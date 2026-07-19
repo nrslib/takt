@@ -204,6 +204,53 @@ describe('validateWorkflowConfig', () => {
     })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
   });
 
+  it('fails fast for incompatible auto-routing on the finding interpreter synthesized step', () => {
+    // findings-interpreter は findings-manager と設定を共有するが名前が異なる
+    // 合成ステップで、auto_routing.rules.steps で別々に routing され得る。
+    // manager 側だけ検証すると、interpreter が実行時（曖昧指摘の解釈フェーズ）に
+    // 初めて落ち、エラーは捕捉されてバッチ全体が provisional 化されてしまう。
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+          model: 'sonnet',
+        },
+      },
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      autoRouting: createValidatorAutoRouting({ steps: { 'findings-interpreter': 'codex' } }),
+    })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
+  });
+
+  it('validates the finding manager against the deterministic strategy default, not every auto-routing candidate', () => {
+    // findings-manager は AI ルーターを通らず、実行時は rules → strategy デフォルト
+    // へ決定的に解決される。rules 不一致時に全候補（ここでは実行時に到達しない
+    // codex + sonnet の組み合わせ）を検証すると、有効な構成を拒否する偽陽性になる。
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+          model: 'sonnet',
+        },
+      },
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      autoRouting: createValidatorAutoRouting(),
+    })).not.toThrow();
+  });
+
   it('fails fast when a loop judge overrides an auto-routed codex step with a Claude model', () => {
     const workflow = createWorkflow({
       loopMonitors: [{

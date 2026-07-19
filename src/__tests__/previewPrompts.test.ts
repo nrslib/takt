@@ -395,7 +395,7 @@ describe('previewPrompts', () => {
     expect(mockInfo).toHaveBeenCalledWith('Finding manager model: gpt-5.5');
   });
 
-  it('finding manager の auto_routing が動的判定を要する場合は未解決として表示する', async () => {
+  it('finding manager は auto_routing の rules 不一致でも strategy デフォルトへ確定して表示する', async () => {
     mockResolveWorkflowConfigValues.mockReturnValue({
       provider: undefined,
       model: undefined,
@@ -431,7 +431,9 @@ describe('previewPrompts', () => {
 
     await previewPrompts('/project');
 
-    expect(mockInfo).toHaveBeenCalledWith('Finding manager provider: not configured');
-    expect(mockInfo).toHaveBeenCalledWith('Finding manager model: not configured');
+    // findings-manager は AI ルーターを通らず、実行時は strategy デフォルト
+    // 候補へ決定的に解決される。preview も同じ値を表示する。
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager provider: codex');
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager model: gpt-5.5');
   });
 });

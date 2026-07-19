@@ -154,7 +154,7 @@ export class LoopMonitorJudgeRunner {
     triggeringRuntime?: RuntimeStepResolution,
   ): RuntimeStepResolution {
     const draftJudgeStep = this.createJudgeStep(monitor, cycleCount, undefined);
-    const judgeProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(draftJudgeStep);
+    const judgeProviderInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(draftJudgeStep);
     const triggeringProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(
       triggeringStep,
       triggeringRuntime,

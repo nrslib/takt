@@ -71,6 +71,8 @@ interface WorkflowRunLoopDeps {
   buildInstruction: (step: WorkflowStep, stepIteration: number) => string;
   buildPhase1Instruction: (step: WorkflowStep, instruction: string, runtime?: RuntimeStepResolution) => string;
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
+  /** auto-routing ルーター・promotion 評価への入力専用（補完前の解決）。 */
+  resolveStepProviderModelBeforeAutoRouting: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
   resolveRuntimeForStep: (step: WorkflowStep) => RuntimeStepResolution | undefined;
   setActiveStep: (step: WorkflowStep, iteration: number) => void;
   addUserInput: (input: string) => void;
@@ -139,7 +141,7 @@ async function resolveStepPromotionRuntime(
     previousResponseContent: deps.state.lastOutput?.content ?? '',
     structuredCaller: deps.options.structuredCaller,
     childProcessEnv: deps.options.childProcessEnv,
-    resolveStepProviderModel: deps.resolveStepProviderModel,
+    resolveStepProviderModel: deps.resolveStepProviderModelBeforeAutoRouting,
   }, step, stepIteration, runtime);
 }
 
@@ -159,7 +161,7 @@ async function resolveStepAutoRoutingRuntime(
     return runtime;
   }
 
-  const currentProviderInfo = deps.resolveStepProviderModel(step, runtime);
+  const currentProviderInfo = deps.resolveStepProviderModelBeforeAutoRouting(step, runtime);
   const autoRuntime = await resolveAutoRoutingRuntime({
     autoRouting: deps.options.autoRouting,
     step: {

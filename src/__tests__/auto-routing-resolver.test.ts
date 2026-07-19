@@ -4,6 +4,7 @@ import {
   matchAutoRoutingRules,
   resolveAutoRoutingBatch,
   resolveAutoRoutingRuntime,
+  resolveDeterministicAutoRoutingProviderInfo,
   selectStrategyDefaultCandidate,
 } from '../core/workflow/auto-routing/resolver.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
@@ -164,6 +165,53 @@ describe('applyAutoRoutingStrategyOverride', () => {
         ],
       }), 'performance'),
     ).toThrow(/performance|high|candidate/i);
+  });
+});
+
+describe('resolveDeterministicAutoRoutingProviderInfo', () => {
+  it('Given a matching rule, When resolving deterministically, Then the rule candidate is selected with auto.rules source', () => {
+    const result = resolveDeterministicAutoRoutingProviderInfo({
+      autoRouting: createAutoRoutingConfig(),
+      step: createStepMetadata(),
+      currentProviderInfo: { provider: undefined, model: undefined },
+    });
+
+    expect(result).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5',
+      providerSource: 'auto.rules',
+      autoRoutingDecision: { candidateName: 'coding' },
+    });
+  });
+
+  it('Given no matching rule, When resolving deterministically, Then the strategy default candidate is selected with auto.default source', () => {
+    const result = resolveDeterministicAutoRoutingProviderInfo({
+      autoRouting: createAutoRoutingConfig(),
+      step: createStepMetadata({ name: 'findings-manager', tags: undefined, personaKey: undefined }),
+      currentProviderInfo: { provider: undefined, model: undefined },
+    });
+
+    expect(result).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5',
+      providerSource: 'auto.default',
+      autoRoutingDecision: { candidateName: 'coding', strategy: 'balanced' },
+    });
+  });
+
+  it('Given provider is already resolved, When resolving deterministically, Then it does not override providerInfo', () => {
+    const result = resolveDeterministicAutoRoutingProviderInfo({
+      autoRouting: createAutoRoutingConfig(),
+      step: createStepMetadata(),
+      currentProviderInfo: {
+        provider: 'claude-sdk',
+        model: 'claude-sonnet-4-20250514',
+        providerSource: 'persona_providers',
+        modelSource: 'persona_providers',
+      },
+    });
+
+    expect(result).toBeUndefined();
   });
 });
 

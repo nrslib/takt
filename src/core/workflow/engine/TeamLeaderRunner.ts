@@ -470,7 +470,7 @@ export class TeamLeaderRunner {
       return runtime;
     }
 
-    const currentProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, runtime);
+    const currentProviderInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(leaderStep, runtime);
     const autoRuntime = await resolveAutoRoutingRuntime({
       autoRouting: this.deps.engineOptions.autoRouting,
       step: {
@@ -665,7 +665,7 @@ export class TeamLeaderRunner {
             tags: partStep.tags,
             personaKey: partStep.providerRoutingPersonaKey,
           },
-          currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModel(partStep, partResolutionRuntime),
+          currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(partStep, partResolutionRuntime),
         };
       }),
       routeBatchWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeBatch,

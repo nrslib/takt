@@ -271,7 +271,7 @@ export class ParallelRunner {
               personaKey: subStep.providerRoutingPersonaKey,
               instruction: subStep.instruction,
             },
-            currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModel(subStep, runtime),
+            currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(subStep, runtime),
           })),
           routeBatchWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeBatch,
           logger: log,

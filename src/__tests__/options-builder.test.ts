@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
+import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 
@@ -454,6 +455,106 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
       provider: 'codex',
       model: 'gpt-5.2-codex',
     });
+  });
+});
+
+describe('OptionsBuilder auto routing deterministic completion', () => {
+  const autoRouting: WorkflowEngineOptions['autoRouting'] = {
+    strategy: 'balanced',
+    router: { provider: 'claude-sdk', model: 'router-model' },
+    candidates: [
+      {
+        name: 'coding',
+        description: 'Implementation and tests',
+        provider: 'codex',
+        model: 'default-candidate-model',
+        costTier: 'medium',
+      },
+    ],
+    rules: { steps: { implement: 'coding' } },
+  };
+
+  function createManagerLikeStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+    return createStep({
+      name: 'findings-manager',
+      structuredOutput: {
+        schemaRef: 'takt.findings.manager.v3',
+        schema: { type: 'object' },
+      },
+      ...overrides,
+    });
+  }
+
+  it('resolveStepProviderModel falls back to the strategy default candidate when auto routing suppresses the config provider', () => {
+    // 事故の再現: config デフォルト provider は auto_routing 有効時に抑止される。
+    // 実行ループの AI ルーターを通らない findings-manager（実際に合成される
+    // ステップそのもの）も、共通の解決経路で strategy デフォルトまで落ち、
+    // buildAgentOptions の structured_output ガードを通過すること。
+    const managerStep = buildFindingManagerStep({
+      contract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+    });
+    const builder = createBuilder(managerStep, { provider: 'codex', providerSource: 'global', autoRouting });
+
+    const resolved = builder.resolveStepProviderModel(managerStep);
+
+    expect(resolved).toMatchObject({
+      provider: 'codex',
+      model: 'default-candidate-model',
+      providerSource: 'auto.default',
+    });
+    expect(builder.buildAgentOptions(managerStep).resolvedProvider).toBe('codex');
+  });
+
+  it('resolveStepProviderModel applies auto routing rules before the strategy default', () => {
+    const step = createManagerLikeStep({ name: 'implement' });
+    const builder = createBuilder(step, { provider: 'codex', providerSource: 'global', autoRouting });
+
+    expect(builder.resolveStepProviderModel(step)).toMatchObject({
+      provider: 'codex',
+      providerSource: 'auto.rules',
+    });
+  });
+
+  it('resolveStepProviderModel prefers runtime providerInfo routed by the run loop over the deterministic completion', () => {
+    const step = createManagerLikeStep();
+    const builder = createBuilder(step, { provider: 'codex', providerSource: 'global', autoRouting });
+
+    const resolved = builder.resolveStepProviderModel(step, {
+      providerInfo: { provider: 'claude', model: 'sonnet', providerSource: 'auto.ai', modelSource: 'auto.ai' },
+    });
+
+    expect(resolved).toMatchObject({ provider: 'claude', model: 'sonnet', providerSource: 'auto.ai' });
+  });
+
+  it('resolveStepProviderModel does not override a provider resolved by persona providers', () => {
+    const step = createManagerLikeStep({ personaDisplayName: 'findings-manager' });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'global',
+      autoRouting,
+      personaProviders: { 'findings-manager': { provider: 'claude', model: 'sonnet' } },
+    });
+
+    expect(builder.resolveStepProviderModel(step)).toMatchObject({
+      provider: 'claude',
+      model: 'sonnet',
+      providerSource: 'persona_providers',
+    });
+  });
+
+  it('resolveStepProviderModelBeforeAutoRouting leaves the provider unresolved so the AI router keeps its say', () => {
+    const step = createManagerLikeStep();
+    const builder = createBuilder(step, { provider: 'codex', providerSource: 'global', autoRouting });
+
+    expect(builder.resolveStepProviderModelBeforeAutoRouting(step).provider).toBeUndefined();
   });
 });
 

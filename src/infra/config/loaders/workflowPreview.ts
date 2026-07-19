@@ -6,7 +6,11 @@ import {
 } from '../../../core/workflow/provider-resolution.js';
 import type { StepProviderInfo } from '../../../core/workflow/types.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
-import { resolveRuleBasedAutoRoutingProviderInfo } from '../../../core/workflow/auto-routing/resolver.js';
+import {
+  resolveDeterministicAutoRoutingProviderInfo,
+  resolveRuleBasedAutoRoutingProviderInfo,
+  toAutoRoutingStepMetadata,
+} from '../../../core/workflow/auto-routing/resolver.js';
 import { resolveEffectiveAutoRouting } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import { buildFindingManagerStep } from '../../../core/workflow/findings/manager-step.js';
 import { resolveFindingContractIntakeStep } from '../../../core/workflow/findings/contract-intake.js';
@@ -133,7 +137,18 @@ function buildFindingManagerPreview(
     workflowProvider: workflow.provider,
     workflowModel: workflow.model,
   });
-  const providerInfo = resolvePreviewProviderInfo(managerStep, resolution);
+  // findings-manager は AI ルーターを通らないため、rules 不一致でも実行時
+  // （OptionsBuilder）と同じ strategy デフォルトまで確定して表示する。
+  // 通常ステップの resolvePreviewProviderInfo（rules のみ、AI 判定分は未確定
+  // 表示）とはここが異なる。
+  const ruleProviderInfo = resolvePreviewProviderInfo(managerStep, resolution);
+  const providerInfo = resolution.autoRouting === undefined
+    ? ruleProviderInfo
+    : resolveDeterministicAutoRoutingProviderInfo({
+        autoRouting: resolution.autoRouting,
+        step: toAutoRoutingStepMetadata(managerStep),
+        currentProviderInfo: ruleProviderInfo,
+      }) ?? ruleProviderInfo;
 
   return {
     name: managerStep.name,

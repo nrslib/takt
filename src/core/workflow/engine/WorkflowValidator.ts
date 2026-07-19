@@ -14,10 +14,12 @@ import {
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
 import { hasUnquotedFindingsReference, isFindingsCondition } from '../evaluation/rule-utils.js';
-import { buildFindingManagerStep } from '../findings/manager-step.js';
+import { buildFindingInterpretationStep, buildFindingManagerStep } from '../findings/manager-step.js';
 import {
   matchAutoRoutingRules,
   resolveAutoRoutingCandidateProviderInfo,
+  resolveDeterministicAutoRoutingProviderInfo,
+  toAutoRoutingStepMetadata,
   validateAutoRoutingResolvedProviderModel,
 } from '../auto-routing/resolver.js';
 
@@ -193,26 +195,42 @@ export function validateFindingContractManagerProviderModel(config: WorkflowConf
   if (!findingContract) {
     return;
   }
-  const managerStep = buildFindingManagerStep({
+  const stepInput = {
     contract: findingContract,
     workflowProvider: config.provider,
     workflowModel: config.model,
-  });
-  const providerInfo = resolveStepProviderModel({
-    step: managerStep,
-    provider: options.provider,
-    providerSource: options.providerSource,
-    model: options.model,
-    modelSource: options.modelSource,
-    autoRouting: options.autoRouting,
-    providerRouting: options.providerRouting,
-    personaProviders: options.personaProviders,
-  });
-  for (const validationInfo of expandAutoRoutingProviderInfos(managerStep, providerInfo, options.autoRouting)) {
+  };
+  // findings-manager と findings-interpreter は実行ループの AI ルーターを
+  // 通らず、実行時は OptionsBuilder.resolveStepProviderModel が rules →
+  // strategy デフォルトへ決定的に補完する。validator も同じ解決で検証しないと、
+  // 実行時には到達しない候補の組み合わせを検証して有効な構成を拒否する
+  // （またはその逆の）食い違いが生まれる。両ステップは provider/model 設定を
+  // 共有するが名前が異なるため、auto_routing.rules.steps で別々に routing
+  // され得る — 片方だけの検証では他方の実行時エラーを素通しする。全候補を
+  // 検証する expandAutoRoutingProviderInfos は AI ルーターがどの候補も選び得る
+  // 通常ステップ専用。
+  for (const step of [buildFindingManagerStep(stepInput), buildFindingInterpretationStep(stepInput)]) {
+    const providerInfo = resolveStepProviderModel({
+      step,
+      provider: options.provider,
+      providerSource: options.providerSource,
+      model: options.model,
+      modelSource: options.modelSource,
+      autoRouting: options.autoRouting,
+      providerRouting: options.providerRouting,
+      personaProviders: options.personaProviders,
+    });
+    const deterministicInfo = options.autoRouting !== undefined
+      ? resolveDeterministicAutoRoutingProviderInfo({
+          autoRouting: options.autoRouting,
+          step: toAutoRoutingStepMetadata(step),
+          currentProviderInfo: providerInfo,
+        })
+      : undefined;
     validateResolvedProviderInfo(
-      validationInfo.providerInfo,
+      deterministicInfo ?? providerInfo,
       'Configuration error: finding_contract.manager.model',
-      validationInfo.autoRouted,
+      deterministicInfo !== undefined,
     );
   }
 }
