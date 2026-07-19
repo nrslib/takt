@@ -149,9 +149,11 @@ try {
     );
     if (process.platform === 'win32') {
       // Windows は read-only 属性付きターゲットへの rename 置換が EPERM になる。
-      // 同一性確認済みの記述子で属性を外してから置換する（旧 inode は置換で
-      // 破棄されるため、最終的な属性は temporary 側の作成モードに従う）。
-      fs.fchmodSync(targetDescriptor, 0o600);
+      // 直前に同一性を検証済みのターゲットの属性を外してから置換する。
+      // fchmod は O_RDONLY ハンドルに FILE_WRITE_ATTRIBUTES が無く効かない
+      // ため、path 経由の chmod を使う（旧 inode は置換で破棄されるため、
+      // 最終的な属性は temporary 側の作成モードに従う）。
+      fs.chmodSync(request.targetName, 0o600);
     }
     fs.renameSync(request.temporaryName, request.targetName);
     published = true;

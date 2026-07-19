@@ -343,7 +343,8 @@ describe('inheritResumeReportSnapshot', () => {
     })).toThrow(/invalid target run slug/);
   });
 
-  it('does not publish a partial reports directory when the copy fails midway', () => {
+  // FIFO は POSIX 専用（Windows の mkfifo は成立しない）ため POSIX ランナーでのみ検証する。
+  it.skipIf(process.platform === 'win32')('does not publish a partial reports directory when the copy fails midway', () => {
     seedSourceRun('source-run', {
       'a-first.md': 'copied before the failure',
       'z-last.md': 'copied after the failure',

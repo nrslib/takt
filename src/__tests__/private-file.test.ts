@@ -288,7 +288,7 @@ describe('private file artifacts', () => {
     }
   });
 
-  itPosix.each([
+  it.each([
     ['temporary-file fstat', 'fstat'],
     ['temporary-file fchmod', 'fchmod'],
     ['partial temporary-file write', 'partialWrite'],
@@ -505,7 +505,7 @@ describe('private file artifacts', () => {
     expect(readFileSync(file, 'utf-8')).toBe('original\n');
   });
 
-  it.each([
+  itPosix.each([
     ['fstat', 'fstat'],
     ['fchmod', 'fchmod'],
   ] as const)('should close the directory descriptor when %s fails', (_phase, operation) => {
