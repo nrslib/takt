@@ -342,7 +342,7 @@ describe('finding-conflict-adjudication runner', () => {
     expect(persistedConflict.adjudications ?? []).toHaveLength(0);
   });
 
-  it('保存処理中に作業ツリーが変化した裁定をロールバックする', async () => {
+  it('保存処理中に作業ツリーが変化した裁定を公開しない', async () => {
     const { ledgerStore } = makeRunner();
     const initialLedger = ledgerStore.loadLedger();
     const conflict = initialLedger.conflicts[0]!;

@@ -351,7 +351,8 @@ function writePrivateFileAtomically(
   content: string | Buffer,
   mode: number,
   rejectExisting: boolean,
-): void {
+  publicationGuard?: () => boolean,
+): boolean {
   const absolute = resolve(filePath);
   const inspection = inspectPrivateArtifactPath(absolute, 'file');
   if (rejectExisting && inspection.expectedStat !== undefined) {
@@ -400,6 +401,9 @@ function writePrivateFileAtomically(
       assertAncestorIdentities(inspection.ancestorIdentities);
       assertPublicationTargetIdentity(absolute, inspection.expectedStat);
       assertTemporaryFileIdentity(temporaryPath, createdStat);
+      if (publicationGuard !== undefined && !publicationGuard()) {
+        return;
+      }
       publishPrivateArtifactAtBoundary(
         dirname(absolute),
         temporaryPath,
@@ -418,6 +422,7 @@ function writePrivateFileAtomically(
     },
     `Private artifact write and temporary-file cleanup both failed: ${absolute}`,
   );
+  return published;
 }
 
 export function readRegularFileNoFollow(filePath: string, expectedStat: Stats): Buffer {
@@ -497,6 +502,15 @@ export function writePrivateFile(filePath: string, content: string): void {
 
 export function writePrivateFileWithMode(filePath: string, content: string | Buffer, mode: number): void {
   writePrivateFileAtomically(filePath, content, mode, false);
+}
+
+export function writePrivateFileWithModeGuarded(
+  filePath: string,
+  content: string | Buffer,
+  mode: number,
+  publicationGuard: () => boolean,
+): boolean {
+  return writePrivateFileAtomically(filePath, content, mode, false, publicationGuard);
 }
 
 export function writeNewPrivateFileWithMode(filePath: string, content: string | Buffer, mode: number): void {

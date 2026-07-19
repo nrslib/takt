@@ -5,6 +5,7 @@ import {
   ensurePrivateDirectory,
   PrivateArtifactPublicationConflictError,
   writePrivateFileWithMode,
+  writePrivateFileWithModeGuarded,
 } from '../../../shared/utils/private-file.js';
 import type { FindingLedger, RawFinding } from './types.js';
 import { parseFindingLedger, parseRawFindings } from './schemas.js';
@@ -41,13 +42,15 @@ export interface LedgerRepository {
    * （mutator の中で await すると、直列化の意味がなくなる）。
    * 同一プロセス内の Promise チェーンによる直列化であり、複数プロセスからの
    * 同時更新はこの直列化の対象外（現状の設計外）。
+   * revalidateBeforeSave は atomic publication の直前にも呼ばれる。publish=false
+   * の場合、候補の一時ファイルを公開せず、返された安全な mutation を保存する。
    */
   updateLedger: <Result>(
     mutator: (current: FindingLedger) => FindingLedgerMutation<Result>,
     revalidateBeforeSave?: (
       current: FindingLedger,
       mutation: FindingLedgerMutation<Result>,
-    ) => FindingLedgerMutation<Result>,
+    ) => FindingLedgerPublicationDecision<Result>,
   ) => Promise<FindingLedgerMutation<Result>>;
 }
 
@@ -81,6 +84,11 @@ export type FindingAdjudicationStore = LedgerRepository
 export interface FindingLedgerMutation<Result> {
   ledger: FindingLedger;
   result: Result;
+}
+
+export interface FindingLedgerPublicationDecision<Result> {
+  mutation: FindingLedgerMutation<Result>;
+  publish: boolean;
 }
 
 /**
@@ -425,11 +433,22 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
   const loadLedgerImpl = (): FindingLedger => {
     return readProjectLedgerOrEmpty(ledgerRoot, ledgerPath, options.workflowName);
   };
-  const saveLedgerImpl = (ledger: FindingLedger): void => {
+  const prepareLedgerSave = (ledger: FindingLedger): string => {
     assertLedgerWorkflowName(ledger, options.workflowName, ledgerPath);
     assertLedgerIdAllocationInvariant(ledger);
     prepareWritableFilePath(ledgerRoot, ledgerPath);
-    writePrivateFileWithMode(ledgerPath, JSON.stringify(ledger, null, 2), PRIVATE_FILE_MODE);
+    return JSON.stringify(ledger, null, 2);
+  };
+  const saveLedgerImpl = (ledger: FindingLedger): void => {
+    writePrivateFileWithMode(ledgerPath, prepareLedgerSave(ledger), PRIVATE_FILE_MODE);
+  };
+  const saveLedgerGuardedImpl = (ledger: FindingLedger, publicationGuard: () => boolean): boolean => {
+    return writePrivateFileWithModeGuarded(
+      ledgerPath,
+      prepareLedgerSave(ledger),
+      PRIVATE_FILE_MODE,
+      publicationGuard,
+    );
   };
 
   // 同一プロセス内の呼び出しを直列化するための Promise チェーン。
@@ -446,18 +465,24 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
       const critical = updateQueue.then(() => {
         const current = loadLedgerImpl();
         const preparedMutation = mutator(current);
-        const mutation = revalidateBeforeSave === undefined
-          ? preparedMutation
-          : revalidateBeforeSave(current, preparedMutation);
-        saveLedgerImpl(mutation.ledger);
         if (revalidateBeforeSave === undefined) {
-          return mutation;
+          saveLedgerImpl(preparedMutation.ledger);
+          return preparedMutation;
         }
-        const verifiedMutation = revalidateBeforeSave(current, mutation);
-        if (verifiedMutation !== mutation) {
-          saveLedgerImpl(verifiedMutation.ledger);
+        const initialDecision = revalidateBeforeSave(current, preparedMutation);
+        if (!initialDecision.publish) {
+          saveLedgerImpl(initialDecision.mutation.ledger);
+          return initialDecision.mutation;
         }
-        return verifiedMutation;
+        let publicationDecision = initialDecision;
+        const published = saveLedgerGuardedImpl(initialDecision.mutation.ledger, () => {
+          publicationDecision = revalidateBeforeSave(current, initialDecision.mutation);
+          return publicationDecision.publish;
+        });
+        if (!published) {
+          saveLedgerImpl(publicationDecision.mutation.ledger);
+        }
+        return publicationDecision.mutation;
       });
       // キューの継続は失敗で止めない（この呼び出しの失敗は呼び出し元へ
       // critical 経由でそのまま伝播する）。失敗を握りつぶさずに繋ぐと、

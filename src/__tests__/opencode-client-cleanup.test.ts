@@ -496,6 +496,45 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(abort).not.toHaveBeenCalled();
   });
 
+  it('should retain iterator and session cleanup failures together', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const iteratorCleanupError = new Error('iterator cleanup failed');
+    const stream = {
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+      next: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+      return: vi.fn().mockRejectedValue(iteratorCleanupError),
+    };
+    const abort = vi.fn().mockResolvedValue({ data: false });
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-combined-cleanup-failure' } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort,
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result).toMatchObject({
+      status: 'error',
+      error: expect.stringContaining('iterator cleanup failed'),
+    });
+    expect(result.error).toContain('OpenCode server session abort failed');
+    expect(stream.return).toHaveBeenCalledOnce();
+    expect(abort).toHaveBeenCalledOnce();
+  });
+
   it('fails an active-session event flood instead of letting it extend the idle timeout indefinitely', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const sessionId = 'session-event-flood';

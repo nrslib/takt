@@ -233,6 +233,7 @@ import {
   writeNewPrivateFileWithMode,
   writePrivateFile,
   writePrivateFileWithMode,
+  writePrivateFileWithModeGuarded,
 } from '../shared/utils/private-file.js';
 
 function isSiblingTemporaryFile(path: string, finalPath: string): boolean {
@@ -301,6 +302,28 @@ describe('private file artifacts', () => {
       expect(readdirSync(root)).toEqual(['artifact.log']);
     },
   );
+
+  it('should discard the temporary file when a publication guard rejects the update', () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-file-publication-guard-'));
+    roots.push(root);
+    const file = join(root, 'artifact.log');
+    writeFileSync(file, 'original\n');
+    chmodSync(file, 0o400);
+    const publicationGuard = vi.fn().mockReturnValue(false);
+
+    const published = writePrivateFileWithModeGuarded(
+      file,
+      'replacement\n',
+      0o600,
+      publicationGuard,
+    );
+
+    expect(published).toBe(false);
+    expect(publicationGuard).toHaveBeenCalledOnce();
+    expect(readFileSync(file, 'utf-8')).toBe('original\n');
+    expect(statSync(file).mode & 0o777).toBe(0o400);
+    expect(readdirSync(root)).toEqual(['artifact.log']);
+  });
 
   it.each([
     ['append preparation open', 'open', 0],

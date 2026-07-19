@@ -38,7 +38,7 @@ const CURL_USER_SPACE_REGEX = /(\B(?:-u|--(?:proxy-)?user)\s+)("(?:\\.|[^"\\])*"
 const CURL_SHORT_USER_COMPACT_REGEX = /(^|\s)(-u)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+)/gi;
 const SENSITIVE_QUERY_VALUE_REGEX = /([?&](?:api[_-]?key|token|password|secret)=)([^&\s]+)/gi;
 const KNOWN_TOKEN_REGEX = /\b(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})\b/g;
-const PEM_PRIVATE_KEY_REGEX = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?-----END \1-----/g;
+const PEM_PRIVATE_KEY_REGEX = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?(?:-----END \1-----|$)/g;
 const POTENTIAL_TOKEN_SUFFIX_REGEX = /(?:^|[^A-Za-z0-9_])(?:s|sk|sk-[A-Za-z0-9_-]*|g|gh|ghp|ghp_[A-Za-z0-9_]*|x|xo|xox|xox[baprs]|xox[baprs]-[A-Za-z0-9-]*)$/;
 const SENSITIVE_KEY_FRAGMENTS = [
   'api',

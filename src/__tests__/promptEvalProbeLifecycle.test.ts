@@ -239,6 +239,38 @@ describe('prompt eval probe lifecycle', () => {
     })).rejects.toMatchObject({ errors: [executionError, cleanupError] });
   });
 
+  it('should cleanup and retain errors when the cleanup phase notification fails', async () => {
+    const phaseError = new Error('cleanup phase notification failed');
+    const cleanupError = new Error('session deletion failed');
+    const serverClose = vi.fn();
+    const globalDispose = vi.fn().mockResolvedValue(undefined);
+    const client: OpenCodeRunnableProbeClient = {
+      session: {
+        create: vi.fn().mockResolvedValue({ data: { id: 'session-1' } }),
+        delete: vi.fn().mockRejectedValue(cleanupError),
+      },
+      global: { dispose: globalDispose },
+    };
+
+    await expect(runOpenCodeProbe({
+      createProbe: async () => ({ client, server: { close: serverClose } }),
+      directory: '/tmp/probe',
+      onPhase: (phase) => {
+        if (phase === 'cleanupStart') {
+          throw phaseError;
+        }
+      },
+      execute: async ({ markReady }) => {
+        markReady();
+        return 'completed';
+      },
+    })).rejects.toMatchObject({ errors: [phaseError, cleanupError] });
+
+    expect(client.session.delete).toHaveBeenCalledOnce();
+    expect(globalDispose).toHaveBeenCalledOnce();
+    expect(serverClose).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['session creation failure', { createError: new Error('session creation failed') }],
     ['empty session ID', { sessionId: '' }],

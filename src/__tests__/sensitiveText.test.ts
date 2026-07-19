@@ -25,6 +25,23 @@ describe('sensitiveText', () => {
     expect(sanitized).not.toContain('b3BlbnNzaC1rZXktdjEAAAAA');
   });
 
+  it('redacts an unterminated PEM private key through the end of the input', () => {
+    const unterminatedKey = 'before\n-----BEGIN PRIVATE KEY-----\nLEAK-ME';
+
+    expect(sanitizeSensitiveText(unterminatedKey)).toBe('before\n[REDACTED]');
+  });
+
+  it('redacts an unterminated PEM private key when the stream is flushed', () => {
+    const redactor = createSensitiveTextStreamRedactor();
+
+    const output = redactor.write('-----BEGIN PRIVATE KEY-----\n', {})
+      + redactor.write('LEAK-ME', {})
+      + redactor.flush({});
+
+    expect(output).toBe('[REDACTED]');
+    expect(output).not.toContain('LEAK-ME');
+  });
+
   it('redacts a PEM private key split at every stream boundary', () => {
     for (let split = 1; split < privateKey.length; split += 1) {
       const redactor = createSensitiveTextStreamRedactor();

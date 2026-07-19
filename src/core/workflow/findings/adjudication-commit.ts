@@ -84,11 +84,20 @@ export async function commitFindingConflictAdjudication(input: {
     };
   }, (fresh, prepared) => {
     if (!prepared.result.applied) {
-      return prepared;
+      return { mutation: prepared, publish: true };
     }
     const conflict = fresh.conflicts.find((candidate) => candidate.id === input.conflictId);
     if (conflict === undefined || conflict.status !== 'active') {
-      return prepared;
+      return {
+        publish: false,
+        mutation: {
+          ledger: fresh,
+          result: {
+            applied: false as const,
+            reason: `conflict "${input.conflictId}" is no longer active`,
+          },
+        },
+      };
     }
     const reviewScopeSnapshot = captureReviewScopeSnapshot(input.cwd);
     const evidenceHash = computeAdjudicationEvidenceHash(buildAdjudicationEvidenceSnapshot({
@@ -97,14 +106,17 @@ export async function commitFindingConflictAdjudication(input: {
       reviewScopeSnapshot,
     }));
     if (evidenceHash === input.promptedEvidenceHash) {
-      return prepared;
+      return { mutation: prepared, publish: true };
     }
     return {
-      ledger: fresh,
-      result: {
-        applied: false as const,
-        reason: 'the conflict\'s evidence changed while the adjudication decision was being applied',
-        freshEvidenceHash: evidenceHash,
+      publish: false,
+      mutation: {
+        ledger: fresh,
+        result: {
+          applied: false as const,
+          reason: 'the conflict\'s evidence changed while the adjudication decision was being applied',
+          freshEvidenceHash: evidenceHash,
+        },
       },
     };
   });

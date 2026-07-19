@@ -137,26 +137,30 @@ export async function runOpenCodeProbe({ createProbe, directory, execute, onPhas
     executionError = error;
   }
 
-  onPhase(executionError === undefined ? 'cleanupStart' : 'failureCleanupStart');
+  let phaseError;
+  try {
+    onPhase(executionError === undefined ? 'cleanupStart' : 'failureCleanupStart');
+  } catch (error) {
+    phaseError = error;
+  }
   let cleanupError;
   try {
     await cleanupOpenCodeProbe({ client, server, sessionId, directory });
   } catch (error) {
     cleanupError = error;
   }
-  if (executionError !== undefined && cleanupError !== undefined) {
-    throw new AggregateError(
-      [executionError, cleanupError],
-      'OpenCode probe execution and cleanup failed',
-    );
-  }
-  if (executionError !== undefined) {
-    throw executionError;
-  }
-  if (cleanupError !== undefined) {
-    throw cleanupError;
-  }
+  throwProbeLifecycleErrors([executionError, phaseError, cleanupError]);
   return result;
+}
+
+function throwProbeLifecycleErrors(errors) {
+  const failures = errors.filter((error) => error !== undefined);
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, 'OpenCode probe lifecycle failed');
+  }
 }
 
 function throwCleanupErrors(errors) {

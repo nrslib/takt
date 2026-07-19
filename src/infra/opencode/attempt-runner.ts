@@ -706,6 +706,7 @@ export class OpenCodeAttemptRunner {
     detail?: string;
   } | undefined;
   let finalizationInvalidationError: OpenCodeSharedServerInvalidationError | undefined;
+  let attemptCleanupError: AggregateError | undefined;
   const structuredAttemptPlan = planStructuredOutputAttempt(callState.recoveryState, hasInitialSessionId);
   // tool-guard fresh recovery 後の attempt は fresh session を強制する。
   // plan の sessionMode を実態に合わせないと、後段の
@@ -779,10 +780,8 @@ export class OpenCodeAttemptRunner {
     serverInvalidationError
   );
 
-  const buildServerInvalidationResponse = (
-    invalidationError: OpenCodeSharedServerInvalidationError,
-  ): AgentResponse => {
-    const errorMessage = sanitizeAttemptError(invalidationError.message);
+  const buildAttemptErrorResponse = (error: unknown): AgentResponse => {
+    const errorMessage = sanitizeAttemptError(getErrorMessage(error));
     return {
       persona: agentType,
       status: 'error',
@@ -791,6 +790,17 @@ export class OpenCodeAttemptRunner {
       timestamp: new Date(),
       sessionId,
     };
+  };
+
+  const buildServerInvalidationResponse = (
+    invalidationError: OpenCodeSharedServerInvalidationError,
+  ): AgentResponse => buildAttemptErrorResponse(invalidationError);
+
+  const combineAttemptAndCleanupErrors = (attemptError: unknown, cleanupError: unknown): AggregateError => {
+    return new AggregateError(
+      [attemptError, cleanupError],
+      `OpenCode attempt and session cleanup failed: ${getErrorMessage(attemptError)}; ${getErrorMessage(cleanupError)}`,
+    );
   };
 
   const scheduleResultEmission = (
@@ -1813,11 +1823,15 @@ export class OpenCodeAttemptRunner {
 
     const stopResult = await sessionLifecycle?.stopServerSessionOnce();
     const invalidationAfterStop = currentServerInvalidationError();
-    if (invalidationAfterStop !== undefined) {
-      return buildServerInvalidationResponse(invalidationAfterStop);
-    }
     if (stopResult !== undefined && !stopResult.ok) {
-      errorMessage = stopResult.error.message;
+      attemptCleanupError = combineAttemptAndCleanupErrors(error, stopResult.error);
+      errorMessage = attemptCleanupError.message;
+    } else if (invalidationAfterStop !== undefined) {
+      attemptCleanupError = combineAttemptAndCleanupErrors(error, invalidationAfterStop);
+      errorMessage = attemptCleanupError.message;
+    }
+    if (invalidationAfterStop !== undefined) {
+      return buildAttemptErrorResponse(errorMessage);
     }
 
     if (containsRateLimitError(errorMessage)) {
@@ -1904,12 +1918,15 @@ export class OpenCodeAttemptRunner {
     })();
 
     // lease を譲渡する前に、最後の invalidation 確認と観測可能な結果を確定する。
-    const finalizationError = currentServerInvalidationError() ?? finalizationInvalidationError;
+    const finalizationError = attemptCleanupError
+      ?? currentServerInvalidationError()
+      ?? finalizationInvalidationError;
     if (finalizationError !== undefined) {
-      attemptResult = buildServerInvalidationResponse(finalizationError);
+      attemptResult = buildAttemptErrorResponse(finalizationError);
+      const finalizationMessage = attemptResult.error ?? attemptResult.content;
       pendingCompletion = {
         reason: 'error',
-        detail: sanitizeAttemptError(finalizationError.message),
+        detail: finalizationMessage,
       };
       if (attemptResult.sessionId) {
         scheduleResultEmission(
