@@ -81,7 +81,7 @@ language: ja         # 表示言語: ja | en
 #       model: gpt-5
 #     review:
 #       provider: opencode
-#       model: opencode/qwen3-coder-next
+#       model: ollama-cloud/qwen3.5:397b
 #     final-gate:
 #       provider: codex
 #       model: gpt-5
@@ -95,7 +95,7 @@ language: ja         # 表示言語: ja | en
 #   steps:
 #     ai-antipattern-review-2nd:
 #       provider: opencode
-#       model: opencode/qwen3-coder-next
+#       model: ollama-cloud/qwen3.5:397b
 
 # display name ベースの旧 provider 上書き（deprecated。新規設定では provider_routing を推奨）
 # persona_providers:

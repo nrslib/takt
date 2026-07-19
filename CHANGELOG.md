@@ -6,6 +6,36 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.52.0] - 2026-07-19
+
+### Added
+
+- Auto-routing is now actually usable (#1040). The `provider: auto` switch announced in 0.51.0 did not work in practice; it has been replaced with a simpler activation model. Keep a concrete top-level `provider` and define effective `auto_routing` candidates — their presence enables automatic per-step provider/model routing. Operations without workflow-step context (such as AI task-slug generation) use the concrete top-level provider/model; `auto_routing.router` and candidates are never implicit defaults. `provider: auto` is no longer accepted — if you had set it, replace it with a concrete provider.
+- `auto_requeue_max_attempts` and `ignore_exceed` config keys (#935, #937). `takt run` can now automatically requeue tasks whose workflow execution failed, up to the configured number of attempts (`0` disables it, the default). `ignore_exceed: true` applies the iteration-limit bypass to `takt run` and `takt watch` like the `--ignore-exceed` flag; an explicit CLI flag still takes precedence. Both keys work in global and project config.
+- Kiro CLI provider `model` support (#1034). The `kiro` provider now forwards a configured `model` to the Kiro CLI via `--model`.
+- Step metadata on phase usage events (#1033). Phase usage events now record the step name, step type, persona, and tags alongside provider/model, and `tools/token-usage.sh` distinguishes steps in its summary output, so per-step token accounting no longer requires correlating spans by hand.
+
+### Changed
+
+- CLI startup is lazy-loaded (#1035, #1047). Subcommand implementations and config/Git/log initialization now load on demand, cutting `--help` / `--version` startup by ~84% (196 ms → 32 ms). Update checking was split into a cheap synchronous cache read in the parent process, with a background worker refreshing the cache.
+- Reviewer verification duties were divided (#1048). The review policy now directs reviewers to spend verification time reproducing their own findings and running risk-based targeted checks instead of re-running full test suites; whole-suite verification belongs to the step that carries it as a quality gate (such as a merge-readiness final gate).
+- Review↔fix convergence hardening (#1038, #1039, #1046). Fixers must now fix all branches of the same finding family at once and report a family coverage table — partial fixes that leave sibling branches open count as non-productive loop iterations. Peer-review convergence gates judge progress by verified resolution, align review scope with blocking dependencies, and preserve genuinely productive loops.
+
+### Fixed
+
+- Codex safety-filter refusals no longer abort workflows as rule-evaluation failures (#1050). A refusal response (short body matching refusal patterns) is detected and retried on a fresh session up to twice; when retries are exhausted it surfaces as an explicit provider error instead of flowing into rule evaluation. Pure structured-output responses are never treated as refusals, and the review policy now states its defensive-audit premise up front to lower the refusal rate.
+- `takt_providers.assistant` now applies to instruct and retry personas, not only interactive planning (#1011, #1018). The 0.51.0 notes listed this fix, but the change actually landed after the 0.51.0 tag; it ships in this release.
+- OpenCode prompts no longer serialize globally (#1026). Prompt queuing is now scoped per session, so parallel steps running on different sessions execute concurrently; implicit retries still get fresh sessions.
+- Kiro session continuity (#781, #1036). Kiro CLI output has ANSI escapes stripped, the session ID is resolved via `kiro-cli chat --list-sessions` after the first turn, and subsequent turns resume with `--resume-id`, so multi-turn workflows no longer lose conversation context. The session lookup also gained a timeout and abort-signal propagation.
+- Auto-routing structured output now uses strict schemas (#1030), so router responses with unknown keys are rejected instead of silently accepted.
+- `timeout_ms` on command quality gates now survives `workflow_call` resolution (#1021). Command gates in callable workflows dropped their timeout during config normalization.
+
+### Internal
+
+- The dogfood quality gates in `.takt/config.yaml` were tiered (#1048, #1049): in-loop fix/implement steps run lightweight gates (build, lint, per-file targeted tests, smoke E2E) and the full suites moved to the merge-readiness gate.
+- OpenCode E2E now targets `ollama-cloud/qwen3.5:397b` after `qwen3-coder-next` was retired upstream; the stale model name was also removed from config examples.
+- The `auto_routing` docs examples were refreshed to a production-style configuration with an explicit note on `assistant` routing.
+
 ## [0.51.0] - 2026-07-11
 
 ### Added

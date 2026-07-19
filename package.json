@@ -1,6 +1,6 @@
 {
   "name": "takt",
-  "version": "0.51.0",
+  "version": "0.52.0",
   "description": "Workflow control for AI coding agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -36,7 +36,7 @@
     "test:e2e:provider:claude": "TAKT_E2E_PROVIDER=claude vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/claude.json",
     "test:e2e:provider:claude-sdk": "TAKT_E2E_PROVIDER=claude-sdk vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/claude-sdk.json",
     "test:e2e:provider:codex": "TAKT_E2E_PROVIDER=codex vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/codex.json",
-    "test:e2e:provider:opencode": "TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=${TAKT_E2E_MODEL:-ollama-cloud/qwen3-coder-next} vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/opencode.json",
+    "test:e2e:provider:opencode": "TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=${TAKT_E2E_MODEL:-ollama-cloud/qwen3.5:397b} vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/opencode.json",
     "test:e2e:provider:cursor": "TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor vitest run --config vitest.config.e2e.cursor.ts --outputFile.json=e2e/results/cursor.json",
     "test:e2e:claude": "npm run test:e2e:provider:claude",
     "test:e2e:codex": "npm run test:e2e:provider:codex",

@@ -81,7 +81,7 @@ language: en        # UI language: en | ja
 #       model: gpt-5
 #     review:
 #       provider: opencode
-#       model: opencode/qwen3-coder-next
+#       model: ollama-cloud/qwen3.5:397b
 #     final-gate:
 #       provider: codex
 #       model: gpt-5
@@ -95,7 +95,7 @@ language: en        # UI language: en | ja
 #   steps:
 #     ai-antipattern-review-2nd:
 #       provider: opencode
-#       model: opencode/qwen3-coder-next
+#       model: ollama-cloud/qwen3.5:397b
 
 # Legacy display-name based provider overrides (deprecated; prefer provider_routing)
 # persona_providers:
