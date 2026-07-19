@@ -52,7 +52,7 @@ export const FindingContractManagerConfigRawSchema = z.object({
   model: nonEmptyString.optional(),
 }).strict();
 
-/** 有限停止予算。両方省略可 — 省略分は stop-budget.ts の DEFAULT_STOP_BUDGET が補う。 */
+/** 有限停止予算。両方省略可 — max_rounds は省略時に既定値 40、max_minutes は省略時は時間上限なし（opt-in）。 */
 export const FindingContractStopBudgetRawSchema = z.object({
   max_rounds: z.number().int().positive().optional(),
   max_minutes: z.number().int().positive().optional(),

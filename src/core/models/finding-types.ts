@@ -51,10 +51,11 @@ export interface FindingContractAdjudicatorConfig {
  * 停止条件を追加する — 累積ラウンド数（と任意で経過時間）が上限を超えたら、
  * fixpoint 未成立でも NEEDS_ADJUDICATION へ収束させる。
  *
- * 両フィールドとも YAML では省略可能。省略されたフィールドには
- * stop-budget.ts の DEFAULT_STOP_BUDGET が適用される（resolveStopBudgetLimits）
- * ため、finding_contract.stop_budget を一切書かないワークフローでも既定値で
- * 有限に停止する（無制限を許さない、という設計要請）。
+ * 両フィールドとも YAML では省略可能。maxRounds の省略には stop-budget.ts の
+ * DEFAULT_STOP_BUDGET（resolveStopBudgetLimits）が既定値を補うため、
+ * finding_contract.stop_budget を一切書かないワークフローでも有限ラウンドで
+ * 停止する（無制限を許さない、という設計要請）。maxMinutes に既定値は無く、
+ * 省略時は時間上限なし — 明示設定した場合だけ壁時計上限として働く。
  */
 export interface FindingContractStopBudgetConfig {
   maxRounds?: number;

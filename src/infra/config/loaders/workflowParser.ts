@@ -119,9 +119,10 @@ function normalizeFindingContractConfig(
       ...(raw.manager.provider ? { provider: raw.manager.provider } : {}),
       ...(raw.manager.model ? { model: raw.manager.model } : {}),
     },
-    // 有限停止予算（Finding Contract・対策バッチ B1 の拡張）: 省略されたサブ
-    // フィールドは stop-budget.ts の DEFAULT_STOP_BUDGET が補うため、ここでは
-    // YAML に書かれた値だけをそのまま写す（未指定フィールドの穴埋めはしない）。
+    // 有限停止予算（Finding Contract・対策バッチ B1 の拡張）: ここでは YAML に
+    // 書かれた値だけをそのまま写す（未指定フィールドの穴埋めはしない）。
+    // max_rounds の既定値適用は stop-budget.ts の resolveStopBudgetLimits が唯一の
+    // 場所。max_minutes に既定値は無く、未設定なら時間上限なし。
     ...(raw.stop_budget
       ? {
         stopBudget: {
