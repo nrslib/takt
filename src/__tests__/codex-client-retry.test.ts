@@ -602,6 +602,43 @@ describe('CodexClient retry', () => {
     expect(result.structuredOutput).toEqual(expect.objectContaining({ step: 1 }));
   });
 
+  it('拒否文で始まり末尾にJSONが続く応答は structured output があっても拒否として扱う', async () => {
+    vi.useFakeTimers();
+
+    const refusalWithJson = 'This request was flagged for possible cybersecurity risk. {"error":"refused"}';
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: refusalWithJson } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-2' },
+          { type: 'item.completed', item: { id: 'msg-2', type: 'agent_message', text: '{"step": 2, "reason": "verified"}' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+    const resultPromise = client.call('judge', 'prompt', {
+      cwd: '/tmp',
+      outputSchema: { type: 'object', properties: { step: { type: 'number' } } },
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await resultPromise;
+
+    expect(startThreadCalls).toHaveLength(2);
+    expect(result.status).toBe('done');
+    expect(result.structuredOutput).toEqual(expect.objectContaining({ step: 2 }));
+  });
+
   it('拒否文を引用しただけの長い正常応答は拒否として扱わない', async () => {
     const quoted = `レビュー結果: 前回の実行は "flagged for possible cybersecurity risk" という拒否で失敗していました。${'この点を踏まえた分析と該当箇所の検証結果を以下に記載します。'.repeat(25)}`;
     runPlans = [

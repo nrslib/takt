@@ -557,10 +557,14 @@ export class CodexClient {
         }
 
         const structuredOutput = parseStructuredOutput(lastAgentMessageText.trim(), !!options.outputSchema);
-        // スキーマ準拠の structured output が得られた応答は、拒否文を引用していても拒否ではない。
-        // 連結本文が長くても最終メッセージ単体が拒否文のケースがあるため両方を照合する。
-        const refusalDetected = structuredOutput === undefined
-          && (isCodexSafetyRefusal(trimmed) || isCodexSafetyRefusal(lastAgentMessageText.trim()));
+        // JSON（または fence）で始まる純粋な structured 応答は、拒否文を引用していても拒否ではない。
+        // 拒否文で始まる応答は、末尾に JSON が続いていてもこの除外に該当しない。
+        // 検出は連結本文のみを対象とする。長い前置きに続く拒否は見逃す可能性があるが、
+        // その場合は従来どおりルール不一致の fail-fast に落ちるだけで、正常応答を
+        // 誤って拒否扱いして枯渇エラーにする誤検出よりも安全側である。
+        const looksLikePureStructuredOutput = structuredOutput !== undefined
+          && (trimmed.startsWith('{') || trimmed.startsWith('```'));
+        const refusalDetected = !looksLikePureStructuredOutput && isCodexSafetyRefusal(trimmed);
         if (refusalDetected) {
           if (refusalRetryCount < CODEX_REFUSAL_MAX_RETRIES) {
             refusalRetryCount += 1;
