@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
 
 type MockStreamEvent = Record<string, unknown>;
 type RunPlan =
@@ -191,6 +195,43 @@ describe('OpenCodeClient retry', () => {
       {
         type: 'stream',
         createStream: (signal?: AbortSignal) => (async function* () {
+          yield {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'timeout-tool',
+                sessionID: 'session-timeout-retry-1',
+                type: 'tool',
+                callID: 'call-timeout-tool',
+                tool: 'remote',
+                state: { status: 'running', input: { token: 'timeout-secret' } },
+              },
+            },
+          };
+          yield {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'timeout-tail',
+                sessionID: 'session-timeout-retry-1',
+                type: 'text',
+                text: 'exception retry tail',
+              },
+              delta: 'exception retry tail',
+            },
+          };
+          yield {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'timeout-reasoning',
+                sessionID: 'session-timeout-retry-1',
+                type: 'reasoning',
+                text: 'exception reasoning tail',
+              },
+              delta: 'exception reasoning tail',
+            },
+          };
           await waitForAbort(signal);
         })(),
       },
@@ -221,9 +262,11 @@ describe('OpenCodeClient retry', () => {
         return Promise.resolve({ data: { id: 'session-timeout-retry-2' } });
       });
     const client = new OpenCodeClient();
+    const onStream = vi.fn();
     const resultPromise = client.call('coder', 'prompt', {
       cwd: '/tmp',
       model: 'opencode/big-pickle',
+      onStream,
     });
 
     await vi.waitFor(() => {
@@ -249,6 +292,125 @@ describe('OpenCodeClient retry', () => {
     expect(promptAsync.mock.calls[0][0].sessionID).toBe('session-timeout-retry-1');
     expect(promptAsync.mock.calls[1][0].sessionID).toBe('session-timeout-retry-2');
     expect(promptAsync.mock.calls[0][0].sessionID).not.toBe(promptAsync.mock.calls[1][0].sessionID);
+    expect(onStream.mock.calls.filter(([event]) => (
+      event.type === 'text' && event.data.text === 'exception retry tail'
+    ))).toHaveLength(1);
+    expect(onStream.mock.calls.filter(([event]) => (
+      event.type === 'thinking' && event.data.thinking === 'exception reasoning tail'
+    ))).toHaveLength(1);
+    expect(JSON.stringify(onStream.mock.calls)).not.toContain('timeout-secret');
+  });
+
+  it('flushes pending text before retrying a transient stream error', async () => {
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'transient-tool',
+                sessionID: 'session-1',
+                type: 'tool',
+                callID: 'call-transient-tool',
+                tool: 'remote',
+                state: { status: 'running', input: { token: 'transient-secret' } },
+              },
+            },
+          },
+          {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'transient-tail',
+                sessionID: 'session-1',
+                type: 'text',
+                text: 'transient retry tail',
+              },
+              delta: 'transient retry tail',
+            },
+          },
+          {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'transient-reasoning',
+                sessionID: 'session-1',
+                type: 'reasoning',
+                text: 'transient reasoning tail',
+              },
+              delta: 'transient reasoning tail',
+            },
+          },
+          {
+            type: 'session.error',
+            properties: {
+              sessionID: 'session-1',
+              error: { name: 'RequestError', data: { message: 'fetch failed' } },
+            },
+          },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          {
+            type: 'message.part.updated',
+            properties: {
+              part: { id: 'recovered', sessionID: 'session-1', type: 'text', text: 'recovered' },
+              delta: 'recovered',
+            },
+          },
+          { type: 'session.idle', properties: { sessionID: 'session-1' } },
+        ],
+      },
+    ];
+    const { sessionCreate, promptAsync, subscribe } = installOpenCodeMock();
+    const onStream = vi.fn();
+    const logsDir = mkdtempSync(join(tmpdir(), 'takt-opencode-retry-thinking-'));
+    const providerLogger = createProviderEventLogger({
+      logsDir,
+      sessionId: 'retry-thinking',
+      runId: 'retry-thinking-run',
+      provider: 'opencode',
+      step: 'implement',
+      enabled: true,
+    });
+    const client = new OpenCodeClient();
+
+    try {
+      const result = await client.call('coder', 'prompt', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        onStream: providerLogger.wrapCallback(onStream),
+      });
+      providerLogger.flush();
+
+      expect(result.status, JSON.stringify(result)).toBe('done');
+      expect(sessionCreate).toHaveBeenCalledTimes(2);
+      expect(promptAsync).toHaveBeenCalledTimes(2);
+      expect(subscribe).toHaveBeenCalledTimes(2);
+      expect(onStream.mock.calls.filter(([event]) => (
+        event.type === 'text' && event.data.text === 'transient retry tail'
+      ))).toHaveLength(1);
+      expect(onStream.mock.calls.filter(([event]) => (
+        event.type === 'thinking' && event.data.thinking === 'transient reasoning tail'
+      ))).toHaveLength(1);
+      expect(JSON.stringify(onStream.mock.calls)).not.toContain('transient-secret');
+
+      const records = readFileSync(providerLogger.filepath, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { event_type: string; data: Record<string, unknown> });
+      expect(records.filter((record) => (
+        record.event_type === 'thinking'
+        && record.data['thinking'] === 'transient reasoning tail'
+      ))).toHaveLength(1);
+      expect(JSON.stringify(records)).not.toContain('transient-secret');
+    } finally {
+      rmSync(logsDir, { recursive: true, force: true });
+    }
   });
 
   it('ストリームの idle timeout は 2 回 retry 後に停止する', async () => {

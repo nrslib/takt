@@ -1,7 +1,13 @@
+import { createHash } from 'node:crypto';
 import type { ProviderType, StreamEvent } from '../../shared/types/provider.js';
 import type { ProviderTypeOrAuto } from '../models/config-types.js';
 import type { ProviderUsageSnapshot } from '../models/response.js';
 import { USAGE_MISSING_REASONS, type UsageMissingReason } from './contracts.js';
+import {
+  sanitizeSensitiveTextWithKnownValues,
+  sanitizeSensitiveValue,
+  sanitizeSensitiveValueWithKnownValues,
+} from '../../shared/utils/sensitiveText.js';
 
 export type StepType = 'normal' | 'parallel' | 'arpeggio' | 'team_leader' | 'workflow_call';
 
@@ -68,15 +74,62 @@ function truncateString(value: string): string {
   return value.slice(0, HEAD_LENGTH) + TRUNCATED_MARKER + value.slice(-TAIL_LENGTH);
 }
 
-function sanitizeData(data: Record<string, unknown>): Record<string, unknown> {
+function sanitizeData(
+  eventType: StreamEvent['type'],
+  data: Record<string, unknown>,
+  knownSensitiveSource: unknown,
+): Record<string, unknown> {
+  const sanitized = eventType === 'tool_use'
+    ? {
+      ...data,
+      input: sanitizeSensitiveValueWithKnownValues(data['input'], knownSensitiveSource),
+    }
+    : eventType === 'tool_result' || eventType === 'tool_output'
+      ? sanitizeSensitiveValueWithKnownValues(data, knownSensitiveSource) as Record<string, unknown>
+      : eventType === 'result'
+        ? {
+          ...data,
+          ...(typeof data['result'] === 'string'
+            ? { result: sanitizeSensitiveTextWithKnownValues(data['result'], knownSensitiveSource) }
+            : {}),
+          ...(typeof data['error'] === 'string'
+            ? { error: sanitizeSensitiveTextWithKnownValues(data['error'], knownSensitiveSource) }
+            : {}),
+        }
+        : eventType === 'text'
+          || eventType === 'thinking'
+          || eventType === 'error'
+      || eventType === 'assistant_error'
+          ? Object.fromEntries(Object.entries(data).map(([key, value]) => [
+            key,
+            typeof value === 'string'
+              ? sanitizeSensitiveTextWithKnownValues(value, knownSensitiveSource)
+              : value,
+          ]))
+      : eventType === 'permission_asked'
+        ? {
+          ...data,
+          permission: sanitizeSensitiveValue(data['permission']),
+          patterns: sanitizeSensitiveValue(data['patterns']),
+          always: sanitizeSensitiveValue(data['always']),
+        }
+        : data;
+  const fullySanitized = sanitizeSensitiveValueWithKnownValues(
+    sanitized,
+    knownSensitiveSource,
+  ) as Record<string, unknown>;
   return Object.fromEntries(
-    Object.entries(data).map(([key, value]) => {
+    Object.entries(fullySanitized).map(([key, value]) => {
       if (typeof value === 'string') {
         return [key, truncateString(value)];
       }
       return [key, value];
     })
   );
+}
+
+function correlateProviderIdentifier(value: string): string {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
 
 function pickString(source: Record<string, unknown>, keys: string[]): string | undefined {
@@ -108,13 +161,15 @@ export function normalizeProviderEvent(
   event: StreamEvent,
   provider: ProviderTypeOrAuto,
   step: string,
-  runId: string
+  runId: string,
+  knownSensitiveSource: unknown,
 ): ProviderEventLogRecord {
-  const data = sanitizeData(event.data as unknown as Record<string, unknown>);
-  const sessionId = pickString(data, ['session_id', 'sessionId', 'sessionID', 'thread_id', 'threadId']);
-  const messageId = pickString(data, ['message_id', 'messageId', 'item_id', 'itemId']);
-  const callId = pickString(data, ['call_id', 'callId', 'id']);
-  const requestId = pickString(data, ['request_id', 'requestId']);
+  const rawData = event.data as unknown as Record<string, unknown>;
+  const sessionId = pickString(rawData, ['session_id', 'sessionId', 'sessionID', 'thread_id', 'threadId']);
+  const messageId = pickString(rawData, ['message_id', 'messageId', 'item_id', 'itemId']);
+  const callId = pickString(rawData, ['call_id', 'callId', 'id']);
+  const requestId = pickString(rawData, ['request_id', 'requestId']);
+  const data = sanitizeData(event.type, rawData, knownSensitiveSource);
 
   return {
     timestamp: new Date().toISOString(),
@@ -122,7 +177,7 @@ export function normalizeProviderEvent(
     event_type: event.type,
     run_id: runId,
     step,
-    ...(sessionId ? { session_id: sessionId } : {}),
+    ...(sessionId ? { session_id: correlateProviderIdentifier(sessionId) } : {}),
     ...(messageId ? { message_id: messageId } : {}),
     ...(callId ? { call_id: callId } : {}),
     ...(requestId ? { request_id: requestId } : {}),

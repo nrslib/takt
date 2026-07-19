@@ -12,7 +12,7 @@
     "takt-mcp": "./dist/app/mcp/index.js"
   },
   "scripts": {
-    "build": "tsc && mkdir -p dist/shared/prompts/en/parts dist/shared/prompts/ja/parts dist/shared/i18n dist/core/runtime/presets && cp src/shared/prompts/en/*.md dist/shared/prompts/en/ && cp src/shared/prompts/ja/*.md dist/shared/prompts/ja/ && cp src/shared/prompts/en/parts/*.md dist/shared/prompts/en/parts/ && cp src/shared/prompts/ja/parts/*.md dist/shared/prompts/ja/parts/ && cp src/shared/i18n/labels_en.yaml src/shared/i18n/labels_ja.yaml dist/shared/i18n/ && cp src/core/runtime/presets/*.sh dist/core/runtime/presets/",
+    "build": "tsc && tsc -p tsconfig.prompt-evals.json && mkdir -p dist/shared/prompts/en/parts dist/shared/prompts/ja/parts dist/shared/i18n dist/core/runtime/presets && cp src/shared/prompts/en/*.md dist/shared/prompts/en/ && cp src/shared/prompts/ja/*.md dist/shared/prompts/ja/ && cp src/shared/prompts/en/parts/*.md dist/shared/prompts/en/parts/ && cp src/shared/prompts/ja/parts/*.md dist/shared/prompts/ja/parts/ && cp src/shared/i18n/labels_en.yaml src/shared/i18n/labels_ja.yaml dist/shared/i18n/ && cp src/core/runtime/presets/*.sh dist/core/runtime/presets/",
     "watch": "tsc --watch",
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
@@ -25,6 +25,7 @@
     "test:it:serial": "node scripts/run-it-serial-groups.mjs",
     "test:it:serial:git": "vitest run --config vitest.config.it.serial.git.ts",
     "test:it:serial:workflow": "vitest run --config vitest.config.it.serial.workflow.ts",
+    "test:prompt-evals": "node prompt-evals/run-smoke.mjs",
     "test:watch": "vitest --config vitest.config.unit.parallel.ts",
     "test:e2e": "tmp=\"$(mktemp -t takt-e2e.XXXXXX)\"; npm run test:e2e:mock >\"$tmp\" 2>&1; code=$?; cat \"$tmp\"; if grep -q \"error connecting to api.github.com\" \"$tmp\"; then echo \"[takt] GitHub connectivity error detected in E2E output\"; code=1; fi; rm -f \"$tmp\"; if [ \"$code\" -eq 0 ]; then msg='test:e2e passed'; else msg=\"test:e2e failed (exit=$code)\"; fi; if command -v osascript >/dev/null 2>&1; then osascript -e \"display notification \\\"$msg\\\" with title \\\"takt\\\" subtitle \\\"E2E\\\"\" >/dev/null 2>&1 || true; fi; echo \"[takt] $msg\"; exit $code",
     "test:e2e:smoke": "TAKT_E2E_PROVIDER=mock vitest run --config vitest.config.e2e.smoke.ts --outputFile.json=e2e/results/smoke.json",
@@ -42,7 +43,7 @@
     "test:e2e:opencode": "npm run test:e2e:provider:opencode",
     "test:e2e:cursor": "npm run test:e2e:provider:cursor",
     "lint": "eslint src/",
-    "check:release": "npm run build && npm run lint && npm run test && npm run test:it && npm run test:e2e:all; code=$?; if [ \"$code\" -eq 0 ]; then msg='check:release passed'; else msg=\"check:release failed (exit=$code)\"; fi; if command -v osascript >/dev/null 2>&1; then osascript -e \"display notification \\\"$msg\\\" with title \\\"takt\\\" subtitle \\\"Release Check\\\"\" >/dev/null 2>&1 || true; fi; echo \"[takt] $msg\"; exit $code",
+    "check:release": "npm run build && npm run lint && npm run test && npm run test:it && npm run test:prompt-evals && npm run test:e2e:all; code=$?; if [ \"$code\" -eq 0 ]; then msg='check:release passed'; else msg=\"check:release failed (exit=$code)\"; fi; if command -v osascript >/dev/null 2>&1; then osascript -e \"display notification \\\"$msg\\\" with title \\\"takt\\\" subtitle \\\"Release Check\\\"\" >/dev/null 2>&1 || true; fi; echo \"[takt] $msg\"; exit $code",
     "prepublishOnly": "npm run lint && npm run build",
     "canary:coder": "node scripts/canary-coder.mjs"
   },

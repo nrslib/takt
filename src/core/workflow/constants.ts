@@ -10,8 +10,8 @@ export const COMPLETE_STEP = 'COMPLETE';
 export const ABORT_STEP = 'ABORT';
 
 /**
- * Terminal target for a provisional fixpoint stop (対策バッチ B1: raw finding
- * 梯子設計 v2 の収束性対策). Like COMPLETE_STEP/ABORT_STEP this is a pure
+ * Terminal target for a provisional fixpoint stop. Like
+ * COMPLETE_STEP/ABORT_STEP this is a pure
  * routing marker — no step object is synthesized for it (unlike
  * FINDING_CONFLICT_ADJUDICATION_STEP, which is a real synthesized step). A
  * workflow routes here via `next: NEEDS_ADJUDICATION` once
@@ -23,8 +23,8 @@ export const ABORT_STEP = 'ABORT';
 export const NEEDS_ADJUDICATION_STEP = 'NEEDS_ADJUDICATION';
 
 /**
- * Reserved name of the engine-synthesized conflict-adjudication step (Phase B
- * of the Finding Contract convergence design). Workflow rules (and loop
+ * Reserved name of the engine-synthesized conflict-adjudication step.
+ * Workflow rules (and loop
  * monitor judge rules) may point `next:` at this name like any other step, but
  * it is never authored in workflow YAML — the name is reserved
  * (WorkflowValidator rejects user-defined steps that squat on it) and the

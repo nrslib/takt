@@ -10,11 +10,34 @@
  * verbatimExcerpt）は常に正しい実在の引用のまま固定し、snapshotId だけを
  * 変えることで、この1変数だけが admission を分けることを示す。
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const fsControl = vi.hoisted(() => ({
+  beforeOpenPath: undefined as string | undefined,
+  beforeOpen: undefined as (() => void) | undefined,
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    openSync: ((path: Parameters<typeof actual.openSync>[0], ...args: unknown[]) => {
+      if (fsControl.beforeOpenPath === String(path)) {
+        fsControl.beforeOpenPath = undefined;
+        const beforeOpen = fsControl.beforeOpen;
+        fsControl.beforeOpen = undefined;
+        beforeOpen?.();
+      }
+      return Reflect.apply(actual.openSync, actual, [path, ...args]) as number;
+    }) as typeof actual.openSync,
+  };
+});
+
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentResponse, FindingContractConfig, WorkflowStep } from '../core/models/types.js';
+import { verifySourceQuoteEvidence } from '../core/workflow/findings/admission-validation.js';
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
@@ -36,6 +59,8 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
   let cwd: string;
 
   beforeEach(() => {
+    fsControl.beforeOpenPath = undefined;
+    fsControl.beforeOpen = undefined;
     cwd = mkdtempSync(join(tmpdir(), 'takt-review-scope-snapshot-admission-'));
     mkdirSync(join(cwd, 'src'), { recursive: true });
     writeFileSync(
@@ -46,6 +71,8 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
   });
 
   afterEach(() => {
+    fsControl.beforeOpenPath = undefined;
+    fsControl.beforeOpen = undefined;
     rmSync(cwd, { recursive: true, force: true });
   });
 
@@ -64,8 +91,9 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
       loadLedger: () => ledger,
       saveLedger: (next) => { ledger = next; },
       updateLedger: (mutator) => {
-        ledger = mutator(ledger);
-        return Promise.resolve(ledger);
+        const mutation = mutator(ledger);
+        ledger = mutation.ledger;
+        return Promise.resolve(mutation);
       },
       createRunCopy: () => '/tmp/ledger-copy.json',
       saveRawFindings: () => '/tmp/raw-findings.json',
@@ -175,10 +203,41 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
     // verbatimExcerpt は現在のファイルと完全一致するが、snapshotId が違うため
     // verifySourceQuoteEvidence は内容の一致/不一致を判定する前に stale-snapshot で
     // 弾く（幻覚した引用が偶然一致しても match と誤判定しないための設計 —
-    // finding-evidence-protocol-units.test.ts 参照）。
+    // finding-evidence-protocol.integration.test.ts 参照）。
     expect(ledger.findings).toHaveLength(0);
     const anomalies = ledger.reviewerAnomalies ?? [];
     expect(anomalies).toHaveLength(1);
     expect(anomalies[0]?.kind).toBe('stale-snapshot');
+  });
+
+  it('rejects admission when the source file is replaced after inspection and leaves the substitute unchanged', () => {
+    const sourcePath = join(cwd, 'src', 'example.ts');
+    const originalPath = join(cwd, 'src', 'original-example.ts');
+    const outsidePath = join(cwd, 'outside-example.ts');
+    const outsideContent = '// substituted outside content\n';
+    const quote = verifiedSourceQuoteFields(cwd, 'src/example.ts', 3);
+    writeFileSync(outsidePath, outsideContent);
+    fsControl.beforeOpenPath = sourcePath;
+    fsControl.beforeOpen = () => {
+      renameSync(sourcePath, originalPath);
+      linkSync(outsidePath, sourcePath);
+    };
+
+    const verification = verifySourceQuoteEvidence(cwd, {
+      kind: 'source_quote',
+      path: 'src/example.ts',
+      startLine: 3,
+      endLine: 3,
+      verbatimExcerpt: quote.verbatimExcerpt,
+      snapshotId: quote.snapshotId,
+    }, quote.snapshotId);
+
+    expect(verification).toMatchObject({
+      outcome: 'unverifiable',
+      reason: expect.stringMatching(/identity changed/),
+    });
+    expect(readFileSync(outsidePath, 'utf-8')).toBe(outsideContent);
+    expect(readFileSync(sourcePath, 'utf-8')).toBe(outsideContent);
+    expect(readFileSync(originalPath, 'utf-8')).toContain('// line 3');
   });
 });

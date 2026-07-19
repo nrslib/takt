@@ -459,7 +459,7 @@ describe('builtin takt-default provider_options refs', () => {
         // v2 梯子設計: provisional（意味を確定できなかった観測）は fixer が直接
         // 直せないため、fix ループへ入れず再計画へ返す。
         'when(findings.provisional.count > 0 && findings.conflicts.count == 0)',
-        `any("needs_fix", "${antipatternNg}", "needs_fix", "needs_fix", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)`,
+        `any("needs_fix", "${antipatternNg}") && when(findings.conflicts.count == 0)`,
         'when(findings.conflicts.count == 0 && findings.open.count > 0)',
         // Phase B (codex B1): actionable かどうかの判断は裁定ステップ自身が
         // 構造化出力で担うため、旧 ai() conflict ルールは削除済み。未裁定の
@@ -588,7 +588,7 @@ describe('builtin takt-default provider_options refs', () => {
         rule('when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)', 'NEEDS_ADJUDICATION'),
         rule('when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)', 'NEEDS_ADJUDICATION'),
         rule('when(findings.provisional.count > 0 && findings.conflicts.count == 0)', 'plan'),
-        rule(`any(${needsFixVotes.map((vote) => `"${vote}"`).join(', ')}) && when(findings.conflicts.count == 0)`, 'fix'),
+        rule(`any(${[...new Set(needsFixVotes)].map((vote) => `"${vote}"`).join(', ')}) && when(findings.conflicts.count == 0)`, 'fix'),
         rule('when(findings.conflicts.count == 0 && findings.open.count > 0)', 'fix'),
         rule('when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)', 'finding-conflict-adjudication'),
         rule('when(findings.conflicts.count > 0)', 'ABORT'),
@@ -643,6 +643,18 @@ describe('builtin takt-default provider_options refs', () => {
         const rawFinalGate = workflow.steps?.find((step) => step.name === 'final-gate');
         expect(ruleSignatures(rawReviewers ?? {}), `${name}:reviewers`).toEqual(expectedRuleSignatures[name].reviewers);
         expect(ruleSignatures(rawFinalGate ?? {}), `${name}:final-gate`).toEqual(expectedRuleSignatures[name].finalGate);
+      }
+
+      const expectedNeedsFixCondition = `any("needs_fix", "${aiNeedsFix}")`;
+      for (const name of ['default-peer-review', 'takt-default-high'] as const) {
+        const workflow = loadBuiltinWorkflow(locale, `${name}.yaml`);
+        const rawReviewers = workflow.steps?.find((step) => step.name === 'reviewers');
+        const fixRule = rawReviewers?.rules?.find((candidate) => candidate.next === 'fix');
+        expect(fixRule?.condition, `${name}:reviewers should use unique any() conditions`).toBe(
+          name === 'takt-default-high'
+            ? `${expectedNeedsFixCondition} && when(findings.conflicts.count == 0)`
+            : expectedNeedsFixCondition,
+        );
       }
     });
 
@@ -1079,10 +1091,11 @@ describe('builtin takt-default provider_options refs', () => {
           ],
           ['final-gate', 'final-gate', 'NEEDS_ADJUDICATION', 'NEEDS_ADJUDICATION', 'plan', 'fix', 'fix', 'finding-conflict-adjudication', 'ABORT'],
         );
-        for (const index of [0, 5]) {
-          expect(reviewersEntry.step.rules?.[index].condition?.match(/"[^"]+"/g), `${name}:reviewers rule ${index} vote count`)
-            .toHaveLength(reviewerChildren.length);
-        }
+        expect(reviewersEntry.step.rules?.[0].condition?.match(/"[^"]+"/g), `${name}:reviewers all() vote count`)
+          .toHaveLength(reviewerChildren.length);
+        const anyVotes = reviewersEntry.step.rules?.[5].condition?.match(/"[^"]+"/g) ?? [];
+        expect(new Set(anyVotes).size, `${name}:reviewers any() values must be unique`).toBe(anyVotes.length);
+        expect(anyVotes, `${name}:reviewers any() outcome set`).toHaveLength(2);
 
         expect(reviewStepConfiguration(mergeReadinessEntry.step)).toEqual(expectedReviewStep({
           name: 'merge-readiness-review', persona: 'merge-readiness-reviewer', policy: 'review', knowledge: undefined,

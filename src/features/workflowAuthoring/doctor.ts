@@ -157,7 +157,7 @@ function warnOnMissingFixpointRouting(
 }
 
 /**
- * 有限停止予算（bounded stop budget; codex 裁定・対策バッチ B1 の拡張）への
+ * 有限停止予算（bounded stop budget; Finding Contract・対策バッチ B1 の拡張）への
  * 移行警告: fixpoint ルーティングだけでは、レビュアーが毎ラウンド別の架空
  * provisional を生成し続けると provisional 集合が毎回変わり fixpoint が
  * 永久に成立しない（v3-r4 実測）。findings.rounds.budgetExhausted を一切
@@ -471,7 +471,7 @@ function buildRoutingEdges(workflow: WorkflowConfig, stepNames: Set<string>): Ma
   for (const monitor of workflow.loopMonitors ?? []) {
     // judge は cycle が threshold 回完走した後にしか発火しない。cycle の
     // 途中ステップからエッジを張ると「cycle 後半の producer を通らない偽の
-    // 早期経路」が生まれ dominator 判定が偽陽性になる（codex 指摘）。
+    // 早期経路」が生まれ dominator 判定が偽陽性になる（boundary requirement）。
     // cycle 最後のステップからのみ張る — 最後のステップの AVAIL には
     // cycle 前半の成果物が通常の rules エッジ経由で伝播している。
     const lastCycleStep = monitor.cycle[monitor.cycle.length - 1];
@@ -497,7 +497,7 @@ const WILDCARD_REPORT = '*';
 /**
  * `*`（workflow_call = 任意レポートの producer）は全集合として扱う: 交差では
  * 通常要素として比較せず、もう一方の集合に吸収される（{"*"} ∩ {"X"} = {"X"}）。
- * codex 指摘: `*` を通常要素として交差すると、workflow_call 経路と実 producer
+ * boundary requirement: `*` を通常要素として交差すると、workflow_call 経路と実 producer
  * 経路の合流で交差が空になり偽陽性が出る。
  */
 function intersectGuaranteedReports(a: Set<string>, b: Set<string>): Set<string> {

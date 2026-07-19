@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, readFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   initNdjsonLog,
@@ -53,6 +53,8 @@ describe('NDJSON log', () => {
 
       expect(filepath).toContain('sess-001.jsonl');
       expect(existsSync(filepath)).toBe(true);
+      expect(statSync(dirname(filepath)).mode & 0o777).toBe(0o700);
+      expect(statSync(filepath).mode & 0o777).toBe(0o600);
 
       const content = readFileSync(filepath, 'utf-8');
       const lines = content.trim().split('\n');

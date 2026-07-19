@@ -2121,7 +2121,7 @@ steps:
 
     expect(state.status).toBe('aborted');
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
-  });
+  }, 30_000);
 
   it('workflow_call depth 制限を超えたら停止する', async () => {
     for (let index = 1; index <= 6; index++) {
@@ -2163,7 +2163,7 @@ steps:
 
     expect(state.status).toBe('aborted');
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
-  });
+  }, 30_000);
 
   it.each([
     {

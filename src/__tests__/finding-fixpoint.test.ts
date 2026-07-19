@@ -14,10 +14,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type { FindingLedger, FindingLedgerEntry } from '../core/workflow/findings/types.js';
-import { attachFixpointState, computeFixpointSnapshot } from '../core/workflow/findings/fixpoint.js';
+import {
+  attachFixpointState as attachFixpointStateWithCwd,
+  computeFixpointSnapshot as computeFixpointSnapshotWithCwd,
+} from '../core/workflow/findings/fixpoint.js';
 import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../core/workflow/findings/manager-runner.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
-import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
+import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
@@ -27,6 +30,18 @@ vi.mock('../agents/agent-usecases.js', () => ({
 
 const { executeAgent } = await import('../agents/agent-usecases.js');
 const executeAgentMock = vi.mocked(executeAgent);
+
+function computeFixpointSnapshot(ledger: FindingLedger) {
+  return computeFixpointSnapshotWithCwd(ledger, process.cwd());
+}
+
+function attachFixpointState(previous: FindingLedger, next: FindingLedger): FindingLedger {
+  return attachFixpointStateWithCwd(previous, next, process.cwd());
+}
+
+function buildFindingsRuleContext(ledger: FindingLedger) {
+  return buildFindingsRuleContextWithCwd(ledger, process.cwd());
+}
 
 beforeEach(() => {
   executeAgentMock.mockReset();
@@ -194,6 +209,44 @@ describe('computeFixpointSnapshot', () => {
     expect(snapshot.unadjudicatedConflictEntries[0]).toMatch(/^C-0001:/);
   });
 
+  it('changes the conflict fixpoint entry when the reviewed worktree changes', () => {
+    const scopeCwd = mkdtempSync(join(tmpdir(), 'takt-fixpoint-scope-'));
+    try {
+      mkdirSync(join(scopeCwd, 'src'), { recursive: true });
+      writeFileSync(join(scopeCwd, 'src', 'a.ts'), 'export const value = 1;\n');
+      initializeGitFixture(scopeCwd, ['src/a.ts']);
+      const withConflict = ledger({
+        findings: [substantiveFinding({ id: 'F-0002' })],
+        rawFindings: [{
+          rawFindingId: 'raw-c1',
+          stepName: 'reviewers',
+          reviewer: 'arch-review',
+          familyTag: 'bug',
+          severity: 'high',
+          title: 'Conflicting claim',
+          description: 'One reviewer says X, another says Y.',
+        }],
+        conflicts: [{
+          id: 'C-0001',
+          status: 'active',
+          findingIds: ['F-0002'],
+          rawFindingIds: ['raw-c1'],
+          description: 'Unresolved disagreement',
+          firstSeen: observation(),
+          lastSeen: observation(),
+        }],
+      });
+      const before = computeFixpointSnapshotWithCwd(withConflict, scopeCwd);
+
+      writeFileSync(join(scopeCwd, 'src', 'a.ts'), 'export const value = 2;\n');
+      const after = computeFixpointSnapshotWithCwd(withConflict, scopeCwd);
+
+      expect(after.unadjudicatedConflictEntries).not.toEqual(before.unadjudicatedConflictEntries);
+    } finally {
+      rmSync(scopeCwd, { recursive: true, force: true });
+    }
+  });
+
   it('produces sorted, order-independent output (two different insertion orders yield the same snapshot)', () => {
     const a = provisionalFinding({ id: 'F-0001', provisional: { ...provisionalFinding().provisional!, stableKey: 'zzz' } });
     const b = provisionalFinding({ id: 'F-0002', provisional: { ...provisionalFinding().provisional!, stableKey: 'aaa' } });
@@ -290,8 +343,9 @@ function makeRoundHarness(initialLedger: FindingLedger): {
     loadLedger: () => ledgerState,
     saveLedger: (next) => { ledgerState = next; },
     updateLedger: (mutator) => {
-      ledgerState = mutator(ledgerState);
-      return Promise.resolve(ledgerState);
+      const mutation = mutator(ledgerState);
+      ledgerState = mutation.ledger;
+      return Promise.resolve(mutation);
     },
     createRunCopy: () => '/tmp/ledger-copy.json',
     saveRawFindings: () => '/tmp/raw-findings.json',

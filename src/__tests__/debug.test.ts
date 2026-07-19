@@ -16,8 +16,8 @@ import {
   errorLog,
   writePromptLog,
 } from '../shared/utils/index.js';
-import { existsSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 function resolvePromptsLogFilePath(): string {
@@ -76,6 +76,8 @@ describe('debug logging', () => {
         expect(logFile!).toContain('/logs/');
         expect(logFile!).toMatch(/debug-.*\.log$/);
         expect(existsSync(logFile!)).toBe(true);
+        expect(statSync(dirname(logFile!)).mode & 0o777).toBe(0o700);
+        expect(statSync(logFile!).mode & 0o777).toBe(0o600);
       } finally {
         rmSync(projectDir, { recursive: true, force: true });
       }

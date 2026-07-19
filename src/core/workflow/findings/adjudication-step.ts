@@ -13,7 +13,7 @@ import { FindingConflictAdjudicationOutputJsonSchema } from './schemas.js';
 // enforces on this shape.
 export const FINDING_CONFLICT_ADJUDICATION_SCHEMA_REF = 'takt.findings.adjudication.v1';
 
-/** Fixed persona for the adjudication step (design item 1): the existing "supervisor" facet, not a per-workflow-configurable persona like findings-manager's. The loader (workflowParser) resolves its personaPath into finding_contract.adjudicator so the facet BODY reaches the system prompt (codex B6). */
+/** The engine-owned adjudication step always uses the supervisor facet resolved into finding_contract.adjudicator. */
 export const FINDING_CONFLICT_ADJUDICATION_PERSONA = 'supervisor';
 
 /**
@@ -21,7 +21,7 @@ export const FINDING_CONFLICT_ADJUDICATION_PERSONA = 'supervisor';
  * (adjudication-runner.ts) sets AgentResponse.matchedRuleIndex to one of these
  * and the standard transition machinery (resolveTransitionFromDone ->
  * determineRuleTransition) takes over — no bespoke interception in the run
- * loop (codex B4).
+ * loop (synthetic-step requirement).
  *
  * - FINDING_CLOSED: the finding moved off open (finding_stale/evidence_invalid)
  *   or the adjudication was discarded / had no eligible target — return to the

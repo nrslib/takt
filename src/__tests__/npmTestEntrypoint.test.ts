@@ -1,23 +1,228 @@
-import { describe, expect, it } from 'vitest';
+import { resolve } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  hasIntegrationTestTarget,
+  runNpmTest,
   selectNpmTestRuns,
 } from '../../scripts/run-npm-test.mjs';
+import { resolveNpmInvocation } from '../../scripts/npm-invocation.mjs';
+import parallelIntegrationConfig from '../../vitest.config.it.parallel.js';
+import serialGitConfig from '../../vitest.config.it.serial.git.js';
+import serialWorkflowConfig from '../../vitest.config.it.serial.workflow.js';
+import unitConfig from '../../vitest.config.unit.parallel.js';
+import {
+  itSerialGitTestGlobs,
+  itSerialTestGlobs,
+  itSerialWorkflowLoaderTestGlobs,
+  itTestGlobs,
+  parallelSrcRunnerConfig,
+  srcTestInclude,
+} from '../../vitest.config.shared.js';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('parallel test runner configuration', () => {
+  it('should retain multiple workers for parallel suites', () => {
+    expect(parallelSrcRunnerConfig.fileParallelism).toBe(true);
+    expect(parallelSrcRunnerConfig.maxWorkers).toMatch(/^\d+%$/);
+    expect(parallelSrcRunnerConfig.maxWorkers).not.toBe('1%');
+  });
+
+  it('should keep unit, parallel integration, and serial integration gates exclusive', () => {
+    expect(unitConfig).toMatchObject({
+      test: {
+        include: srcTestInclude,
+        exclude: [...itTestGlobs, ...itSerialTestGlobs],
+      },
+    });
+    expect(parallelIntegrationConfig).toMatchObject({
+      test: {
+        include: itTestGlobs,
+        exclude: itSerialTestGlobs,
+      },
+    });
+    expect(serialGitConfig).toMatchObject({
+      test: { include: itSerialGitTestGlobs },
+    });
+    expect(serialWorkflowConfig).toMatchObject({
+      test: { include: itSerialWorkflowLoaderTestGlobs },
+    });
+  });
+});
+
+describe('npm test sequential execution', () => {
+  it('should execute npm-cli through Node without a shell', () => {
+    expect(resolveNpmInvocation('/opt/node/bin/node', '/opt/node/lib/node_modules/npm/bin/npm-cli.js')).toEqual({
+      executable: '/opt/node/bin/node',
+      args: ['/opt/node/lib/node_modules/npm/bin/npm-cli.js'],
+    });
+  });
+
+  it('should reject command shims and unverified package-manager entrypoints', () => {
+    expect(() => resolveNpmInvocation('/opt/node/bin/node', '/opt/node/bin/npm.cmd')).toThrow(/npm-cli\.js/);
+    expect(() => resolveNpmInvocation('/opt/node/bin/node', 'npm-cli.js')).toThrow(/absolute path/);
+  });
+
+  it('should run only the unit gate when no target is provided', async () => {
+    const events: string[] = [];
+    const run = vi.fn(async (npmArgs: string[]) => {
+      const script = npmArgs[1]!;
+      events.push(`start:${script}`);
+      await Promise.resolve();
+      events.push(`finish:${script}`);
+      return { code: 0, signal: null };
+    });
+
+    const code = await runNpmTest([], run);
+
+    expect(events).toEqual([
+      'start:test:unit:parallel',
+      'finish:test:unit:parallel',
+    ]);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(code).toBe(0);
+  });
+
+  it('should continue routed gates sequentially and return the first child failure code', async () => {
+    const commands: string[][] = [];
+    const events: string[] = [];
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const run = vi.fn(async (npmArgs: string[]) => {
+      const script = npmArgs[1]!;
+      commands.push(npmArgs);
+      events.push(`start:${script}`);
+      await Promise.resolve();
+      events.push(`finish:${script}`);
+      return { code: script === 'test:unit:parallel' ? 7 : 0, signal: null };
+    });
+
+    const code = await runNpmTest([
+      '--reporter',
+      'verbose',
+      'src/__tests__/acpAgent.test.ts',
+      'src/__tests__/it-acp-workflow-bridge.test.ts',
+    ], run);
+
+    expect(commands).toEqual([
+      [
+        'run',
+        'test:unit:parallel',
+        '--',
+        '--reporter',
+        'verbose',
+        'src/__tests__/acpAgent.test.ts',
+      ],
+      [
+        'run',
+        'test:it:parallel',
+        '--',
+        '--reporter',
+        'verbose',
+        'src/__tests__/it-acp-workflow-bridge.test.ts',
+      ],
+    ]);
+    expect(events).toEqual([
+      'start:test:unit:parallel',
+      'finish:test:unit:parallel',
+      'start:test:it:parallel',
+      'finish:test:it:parallel',
+    ]);
+    expect(error).toHaveBeenCalledWith(
+      '[takt] npm run test:unit:parallel -- --reporter verbose src/__tests__/acpAgent.test.ts failed with exit=7',
+    );
+    expect(code).toBe(7);
+  });
+});
 
 describe('npm test entrypoint routing', () => {
-  it('should run the unit suite as a single parallel run when no test target is provided', () => {
-    // 対策バッチ A-4: --shard もワーカー上書きも付けず、vitest config 既定の
-    // ワーカー数（75%）に任せる（実測 98.6s → 65.4s）。CI は npm test を経由せず
-    // test:unit:parallel --shard を直接叩くため、この経路の変更は CI 無影響。
+  it('should run only the unit suite when no test target is provided', () => {
     expect(selectNpmTestRuns([])).toEqual([
       { npmArgs: ['run', 'test:unit:parallel'] },
+    ]);
+  });
+
+  it('should pass required-value options to the default unit suite when no target is provided', () => {
+    expect(selectNpmTestRuns(['--reporter', 'verbose'])).toEqual([
+      { npmArgs: ['run', 'test:unit:parallel', '--', '--reporter', 'verbose'] },
+    ]);
+  });
+
+  it('should pass boolean options to the default unit suite when no target is provided', () => {
+    expect(selectNpmTestRuns(['--silent'])).toEqual([
+      { npmArgs: ['run', 'test:unit:parallel', '--', '--silent'] },
+    ]);
+  });
+
+  it('should route targeted serial Git tests to the Git runner', () => {
+    const args = ['src/__tests__/finding-ladder-robustness.test.ts'];
+
+    expect(selectNpmTestRuns(args)).toEqual([
+      { npmArgs: ['run', 'test:it:serial:git', '--', ...args] },
+    ]);
+  });
+
+  it('should route the adjudication runner integration test to the serial Git runner', () => {
+    const args = ['src/__tests__/finding-conflict-adjudication-runner.test.ts'];
+
+    expect(selectNpmTestRuns(args)).toEqual([
+      { npmArgs: ['run', 'test:it:serial:git', '--', ...args] },
+    ]);
+  });
+
+  it('should normalize a serial Git basename before routing', () => {
+    expect(selectNpmTestRuns(['finding-ladder-robustness.test.ts'])).toEqual([
+      {
+        npmArgs: [
+          'run',
+          'test:it:serial:git',
+          '--',
+          'src/__tests__/finding-ladder-robustness.test.ts',
+        ],
+      },
+    ]);
+  });
+
+  it('should normalize an absolute serial workflow path before routing', () => {
+    expect(selectNpmTestRuns([resolve('src/__tests__/workflowLoader.test.ts')])).toEqual([
+      {
+        npmArgs: [
+          'run',
+          'test:it:serial:workflow',
+          '--',
+          'src/__tests__/workflowLoader.test.ts',
+        ],
+      },
+    ]);
+  });
+
+  it('should route targeted serial workflow tests to the workflow runner', () => {
+    const args = ['src/__tests__/workflowLoader.test.ts'];
+
+    expect(selectNpmTestRuns(args)).toEqual([
+      { npmArgs: ['run', 'test:it:serial:workflow', '--', ...args] },
+    ]);
+  });
+
+  it('should route mixed unit, parallel IT, and serial targets exactly once', () => {
+    const args = [
+      'src/__tests__/acpAgent.test.ts',
+      'src/__tests__/it-acp-workflow-bridge.test.ts',
+      'src/__tests__/finding-evidence-protocol.integration.test.ts',
+      'src/__tests__/config.test.ts',
+    ];
+
+    expect(selectNpmTestRuns(args)).toEqual([
+      { npmArgs: ['run', 'test:unit:parallel', '--', args[0]] },
+      { npmArgs: ['run', 'test:it:parallel', '--', args[1]] },
+      { npmArgs: ['run', 'test:it:serial:git', '--', args[2]] },
+      { npmArgs: ['run', 'test:it:serial:workflow', '--', args[3]] },
     ]);
   });
 
   it('should route targeted integration tests to the IT runner', () => {
     const args = ['src/__tests__/it-acp-workflow-bridge.test.ts'];
 
-    expect(hasIntegrationTestTarget(args)).toBe(true);
     expect(selectNpmTestRuns(args)).toEqual([
       { npmArgs: ['run', 'test:it:parallel', '--', ...args] },
     ]);
@@ -26,7 +231,6 @@ describe('npm test entrypoint routing', () => {
   it('should keep targeted unit tests on the unit runner', () => {
     const args = ['src/__tests__/workflowExecutionEvents.test.ts'];
 
-    expect(hasIntegrationTestTarget(args)).toBe(false);
     expect(selectNpmTestRuns(args)).toEqual([
       { npmArgs: ['run', 'test:unit:parallel', '--', ...args] },
     ]);
@@ -36,7 +240,6 @@ describe('npm test entrypoint routing', () => {
     const unitTarget = 'src/__tests__/acpAgent.test.ts';
     const integrationTarget = 'src/__tests__/it-acp-workflow-bridge.test.ts';
 
-    expect(hasIntegrationTestTarget([unitTarget, integrationTarget])).toBe(true);
     expect(selectNpmTestRuns([unitTarget, integrationTarget])).toEqual([
       {
         npmArgs: ['run', 'test:unit:parallel', '--', unitTarget],
@@ -50,7 +253,6 @@ describe('npm test entrypoint routing', () => {
   it('should keep test name filters with targeted integration tests', () => {
     const args = ['-t', 'workflow', 'src/__tests__/it-acp-workflow-bridge.test.ts'];
 
-    expect(hasIntegrationTestTarget(args)).toBe(true);
     expect(selectNpmTestRuns(args)).toEqual([
       {
         npmArgs: ['run', 'test:it:parallel', '--', ...args],
@@ -63,7 +265,6 @@ describe('npm test entrypoint routing', () => {
     const integrationTarget = 'src/__tests__/it-acp-workflow-bridge.test.ts';
     const sharedArgs = ['--testNamePattern', 'workflow'];
 
-    expect(hasIntegrationTestTarget([...sharedArgs, unitTarget, integrationTarget])).toBe(true);
     expect(selectNpmTestRuns([...sharedArgs, unitTarget, integrationTarget])).toEqual([
       {
         npmArgs: ['run', 'test:unit:parallel', '--', ...sharedArgs, unitTarget],

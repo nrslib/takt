@@ -17,20 +17,21 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It r
 | `npm run lint` | ESLint on `src/`. `no-explicit-any` is error; unused vars must be prefixed `_`. |
 | `npm test` | Fast unit gate. Excludes integration/regression/performance tests. |
 | `npm run test:unit:parallel` | Parallel unit slice (`vitest.config.unit.parallel.ts`). |
-| `npm run test:it` | Integration/regression/performance gate. Runs the parallel IT slice, then the audited serial Git and workflow-loader groups in parallel. |
+| `npm run test:it` | Integration/regression/performance gate. Runs the parallel IT slice, then the audited serial Git and workflow-loader groups sequentially. |
 | `npm run test:it:parallel` | Parallel IT slice (`vitest.config.it.parallel.ts`). Excludes the audited serial groups. |
-| `npm run test:it:serial` | Runs serial Git and workflow-loader groups concurrently. Use `test:it:serial:git` or `test:it:serial:workflow` for one group. |
-| `npx vitest run src/__tests__/<file>.test.ts` | Run a single file. |
-| `npx vitest run -t "<pattern>"` | Run tests whose name matches `<pattern>`. |
-| `npm run test:e2e:smoke` | Fast mock-provider E2E smoke check for targeted local iteration. Not a TAKT quality gate. |
+| `npm run test:it:serial` | Runs serial Git and workflow-loader groups sequentially, attempts both groups, and returns the first failing child exit code. Use `test:it:serial:git` or `test:it:serial:workflow` for one group. |
+| `npm run test:prompt-evals` | Deterministic OpenCode prompt-eval smoke gate. Included in `check:release`. |
+| `npm test -- src/__tests__/<file>.test.ts` | Route a single file to exactly one unit, parallel-IT, serial-Git, or serial-workflow runner. Multiple routed runners execute sequentially and return the first failing child exit code. |
+| `npm test -- -t "<pattern>"` | Run unit tests whose name matches `<pattern>`. |
+| `npm run test:e2e:smoke` | Fast mock-provider E2E smoke check for targeted local iteration. |
 | `npm run test:e2e:mock` | Full mock-provider E2E suite split into parallel shards. This is the TAKT quality gate. Use `test:e2e:mock:serial` for the legacy single-process run. |
 | `npm run test:e2e` | Wrapper around `test:e2e:mock` that also fails on `error connecting to api.github.com` in the output and emits a macOS notification. |
 | `npm run test:e2e:provider:{claude,claude-sdk,codex,opencode,cursor}` | E2E against a real provider (slow, costs API credits). |
-| `npm run check:release` | Full pre-release gate: `build` + `lint` + `test` + `test:it` + `test:e2e:all`. |
+| `npm run check:release` | Full pre-release gate: `build` + `lint` + `test` + `test:it` + `test:prompt-evals` + `test:e2e:all`. |
 
 ### Local quality gates
 
-`.takt/config.yaml` overrides the `implement`, `fix`, and `ai_fix` step gates to require `npm run build`, `npm run lint`, `npm test`, `npm run test:it`, and `npm run test:e2e:mock` to pass before a TAKT step can complete. Run `npm run check:release` when validating the full release path.
+`.takt/config.yaml` gives implementation and fix steps explicit build, lint, test, integration, and mock-E2E verification instructions. The builtin merge-readiness final gate evaluates the reported verification results and routes failures through `needs_fix`; it does not execute command gates itself. Run `npm run check:release` when validating the full release path.
 
 ## CLI Surface
 

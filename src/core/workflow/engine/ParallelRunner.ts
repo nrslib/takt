@@ -511,7 +511,7 @@ export class ParallelRunner {
               };
             }
           }
-          // レビュア1回突き返し（v2 梯子設計 §3）: relation/target/kind の意味
+          // レビュア1回突き返し: relation/target/kind の意味
           // 矛盾がある raw について同一セッションで1回だけ明確化を求める。
           // 直らなかった raw は drop せず ambiguous のまま manager 解釈 /
           // provisional へ進む。clarification は engine 発行の taint 根拠として

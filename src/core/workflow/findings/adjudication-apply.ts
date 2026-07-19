@@ -11,8 +11,7 @@ import type {
 } from './types.js';
 
 /**
- * outcome -> findingTransition is a fixed, engine-owned mapping (design item 1:
- * "outcome と findingTransition の整合はエンジンが検証"). The LLM's own
+ * outcome -> findingTransition is a fixed, engine-owned mapping. The LLM's own
  * findingTransition value is validated against this and never trusted on its
  * own — see applyFindingConflictAdjudication's first check.
  *
@@ -31,8 +30,7 @@ export const FINDING_CONFLICT_ADJUDICATION_OUTCOME_TRANSITION: Readonly<
 };
 
 /**
- * Engine-facing routing summary of an applied adjudication (the original codex
- * design table):
+ * Engine-facing routing summary of an applied adjudication:
  *
  * - 'finding_closed'  — finding_stale / evidence_invalid: the finding moved off
  *   open and the conflict is resolved. Route back to the originating step so it
@@ -80,15 +78,29 @@ function observationFromContext(context: FindingReconcileContext): FindingLedger
   return { runId: context.runId, stepName: context.stepName, timestamp: context.timestamp };
 }
 
-/** At least one evidence entry must be a "path:line" citation the engine can verify against the reviewed code. */
-function findVerifiedResolvedEvidence(evidence: readonly string[], cwd: string): string | undefined {
-  return evidence.find((entry) => {
+type ResolvedEvidenceVerification =
+  | { outcome: 'verified'; evidence: string }
+  | { outcome: 'invalid' }
+  | { outcome: 'unverifiable'; reason: string };
+
+function verifyResolvedEvidence(evidence: readonly string[], cwd: string): ResolvedEvidenceVerification {
+  let unverifiableReason: string | undefined;
+  for (const entry of evidence) {
     const parsed = parseFindingLocation(entry.trim());
     if (parsed === undefined || parsed.line === undefined) {
-      return false;
+      continue;
     }
-    return validateLocationAdmission(cwd, entry.trim()).ok;
-  });
+    const validation = validateLocationAdmission(cwd, entry.trim());
+    if (validation.ok) {
+      return { outcome: 'verified', evidence: entry };
+    }
+    if (validation.outcome === 'unverifiable' && unverifiableReason === undefined) {
+      unverifiableReason = validation.reason;
+    }
+  }
+  return unverifiableReason === undefined
+    ? { outcome: 'invalid' }
+    : { outcome: 'unverifiable', reason: unverifiableReason };
 }
 
 function assertKnownConflict(
@@ -117,7 +129,7 @@ function appendActionableFixToSuggestion(existing: string | undefined, actionabl
 /**
  * Applies one finding-conflict-adjudication decision to the ledger. Pure
  * function over its inputs except for the deterministic filesystem check
- * (validateLocationAdmission, same as Phase A's raw admission validation)
+ * (validateLocationAdmission, the shared location-admission boundary)
  * needed to verify "resolved" evidence and to attempt machine verification of
  * "invalidated". Throws on any invariant violation instead of silently
  * coercing bad output — the caller (adjudication-runner.ts) does not retry;
@@ -148,8 +160,14 @@ export function applyFindingConflictAdjudication(
 
   let updatedFindings = ledger.findings;
   if (expectedTransition === 'resolved') {
-    const verifiedEvidence = findVerifiedResolvedEvidence(output.evidence, cwd);
-    if (verifiedEvidence === undefined) {
+    const verification = verifyResolvedEvidence(output.evidence, cwd);
+    if (verification.outcome === 'unverifiable') {
+      throw new Error(
+        `Cannot resolve the finding(s) for conflict "${conflict.id}" because adjudication evidence could not be verified: `
+        + verification.reason,
+      );
+    }
+    if (verification.outcome === 'invalid') {
       throw new Error(
         `Cannot resolve the finding(s) for conflict "${conflict.id}": adjudication evidence must include at least `
         + 'one verifiable "path:line" citation',
@@ -164,7 +182,7 @@ export function applyFindingConflictAdjudication(
         status: 'resolved',
         lifecycle: 'resolved',
         resolvedAt: decidedAt,
-        resolvedEvidence: verifiedEvidence,
+        resolvedEvidence: verification.evidence,
       };
     });
   } else if (expectedTransition === 'invalidated') {
@@ -172,16 +190,21 @@ export function applyFindingConflictAdjudication(
       if (!conflict.findingIds.includes(finding.id) || finding.status !== 'open') {
         return finding;
       }
-      // Machine verification (Phase A's admission-validation) when possible:
+      // Machine verification through validateLocationAdmission when possible:
       // the finding's own location fails a deterministic check (does not exist
       // / out of range). When the finding has no location, or its location
       // resolves fine (the claim is "the premise doesn't hold" in a way that
       // is not a location check — e.g. the assertion itself is false), fall
       // back to recording the adjudicator's structured evidence.
       const locationResult = validateLocationAdmission(cwd, finding.location);
+      if (!locationResult.ok && locationResult.outcome === 'unverifiable') {
+        throw new Error(
+          `Cannot invalidate finding "${finding.id}" because its location could not be verified: ${locationResult.reason}`,
+        );
+      }
       const evidenceText = locationResult.ok
         ? output.evidence.join(' | ')
-        : (locationResult.reason ?? output.evidence.join(' | '));
+        : locationResult.reason;
       return {
         ...finding,
         status: 'invalidated',

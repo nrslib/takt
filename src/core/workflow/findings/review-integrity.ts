@@ -1,7 +1,7 @@
 /**
- * review-integrity 予算（codex 検証ブロッカー#1）。
+ * review-integrity 予算（review-integrity requirement）。
  *
- * 二系統台帳（codex 対策#4）は、機械照合を通らない reviewer の主張を product
+ * 二系統台帳（review-integrity protocol）は、機械照合を通らない reviewer の主張を product
  * finding ではなく reviewer anomaly（review-integrity 側）へ隔離する。だが「全
  * 指摘が anomaly に隔離された run」は product gate（open/provisional）が空になり、
  * ワークフローが即 COMPLETE へ流れて実質レビューされずに通り得た。これを防ぐため、
@@ -16,7 +16,7 @@
  * の最終防波堤）。
  *
  * ラウンド跨ぎの累積状態は FindingLedger.reviewIntegrity へ永続化する（run/resume を
- * 跨いだ累積が無料で成立する）。マーカーの一意性・冪等性は stop-budget.ts の
+ * 跨いだ累積が無料で成立する）。マーカーの一意性・冪等性は round-marker.ts の
  * computeRoundMarker を共有する。
  */
 import type {
@@ -24,6 +24,7 @@ import type {
   FindingLedger,
   FindingLedgerReviewIntegrityState,
 } from './types.js';
+import { addRoundMarker } from './round-marker.js';
 
 /**
  * finding_contract.review_budget が省略した場合の既定値。「無制限を許さない」
@@ -32,9 +33,9 @@ import type {
  * 走らせ得るため、1 レビューサイクルで複数マーカーが付く場合がある — 数サイクル
  * 分の再レビュー機会を残しつつ、壊れたレビュアーの無駄な反復は抑える値にする。
  */
-export const DEFAULT_REVIEW_INTEGRITY_BUDGET = {
+export const DEFAULT_REVIEW_INTEGRITY_BUDGET = Object.freeze({
   maxReviewRounds: 6,
-} as const;
+});
 
 export interface ResolvedReviewIntegrityLimits {
   maxReviewRounds: number;
@@ -57,10 +58,6 @@ export function reviewIntegrityRoundsCompleted(ledger: FindingLedger): number {
 /** 未昇格（promotedFindingId 無し）の reviewer anomaly が1件でも残っているか。 */
 function hasOutstandingReviewerAnomalies(ledger: FindingLedger): boolean {
   return (ledger.reviewerAnomalies ?? []).some((anomaly) => anomaly.promotedFindingId === undefined);
-}
-
-function addRoundMarker(existing: readonly string[] | undefined, marker: string): string[] {
-  return [...new Set([...(existing ?? []), marker])].sort();
 }
 
 /**

@@ -12,10 +12,11 @@
  * 実行時の構文解釈を揃える。
  */
 
-import { lstatSync } from 'node:fs';
-import { resolve, sep } from 'node:path';
+import { lstatSync, realpathSync, type Stats } from 'node:fs';
+import { relative, resolve, sep } from 'node:path';
 import { isReservedReportFileName, RESUME_ARTIFACTS_FILE_NAME } from '../../models/reserved-report-names.js';
 import { readResumeReportSnapshotManifest } from '../run/resume-report-snapshot.js';
+import { readRegularFileNoFollow } from '../../../shared/utils/private-file.js';
 
 export const REPORT_REFERENCE_PATTERN = /\{report:([^}]+)\}/g;
 
@@ -55,7 +56,7 @@ export interface ResolveReportReferenceContext {
 export type ResolvedReportReferenceScope = 'step' | 'parent-run-readonly';
 
 export interface ResolvedReportReference {
-  readonly path: string;
+  readonly content: string;
   readonly scope: ResolvedReportReferenceScope;
 }
 
@@ -87,7 +88,9 @@ function buildMissingReportError(
   const runLabel = runInfo ? `run "${runInfo.runSlug}"` : `report directory "${reportDir}"`;
   let resumeNote = '';
   if (runInfo) {
-    const manifest = readResumeReportSnapshotManifest(runInfo.cwd, runInfo.runSlug);
+    const manifest = readPathValueOrUndefined(
+      () => readResumeReportSnapshotManifest(runInfo.cwd, runInfo.runSlug),
+    );
     if (manifest) {
       resumeNote = ` Resumed from "${manifest.sourceRunSlug}", but the source report snapshot does not contain it.`;
     }
@@ -102,28 +105,75 @@ function buildMissingReportError(
 /**
  * 実在する通常ファイルかどうか。symlink は lstat で **リンク自体を拒否**する
  * （statSync はリンク先を追うため、reportDir 外を指す symlink の参照を
- * 受理してしまう — codex 指摘）。
+ * 受理してしまう — boundary requirement）。
  */
-function checkRegularFile(pathAbs: string, reference: string, stepName: string): boolean {
-  let stat;
+function isMissingPathError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+function readPathValueOrUndefined<T>(read: () => T): T | undefined {
   try {
-    stat = lstatSync(pathAbs);
-  } catch {
-    return false;
+    return read();
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return undefined;
+    }
+    throw error;
   }
-  if (stat.isSymbolicLink()) {
+}
+
+function readRegularReportFile(
+  trustedRootDir: string,
+  pathAbs: string,
+  reference: string,
+  stepName: string,
+): string | undefined {
+  const baseAbs = resolve(trustedRootDir);
+  const relativeTarget = relative(baseAbs, pathAbs);
+  const components = relativeTarget.split(sep).filter((component) => component.length > 0);
+  let current = baseAbs;
+  let targetStat: Stats | undefined;
+
+  for (const component of ['', ...components]) {
+    current = component.length > 0 ? resolve(current, component) : current;
+    targetStat = readPathValueOrUndefined(() => lstatSync(current));
+    if (targetStat === undefined) {
+      return undefined;
+    }
+    if (targetStat.isSymbolicLink()) {
+      throw new Error(
+        `Report reference "${reference}" for step "${stepName}" resolves to a symlink at "${current}" or traverses a symlinked parent; refusing to follow it`,
+      );
+    }
+  }
+
+  const realBase = readPathValueOrUndefined(() => realpathSync(baseAbs));
+  const realTarget = readPathValueOrUndefined(() => realpathSync(pathAbs));
+  if (realBase === undefined || realTarget === undefined) {
+    return undefined;
+  }
+  const realBasePrefix = realBase.endsWith(sep) ? realBase : realBase + sep;
+  if (realTarget !== realBase && !realTarget.startsWith(realBasePrefix)) {
     throw new Error(
-      `Report reference "${reference}" for step "${stepName}" resolves to a symlink; refusing to follow it`,
+      `Report reference "${reference}" escapes the report directory for step "${stepName}" through its real path`,
     );
   }
-  return stat.isFile();
+  if (targetStat?.isFile() !== true) {
+    throw new Error(
+      `Report reference "${reference}" for step "${stepName}" is not a regular file: "${pathAbs}"`,
+    );
+  }
+  return readPathValueOrUndefined(
+    () => readRegularFileNoFollow(pathAbs, targetStat).toString('utf-8'),
+  );
 }
 
 function assertContained(reportDir: string, reference: string, stepName: string): string {
   const baseAbs = resolve(reportDir);
   const targetAbs = resolve(reportDir, reference);
   const basePrefix = baseAbs.endsWith(sep) ? baseAbs : baseAbs + sep;
-  if (!targetAbs.startsWith(basePrefix)) {
+  if (targetAbs !== baseAbs && !targetAbs.startsWith(basePrefix)) {
     throw new Error(
       `Report reference "${reference}" escapes the report directory for step "${stepName}"`,
     );
@@ -134,7 +184,7 @@ function assertContained(reportDir: string, reference: string, stepName: string)
 /**
  * reportDir が reportsRootDir の `subworkflows/` 名前空間配下かどうか。
  * workflow_call の子だけが親成果物フォールバックの対象（任意のネスト
- * reportDir へ適用しない — codex 指摘）。
+ * reportDir へ適用しない — boundary requirement）。
  */
 function isSubworkflowNamespaceDir(reportDir: string, reportsRootDir: string): boolean {
   const rootAbs = resolve(reportsRootDir);
@@ -168,16 +218,20 @@ export function resolveReportReferenceDetailed(
   }
   const targetAbs = assertContained(reportDir, reference, context.stepName);
   if (context.validateExistence === false) {
-    return { path: `${reportDir}/${reference}`, scope: 'step' };
-  }
-  if (checkRegularFile(targetAbs, reference, context.stepName)) {
-    return { path: `${reportDir}/${reference}`, scope: 'step' };
+    return { content: `${reportDir}/${reference}`, scope: 'step' };
   }
   const reportsRoot = context.reportsRootDir;
+  const trustedRoot = reportsRoot ?? reportDir;
+  assertContained(trustedRoot, relative(resolve(trustedRoot), resolve(reportDir)), context.stepName);
+  const stepContent = readRegularReportFile(trustedRoot, targetAbs, reference, context.stepName);
+  if (stepContent !== undefined) {
+    return { content: stepContent, scope: 'step' };
+  }
   if (reportsRoot !== undefined && isSubworkflowNamespaceDir(reportDir, reportsRoot)) {
     const rootTargetAbs = assertContained(reportsRoot, reference, context.stepName);
-    if (checkRegularFile(rootTargetAbs, reference, context.stepName)) {
-      return { path: `${reportsRoot}/${reference}`, scope: 'parent-run-readonly' };
+    const parentContent = readRegularReportFile(reportsRoot, rootTargetAbs, reference, context.stepName);
+    if (parentContent !== undefined) {
+      return { content: parentContent, scope: 'parent-run-readonly' };
     }
   }
   throw buildMissingReportError(reference, reportDir, context);
@@ -188,5 +242,5 @@ export function resolveReportReference(
   reference: string,
   context: ResolveReportReferenceContext,
 ): string {
-  return resolveReportReferenceDetailed(reportDir, reference, context).path;
+  return resolveReportReferenceDetailed(reportDir, reference, context).content;
 }

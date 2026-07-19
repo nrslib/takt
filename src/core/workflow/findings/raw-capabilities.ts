@@ -1,5 +1,5 @@
 /**
- * capability 格子（v2 梯子設計 §4・実装単位5）。
+ * ambiguous raw の capability 格子。
  *
  * - 権限はエンジンだけが発行する。manager の出力は「提案」（AmbiguousInterpretation）
  *   であり、capability / taint / SameProof を LLM の出力フィールドから受け取る
@@ -44,7 +44,7 @@ function issueProof(value: UnbrandedSameProof): DeterministicSameProof {
 
 /**
  * 完全一致 identity（mechanical-classification.ts の exactDuplicateKey と同じ
- * 正規化 — 大小文字は保存する。codex B3: 大小文字を潰すと別問題を誤統合）。
+ * 正規化 — 大小文字は保存する。contract invariant: 大小文字を潰すと別問題を誤統合）。
  */
 function sameProofIdentityKey(fields: {
   location?: string;
@@ -65,8 +65,8 @@ function findingRevisionOf(entry: FindingLedgerEntry): number {
 }
 
 /**
- * ambiguous canonical raw に対して成立する決定的 SameProof をエンジンが発行する
- * （設計書 §4.2）。証明条件は、open finding に紐づく raw（または finding 自身の
+ * ambiguous canonical raw に対して成立する決定的 SameProof をエンジンが発行する。
+ * 証明条件は、open finding に紐づく raw（または finding 自身の
  * フィールド）との正規化 path/title/description/suggestion 完全一致。
  * 返り値は rawFindingId → proof。証明が成立しない raw は含まれない。
  */
@@ -98,7 +98,7 @@ export function issueDeterministicSameProofs(input: {
 
   const proofs = new Map<string, DeterministicSameProof>();
   for (const raw of input.ambiguousRawFindings) {
-    // runtime brand 検査（攻撃2）: canonical factory を通っていない object
+    // runtime brand 検査: canonical factory を通っていない object
     // （型 assertion / spread での昇格）には証明を発行しない。
     assertCanonicalRawFinding(raw, 'issueDeterministicSameProofs');
     // 完全一致には全フィールドが必要。欠損フィールドのある raw は証明不能。
@@ -128,7 +128,7 @@ export function issueDeterministicSameProofs(input: {
 
 /**
  * 保存直前（排他区間内）の SameProof 再検証。発行時 revision が最新台帳と
- * 一致しない proof は stale として不採用（設計書 §4.2 / テスト要件
+ * 一致しない proof は stale として不採用（テスト要件
  * 「deterministic SameProof の revision が stale なら不採用」）。
  */
 export function verifySameProofAgainstLedger(
@@ -162,7 +162,7 @@ export type ValidatedInterpretation =
  * manager 提案の runtime 検証（capability 格子の強制）。型では表現できない
  * 実在性・整合を確認する:
  *
- * - rawFindingId が今回の ambiguous 集合に属する（未知・重複は不採用）
+ * - rawFindingId が入力の ambiguous 集合に属する（未知・重複は不採用）
  * - same_with_proof の proofId がエンジン発行の proof と一致する
  * - open_conflict の target が台帳に存在し open である
  * - create_independent は raw の必須フィールドが揃っている場合のみ

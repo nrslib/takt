@@ -1,6 +1,6 @@
 <!--
   template: finding_conflict_adjudication_instruction
-  role: conflict adjudication instruction (Phase B of the Finding Contract convergence design)
+  role: finding-contract conflict adjudication instruction
   caller: core/workflow/findings/adjudication-runner
 -->
 A finding-contract conflict could not be resolved automatically and needs your independent judgment. Reviewers disagree about whether a finding still holds: one side reported it fixed, another side still reports it (or reviewers otherwise contradict each other about it), and the engine could not decide who is right on its own.

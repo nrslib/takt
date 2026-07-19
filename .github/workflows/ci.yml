@@ -79,6 +79,22 @@ jobs:
       - run: npm run build
       - run: npm run test:it
 
+  windows-private-artifacts:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test -- src/__tests__/private-file.test.ts src/__tests__/resume-report-snapshot.test.ts src/__tests__/promptEvalProbeLifecycle.test.ts
+
   e2e-mock:
     runs-on: ubuntu-latest
     permissions:

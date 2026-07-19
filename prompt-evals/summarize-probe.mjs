@@ -8,9 +8,18 @@
  */
 import { createOpencode } from '@opencode-ai/sdk/v2';
 import { createServer } from 'node:http';
-import { createServer as createNetServer } from 'node:net';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { ensureOwnedProbeEntrypoint } from './probe-entrypoint.mjs';
+import {
+  listOpenCodeSessionMessages,
+  OPENCODE_PROBE_STARTUP_TIMEOUT_MS,
+  runOpenCodeProbe,
+  summarizeOpenCodeSession,
+} from './opencode-probe-lifecycle.mjs';
+import { reportProbePhase } from './probe-process.mjs';
+
+await ensureOwnedProbeEntrypoint(import.meta.url);
 
 const recorder = createServer((request, response) => {
   let body = '';
@@ -37,46 +46,57 @@ const recorder = createServer((request, response) => {
     response.end();
   });
 });
-await new Promise((done) => recorder.listen(8901, '127.0.0.1', done));
-
-const port = await new Promise((done) => {
-  const probe = createNetServer();
-  probe.listen(0, '127.0.0.1', () => { const { port: free } = probe.address(); probe.close(() => done(free)); });
-});
+await new Promise((done) => recorder.listen(0, '127.0.0.1', done));
+const recorderAddress = recorder.address();
+if (recorderAddress === null || typeof recorderAddress === 'string') {
+  throw new Error('Summary recorder did not expose a TCP port');
+}
 
 const cwd = mkdtempSync(`${tmpdir()}/takt-summarize-probe-`);
-const { client, server } = await createOpencode({
-  port,
-  config: {
-    model: 'probe/probe', small_model: 'probe/probe',
-    provider: { probe: { npm: '@ai-sdk/openai-compatible', name: 'probe', options: { baseURL: 'http://127.0.0.1:8901/v1', apiKey: 'x' }, models: { probe: { name: 'probe' } } } },
-  },
-});
 
-const summaryCount = async (sessionID) => {
-  const result = await client.session.messages({ sessionID, directory: cwd });
+const summaryCount = async (client, sessionID) => {
+  const result = await listOpenCodeSessionMessages(client, { sessionID, directory: cwd });
   return (result.data ?? []).filter((message) => message.info?.summary === true).length;
 };
 
+let finalSummaryCount = 0;
 try {
-  const session = await client.session.create({ directory: cwd });
-  const sessionID = session.data.id;
-
-  console.log('=== 事例1: メッセージが1件も無いセッションで summarize ===');
-  console.log('  summarize 前の summary 数:', await summaryCount(sessionID));
-  try {
-    const result = await client.session.summarize({
-      sessionID, directory: cwd, providerID: 'probe', modelID: 'probe', auto: false,
-    });
-    console.log('  summarize の戻り値:', JSON.stringify(result.data));
-  } catch (error) {
-    console.log('  summarize が例外:', String(error).slice(0, 120));
-  }
-  for (const waited of [1, 3, 6, 11, 16]) {
-    await new Promise((resolve) => setTimeout(resolve, waited === 1 ? 1000 : 2000));
-    console.log(`  ${waited}s 後の summary 数:`, await summaryCount(sessionID));
-  }
+  await runOpenCodeProbe({
+    createProbe: () => createOpencode({
+      port: 0,
+      timeout: OPENCODE_PROBE_STARTUP_TIMEOUT_MS,
+      config: {
+        model: 'probe/probe', small_model: 'probe/probe',
+        provider: { probe: { npm: '@ai-sdk/openai-compatible', name: 'probe', options: { baseURL: `http://127.0.0.1:${recorderAddress.port}/v1`, apiKey: 'x' }, models: { probe: { name: 'probe' } } } },
+      },
+    }),
+    directory: cwd,
+    onPhase: reportProbePhase,
+    execute: async ({ client, sessionId, markReady }) => {
+      console.log('=== 事例1: メッセージが1件も無いセッションで summarize ===');
+      console.log('  summarize 前の summary 数:', await summaryCount(client, sessionId));
+      const result = await summarizeOpenCodeSession(client, {
+        sessionID: sessionId, directory: cwd, providerID: 'probe', modelID: 'probe', auto: false,
+      });
+      markReady();
+      console.log('  summarize の戻り値:', JSON.stringify(result.data));
+      const deadline = Date.now() + 10_000;
+      let count = await summaryCount(client, sessionId);
+      while (count === 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        count = await summaryCount(client, sessionId);
+      }
+      if (count === 0) {
+        throw new Error('Summarize probe timed out before a summary message appeared');
+      }
+      finalSummaryCount = count;
+      console.log('  summarize 後の summary 数:', count);
+    },
+  });
 } finally {
-  await server.close?.();
-  recorder.close();
+  await new Promise((done, reject) => {
+    recorder.close((error) => error ? reject(error) : done());
+    recorder.closeAllConnections();
+  });
 }
+console.log(`PROBE_RESULT ${JSON.stringify({ workspace: cwd, summaryCount: finalSummaryCount })}`);

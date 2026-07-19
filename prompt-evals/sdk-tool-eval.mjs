@@ -13,6 +13,16 @@ import { createOpencode } from '@opencode-ai/sdk/v2';
 import { createServer } from 'node:net';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { ensureOwnedProbeEntrypoint } from './probe-entrypoint.mjs';
+import {
+  OPENCODE_PROBE_STARTUP_TIMEOUT_MS,
+  promptOpenCodeSessionAsync,
+  runOpenCodeProbe,
+  runOpenCodeSessionWithEvents,
+} from './opencode-probe-lifecycle.mjs';
+import { reportProbePhase } from './probe-process.mjs';
+
+await ensureOwnedProbeEntrypoint(import.meta.url);
 
 // SDK の既定ポートは 4096 固定。並列実行すると衝突して ServeError で落ちるため、
 // TAKT 本体と同じく空きポートを取ってから渡す。
@@ -39,63 +49,88 @@ const variant = args.variant ?? 'default';
 const cwd = resolve(args.cwd ?? process.cwd());
 const outPath = resolve(args.out ?? 'sdk-tool-eval.json');
 const model = args.model ?? 'ollama-cloud/qwen3-coder-next';
-const prompt = readFileSync(resolve(args.prompt), 'utf8');
+const cleanupProbe = args.cleanupProbe === 'true';
+const providerBaseUrl = args.providerBaseUrl;
+const prompt = cleanupProbe ? '' : readFileSync(resolve(args.prompt), 'utf8');
 const instructionsFile = args.instructions ? resolve(args.instructions) : undefined;
+const [providerId, ...modelNameParts] = model.split('/');
+const modelId = modelNameParts.join('/');
+if (providerId.length === 0 || modelId.length === 0) {
+  throw new Error(`Model must use provider/model format: ${model}`);
+}
 
 // --systemPrompt を渡せば、その内容が agent.prompt になる（opencode 既定を置き換える）。
 // 渡さなければ agent.prompt を省き、opencode 既定のプロンプトがそのまま使われる。
-const systemPrompt = args.systemPrompt ? readFileSync(resolve(args.systemPrompt), 'utf8') : undefined;
+const systemPrompt = cleanupProbe || args.systemPrompt === undefined
+  ? undefined
+  : readFileSync(resolve(args.systemPrompt), 'utf8');
 
 const config = {
   model,
   small_model: model,
   permission: { external_directory: 'deny' },
   agent: { takt: { ...(systemPrompt ? { prompt: systemPrompt } : {}), tools: { task: false } } },
+  ...(providerBaseUrl ? {
+    provider: {
+      [providerId]: {
+        npm: '@ai-sdk/openai-compatible',
+        name: providerId,
+        options: { baseURL: providerBaseUrl, apiKey: 'probe' },
+        models: { [modelId]: { name: modelId } },
+      },
+    },
+  } : {}),
   ...(instructionsFile ? { instructions: [instructionsFile] } : {}),
 };
 
 const toolCalls = [];
 let sessionError;
-const { client, server } = await createOpencode({ port: await getFreePort(), config });
-
-try {
-  const session = await client.session.create({ directory: cwd });
-  const sessionID = session.data.id;
-
-  const { stream } = await client.event.subscribe({ directory: cwd });
-  const done = client.session.promptAsync({
-    sessionID,
-    directory: cwd,
-    model: { providerID: model.split('/')[0], modelID: model.split('/').slice(1).join('/') },
-    agent: 'takt',
-    parts: [{ type: 'text', text: prompt }],
-  }).catch((error) => { sessionError = String(error); });
-
-  // TAKT と同じく session.idle まで読む。promptAsync はプロンプト投入で解決するため
-  // 完了検知には使えない。
-  for await (const event of stream) {
-    const props = event?.properties ?? {};
-    if (event?.type === 'message.part.updated' && props.part?.type === 'tool') {
-      const part = props.part;
-      toolCalls.push({
-        tool: part.tool,
-        callId: part.callID ?? part.id,
-        status: part.state?.status,
-        input: part.state?.input,
-        error: part.state?.error,
-      });
+await runOpenCodeProbe({
+  createProbe: async () => createOpencode({
+    port: await getFreePort(),
+    timeout: OPENCODE_PROBE_STARTUP_TIMEOUT_MS,
+    config,
+  }),
+  directory: cwd,
+  onPhase: reportProbePhase,
+  execute: async ({ client, sessionId, markReady }) => {
+    if (cleanupProbe) {
+      markReady();
+      writeFileSync(outPath, JSON.stringify({ cleanupProbe: true, workspace: cwd }, null, 2));
+      return;
     }
-    if (event?.type === 'session.error' && (!props.sessionID || props.sessionID === sessionID)) {
-      sessionError = JSON.stringify(props.error);
-      break;
-    }
-    if (event?.type === 'session.idle' && props.sessionID === sessionID) break;
-    if (event?.type === 'session.status' && props.sessionID === sessionID && props.status?.type === 'idle') break;
-  }
-  await done;
-} finally {
-  await server.close?.();
-}
+    await runOpenCodeSessionWithEvents({
+      client,
+      directory: cwd,
+      sessionId,
+      start: () => promptOpenCodeSessionAsync(client, {
+        sessionID: sessionId,
+        directory: cwd,
+        model: { providerID: providerId, modelID: modelId },
+        agent: 'takt',
+        parts: [{ type: 'text', text: prompt }],
+      }),
+      onReady: markReady,
+      onEvent: (event) => {
+        const props = event?.properties ?? {};
+        if (event?.type === 'message.part.updated' && props.part?.type === 'tool') {
+          const part = props.part;
+          toolCalls.push({
+            tool: part.tool,
+            callId: part.callID ?? part.id,
+            status: part.state?.status,
+            input: part.state?.input,
+            output: part.state?.output,
+            error: part.state?.error,
+          });
+        }
+        if (event?.type === 'session.error' && (!props.sessionID || props.sessionID === sessionId)) {
+          sessionError = JSON.stringify(props.error);
+        }
+      },
+    });
+  },
+});
 
 // 1 回の呼び出しが pending → running → completed と複数イベントで届くため、
 // callId で畳んで最終状態だけを 1 件として数える。
@@ -107,9 +142,44 @@ const errored = calls.filter((call) => call.status === 'error');
 const schemaErrors = errored.filter((call) => /SchemaError/.test(String(call.error)));
 const missingKey = errored.filter((call) => /Missing key/.test(String(call.error)));
 
-writeFileSync(outPath, JSON.stringify({ variant, model, cwd, sessionError, calls, events: toolCalls }, null, 2));
-console.log(
-  `variant=${variant} calls=${calls.length} completed=${completed.length} ` +
-  `errors=${errored.length} schemaErrors=${schemaErrors.length} missingKey=${missingKey.length}` +
-  `${sessionError ? ` sessionError=${sessionError}` : ''} → ${outPath}`,
-);
+function assertSuccessfulToolEvaluation() {
+  if (sessionError !== undefined) {
+    throw new Error(`SDK tool evaluation reported a session error: ${sessionError}`);
+  }
+  if (calls.length === 0) {
+    throw new Error('SDK tool evaluation completed without observing a tool call');
+  }
+  const unsuccessful = calls.filter((call) => call.status !== 'completed');
+  if (unsuccessful.length > 0) {
+    throw new Error(`SDK tool evaluation observed non-completed calls: ${JSON.stringify(unsuccessful)}`);
+  }
+  for (const call of calls) {
+    if (
+      typeof call.tool !== 'string'
+      || call.tool.length === 0
+      || call.tool === 'invalid'
+      || typeof call.callId !== 'string'
+      || call.callId.length === 0
+      || call.input === null
+      || typeof call.input !== 'object'
+      || Object.keys(call.input).length === 0
+      || typeof call.output !== 'string'
+      || call.output.length === 0
+    ) {
+      throw new Error(`SDK tool evaluation observed an incomplete completed call: ${JSON.stringify(call)}`);
+    }
+  }
+}
+
+if (cleanupProbe) {
+  console.log(`PROBE_RESULT ${JSON.stringify({ workspace: cwd, cleanupProbe: true })}`);
+} else {
+  writeFileSync(outPath, JSON.stringify({ variant, model, cwd, sessionError, calls, events: toolCalls }, null, 2));
+  assertSuccessfulToolEvaluation();
+  console.log(
+    `variant=${variant} calls=${calls.length} completed=${completed.length} ` +
+    `errors=${errored.length} schemaErrors=${schemaErrors.length} missingKey=${missingKey.length}` +
+    `${sessionError ? ` sessionError=${sessionError}` : ''} → ${outPath}`,
+  );
+  console.log(`PROBE_RESULT ${JSON.stringify({ workspace: cwd, variant, calls: calls.length })}`);
+}

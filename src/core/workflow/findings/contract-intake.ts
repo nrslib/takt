@@ -18,7 +18,7 @@ import {
   type FindingManagerRunResult,
   type FindingManagerSubStepResult,
 } from './manager-runner.js';
-import type { FindingLedgerStore } from './store.js';
+import type { FindingManagerStore } from './store.js';
 
 /**
  * ある単独ステップが Finding Contract の取り込み対象かどうかを判定する。
@@ -63,7 +63,7 @@ export interface FindingContractIntakeInput {
   /** manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
-  ledgerStore: FindingLedgerStore;
+  ledgerStore: FindingManagerStore;
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
   /** raw admission validation（manager-runner.ts の cwd 引数を参照）に使う実行 cwd。 */
@@ -85,8 +85,8 @@ export interface FindingContractIntakeInput {
 /**
  * findings-manager を実行し、台帳更新イベントを発火する。台帳への
  * 取り込みという副作用込みの手続きをここへ集約し、ParallelRunner と
- * StepExecutor の両方が同じ手順で呼べるようにする。v2 梯子設計では
- * 取り込みは常に 'updated' で完了する（manager の壊れた応答・予算超過は
+ * StepExecutor の両方が同じ手順で呼べるようにする。取り込みは
+ * 常に 'updated' で完了する（manager の壊れた応答・予算超過は
  * provisional として台帳へ着地し、run-level の invalid_manager_output は無い）。
  */
 export async function ingestFindingContractResults(

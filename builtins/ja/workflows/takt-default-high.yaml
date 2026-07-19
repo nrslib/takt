@@ -208,7 +208,7 @@ steps:
         next: NEEDS_ADJUDICATION
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
         next: plan
-      - condition: any("needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)
+      - condition: any("needs_fix", "AI特有の問題あり") && when(findings.conflicts.count == 0)
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix

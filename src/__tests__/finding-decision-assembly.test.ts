@@ -382,6 +382,40 @@ describe('assembleManagerOutput dispute decisions', () => {
     ]);
   });
 
+  it('Given an open canonical from a prior duplicate merge When waived in a later round Then the waiver is accepted', () => {
+    const ledger = makeLedger({
+      findings: [
+        makeFinding(),
+        makeFinding({
+          id: 'F-0002',
+          status: 'superseded',
+          lifecycle: 'superseded',
+          location: 'src/b.ts:20',
+          supersededByFindingId: 'F-0001',
+        }),
+      ],
+    });
+
+    const result = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [],
+      decisions: makeDecisions({
+        disputeDecisions: [{
+          findingId: 'F-0001',
+          decision: 'waive',
+          reason: 'Frozen contract',
+          evidence: 'src/types.ts:94',
+        }],
+      }),
+      priorStepResponseText: DISPUTE_CLAIM,
+    });
+
+    expect(result.rejectedDisputeDecisions).toEqual([]);
+    expect(result.output.waivedFindings).toEqual([
+      { findingId: 'F-0001', reason: 'Frozen contract', evidence: 'src/types.ts:94' },
+    ]);
+  });
+
   it('Given a "note" decision When assembled Then it lands in disputeNotes', () => {
     const result = assembleManagerOutput({
       previousLedger: makeLedger(),

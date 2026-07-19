@@ -17,14 +17,26 @@ import {
   resolveAdjudicationDisposition,
   selectConflictForAdjudication,
 } from '../core/workflow/findings/adjudication-apply.js';
-import { computeConflictEvidenceHash, isConflictUnadjudicated } from '../core/workflow/findings/adjudication-evidence.js';
-import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
+import { computeConflictEvidenceHash as computeConflictEvidenceHashWithScope, isConflictUnadjudicated } from '../core/workflow/findings/adjudication-evidence.js';
+import { buildFindingsRuleContext as buildFindingsRuleContextWithScope } from '../core/workflow/findings/context.js';
+import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
 import type {
   FindingConflictAdjudicationOutput,
   FindingLedger,
   FindingLedgerConflict,
   FindingLedgerEntry,
 } from '../core/workflow/findings/types.js';
+
+function computeConflictEvidenceHash(
+  conflict: FindingLedgerConflict,
+  ledger: FindingLedger,
+): string {
+  return computeConflictEvidenceHashWithScope(conflict, ledger, computeReviewScopeSnapshotId(process.cwd()));
+}
+
+function buildFindingsRuleContext(ledger: FindingLedger) {
+  return buildFindingsRuleContextWithScope(ledger, process.cwd());
+}
 
 function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedgerEntry {
   return {
@@ -155,6 +167,7 @@ describe('computeConflictEvidenceHash / isConflictUnadjudicated', () => {
       ...makeConflict(),
       adjudicationAttempts: [{
         evidenceHash: 'attempted-hash',
+        reservationToken: 'reservation-run-1',
         startedAt: { runId: 'run-1', stepName: 'finding-conflict-adjudication', timestamp: '2026-06-13T00:00:00.000Z' },
       }],
     };
@@ -170,7 +183,7 @@ describe('computeConflictEvidenceHash / isConflictUnadjudicated', () => {
     expect(hashAfter).not.toBe(hashBefore);
   });
 
-  it('raw finding の ID だけが変わり内容が同一なら hash は変わらない（内容ベース, codex B2）', () => {
+  it('raw finding の ID が変わると完全な台帳証跡の hash も変わる', () => {
     const before = makeLedger({ rawFindings: [makeRaw()] });
     const hashBefore = computeConflictEvidenceHash(before.conflicts[0]!, before);
     const after = makeLedger({
@@ -178,7 +191,14 @@ describe('computeConflictEvidenceHash / isConflictUnadjudicated', () => {
       rawFindings: [makeRaw({ rawFindingId: 'raw-renamed' })],
     });
     const hashAfter = computeConflictEvidenceHash(after.conflicts[0]!, after);
-    expect(hashAfter).toBe(hashBefore);
+    expect(hashAfter).not.toBe(hashBefore);
+  });
+
+  it('review scope snapshot の変化で hash が変わる', () => {
+    const ledger = makeLedger({ rawFindings: [makeRaw()] });
+    const before = computeConflictEvidenceHashWithScope(ledger.conflicts[0]!, ledger, 'scope-before');
+    const after = computeConflictEvidenceHashWithScope(ledger.conflicts[0]!, ledger, 'scope-after');
+    expect(after).not.toBe(before);
   });
 
   it('新しい内容の raw finding の追加で hash が変わる', () => {

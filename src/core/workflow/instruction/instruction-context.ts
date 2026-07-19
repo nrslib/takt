@@ -17,7 +17,7 @@ export interface FindingContractInstructionContext {
   hasWaivedFindings: boolean;
   rawFindingsJsonSchema?: Record<string, unknown>;
   /**
-   * codex 対策#4: reviewer が typed evidence protocol の source_quote 主張に
+   * review-integrity protocol: reviewer が typed evidence protocol の source_quote 主張に
    * echo する review scope snapshot id（snapshot.ts の
    * computeReviewScopeSnapshotId）。reviewer step（includeRawFindingsSchema が
    * true）のときだけ設定される — manager-runner.ts の runFindingManagerForStep が

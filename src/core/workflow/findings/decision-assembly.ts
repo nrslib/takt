@@ -96,7 +96,7 @@ export interface AssembleManagerOutputResult {
    * 保存の間に別の並列子が finding を resolved に変えたとき、conflict だけが残って
    * 「closed な finding を conflict が参照するなら同じ出力で reopen していなければ
    * ならない」の検証で reconciler が例外を投げ、updateLedger 自体が失敗する
-   * （codex が共有 FindingLedgerStore の並列更新で再現）。
+   * （共有 FindingLedgerStore の並列更新で再現する）。
    */
   rejectedCarriedConflicts: RejectedCarriedConflict[];
   rejectedInvalidateDecisions: RejectedInvalidateDecision[];
@@ -145,7 +145,7 @@ export interface AssembleManagerOutputInput {
    * conflicts へ統合する。保存直前の再照合（manager-runner.ts の freshAssembly）が
    * flatten の戻りをそのまま渡す。これが無いと、初回組み立てで作った conflict が
    * 保存時の往復で消え、finding は open のまま conflicts.count > 0 のルールが
-   * 発火しない（codex が実行で再現）。
+   * 発火しない（実行時の競合ケースで再現する）。
    */
   carriedFindingOnlyConflicts?: FindingManagerConflict[];
   /**
@@ -206,19 +206,19 @@ function appendGroupedConflict(
 /**
  * 機械的に畳んでよい「疑いようのない重複」の識別キー: 正規化した
  * path + title + description の完全一致。familyTag と行番号は分類・検索
- * ヒントに過ぎず同一性の根拠にしない（Finding Contract 収束性改善 Phase A）。
+ * ヒントに過ぎず同一性の根拠にしない。
  *
  * description まで要求するのは、path + タイトルだけで畳むと、同じタイトル・
  * 同じファイルだが failure mode が異なる本当に別の問題まで誤って1つに畳んで
- * しまうため（禁止された「意味なし自動マージ」— codex 再現ブロッカー B3。
+ * しまうため（禁止された「意味なし自動マージ」— regression requirement。
  * 同ラウンド内 new+new のグルーピングと、保存直前の再照合で既存 open finding
  * へ付け替えるリダイレクトの両方が、この同じ厳格キーを使う）。取りこぼした
- * 本当の重複は manager が duplicateDecisions で後から統合できる（item 6）。
+ * 本当の重複は manager が duplicateDecisions で後から統合できる。
  *
  * 正規化は大小文字を保存する（normalizeFindingText: trim + 空白畳み込みのみ）。
  * 小文字化すると `Wrong identifier PATH` と `Wrong identifier Path` のような
  * 大小文字を区別する識別子への別指摘が「完全一致」扱いで誤統合される
- * （codex 直接実行で再現）。大小文字の表記ゆれ程度の重複は manager が
+ * （runtime reproductionで再現）。大小文字の表記ゆれ程度の重複は manager が
  * duplicateDecisions で意味判断のうえ統合すればよい。
  */
 function findingIdentityKey(path: string | undefined, title: string, description: string | undefined): string {
@@ -242,11 +242,11 @@ function severityRank(severity: FindingSeverity): number {
  * 保存直前の再照合（previousLedger が最新台帳のとき）で、内容が完全一致する
  * open finding が既に台帳にあるかを引けるようにする。並列子が同一の raw を
  * "new" と判断しても、他の子が直前に立てた finding をこの索引で検出し、
- * "same" として畳み込む（重複作成の防止。codex 指摘の再現ケース: 並列子2つが
+ * "same" として畳み込む（重複作成の防止。boundary requirementの再現ケース: 並列子2つが
  * 同じ問題を new と判断し、F-0001 と F-0002 が重複作成された）。キーは
  * findingIdentityKey（path+title+description の完全一致）— path+title だけの
  * リダイレクトは manager の明示的な new 判断を意味判断なしで same に付け替える
- * 禁止マージだった（codex 再現ブロッカー B3）。完全同一の raw なら description
+ * 禁止マージだった（regression requirement）。完全同一の raw なら description
  * も一致するため、並列子競合対策としてはこの厳格キーで引き続き成立する。
  */
 function buildOpenFindingKeyIndex(previousLedger: FindingLedger): Map<string, string> {
@@ -335,7 +335,7 @@ function assembleRawDecisions(input: {
         continue;
       }
       // relation=persists/reopened の raw は既存 finding への明示参照であり、
-      // 新規 finding の根拠にはできない（codex 再現ブロッカー B2: 明示参照付き
+      // 新規 finding の根拠にはできない（regression requirement: 明示参照付き
       // 再報告を manager が new へ倒すと、根拠不成立の再報告が新規 finding
       // として台帳に混入する）。same / unsupported / （対象状態が合えば）
       // reopened のいずれかを選ばせる。
@@ -350,7 +350,7 @@ function assembleRawDecisions(input: {
       // したケース）。LLM は他の子の直前の判断を知り得ないため、"new" ではなく
       // "same" として扱い、重複作成を避ける。キーは同ラウンド new+new の
       // グルーピングと同一の findingIdentityKey — path+title だけのリダイレクトは
-      // manager の明示的な new 判断を覆す禁止マージだった（codex ブロッカー B3）。
+      // manager の明示的な new 判断を覆す禁止マージだった。
       const groupKey = newFindingGroupKey(raw);
       const existingOpenFindingId = openFindingKeyIndex.get(groupKey);
       if (existingOpenFindingId !== undefined) {
@@ -363,8 +363,8 @@ function assembleRawDecisions(input: {
       // フィールド等価で決まるので、LLM の判断に委ねずここで畳む。委ねると
       // 台帳に重複した finding が立つ。description まで一致を要求するのは、
       // path + タイトルだけで畳むと同タイトル・同ファイルの本当に別問題
-      // （failure mode 違い）まで誤って畳んでしまうため（item 5）。取りこぼした
-      // 本当の重複は manager が duplicateDecisions で後から統合できる（item 6）。
+      // （failure mode 違い）まで誤って畳んでしまうため。取りこぼした本当の重複は
+      // manager が duplicateDecisions で後から統合できる。
       const existing = newFindingsByKey.get(groupKey);
       if (existing !== undefined) {
         existing.rawFindingIds.push(raw.rawFindingId);
@@ -500,7 +500,7 @@ function assembleInvalidateDecisions(input: {
     }
     // provisional（意味を確定できなかった観測の gate blocker）は raw 由来の
     // 判断では消せない。invalidate を許すと、解釈不能な観測を location 不成立で
-    // 洗い流してゲートが開く（v2 梯子設計 §7: 解消は clean な後続 raw のみ）。
+    // 洗い流してゲートが開く（解消は clean な後続 raw のみ）。
     if (finding.provisional !== undefined) {
       rejected.push({ findingId: decision.findingId, reason: `Cannot invalidate provisional finding "${decision.findingId}"; provisional findings are settled only by later clean review evidence` });
       continue;

@@ -10,7 +10,7 @@ const SERVER_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/i;
 
 export function parseServerAvailableTools(message: string): string[] | undefined {
   // 列挙はメッセージ末尾（終端ピリオドは任意）まで丸ごと取る。`[^.]+` は
-  // "foo.bar, read." を "foo" に切り詰めて解析成功と誤認する（codex 指摘）。
+  // "foo.bar, read." を "foo" に切り詰めて解析成功と誤認する（boundary requirement）。
   const match = /Available tools:\s*(.+?)\.?\s*$/i.exec(message);
   const body = match?.[1];
   if (!body) {

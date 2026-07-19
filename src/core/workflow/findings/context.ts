@@ -1,5 +1,6 @@
 import { FINDING_SEVERITIES, type FindingLedger, type FindingSeverity, type FindingsRuleContext } from './types.js';
 import { isLedgerConflictUnadjudicated } from './adjudication-evidence.js';
+import { computeReviewScopeSnapshotId } from './snapshot.js';
 
 export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): string {
   return JSON.stringify({
@@ -16,8 +17,8 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
         description: finding.description,
         suggestion: finding.suggestion,
         reviewers: finding.reviewers,
-        // provisional は fixer が直接直せない system finding（v2 梯子設計 §7）。
-        // agent がそれを識別できるようサマリへ kind/reason を出す（追加のみ）。
+        // provisional は fixer が直接直せない system finding なので、agent が
+        // 識別できるようサマリへ kind/reason を出す。
         ...(finding.provisional !== undefined
           ? { provisional: { kind: finding.provisional.kind, reason: finding.provisional.reason } }
           : {}),
@@ -38,7 +39,7 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
         title: finding.title,
         waiver: finding.waivers?.at(-1),
       })),
-    // 監査可視化（codex ブロッカー B5）: invalidated（前提事実の不成立を
+    // invalidated（前提事実の不成立を
     // エンジンが検証済み）と superseded（重複として canonical へ統合済み）は
     // ブロッキング対象外だが、「消えた」のではなく「こう裁定された」ことが
     // サマリから追えるようにする。既存キーの形式は変えない（追加のみ）。
@@ -103,12 +104,16 @@ export function ledgerHasWaivedFindings(ledger: FindingLedger): boolean {
   return ledger.findings.some((finding) => finding.status === 'waived');
 }
 
-export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleContext {
+export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): FindingsRuleContext {
   const openItems = ledger.findings.filter((finding) => finding.status === 'open');
   const activeConflicts = ledger.conflicts.filter((conflict) => conflict.status === 'active');
-  const unadjudicatedConflictCount = activeConflicts.filter((conflict) => (
-    isLedgerConflictUnadjudicated(conflict, ledger)
-  )).length;
+  let unadjudicatedConflictCount = 0;
+  if (activeConflicts.length > 0) {
+    const reviewScopeSnapshotId = computeReviewScopeSnapshotId(cwd);
+    unadjudicatedConflictCount = activeConflicts.filter((conflict) => (
+      isLedgerConflictUnadjudicated(conflict, ledger, reviewScopeSnapshotId)
+    )).length;
+  }
   const bySeverity = Object.fromEntries(
     FINDING_SEVERITIES.map((severity) => [severity, 0]),
   ) as Record<FindingSeverity, number>;
@@ -133,10 +138,10 @@ export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleCon
     // provisional は status=open の finding に付く optional メタデータなので
     // open.count にも含まれる（既存の findings.open.count == 0 ゲートは安全側）。
     // builtin workflow はこの count を見て need_replan へルーティングし、エンジンは
-    // count > 0 での COMPLETE を最終不変条件として拒否する（設計書 §7）。
+    // count > 0 での COMPLETE を最終不変条件として拒否する。
     provisional: {
       count: openItems.filter((finding) => finding.provisional !== undefined).length,
-      // 対策バッチ B1: 直前の findings-manager ラウンドが fixpoint に達したか
+      // 直前の findings-manager ラウンドが fixpoint に達したか
       // （台帳側で計算・永続化済み。ここは読むだけ）。builtin workflow はこれを
       // 見て NEEDS_ADJUDICATION へルーティングする。
       fixpoint: ledger.fixpoint?.reached ?? false,
@@ -148,7 +153,7 @@ export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleCon
           reason: finding.provisional!.reason,
         })),
     },
-    // 有限停止予算（codex 裁定・対策バッチ B1 の拡張）: 累積ラウンド数・
+    // 累積ラウンド数・
     // 経過時間が上限に達したか（台帳側で計算・永続化済み。ここは読むだけ）。
     // provisional バケットとは独立 — fixpoint が成立しない churn でも、
     // ラウンド数だけで機械的に判定できる最終防波堤。
@@ -161,7 +166,7 @@ export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleCon
     waived: {
       count: ledger.findings.filter((finding) => finding.status === 'waived').length,
     },
-    // 監査可視化のみ（codex ブロッカー B5）。gate 条件は open/conflicts のまま
+    // 監査可視化のみ。gate 条件は open/conflicts のまま
     // 変えない — count を公開するだけで、既存ルール式の意味は変わらない。
     invalidated: {
       count: ledger.findings.filter((finding) => finding.status === 'invalidated').length,
@@ -169,14 +174,14 @@ export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleCon
     superseded: {
       count: ledger.findings.filter((finding) => finding.status === 'superseded').length,
     },
-    // codex 対策#4: 二系統台帳の review-integrity 側。未昇格（promotedFindingId
+    // review-integrity protocol: 二系統台帳の review-integrity 側。未昇格（promotedFindingId
     // 無し）の anomaly だけを数える — 昇格済みは既に product finding 側
     // （open/provisional 等）でカウントされているため二重計上しない。product
     // gate（COMPLETE 判定）はこの count を一切参照しない — reviewerAnomalies は
     // findings 配列と別物なので、参照しなくても構造的に gate を塞げない。
     reviewerAnomalies: {
       count: (ledger.reviewerAnomalies ?? []).filter((anomaly) => anomaly.promotedFindingId === undefined).length,
-      // codex 検証ブロッカー#1: review-integrity 予算が尽きたか（台帳側で計算・
+      // review-integrity requirement: review-integrity 予算が尽きたか（台帳側で計算・
       // 永続化済み。ここは読むだけ）。未昇格 anomaly が残る限り COMPLETE は許さず
       // 再レビューへ送るが、有限回で補完できなければ builtin はこれを見て
       // NEEDS_ADJUDICATION へルーティングする。

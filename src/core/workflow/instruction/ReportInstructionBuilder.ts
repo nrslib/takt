@@ -15,7 +15,7 @@ import {
   renderReportContext,
   renderReportOutputInstruction,
 } from './InstructionBuilder.js';
-import { renderFencedJsonBlock } from './fenced-json.js';
+import { renderFencedJsonBlock } from './fenced-block.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 
 /**

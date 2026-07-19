@@ -1,6 +1,9 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import type { CommandQualityGateFailure } from './types.js';
+
+export { sanitizeSensitiveText };
 
 const MAX_FEEDBACK_CHARS = 1_000;
 
@@ -9,22 +12,6 @@ function truncateForFeedback(text: string): string {
     return text;
   }
   return `${text.slice(0, MAX_FEEDBACK_CHARS)}\n[TRUNCATED ${text.length - MAX_FEEDBACK_CHARS} chars]`;
-}
-
-export function sanitizeSensitiveText(text: string): string {
-  if (!text) return text;
-  return text
-    .replace(/(Authorization\s*:\s*Bearer\s+)([^\s]+)/gi, '$1[REDACTED]')
-    .replace(
-      /(--(?:api[_-]?key|token|password|secret|access[_-]?token|refresh[_-]?token)\s+)(?:"[^"]*"|'[^']*'|[^\s]+)/gi,
-      '$1[REDACTED]',
-    )
-    .replace(
-      /(["']?(?:api[_-]?key|token|password|secret|access[_-]?token|refresh[_-]?token)["']?\s*[:=]\s*["']?)([^"',\s}\]]+)(["']?)/gi,
-      '$1[REDACTED]$3',
-    )
-    .replace(/([?&](?:api[_-]?key|token|password|secret)=)([^&\s]+)/gi, '$1[REDACTED]')
-    .replace(/\b(?:sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})\b/g, '[REDACTED]');
 }
 
 function maskKnownPaths(text: string, projectRoot: string): string {
@@ -70,14 +57,6 @@ function formatOutputLog(failure: CommandQualityGateFailure): string {
   return 'not created';
 }
 
-function formatStreamForFeedback(label: string, text: string, projectRoot: string): string[] {
-  const sanitized = sanitizeForFeedback(text, projectRoot);
-  return [
-    `${label}:`,
-    sanitized.length > 0 ? sanitized : '<empty>',
-  ];
-}
-
 export function formatCommandGateFailure(failure: CommandQualityGateFailure): string {
   const lines = [
     `Quality gate failed: ${sanitizeForFeedback(failure.gateName, failure.projectRoot)}`,
@@ -97,9 +76,6 @@ export function formatCommandGateFailure(failure: CommandQualityGateFailure): st
   lines.push(
     '',
     `Output log: ${formatOutputLog(failure)}`,
-    ...formatStreamForFeedback('Stdout', failure.stdout, failure.projectRoot),
-    '',
-    ...formatStreamForFeedback('Stderr', failure.stderr, failure.projectRoot),
   );
 
   return lines.join('\n');

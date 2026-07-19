@@ -1,5 +1,5 @@
 /**
- * OpenCode の tool ガード（v3-r4 実測 + codex 設計裁定）。
+ * OpenCode の tool ガード（v3-r4 実測 + tool-guard design）。
  *
  * 旧 ToolErrorBudgetDetector（1コール内エラー総数の単純累積、既定25）は、
  * 成功ツールコールを考慮しないため「弱いモデルが生産的に働きながら払う
@@ -16,7 +16,7 @@
  *
  * edit の幻覚 oldString 反復（v3-r4 で 19/25）には専用の edit_conflict_loop を
  * 設け、同一セッション内 correction → fresh session recovery の bounded な
- * 救済に接続する（client.ts）。空白正規化プラグイン案は codex 評価と実測により
+ * 救済に接続する（client.ts）。空白正規化プラグイン案は review evaluationと実測により
  * 不採用が確定済み — 実装しない。
  */
 
@@ -99,7 +99,7 @@ export function resolveToolGuardConfig(): ToolGuardConfig {
     toolResultStagnationRepeats: resolveEnvInt('TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS', 12),
     editConflictRepeats: resolveEnvInt('TAKT_OPENCODE_EDIT_CONFLICT_REPEATS', 3),
     // correction 中に別署名の conflict が新たに起きた場合、その署名は自身の
-    // correction 段階から始める（codex 裁定）。ただし無限 correction にしない
+    // correction 段階から始める（Finding Contract）。ただし無限 correction にしない
     // ため、コール全体の回数上限で縛る。
     editCorrectionLimit: resolveEnvInt('TAKT_OPENCODE_EDIT_CORRECTION_LIMIT', 2),
   };
@@ -270,7 +270,7 @@ export class OpenCodeToolGuard {
       // 直近ウィンドウも消去する — 率計算が強い進捗を跨ぐと、
       // 「9エラー → bash成功 → 9エラー → bash成功 → 1エラー」のような
       // 健全な試行錯誤（前進しながらの edit 税）がエラー率90%を満たして
-      // 誤 burst になる（codex 再現ケース）。
+      // 同一内容の再送を進捗として数えると誤 burst になる。
       this.consecutiveErrors = 0;
       this.sessionSignatureCounts.clear();
       this.recentWindow = [];
@@ -464,7 +464,7 @@ export class OpenCodeToolGuard {
  * - fresh session: correction 後の再発、または correction 予算超過に対して1回
  *   （tool-loop 種別で合計1回を共有）
  * どちらも使い切った後の再発は本物の失敗（needs_fix / plan への自動迂回は
- * しない — インフラ障害とレビュー判断を混同しない、という codex 裁定）。
+ * しない — インフラ障害とレビュー判断を混同しない、という Finding Contract）。
  */
 export interface ToolGuardRecoveryState {
   /** コール全体で消費した correction 回数（上限は editCorrectionLimit）。 */

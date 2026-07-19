@@ -9,7 +9,7 @@
  * seams (admission -> assembly -> reconcile) and schema invariants.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,11 +19,15 @@ import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js'
 import { validateLocationAdmission } from '../core/workflow/findings/admission-validation.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
 import { parseFindingLedger, parseRawFindings } from '../core/models/finding-schemas.js';
-import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
+import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type { FindingLedger, FindingLedgerEntry, FindingLedgerStore, FindingManagerDecisions, RawFinding } from '../core/workflow/findings/types.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
+
+function buildFindingsRuleContext(ledger: FindingLedger) {
+  return buildFindingsRuleContextWithCwd(ledger, process.cwd());
+}
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -316,6 +320,19 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     expect(validateLocationAdmission(projectDir, undefined)).toEqual({ ok: true });
   });
 
+  it('keeps an inaccessible existing location unverifiable instead of classifying it as invalid', () => {
+    const restrictedDir = join(projectDir, 'restricted');
+    mkdirSync(restrictedDir);
+    writeFileSync(join(restrictedDir, 'real.ts'), 'line 1\n');
+    chmodSync(restrictedDir, 0o000);
+    try {
+      const result = validateLocationAdmission(projectDir, 'restricted/real.ts:1');
+      expect(result).toMatchObject({ ok: false, outcome: 'unverifiable' });
+    } finally {
+      chmodSync(restrictedDir, 0o700);
+    }
+  });
+
   function makeHarness(initialLedger: FindingLedger): {
     savedLedgers: FindingLedger[];
     savedValidationReports: unknown[];
@@ -331,9 +348,10 @@ describe('item 1/4: raw admission validation and invalidate', () => {
       // v2 では WAL（beginInterpretations 等）が保存を複数回行うため、double も
       // 状態を持つ（mutator の結果を次回の読み込みへ引き継ぐ）。
       updateLedger: (mutator) => {
-        ledger = mutator(ledger);
+        const mutation = mutator(ledger);
+        ledger = mutation.ledger;
         savedLedgers.push(ledger);
-        return Promise.resolve(ledger);
+        return Promise.resolve(mutation);
       },
       createRunCopy: () => join(projectDir, 'ledger-copy.json'),
       saveRawFindings: () => join(projectDir, 'raw-findings.json'),

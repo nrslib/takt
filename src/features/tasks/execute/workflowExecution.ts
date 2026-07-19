@@ -342,6 +342,7 @@ async function executeWorkflowInternal(
     }
     throw error;
   } finally {
+    bootstrap.providerEventLogger.flush();
     bootstrap.prefixWriter?.flush();
     abortHandler.cleanup();
     try {

@@ -84,7 +84,7 @@ interface WorkflowEngineStepCoordinatorDeps {
   /** Present only when the workflow has an effective finding_contract and the finding-conflict-adjudication step was injected (see WorkflowEngine). */
   findingConflictAdjudicationRunner?: {
     run: (step: WorkflowStep, state: WorkflowState, runtime?: RuntimeStepResolution) => Promise<StepRunResult>;
-    /** Origin the runner last resolved (state.previousStep or the pending attempt's durable originStep — codex R1). */
+    /** Origin the runner last resolved (state.previousStep or the pending attempt's durable originStep — origin-step requirement). */
     getLastOriginStep: () => string | undefined;
   };
 }
@@ -213,7 +213,7 @@ export class WorkflowEngineStepCoordinator {
    *   the origin whose own `when(findings.conflicts.count == 0 &&
    *   findings.open.count > 0)`-style rule routes to the fix path next round.
    *
-   * Origin resolution order (codex R1):
+   * Origin resolution order (origin-step requirement):
    * 1. WorkflowState.previousStep (normal in-run entry),
    * 2. the runner's last resolved origin — which covers the durable originStep
    *    persisted on the conflict's pending attempt, so a resume that starts

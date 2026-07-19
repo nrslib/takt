@@ -121,7 +121,7 @@ function normalizeFindingContractConfig(
       ...(raw.manager.provider ? { provider: raw.manager.provider } : {}),
       ...(raw.manager.model ? { model: raw.manager.model } : {}),
     },
-    // 有限停止予算（codex 裁定・対策バッチ B1 の拡張）: 省略されたサブ
+    // 有限停止予算（Finding Contract・対策バッチ B1 の拡張）: 省略されたサブ
     // フィールドは stop-budget.ts の DEFAULT_STOP_BUDGET が補うため、ここでは
     // YAML に書かれた値だけをそのまま写す（未指定フィールドの穴埋めはしない）。
     ...(raw.stop_budget
@@ -132,7 +132,7 @@ function normalizeFindingContractConfig(
         },
       }
       : {}),
-    // review-integrity 予算（codex 検証ブロッカー#1）: 未指定分は
+    // review-integrity 予算（review-integrity requirement）: 未指定分は
     // review-integrity.ts の DEFAULT_REVIEW_INTEGRITY_BUDGET が補う。
     ...(raw.review_budget
       ? {
@@ -146,7 +146,7 @@ function normalizeFindingContractConfig(
 
 /**
  * Resolves the fixed "supervisor" persona for the engine-synthesized
- * finding-conflict-adjudication step (codex B6). Without personaPath the
+ * finding-conflict-adjudication step (contract invariant). Without personaPath the
  * runner would use the bare persona NAME as the system prompt and the facet
  * body would never reach the model. Resolution is attempted whenever a
  * finding contract exists (so workflow_call children that wire the step can

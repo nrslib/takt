@@ -178,6 +178,7 @@ vi.mock('../shared/utils/providerEventLogger.js', () => ({
     wrapCallback: vi.fn((callback) => callback),
     setStep: vi.fn(),
     setProvider: vi.fn(),
+    flush: vi.fn(),
   }),
   isProviderEventsEnabled: vi.fn().mockReturnValue(false),
 }));
@@ -197,6 +198,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 }));
 
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
+import { createProviderEventLogger } from '../shared/utils/providerEventLogger.js';
 import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowLoader.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolutionCache.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
@@ -242,6 +244,11 @@ function getInjectedStructuredCaller(): StructuredCaller {
   return structuredCaller as StructuredCaller;
 }
 
+function expectProviderEventLoggerFlushed(): void {
+  const logger = vi.mocked(createProviderEventLogger).mock.results.at(-1)?.value;
+  expect(logger?.flush).toHaveBeenCalledOnce();
+}
+
 describe('executeWorkflow structuredCaller injection', () => {
   const originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
   let cleanupDirs: string[];
@@ -283,6 +290,7 @@ beforeEach(() => {
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
     });
+    expectProviderEventLoggerFlushed();
 
     mockGetProvider.mockReturnValue({ supportsStructuredOutput: false });
     mockRunAgent.mockResolvedValue({
@@ -785,6 +793,7 @@ steps:
     const serialized = JSON.parse(String(lastWrite?.[1]));
     expect(serialized.status).toBe('aborted');
     expect(serialized.resume_point).toEqual(parentResumePoint);
+    expectProviderEventLoggerFlushed();
   });
 
   it('should persist the latest parent resume_point when workflow engine throws after a workflow_call step completes', async () => {
@@ -844,6 +853,7 @@ steps:
     const serialized = JSON.parse(String(lastWrite?.[1]));
     expect(serialized.status).toBe('aborted');
     expect(serialized.resume_point).toEqual(parentResumePoint);
+    expectProviderEventLoggerFlushed();
   });
 
   it('should pass provider override through to WorkflowEngine', async () => {

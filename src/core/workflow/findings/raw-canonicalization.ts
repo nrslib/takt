@@ -1,9 +1,9 @@
 /**
- * v2 梯子設計の二層スキーマ境界（設計書 §2〜§3）。
+ * raw finding の二層スキーマ境界。
  *
  * - reviewer structured output は「寛容な per-item parse」で
  *   ReviewerRawFindingCandidate に落とす。1件の不正 raw が配列全体の Zod parse
- *   失敗として run を殺す構造（v3-r3 実測: gemma の kind/relation 矛盾1件で
+ *   失敗として run を殺す構造（kind/relation 矛盾1件で
  *   run 全体 abort）をここで断つ。
  * - canonical 生成関数は canonicalizeReviewerRawFinding の1つだけ。reviewer 用・
  *   legacy 用・test 用に別の生成関数を作らない。legacy ledger を読む場合も
@@ -11,9 +11,9 @@
  * - brand は型レベル（unique symbol）に加えて runtime でも強制する: factory が
  *   WeakSet/WeakMap に登録し、downstream（機械分類・reconciler・manager prompt）
  *   の入口が assertCanonicalRawFinding で照合する。型 assertion や spread で
- *   作った object は WeakSet に居ないため runtime で拒否される（攻撃2の固定）。
+ *   作った object は WeakSet に居ないため runtime で拒否される。
  * - taint（provenance.ambiguityOrigin）は同一梯子内では消さない。correction で
- *   形式が整っても ambiguityOrigin: true を保持する（設計書 §3）。
+ *   形式が整っても ambiguityOrigin: true を保持する。
  * - capability はエンジンだけが発行する。LLM の出力フィールドからは受け取らない。
  */
 
@@ -93,7 +93,7 @@ function normalizedTitleOf(title: string | undefined): string {
 }
 
 /**
- * 再発同定の lineage key（設計書 §8）。行番号・run ID・step iteration・
+ * 再発同定の lineage key。行番号・run ID・step iteration・
  * タイムスタンプ・LLM 説明文全文は入れない。
  */
 export function computeLineageKey(input: {
@@ -117,7 +117,7 @@ export function computeLineageKey(input: {
 
 /**
  * raw の evidence hash。行番号・rawFindingId・runId は含めない（それらだけを
- * 変えた再発は「同一 evidence」= manager を再呼び出さない — 攻撃5対策）。
+ * 変えた再発は「同一 evidence」= manager を再呼び出さない）。
  * description 等の実質変更は hash を変え、再解釈候補になる（ただし epoch 上限
  * MAX 2 / lineage は raw-finding-limits.ts が別途強制する）。
  */
@@ -153,7 +153,7 @@ export function computeProvisionalStableKey(input: {
 }
 
 /**
- * reviewer anomaly（codex 対策#4: 二系統台帳の review-integrity 側）の再発同定
+ * reviewer anomaly（review-integrity protocol: 二系統台帳の review-integrity 側）の再発同定
  * キー。computeProvisionalStableKey と同じ形だが名前空間を分ける
  * （'reviewer-anomaly-stable-key' プレフィックス）ため、同じ
  * (reviewerStableKey, lineageKey) でも provisional と anomaly の stableKey が
@@ -167,7 +167,7 @@ export function computeReviewerAnomalyStableKey(input: {
   return sha256Of('reviewer-anomaly-stable-key', input.reviewerStableKey, input.lineageKey, input.anomalyKind, String(RAW_LADDER_POLICY_VERSION));
 }
 
-/** reviewer 全量超過の単一 blocker 用（設計書 §10 の overflow stableKey 規則）。 */
+/** reviewer 全量超過の単一 blocker 用 overflow stableKey。 */
 export function computeOverflowStableKey(reviewerStableKey: string): string {
   return sha256Of(reviewerStableKey, 'reviewer-output-overflow');
 }
@@ -193,7 +193,7 @@ export interface ReviewerRawIntakeContext {
   runId: string;
   /** reviewer サブステップ名（raw finding id の名前空間に使う既存規約）。 */
   reviewerStepName: string;
-  /** reviewer の persona キー（reviewerStableKey の構成要素、設計書 §8）。 */
+  /** reviewer の persona キー（reviewerStableKey の構成要素）。 */
   reviewerPersonaKey: string;
 }
 
@@ -237,7 +237,7 @@ function pickEvidenceKind(value: unknown): RawFindingEvidenceKind | undefined {
 }
 
 /**
- * typed evidence protocol(codex 対策#4)の組み立て。provider-facing の flat wire
+ * typed evidence protocol(review-integrity protocol)の組み立て。provider-facing の flat wire
  * フィールド(evidenceKind/verbatimExcerpt/snapshotId)と location から、ネスト済み
  * RawFindingEvidence を作る唯一の関数 — candidate factory
  * (createReviewerRawFindingCandidates)だけがここを通す。
@@ -245,7 +245,7 @@ function pickEvidenceKind(value: unknown): RawFindingEvidenceKind | undefined {
  * - locationless: explanation は独立の wire フィールドを持たせず description を
  *   流用する(弱いモデルへ要求する必須フィールドを増やさない設計判断)。location が
  *   非空でも(「存在するはずの path」を主張する claim)組み立てる — 「存在しない
- *   ことが根拠」の claim を無理に source_quote へ押し込めない、という codex の
+ *   ことが根拠」の claim を無理に source_quote へ押し込めない、という review evidence
  *   要請どおり、verbatimExcerpt 照合の対象にしない。
  * - source_quote: verbatimExcerpt・snapshotId が両方揃い、かつ location が
  *   「path:line」か「path:start-end」のどちらかの形で行範囲を持つ場合のみ組み立てる。
@@ -375,7 +375,7 @@ export function createReviewerRawFindingCandidates(
 
 /**
  * legacy adapter: 既存台帳の RawFinding から candidate を作る。kind → relation の
- * 復元（deriveRawFindingRelation）はこの adapter の中だけに許される（設計書 §2.2）。
+ * 復元（deriveRawFindingRelation）はこの adapter の中だけに許される。
  */
 export function candidateFromLegacyRawFinding(
   raw: RawFinding,
@@ -404,7 +404,7 @@ export function candidateFromLegacyRawFinding(
 }
 
 /**
- * reviewer 出力全量が上限超過したときの単一 overflow event（設計書 §10）。
+ * reviewer 出力全量が上限超過したときの単一 overflow event。
  * system 起源の candidate として同じ canonical 生成関数を通す。
  */
 export function createOverflowRawCandidate(input: {
@@ -436,7 +436,7 @@ export function createOverflowRawCandidate(input: {
 // canonical 生成（唯一の関数）
 // ---------------------------------------------------------------------------
 
-/** ambiguous 起源 raw の権限格子（設計書 §4.1）。エンジンだけが発行する。 */
+/** ambiguous 起源 raw の権限格子。エンジンだけが発行する。 */
 export const AMBIGUOUS_RAW_CAPABILITIES: AmbiguousRawCapabilities = Object.freeze({
   mayCreateIndependentFinding: true,
   mayOpenConflict: true,
@@ -453,7 +453,7 @@ export interface RawCanonicalizationContext {
   ledger: FindingLedger;
   /** レビュア1回突き返し（correction）を経た再 canonical 化なら true。 */
   clarificationAttempted?: boolean;
-  /** correction 前の ambiguity codes。taint は同一梯子内では消さない（設計書 §3）。 */
+  /** correction 前の ambiguity codes。taint は同一梯子内では消さない。 */
   priorAmbiguityCodes?: readonly RawAmbiguityCode[];
 }
 
@@ -490,7 +490,7 @@ function indexLedgerFindings(ledger: FindingLedger): OpenFindingIndexes {
     }
     // provisional（意味を確定できなかった観測の placeholder）は 'new' 衝突検出の
     // 対象にしない: 同じ claim の clean coherent raw こそが provisional を確定・
-    // 解消できる唯一の証拠であり（設計書 §8）、衝突扱いで ambiguous に落とすと
+    // 解消できる唯一の証拠であり、衝突扱いで ambiguous に落とすと
     // provisional が永久に確定不能になる。
     if (finding.provisional !== undefined) {
       continue;
@@ -533,7 +533,7 @@ export interface RawAmbiguityDetection {
 }
 
 /**
- * ambiguity 検出の唯一の実装（設計書 §3）。canonicalizeReviewerRawFinding と
+ * ambiguity 検出の唯一の実装。canonicalizeReviewerRawFinding と
  * runner 側のレビュア突き返し検出（relation-coherence.ts）が共有する —
  * 検出条件が二重実装で食い違うと、runner が直したはずの raw が intake で
  * 再び ambiguous になる（またはその逆の緩み）。
@@ -556,7 +556,7 @@ export function detectRawFindingAmbiguities(
     codes.push('missing-required-field');
   }
 
-  // legacy kind と relation の矛盾（v3-r3 gemma 実測パターン: kind=issue +
+  // legacy kind と relation の矛盾（kind=issue +
   // relation=resolution_confirmation）。parse 失敗ではなく taint にする。
   if (claimedRelation !== undefined && fields.legacyKind !== undefined
     && kindForRelation(claimedRelation) !== fields.legacyKind) {
@@ -636,14 +636,14 @@ export function extractLenientRawFields(
     ...(pickString(record.familyTag) !== undefined ? { familyTag: pickString(record.familyTag)! } : {}),
     ...(pickString(record.location) !== undefined ? { location: pickString(record.location)! } : {}),
     ...(pickString(record.suggestion) !== undefined ? { suggestion: pickString(record.suggestion)! } : {}),
-    // typed evidence protocol（codex 対策#4）の envelope 検査対象フィールド。
+    // typed evidence protocol（review-integrity protocol）の envelope 検査対象フィールド。
     ...(pickString(record.verbatimExcerpt) !== undefined ? { verbatimExcerpt: pickString(record.verbatimExcerpt)! } : {}),
     ...(pickString(record.snapshotId) !== undefined ? { snapshotId: pickString(record.snapshotId)! } : {}),
   };
 }
 
 /**
- * 唯一の canonical 生成関数（設計書 §2.1）。candidate は必ず coherent または
+ * 唯一の canonical 生成関数。candidate は必ず coherent または
  * ambiguous のどちらかに着地する — 例外で死ぬ経路は無い。
  */
 export function canonicalizeReviewerRawFinding(
@@ -664,7 +664,7 @@ export function canonicalizeReviewerRawFinding(
   const ambiguityOrigin = codes.length > 0 || priorCodes.length > 0;
   const allCodes = [...new Set([...priorCodes, ...codes])];
 
-  // canonical の relation/kind は必ず一致する整合ペア（設計書 §2.2）。ambiguous で
+  // canonical の relation/kind は必ず一致する整合ペア。ambiguous で
   // relation の主張が成立しない場合は最も権限の弱い 'new' に正規化する（権限は
   // capabilities が全遮断しているため、この正規化がゲートを開けることはない）。
   const relationClaimHolds = claimedRelation !== undefined
@@ -706,7 +706,7 @@ export function canonicalizeReviewerRawFinding(
       clarificationAttempted,
       ambiguityCodes: allCodes,
     },
-    // typed evidence protocol(codex 対策#4)。coherent/ambiguous どちらの raw も
+    // typed evidence protocol(review-integrity protocol)。coherent/ambiguous どちらの raw も
     // 持ちうる(ambiguity は relation/target の構造的矛盾であり、evidence の有無とは
     // 直交する — raw-canonicalization.ts のコメント参照)。evidenceHash とは独立に
     // 保持する(evidenceHash は WAL/epoch 用の「同一 claim 判定」であり、
@@ -717,7 +717,7 @@ export function canonicalizeReviewerRawFinding(
 
   // 形式が完全（codes 空）なら coherent。ただし taint（priorCodes）は保持する:
   // correction で relation が整った raw は形式上 coherent だが ambiguityOrigin は
-  // true のままで、downstream の権限判定は provenance を見る（設計書 §3）。
+  // true のままで、downstream の権限判定は provenance を見る。
   if (codes.length === 0
     && candidate.title !== undefined && candidate.description !== undefined
     && candidate.severity !== undefined && candidate.familyTag !== undefined) {
@@ -769,8 +769,8 @@ export function toLedgerRawFinding(canonical: CanonicalRawFinding): RawFinding {
   // description は本文のまま保つ（注記を混ぜない）。ambiguity code や正規化で
   // 落ちた targetFindingId 主張の監査情報は canonical.provenance / 検証レポート /
   // provisional.reason 側にあり、description を汚すと provisional entry と後続の
-  // clean raw の完全 identity（path+title+description）照合が壊れ、§8 の確定・
-  // 解消（codex B2 の決定的照合）が永久に成立しなくなる。
+  // clean raw の完全 identity（path+title+description）照合が壊れ、確定・
+  // 解消（evidence CAS requirement の決定的照合）が永久に成立しなくなる。
   const description = canonical.description
     ?? (isCoherent ? '(no description)' : (canonical as AmbiguousCanonicalRawFinding).safeEvidenceExcerpt);
   return {

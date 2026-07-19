@@ -25,14 +25,14 @@ import type { FindingContractStopBudgetConfig, FindingLedger } from '../core/wor
 import {
   DEFAULT_STOP_BUDGET,
   attachStopBudgetState,
-  computeRoundMarker,
   resolveStopBudgetLimits,
   stopBudgetRoundsCompleted,
   type ResolvedStopBudgetLimits,
 } from '../core/workflow/findings/stop-budget.js';
+import { computeRoundMarker } from '../core/workflow/findings/round-marker.js';
 import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../core/workflow/findings/manager-runner.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
-import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
+import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -41,6 +41,10 @@ vi.mock('../agents/agent-usecases.js', () => ({
 
 const { executeAgent } = await import('../agents/agent-usecases.js');
 const executeAgentMock = vi.mocked(executeAgent);
+
+function buildFindingsRuleContext(ledger: FindingLedger) {
+  return buildFindingsRuleContextWithCwd(ledger, process.cwd());
+}
 
 beforeEach(() => {
   executeAgentMock.mockReset();
@@ -71,6 +75,10 @@ function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
 }
 
 describe('resolveStopBudgetLimits', () => {
+  it('公開既定値を実行時にも変更不能にする', () => {
+    expect(Object.isFrozen(DEFAULT_STOP_BUDGET)).toBe(true);
+  });
+
   it('applies both defaults when finding_contract.stop_budget is entirely omitted (undefined must still stop in finite rounds)', () => {
     expect(resolveStopBudgetLimits(undefined)).toEqual({
       maxRounds: DEFAULT_STOP_BUDGET.maxRounds,
@@ -104,6 +112,7 @@ describe('computeRoundMarker', () => {
     const differentIteration = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 4 });
     const differentRun = computeRoundMarker({ runId: 'run-2', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3 });
     expect(a).toBe(aAgain);
+    expect(a).toContain('\0');
     expect(a).not.toBe(differentIteration);
     expect(a).not.toBe(differentRun);
   });
@@ -223,8 +232,9 @@ function makeRoundHarness(
     loadLedger: () => ledgerState,
     saveLedger: (next) => { ledgerState = next; },
     updateLedger: (mutator) => {
-      ledgerState = mutator(ledgerState);
-      return Promise.resolve(ledgerState);
+      const mutation = mutator(ledgerState);
+      ledgerState = mutation.ledger;
+      return Promise.resolve(mutation);
     },
     createRunCopy: () => '/tmp/ledger-copy.json',
     saveRawFindings: () => '/tmp/raw-findings.json',
@@ -460,7 +470,11 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
       workflowName: 'peer-review',
       loadLedger: () => ledgerState,
       saveLedger: (next) => { ledgerState = next; },
-      updateLedger: (mutator) => { ledgerState = mutator(ledgerState); return Promise.resolve(ledgerState); },
+      updateLedger: (mutator) => {
+        const mutation = mutator(ledgerState);
+        ledgerState = mutation.ledger;
+        return Promise.resolve(mutation);
+      },
       createRunCopy: () => '/tmp/ledger-copy.json',
       saveRawFindings: () => '/tmp/raw-findings.json',
       saveManagerValidationReport: () => '/tmp/manager-report.json',

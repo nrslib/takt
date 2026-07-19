@@ -24,7 +24,7 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
   const { contract, language, renderFencedJsonBlock } = input;
   const isReviewer = Boolean(contract.rawFindingsJsonSchema);
 
-  // codex 対策#4: rawFindingsJsonSchema と reviewScopeSnapshotId は同じ
+  // review-integrity protocol: rawFindingsJsonSchema と reviewScopeSnapshotId は同じ
   // includeRawFindingsSchema 条件下で必ずセットで生成される（WorkflowEngineSetup.ts
   // の buildFindingContractInstructionContext 参照）。reviewer 用の
   // FindingContractInstructionContext を組む経路が reviewScopeSnapshotId の配線を
@@ -58,7 +58,7 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
     rawFindingsJsonSchema: contract.rawFindingsJsonSchema
       ? renderFencedJsonBlock(contract.rawFindingsJsonSchema)
       : '',
-    // codex 対策#4: reviewer step のときだけ設定される（instruction-context.ts
+    // review-integrity protocol: reviewer step のときだけ設定される（instruction-context.ts
     // 参照）。空文字は「該当なし」— テンプレート側は isReviewer と一緒にしか
     // 出さない。
     reviewScopeSnapshotId: contract.reviewScopeSnapshotId ?? '',

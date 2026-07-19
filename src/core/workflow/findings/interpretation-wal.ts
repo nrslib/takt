@@ -1,5 +1,5 @@
 /**
- * 解釈 WAL（write-ahead log、v2 梯子設計 §9・実装単位7）。
+ * ambiguous raw 解釈の write-ahead log。
  *
  * ambiguous raw への manager 解釈を冪等化する。処理順序:
  *
@@ -10,7 +10,7 @@
  * 4. 最新台帳を再読込し、前提条件を検証
  * 5. finding mutation と `ledger_applied` を同じ updateLedger 内で保存
  *
- * resume 規則（設計書 §9 の表）:
+ * resume 規則:
  * - レコードなし → started を書いて manager 呼び出し
  * - `interpretation_started` のみ（前回 run の中断）→ manager を再呼び出さず
  *   `interpretation-interrupted` provisional
@@ -26,7 +26,7 @@ import type {
   FindingObservation,
   InterpretationApplicationResult,
 } from './types.js';
-import type { FindingLedgerStore } from './store.js';
+import type { LedgerRepository } from './store.js';
 
 export function findInterpretationRecord(
   ledger: FindingLedger,
@@ -62,17 +62,17 @@ export interface BeginInterpretationsResult {
  * 全て1回の updateLedger（排他区間、同期 mutator）で行う。
  */
 export async function beginInterpretations(
-  store: FindingLedgerStore,
+  store: LedgerRepository,
   inputs: readonly NewInterpretationInput[],
   observation: FindingObservation,
 ): Promise<BeginInterpretationsResult> {
-  const result: BeginInterpretationsResult = {
-    freshlyStartedKeys: new Set(),
-    interruptedKeys: new Set(),
-    completedByKey: new Map(),
-    appliedByKey: new Map(),
-  };
-  await store.updateLedger((ledger) => {
+  const mutation = await store.updateLedger((ledger) => {
+    const result: BeginInterpretationsResult = {
+      freshlyStartedKeys: new Set(),
+      interruptedKeys: new Set(),
+      completedByKey: new Map(),
+      appliedByKey: new Map(),
+    };
     const interpretations = [...(ledger.interpretations ?? [])];
     for (const input of inputs) {
       const existing = interpretations.find((record) => record.interpretationKey === input.interpretationKey);
@@ -103,14 +103,14 @@ export async function beginInterpretations(
       // ここへ来るのは resume（別 run）だけ。再呼び出しせず provisional へ。
       result.interruptedKeys.add(input.interpretationKey);
     }
-    return { ...ledger, interpretations };
+    return { ledger: { ...ledger, interpretations }, result };
   });
-  return result;
+  return mutation.result;
 }
 
 /** 検証済み decision を interpretation_completed として保存する。 */
 export async function completeInterpretations(
-  store: FindingLedgerStore,
+  store: LedgerRepository,
   decisions: ReadonlyMap<string, AmbiguousInterpretation>,
   observation: FindingObservation,
 ): Promise<void> {
@@ -118,19 +118,22 @@ export async function completeInterpretations(
     return;
   }
   await store.updateLedger((ledger) => ({
-    ...ledger,
-    interpretations: (ledger.interpretations ?? []).map((record) => {
-      const decision = decisions.get(record.interpretationKey);
-      if (decision === undefined || record.stage !== 'interpretation_started') {
-        return record;
-      }
-      return {
-        ...record,
-        stage: 'interpretation_completed' as const,
-        completedAt: observation,
-        validatedDecision: decision,
-      };
-    }),
+    ledger: {
+      ...ledger,
+      interpretations: (ledger.interpretations ?? []).map((record) => {
+        const decision = decisions.get(record.interpretationKey);
+        if (decision === undefined || record.stage !== 'interpretation_started') {
+          return record;
+        }
+        return {
+          ...record,
+          stage: 'interpretation_completed' as const,
+          completedAt: observation,
+          validatedDecision: decision,
+        };
+      }),
+    },
+    result: undefined,
   }));
 }
 
@@ -163,7 +166,7 @@ export function markInterpretationsApplied(
   };
 }
 
-/** lineage ごとの消費済み解釈 epoch 数（WAL レコード数で数える。攻撃5の上限判定）。 */
+/** lineage ごとの消費済み解釈 epoch 数（WAL レコード数で数える）。 */
 export function countInterpretationEpochs(ledger: FindingLedger, lineageKey: string): number {
   return (ledger.interpretations ?? []).filter((record) => record.lineageKey === lineageKey).length;
 }

@@ -94,9 +94,10 @@ function makeHarness(initialLedger: FindingLedger): Harness {
     loadLedger: () => ledger,
     saveLedger: (next) => { ledger = next; savedLedgers.push(next); },
     updateLedger: (mutator) => {
-      ledger = mutator(ledger);
+      const mutation = mutator(ledger);
+      ledger = mutation.ledger;
       savedLedgers.push(ledger);
-      return Promise.resolve(ledger);
+      return Promise.resolve(mutation);
     },
     createRunCopy: () => '/tmp/ledger-copy.json',
     saveRawFindings: (_runId, _stepName, rawFindings) => {
@@ -499,9 +500,9 @@ describe('runFindingManagerForStep workflow_call sub-steps', () => {
       loadLedger: () => makeLedger(),
       saveLedger: (next) => { savedLedgers.push(next); },
       updateLedger: (mutator) => {
-        const next = mutator(makeLedger());
-        savedLedgers.push(next);
-        return Promise.resolve(next);
+        const mutation = mutator(makeLedger());
+        savedLedgers.push(mutation.ledger);
+        return Promise.resolve(mutation);
       },
       createRunCopy: () => '/tmp/ledger-copy.json',
       saveRawFindings: (_runId, _stepName, rawFindings) => {
@@ -916,9 +917,9 @@ describe('runFindingManagerForStep stale rejection excluded from unmentioned fal
       loadLedger: () => initialLedger,
       saveLedger: (next) => { savedLedgers.push(next); },
       updateLedger: (mutator) => {
-        const next = mutator(staleFreshLedger);
-        savedLedgers.push(next);
-        return Promise.resolve(next);
+        const mutation = mutator(staleFreshLedger);
+        savedLedgers.push(mutation.ledger);
+        return Promise.resolve(mutation);
       },
       createRunCopy: () => '/tmp/ledger-copy.json',
       saveRawFindings: () => '/tmp/raw-findings.json',

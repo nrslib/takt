@@ -7,7 +7,7 @@
  * 境界バグ）。ここでは旧 run の reports/ 全体（バージョン付き履歴を含む）を
  * 新 run の reports/ として原子的に継承する。
  *
- * codex 裁定のポイント:
+ * Finding Contractのポイント:
  * - 選択コピーはしない。静的解析では workflow_call / loop judge / 動的 facet の
  *   参照を把握しきれないため、常に全体をコピーする。
  * - 祖先探索・fallback はしない。常に source_run_slug の直接の親のみ。
@@ -15,7 +15,7 @@
  *   fail-fast。失敗時は一時成果物を除去し、半端な reports/ を公開しない。
  * - ファイル一覧と hash の SSOT は manifest（resume-artifacts.json）。meta.json
  *   からは参照のみ。
- * - **公開は単一 rename に集約する（codex 2巡目裁定）**: manifest は staged
+ * - **公開は単一 rename に集約する（atomic publication requirement）**: manifest は staged
  *   reports の内側（reports/resume-artifacts.json、予約名）に置き、一時領域で
  *   全部完成させてから reports の rename 1回だけで公開する。ロールバックという
  *   概念が存在しないため、並行 resume の勝者破壊もロールバック失敗による
@@ -25,18 +25,22 @@
 
 import { createHash } from 'node:crypto';
 import {
-  existsSync,
   lstatSync,
-  mkdirSync,
   readdirSync,
-  readFileSync,
-  renameSync,
-  rmdirSync,
-  rmSync,
-  writeFileSync,
+  type Stats,
 } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { isValidReportDirName } from '../../../shared/utils/index.js';
+import {
+  assertPrivateDirectoryReadSnapshot,
+  capturePrivateDirectoryReadSnapshot,
+  readRegularFileNoFollow,
+  ensurePrivateDirectory,
+  publishPrivateDirectory,
+  removePrivateDirectory,
+  writePrivateFileWithMode,
+  type PrivateDirectoryReadSnapshot,
+} from '../../../shared/utils/private-file.js';
 import { buildRunPaths } from './run-paths.js';
 
 // reports/ 直下の予約名（単一情報源は core/models/reserved-report-names.ts）。
@@ -69,6 +73,89 @@ export interface InheritResumeReportSnapshotOptions {
   readonly targetRunSlug: string;
 }
 
+const MANIFEST_KEYS = new Set(['version', 'sourceRunSlug', 'targetRunSlug', 'createdAt', 'files']);
+const MANIFEST_FILE_KEYS = new Set(['path', 'size', 'sha256']);
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+
+function assertManifestMetadata(
+  sourceRunSlug: string,
+  targetRunSlug: string,
+  createdAt: string,
+): void {
+  if (sourceRunSlug === targetRunSlug) {
+    throw new Error('Resume report snapshot: manifest sourceRunSlug and targetRunSlug must differ');
+  }
+  const timestamp = new Date(createdAt);
+  if (Number.isNaN(timestamp.getTime()) || timestamp.toISOString() !== createdAt) {
+    throw new Error('Resume report snapshot: manifest createdAt must be a canonical ISO timestamp');
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function isValidManifestPath(value: string): boolean {
+  if (value.length === 0 || value.includes('\\') || value.startsWith('/')) {
+    return false;
+  }
+  const segments = value.split('/');
+  return segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
+}
+
+function parseResumeReportSnapshotManifest(value: unknown, targetRunSlug: string): ResumeReportSnapshotManifest {
+  if (!isRecord(value) || !hasOnlyKeys(value, MANIFEST_KEYS)) {
+    throw new Error('Resume report snapshot: manifest must be an object with only the documented fields');
+  }
+  if (value.version !== 1) {
+    throw new Error('Resume report snapshot: manifest version must be 1');
+  }
+  if (typeof value.sourceRunSlug !== 'string' || !isValidReportDirName(value.sourceRunSlug)) {
+    throw new Error('Resume report snapshot: manifest sourceRunSlug is invalid');
+  }
+  if (value.targetRunSlug !== targetRunSlug) {
+    throw new Error(`Resume report snapshot: manifest targetRunSlug must match "${targetRunSlug}"`);
+  }
+  if (typeof value.createdAt !== 'string') {
+    throw new Error('Resume report snapshot: manifest createdAt must be a canonical ISO timestamp');
+  }
+  assertManifestMetadata(value.sourceRunSlug, targetRunSlug, value.createdAt);
+  if (!Array.isArray(value.files)) {
+    throw new Error('Resume report snapshot: manifest files must be an array');
+  }
+  const seenPaths = new Set<string>();
+  const files = value.files.map((entry, index): ResumeReportSnapshotFileEntry => {
+    if (!isRecord(entry) || !hasOnlyKeys(entry, MANIFEST_FILE_KEYS)) {
+      throw new Error(`Resume report snapshot: manifest files[${index}] has an invalid shape`);
+    }
+    if (typeof entry.path !== 'string' || !isValidManifestPath(entry.path)) {
+      throw new Error(`Resume report snapshot: manifest files[${index}].path is invalid`);
+    }
+    if (entry.path === RESUME_ARTIFACTS_FILE_NAME || seenPaths.has(entry.path)) {
+      throw new Error(`Resume report snapshot: manifest contains a reserved or duplicate path "${entry.path}"`);
+    }
+    if (typeof entry.size !== 'number' || !Number.isSafeInteger(entry.size) || entry.size < 0) {
+      throw new Error(`Resume report snapshot: manifest files[${index}].size is invalid`);
+    }
+    if (typeof entry.sha256 !== 'string' || !SHA256_PATTERN.test(entry.sha256)) {
+      throw new Error(`Resume report snapshot: manifest files[${index}].sha256 is invalid`);
+    }
+    seenPaths.add(entry.path);
+    return { path: entry.path, size: entry.size, sha256: entry.sha256 };
+  });
+  return {
+    version: 1,
+    sourceRunSlug: value.sourceRunSlug,
+    targetRunSlug,
+    createdAt: value.createdAt,
+    files,
+  };
+}
+
 function toPosixRelative(relativePath: string): string {
   return relativePath.split(sep).join('/');
 }
@@ -80,22 +167,71 @@ function assertInside(baseAbs: string, candidateAbs: string, label: string): voi
   }
 }
 
+function assertDirectoryChain(trustedRootAbs: string, targetDirAbs: string, label: string): void {
+  const trustedRoot = resolve(trustedRootAbs);
+  const targetDir = resolve(targetDirAbs);
+  assertInside(trustedRoot, targetDir, label);
+  let current = trustedRoot;
+  for (const component of relative(trustedRoot, targetDir).split(sep).filter(Boolean)) {
+    current = join(current, component);
+    const stat = lstatOrUndefined(current);
+    if (stat === undefined) {
+      return;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Resume report snapshot: ${label} contains a symlink: ${current}`);
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`Resume report snapshot: ${label} contains a non-directory path: ${current}`);
+    }
+  }
+}
+
+function createDirectoryChain(trustedRootAbs: string, targetDirAbs: string, label: string): void {
+  const trustedRoot = resolve(trustedRootAbs);
+  const targetDir = resolve(targetDirAbs);
+  assertInside(trustedRoot, targetDir, label);
+  let current = trustedRoot;
+  for (const component of relative(trustedRoot, targetDir).split(sep).filter(Boolean)) {
+    current = join(current, component);
+    if (lstatOrUndefined(current) === undefined) {
+      ensurePrivateDirectory(current);
+    }
+    const stat = lstatSync(current);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Resume report snapshot: ${label} contains a symlink: ${current}`);
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`Resume report snapshot: ${label} contains a non-directory path: ${current}`);
+    }
+  }
+}
+
 interface CopyResult {
   readonly files: ResumeReportSnapshotFileEntry[];
 }
+
+const PRIVATE_FILE_MODE = 0o600;
 
 /**
  * source reports/ を stagingDir へ再帰コピーしつつ manifest エントリを作る。
  * symlink・非通常ファイル（fifo 等）は拒否して即座に throw する。
  */
 function copyReportsTree(
-  sourceRootAbs: string,
+  sourceRootSnapshot: PrivateDirectoryReadSnapshot,
   stagingRootAbs: string,
   relativeDir: string,
 ): CopyResult {
   const files: ResumeReportSnapshotFileEntry[] = [];
+  const sourceRootAbs = sourceRootSnapshot.path;
   const sourceDirAbs = relativeDir === '' ? sourceRootAbs : join(sourceRootAbs, relativeDir);
-  for (const entryName of readdirSync(sourceDirAbs)) {
+  const directorySnapshot = relativeDir === ''
+    ? sourceRootSnapshot
+    : capturePrivateDirectoryReadSnapshot(sourceDirAbs);
+  assertPrivateDirectoryReadSnapshot(directorySnapshot);
+  const entryNames = readdirSync(sourceDirAbs);
+  assertPrivateDirectoryReadSnapshot(directorySnapshot);
+  for (const entryName of entryNames) {
     // 予約名（前回 resume の継承 manifest）はコピーしない — この継承で
     // 生成する新しい manifest が同名で staged reports に入る。
     if (relativeDir === '' && entryName === RESUME_ARTIFACTS_FILE_NAME) {
@@ -111,8 +247,9 @@ function copyReportsTree(
       );
     }
     if (stat.isDirectory()) {
-      mkdirSync(join(stagingRootAbs, entryRel), { recursive: true });
-      files.push(...copyReportsTree(sourceRootAbs, stagingRootAbs, entryRel).files);
+      const stagingDirectory = join(stagingRootAbs, entryRel);
+      ensurePrivateDirectory(stagingDirectory);
+      files.push(...copyReportsTree(sourceRootSnapshot, stagingRootAbs, entryRel).files);
       continue;
     }
     if (!stat.isFile()) {
@@ -120,11 +257,13 @@ function copyReportsTree(
         `Resume report snapshot: refusing to copy non-regular file "${toPosixRelative(entryRel)}" from source run reports`,
       );
     }
-    const content = readFileSync(entryAbs);
+    const content = readRegularFileNoFollow(entryAbs, stat);
     const stagingAbs = resolve(stagingRootAbs, entryRel);
     assertInside(stagingRootAbs, stagingAbs, `staged entry "${toPosixRelative(entryRel)}"`);
-    mkdirSync(dirname(stagingAbs), { recursive: true });
-    writeFileSync(stagingAbs, content);
+    const stagingDirectory = dirname(stagingAbs);
+    ensurePrivateDirectory(stagingDirectory);
+    const inheritedMode = stat.mode & PRIVATE_FILE_MODE;
+    writePrivateFileWithMode(stagingAbs, content, inheritedMode);
     files.push({
       path: toPosixRelative(entryRel),
       size: content.length,
@@ -150,14 +289,15 @@ export function readResumeReportSnapshotManifest(
     return undefined;
   }
   const manifestAbs = resumeArtifactsPath(cwd, runSlug);
-  if (!existsSync(manifestAbs)) {
+  const manifestStat = lstatOrUndefined(manifestAbs);
+  if (manifestStat === undefined) {
     return undefined;
   }
-  try {
-    return JSON.parse(readFileSync(manifestAbs, 'utf-8')) as ResumeReportSnapshotManifest;
-  } catch {
-    return undefined;
+  if (!manifestStat.isFile()) {
+    throw new Error(`Resume report snapshot: manifest is not a regular file: ${manifestAbs}`);
   }
+  const parsed: unknown = JSON.parse(readRegularFileNoFollow(manifestAbs, manifestStat).toString('utf-8'));
+  return parseResumeReportSnapshotManifest(parsed, runSlug);
 }
 
 /**
@@ -186,12 +326,21 @@ export function inheritResumeReportSnapshot(
 
   const sourcePaths = buildRunPaths(cwd, sourceRunSlug);
   const targetPaths = buildRunPaths(cwd, targetRunSlug);
-  if (!existsSync(sourcePaths.runRootAbs)) {
+  assertDirectoryChain(cwd, targetPaths.runRootAbs, 'target run path');
+  const sourceRunStat = lstatOrUndefined(sourcePaths.runRootAbs);
+  if (sourceRunStat === undefined) {
     throw new Error(
       `Resume report snapshot: source run "${sourceRunSlug}" does not exist at ${sourcePaths.runRootAbs}`,
     );
   }
-  if (existsSync(targetPaths.reportsAbs) && !isEmptyDir(targetPaths.reportsAbs)) {
+  if (!sourceRunStat.isDirectory()) {
+    throw new Error(`Resume report snapshot: source run "${sourceRunSlug}" is not a directory`);
+  }
+  const targetReportsStat = lstatOrUndefined(targetPaths.reportsAbs);
+  if (targetReportsStat !== undefined && !targetReportsStat.isDirectory()) {
+    throw new Error(`Resume report snapshot: target run "${targetRunSlug}" reports path is not a directory`);
+  }
+  if (targetReportsStat !== undefined && !isEmptyDir(targetPaths.reportsAbs)) {
     throw new Error(
       `Resume report snapshot: target run "${targetRunSlug}" already has a non-empty reports directory; `
       + 'refusing to overwrite it with the inherited snapshot',
@@ -199,7 +348,7 @@ export function inheritResumeReportSnapshot(
   }
 
   // source の reports/ パス自体が symlink の場合、外部ディレクトリを丸ごと
-  // コピーしてしまう（codex 指摘）。中身の走査前にパス自体を lstat で拒否する。
+  // コピーしてしまう（boundary requirement）。中身の走査前にパス自体を lstat で拒否する。
   const sourceReportsStat = lstatOrUndefined(sourcePaths.reportsAbs);
   if (sourceReportsStat?.isSymbolicLink()) {
     throw new Error(
@@ -211,60 +360,70 @@ export function inheritResumeReportSnapshot(
       `Resume report snapshot: source run "${sourceRunSlug}" reports path is not a directory`,
     );
   }
+  const sourceReportsSnapshot = sourceReportsStat === undefined
+    ? undefined
+    : capturePrivateDirectoryReadSnapshot(sourcePaths.reportsAbs);
 
-  mkdirSync(targetPaths.runRootAbs, { recursive: true });
+  createDirectoryChain(cwd, targetPaths.runRootAbs, 'target run path');
+  assertDirectoryChain(cwd, targetPaths.runRootAbs, 'target run path');
   const uniqueSuffix = `${process.pid}-${Date.now().toString(36)}`;
   const stagingRootAbs = join(targetPaths.runRootAbs, `.reports-inherit-tmp-${uniqueSuffix}`);
-  // 公開は単一 rename に集約する（codex 2巡目裁定）。一時領域で reports コピーと
+  const targetRunStat = lstatSync(targetPaths.runRootAbs) as Stats;
+  // 公開は単一 rename に集約する（atomic publication requirement）。一時領域で reports コピーと
   // manifest（staged reports の内側の予約名）の両方を完成させてから rename する。
   // 失敗経路は staging の掃除のみで、公開済み状態に触る操作は存在しない —
   // 並行 resume の勝者破壊も、ロールバック失敗による中途半端な状態も
   // 原理的に起きない。
   let completed = false;
   try {
-    mkdirSync(stagingRootAbs, { recursive: true });
-    const { files } = sourceReportsStat !== undefined
-      ? copyReportsTree(sourcePaths.reportsAbs, stagingRootAbs, '')
+    ensurePrivateDirectory(stagingRootAbs);
+    const { files } = sourceReportsSnapshot !== undefined
+      ? copyReportsTree(sourceReportsSnapshot, stagingRootAbs, '')
       : { files: [] as ResumeReportSnapshotFileEntry[] };
 
+    const createdAt = new Date().toISOString();
+    assertManifestMetadata(sourceRunSlug, targetRunSlug, createdAt);
     const manifest: ResumeReportSnapshotManifest = {
       version: 1,
       sourceRunSlug,
       targetRunSlug,
-      createdAt: new Date().toISOString(),
+      createdAt,
       files: [...files].sort((a, b) => a.path.localeCompare(b.path)),
     };
     // manifest は staged reports の内側（予約名）— 空 source でも staged
     // reports は manifest 1ファイルを含むため、「空ディレクトリの公開」という
     // 窓自体が消える。
-    writeFileSync(join(stagingRootAbs, RESUME_ARTIFACTS_FILE_NAME), JSON.stringify(manifest, null, 2));
+    const manifestPath = join(stagingRootAbs, RESUME_ARTIFACTS_FILE_NAME);
+    writePrivateFileWithMode(manifestPath, JSON.stringify(manifest, null, 2), PRIVATE_FILE_MODE);
 
-    // 空の reports/ が既にあれば除去してから rename する。並行 resume が先に
-    // 除去していた場合（ENOENT）は続行してよい — 公開は直後の rename が原子的に
-    // 決着し、敗者は rename の失敗（宛先既存）で落ちて staging を掃除するだけ。
-    if (existsSync(targetPaths.reportsAbs)) {
-      try {
-        rmdirSync(targetPaths.reportsAbs);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          throw error;
-        }
-      }
-    }
-    renameSync(stagingRootAbs, targetPaths.reportsAbs);
+    const stagingStat = lstatSync(stagingRootAbs) as Stats;
+    publishPrivateDirectory(
+      targetPaths.runRootAbs,
+      stagingRootAbs,
+      targetPaths.reportsAbs,
+      targetRunStat,
+      stagingStat,
+      targetReportsStat,
+    );
     completed = true;
     return manifest;
   } finally {
     if (!completed) {
-      rmSync(stagingRootAbs, { recursive: true, force: true });
+      const stagingStat = lstatOrUndefined(stagingRootAbs);
+      if (stagingStat !== undefined) {
+        removePrivateDirectory(targetPaths.runRootAbs, stagingRootAbs, targetRunStat, stagingStat);
+      }
     }
   }
 }
 
-function lstatOrUndefined(pathAbs: string): ReturnType<typeof lstatSync> | undefined {
+function lstatOrUndefined(pathAbs: string): Stats | undefined {
   try {
-    return lstatSync(pathAbs);
-  } catch {
-    return undefined;
+    return lstatSync(pathAbs) as Stats;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined;
+    }
+    throw error;
   }
 }

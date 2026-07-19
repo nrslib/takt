@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -76,6 +76,7 @@ describe('usageEventLogger', () => {
   });
 
   it('should write usage event records with required fields', async () => {
+    chmodSync(tempDir, 0o777);
     const { createUsageEventLogger } = await loadUsageEventLoggerModule();
     const logger = createUsageEventLogger({
       logsDir: tempDir,
@@ -101,6 +102,8 @@ describe('usageEventLogger', () => {
     });
 
     expect(existsSync(logger.filepath)).toBe(true);
+    expect(statSync(tempDir).mode & 0o777).toBe(0o700);
+    expect(statSync(logger.filepath).mode & 0o777).toBe(0o600);
 
     const line = readFileSync(logger.filepath, 'utf-8').trim();
     const parsed = JSON.parse(line) as {

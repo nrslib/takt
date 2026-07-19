@@ -5,8 +5,7 @@ import type { FindingManagerConflict, FindingManagerOutput } from './types.js';
  * が同時に付いた出力を、矛盾を保ったまま台帳へ書ける形へ畳む。
  *
  * どちらもレビュアーの正当な観測で、矛盾は現実の側にある（部分的にしか直っていない）。
- * 実測（takt-bench v3-r2）: 台帳 F-0002（同期 FS 操作 @ :137）の修正確認と、同じ
- * familyTag の残存指摘（@ :149）が同一ラウンドで届いた。
+ * 修正確認と同じ familyTag の残存指摘が同一ラウンドで届くことがある。
  *
  * 畳まないと「1 finding = 1 決定」の不変条件違反として出力全体が捨てられ、台帳が
  * 更新されないまま reviewers ↔ fix が永久に回る。未修正の証拠（match または conflict）
@@ -16,8 +15,8 @@ import type { FindingManagerConflict, FindingManagerOutput } from './types.js';
  * （「未修正の証拠がある finding は resolved にしない」が不変条件）。
  *
  * 適用箇所は2つある。組み立て直後（LLM の判断が衝突した場合）と、機械分類の結果と
- * merge した直後（実測の障害はこちら。resolution_confirmation は機械分類が処理する
- * ため、LLM の組み立てには現れず、衝突は merge で初めて生まれる）。
+ * merge した直後（resolution_confirmation は機械分類が処理するため、LLM の
+ * 組み立てには現れず、衝突は merge で初めて生まれる）。
  */
 export function canonicalizeFindingManagerOutput(output: FindingManagerOutput): FindingManagerOutput {
   const collidingFindingIds = new Set([

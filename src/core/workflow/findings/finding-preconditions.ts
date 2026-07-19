@@ -1,12 +1,11 @@
 /**
- * 楽観的前提条件（CAS、v2 梯子設計 §6・実装単位6）。
+ * finding mutation の楽観的前提条件（CAS）。
  *
  * confirmation（および reopen / invalidate / supersede）を機械処理または manager
  * prompt へ載せた時点で target のスナップショット（revision / status /
  * evidence hash）を固定し、保存時の排他区間で最新台帳に対して再検証する。
  * ambiguous 起源に限らず全 confirmation に適用する — 形式的に正しい確認でも、
- * prompt 後に別 reviewer の persists が保存されていれば resolve してはならない
- * （攻撃3）。
+ * prompt 後に別 reviewer の persists が保存されていれば resolve してはならない。
  */
 
 import { createHash } from 'node:crypto';
@@ -26,7 +25,7 @@ export function findingRevision(entry: Pick<FindingLedgerEntry, 'revision'>): nu
 }
 
 /**
- * finding entry の evidence hash（設計書 §6 の列挙フィールド）。台帳に紐づく
+ * finding entry の evidence hash。台帳に紐づく
  * 各 raw の evidence hash（行番号・runId 非依存の computeRawEvidenceHash）を含む
  * ため、prompt 後に同じ target へ raw（persists 等）が追加されると必ず変わる。
  */
@@ -96,7 +95,7 @@ export function captureFindingPreconditions(ledger: FindingLedger): Map<string, 
 
 export type FindingPreconditionCheck =
   | { outcome: 'ok' }
-  /** 同じ confirmation が既に同じ evidence で resolved 済み（冪等成功、設計書 §6）。 */
+  /** 同じ confirmation が既に同じ evidence で resolved 済み（冪等成功）。 */
   | { outcome: 'idempotent-resolved' }
   /** prompt 後に同じ target への persists / reopened 観測が保存された（→ conflict 化）。 */
   | { outcome: 'post-prompt-persists'; detail: string }
@@ -162,7 +161,7 @@ export function checkFindingPrecondition(input: {
  * prompt 後（= precondition 固定後）に fresh target へ追加された raw のうち、
  * この target を指す persists / reopened 観測があるか。ある場合、confirmation は
  * 単なる stale ではなく「未修正の証拠と衝突している」ため active conflict へ
- * 変換する（設計書 §6 保存時規則）。capture 時点で既に紐づいていた raw は
+ * 変換する。capture 時点で既に紐づいていた raw は
  * 対象外（当時の hash 検証を通過済みの証拠であり、post-prompt の競合ではない）。
  */
 function hasPostPromptPersists(

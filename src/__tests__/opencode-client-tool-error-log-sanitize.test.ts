@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
 
 // OpenCode のツール呼び出し失敗を debug ログへ残す機能（84622c96）は
 // state.input / state.error を無加工で渡していたため、bash の command や
@@ -16,9 +20,10 @@ function createEvents(events: MockStreamEvent[]) {
   })();
 }
 
-const { createOpencodeMock, debugLogSpy } = vi.hoisted(() => ({
+const { createOpencodeMock, debugLogSpy, infoLogSpy } = vi.hoisted(() => ({
   createOpencodeMock: vi.fn(),
   debugLogSpy: vi.fn(),
+  infoLogSpy: vi.fn(),
 }));
 
 vi.mock('node:net', () => ({
@@ -50,7 +55,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   createLogger: () => ({
     trace: vi.fn(),
     debug: debugLogSpy,
-    info: vi.fn(),
+    info: infoLogSpy,
     warn: vi.fn(),
     error: vi.fn(),
     enter: vi.fn(),
@@ -60,22 +65,63 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');
 
-function installOpenCodeMock(events: MockStreamEvent[]) {
+function installOpenCodeMock(events: MockStreamEvent[] | MockStreamEvent[][]) {
+  const runs = Array.isArray(events[0]) ? events as MockStreamEvent[][] : [events as MockStreamEvent[]];
+  let runIndex = 0;
   const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-1' } });
   const promptAsync = vi.fn().mockResolvedValue(undefined);
-  const subscribe = vi.fn().mockResolvedValue({ stream: createEvents(events) });
+  const subscribe = vi.fn().mockImplementation(() => {
+    const run = runs[runIndex];
+    runIndex += 1;
+    if (run === undefined) {
+      throw new Error(`Missing stream events for attempt ${runIndex}`);
+    }
+    return Promise.resolve({ stream: createEvents(run) });
+  });
 
   createOpencodeMock.mockResolvedValue({
     client: {
       instance: { dispose: vi.fn() },
-      session: { create: sessionCreate, promptAsync },
+      session: {
+        create: sessionCreate,
+        promptAsync,
+        abort: vi.fn().mockResolvedValue({ data: true }),
+      },
       event: { subscribe },
-      permission: { reply: vi.fn() },
+      permission: { reply: vi.fn().mockResolvedValue({ data: {} }) },
     },
     server: { close: vi.fn() },
   });
 
   return { sessionCreate, promptAsync, subscribe };
+}
+
+function providerErrorEvent(type: string, error: unknown): MockStreamEvent {
+  if (type === 'session.error') {
+    return { type, properties: { sessionID: 'session-1', error } };
+  }
+  return {
+    type,
+    properties: {
+      info: { sessionID: 'session-1', role: 'assistant', error },
+    },
+  };
+}
+
+function sensitiveToolEvent(secret: string): MockStreamEvent {
+  return {
+    type: 'message.part.updated',
+    properties: {
+      part: {
+        id: 'sensitive-source',
+        sessionID: 'session-1',
+        type: 'tool',
+        callID: 'call-sensitive-source',
+        tool: 'remote',
+        state: { status: 'running', input: { token: secret } },
+      },
+    },
+  };
 }
 
 describe('OpenCodeClient tool call failure logging', () => {
@@ -85,8 +131,162 @@ describe('OpenCodeClient tool call failure logging', () => {
     resetSharedServer();
   });
 
+  it.each([
+    'message.updated',
+    'message.completed',
+    'message.failed',
+    'session.error',
+  ])('%s の外部エラーをdebugログ・provider JSONL・AgentResponseでマスクする', async (eventType) => {
+    const knownSecret = `known-${eventType}-secret`;
+    const apiKeySecret = `opaque-api-key-${eventType}`;
+    const childEnvSecret = `opaque-child-env-${eventType}`;
+    const authorizationSecret = `authorization-${eventType}-secret`;
+    const rawError = [
+      `provider rejected ${knownSecret}`,
+      apiKeySecret,
+      childEnvSecret,
+      `Authorization: Bearer ${authorizationSecret}`,
+    ].join('; ');
+    installOpenCodeMock([
+      sensitiveToolEvent(knownSecret),
+      providerErrorEvent(eventType, { name: 'ProviderError', data: { message: rawError } }),
+    ]);
+    const logsDir = mkdtempSync(join(tmpdir(), 'takt-opencode-provider-error-'));
+
+    try {
+      const providerLogger = createProviderEventLogger({
+        logsDir,
+        sessionId: `provider-error-${eventType}`,
+        runId: 'provider-error-run',
+        provider: 'opencode',
+        step: 'review',
+        enabled: true,
+      });
+      const observed = vi.fn();
+      const client = new OpenCodeClient();
+      const result = await client.call('coder', 'prompt', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        onStream: providerLogger.wrapCallback(observed),
+        opencodeApiKey: apiKeySecret,
+        childProcessEnv: { OPENCODE_ACCESS_TOKEN: childEnvSecret },
+      });
+      providerLogger.flush();
+
+      const evidence = JSON.stringify({
+        result,
+        debugCalls: debugLogSpy.mock.calls,
+        infoCalls: infoLogSpy.mock.calls,
+        streamCalls: observed.mock.calls,
+        jsonl: readFileSync(providerLogger.filepath, 'utf8'),
+      });
+      expect(result.status).toBe('error');
+      expect(evidence).not.toContain(knownSecret);
+      expect(evidence).not.toContain(apiKeySecret);
+      expect(evidence).not.toContain(childEnvSecret);
+      expect(evidence).not.toContain(authorizationSecret);
+      expect(evidence).toContain('[REDACTED]');
+    } finally {
+      rmSync(logsDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    'message.updated',
+    'message.completed',
+    'message.failed',
+    'session.error',
+  ])('onStream なしでも %s の外部エラーから tool input をマスクする', async (eventType) => {
+    const toolSecret = `silent-tool-${eventType}-secret`;
+    installOpenCodeMock([
+      sensitiveToolEvent(toolSecret),
+      providerErrorEvent(eventType, {
+        name: 'ProviderError',
+        data: { message: `provider quoted ${toolSecret}` },
+      }),
+    ]);
+    const client = new OpenCodeClient();
+
+    const result = await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    const evidence = JSON.stringify({ result, debugCalls: debugLogSpy.mock.calls });
+    expect(result.status).toBe('error');
+    expect(evidence).not.toContain(toolSecret);
+    expect(evidence).toContain('[REDACTED]');
+  });
+
+  it('transient SSEエラーとprompt例外のretryログ・結果イベントをマスクする', async () => {
+    const sseSecret = 'retry-sse-provider-secret';
+    const exceptionSecret = 'retry-exception-provider-secret';
+    const childEnvSecret = 'retry-child-env-provider-secret';
+    const { promptAsync } = installOpenCodeMock([
+      [
+        sensitiveToolEvent(sseSecret),
+        providerErrorEvent('session.error', {
+          name: 'RequestError',
+          data: { message: `fetch failed; token=${sseSecret}` },
+        }),
+      ],
+      [],
+      [{ type: 'session.idle', properties: { sessionID: 'session-1' } }],
+    ]);
+    promptAsync
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error(`fetch failed; ${exceptionSecret}; ${childEnvSecret}`))
+      .mockResolvedValueOnce(undefined);
+    const observed = vi.fn();
+    const client = new OpenCodeClient();
+
+    const result = await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      onStream: observed,
+      opencodeApiKey: exceptionSecret,
+      childProcessEnv: { OPENCODE_ACCESS_TOKEN: childEnvSecret },
+    });
+
+    const evidence = JSON.stringify({
+      result,
+      debugCalls: debugLogSpy.mock.calls,
+      infoCalls: infoLogSpy.mock.calls,
+      streamCalls: observed.mock.calls,
+    });
+    expect(result.status).toBe('done');
+    expect(evidence).not.toContain(sseSecret);
+    expect(evidence).not.toContain(exceptionSecret);
+    expect(evidence).not.toContain(childEnvSecret);
+    expect(evidence).toContain('[REDACTED]');
+  });
+
+  it('onStream なしのtool inputを同一attemptのprompt例外とretry結果からマスクする', async () => {
+    const toolSecret = 'silent-tool-prompt-exception-secret';
+    const { promptAsync } = installOpenCodeMock([
+      [sensitiveToolEvent(toolSecret), { type: 'session.idle', properties: { sessionID: 'session-1' } }],
+      [{ type: 'session.idle', properties: { sessionID: 'session-1' } }],
+    ]);
+    promptAsync
+      .mockRejectedValueOnce(new Error(`fetch failed; provider quoted ${toolSecret}`))
+      .mockResolvedValueOnce(undefined);
+    const client = new OpenCodeClient();
+
+    const result = await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    const evidence = JSON.stringify({ result, debugCalls: debugLogSpy.mock.calls });
+    expect(result.status).toBe('done');
+    expect(evidence).not.toContain(toolSecret);
+  });
+
   it('bash command に API キーらしき文字列を含む失敗ツール呼び出しがあっても、debug ログにその文字列がそのまま出ない', async () => {
     const secret = 'sk-liveTestSecretDoNotLeak1234567890';
+    const proxySecret = 'Basic proxyOpaqueCredential';
+    const cookieSecret = 'sid=opaqueCookieValue';
+    const sessionSecret = 'opaque-provider-session';
     const events: MockStreamEvent[] = [
       {
         type: 'message.part.updated',
@@ -101,8 +301,11 @@ describe('OpenCodeClient tool call failure logging', () => {
               status: 'error',
               input: {
                 command: `curl -H "Authorization: Bearer ${secret}" https://example.com/api`,
+                'Proxy-Authorization': proxySecret,
+                cookies: cookieSecret,
+                sessionId: sessionSecret,
               },
-              error: `Command failed: authentication rejected token ${secret}`,
+              error: `Command failed: ${secret}; ${proxySecret}; ${cookieSecret}; ${sessionSecret}`,
             },
           },
         },
@@ -126,6 +329,9 @@ describe('OpenCodeClient tool call failure logging', () => {
     // 他の経路で漏れるケースも拾えるよう、呼び出し引数全体を対象にする。
     const serializedCall = JSON.stringify(failureCall);
     expect(serializedCall).not.toContain(secret);
+    expect(serializedCall).not.toContain(proxySecret);
+    expect(serializedCall).not.toContain(cookieSecret);
+    expect(serializedCall).not.toContain(sessionSecret);
 
     // マスクされてもキー名（command）とツール名は残り、後から
     // 「何のツールの何の引数が壊れたか」を特定できる。
@@ -134,6 +340,83 @@ describe('OpenCodeClient tool call failure logging', () => {
     expect(data.input).toHaveProperty('command');
     expect(data.input.command).toContain('[REDACTED]');
     expect(data.error).toContain('[REDACTED]');
+  });
+
+  it('permission rejection の patterns / always を debug ログへ渡す前にマスクする', async () => {
+    const patternSecret = 'permission-pattern-secret';
+    const alwaysSecret = 'permission-always-secret';
+    installOpenCodeMock([
+      {
+        type: 'permission.asked',
+        properties: {
+          id: 'permission-1',
+          sessionID: 'session-1',
+          permission: 'bash',
+          patterns: [`Authorization: Bearer ${patternSecret}`],
+          always: [`session_id: ${alwaysSecret}`],
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-1' } },
+    ]);
+    const client = new OpenCodeClient();
+
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      permissionMode: 'readonly',
+    });
+
+    const rejectionCall = infoLogSpy.mock.calls.find(([message]) => (
+      typeof message === 'string' && message.includes('permission rejected')
+    ));
+    expect(rejectionCall).toBeDefined();
+    const serializedCall = JSON.stringify(rejectionCall);
+    expect(serializedCall).not.toContain(patternSecret);
+    expect(serializedCall).not.toContain(alwaysSecret);
+    expect(serializedCall).toContain('[REDACTED]');
+  });
+
+  it('幅広・循環入力の失敗ログを有界走査し、未走査サブツリーをfail-closedにする', async () => {
+    const circular: Record<string, unknown> = { label: 'cycle' };
+    circular['self'] = circular;
+    const input = {
+      payload: Array.from({ length: 50_000 }, (_, index) => `value-${index}`),
+      circular,
+    };
+    const events: MockStreamEvent[] = [{
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'part-wide',
+          sessionID: 'session-1',
+          type: 'tool',
+          callID: 'call-wide',
+          tool: 'Bash',
+          state: {
+            status: 'error',
+            input,
+            error: 'wide input rejected',
+          },
+        },
+      },
+    }, { type: 'session.idle', properties: { sessionID: 'session-1' } }];
+
+    installOpenCodeMock(events);
+    const client = new OpenCodeClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    const failureCall = debugLogSpy.mock.calls.find(([message]) => message === 'OpenCode tool call failed');
+    expect(failureCall).toBeDefined();
+    const [, data] = failureCall as [string, {
+      input: { payload: unknown; circular: { self: unknown } };
+      error: string;
+    }];
+    expect(data.input.payload).toBe('[REDACTED]');
+    expect(data.input.circular.self).toBe('[REDACTED]');
+    expect(data.error).toBe('[REDACTED]');
   });
 
   it('edit の oldString / newString はソース本文を残さず {sha256, length} にマスクされ、filePath は従来どおり残る（codex ブロッカー3）', async () => {
@@ -243,6 +526,38 @@ describe('OpenCodeClient tool call failure logging', () => {
     expect(data.error).toContain('Could not find the following text');
     expect(data.input.filePath).toBe('src/features/pipeline/steps.ts');
   });
+
+  it.each(['a', 'ab', 'abc', 'abcd', 'abcde'])(
+    '短い edit 本文 %s もエラー文とログ入力へ露出しない',
+    async (sourceBody) => {
+      installOpenCodeMock([{
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: `part-short-${sourceBody.length}`,
+            sessionID: 'session-1',
+            type: 'tool',
+            callID: `call-short-${sourceBody.length}`,
+            tool: 'edit',
+            state: {
+              status: 'error',
+              input: { filePath: 'src/short.ts', oldString: sourceBody, newString: 'replacement' },
+              error: `Could not find text: ${sourceBody}`,
+            },
+          },
+        },
+      }, { type: 'session.idle', properties: { sessionID: 'session-1' } }]);
+      const client = new OpenCodeClient();
+
+      await client.call('coder', 'prompt', { cwd: '/tmp', model: 'opencode/big-pickle' });
+
+      const failureCall = debugLogSpy.mock.calls.find(([message]) => message === 'OpenCode tool call failed');
+      expect(failureCall).toBeDefined();
+      const [, data] = failureCall as [string, { error: string; input: { oldString: unknown } }];
+      expect(data.input.oldString).not.toBe(sourceBody);
+      expect(data.error).toContain(`length:${sourceBody.length}`);
+    },
+  );
 
   it('onStream の全イベント（tool_use / tool_result）に oldString/newString 本文が一切現れない — provider event logging で永続化される経路（codex 3〜4巡目ブロッカー）', async () => {
     const sourceBody = 'const leakedViaOnStream = computeThing(privateValue); // opencode quotes this in the error';

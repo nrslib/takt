@@ -5,9 +5,9 @@
  * （'ls' への改名でもなく削除）。一方でローカルモデル（qwen3-coder-next 等）は
  * 'list' を執拗に呼び、unavailable-tool recovery（fresh session 1回）後も
  * 同名再発して確定失敗した。前置文の誘導修正に加え、幻覚の受け皿として
- * ディレクトリ一覧の最小ツールを登録する（codex 条件付き採用）。
+ * ディレクトリ一覧の最小ツールを登録する（compatibility requirement）。
  *
- * 責務の上限（codex 裁定）: fs.promises.readdir({ withFileTypes: true }) のみ。
+ * 責務の上限（Finding Contract）: fs.promises.readdir({ withFileTypes: true }) のみ。
  * 任意コマンド・再帰探索・glob・ファイル内容読み取りへ広げない。
  *
  * 配布経路は coerce-tool-args.ts と同じ（TAKT dist の絶対パスを config.plugin
@@ -64,7 +64,7 @@ async function resolveWithinWorktree(
   const targetReal = await fs.realpath(targetAbs);
   const relFromRoot = relative(rootReal, targetReal);
   // startsWith('..') だけだと workspace 直下の正当な `..visible` のような
-  // ディレクトリ名を escape と誤判定する（codex 指摘）。親方向は「`..` 単体」
+  // ディレクトリ名を escape と誤判定する（boundary requirement）。親方向は「`..` 単体」
   // または「`..` + 区切り」で始まる場合のみ。
   if (relFromRoot === '..' || relFromRoot.startsWith(`..${sep}`) || isAbsolute(relFromRoot)) {
     throw new Error(

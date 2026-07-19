@@ -1,9 +1,9 @@
 /**
- * 二系統台帳（codex 対策#4: typed evidence protocol + verbatimExcerpt 機械照合 +
+ * 二系統台帳（review-integrity protocol: typed evidence protocol + verbatimExcerpt 機械照合 +
  * 二系統台帳 + gate 分離）の review-integrity 側の台帳操作。
  *
  * product finding（FindingLedgerEntry、findings 配列）とは完全に独立した配列
- * （reviewerAnomalies）へ隔離する。安全不変条件（設計書 D、すべてこのモジュール
+ * （reviewerAnomalies）へ隔離する。安全不変条件（すべてこのモジュール
  * だけで守る）:
  *   - invalidated/resolved/waived として扱わない（ReviewerAnomalyEntry に
  *     そもそもそういう状態フィールドが無い — 型で保証）
@@ -16,11 +16,14 @@
  */
 import { createHash } from 'node:crypto';
 import type {
+  CanonicalRawFinding,
   FindingLedger,
   FindingReconcileContext,
+  RawFinding,
   ReviewerAnomalyEntry,
   ReviewerAnomalyKind,
 } from './types.js';
+import { computeReviewerAnomalyStableKey } from './raw-canonicalization.js';
 
 export interface ReviewerAnomalySpec {
   kind: ReviewerAnomalyKind;
@@ -32,6 +35,31 @@ export interface ReviewerAnomalySpec {
   claimedLocation?: string;
   claimedExcerpt?: string;
   mismatchReason: string;
+}
+
+export function createReviewerAnomalySpec(input: {
+  wire: RawFinding;
+  canonical: Pick<CanonicalRawFinding, 'reviewerStableKey' | 'lineageKey'>;
+  anomalyKind: ReviewerAnomalyKind;
+  reason: string;
+}): ReviewerAnomalySpec {
+  return {
+    kind: input.anomalyKind,
+    stableKey: computeReviewerAnomalyStableKey({
+      reviewerStableKey: input.canonical.reviewerStableKey,
+      lineageKey: input.canonical.lineageKey,
+      anomalyKind: input.anomalyKind,
+    }),
+    lineageKey: input.canonical.lineageKey,
+    sourceRawFindingIds: [input.wire.rawFindingId],
+    reviewers: [input.wire.reviewer],
+    title: input.wire.title,
+    ...(input.wire.location !== undefined ? { claimedLocation: input.wire.location } : {}),
+    ...(input.wire.evidence?.kind === 'source_quote'
+      ? { claimedExcerpt: input.wire.evidence.verbatimExcerpt }
+      : {}),
+    mismatchReason: input.reason,
+  };
 }
 
 /**
@@ -74,11 +102,11 @@ export function applyReviewerAnomalySpecsToLedger(
   for (const spec of specs) {
     const existing = byStableKey.get(spec.stableKey);
     if (existing !== undefined) {
-      // crash/replay 冪等（codex 検証ブロッカー#3）: occurrences は「観測された
+      // crash/replay 冪等（review-integrity requirement）: occurrences は「観測された
       // 回数」なので、同一 raw finding id の再適用（同一ラウンドが二度コミット
       // される crash/replay）で二重計上してはならない。stop budget の round
       // marker（適用済みマーカー集合）と同じ思想で、適用済みの raw finding id を
-      // 冪等判定キーにする — 今回の spec が既存に無い新しい raw finding id を
+      // 冪等判定キーにする — 入力 spec が既存に無い新しい raw finding id を
       // 1件も持ち込まないなら、それは既適用の再来なので完全な no-op にする
       // （occurrences も lastObserved も mismatchReason も動かさない）。別ラウンドの
       // 再観測は名前空間付き raw finding id（runId:step:iter:reviewer:localId）が
@@ -132,8 +160,7 @@ export interface ReviewerAnomalyPromotionCandidate {
 /**
  * 後続ラウンドの clean な verbatimExcerpt 一致が product finding を確定させた
  * 場合に、同じ lineageKey を持つ未昇格の reviewer anomaly へ promotedFindingId を
- * 記録する（設計書 D:「後続ラウンドで一致する証跡が出たら初めて product finding
- * 側へ昇格できる」）。レコード自体は削除・改変しない — 昇格後も監査履歴として
+ * 記録する。レコード自体は削除・改変しない — 昇格後も監査履歴として
  * 残る（観測消去の禁止）。呼び出し元は reconcile 完了後の最終 ledger（finding id
  * 割当済み）を渡すこと — このタイミングでしか「どの finding id に着地したか」が
  * 確定しない。

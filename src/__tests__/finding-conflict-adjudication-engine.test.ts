@@ -49,6 +49,7 @@ import { makeRule, makeStep } from './test-helpers.js';
 import { createFindingLedgerStore, resolveFindingLedgerRoot } from '../core/workflow/findings/store.js';
 import { createFindingConflictAdjudicationRunner } from '../core/workflow/findings/adjudication-runner.js';
 import { computeConflictEvidenceHash } from '../core/workflow/findings/adjudication-evidence.js';
+import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
@@ -495,6 +496,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       title: 'Disputed issue',
       location: 'src/a.ts:5',
       description: 'The bug is present.',
+      relation: 'new',
     };
     const conflictBase = {
       id: 'C-0001',
@@ -508,6 +510,7 @@ describe('finding-conflict-adjudication engine detour', () => {
     const evidenceHash = computeConflictEvidenceHash(
       conflictBase as never,
       { findings: [finding as never], rawFindings: [rawFinding as never] },
+      computeReviewScopeSnapshotId(cwd),
     );
     writeFileSync(ledgerPath, JSON.stringify({
       version: 1,
@@ -522,6 +525,7 @@ describe('finding-conflict-adjudication engine detour', () => {
         // originStep が耐久記録として final-gate を指す。
         adjudicationAttempts: [{
           evidenceHash,
+          reservationToken: 'reservation-final-gate',
           startedAt: { runId: 'test-report-dir', stepName: 'finding-conflict-adjudication', timestamp: '2026-06-13T01:00:00.000Z' },
           originStep: 'final-gate',
         }],
@@ -629,6 +633,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       title: 'Disputed issue',
       location: 'src/a.ts:5',
       description: 'The bug is present.',
+      relation: 'new',
     };
     const conflictBase = {
       id: 'C-0001',
@@ -642,6 +647,7 @@ describe('finding-conflict-adjudication engine detour', () => {
     const evidenceHash = computeConflictEvidenceHash(
       conflictBase as never,
       { findings: [finding as never], rawFindings: [rawFinding as never] },
+      computeReviewScopeSnapshotId(cwd),
     );
     writeFileSync(ledgerPath, JSON.stringify({
       version: 1,
@@ -654,6 +660,7 @@ describe('finding-conflict-adjudication engine detour', () => {
         ...conflictBase,
         adjudicationAttempts: [{
           evidenceHash,
+          reservationToken: 'reservation-without-origin',
           startedAt: { runId: 'test-report-dir', stepName: 'finding-conflict-adjudication', timestamp: '2026-06-13T01:00:00.000Z' },
           // originStep なし
         }],

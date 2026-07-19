@@ -151,11 +151,11 @@ export type WorkflowAbortKind =
    * COMPLETE への遷移時に open な provisional finding（意味を確定できなかった
    * 観測）が残っていた。エンジン最終不変条件のバックストップ発火 = workflow の
    * rules が findings.provisional.count を処理する記述を欠いている設定不備で、
-   * 「ルールはあるが何もマッチしない」と同じクラスの fail-fast（v2 梯子設計 §7）。
+   * 「ルールはあるが何もマッチしない」と同じクラスの fail-fast。
    */
   | 'provisional_findings'
   /**
-   * `next: NEEDS_ADJUDICATION` への遷移（対策バッチ B1）: provisional findings
+   * `next: NEEDS_ADJUDICATION` への遷移: provisional findings
    * が直前ラウンドから意味的な変化の無い fixpoint に達し、plan への差し戻しでは
    * もう解消し得ないと機械判定された。provisional_findings（設定不備の
    * fail-fast）とは異なり、これは workflow が意図的にルーティングした正規の

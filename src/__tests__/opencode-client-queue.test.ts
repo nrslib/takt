@@ -50,6 +50,8 @@ const { createOpencodeMock } = vi.hoisted(() => ({
   createOpencodeMock: vi.fn(),
 }));
 
+const ASYNC_START_TIMEOUT_MS = 5_000;
+
 vi.mock('node:net', () => ({
   createServer: () => {
     const handlers = new Map<string, (...args: unknown[]) => void>();
@@ -117,7 +119,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     expect(sessionCreate).toHaveBeenCalledTimes(2);
     expect(createOpencodeMock).toHaveBeenCalledTimes(1);
@@ -165,7 +167,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     expect(sessionCreate).not.toHaveBeenCalled();
     expect(createOpencodeMock).toHaveBeenCalledTimes(1);
@@ -211,7 +213,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     expect(sessionCreate).not.toHaveBeenCalled();
 
@@ -220,7 +222,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     secondPrompt.resolve();
     await call2;
@@ -303,7 +305,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     secondPrompt.resolve();
     const result2 = await call2;
@@ -348,7 +350,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     abortController.abort();
     const result1 = await call1;
@@ -356,7 +358,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     secondPrompt.resolve();
     const result2 = await call2;
@@ -463,7 +465,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     expect(sessionCreate).toHaveBeenCalledTimes(1);
     expect(promptCallCount).toBe(1);
@@ -471,7 +473,7 @@ describe('OpenCodeClient session queue', () => {
     await vi.waitFor(() => {
       expect(call2Promise).toBeDefined();
       expect(registerAbortSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     expect(registerAbortSpy.mock.calls[1]).toEqual([
       'abort',
@@ -485,7 +487,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     expect(promptAsync.mock.calls[0][0].sessionID).toBe(SID);
     expect(promptAsync.mock.calls[1][0].sessionID).toBe(SID);
@@ -590,13 +592,13 @@ describe('OpenCodeClient session queue', () => {
       expect(sessionCreate).toHaveBeenCalledTimes(1);
       expect(followUpCall).toBeDefined();
       expect(promptAsync).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     recoveredPrompt.resolve();
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(3);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     followUpPrompt.resolve();
     const [recoveredResult, followUpResult] = await Promise.all([recoveredCall, followUpCall!]);

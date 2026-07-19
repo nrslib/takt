@@ -1,5 +1,11 @@
-import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { lstatSync, realpathSync, type Stats } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
+import {
+  readRegularFileNoFollow,
+  ensurePrivateDirectory,
+  PrivateArtifactPublicationConflictError,
+  writePrivateFileWithMode,
+} from '../../../shared/utils/private-file.js';
 import type { FindingLedger, RawFinding } from './types.js';
 import { parseFindingLedger, parseRawFindings } from './schemas.js';
 import { assertLedgerIdAllocationInvariant } from './ledger-validation.js';
@@ -13,11 +19,10 @@ interface FindingLedgerStoreOptions {
   rawFindingsPath: string;
 }
 
-const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 const READ_ONLY_PRIVATE_FILE_MODE = 0o400;
 
-export interface FindingLedgerStore {
+export interface LedgerRepository {
   /**
    * この store が束縛する台帳の正準ワークフロー名。workflow_call の子が親から
    * store を継承した場合も親の名前のまま変わらない。ledger.json の
@@ -37,20 +42,51 @@ export interface FindingLedgerStore {
    * 同一プロセス内の Promise チェーンによる直列化であり、複数プロセスからの
    * 同時更新はこの直列化の対象外（現状の設計外）。
    */
-  updateLedger: (mutator: (current: FindingLedger) => FindingLedger) => Promise<FindingLedger>;
+  updateLedger: <Result>(
+    mutator: (current: FindingLedger) => FindingLedgerMutation<Result>,
+    revalidateBeforeSave?: (
+      current: FindingLedger,
+      mutation: FindingLedgerMutation<Result>,
+    ) => FindingLedgerMutation<Result>,
+  ) => Promise<FindingLedgerMutation<Result>>;
+}
+
+export interface AdjudicationReservationRegistry {
+  claimAdjudicationReservation: (reservationToken: string) => boolean;
+  releaseAdjudicationReservation: (reservationToken: string) => void;
+}
+
+export interface FindingArtifactWriter {
   createRunCopy: () => string;
   saveRawFindings: (runId: string, stepName: string, rawFindings: RawFinding[]) => string;
   saveManagerValidationReport: (report: FindingManagerValidationReport) => string;
   /** Audit trail for the finding-conflict-adjudication synthetic step: discarded decisions (evidence changed between prompt and apply) and other non-applied outcomes. */
   saveConflictAdjudicationReport: (report: FindingConflictAdjudicationAuditReport) => string;
-  /** Audit trail for a NEEDS_ADJUDICATION stop (対策バッチ B1): the open provisional findings that reached a cross-round fixpoint and their origin. */
+  /** Audit trail for a NEEDS_ADJUDICATION stop: the open provisional findings that reached a cross-round fixpoint and their origin. */
   saveNeedsAdjudicationReport: (report: NeedsAdjudicationReport) => string;
+}
+
+export interface FindingLedgerStore
+  extends LedgerRepository, FindingArtifactWriter, AdjudicationReservationRegistry {}
+
+export type FindingManagerStore = LedgerRepository & Pick<
+  FindingArtifactWriter,
+  'createRunCopy' | 'saveRawFindings' | 'saveManagerValidationReport'
+>;
+
+export type FindingAdjudicationStore = LedgerRepository
+  & AdjudicationReservationRegistry
+  & Pick<FindingArtifactWriter, 'saveConflictAdjudicationReport'>;
+
+export interface FindingLedgerMutation<Result> {
+  ledger: FindingLedger;
+  result: Result;
 }
 
 /**
  * Which condition forced the NEEDS_ADJUDICATION transition. 'fixpoint' is the
- * original 対策バッチ B1 mechanism (the provisional set stopped changing
- * across rounds); 'budget-exhausted' is the codex-adjudicated bounded stop
+ * provisional fixpoint mechanism (the provisional set stopped changing
+ * across rounds); 'budget-exhausted' is the bounded stop
  * budget extension (the cumulative round count, or elapsed time, exceeded its
  * configured limit even though the provisional set kept churning). This is
  * classified from the actual matched rule condition (see NeedsAdjudicationReport.matchedCondition),
@@ -62,7 +98,7 @@ export interface FindingLedgerStore {
 export type NeedsAdjudicationStopReason = 'fixpoint' | 'budget-exhausted' | 'review-integrity-exhausted' | 'unclassified';
 
 /**
- * Written when the workflow stops at NEEDS_ADJUDICATION (対策バッチ B1: a
+ * Written when the workflow stops at NEEDS_ADJUDICATION (a
  * cross-round provisional fixpoint, or its bounded-stop-budget extension).
  * Durable, machine-readable record of "why it stopped" alongside the
  * human-readable abort reason string — see WorkflowEngine's
@@ -92,7 +128,7 @@ export interface NeedsAdjudicationReport {
     sourceRawFindingIds: string[];
   }>;
   /**
-   * 二系統台帳（codex 対策#4）の review-integrity 側の未昇格 anomaly。
+   * 二系統台帳（review-integrity protocol）の review-integrity 側の未昇格 anomaly。
    * NEEDS_ADJUDICATION 自体は（従来どおり）provisional のみが引き起こすが、
    * 到達したときにこの監査情報も同梱することで、人手裁定が「product gate を
    * 塞いでいる provisional」と「引用不成立で監査だけされている anomaly」の
@@ -111,7 +147,7 @@ export interface NeedsAdjudicationReport {
 }
 
 /**
- * Written when an adjudication decision could NOT be applied (codex B2: the
+ * Written when an adjudication decision could NOT be applied (evidence CAS requirement: the
  * evidence hash at apply time differed from the hash the LLM was prompted
  * with, or the conflict stopped being active mid-flight). The started attempt
  * stays recorded on the conflict; this report preserves WHY nothing was
@@ -148,18 +184,13 @@ export interface UnsupportedRawFindingReport {
   evidence: string;
 }
 
-/** reviewer 出力がハード上限（件数 / byte / フィールド長）を超え、全量が単一 overflow provisional に置き換えられた記録（v2 梯子設計 §10）。 */
+/** reviewer 出力がハード上限（件数 / byte / フィールド長）を超え、全量が単一 overflow provisional に置き換えられた記録。 */
 export interface ReviewerOutputOverflowReport {
   reviewer: string;
   reason: string;
 }
 
-/**
- * canonicalization が raw の主張を正規化した監査レコード（codex 2巡目ブロッカー
- * 対応）。wire / ledger の identity 構成フィールド（path/title/description）には
- * 一切載せず、この専用メタデータだけが「正規化前の元の主張」を保持する。
- * 変換が起きた raw のみ記録する（無変換 raw のノイズは増やさない）。
- */
+/** canonical identity を変えずに、raw finding の正規化前後を監査する。 */
 export interface RawNormalizationAuditRecord {
   /** 正規化後（namespace 付与後）の raw finding id。wire / provisional の sourceRawFindingIds と突合できる。 */
   rawFindingId: string;
@@ -181,14 +212,14 @@ export interface RawNormalizationAuditRecord {
     | 'relation-normalized'
     | 'target-dropped-from-wire'
     | 'required-fields-missing'
-    /** A-2: location を行範囲（path:start-end）として解釈した。 */
+    /** location を行範囲（path:start-end）として解釈した。 */
     | 'location-line-range-interpreted'
-    /** A-2: location "N/A" を locationless として扱った。 */
+    /** location "N/A" を locationless として扱った。 */
     | 'location-not-applicable'
   >;
 }
 
-/** raw / 決定が provisional finding として着地した記録（v2 梯子設計 §7）。 */
+/** raw / 決定が provisional finding として着地した記録。 */
 export interface ProvisionalLandingReport {
   kind: string;
   stableKey: string;
@@ -196,7 +227,7 @@ export interface ProvisionalLandingReport {
   sourceRawFindingIds: string[];
 }
 
-/** raw が reviewer anomaly（review-integrity 側の二系統台帳）として着地した記録（codex 対策#4）。ProvisionalLandingReport と同じ形だが、product gate を一切塞がない着地先であることを型で区別する。 */
+/** raw が reviewer anomaly（review-integrity 側の二系統台帳）として着地した記録（review-integrity protocol）。ProvisionalLandingReport と同じ形だが、product gate を一切塞がない着地先であることを型で区別する。 */
 export interface ReviewerAnomalyLandingReport {
   kind: string;
   stableKey: string;
@@ -204,7 +235,7 @@ export interface ReviewerAnomalyLandingReport {
   sourceRawFindingIds: string[];
 }
 
-/** ambiguous raw 解釈（manager interpretation）の観測メトリクス（v2 梯子設計 実装単位10）。 */
+/** ambiguous raw 解釈（manager interpretation）の観測メトリクス。 */
 export interface InterpretationStatsReport {
   ambiguousRawCount: number;
   managerCalls: number;
@@ -227,7 +258,7 @@ export interface FindingManagerValidationReport {
   unsupportedRawFindings?: UnsupportedRawFindingReport[];
   reviewerOutputOverflows?: ReviewerOutputOverflowReport[];
   provisionalLandings?: ProvisionalLandingReport[];
-  /** reviewer anomaly として着地した記録（codex 対策#4。product gate は塞がない）。 */
+  /** reviewer anomaly として着地した記録（review-integrity protocol。product gate は塞がない）。 */
   reviewerAnomalyLandings?: ReviewerAnomalyLandingReport[];
   /** 正規化前の元の主張の監査記録（変換が起きた raw のみ）。 */
   rawNormalizations?: RawNormalizationAuditRecord[];
@@ -289,13 +320,9 @@ function assertRealPathInside(baseDir: string, path: string): void {
 function prepareWritableFilePath(baseDir: string, filePath: string): void {
   const parentDir = dirname(filePath);
   assertRealPathInside(baseDir, findExistingAncestor(parentDir));
-  mkdirSync(parentDir, { recursive: true, mode: PRIVATE_DIR_MODE });
-  chmodSync(parentDir, PRIVATE_DIR_MODE);
+  ensurePrivateDirectory(parentDir);
   assertRealPathInside(baseDir, parentDir);
   assertNotSymlink(filePath);
-  if (pathExists(filePath)) {
-    chmodSync(filePath, PRIVATE_FILE_MODE);
-  }
 }
 
 function prepareWritableCopyPath(baseDir: string, filePath: string): void {
@@ -304,8 +331,7 @@ function prepareWritableCopyPath(baseDir: string, filePath: string): void {
 
 function prepareWritableDirectory(baseDir: string, dirPath: string): void {
   assertRealPathInside(baseDir, findExistingAncestor(dirPath));
-  mkdirSync(dirPath, { recursive: true, mode: PRIVATE_DIR_MODE });
-  chmodSync(dirPath, PRIVATE_DIR_MODE);
+  ensurePrivateDirectory(dirPath);
   assertRealPathInside(baseDir, dirPath);
 }
 
@@ -321,16 +347,47 @@ function createEmptyLedger(workflowName: string): FindingLedger {
   };
 }
 
-function readLedgerFile(path: string): FindingLedger {
-  const ledger = parseFindingLedger(JSON.parse(readFileSync(path, 'utf-8')));
+function readLedgerFile(path: string, expectedStat: Stats): FindingLedger {
+  const ledger = parseFindingLedger(JSON.parse(readRegularFileNoFollow(path, expectedStat).toString('utf-8')));
   assertLedgerIdAllocationInvariant(ledger);
   return ledger;
+}
+
+function hasEquivalentLedgerState(content: string, expected: FindingLedger): boolean {
+  try {
+    const published = parseFindingLedger(JSON.parse(content));
+    const publishedState = { ...published, updatedAt: '' };
+    const expectedState = { ...expected, updatedAt: '' };
+    return JSON.stringify(publishedState) === JSON.stringify(expectedState);
+  } catch {
+    return false;
+  }
+}
+
+function describeLedgerState(content: string): string {
+  try {
+    const ledger = parseFindingLedger(JSON.parse(content));
+    return JSON.stringify({
+      workflowName: ledger.workflowName,
+      nextId: ledger.nextId,
+      findings: ledger.findings.length,
+      rawFindings: ledger.rawFindings.length,
+      conflicts: ledger.conflicts.length,
+      updatedAt: ledger.updatedAt,
+    });
+  } catch {
+    return 'invalid-ledger';
+  }
 }
 
 function readProjectLedgerFile(baseDir: string, path: string): FindingLedger {
   assertNotSymlink(path);
   assertRealPathInside(baseDir, path);
-  return readLedgerFile(path);
+  const expectedStat = lstatSync(path);
+  if (!expectedStat.isFile()) {
+    throw new Error(`Finding ledger path is not a regular file: ${path}`);
+  }
+  return readLedgerFile(path, expectedStat);
 }
 
 function readProjectLedgerOrEmpty(baseDir: string, path: string, workflowName: string): FindingLedger {
@@ -372,25 +429,35 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
     assertLedgerWorkflowName(ledger, options.workflowName, ledgerPath);
     assertLedgerIdAllocationInvariant(ledger);
     prepareWritableFilePath(ledgerRoot, ledgerPath);
-    writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2), { encoding: 'utf-8', mode: PRIVATE_FILE_MODE });
-    chmodSync(ledgerPath, PRIVATE_FILE_MODE);
+    writePrivateFileWithMode(ledgerPath, JSON.stringify(ledger, null, 2), PRIVATE_FILE_MODE);
   };
 
   // 同一プロセス内の呼び出しを直列化するための Promise チェーン。
   // updateLedger は「このチェーンの末尾に自分の臨界区間を継ぎ足し、前の
   // 呼び出しが終わるまで自分の読み込みを始めない」ことで排他を実現する。
   let updateQueue: Promise<unknown> = Promise.resolve();
+  const adjudicationReservations = new Set<string>();
 
   return {
     workflowName: options.workflowName,
     loadLedger: loadLedgerImpl,
     saveLedger: saveLedgerImpl,
-    updateLedger: (mutator) => {
+    updateLedger: (mutator, revalidateBeforeSave) => {
       const critical = updateQueue.then(() => {
         const current = loadLedgerImpl();
-        const next = mutator(current);
-        saveLedgerImpl(next);
-        return next;
+        const preparedMutation = mutator(current);
+        const mutation = revalidateBeforeSave === undefined
+          ? preparedMutation
+          : revalidateBeforeSave(current, preparedMutation);
+        saveLedgerImpl(mutation.ledger);
+        if (revalidateBeforeSave === undefined) {
+          return mutation;
+        }
+        const verifiedMutation = revalidateBeforeSave(current, mutation);
+        if (verifiedMutation !== mutation) {
+          saveLedgerImpl(verifiedMutation.ledger);
+        }
+        return verifiedMutation;
       });
       // キューの継続は失敗で止めない（この呼び出しの失敗は呼び出し元へ
       // critical 経由でそのまま伝播する）。失敗を握りつぶさずに繋ぐと、
@@ -398,11 +465,38 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
       updateQueue = critical.catch(() => undefined);
       return critical;
     },
+    claimAdjudicationReservation: (reservationToken) => {
+      if (adjudicationReservations.has(reservationToken)) {
+        return false;
+      }
+      adjudicationReservations.add(reservationToken);
+      return true;
+    },
+    releaseAdjudicationReservation: (reservationToken) => {
+      adjudicationReservations.delete(reservationToken);
+    },
     createRunCopy: () => {
       const ledger = readProjectLedgerOrEmpty(ledgerRoot, ledgerPath, options.workflowName);
+      const content = JSON.stringify(ledger, null, 2);
       prepareWritableCopyPath(options.reportDir, copyPath);
-      writeFileSync(copyPath, JSON.stringify(ledger, null, 2), { encoding: 'utf-8', mode: PRIVATE_FILE_MODE });
-      chmodSync(copyPath, READ_ONLY_PRIVATE_FILE_MODE);
+      try {
+        writePrivateFileWithMode(copyPath, content, READ_ONLY_PRIVATE_FILE_MODE);
+      } catch (error) {
+        if (!(error instanceof PrivateArtifactPublicationConflictError)) {
+          throw error;
+        }
+        const publishedStat = lstatSync(copyPath) as Stats;
+        if (!publishedStat.isFile()) {
+          throw error;
+        }
+        const publishedContent = readRegularFileNoFollow(copyPath, publishedStat).toString('utf-8');
+        if (publishedContent !== content && !hasEquivalentLedgerState(publishedContent, ledger)) {
+          throw new Error(
+            `${error.message}; concurrent run copy differs: ${describeLedgerState(publishedContent)}`,
+            { cause: error },
+          );
+        }
+      }
       return copyPath;
     },
     saveRawFindings: (runId, stepName, rawFindings) => {
@@ -417,11 +511,7 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
       }
       const rawFindingsFilePath = resolveInside(rawFindingsDir, rawFindingsFile);
       assertNotSymlink(rawFindingsFilePath);
-      writeFileSync(rawFindingsFilePath, JSON.stringify(parsedRawFindings, null, 2), {
-        encoding: 'utf-8',
-        mode: PRIVATE_FILE_MODE,
-      });
-      chmodSync(rawFindingsFilePath, PRIVATE_FILE_MODE);
+      writePrivateFileWithMode(rawFindingsFilePath, JSON.stringify(parsedRawFindings, null, 2), PRIVATE_FILE_MODE);
       return rawFindingsFilePath;
     },
     saveManagerValidationReport: (report) => {

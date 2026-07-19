@@ -14,6 +14,7 @@ npm run build
 npm run lint
 npm test
 npm run test:it
+npm run test:prompt-evals
 npm run test:e2e:mock
 ```
 
@@ -41,8 +42,11 @@ npm run build
 npm run lint
 npm test
 npm run test:it
+npm run test:prompt-evals
 npm run test:e2e:mock
 ```
+
+`npm test` is the unit gate. Integration, regression, and performance tests run through `npm run test:it`; the deterministic OpenCode prompt smoke suite runs through `npm run test:prompt-evals`. `npm test -- <test-file>` routes each specified source test to exactly one unit, parallel integration, serial Git, or serial workflow runner. Routed runners execute sequentially, attempt every selected runner, and return the first failing child exit code. Release maintainers can run `npm run check:release` for the complete release path, including all provider E2E suites.
 
 ### 2. Run a TAKT review (recommended)
 

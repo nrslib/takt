@@ -33,7 +33,7 @@ import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../core/workflow/findings/manager-runner.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
-import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
+import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -42,6 +42,10 @@ vi.mock('../agents/agent-usecases.js', () => ({
 
 const { executeAgent } = await import('../agents/agent-usecases.js');
 const executeAgentMock = vi.mocked(executeAgent);
+
+function buildFindingsRuleContext(ledger: FindingLedger) {
+  return buildFindingsRuleContextWithCwd(ledger, process.cwd());
+}
 
 beforeEach(() => {
   executeAgentMock.mockReset();
@@ -166,8 +170,9 @@ function makeHarness(initialLedger: FindingLedger): {
     loadLedger: () => ledgerState,
     saveLedger: (next) => { ledgerState = next; },
     updateLedger: (mutator) => {
-      ledgerState = mutator(ledgerState);
-      return Promise.resolve(ledgerState);
+      const mutation = mutator(ledgerState);
+      ledgerState = mutation.ledger;
+      return Promise.resolve(mutation);
     },
     createRunCopy: () => '/tmp/ledger-copy.json',
     saveRawFindings: () => '/tmp/raw-findings.json',

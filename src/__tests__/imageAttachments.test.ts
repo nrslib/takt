@@ -84,6 +84,22 @@ describe('createImageAttachmentStore', () => {
     expect(fs.statSync(attachment.tempPath).mode & 0o777).toBe(0o600);
   });
 
+  it('should reject an existing attachment path without changing its content', async () => {
+    const tmpRoot = createTempRoot();
+    const attachmentDir = path.join(tmpRoot, 'takt', 'session-collision', 'attachments');
+    const existingPath = path.join(attachmentDir, 'image-1.png');
+    fs.mkdirSync(attachmentDir, { recursive: true });
+    fs.writeFileSync(existingPath, 'existing');
+    const store = createImageAttachmentStore({
+      tmpRoot,
+      sessionId: 'session-collision',
+    });
+
+    await expect(store.saveImage(Buffer.from('replacement'), 'image/png')).rejects.toThrow(/already exists/);
+
+    expect(fs.readFileSync(existingPath, 'utf-8')).toBe('existing');
+  });
+
   it('should remove the session image attachment directory on cleanup', async () => {
     const tmpRoot = createTempRoot();
     const store = createImageAttachmentStore({

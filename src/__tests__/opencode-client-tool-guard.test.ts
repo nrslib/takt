@@ -128,6 +128,62 @@ function genericErrorEvent(index: number): MockStreamEvent {
   };
 }
 
+function bodyErrorEvent(tool: string, key: string, body: string, index: number): MockStreamEvent {
+  toolCallSeq += 1;
+  return {
+    type: 'message.part.updated',
+    properties: {
+      part: {
+        id: `part-${toolCallSeq}`,
+        type: 'tool',
+        tool,
+        callID: `tc-${toolCallSeq}`,
+        state: {
+          status: 'error',
+          error: `Tool failure ${index} quoted body:\n${body}`,
+          input: { filePath: `src/file-${index}.ts`, [key]: body },
+        },
+      },
+    },
+  };
+}
+
+function sensitiveErrorEvent(input: Record<string, unknown>, error: string): MockStreamEvent {
+  toolCallSeq += 1;
+  return {
+    type: 'message.part.updated',
+    properties: {
+      part: {
+        id: `part-${toolCallSeq}`,
+        type: 'tool',
+        tool: 'fetch',
+        callID: `tc-${toolCallSeq}`,
+        state: { status: 'error', error, input },
+      },
+    },
+  };
+}
+
+function shortSecretInvalidArgumentEvent(): MockStreamEvent {
+  toolCallSeq += 1;
+  return {
+    type: 'message.part.updated',
+    properties: {
+      part: {
+        id: `part-${toolCallSeq}`,
+        type: 'tool',
+        tool: 'read',
+        callID: `tc-${toolCallSeq}`,
+        state: {
+          status: 'error',
+          error: 'Invalid arguments: token "a"',
+          input: { token: 'a' },
+        },
+      },
+    },
+  };
+}
+
 function completedToolEvent(
   tool: string,
   input: Record<string, unknown>,
@@ -565,6 +621,76 @@ describe('OpenCodeClient tool guard recovery', () => {
     expect(result.error).not.toContain(longOldString);
     expect(result.error).not.toContain('secretLookingSnippet');
     expect(result.error).toMatch(/\{sha256:[0-9a-f]{12},length:\d+\}/);
+  });
+
+  it.each([
+    ['write', 'content', 'complete source body quoted by write failure'],
+    ['apply_patch', 'patchText', 'patch body quoted by apply_patch failure'],
+  ])('guard の最終 AgentResponse.error に %s.%s 本文を残さない', async (tool, key, body) => {
+    process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '5';
+    runPlans = [[0, 1, 2, 3, 4].map((index) => bodyErrorEvent(tool, key, body, index))];
+    installOpenCodeMock();
+    const client = new OpenCodeClient();
+
+    const result = await client.call('coder', 'implement the task', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('absolute tool error budget');
+    expect(result.error).not.toContain(body);
+    expect(result.error).toMatch(/\{sha256:[0-9a-f]{12},length:\d+\}/);
+  });
+
+  it('guard の最終 AgentResponse.error に HTTP/session 機密値を再流出させない', async () => {
+    process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '1';
+    const secrets = {
+      proxyAuthorization: 'Basic proxy-credential-secret',
+      cookies: 'sid=cookie-value-secret',
+      sessionId: 'provider-session-value-secret',
+    };
+    runPlans = [[sensitiveErrorEvent({
+      'Proxy-Authorization': secrets.proxyAuthorization,
+      cookies: secrets.cookies,
+      sessionId: secrets.sessionId,
+    }, `provider rejected ${secrets.proxyAuthorization}; ${secrets.cookies}; ${secrets.sessionId}`)]];
+
+    installOpenCodeMock();
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'implement the task', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('absolute tool error budget');
+    expect(result.error).not.toContain(secrets.proxyAuthorization);
+    expect(result.error).not.toContain(secrets.cookies);
+    expect(result.error).not.toContain(secrets.sessionId);
+  });
+
+  it('short secrets do not prevent invalid-argument loop detection', async () => {
+    runPlans = [
+      [
+        shortSecretInvalidArgumentEvent(),
+        shortSecretInvalidArgumentEvent(),
+        shortSecretInvalidArgumentEvent(),
+        shortSecretInvalidArgumentEvent(),
+      ],
+      successEvents('unused', 'recovered'),
+    ];
+
+    const { promptAsync } = installOpenCodeMock();
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'implement the task', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('done');
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(promptAsync.mock.calls)).not.toContain('token "a"');
   });
 
   it('absolute_cost_limit: 即失敗し recovery は使われない', async () => {

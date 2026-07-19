@@ -130,8 +130,8 @@ export class WorkflowEngine extends EventEmitter {
       config.autoRouting ?? options.autoRouting,
       options.autoStrategyOverride,
     );
-    // Phase B (codex B4): the finding-conflict-adjudication step is a REAL
-    // synthesized step injected into config.steps whenever the workflow (or a
+    // The adjudication target must participate in normal step validation and execution,
+    // so it is injected into config.steps whenever the workflow (or a
     // loop monitor judge) wires a rule to it and a finding contract is in
     // effect. Injection happens before validateWorkflowConfig so the injected
     // step is validated exactly like an authored step (session, provider,
@@ -337,7 +337,7 @@ export class WorkflowEngine extends EventEmitter {
     if (!this.findingLedgerStore) {
       return;
     }
-    this.state.findings = buildFindingsRuleContext(this.findingLedgerStore.loadLedger());
+    this.state.findings = buildFindingsRuleContext(this.findingLedgerStore.loadLedger(), this.cwd);
   }
 
   /** Open findings still carrying provisional metadata (shared by checkCompletionGate and recordNeedsAdjudication). */
@@ -355,7 +355,7 @@ export class WorkflowEngine extends EventEmitter {
   }
 
   /**
-   * 二系統台帳（codex 対策#4）の review-integrity 側の未昇格 anomaly
+   * 二系統台帳（review-integrity protocol）の review-integrity 側の未昇格 anomaly
    * （recordNeedsAdjudication 専用）。product gate（checkCompletionGate）は
    * この配列を一切参照しない — anomaly 単体で COMPLETE を拒否することはない
    * （安全不変条件: anomaly は product gate を塞がない）。NEEDS_ADJUDICATION に
@@ -368,12 +368,12 @@ export class WorkflowEngine extends EventEmitter {
   /**
    * COMPLETE 遷移直前のエンジン最終不変条件。2つの独立したゲートを見る:
    *
-   * 1. product gate（v2 梯子設計 §7）: open な provisional finding（意味を確定
+   * 1. product gate: open な provisional finding（意味を確定
    *    できなかった観測）が1件でも残っていれば COMPLETE を拒否する。
    *
-   * 2. review-integrity gate（codex 検証ブロッカー#1）: 未昇格（promotedFindingId
+   * 2. review-integrity gate（review-integrity requirement）: 未昇格（promotedFindingId
    *    無し）の reviewer anomaly が1件でも残っていれば COMPLETE を拒否する。
-   *    二系統台帳（codex 対策#4）で全指摘が anomaly に隔離された run は product
+   *    二系統台帳（review-integrity protocol）で全指摘が anomaly に隔離された run は product
    *    gate が空になり「即 COMPLETE」で実質レビューされずに通り得たため、product
    *    gate とは別にここで fail-closed にする。anomaly は product finding では
    *    ないので product gate（open/provisional の count）は塞がない — この
@@ -415,12 +415,12 @@ export class WorkflowEngine extends EventEmitter {
     return [
       `- ${anomalies.length} unpromoted reviewer anomaly(ies) remain (reviewer claims whose evidence did not mechanically verify — the reviewed scope was not soundly reviewed):`,
       ...anomalies.map((anomaly) => `  - ${anomaly.id} [${anomaly.kind}]: ${anomaly.mismatchReason}`),
-      '  This is the review-integrity gate (codex 対策#4): an unpromoted anomaly is NOT a product finding, so it does not block the product gate — but the workflow must route on findings.reviewerAnomalies.count to re-review (reviewers) until a correctly-quoted finding promotes it or, once findings.reviewerAnomalies.budgetExhausted is true, to NEEDS_ADJUDICATION. Completion is never allowed while an unverified reviewer anomaly stands.',
+      '  This is the review-integrity gate: an unpromoted anomaly is NOT a product finding, so it does not block the product gate — but the workflow must route on findings.reviewerAnomalies.count to re-review (reviewers) until a correctly-quoted finding promotes it or, once findings.reviewerAnomalies.budgetExhausted is true, to NEEDS_ADJUDICATION. Completion is never allowed while an unverified reviewer anomaly stands.',
     ];
   }
 
   /**
-   * review-integrity gate 単独（codex 検証2巡目#1）。checkCompletionGate は product
+   * review-integrity gate 単独。checkCompletionGate は product
    * gate（provisional）+ review-integrity gate（未昇格 anomaly）の両方を見るが、
    * こちらは未昇格 anomaly だけを見る。returnValue 終端（`return: X`）に適用する
    * ためのもの: `return: need_replan` のような「未解決の provisional を親/呼び出し元へ
@@ -440,7 +440,7 @@ export class WorkflowEngine extends EventEmitter {
   }
 
   /**
-   * NEEDS_ADJUDICATION の停止理由（codex 裁定・対策バッチ B1 の有限停止予算
+   * NEEDS_ADJUDICATION の停止理由（Finding Contract の有限停止予算
    * 拡張）を、実際にマッチしたルールの condition（= 事実）から分類する。台帳
    * 状態からの推定ではない — WorkflowRunLoop が遷移を起こしたルールの condition
    * 文字列を渡してくる（recordNeedsAdjudication の引数）。builtin では fixpoint と
@@ -469,7 +469,7 @@ export class WorkflowEngine extends EventEmitter {
     }
     const referencesFixpoint = hasUnquotedIdentifierReference(matchedCondition, 'findings.provisional.fixpoint');
     const referencesBudget = hasUnquotedIdentifierReference(matchedCondition, 'findings.rounds.budgetExhausted');
-    // codex 検証ブロッカー#1: review-integrity 予算切れ（未昇格 anomaly が有限回の
+    // review-integrity requirement: review-integrity 予算切れ（未昇格 anomaly が有限回の
     // 再レビューでも補完できず NEEDS_ADJUDICATION へ）。findings.rounds.budgetExhausted
     // とは別の識別子なので取り違えない。
     const referencesReviewIntegrity = hasUnquotedIdentifierReference(matchedCondition, 'findings.reviewerAnomalies.budgetExhausted');
@@ -491,8 +491,7 @@ export class WorkflowEngine extends EventEmitter {
   }
 
   /**
-   * `next: NEEDS_ADJUDICATION` 到達時（対策バッチ B1、および codex 裁定の
-   * 有限停止予算拡張）に呼ぶ。open provisional findings と発生元
+   * `next: NEEDS_ADJUDICATION` 到達時に、open provisional findings と発生元
    * （sourceRawFindingIds / reason / reviewers）、実際にマッチした condition
    * （matchedCondition）と、そこから分類した停止理由（fixpoint /
    * budget-exhausted）を監査レポート（findings-ledger store 経由）へ永続化し、

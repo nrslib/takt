@@ -811,7 +811,7 @@ export class StepExecutor {
       return { response, instruction: phase1Instruction, providerInfo };
     }
 
-    // レビュア1回突き返し（v2 梯子設計 §3）: relation/target/kind の意味矛盾が
+    // レビュア1回突き返し: relation/target/kind の意味矛盾が
     // ある raw について同一セッションで1回だけ明確化を求める（ParallelRunner の
     // 同名処理と同じ一般経路）。clarification は engine 発行の taint 根拠として
     // 取り込み（manager-runner の canonicalization）へ渡す。

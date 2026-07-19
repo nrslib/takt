@@ -12,6 +12,7 @@ import {
   escapeTemplateChars,
   replaceTemplatePlaceholders,
 } from '../core/workflow/instruction/escape.js';
+import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
 import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
 import { makeStep, makeInstructionContext } from './test-helpers.js';
 
@@ -163,7 +164,7 @@ describe('replaceTemplatePlaceholders', () => {
       rmSync(reportDir, { recursive: true, force: true });
     });
 
-    it('should replace {report:filename} with full path when the report exists', () => {
+    it('should replace {report:filename} with the verified report content', () => {
       writeFileSync(join(reportDir, 'review.md'), 'review');
       writeFileSync(join(reportDir, 'plan.md'), 'plan');
       const step = makeStep();
@@ -171,7 +172,28 @@ describe('replaceTemplatePlaceholders', () => {
       const template = 'Read {report:review.md} and {report:plan.md}';
 
       const result = replaceTemplatePlaceholders(template, step, ctx);
-      expect(result).toBe(`Read ${reportDir}/review.md and ${reportDir}/plan.md`);
+      expect(result).toBe('Read review and plan');
+    });
+
+    it('should preserve ASCII braces in report content', () => {
+      const report = '{"finding":{"line":12,"evidence":"const value = { safe: true };"}}';
+      writeFileSync(join(reportDir, 'review.md'), report);
+      const step = makeStep();
+      const ctx = makeInstructionContext({ reportDir });
+
+      expect(replaceTemplatePlaceholders('{report:review.md}', step, ctx)).toBe(report);
+    });
+
+    it('should preserve report code and JSON through InstructionBuilder', () => {
+      const report = '```json\n{"finding":{"line":12}}\n```\nconst value = { safe: true };';
+      writeFileSync(join(reportDir, 'review.md'), report);
+      const step = makeStep({ instruction: 'Use this evidence exactly:\n{report:review.md}' });
+      const ctx = makeInstructionContext({ reportDir });
+
+      const instruction = new InstructionBuilder(step, ctx).build();
+
+      expect(instruction).toContain(report);
+      expect(instruction).not.toContain('｛"finding"');
     });
 
     // v3-r4 resume 境界バグの再発防止: {report:X} は存在チェックなしの
@@ -212,7 +234,7 @@ describe('replaceTemplatePlaceholders', () => {
       const step = makeStep({ name: 'implement' });
       const ctx = makeInstructionContext({ reportDir: childReportDir, reportsRootDir: reportsRoot });
       const result = replaceTemplatePlaceholders('Read {report:plan.md}', step, ctx);
-      expect(result).toBe(`Read ${reportsRoot}/plan.md`);
+      expect(result).toBe('Read parent plan');
 
       // ルートにも無い場合は明確なエラー。
       expect(() => replaceTemplatePlaceholders('Read {report:ghost.md}', step, ctx)).toThrow(
@@ -230,7 +252,7 @@ describe('replaceTemplatePlaceholders', () => {
       const step = makeStep({ name: 'implement' });
       const ctx = makeInstructionContext({ reportDir: childReportDir, reportsRootDir: reportsRoot });
       const result = replaceTemplatePlaceholders('Read {report:plan.md}', step, ctx);
-      expect(result).toBe(`Read ${childReportDir}/plan.md`);
+      expect(result).toBe('Read child plan');
     });
 
     it('should not fall back for nested report dirs outside the subworkflows namespace', () => {

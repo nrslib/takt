@@ -1,7 +1,7 @@
 /**
  * 'list' 互換シム（plugins/list-tool.ts）の upstream 衝突ガード。
  *
- * codex 裁定: upstream の registry に 'list' が実在する環境では登録しない
+ * Finding Contract: upstream の registry に 'list' が実在する環境では登録しない
  * （fail-closed。「custom が上書きするから問題ない」は不可）。実装はバージョン
  * allowlist を採る:
  * - プラグイン初期化中に自サーバの /experimental/tool/ids を引くと deadlock
@@ -24,7 +24,7 @@
  */
 export function versionAllowsListToolShim(version: string): boolean {
   // 末尾アンカー付きの厳密形。"1.17.18-beta.1" / "1.17.18junk" / "1.17.18.1" の
-  // ような亜種は未検証バージョンとして fail-closed（codex 指摘: アンカー無しだと
+  // ような亜種は未検証バージョンとして fail-closed（boundary requirement: アンカー無しだと
   // 全部許可されていた）。
   const normalized = version.trim();
   if (normalized === '1.18.2') {

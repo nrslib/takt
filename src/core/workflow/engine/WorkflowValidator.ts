@@ -36,10 +36,10 @@ function validateFindingsRuleContract(
 }
 
 /**
- * `next: finding-conflict-adjudication` targets the engine-synthesized Phase B
- * step (see constants.ts / adjudication-step.ts). Like findings.* conditions,
+ * `next: finding-conflict-adjudication` targets the engine-synthesized
+ * adjudication step (see constants.ts / adjudication-step.ts). Like findings.* conditions,
  * it only makes sense when a finding ledger exists to adjudicate against.
- * Applies to step rules, loop monitor judge rules (codex B7), AND parallel
+ * Applies to step rules, loop monitor judge rules (contract invariant), AND parallel
  * sub-step rules. A sub-step's `next` never routes at runtime (ParallelRunner
  * aggregates; only the parent step's rules transition), but sub-step wiring
  * still counts for step injection (workflowWiresFindingConflictAdjudication),
@@ -57,7 +57,7 @@ function validateFindingConflictAdjudicationRuleContract(
 }
 
 /**
- * `next: NEEDS_ADJUDICATION` (対策バッチ B1) only makes sense when a finding
+ * `next: NEEDS_ADJUDICATION` only makes sense when a finding
  * ledger exists to have reached a provisional fixpoint against — mirrors
  * validateFindingConflictAdjudicationRuleContract above. Unlike that target,
  * NEEDS_ADJUDICATION is a pure terminal marker (no synthesized step), so this
@@ -74,7 +74,7 @@ function validateNeedsAdjudicationRuleContract(
 }
 
 /**
- * The synthetic step name is reserved (codex B7): a user-authored step
+ * The synthetic step name is reserved (contract invariant): a user-authored step
  * squatting on it would collide with the engine's injection and silently
  * shadow the adjudication semantics. The engine's own injected step carries
  * engineSynthesized (not settable from YAML — the raw schema has no such

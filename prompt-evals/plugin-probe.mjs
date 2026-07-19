@@ -9,9 +9,19 @@
  */
 import { createOpencode } from '@opencode-ai/sdk/v2';
 import { createServer } from 'node:http';
-import { createServer as createNetServer } from 'node:net';
-import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { ensureOwnedProbeEntrypoint } from './probe-entrypoint.mjs';
+import {
+  OPENCODE_PROBE_STARTUP_TIMEOUT_MS,
+  promptOpenCodeSessionAsync,
+  runOpenCodeProbe,
+  runOpenCodeSessionWithEvents,
+} from './opencode-probe-lifecycle.mjs';
+import { reportProbePhase } from './probe-process.mjs';
+
+await ensureOwnedProbeEntrypoint(import.meta.url);
 
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((pairs, token, index, all) => {
@@ -20,9 +30,10 @@ const args = Object.fromEntries(
   }, []),
 );
 const mode = args.plugin ?? 'none';
-const workspace = args.cwd ?? '/private/tmp/claude-501/-Users-nrs-work-git-takt/bc515ddf-ddca-4d38-b413-a296fa013bae/scratchpad/plugin-probe';
+const workspace = args.cwd !== undefined
+  ? resolve(args.cwd)
+  : mkdtempSync(join(tmpdir(), 'takt-plugin-probe-'));
 
-rmSync(workspace, { recursive: true, force: true });
 mkdirSync(join(workspace, '.opencode', 'plugin'), { recursive: true });
 writeFileSync(join(workspace, 'target.txt'), Array.from({ length: 400 }, (_, i) => `line ${i + 1}`).join('\n'));
 
@@ -113,55 +124,71 @@ const recorder = createServer((request, response) => {
     response.end();
   });
 });
-await new Promise((done) => recorder.listen(8899, '127.0.0.1', done));
-
-const freePort = await new Promise((done) => {
-  const probe = createNetServer();
-  probe.listen(0, '127.0.0.1', () => { const { port } = probe.address(); probe.close(() => done(port)); });
-});
-
-const { client, server } = await createOpencode({
-  port: freePort,
-  config: {
-    model: 'probe/probe', small_model: 'probe/probe',
-    provider: { probe: { npm: '@ai-sdk/openai-compatible', name: 'probe', options: { baseURL: 'http://127.0.0.1:8899/v1', apiKey: 'x' }, models: { probe: { name: 'probe' } } } },
-    ...(externalPluginPath ? { plugin: [externalPluginPath] } : {}),
-  },
-});
+await new Promise((done) => recorder.listen(0, '127.0.0.1', done));
+const recorderAddress = recorder.address();
+if (recorderAddress === null || typeof recorderAddress === 'string') {
+  throw new Error('Probe recorder did not expose a TCP port');
+}
 
 const toolCalls = [];
+let hookOutput = '';
 try {
-  const session = await client.session.create({ directory: workspace });
-  const sessionID = session.data.id;
-  const { stream } = await client.event.subscribe({ directory: workspace });
-  const done = client.session.promptAsync({
-    sessionID, directory: workspace,
-    model: { providerID: 'probe', modelID: 'probe' },
-    parts: [{ type: 'text', text: 'Read target.txt around line 300.' }],
-  }).catch(() => {});
-
-  for await (const event of stream) {
-    const props = event?.properties ?? {};
-    if (event?.type === 'message.part.updated' && props.part?.type === 'tool') {
-      toolCalls.push({ tool: props.part.tool, status: props.part.state?.status, error: props.part.state?.error, input: props.part.state?.input });
-    }
-    if (event?.type === 'session.idle' && props.sessionID === sessionID) break;
-    if (event?.type === 'session.error') break;
-  }
-  await done;
+  await runOpenCodeProbe({
+    createProbe: () => createOpencode({
+      port: 0,
+      timeout: OPENCODE_PROBE_STARTUP_TIMEOUT_MS,
+      config: {
+        model: 'probe/probe', small_model: 'probe/probe',
+        provider: { probe: { npm: '@ai-sdk/openai-compatible', name: 'probe', options: { baseURL: `http://127.0.0.1:${recorderAddress.port}/v1`, apiKey: 'x' }, models: { probe: { name: 'probe' } } } },
+        ...(externalPluginPath ? { plugin: [externalPluginPath] } : {}),
+      },
+    }),
+    directory: workspace,
+    onPhase: reportProbePhase,
+    execute: async ({ client, sessionId, markReady }) => {
+      await runOpenCodeSessionWithEvents({
+        client,
+        directory: workspace,
+        sessionId,
+        start: () => promptOpenCodeSessionAsync(client, {
+          sessionID: sessionId, directory: workspace,
+          model: { providerID: 'probe', modelID: 'probe' },
+          parts: [{ type: 'text', text: 'Read target.txt around line 300.' }],
+        }),
+        onReady: markReady,
+        onEvent: (event) => {
+          const props = event?.properties ?? {};
+          if (event?.type === 'message.part.updated' && props.part?.type === 'tool') {
+            toolCalls.push({ tool: props.part.tool, status: props.part.state?.status, error: props.part.state?.error, input: props.part.state?.input });
+          }
+        },
+      });
+      hookOutput = existsSync(markerPath) ? readFileSync(markerPath, 'utf8').trim() : '';
+    },
+  });
 } finally {
-  await server.close?.();
-  recorder.close();
+  await new Promise((done, reject) => {
+    recorder.close((error) => error ? reject(error) : done());
+    recorder.closeAllConnections();
+  });
 }
 
 const byCall = new Map();
 for (const call of toolCalls) byCall.set(call.tool + String(call.status), call);
 const final = [...byCall.values()].filter((call) => call.status === 'completed' || call.status === 'error');
 console.log(`\n=== plugin=${mode} ===`);
-console.log('フック発火:', existsSync(markerPath) ? readFileSync(markerPath, 'utf8').trim() : '（なし）');
+console.log('フック発火:', hookOutput || '（なし）');
 for (const call of final) {
   console.log(`  ${call.tool}: ${call.status}`);
   if (call.error) console.log(`    error: ${String(call.error).slice(0, 110)}`);
   if (call.input) console.log(`    input: ${JSON.stringify(call.input).slice(0, 110)}`);
 }
-if (final.length === 0) console.log('  （ツール呼び出しが観測されず）');
+if (final.length === 0) {
+  throw new Error('Probe completed without observing a terminal tool call');
+}
+console.log(`PROBE_RESULT ${JSON.stringify({
+  mode,
+  workspace,
+  hookFired: hookOutput.length > 0,
+  terminalStatuses: final.map((call) => call.status),
+})}`);

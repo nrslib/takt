@@ -81,7 +81,7 @@ export function replaceTemplatePlaceholders(
   result = result.replace(/\{report_history\}/g, context.reportHistory ?? '');
   result = result.replace(/\{peer_reports\}/g, context.peerReports ?? '');
 
-  // Replace {report:filename} with reportDir/filename.
+  // Replace {report:filename} with the verified report content.
   // 単純な文字列連結ではなく専用リゾルバを通す: containment / 存在 /
   // 通常ファイルを検証し、欠落時はエージェント起動前に明確なエラーを投げる
   // （v3-r4 の resume 境界バグ — 旧 run のレポートを参照する consumer が

@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import type { ImageAttachmentReference, StoredImageAttachment } from '../../shared/types/image-attachments.js';
 import { debugLog } from '../../shared/utils/index.js';
 import { resolveReferencedImageAttachments } from '../../shared/utils/imageAttachmentReferences.js';
+import { ensurePrivateDirectory, writeNewPrivateFileWithMode } from '../../shared/utils/private-file.js';
 import type { InteractiveModeResult } from './interactive.js';
 import type { ImagePasteHandler } from './inlineImagePaste.js';
 import { readClipboardImage } from './clipboardImage.js';
@@ -27,7 +28,6 @@ export interface ImageAttachmentStoreOptions {
   initialAttachments?: readonly InteractiveImageAttachment[];
 }
 
-const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 
 function extensionForMimeType(mimeType: string): string {
@@ -43,11 +43,6 @@ function extensionForMimeType(mimeType: string): string {
     default:
       throw new Error(`Unsupported pasted image type: ${mimeType}`);
   }
-}
-
-function ensurePrivateDirectory(directoryPath: string): void {
-  fs.mkdirSync(directoryPath, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
-  fs.chmodSync(directoryPath, PRIVATE_DIRECTORY_MODE);
 }
 
 function validateImageAttachmentSessionId(sessionId: string): void {
@@ -136,6 +131,7 @@ export function createImageAttachmentStore(
     ? [...options.initialAttachments]
     : [];
   const sessionDir = path.join(options.tmpRoot, 'takt', options.sessionId);
+  const taktTmpDir = path.dirname(sessionDir);
   const attachmentDir = path.join(sessionDir, 'attachments');
 
   return {
@@ -149,9 +145,10 @@ export function createImageAttachmentStore(
         fileName,
       };
 
+      ensurePrivateDirectory(taktTmpDir);
       ensurePrivateDirectory(sessionDir);
       ensurePrivateDirectory(attachmentDir);
-      fs.writeFileSync(tempPath, data, { mode: PRIVATE_FILE_MODE, flag: 'wx' });
+      writeNewPrivateFileWithMode(tempPath, data, PRIVATE_FILE_MODE);
       attachments = [...attachments, attachment];
       return attachment;
     },

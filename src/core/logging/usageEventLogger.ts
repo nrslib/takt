@@ -1,5 +1,5 @@
-import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type { ProviderTypeOrAuto } from '../models/config-types.js';
 import type { ProviderUsageSnapshot } from '../models/response.js';
@@ -8,6 +8,7 @@ import {
   buildUsageEventRecord,
   type StepType,
 } from './providerEvent.js';
+import { appendPrivateFile, repairPrivateDirectory } from '../../shared/utils/private-file.js';
 
 export interface UsageEventLoggerConfig {
   readonly logsDir: string;
@@ -44,6 +45,9 @@ export function createUsageEventLogger(config: UsageEventLoggerConfig): UsageEve
     assertNonEmpty(config.runId, 'runId');
     assertNonEmpty(config.providerModel, 'providerModel');
     assertNonEmpty(config.step, 'step');
+    if (existsSync(config.logsDir)) {
+      repairPrivateDirectory(config.logsDir);
+    }
   }
 
   const filepath = join(config.logsDir, `${config.sessionId}${USAGE_EVENTS_LOG_FILE_SUFFIX}`);
@@ -90,7 +94,7 @@ export function createUsageEventLogger(config: UsageEventLoggerConfig): UsageEve
       );
 
       try {
-        appendFileSync(filepath, JSON.stringify(record) + '\n', 'utf-8');
+        appendPrivateFile(filepath, JSON.stringify(record) + '\n');
       } catch (error) {
         if (hasReportedWriteFailure) {
           return;

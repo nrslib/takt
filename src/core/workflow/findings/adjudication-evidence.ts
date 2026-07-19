@@ -1,91 +1,176 @@
 import { createHash } from 'node:crypto';
-import { normalizeFindingText } from './location.js';
-import type { FindingConflictAdjudicationAttempt, FindingLedger, FindingLedgerConflict, RawFinding } from './types.js';
+import { loadTemplate } from '../../../shared/prompts/index.js';
+import {
+  renderFencedJsonBlock,
+  renderFencedTextBlock,
+} from '../instruction/fenced-block.js';
+import type { ReviewScopeSnapshot, ReviewScopeUntrackedEvidence } from './snapshot.js';
+import type {
+  FindingConflictAdjudicationAttempt,
+  FindingLedger,
+  FindingLedgerConflict,
+  FindingLedgerEntry,
+  RawFinding,
+} from './types.js';
 
-/**
- * "1回制限" (Phase B design item 1): a conflict is only ever adjudicated once
- * per distinct body of evidence. evidenceHash is a deterministic digest of the
- * evidence CONTENT that would be shown to the adjudicator for a given conflict
- * (codex B2: hashing ids alone missed content edits and changed spuriously on
- * id re-namespacing):
- *
- * - the BODY (title / description / location / severity / suggestion) of every
- *   raw finding referenced by the conflict directly (conflict.rawFindingIds)
- *   or attached to a finding the conflict names (finding.rawFindingIds);
- *   normalized, de-duplicated by content, and sorted
- * - the dispute records (reason + evidence) on those findings — normalized,
- *   de-duplicated, sorted
- * - the conflict's own description (normalized)
- *
- * All inputs are ledger-resident (no dependency on ephemeral per-step text such
- * as the coder's prior response), so the hash can be recomputed identically
- * when building FindingsRuleContext (to decide whether a conflict counts as
- * "unadjudicated"), when the adjudication step records its attempt, and again
- * immediately before applying the decision (codex B2: the applied hash must
- * EQUAL the hash the LLM was prompted with; a mismatch discards the decision).
- * New raw finding content or a new dispute changes the hash and makes the
- * conflict eligible for adjudication again; a raw finding id changing without
- * a content change does not.
- */
-export function computeConflictEvidenceHash(
-  conflict: Pick<FindingLedgerConflict, 'findingIds' | 'rawFindingIds' | 'description'>,
-  ledger: Pick<FindingLedger, 'findings' | 'rawFindings'>,
-): string {
+interface AdjudicationConflictEvidence {
+  id: string;
+  status: FindingLedgerConflict['status'];
+  findingIds: string[];
+  rawFindingIds: string[];
+  description: string;
+  firstSeen: FindingLedgerConflict['firstSeen'];
+  lastSeen: FindingLedgerConflict['lastSeen'];
+}
+
+export interface AdjudicationEvidenceSnapshot {
+  conflict: AdjudicationConflictEvidence;
+  findings: FindingLedgerEntry[];
+  rawFindings: RawFinding[];
+  reviewScopeSnapshotId: string;
+  trackedDiffDigest: string;
+  untrackedEvidence: ReviewScopeUntrackedEvidence[];
+}
+
+function selectLedgerEvidence(
+  ledger: FindingLedger,
+  conflict: FindingLedgerConflict,
+): Pick<AdjudicationEvidenceSnapshot, 'conflict' | 'findings' | 'rawFindings'> {
   const findingsById = new Map(ledger.findings.map((finding) => [finding.id, finding]));
-  const rawFindingsById = new Map(ledger.rawFindings.map((raw) => [raw.rawFindingId, raw]));
-
-  const rawFindingIds = new Set(conflict.rawFindingIds);
-  const disputeTexts = new Set<string>();
-
-  for (const findingId of conflict.findingIds) {
-    const finding = findingsById.get(findingId);
-    if (finding === undefined) {
-      continue;
-    }
-    for (const rawFindingId of finding.rawFindingIds) {
-      rawFindingIds.add(rawFindingId);
-    }
-    for (const dispute of finding.disputes ?? []) {
-      disputeTexts.add(`${normalizeFindingText(dispute.reason)}\n${normalizeFindingText(dispute.evidence)}`);
-    }
-  }
-
-  const rawContents = new Set<string>();
-  for (const rawFindingId of rawFindingIds) {
-    const raw = rawFindingsById.get(rawFindingId);
-    // A referenced raw whose body is not in the ledger (should not happen for
-    // reconciler-produced ledgers) still has to contribute deterministically;
-    // fall back to the id.
-    rawContents.add(raw !== undefined ? rawEvidenceContent(raw) : `missing:${rawFindingId}`);
-  }
-
-  const payload = JSON.stringify({
-    conflictDescription: normalizeFindingText(conflict.description),
-    rawFindings: [...rawContents].sort(),
-    disputes: [...disputeTexts].sort(),
-  });
-  return createHash('sha256').update(payload).digest('hex');
-}
-
-function rawEvidenceContent(raw: RawFinding): string {
-  return JSON.stringify([
-    normalizeFindingText(raw.title),
-    normalizeFindingText(raw.description),
-    raw.location !== undefined ? normalizeFindingText(raw.location) : '',
-    raw.severity,
-    raw.suggestion !== undefined ? normalizeFindingText(raw.suggestion) : '',
+  const findings = conflict.findingIds
+    .map((findingId) => findingsById.get(findingId))
+    .filter((finding): finding is FindingLedgerEntry => finding !== undefined)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const rawFindingIds = new Set([
+    ...conflict.rawFindingIds,
+    ...findings.flatMap((finding) => finding.rawFindingIds),
   ]);
+  const rawFindingsById = new Map(ledger.rawFindings.map((raw) => [raw.rawFindingId, raw]));
+  const rawFindings = [...rawFindingIds]
+    .map((rawFindingId) => rawFindingsById.get(rawFindingId))
+    .filter((raw): raw is RawFinding => raw !== undefined)
+    .sort((left, right) => left.rawFindingId.localeCompare(right.rawFindingId));
+  return structuredClone({
+    conflict: {
+      id: conflict.id,
+      status: conflict.status,
+      findingIds: [...conflict.findingIds].sort(),
+      rawFindingIds: [...conflict.rawFindingIds].sort(),
+      description: conflict.description,
+      firstSeen: conflict.firstSeen,
+      lastSeen: conflict.lastSeen,
+    },
+    findings,
+    rawFindings,
+  });
 }
 
-/**
- * A conflict is eligible for finding-conflict-adjudication only when the
- * current evidence hash has NEVER been seen before — neither in a completed
- * adjudication record nor in a started attempt (codex B3: comparing only the
- * latest record allowed re-adjudication when the evidence reverted to a past
- * state, and ignoring started attempts allowed an interrupted run to
- * re-adjudicate the same evidence after resume). Only genuinely new evidence
- * (content change) re-opens eligibility.
- */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => (
+      item === undefined || typeof item === 'function' || typeof item === 'symbol'
+        ? 'null'
+        : canonicalJson(item)
+    )).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined && typeof item !== 'function' && typeof item !== 'symbol')
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+      .join(',')}}`;
+  }
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) {
+    throw new Error('Adjudication evidence contains a non-serializable value');
+  }
+  return serialized;
+}
+
+export function computeAdjudicationEvidenceHash(
+  snapshot: Pick<AdjudicationEvidenceSnapshot, 'conflict' | 'findings' | 'rawFindings' | 'reviewScopeSnapshotId'>,
+): string {
+  return createHash('sha256').update(canonicalJson({
+    conflict: snapshot.conflict,
+    findings: snapshot.findings,
+    rawFindings: snapshot.rawFindings,
+    reviewScopeSnapshotId: snapshot.reviewScopeSnapshotId,
+  })).digest('hex');
+}
+
+export function computeConflictEvidenceHash(
+  conflict: FindingLedgerConflict,
+  ledger: FindingLedger,
+  reviewScopeSnapshotId: string,
+): string {
+  return computeAdjudicationEvidenceHash({
+    ...selectLedgerEvidence(ledger, conflict),
+    reviewScopeSnapshotId,
+  });
+}
+
+export function buildAdjudicationEvidenceSnapshot(input: {
+  ledger: FindingLedger;
+  conflictId: string;
+  reviewScopeSnapshot: ReviewScopeSnapshot;
+}): AdjudicationEvidenceSnapshot {
+  const conflict = input.ledger.conflicts.find((candidate) => candidate.id === input.conflictId);
+  if (conflict === undefined) {
+    throw new Error(`Finding conflict "${input.conflictId}" disappeared before evidence collection`);
+  }
+  const ledgerEvidence = selectLedgerEvidence(input.ledger, conflict);
+  return {
+    ...ledgerEvidence,
+    reviewScopeSnapshotId: input.reviewScopeSnapshot.reviewScopeSnapshotId,
+    trackedDiffDigest: createHash('sha256')
+      .update(input.reviewScopeSnapshot.trackedDiff ?? '')
+      .digest('hex'),
+    untrackedEvidence: input.reviewScopeSnapshot.untrackedEvidence.map((entry) => ({
+      path: entry.path,
+      kind: entry.kind,
+      ...(entry.contentDigest === undefined ? {} : { contentDigest: entry.contentDigest }),
+    })),
+  };
+}
+
+function renderUntrackedEvidence(entries: ReviewScopeUntrackedEvidence[]): string {
+  if (entries.length === 0) {
+    return '(no untracked files)';
+  }
+  return entries.map((entry) => {
+    const header = `untracked: ${entry.path} (${entry.kind})`;
+    if (entry.contentDigest === undefined) {
+      return header;
+    }
+    return `${header}\ncontentDigest: ${entry.contentDigest}`;
+  }).join('\n\n');
+}
+
+export function renderAdjudicationInstruction(snapshot: AdjudicationEvidenceSnapshot): string {
+  const disputes = snapshot.findings.flatMap((finding) => (finding.disputes ?? []).map((dispute) => ({
+    findingId: finding.id,
+    ...dispute,
+  })));
+  return loadTemplate('finding_conflict_adjudication_instruction', 'en', {
+    conflictId: snapshot.conflict.id,
+    conflictBlock: renderFencedJsonBlock(snapshot.conflict),
+    findingsBlock: snapshot.findings.length > 0
+      ? renderFencedJsonBlock(snapshot.findings)
+      : renderFencedTextBlock('(no ledger finding matched this conflict\'s findingIds)'),
+    rawFindingsBlock: snapshot.rawFindings.length > 0
+      ? renderFencedJsonBlock(snapshot.rawFindings)
+      : renderFencedTextBlock('(no raw findings on record for this conflict)'),
+    disputesBlock: disputes.length > 0
+      ? renderFencedJsonBlock(disputes)
+      : renderFencedTextBlock('(no disputes recorded on the finding(s) above)'),
+    diffBlock: renderFencedTextBlock([
+      `reviewScopeSnapshotId: ${snapshot.reviewScopeSnapshotId}`,
+      `trackedDiffDigest: ${snapshot.trackedDiffDigest}`,
+      renderUntrackedEvidence(snapshot.untrackedEvidence),
+    ].join('\n')),
+  });
+}
+
 export function isConflictUnadjudicated(
   conflict: Pick<FindingLedgerConflict, 'adjudications' | 'adjudicationAttempts'>,
   currentEvidenceHash: string,
@@ -95,24 +180,17 @@ export function isConflictUnadjudicated(
   return !seen;
 }
 
-/** Convenience: eligibility over a full ledger snapshot (rule context and the adjudication runner share this predicate). */
 export function isLedgerConflictUnadjudicated(
   conflict: FindingLedgerConflict,
-  ledger: Pick<FindingLedger, 'findings' | 'rawFindings'>,
+  ledger: FindingLedger,
+  reviewScopeSnapshotId: string,
 ): boolean {
-  return isConflictUnadjudicated(conflict, computeConflictEvidenceHash(conflict, ledger));
+  return isConflictUnadjudicated(
+    conflict,
+    computeConflictEvidenceHash(conflict, ledger, reviewScopeSnapshotId),
+  );
 }
 
-/**
- * A PENDING attempt (its evidenceHash has no completed adjudication record)
- * started by the SAME run. Such an attempt is a reusable reservation (codex
- * R2): a rate-limit fallback re-execution of the adjudication step within the
- * same run may retry the LLM call against it instead of being blocked as
- * "already adjudicated". A pending attempt from a DIFFERENT runId (an
- * interrupted run that was resumed) stays blocking — that is the intended
- * safe-side escalation to ABORT. A completed adjudication blocks regardless of
- * runId.
- */
 export function findReusablePendingAttempt(
   conflict: Pick<FindingLedgerConflict, 'adjudications' | 'adjudicationAttempts'>,
   currentEvidenceHash: string,

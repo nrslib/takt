@@ -1,7 +1,73 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const fsFailure = vi.hoisted(() => ({
+  failWriteOnce: undefined as ((path: string) => boolean) | undefined,
+  descriptorPaths: new Map<number, string>(),
+  beforeOpen: undefined as ((path: string) => void) | undefined,
+  beforePublication: undefined as ((targetPath: string) => void) | undefined,
+}));
+
+vi.mock('node:child_process', async () => {
+  const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+  const path = await vi.importActual<typeof import('node:path')>('node:path');
+  return {
+    ...actual,
+    spawnSync(...args: Parameters<typeof actual.spawnSync>) {
+      const commandArguments = args[1];
+      const rawRequest = Array.isArray(commandArguments) ? commandArguments[2] : undefined;
+      if (typeof rawRequest === 'string' && rawRequest.includes('"operation":"publish"')) {
+        const request = JSON.parse(rawRequest) as { targetName: string };
+        const options = args[2];
+        if (typeof options === 'object' && options !== null && typeof options.cwd === 'string') {
+          const beforePublication = fsFailure.beforePublication;
+          fsFailure.beforePublication = undefined;
+          beforePublication?.(path.join(options.cwd, request.targetName));
+        }
+      }
+      return actual.spawnSync(...args);
+    },
+  };
+});
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const actualWriteFileSync = actual.writeFileSync as unknown as (...args: unknown[]) => unknown;
+  return {
+    ...actual,
+    openSync: ((path: Parameters<typeof actual.openSync>[0], ...args: unknown[]) => {
+      fsFailure.beforeOpen?.(String(path));
+      const descriptor = Reflect.apply(actual.openSync, actual, [path, ...args]) as number;
+      fsFailure.descriptorPaths.set(descriptor, String(path));
+      return descriptor;
+    }) as typeof actual.openSync,
+    closeSync: ((descriptor: number) => {
+      fsFailure.descriptorPaths.delete(descriptor);
+      return actual.closeSync(descriptor);
+    }) as typeof actual.closeSync,
+    writeFileSync: ((
+      path: Parameters<typeof actual.writeFileSync>[0],
+      data: Parameters<typeof actual.writeFileSync>[1],
+      options?: Parameters<typeof actual.writeFileSync>[2],
+    ) => {
+      const resolvedPath = typeof path === 'number'
+        ? fsFailure.descriptorPaths.get(path) ?? String(path)
+        : String(path);
+      if (fsFailure.failWriteOnce?.(resolvedPath)) {
+        fsFailure.failWriteOnce = undefined;
+        const partialData = typeof data === 'string'
+          ? data.slice(0, Math.max(1, Math.floor(data.length / 2)))
+          : data;
+        Reflect.apply(actualWriteFileSync, actual, [path, partialData, options]);
+        throw Object.assign(new Error(`injected write failure: ${resolvedPath}`), { code: 'EFBIG' });
+      }
+      Reflect.apply(actualWriteFileSync, actual, [path, data, options]);
+    }) as typeof actual.writeFileSync,
+  };
+});
+
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 
@@ -49,7 +115,18 @@ function createStore(options: {
   });
 }
 
+beforeEach(() => {
+  fsFailure.failWriteOnce = undefined;
+  fsFailure.descriptorPaths.clear();
+  fsFailure.beforeOpen = undefined;
+  fsFailure.beforePublication = undefined;
+});
+
 afterEach(() => {
+  fsFailure.failWriteOnce = undefined;
+  fsFailure.descriptorPaths.clear();
+  fsFailure.beforeOpen = undefined;
+  fsFailure.beforePublication = undefined;
   for (const dir of cleanupDirs) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -110,6 +187,42 @@ describe('FindingLedgerStore', () => {
     expect(existsSync(join(projectCwd, '.takt/findings/peer-review.json'))).toBe(true);
   });
 
+  it('should migrate legacy version 1 adjudication attempts to stable reservation tokens', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const projectLedgerPath = join(projectCwd, '.takt/findings/peer-review.json');
+    mkdirSync(dirname(projectLedgerPath), { recursive: true });
+    writeFileSync(projectLedgerPath, JSON.stringify({
+      ...makeLedger(),
+      conflicts: [{
+        id: 'C-0001',
+        status: 'active',
+        findingIds: ['F-0001'],
+        rawFindingIds: [],
+        description: 'legacy conflict',
+        firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        adjudicationAttempts: [{
+          evidenceHash: 'legacy-evidence-hash',
+          startedAt: {
+            runId: 'run-1',
+            stepName: 'finding-conflict-adjudication',
+            timestamp: '2026-06-13T01:00:00.000Z',
+          },
+        }],
+      }],
+    }), 'utf-8');
+    const store = createStore({ projectCwd, reportDir });
+
+    const firstLoad = store.loadLedger();
+    const secondLoad = store.loadLedger();
+
+    expect(firstLoad.conflicts[0]?.adjudicationAttempts?.[0]?.reservationToken)
+      .toBe('legacy-v1:0:0:C-0001');
+    expect(secondLoad.conflicts[0]?.adjudicationAttempts?.[0]?.reservationToken)
+      .toBe('legacy-v1:0:0:C-0001');
+  });
+
   it('should create the run-local ledger copy as owner-only read-only', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
@@ -118,6 +231,26 @@ describe('FindingLedgerStore', () => {
     store.saveLedger(makeLedger());
     const copyPath = store.createRunCopy();
 
+    expect(statSync(copyPath).mode & 0o777).toBe(0o400);
+  });
+
+  it('should accept an equivalent run copy published by a concurrent writer', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+    store.saveLedger(makeLedger());
+    const ledger = store.loadLedger();
+    const concurrentContent = JSON.stringify({
+      ...ledger,
+      updatedAt: '2026-06-13T00:00:01.000Z',
+    }, null, 2);
+    fsFailure.beforePublication = (targetPath) => {
+      writeFileSync(targetPath, concurrentContent, { mode: 0o400 });
+    };
+
+    const copyPath = store.createRunCopy();
+
+    expect(readFileSync(copyPath, 'utf-8')).toBe(concurrentContent);
     expect(statSync(copyPath).mode & 0o777).toBe(0o400);
   });
 
@@ -136,6 +269,34 @@ describe('FindingLedgerStore', () => {
       expect.objectContaining({ nextId: 3 }),
     );
     expect(statSync(copyPath).mode & 0o777).toBe(0o400);
+  });
+
+  it('should preserve a read-only run copy when it is replaced before publication', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+    store.saveLedger(makeLedger());
+    const copyPath = store.createRunCopy();
+    const originalCopyPath = join(reportDir, 'original-findings-ledger.json');
+    fsFailure.beforeOpen = (path) => {
+      if (
+        dirname(path) !== dirname(copyPath)
+        || !basename(path).startsWith('.findings-ledger.json.')
+        || !path.endsWith('.tmp')
+      ) {
+        return;
+      }
+      fsFailure.beforeOpen = undefined;
+      renameSync(copyPath, originalCopyPath);
+      writeFileSync(copyPath, 'substituted', { mode: 0o600 });
+    };
+
+    expect(() => store.createRunCopy()).toThrow(/identity changed/);
+
+    expect(JSON.parse(readFileSync(originalCopyPath, 'utf-8'))).toMatchObject({ nextId: 2 });
+    expect(statSync(originalCopyPath).mode & 0o777).toBe(0o400);
+    expect(readFileSync(copyPath, 'utf-8')).toBe('substituted');
+    expect(statSync(copyPath).mode & 0o777).toBe(0o600);
   });
 
   it('should reject a ledger from a different workflow when loading or creating a run copy', () => {
@@ -248,6 +409,61 @@ describe('FindingLedgerStore', () => {
     expect(() => store.loadLedger()).toThrow('Finding ledger path escapes base directory');
   });
 
+  it('should reject a ledger parent swap after inspection without reading the substituted ledger', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const findingsDir = join(projectCwd, '.takt', 'findings');
+    const originalFindingsDir = join(projectCwd, 'original-findings');
+    const outsideDir = makeTempDir('takt-findings-outside-');
+    const ledgerPath = join(findingsDir, 'peer-review.json');
+    mkdirSync(findingsDir, { recursive: true });
+    writeFileSync(ledgerPath, JSON.stringify(makeLedger()));
+    writeFileSync(join(outsideDir, 'peer-review.json'), JSON.stringify({
+      ...makeLedger(),
+      nextId: 99,
+    }));
+    const store = createStore({ projectCwd, reportDir });
+    fsFailure.beforeOpen = (path) => {
+      if (path !== ledgerPath) {
+        return;
+      }
+      fsFailure.beforeOpen = undefined;
+      renameSync(findingsDir, originalFindingsDir);
+      symlinkSync(outsideDir, findingsDir, 'dir');
+    };
+
+    expect(() => store.loadLedger()).toThrow(/identity changed/);
+
+    expect(JSON.parse(readFileSync(join(outsideDir, 'peer-review.json'), 'utf-8'))).toMatchObject({ nextId: 99 });
+  });
+
+  it('should reject a ledger parent swap before publishing without changing either ledger', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+    const initialLedger = makeLedger();
+    store.saveLedger(initialLedger);
+    const findingsDir = join(projectCwd, '.takt', 'findings');
+    const originalFindingsDir = join(projectCwd, 'original-findings');
+    const outsideDir = makeTempDir('takt-findings-outside-');
+    const outsideLedger = join(outsideDir, 'peer-review.json');
+    writeFileSync(outsideLedger, 'outside unchanged');
+    fsFailure.beforeOpen = (path) => {
+      if (!basename(path).startsWith('.peer-review.json.') || !path.endsWith('.tmp')) {
+        return;
+      }
+      fsFailure.beforeOpen = undefined;
+      renameSync(findingsDir, originalFindingsDir);
+      symlinkSync(outsideDir, findingsDir, 'dir');
+    };
+
+    expect(() => store.saveLedger({ ...initialLedger, nextId: 3 })).toThrow(/identity changed/);
+
+    expect(JSON.parse(readFileSync(join(originalFindingsDir, 'peer-review.json'), 'utf-8'))).toEqual(initialLedger);
+    expect(readFileSync(outsideLedger, 'utf-8')).toBe('outside unchanged');
+    expect(readdirSync(outsideDir)).toEqual(['peer-review.json']);
+  });
+
   it('should reject run copy creation from ledgers under symlinked parent directories outside the projectCwd', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
@@ -342,10 +558,73 @@ describe('FindingLedgerStore', () => {
       'utf-8',
     );
 
-    const result = await store.updateLedger((current) => ({ ...current, nextId: current.nextId + 1 }));
+    const result = await store.updateLedger((current) => ({
+      ledger: { ...current, nextId: current.nextId + 1 },
+      result: current.nextId + 1,
+    }));
 
-    expect(result.nextId).toBe(6);
+    expect(result.result).toBe(6);
+    expect(result.ledger.nextId).toBe(6);
     expect(store.loadLedger().nextId).toBe(6);
+  });
+
+  it('should propagate a mutator failure without changing the ledger or blocking the next update', async () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+    const initialLedger = makeLedger();
+    const mutatorError = new Error('mutator failed');
+    store.saveLedger(initialLedger);
+
+    const failedUpdate = store.updateLedger(() => {
+      throw mutatorError;
+    });
+
+    await expect(failedUpdate).rejects.toBe(mutatorError);
+    expect(store.loadLedger()).toEqual(initialLedger);
+
+    const recovered = await store.updateLedger((current) => ({
+      ledger: { ...current, nextId: current.nextId + 1 },
+      result: 'recovered',
+    }));
+
+    expect(recovered.ledger.nextId).toBe(3);
+    expect(recovered.result).toBe('recovered');
+    expect(store.loadLedger()).toEqual({ ...initialLedger, nextId: 3 });
+  });
+
+  it('should propagate a save failure without partially writing or blocking the next update', async () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+    const initialLedger = makeLedger();
+    store.saveLedger(initialLedger);
+    const ledgerPath = join(projectCwd, '.takt/findings/peer-review.json');
+    const initialContent = readFileSync(ledgerPath, 'utf-8');
+    fsFailure.failWriteOnce = (path) => (
+      dirname(path) === dirname(ledgerPath)
+      && basename(path).startsWith('.peer-review.json.')
+      && path.endsWith('.tmp')
+    );
+
+    const failedUpdate = store.updateLedger((current) => ({
+      ledger: { ...current, nextId: current.nextId + 10 },
+      result: undefined,
+    }));
+
+    await expect(failedUpdate).rejects.toMatchObject({ code: 'EFBIG' });
+    expect(readFileSync(ledgerPath, 'utf-8')).toBe(initialContent);
+    expect(store.loadLedger()).toEqual(initialLedger);
+    expect(readdirSync(dirname(ledgerPath)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+
+    const recovered = await store.updateLedger((current) => ({
+      ledger: { ...current, nextId: current.nextId + 1 },
+      result: 'recovered',
+    }));
+
+    expect(recovered.ledger.nextId).toBe(3);
+    expect(recovered.result).toBe('recovered');
+    expect(store.loadLedger()).toEqual({ ...initialLedger, nextId: 3 });
   });
 
   it('should serialize concurrent callers so neither increment is lost (no lost update)', async () => {
@@ -366,17 +645,23 @@ describe('FindingLedgerStore', () => {
     // 方式）だと、片方の保存がもう片方の保存を上書きして加算が1回分消える。
     const callerA = (async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
-      return store.updateLedger((current) => ({ ...current, nextId: current.nextId + 1 }));
+      return store.updateLedger((current) => ({
+        ledger: { ...current, nextId: current.nextId + 1 },
+        result: current.nextId + 1,
+      }));
     })();
     const callerB = (async () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
-      return store.updateLedger((current) => ({ ...current, nextId: current.nextId + 1 }));
+      return store.updateLedger((current) => ({
+        ledger: { ...current, nextId: current.nextId + 1 },
+        result: current.nextId + 1,
+      }));
     })();
 
     const [resultA, resultB] = await Promise.all([callerA, callerB]);
 
     expect(store.loadLedger().nextId).toBe(4);
-    expect([resultA.nextId, resultB.nextId].sort()).toEqual([3, 4]);
+    expect([resultA.result, resultB.result].sort()).toEqual([3, 4]);
   });
 
   it('should save manager validation reports under the run report directory', () => {

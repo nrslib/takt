@@ -1,6 +1,7 @@
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import { normalizeFindingText, parseFindingLocation } from './location.js';
 import { deriveRawFindingRelation } from './schemas.js';
+import { createEmptyManagerOutput } from './manager-output.js';
 import type { FindingLedger, FindingManagerOutput, RawFinding } from './types.js';
 
 /**
@@ -9,8 +10,7 @@ import type { FindingLedger, FindingManagerOutput, RawFinding } from './types.js
  * 機械分類。
  *
  * 保守的な原則: フィールド等価で一意に決まらないものは全て residual に落とす。
- * 機械的に確定してよいのは次の3つだけ（Finding Contract 収束性改善 Phase A の
- * 設計）:
+ * 機械的に確定してよいのは次の3つだけ:
  *   1. 完全同一の raw: 正規化後の title / description / path / suggestion が
  *      既存 open finding に紐づく raw finding のいずれかと全て一致する。
  *   2. 明示参照: relation が persists/reopened で targetFindingId が構造化
@@ -23,27 +23,11 @@ import type { FindingLedger, FindingManagerOutput, RawFinding } from './types.js
  *
  * familyTag + exact location による自動 same は削除した。familyTag と行番号は
  * 分類・検索ヒントに過ぎず、同一性の最終判断は manager（意味判断）に移る
- * （実測: takt-bench v3-r2 の F-0016 — 同じ familyTag・同じ行だが意味の異なる
- * raw 2件が壊れた混成 finding に畳まれた）。
+ * 同じ familyTag・同じ行でも意味の異なる raw を混成 finding に畳まないためである。
  */
 export interface MechanicalClassificationResult {
   output: FindingManagerOutput;
   residualRawFindings: RawFinding[];
-}
-
-function emptyManagerOutput(): FindingManagerOutput {
-  return {
-    matches: [],
-    newFindings: [],
-    resolvedFindings: [],
-    reopenedFindings: [],
-    conflicts: [],
-    resolvedConflicts: [],
-    waivedFindings: [],
-    disputeNotes: [],
-    invalidatedFindings: [],
-    duplicateFindings: [],
-  };
 }
 
 /**
@@ -95,7 +79,7 @@ export function classifyRawFindingsMechanically(input: {
   previousLedger: FindingLedger;
   rawFindings: RawFinding[];
 }): MechanicalClassificationResult {
-  const output = emptyManagerOutput();
+  const output = createEmptyManagerOutput();
   const residualRawFindings: RawFinding[] = [];
   const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
   const exactDuplicateIndex = buildExactDuplicateIndex(input.previousLedger);
@@ -206,8 +190,8 @@ function mergeByFindingId<T extends { findingId: string; rawFindingIds: string[]
  *
  * 束ねた直後に canonicalize する。resolution_confirmation は機械分類が処理して
  * resolvedFindings に入り、同じ finding への残存指摘は LLM 側の matches に入るため、
- * 「1 finding = 1 決定」を破る衝突はこの merge で初めて生まれる（実測: takt-bench
- * v3-r2 の台帳凍結）。組み立て側だけを直しても本番経路は直らない。
+ * 「1 finding = 1 決定」を破る衝突はこの merge で初めて生まれるため、
+ * 組み立て側だけを直しても本番経路は直らない。
  */
 export function mergeFindingManagerOutputs(
   base: FindingManagerOutput,

@@ -1,10 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readlinkSync, type Stats } from 'node:fs';
+import { truncateUtf8 } from '../../../shared/utils/utf8.js';
 
 const HASH_CHUNK_BYTES = 1024 * 1024;
 const CAPTURE_ATTEMPTS = 3;
 const SNAPSHOT_FORMAT = Buffer.from('review-scope-snapshot-v2');
+const SNAPSHOT_DIFF_MAX_BYTES = 20_000;
+const SNAPSHOT_DIFF_CAPTURE_MAX_BYTES = 128 * 1024;
+const SNAPSHOT_UNTRACKED_CONTENT_MAX_BYTES = 20_000;
 
 class ReviewScopeSnapshotError extends Error {
   constructor(operation: string, path: string, cause: unknown) {
@@ -25,11 +29,40 @@ interface SnapshotEntry {
   record: Buffer;
   sortOrder: number;
   stage: Buffer;
+  untrackedEvidence?: ReviewScopeUntrackedEvidence;
 }
 
 interface CapturedSnapshot {
   inventory: Buffer;
   snapshotId: string;
+  trackedDiff: string | undefined;
+  untrackedEvidence: ReviewScopeUntrackedEvidence[];
+  presentationDigest: string;
+}
+
+export interface ReviewScopeUntrackedEvidence {
+  path: string;
+  kind: string;
+  contentDigest?: string;
+  content?: string;
+  contentEncoding?: 'utf8' | 'base64';
+  truncated?: boolean;
+}
+
+export interface ReviewScopeSnapshot {
+  reviewScopeSnapshotId: string;
+  trackedDiff: string | undefined;
+  untrackedEvidence: ReviewScopeUntrackedEvidence[];
+}
+
+interface FileSnapshot {
+  digest: Buffer;
+  preview: Buffer;
+  truncated: boolean;
+}
+
+interface PreviewBudget {
+  remainingBytes: number;
 }
 
 function describeCause(cause: unknown): string {
@@ -56,17 +89,27 @@ function decodeRepositoryPath(path: Buffer): string {
   return decoded;
 }
 
+function executeGit(cwd: string, args: string[], maxBuffer: number): Buffer {
+  return execFileSync('git', args, {
+    cwd,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer,
+  });
+}
+
 function runGit(cwd: string, args: string[]): Buffer {
-  const operation = `git ${args.join(' ')}`;
   try {
-    return execFileSync('git', args, {
-      cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      maxBuffer: 64 * 1024 * 1024,
-    });
+    return executeGit(cwd, args, 64 * 1024 * 1024);
   } catch (cause) {
-    return fail(operation, cwd, cause);
+    return fail(`git ${args.join(' ')}`, cwd, cause);
   }
+}
+
+function isGitOutputLimitError(cause: unknown): boolean {
+  return typeof cause === 'object'
+    && cause !== null
+    && 'code' in cause
+    && cause.code === 'ENOBUFS';
 }
 
 function parseNulEntries(output: Buffer, operation: string, path: string): Buffer[] {
@@ -170,7 +213,12 @@ function hasMatchingFileIdentity(expected: Stats, actual: Stats): boolean {
     && fileKind(expected) === fileKind(actual);
 }
 
-function hashFileContent(absPath: Buffer, path: Buffer, expectedStat: Stats): Buffer {
+function readFileSnapshot(
+  absPath: Buffer,
+  path: Buffer,
+  expectedStat: Stats,
+  maxPreviewBytes: number,
+): FileSnapshot {
   if (constants.O_NOFOLLOW === undefined) {
     return fail('open', displayPath(path), new Error('O_NOFOLLOW is unavailable on this platform'));
   }
@@ -183,6 +231,9 @@ function hashFileContent(absPath: Buffer, path: Buffer, expectedStat: Stats): Bu
   }
 
   const hash = createHash('sha256');
+  const previewChunks: Buffer[] = [];
+  let previewBytes = 0;
+  let contentBytes = 0;
   let failure: unknown;
   let closeFailure: unknown;
   try {
@@ -210,7 +261,14 @@ function hashFileContent(absPath: Buffer, path: Buffer, expectedStat: Stats): Bu
       if (bytesRead === 0) {
         break;
       }
-      hash.update(buffer.subarray(0, bytesRead));
+      const chunk = buffer.subarray(0, bytesRead);
+      hash.update(chunk);
+      contentBytes += bytesRead;
+      const previewLength = Math.min(bytesRead, maxPreviewBytes - previewBytes);
+      if (previewLength > 0) {
+        previewChunks.push(Buffer.from(chunk.subarray(0, previewLength)));
+        previewBytes += previewLength;
+      }
     }
   } finally {
     try {
@@ -224,7 +282,11 @@ function hashFileContent(absPath: Buffer, path: Buffer, expectedStat: Stats): Bu
   if (closeFailure !== undefined) {
     return fail('close', displayPath(path), closeFailure);
   }
-  return hash.digest();
+  return {
+    digest: hash.digest(),
+    preview: Buffer.concat(previewChunks),
+    truncated: contentBytes > previewBytes,
+  };
 }
 
 function readSymlinkTarget(absPath: Buffer, path: Buffer): Buffer {
@@ -258,7 +320,11 @@ function assertGitlinkDirectory(stat: Stats, path: Buffer): void {
   }
 }
 
-function trackedSnapshotEntry(cwd: string, entry: TrackedEntry, visitedDirectories: Set<string>): SnapshotEntry {
+function trackedSnapshotEntry(
+  cwd: string,
+  entry: TrackedEntry,
+  visitedDirectories: Set<string>,
+): SnapshotEntry {
   const absPath = absolutePath(cwd, entry.path);
   const stat = lstatPath(absPath, entry.path, true);
   const baseFields: Array<[string, Buffer | string | number]> = [
@@ -287,7 +353,7 @@ function trackedSnapshotEntry(cwd: string, entry: TrackedEntry, visitedDirectori
     assertGitlinkDirectory(stat, entry.path);
     let digest: string;
     try {
-      digest = computeStableSnapshot(decodeRepositoryPath(absPath), visitedDirectories);
+      digest = computeStableSnapshot(decodeRepositoryPath(absPath), visitedDirectories, false).reviewScopeSnapshotId;
     } catch (cause) {
       return fail('submodule digest', displayPath(entry.path), cause);
     }
@@ -296,7 +362,7 @@ function trackedSnapshotEntry(cwd: string, entry: TrackedEntry, visitedDirectori
   } else if (stat.isSymbolicLink()) {
     fields.push(['symlinkTarget', readSymlinkTarget(absPath, entry.path)]);
   } else if (stat.isFile()) {
-    fields.push(['contentDigest', hashFileContent(absPath, entry.path, stat)]);
+    fields.push(['contentDigest', readFileSnapshot(absPath, entry.path, stat, 0).digest]);
   }
 
   return {
@@ -307,7 +373,25 @@ function trackedSnapshotEntry(cwd: string, entry: TrackedEntry, visitedDirectori
   };
 }
 
-function untrackedSnapshotEntry(cwd: string, path: Buffer, visitedDirectories: Set<string>): SnapshotEntry {
+function displayRepositoryPath(path: Buffer): string {
+  const decoded = path.toString('utf8');
+  return Buffer.from(decoded, 'utf8').equals(path) ? decoded : displayPath(path);
+}
+
+function encodePreview(preview: Buffer): Pick<ReviewScopeUntrackedEvidence, 'content' | 'contentEncoding'> {
+  const decoded = preview.toString('utf8');
+  if (Buffer.from(decoded, 'utf8').equals(preview) && !decoded.includes('\0')) {
+    return { content: decoded, contentEncoding: 'utf8' };
+  }
+  return { content: preview.toString('base64'), contentEncoding: 'base64' };
+}
+
+function untrackedSnapshotEntry(
+  cwd: string,
+  path: Buffer,
+  visitedDirectories: Set<string>,
+  previewBudget: PreviewBudget,
+): SnapshotEntry {
   const absPath = absolutePath(cwd, path);
   const stat = lstatPath(absPath, path, false);
 
@@ -321,33 +405,89 @@ function untrackedSnapshotEntry(cwd: string, path: Buffer, visitedDirectories: S
     ['stage', ''],
     ['deleted', 0],
   ];
+  let untrackedEvidence: ReviewScopeUntrackedEvidence = {
+    path: displayRepositoryPath(path),
+    kind: fileKind(stat),
+  };
   if (stat.isSymbolicLink()) {
-    fields.push(['symlinkTarget', readSymlinkTarget(absPath, path)]);
+    const target = readSymlinkTarget(absPath, path);
+    fields.push(['symlinkTarget', target]);
+    untrackedEvidence = {
+      ...untrackedEvidence,
+      contentDigest: createHash('sha256').update(target).digest('hex'),
+    };
   } else if (stat.isFile()) {
-    fields.push(['contentDigest', hashFileContent(absPath, path, stat)]);
+    const fileSnapshot = readFileSnapshot(absPath, path, stat, previewBudget.remainingBytes);
+    previewBudget.remainingBytes -= fileSnapshot.preview.length;
+    fields.push(['contentDigest', fileSnapshot.digest]);
+    untrackedEvidence = {
+      ...untrackedEvidence,
+      contentDigest: fileSnapshot.digest.toString('hex'),
+      ...encodePreview(fileSnapshot.preview),
+      ...(fileSnapshot.truncated ? { truncated: true } : {}),
+    };
   } else if (stat.isDirectory()) {
     let digest: string;
     try {
-      digest = computeStableSnapshot(decodeRepositoryPath(absPath), visitedDirectories);
+      digest = computeStableSnapshot(decodeRepositoryPath(absPath), visitedDirectories, false).reviewScopeSnapshotId;
     } catch (cause) {
       return fail('embedded repository digest', displayPath(path), cause);
     }
     fields.push(['embeddedRepositoryWorkingTreeDigest', digest]);
+    untrackedEvidence = { ...untrackedEvidence, contentDigest: digest };
   }
 
-  return { path, record: normalizeRecord(fields), sortOrder: 1, stage: Buffer.alloc(0) };
+  return {
+    path,
+    record: normalizeRecord(fields),
+    sortOrder: 1,
+    stage: Buffer.alloc(0),
+    untrackedEvidence,
+  };
 }
 
-function captureSnapshot(cwd: string, visitedDirectories: Set<string>): CapturedSnapshot {
+function boundedTrackedDiff(cwd: string): string | undefined {
+  const args = ['diff', '--no-ext-diff', '--binary', 'HEAD', '--'];
+  let output: Buffer;
+  try {
+    output = executeGit(cwd, args, SNAPSHOT_DIFF_CAPTURE_MAX_BYTES);
+  } catch (cause) {
+    if (!isGitOutputLimitError(cause)) {
+      return fail(`git ${args.join(' ')}`, cwd, cause);
+    }
+    const summary = runGit(cwd, ['diff', '--no-ext-diff', '--stat', 'HEAD', '--'])
+      .toString('utf8')
+      .trim();
+    return `Tracked diff exceeded the ${SNAPSHOT_DIFF_CAPTURE_MAX_BYTES}-byte capture limit.\n${summary}`;
+  }
+  const trimmed = output.toString('utf8').trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  const truncated = truncateUtf8(trimmed, SNAPSHOT_DIFF_MAX_BYTES);
+  if (truncated.bytes === Buffer.byteLength(trimmed, 'utf8')) {
+    return trimmed;
+  }
+  return `${truncated.value}\n... (truncated; full state is bound by reviewScopeSnapshotId)`;
+}
+
+function captureSnapshot(
+  cwd: string,
+  visitedDirectories: Set<string>,
+  includeEvidence: boolean,
+): CapturedSnapshot {
   const trackedOutput = runGit(cwd, ['ls-files', '--cached', '--stage', '-z']);
   const untrackedOutput = runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z']);
   const head = runGit(cwd, ['rev-parse', '--verify', 'HEAD']);
   const tracked = parseNulEntries(trackedOutput, 'git ls-files --cached --stage -z parse', cwd)
     .map((record) => parseTrackedEntry(record, cwd));
   const untracked = parseNulEntries(untrackedOutput, 'git ls-files --others --exclude-standard -z parse', cwd);
+  const previewBudget: PreviewBudget = {
+    remainingBytes: includeEvidence ? SNAPSHOT_UNTRACKED_CONTENT_MAX_BYTES : 0,
+  };
   const entries = [
     ...tracked.map((entry) => trackedSnapshotEntry(cwd, entry, visitedDirectories)),
-    ...untracked.map((path) => untrackedSnapshotEntry(cwd, path, visitedDirectories)),
+    ...untracked.map((path) => untrackedSnapshotEntry(cwd, path, visitedDirectories, previewBudget)),
   ];
   entries.sort((left, right) => Buffer.compare(left.path, right.path)
     || left.sortOrder - right.sortOrder
@@ -360,7 +500,23 @@ function captureSnapshot(cwd: string, visitedDirectories: Set<string>): Captured
   const hash = createHash('sha256');
   hash.update(lengthPrefixed(SNAPSHOT_FORMAT));
   hash.update(lengthPrefixed(inventory));
-  return { inventory, snapshotId: hash.digest('hex') };
+  const trackedDiff = includeEvidence ? boundedTrackedDiff(cwd) : undefined;
+  const untrackedEvidence = includeEvidence
+    ? entries.flatMap((entry) => (
+      entry.untrackedEvidence === undefined ? [] : [entry.untrackedEvidence]
+    ))
+    : [];
+  const presentationDigest = createHash('sha256')
+    .update(trackedDiff ?? '')
+    .update(JSON.stringify(untrackedEvidence))
+    .digest('hex');
+  return {
+    inventory,
+    snapshotId: hash.digest('hex'),
+    trackedDiff,
+    untrackedEvidence,
+    presentationDigest,
+  };
 }
 
 function directoryIdentity(stat: Stats): string {
@@ -380,7 +536,11 @@ function captureDirectoryIdentity(cwd: string): string {
   return directoryIdentity(stat);
 }
 
-function computeStableSnapshot(cwd: string, visitedDirectories: Set<string>): string {
+function computeStableSnapshot(
+  cwd: string,
+  visitedDirectories: Set<string>,
+  includeEvidence: boolean,
+): ReviewScopeSnapshot {
   const identity = captureDirectoryIdentity(cwd);
   if (visitedDirectories.has(identity)) {
     return fail('capture recursion', cwd, new Error('directory cycle detected'));
@@ -388,10 +548,16 @@ function computeStableSnapshot(cwd: string, visitedDirectories: Set<string>): st
   visitedDirectories.add(identity);
   try {
     for (let attempt = 0; attempt < CAPTURE_ATTEMPTS; attempt += 1) {
-      const first = captureSnapshot(cwd, visitedDirectories);
-      const second = captureSnapshot(cwd, visitedDirectories);
-      if (first.snapshotId === second.snapshotId && first.inventory.equals(second.inventory)) {
-        return second.snapshotId;
+      const first = captureSnapshot(cwd, visitedDirectories, includeEvidence);
+      const second = captureSnapshot(cwd, visitedDirectories, includeEvidence);
+      if (first.snapshotId === second.snapshotId
+        && first.inventory.equals(second.inventory)
+        && first.presentationDigest === second.presentationDigest) {
+        return {
+          reviewScopeSnapshotId: second.snapshotId,
+          trackedDiff: second.trackedDiff,
+          untrackedEvidence: second.untrackedEvidence,
+        };
       }
     }
     return fail('capture', cwd, new Error(`working tree changed during ${CAPTURE_ATTEMPTS} consecutive capture attempts`));
@@ -405,5 +571,9 @@ function computeStableSnapshot(cwd: string, visitedDirectories: Set<string>): st
  * を除く）を実体から収集し、連続する2回の完全一致を確認してから返す。
  */
 export function computeReviewScopeSnapshotId(cwd: string): string {
-  return computeStableSnapshot(cwd, new Set());
+  return computeStableSnapshot(cwd, new Set(), false).reviewScopeSnapshotId;
+}
+
+export function captureReviewScopeSnapshot(cwd: string): ReviewScopeSnapshot {
+  return computeStableSnapshot(cwd, new Set(), true);
 }

@@ -15,9 +15,9 @@ import { validateFindingManagerOutput } from './manager-output-validation.js';
 import { computeLineageKey, computeProvisionalStableKey, computeReviewerStableKey } from './raw-canonicalization.js';
 
 /**
- * provisional finding の upsert 指示（v2 梯子設計 §7〜§8）。stableKey が同じ
+ * provisional finding の upsert 指示。stableKey が同じ
  * open provisional が既にあれば同一 ID を更新し（新しい finding ID を作らない —
- * 攻撃5対策）、無ければ新規 open finding を provisional メタデータ付きで作る。
+ * 再発同定キー）、無ければ新規 open finding を provisional メタデータ付きで作る。
  */
 export interface ProvisionalFindingSpec {
   kind: FindingProvisionalKind;
@@ -26,7 +26,7 @@ export interface ProvisionalFindingSpec {
   sourceRawFindingIds: string[];
   reason: string;
   title: string;
-  /** raw 由来なら元 severity、system overflow / budget failure は 'high'（設計書 §7）。 */
+  /** raw 由来なら元 severity、system overflow / budget failure は 'high'。 */
   severity: FindingSeverity;
   location?: string;
   description?: string;
@@ -43,7 +43,7 @@ interface ReconcileFindingLedgerInput {
   context: FindingReconcileContext;
   priorStepResponseText?: string;
   /**
-   * どの決定にも現れなかった raw の着地先。v2 梯子設計は「未言及 raw → new
+   * どの決定にも現れなかった raw の着地先。「未言及 raw → new
    * finding」フォールバックを廃止した（不採用の意味が消える / 根拠不成立の
    * 再報告が新規 finding として洗浄される）。代わりに、呼び出し元
    * （manager-runner.ts）が未言及 raw を provisional spec としてここへ渡す。
@@ -60,7 +60,7 @@ interface ReconcileFindingLedgerInput {
   /**
    * raw finding id → canonicalization が計算した provenance（reviewerStableKey /
    * lineageKey）。defense-in-depth fallback はこれを使い、reviewer 名からの
-   * 別キー導出を行わない（codex B1: 同一 lineage の provisional が intake 経路と
+   * 別キー導出を行わない（contract invariant: 同一 lineage の provisional が intake 経路と
    * fallback 経路で別 stableKey になり増殖していた）。manager-runner 経路は
    * 常にこのマップを渡す。マップに無い raw（旧経路・テストの手組み raw）だけが
    * 最終手段の導出に落ちる。
@@ -144,7 +144,7 @@ function mergeRawFindingIds(current: readonly string[], next: readonly string[])
 }
 
 /**
- * 楽観的前提条件（CAS、設計書 §6）の版数。エントリを変更する全ての決定適用で
+ * 楽観的前提条件（CAS）の版数。エントリを変更する全ての決定適用で
  * +1 する。省略時（既存 v1 ledger）は 1 とみなす。
  */
 function bumpRevision(finding: Pick<FindingRecord, 'revision'>): number {
@@ -294,7 +294,7 @@ function withoutResolutionFields(finding: FindingRecord): Omit<FindingRecord, 'r
     // （落とすと CAS の版数が巻き戻り、stale 検出が誤って成功する）。
     ...(finding.revision !== undefined ? { revision: finding.revision } : {}),
     ...(finding.provisional !== undefined ? { provisional: finding.provisional } : {}),
-    // rejectedObservations（A-3 の監査添付履歴）も解消情報ではないため保持する。
+    // rejectedObservations の監査添付履歴も解消情報ではないため保持する。
     ...(finding.rejectedObservations !== undefined ? { rejectedObservations: finding.rejectedObservations } : {}),
   };
 }
@@ -602,7 +602,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     context: input.context,
   });
 
-  // v2 梯子設計: 「未言及 raw → new finding」フォールバックは廃止した。
+  // 「未言及 raw → new finding」フォールバックは廃止した。
   // どの決定にも現れなかった raw は呼び出し元が provisional spec として渡し、
   // 渡し漏れも defense-in-depth でここが provisional に変換する（黙って消して
   // ゲートを開けない。新規 finding への昇格もしない — 根拠不成立の再報告が
@@ -621,7 +621,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       || excludedFromUnmentionedFallback.has(rawFinding.rawFindingId)) {
       continue;
     }
-    // canonicalization が計算した provenance を最優先で使う（codex B1: 別キー
+    // canonicalization が計算した provenance を最優先で使う（contract invariant: 別キー
     // 導出は同一 lineage の provisional を増殖させる）。manager-runner 経路は
     // 常にマップを渡すため、以下の導出はマップ外の raw（旧経路・手組み raw）
     // だけの最終手段。
@@ -680,9 +680,8 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
 }
 
 /**
- * reconcile 済みの台帳へ provisional spec を追加適用する（対策バッチ A-3 /
- * codex ブロッカー2）。証跡不成立 persists の添付判断は reconcile 後の台帳に
- * 対して行うため、その時点で target が閉じていた分の B3 フォールバックは
+ * reconcile 済みの台帳へ provisional spec を追加適用する。証跡不成立 persists の
+ * 添付判断は reconcile 後の台帳に対して行うため、その時点で target が閉じていた分は
  * reconcile の provisionalFindings ではなくこの関数で upsert する。更新則は
  * applyProvisionalFindingSpecs と同一（同じ stableKey の open provisional へ
  * upsert、無ければ新規 ID を採番）。
@@ -718,13 +717,13 @@ export function applyProvisionalFindingSpecsToLedger(
 }
 
 /**
- * provisional spec を台帳へ適用する（設計書 §8 の更新則）。
+ * provisional spec を台帳へ適用する。
  *
  * - 同じ stableKey の open provisional が既にあれば同一 ID を更新する（新しい
  *   finding ID を作らない）: rawFindingIds / reason / lastSeen を更新し、
  *   revision += 1、lifecycle は 'persists'。
  * - 無ければ新規 open finding を provisional メタデータ付きで作る。
- * - 「今回観測されなかった」だけでは resolve しない（この関数は既存 provisional
+ * - 「現在のラウンドで観測されなかった」だけでは resolve しない（この関数は既存 provisional
  *   に一切触れない — 解消は clean な後続 raw の CAS 経路だけが行う）。
  */
 function applyProvisionalFindingSpecs(input: {

@@ -12,6 +12,11 @@ import {
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/index.js';
+import {
+  OPENCODE_STREAM_EVENT_LIMIT,
+  OPENCODE_STREAM_TEXT_BYTE_LIMIT,
+  OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE,
+} from '../infra/opencode/OpenCodeStreamHandler.js';
 
 /**
  * 自セッションの進捗が止まったまま、サーバ全体のバスに無関係イベントが
@@ -267,6 +272,46 @@ function textPartUpdated(sessionID: string, id: string, text: string): unknown {
   };
 }
 
+function reasoningPartUpdated(sessionID: string, id: string, thinking: string): unknown {
+  return {
+    type: 'message.part.updated',
+    properties: {
+      part: { id, sessionID, type: 'reasoning', text: thinking },
+      delta: thinking,
+    },
+  };
+}
+
+function sensitiveToolPartUpdated(sessionID: string, id: string, secret: string): unknown {
+  return {
+    type: 'message.part.updated',
+    properties: {
+      part: {
+        id,
+        sessionID,
+        type: 'tool',
+        callID: `call-${id}`,
+        tool: 'remote',
+        state: { status: 'running', input: { token: secret } },
+      },
+    },
+  };
+}
+
+function expectStreamTextOnce(onStream: ReturnType<typeof vi.fn>, text: string): void {
+  const textEvents = onStream.mock.calls
+    .map(([event]) => event as { type?: string; data?: { text?: string } })
+    .filter((event) => event.type === 'text' && event.data?.text === text);
+  expect(textEvents).toHaveLength(1);
+}
+
+function expectStreamThinkingOnce(onStream: ReturnType<typeof vi.fn>, thinking: string): void {
+  const thinkingEvents = onStream.mock.calls
+    .map(([event]) => event as { type?: string; data?: { thinking?: string } })
+    .filter((event) => event.type === 'thinking' && event.data?.thinking === thinking);
+  expect(thinkingEvents).toHaveLength(1);
+}
+
 function sessionIdle(sessionID: string): unknown {
   return { type: 'session.idle', properties: { sessionID } };
 }
@@ -401,6 +446,156 @@ describe('OpenCodeClient stream cleanup', () => {
       { directory: '/tmp' },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+  });
+
+  it('should surface iterator cleanup failure after an idle session is finalized', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const cleanupError = new Error('iterator cleanup failed');
+    let emitted = false;
+    const stream = {
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+      async next(): Promise<IteratorResult<unknown, void>> {
+        if (emitted) {
+          return { done: true, value: undefined };
+        }
+        emitted = true;
+        return {
+          done: false,
+          value: { type: 'session.idle', properties: { sessionID: 'session-cleanup-failure' } },
+        };
+      },
+      return: vi.fn().mockRejectedValue(cleanupError),
+    };
+    const abort = successfulSessionAbort();
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-cleanup-failure' } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort,
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result).toMatchObject({
+      status: 'error',
+      error: expect.stringContaining('iterator cleanup failed'),
+    });
+    expect(stream.return).toHaveBeenCalledOnce();
+    expect(abort).not.toHaveBeenCalled();
+  });
+
+  it('fails an active-session event flood instead of letting it extend the idle timeout indefinitely', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = 'session-event-flood';
+    const events = Array.from({ length: OPENCODE_STREAM_EVENT_LIMIT + 1 }, () => ({
+      type: 'session.status',
+      properties: { sessionID: sessionId, status: { type: 'busy' } },
+    }));
+    const stream = new MockEventStream(events, sessionId);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: sessionId } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toBe(OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE);
+    expect(stream.returnSpy).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['delta', (sessionId: string) => [{
+      type: 'message.part.delta',
+      properties: {
+        sessionID: sessionId,
+        partID: 'text-1',
+        field: 'text',
+        delta: 'x'.repeat(OPENCODE_STREAM_TEXT_BYTE_LIMIT + 1),
+      },
+    }]],
+    ['full snapshot', (sessionId: string) => [{
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'text-1',
+          sessionID: sessionId,
+          type: 'text',
+          text: 'x'.repeat(OPENCODE_STREAM_TEXT_BYTE_LIMIT + 1),
+        },
+      },
+    }]],
+    ['multiple ids', (sessionId: string) => [
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: sessionId,
+          partID: 'text-1',
+          field: 'text',
+          delta: 'x'.repeat(Math.floor(OPENCODE_STREAM_TEXT_BYTE_LIMIT / 2) + 1),
+        },
+      },
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: sessionId,
+          partID: 'text-2',
+          field: 'text',
+          delta: 'y'.repeat(Math.floor(OPENCODE_STREAM_TEXT_BYTE_LIMIT / 2) + 1),
+        },
+      },
+    ]],
+  ] as const)('fails an attempt when %s text exceeds the cumulative byte limit', async (_kind, makeEvents) => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = `session-text-limit-${_kind.replace(' ', '-')}`;
+    const stream = new MockEventStream(makeEvents(sessionId), sessionId);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: sessionId } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toBe(OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE);
+    expect(result.content).toBe(OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE);
+    expect(stream.returnSpy).toHaveBeenCalled();
   });
 
   it('should consume stream events while promptAsync is still pending', async () => {
@@ -2889,6 +3084,9 @@ describe('OpenCodeClient stream cleanup', () => {
     const subscribe = vi.fn()
       .mockResolvedValueOnce({
         stream: new MockEventStream([
+          sensitiveToolPartUpdated('session-fmt', 'format-tool', 'format-secret'),
+          textPartUpdated('session-fmt', 'format-tail', 'format retry tail'),
+          reasoningPartUpdated('session-fmt', 'format-reasoning', 'format reasoning tail'),
           {
             type: 'message.updated',
             properties: {
@@ -2929,10 +3127,12 @@ describe('OpenCodeClient stream cleanup', () => {
     });
 
     const client = new OpenCodeClient();
+    const onStream = vi.fn();
     const result = await client.call('reviewer', 'review it', {
       cwd: '/tmp',
       model: 'opencode/big-pickle',
       outputSchema: schema,
+      onStream,
     });
 
     expect(result.status).toBe('done');
@@ -2941,6 +3141,9 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(promptAsync.mock.calls[0]?.[0]).toHaveProperty('format');
     expect(promptAsync.mock.calls[1]?.[0]).not.toHaveProperty('format');
+    expectStreamTextOnce(onStream, 'format retry tail');
+    expectStreamThinkingOnce(onStream, 'format reasoning tail');
+    expect(JSON.stringify(onStream.mock.calls)).not.toContain('format-secret');
   });
 
   it('should still fall back when the format failure lands on the last transient-budget attempt', async () => {
@@ -3006,6 +3209,9 @@ describe('OpenCodeClient stream cleanup', () => {
   it('should recover a stale StructuredOutput tool call on a resumed plain session by retrying in a fresh session', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const staleStream = new MockEventStream([
+      sensitiveToolPartUpdated('session-old', 'stale-tool-secret', 'stale-secret'),
+      textPartUpdated('session-old', 'stale-tail', 'stale retry tail'),
+      reasoningPartUpdated('session-old', 'stale-reasoning', 'stale reasoning tail'),
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'StructuredOutput'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'StructuredOutput'),
     ], 'session-old');
@@ -3032,10 +3238,12 @@ describe('OpenCodeClient stream cleanup', () => {
     });
 
     const client = new OpenCodeClient();
+    const onStream = vi.fn();
     const result = await client.call('reviewer', 'review it', {
       cwd: '/tmp',
       model: 'opencode/big-pickle',
       sessionId: 'session-old',
+      onStream,
     });
 
     expect(result.status).toBe('done');
@@ -3044,6 +3252,9 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(sessionCreate).toHaveBeenCalledTimes(1);
     expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({ sessionID: 'session-old' });
     expect(promptAsync.mock.calls[1]?.[0]).toMatchObject({ sessionID: 'session-fresh' });
+    expectStreamTextOnce(onStream, 'stale retry tail');
+    expectStreamThinkingOnce(onStream, 'stale reasoning tail');
+    expect(JSON.stringify(onStream.mock.calls)).not.toContain('stale-secret');
   });
 
   it('should fail fast when the recovered fresh session also loops on StructuredOutput', async () => {
@@ -3379,10 +3590,16 @@ describe('OpenCodeClient stream cleanup', () => {
   it('should correct an unavailable-tool loop in-session, then recover a repeated fingerprint in one fresh session', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const loopStream = new MockEventStream([
+      sensitiveToolPartUpdated('session-a', 'correction-secret-tool', 'correction-private-token'),
+      textPartUpdated('session-a', 'correction-tail', 'correction retry tail'),
+      reasoningPartUpdated('session-a', 'correction-reasoning', 'correction reasoning tail'),
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
     ], 'session-a');
     const correctionStream = new MockEventStream([
+      sensitiveToolPartUpdated('session-a', 'fresh-secret-tool', 'fresh-private-token'),
+      textPartUpdated('session-a', 'fresh-tail', 'fresh retry tail'),
+      reasoningPartUpdated('session-a', 'fresh-reasoning', 'fresh reasoning tail'),
       unavailableToolErrorEvent('tool-part-3', 'call-3', 'run'),
       unavailableToolErrorEvent('tool-part-4', 'call-4', 'run'),
     ], 'session-a');
@@ -3413,9 +3630,11 @@ describe('OpenCodeClient stream cleanup', () => {
     });
 
     const client = new OpenCodeClient();
+    const onStream = vi.fn();
     const result = await client.call('coder', 'implement it', {
       cwd: '/tmp',
       model: 'opencode/big-pickle',
+      onStream,
     });
 
     expect(result.status).toBe('done');
@@ -3439,6 +3658,12 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(retryText).toContain('implement it');
     expect(abort.mock.invocationCallOrder[0]).toBeLessThan(promptAsync.mock.invocationCallOrder[1]);
     expect(abort.mock.invocationCallOrder[1]).toBeLessThan(promptAsync.mock.invocationCallOrder[2]);
+    expectStreamTextOnce(onStream, 'correction retry tail');
+    expectStreamTextOnce(onStream, 'fresh retry tail');
+    expectStreamThinkingOnce(onStream, 'correction reasoning tail');
+    expectStreamThinkingOnce(onStream, 'fresh reasoning tail');
+    expect(JSON.stringify(onStream.mock.calls)).not.toContain('correction-private-token');
+    expect(JSON.stringify(onStream.mock.calls)).not.toContain('fresh-private-token');
   });
 
   it('should keep a resumed session for correction and discard it only after the fingerprint repeats', async () => {

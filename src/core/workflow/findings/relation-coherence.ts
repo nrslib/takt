@@ -1,5 +1,5 @@
 /**
- * レビュア1回突き返し（v2 梯子設計 §3・実装単位4）。
+ * relation/target/kind の意味矛盾をレビュアへ1回だけ突き返す。
  *
  * reviewer structured output のうち relation/target/kind の意味矛盾がある raw
  * について、同一 reviewer session へ1回だけ明確化を求める。対象は 'new' 衝突
@@ -7,7 +7,7 @@
  * 唯一の検出実装）が返す全 ambiguity のうち、relation / targetFindingId の
  * 付け替えだけで直せる見込みのあるもの。
  *
- * 厳守事項（設計書 §3・§12-4）:
+ * 厳守事項:
  * - correction では raw 集合・本文・severity 等の変更を禁止する
  *   （findRegenerationContractViolation が決定的に検証し、違反は訂正全体を不採用）。
  * - correction 後も ambiguity-origin taint は保持する。訂正結果は manager の
@@ -246,7 +246,7 @@ export async function clarifyAmbiguousRawRelationsOnce(
     });
     return { response: input.response, clarification };
   }
-  // correction 出力の hard budget（設計書 §10: correction 出力 2,048 output tokens 相当）。
+  // correction 出力の hard budget（2,048 output tokens 相当）。
   const outputTokens = estimateTokens(JSON.stringify(renormalized.response.structuredOutput ?? {}));
   if (outputTokens > RAW_FINDING_LIMITS.maxCorrectionOutputTokens) {
     log.warn('Relation clarification output exceeded the correction budget; keeping the original raw findings', {
@@ -287,7 +287,7 @@ function rawContentKey(fields: ReturnType<typeof extractLenientRawFields>): stri
 }
 
 /**
- * regeneration contract（設計書 §12-4）: reviewer は指摘された raw の relation /
+ * regeneration contract: reviewer は指摘された raw の relation /
  * targetFindingId だけを付け替えてよい。決定的に検証する:
  *
  * - rawFindingId の集合が元と完全一致（追加・削除・重複なし）

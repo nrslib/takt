@@ -99,7 +99,7 @@ export interface WorkflowStructuredOutput {
    * formless/劣化経路（providerSupportsStructuredOutput === false の provider や
    * プロンプト埋め込み fallback）の出力検証にはこちらを使う。未指定なら
    * `schema` で検証する。provider へ渡してはならない（strict 様式に違反し、
-   * native 経路では生成前に schema 自体が拒否される — codex 検証で実証）。
+   * native 経路では生成前に schema 自体が拒否される）。
    */
   validationSchema?: Record<string, unknown>;
 }

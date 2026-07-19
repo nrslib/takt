@@ -366,7 +366,7 @@ steps:
       # looping the fixer (raw-finding ladder design v2).
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
         next: plan
-      - condition: any("needs_fix", "needs_fix", "AI-specific issues found", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)
+      - condition: any("needs_fix", "AI-specific issues found") && when(findings.conflicts.count == 0)
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix

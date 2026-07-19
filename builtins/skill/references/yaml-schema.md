@@ -236,7 +236,7 @@ output_contracts:
 
 ## Quality Gates 定義
 
-Step 完了時の品質 gate を定義する。文字列は AI への指示としてプロンプトに含まれる。`type: command` の object gate は step 完了後に worktree 内で機械実行され、exit code `0` の場合のみ成功する。workflow YAML の command gate は config 側の `workflow_command_gates.custom_scripts: true` が必要。失敗時は command metadata / cwd / exit code または timeout・output limit 情報 / output log path / 上限付きでサニタイズされた stdout・stderr が同じ step の差し戻し入力に含まれる。raw stdout / stderr はローカルの output log にも保存される。
+Step 完了時の品質 gate を定義する。文字列は AI への指示としてプロンプトに含まれる。`type: command` の object gate は step 完了後に worktree 内で機械実行され、exit code `0` の場合のみ成功する。workflow YAML の command gate は config 側の `workflow_command_gates.custom_scripts: true` が必要。失敗時は command metadata / cwd / exit code または timeout・output limit 情報 / 非公開 output log path が同じ step の差し戻し入力に含まれる。サニタイズ済み stdout / stderr はローカルの非公開ログだけに保存され、step への差し戻し入力には含まれない。
 
 ```yaml
 quality_gates:

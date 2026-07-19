@@ -5,8 +5,8 @@
  * backward compatibility (existing v1 ledgers parse unchanged); this module is
  * the single place that decomposes it into path/line for callers that need to
  * reason about identity (decision-assembly.ts) or admission (admission-validation.ts)
- * without treating the line number as part of identity (see Finding Contract
- * convergence design: familyTag and line number are demoted from identity to hints).
+ * without treating the line number as part of identity. The Finding Contract
+ * treats familyTag and line number as hints rather than identity fields.
  */
 
 export interface ParsedFindingLocation {
@@ -42,12 +42,12 @@ export interface ParsedFindingLocationRange {
 }
 
 /**
- * Parses a "path:start-end" range location string (the A-2 line-range shape;
+ * Parses a "path:start-end" range location string;
  * see admission-validation.ts). Returns undefined for any other shape,
  * including a bare "path:line" (single line — callers that accept both should
  * fall back to parseFindingLocation and treat startLine === endLine === line).
  * Shared by admission-validation.ts (lenient path-only check) and
- * raw-canonicalization.ts (typed evidence assembly, codex 対策#4) so the two
+ * raw-canonicalization.ts (typed evidence assembly, review-integrity protocol) so the two
  * callers can't drift on what counts as a range.
  */
 export function parseFindingLocationRange(location: string | undefined): ParsedFindingLocationRange | undefined {

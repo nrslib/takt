@@ -1,13 +1,9 @@
 import type { AgentWorkflowStep, FindingContractConfig, WorkflowConfig } from '../../models/types.js';
 import { AmbiguousInterpretationsOutputJsonSchema, FindingManagerDecisionsJsonSchema } from './schemas.js';
 
-// v3: v2（raw finding / disputed finding / conflict 1件ごとの「判断」だけを
-// 返させる形）に、invalidateDecisions（既存 finding の invalidate 候補選択）と
-// duplicateDecisions（重複 finding の統合）を追加。組み立てと不変条件の強制は
-// decision-assembly.ts が行う。
 export const FINDING_MANAGER_SCHEMA_REF = 'takt.findings.manager.v3';
 
-/** ambiguous raw 解釈フェーズ（v2 梯子設計 §4）の structured output。提案のみ。 */
+/** ambiguous raw 解釈フェーズの structured output。提案のみ。 */
 export const FINDING_INTERPRETATION_SCHEMA_REF = 'takt.findings.interpretation.v1';
 
 /**

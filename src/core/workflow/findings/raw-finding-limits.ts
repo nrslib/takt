@@ -1,5 +1,5 @@
 /**
- * Finding Contract のハード上限（v2 梯子設計 §10）。正常時が数件〜十数件、
+ * Finding Contract のハード上限。正常時が数件〜十数件、
  * 暴走時が435件という実測から、正常値の約4倍以上を許容しつつ暴走を早期遮断する。
  *
  * 1項目でも超過した reviewer 出力は部分採用しない: その reviewer の全 raw を
@@ -24,7 +24,7 @@ export const RAW_FINDING_LIMITS = {
   maxDescriptionChars: 8192,
   maxSuggestionChars: 8192,
   /**
-   * typed evidence protocol（codex 対策#4）の verbatimExcerpt 上限。
+   * typed evidence protocol（review-integrity protocol）の verbatimExcerpt 上限。
    * admission-validation.ts の MAX_SOURCE_QUOTE_LINES（200行）と整合する
    * 概算バイト数 — 極端に広い引用（ファイル丸ごとの貼り付け等）を envelope
    * 検査（parse 前）の段階で早期遮断する、行数チェックとは別の防御線。
@@ -66,7 +66,7 @@ export const RAW_LADDER_POLICY_VERSION = 2 as const;
  * トークン概算。provider 非依存の保守的近似（1 token ≒ 4 bytes）。
  *
  * これは計測・ログとバッチ縮小の判断材料であって、ハード上限ではない
- * （codex B4）。出力サイズのハード上限は structured output schema 自体の
+ * （synthetic-step requirement）。出力サイズのハード上限は structured output schema 自体の
  * maxItems / maxLength（AmbiguousInterpretationsOutputJsonSchema）が構造的に
  * 保証する。入力側は送信前にこの概算で遮断する（送らなければ消費されない）。
  * 概算超過の応答を受信後に不採用 → provisional にする既存の検査は、schema を
@@ -104,7 +104,7 @@ export function checkReviewerEnvelope(input: {
 /**
  * step 全体（全 reviewer 合算）の envelope 検査。超過した場合、呼び出し元は
  * 超過を発生させた reviewer 単位で overflow に置き換える（正常 reviewer の raw は
- * 処理を続ける — 攻撃7の要求）。
+ * 処理を続ける）。
  */
 export function checkStepEnvelope(input: {
   totalItemCount: number;

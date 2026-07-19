@@ -159,7 +159,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       ...(includeRawFindingsSchema
         ? {
             rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,
-            // codex 対策#4: このラウンドの reviewer 全員へ同じ snapshot id を
+            // review-integrity protocol: このラウンドの reviewer 全員へ同じ snapshot id を
             // 配る。manager-runner.ts の runFindingManagerForStep が同じ cwd に
             // 対して同じ関数をもう一度呼び、reviewer 呼び出しと検証呼び出しの
             // 間に書き込みが起きない通常経路では同じ値になる（値の一致で

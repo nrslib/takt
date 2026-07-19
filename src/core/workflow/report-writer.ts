@@ -1,6 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { lstatSync, type Stats } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 import { isReservedReportFileName, reservedReportFileNameMessage } from '../models/reserved-report-names.js';
+import {
+  ensurePrivateDirectory,
+  readRegularFileNoFollow,
+  writeNewPrivateFileWithMode,
+  writePrivateFile,
+} from '../../shared/utils/private-file.js';
+
+const PRIVATE_REPORT_MODE = 0o600;
 
 function formatHistoryTimestamp(date: Date): string {
   const year = date.getUTCFullYear();
@@ -18,20 +26,36 @@ function buildVersionedFileName(fileName: string, timestamp: string, sequence: n
 }
 
 function backupExistingReport(reportDir: string, fileName: string, targetPath: string): void {
-  if (!existsSync(targetPath)) {
+  const targetStat = lstatOrUndefined(targetPath);
+  if (targetStat === undefined) {
     return;
   }
+  if (!targetStat.isFile() || targetStat.isSymbolicLink()) {
+    throw new Error(`Report path is not a regular file: ${targetPath}`);
+  }
 
-  const currentContent = readFileSync(targetPath, 'utf-8');
+  const currentContent = readRegularFileNoFollow(targetPath, targetStat);
   const timestamp = formatHistoryTimestamp(new Date());
   let sequence = 0;
   let versionedPath = resolve(reportDir, buildVersionedFileName(fileName, timestamp, sequence));
-  while (existsSync(versionedPath)) {
+  while (lstatOrUndefined(versionedPath) !== undefined) {
     sequence += 1;
     versionedPath = resolve(reportDir, buildVersionedFileName(fileName, timestamp, sequence));
   }
 
-  writeFileSync(versionedPath, currentContent);
+  writeNewPrivateFileWithMode(versionedPath, currentContent, PRIVATE_REPORT_MODE);
+}
+
+function lstatOrUndefined(path: string): Stats | undefined {
+  try {
+    return lstatSync(path) as Stats;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 export function writeReportFile(reportDir: string, fileName: string, content: string): string {
@@ -46,8 +70,8 @@ export function writeReportFile(reportDir: string, fileName: string, content: st
   if (!targetPath.startsWith(basePrefix)) {
     throw new Error(`Report file path escapes report directory: ${fileName}`);
   }
-  mkdirSync(dirname(targetPath), { recursive: true });
+  ensurePrivateDirectory(dirname(targetPath));
   backupExistingReport(baseDir, fileName, targetPath);
-  writeFileSync(targetPath, content);
+  writePrivateFile(targetPath, content);
   return targetPath;
 }

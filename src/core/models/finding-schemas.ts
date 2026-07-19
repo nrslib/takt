@@ -39,13 +39,13 @@ export const FindingContractManagerConfigRawSchema = z.object({
   model: nonEmptyString.optional(),
 }).strict();
 
-/** 有限停止予算（bounded stop budget; codex 裁定・対策バッチ B1 の拡張）。両方省略可 — 省略分は stop-budget.ts の DEFAULT_STOP_BUDGET が補う。 */
+/** 有限停止予算。両方省略可 — 省略分は stop-budget.ts の DEFAULT_STOP_BUDGET が補う。 */
 export const FindingContractStopBudgetRawSchema = z.object({
   max_rounds: z.number().int().positive().optional(),
   max_minutes: z.number().int().positive().optional(),
 }).strict();
 
-/** review-integrity 予算（codex 検証ブロッカー#1）。省略可 — 省略時は review-integrity.ts の DEFAULT_REVIEW_INTEGRITY_BUDGET が補う。 */
+/** review-integrity 予算（review-integrity requirement）。省略可 — 省略時は review-integrity.ts の DEFAULT_REVIEW_INTEGRITY_BUDGET が補う。 */
 export const FindingContractReviewBudgetRawSchema = z.object({
   max_review_rounds: z.number().int().positive().optional(),
 }).strict();
@@ -69,7 +69,7 @@ export const FindingObservationSchema = z.object({
 }).strict();
 
 // ---------------------------------------------------------------------------
-// typed evidence protocol（codex 対策#4: admission control 強化）
+// typed evidence protocol（review-integrity protocol: admission control 強化）
 // ---------------------------------------------------------------------------
 
 export const SourceQuoteEvidenceSchema = z.object({
@@ -109,7 +109,7 @@ export const ReviewerAnomalyEntrySchema = z.object({
   promotedFindingId: nonEmptyString.optional(),
 }).strict();
 
-/** provisional メタデータ（設計書 §7）。ledger v1 の optional field なので後方互換。 */
+/** provisional メタデータ。ledger v1 の optional field なので後方互換。 */
 export const FindingProvisionalMetadataSchema = z.object({
   kind: z.enum(FINDING_PROVISIONAL_KINDS),
   stableKey: nonEmptyString,
@@ -161,7 +161,7 @@ export const FindingLedgerEntrySchema = z.object({
 }).strict();
 
 /**
- * relation → kind の唯一の機械導出（設計書 §2.2）。`kind` は入力上の判断項目に
+ * relation → kind の唯一の機械導出。`kind` は入力上の判断項目に
  * しない: canonical 側では relation と kind を必須にし、必ずこの関数の結果と
  * 一致させる。逆方向（kind → relation の推測）は legacy adapter
  * （deriveRawFindingRelation 経由）だけに許される。
@@ -175,10 +175,8 @@ export function kindForRelation(relation: RawFindingRelation): RawFindingKind {
  * field may be absent (pre-existing data, or a schema predating this field).
  * Backward compatibility rule: relation undefined + kind 'resolution_confirmation'
  * -> 'resolution_confirmation'; relation undefined + kind 'issue'/undefined with
- * targetFindingId set -> 'persists' (this is exactly how pre-relation ledgers
- * recorded a re-report against an existing finding — real v3-r2 ledger data has
- * numerous kind:'issue' raws with targetFindingId set, e.g. "This is a
- * continuation of the issue tracked as F-0002"); relation undefined + kind
+ * targetFindingId set -> 'persists' (this is how pre-relation ledgers recorded
+ * a re-report against an existing finding); relation undefined + kind
  * 'issue'/undefined with no targetFindingId -> 'new'.
  *
  * This is the single authoritative derivation: schema parsing uses it here, and
@@ -253,7 +251,7 @@ const RawFindingFieldsSchema = z.object({
   kind: z.enum(RAW_FINDING_KINDS).optional(),
   relation: z.enum(RAW_FINDING_RELATIONS).optional(),
   targetFindingId: nonEmptyString.optional(),
-  // typed evidence protocol（codex 対策#4）。既存 v1 台帳の raw finding には
+  // typed evidence protocol（review-integrity protocol）。既存 v1 台帳の raw finding には
   // 無いため optional — 欠損は「evidence なし」として扱う（migration 不要）。
   evidence: RawFindingEvidenceSchema.optional(),
 }).strict();
@@ -294,6 +292,7 @@ export const FindingConflictAdjudicationRecordSchema = z.object({
 
 export const FindingConflictAdjudicationAttemptSchema = z.object({
   evidenceHash: nonEmptyString,
+  reservationToken: nonEmptyString,
   startedAt: FindingObservationSchema,
   originStep: nonEmptyString.optional(),
 }).strict();
@@ -312,7 +311,7 @@ export const FindingLedgerConflictSchema = z.object({
   adjudicationAttempts: z.array(FindingConflictAdjudicationAttemptSchema).optional(),
 }).strict();
 
-/** 楽観的前提条件（CAS、設計書 §6）。 */
+/** 楽観的前提条件（CAS）。 */
 export const FindingMutationPreconditionSchema = z.object({
   targetFindingId: nonEmptyString,
   targetRevision: z.number().int().positive(),
@@ -321,7 +320,7 @@ export const FindingMutationPreconditionSchema = z.object({
 }).strict();
 
 /**
- * manager が ambiguous raw に返す「提案」（設計書 §4.1）。台帳操作そのものでは
+ * manager が ambiguous raw に返す「提案」。台帳操作そのものでは
  * ない。decision ごとの必須フィールドは AmbiguousInterpretationSchema の
  * superRefine と raw-capabilities.ts の runtime 検証の両方で強制する。
  */
@@ -367,7 +366,7 @@ export function toAmbiguousInterpretation(parsed: {
   }
 }
 
-/** WAL に保存する検証済み提案（設計書 §9）。判別型を復元できる形で保存する。 */
+/** WAL に保存する検証済み提案。判別型を復元できる形で保存する。 */
 const StoredAmbiguousInterpretationSchema = z.object({
   decision: z.enum(AMBIGUOUS_INTERPRETATION_DECISIONS),
   rawFindingId: nonEmptyString,
@@ -398,7 +397,7 @@ export const FindingInterpretationRecordSchema = z.object({
   applicationResult: z.enum(INTERPRETATION_APPLICATION_RESULTS).optional(),
 }).strict();
 
-/** ラウンド跨ぎの fixpoint 比較スナップショット（対策バッチ B1）。 */
+/** ラウンド跨ぎの fixpoint 比較スナップショット。 */
 export const FindingLedgerFixpointSnapshotSchema = z.object({
   provisionalKeys: z.array(nonEmptyString),
   substantiveEntries: z.array(nonEmptyString),
@@ -410,14 +409,14 @@ export const FindingLedgerFixpointStateSchema = z.object({
   reached: z.boolean(),
 }).strict();
 
-/** 有限停止予算（bounded stop budget; codex 裁定・対策バッチ B1 の拡張）のラウンド跨ぎ累積状態。roundsCompleted は roundMarkers.length から導出する（冪等な適用済み集合）。 */
+/** 有限停止予算のラウンド跨ぎ累積状態。roundsCompleted は roundMarkers.length から導出する（冪等な適用済み集合）。 */
 export const FindingLedgerStopBudgetStateSchema = z.object({
   roundMarkers: z.array(nonEmptyString),
   firstRoundAt: nonEmptyString,
   exhausted: z.boolean(),
 }).strict();
 
-/** review-integrity 予算（codex 検証ブロッカー#1）のラウンド跨ぎ累積状態。stopBudget と同形。 */
+/** review-integrity 予算（review-integrity requirement）のラウンド跨ぎ累積状態。stopBudget と同形。 */
 export const FindingLedgerReviewIntegrityStateSchema = z.object({
   roundMarkers: z.array(nonEmptyString),
   firstRoundAt: nonEmptyString,
@@ -435,12 +434,51 @@ export const FindingLedgerSchema = z.object({
   interpretations: z.array(FindingInterpretationRecordSchema).optional(),
   fixpoint: FindingLedgerFixpointStateSchema.optional(),
   stopBudget: FindingLedgerStopBudgetStateSchema.optional(),
-  // 二系統台帳（codex 対策#4）の review-integrity 側。optional なので既存
+  // 二系統台帳（review-integrity protocol）の review-integrity 側。optional なので既存
   // v1 ledger は migration なしで読める。
   reviewerAnomalies: z.array(ReviewerAnomalyEntrySchema).optional(),
-  // review-integrity 予算（codex 検証ブロッカー#1）。optional。
+  // review-integrity 予算（review-integrity requirement）。optional。
   reviewIntegrity: FindingLedgerReviewIntegrityStateSchema.optional(),
 }).strict();
+
+function migrateLegacyAdjudicationAttempts(value: unknown): unknown {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+  const ledger = value as Record<string, unknown>;
+  if (ledger['version'] !== 1 || !Array.isArray(ledger['conflicts'])) {
+    return value;
+  }
+  return {
+    ...ledger,
+    conflicts: ledger['conflicts'].map((candidate, conflictIndex) => {
+      if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) {
+        return candidate;
+      }
+      const conflict = candidate as Record<string, unknown>;
+      if (!Array.isArray(conflict['adjudicationAttempts'])) {
+        return candidate;
+      }
+      return {
+        ...conflict,
+        adjudicationAttempts: conflict['adjudicationAttempts'].map((attempt, attemptIndex) => {
+          if (
+            attempt === null
+            || typeof attempt !== 'object'
+            || Array.isArray(attempt)
+            || 'reservationToken' in attempt
+          ) {
+            return attempt;
+          }
+          return {
+            ...attempt,
+            reservationToken: `legacy-v1:${conflictIndex}:${attemptIndex}:${String(conflict['id'])}`,
+          };
+        }),
+      };
+    }),
+  };
+}
 
 /**
  * findings-manager の ambiguous 解釈フェーズが返す structured output の JSON
@@ -454,7 +492,7 @@ export const AmbiguousInterpretationsOutputJsonSchema = {
     interpretations: {
       type: 'array',
       description: 'Exactly one interpretation per ambiguous raw finding listed in the prompt. These are PROPOSALS: the engine holds all authority and rejects anything outside your granted capabilities.',
-      // 構造的なハード上限（codex B4）: 出力サイズは schema レベルで有界化する。
+      // 構造的なハード上限（synthetic-step requirement）: 出力サイズは schema レベルで有界化する。
       // batch は最大16件（MANAGER_INTERPRETATION_LIMITS.maxAmbiguousCandidatesPerBatch）、
       // 各フィールドは固定長。chars/4 のトークン概算は計測・ログ用であって
       // ハード上限ではない（native structured output provider は生成自体が
@@ -878,7 +916,7 @@ export function parseFindingConflictAdjudicationOutput(value: unknown): FindingC
   return FindingConflictAdjudicationOutputSchema.parse(value);
 }
 
-// NOTE (codex 検証ブロッカー#2): native structured output は「全 properties が
+// NOTE (review-integrity requirement): native structured output は「全 properties が
 // required」の strict 様式を要求するため、evidenceKind:'locationless' の raw でも
 // location/verbatimExcerpt/snapshotId フィールド自体は存在させねばならず、この
 // schema はそれらに空文字を許す（type:'string' のまま minLength を課さない）。
@@ -902,7 +940,7 @@ export const RawFindingsOutputJsonSchema = {
         required: ['rawFindingId', 'relation', 'targetFindingId', 'familyTag', 'severity', 'title', 'location', 'evidenceKind', 'verbatimExcerpt', 'snapshotId', 'description', 'suggestion'],
         properties: {
           rawFindingId: { type: 'string', minLength: 1 },
-          // v2 梯子設計 §2.2: relation が正本。legacy の `kind` はこの
+          // relation が正本。legacy の `kind` はこの
           // provider-facing schema には存在しない（OpenAI/Codex 系の native
           // structured output は全 properties required の strict 様式を要求する
           // ため optional プロパティを置けない。native 経路は schema が生成を
@@ -952,17 +990,17 @@ export const RawFindingsOutputJsonSchema = {
 } as const;
 
 /**
- * post-hoc 検証専用の寛容版 raw findings schema（codex 検証ブロッカー対応）。
+ * post-hoc 検証専用の寛容版 raw findings schema（review-integrity requirement対応）。
  *
  * RawFindingsOutputJsonSchema（provider-facing、strict 様式）と役割を分離する:
  * - provider へ渡すのは strict 版のみ（native structured output は全 properties
  *   required を要求し、optional の kind を含む schema は生成前に拒否される）。
  * - schema が生成を拘束しない formless/劣化経路（opencode+ollama 等）の出力は
  *   こちらで検証する。弱いモデルは訂正1回でも legacy `kind` 併記をやめない
- *   （v3-r3 resume 実測）ため、kind を optional で受理し、意味の検証
+ *   ため、kind を optional で受理し、意味の検証
  *   （kind/relation 矛盾 → 正規化・claimedKind 監査・ambiguity taint）は intake
  *   の canonicalization に委ねる。
- * - typed evidence protocol（codex 対策#4）の evidenceKind/verbatimExcerpt/
+ * - typed evidence protocol（review-integrity protocol）の evidenceKind/verbatimExcerpt/
  *   snapshotId も同じ理由で required から外す。schema が生成を拘束できない
  *   経路のモデルがこれらを省略しても、structured output 全体を無効にしては
  *   ならない — 欠損は intake の canonicalization が「evidence なし」として
@@ -995,7 +1033,7 @@ export const RawFindingsOutputValidationJsonSchema = {
 } as const;
 
 export function parseFindingLedger(value: unknown): FindingLedger {
-  return FindingLedgerSchema.parse(value);
+  return FindingLedgerSchema.parse(migrateLegacyAdjudicationAttempts(value));
 }
 
 export function parseRawFindings(value: unknown): RawFinding[] {

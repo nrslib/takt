@@ -59,6 +59,7 @@ vi.mock('../shared/utils/providerEventLogger.js', () => ({
     wrapCallback: (callback: unknown) => callback,
     setStep: vi.fn(),
     setProvider: vi.fn(),
+    flush: vi.fn(),
   })),
   isProviderEventsEnabled: vi.fn(() => false),
 }));

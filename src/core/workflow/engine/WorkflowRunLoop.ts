@@ -77,7 +77,7 @@ interface WorkflowRunLoopDeps {
   emit: (event: string, ...args: unknown[]) => void;
   updateMaxSteps: (maxSteps: number) => void;
   /**
-   * COMPLETE 遷移直前のエンジン最終不変条件（v2 梯子設計 §7）: open な
+   * COMPLETE 遷移直前のエンジン最終不変条件: open な
    * provisional finding が1件でもあれば COMPLETE を拒否する。バックストップ
    * 発火は「workflow rules が findings.provisional.count を処理していない」
    * 設定不備なので fail-fast abort（house の「マッチなしは黙ってデフォルトを
@@ -86,7 +86,7 @@ interface WorkflowRunLoopDeps {
    */
   checkCompletionGate: () => { ok: true } | { ok: false; reason: string };
   /**
-   * review-integrity gate 単独（codex 検証2巡目#1）: 未昇格 reviewer anomaly のみを
+   * review-integrity gate 単独（review-integrity requirement）: 未昇格 reviewer anomaly のみを
    * 見る。returnValue 終端（`return: X`）に適用する。`return: need_replan` のような
    * 「未解決 provisional を呼び出し元へハンドバックするシグナル」を provisional gate で
    * 塞がないよう、returnValue 経路では product gate ではなくこの gate を使う。ただし
@@ -94,7 +94,7 @@ interface WorkflowRunLoopDeps {
    */
   checkReviewIntegrityGate: () => { ok: true } | { ok: false; reason: string };
   /**
-   * `next: NEEDS_ADJUDICATION` 到達時（対策バッチ B1、および有限停止予算拡張）に
+   * `next: NEEDS_ADJUDICATION` 到達時に
    * 呼ぶ。現在 open な provisional finding とその発生元を監査レポートへ永続化し
    * （FindingLedgerStore.saveNeedsAdjudicationReport）、人間可読な abort reason
    * 文字列を返す副作用込みの操作 — 純粋な "build" ではないため checkCompletionGate
@@ -349,7 +349,7 @@ function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): W
 
 /**
  * 全ての完了経路（COMPLETE 遷移・returnValue 終端）が必ず通る fail-closed の
- * 一元判定（codex 検証2巡目#1）。渡された gate 結果を評価し、通れば state.status を
+ * 一元判定（review-integrity requirement）。渡された gate 結果を評価し、通れば state.status を
  * 'completed' にして undefined を返す。塞がっていれば完了させず abort を返す。
  * どの完了終端もこの関数だけで status='completed' を確定させることで、gate を
  * 迂回する完了経路（かつて returnValue 終端が gate を呼ばず直接 completed にして
@@ -652,7 +652,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
 
       if (transition.returnValue !== undefined) {
-        // returnValue 終端も review-integrity gate を必ず通す（codex 検証2巡目#1:
+        // returnValue 終端も review-integrity gate を必ず通す（review-integrity requirement:
         // かつてここは gate を呼ばず直接 completed にしており、未昇格 anomaly を
         // 残したまま完了できる迂回路だった）。provisional は returnValue で呼び出し元へ
         // ハンドバックされ得るため product gate ではなく review-integrity gate を使う。
@@ -899,7 +899,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
 
   if (transition.returnValue !== undefined) {
-    // returnValue 終端も review-integrity gate を必ず通す（codex 検証2巡目#1）。
+    // returnValue 終端も review-integrity gate を必ず通す（review-integrity requirement）。
     const gateAbort = finalizeCompletionOrAbort(deps, deps.checkReviewIntegrityGate());
     if (gateAbort) {
       return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort: gateAbort };

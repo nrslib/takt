@@ -1,7 +1,6 @@
 /**
- * provisional fixpoint 判定（対策バッチ B1: raw finding 梯子設計 v2 の収束性
- * 対策）。意味を確定できない raw finding は provisional として台帳に着地し
- * COMPLETE を塞ぐ（v2 梯子設計 §7）が、幻覚など「レビュアーが何度観測しても
+ * provisional fixpoint 判定。意味を確定できない raw finding は provisional
+ * として台帳に着地し COMPLETE を塞ぐが、幻覚など「レビュアーが何度観測しても
  * 解消しない」provisional は plan への差し戻しを無限に繰り返す（安全だが
  * 有限時間で停止しない）。ここでは「直前ラウンドと今ラウンドで台帳の意味的な
  * 状態に変化が無い」ことを機械判定し、workflow がその結果を見て
@@ -14,6 +13,7 @@
  * このモジュールだけで前ラウンドとの比較を継続できる。
  */
 import { computeConflictEvidenceHash, isLedgerConflictUnadjudicated } from './adjudication-evidence.js';
+import { computeReviewScopeSnapshotId } from './snapshot.js';
 import type { FindingLedger, FindingLedgerFixpointSnapshot, FindingLedgerFixpointState } from './types.js';
 
 function sortedUnique(values: Iterable<string>): string[] {
@@ -22,13 +22,13 @@ function sortedUnique(values: Iterable<string>): string[] {
 
 /**
  * ledger の現時点の状態から fixpoint 比較用スナップショットを計算する。
- * 3つの独立した基準（codex 設計の4基準のうち「新しい admissible evidence が
+ * 3つの独立した基準（「新しい admissible evidence が
  * 無い」は、findingId が単調増加で再利用されないため id 込みの
  * substantiveEntries / unadjudicatedConflictEntries の変化として現れる —
  * 新規 finding・resolve・reopen・waive・invalidate は必ずどれかの集合の
  * 要素を変える）。
  */
-export function computeFixpointSnapshot(ledger: FindingLedger): FindingLedgerFixpointSnapshot {
+export function computeFixpointSnapshot(ledger: FindingLedger, cwd: string): FindingLedgerFixpointSnapshot {
   const provisionalKeys = sortedUnique(
     ledger.findings
       .filter((finding) => finding.status === 'open' && finding.provisional !== undefined)
@@ -41,11 +41,16 @@ export function computeFixpointSnapshot(ledger: FindingLedger): FindingLedgerFix
       .map((finding) => `${finding.id}:${finding.status}`),
   );
 
-  const unadjudicatedConflictEntries = sortedUnique(
-    ledger.conflicts
-      .filter((conflict) => conflict.status === 'active' && isLedgerConflictUnadjudicated(conflict, ledger))
-      .map((conflict) => `${conflict.id}:${computeConflictEvidenceHash(conflict, ledger)}`),
-  );
+  const activeConflicts = ledger.conflicts.filter((conflict) => conflict.status === 'active');
+  let unadjudicatedConflictEntries: string[] = [];
+  if (activeConflicts.length > 0) {
+    const reviewScopeSnapshotId = computeReviewScopeSnapshotId(cwd);
+    unadjudicatedConflictEntries = sortedUnique(
+      activeConflicts
+        .filter((conflict) => isLedgerConflictUnadjudicated(conflict, ledger, reviewScopeSnapshotId))
+        .map((conflict) => `${conflict.id}:${computeConflictEvidenceHash(conflict, ledger, reviewScopeSnapshotId)}`),
+    );
+  }
 
   return { provisionalKeys, substantiveEntries, unadjudicatedConflictEntries };
 }
@@ -73,8 +78,8 @@ function snapshotsEqual(a: FindingLedgerFixpointSnapshot, b: FindingLedgerFixpoi
  * 最新永続化状態）を渡すこと — lost-update を避けるため、関数呼び出し開始時に
  * 一度だけ読んだ previousLedger 変数を使ってはいけない。
  */
-export function attachFixpointState(previousLedger: FindingLedger, nextLedger: FindingLedger): FindingLedger {
-  const snapshot = computeFixpointSnapshot(nextLedger);
+export function attachFixpointState(previousLedger: FindingLedger, nextLedger: FindingLedger, cwd: string): FindingLedger {
+  const snapshot = computeFixpointSnapshot(nextLedger, cwd);
   const previousSnapshot = previousLedger.fixpoint?.snapshot;
   const reached = previousSnapshot !== undefined
     && snapshot.provisionalKeys.length > 0

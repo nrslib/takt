@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, realpathSync, type Stats } from 'node:fs';
 import { resolve, sep } from 'node:path';
+import { readRegularFileNoFollow } from '../../../shared/utils/private-file.js';
 import { parseFindingLocation, parseFindingLocationRange } from './location.js';
 import type { SourceQuoteEvidence } from '../../models/finding-types.js';
 
@@ -8,7 +9,7 @@ import type { SourceQuoteEvidence } from '../../models/finding-types.js';
  * Deterministic, cwd-based verification that a "path:line" location string
  * points at a real file within the project and (when a line is present) a line
  * number within that file's range. This is the "raw admission validation" from
- * the Finding Contract convergence design: hallucinated locations (a reviewer
+ * the Finding Contract admission boundary: hallucinated locations (a reviewer
  * cites a file/line that doesn't exist) must never be able to promote a raw
  * finding into a ledger entry, and must never be treated as evidence for an
  * existing finding. It is also reused, unmodified, to re-verify manager-proposed
@@ -22,18 +23,17 @@ import type { SourceQuoteEvidence } from '../../models/finding-types.js';
  * that touches the filesystem, and callers (manager-runner.ts) thread `cwd`
  * into it explicitly rather than letting fs access leak into the pure layers.
  */
-export interface LocationAdmissionResult {
-  ok: boolean;
-  reason?: string;
-}
+export type LocationAdmissionResult =
+  | { ok: true }
+  | { ok: false; outcome: 'invalid' | 'unverifiable'; reason: string };
 
 const NO_LOCATION_RESULT: LocationAdmissionResult = { ok: true };
 
 /**
- * admission 前段の機械正規化（対策バッチ A-2）。実運用のレビュア表現が一律
+ * admission 前段の機械正規化。実運用のレビュア表現が一律
  * 「存在しないパス」化していた実測への対処:
  * - 行範囲 `path:start-end` → path として実在検証する（行は範囲情報として扱い、
- *   行検証はしない — codex 裁定）
+ *   行検証はしない — Finding Contract）
  * - `N/A`（大文字小文字・前後空白許容の厳密一致）と空文字 → locationless
  *   （空文字は従来から admissible なので、N/A → none は新しい権限ではない）
  * - カンマ区切り複数 location → 曖昧なので正規化しない（従来どおり invalid）
@@ -43,7 +43,7 @@ const NOT_APPLICABLE_PATTERN = /^n\/a$/i;
 export type LocationAdmissionNormalization = 'location-line-range-interpreted' | 'location-not-applicable';
 
 /**
- * A-2 の正規化がこの location に適用されるかの分類（監査記録用）。適用事実は
+ * この location に正規化が適用されるかの分類（監査記録用）。適用事実は
  * rawNormalizations（store.ts）に記録される。空文字は従来から locationless で
  * あり正規化イベントではないため undefined を返す。
  */
@@ -72,7 +72,7 @@ function isInsideBase(base: string, path: string): boolean {
  * ファイルの行数。末尾改行は「最後の行の終端」であって空行ではない
  * （"a\nb\n" は2行。split('\n') の 3 要素目は行ではない）。素朴な
  * split('\n').length は 134 行のファイルで ":135" を範囲内と誤判定していた
- * （codex 再現ブロッカー B1）。
+ * （regression requirement）。
  */
 function countLines(content: string): number {
   if (content.length === 0) {
@@ -83,16 +83,26 @@ function countLines(content: string): number {
 }
 
 type RealPathResolution =
-  | { ok: true; realPath: string }
-  | { ok: false; reason: string };
+  | { ok: true; realPath: string; stat: Stats }
+  | { ok: false; outcome: 'invalid' | 'unverifiable'; reason: string; error?: unknown };
+
+function isMissingPathError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+export const MAX_EVIDENCE_SOURCE_FILE_BYTES = 1024 * 1024;
+
+function evidenceFileLimitReason(path: string, size: number): string {
+  return `location path "${path}" is ${size} bytes, exceeding the evidence inspection limit of ${MAX_EVIDENCE_SOURCE_FILE_BYTES} bytes`;
+}
 
 /**
  * project 境界内かつ symlink 脱出していない実体ファイルへ path を解決する。
  * validateLocationAdmission（行範囲チェックなしの寛容版）と
- * verifySourceQuoteEvidence（verbatimExcerpt 機械照合、codex 対策#4）の両方が
- * 使う唯一の実装 — symlink 脱出検出は一度 codex に再現された実バグ
- * （node_modules/... のようなプロジェクト外実体が受理されていた）があるため、
- * 二重実装で片方だけ直った状態を防ぐ。
+ * verifySourceQuoteEvidence（verbatimExcerpt 機械照合、review-integrity protocol）の両方が
+ * 使う唯一の実装。node_modules/... のようなプロジェクト外実体を受理しない規則を
+ * 一元化し、検証経路間の不一致を防ぐ。
  */
 function resolveRealPathWithinProject(cwd: string, path: string): RealPathResolution {
   const resolvedBase = resolve(cwd);
@@ -102,46 +112,65 @@ function resolveRealPathWithinProject(cwd: string, path: string): RealPathResolu
     // A path that escapes the project is treated as inadmissible rather than
     // as a thrown error, matching the rest of this validation (evidence that
     // fails a deterministic check is dropped, not a hard failure of the run).
-    return { ok: false, reason: `location path "${path}" resolves outside the project` };
+    return { ok: false, outcome: 'invalid', reason: `location path "${path}" resolves outside the project` };
   }
 
   // 字句的な resolve() だけでは symlink 経由の脱出を検出できない（statSync が
   // リンクを追跡するため node_modules/... のようなプロジェクト外実体が受理
-  // されていた — codex 再現ブロッカー B1）。実体パス（realpath）同士で包含を
+  // されていた — regression requirement）。実体パス（realpath）同士で包含を
   // 検証する。realpathSync は存在しないパスで throw するので存在確認も兼ねる。
   let realBase: string;
   let realPath: string;
   try {
     realBase = realpathSync(resolvedBase);
-  } catch {
-    return { ok: false, reason: `project root "${cwd}" cannot be resolved` };
+  } catch (error) {
+    return {
+      ok: false,
+      outcome: 'unverifiable',
+      reason: `project root "${cwd}" cannot be resolved: ${error instanceof Error ? error.message : String(error)}`,
+      ...(!isMissingPathError(error) ? { error } : {}),
+    };
   }
   try {
     realPath = realpathSync(resolvedPath);
-  } catch {
-    return { ok: false, reason: `location path "${path}" does not exist` };
+  } catch (error) {
+    return isMissingPathError(error)
+      ? { ok: false, outcome: 'invalid', reason: `location path "${path}" does not exist` }
+      : {
+        ok: false,
+        outcome: 'unverifiable',
+        reason: `location path "${path}" could not be resolved: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+      };
   }
   if (!isInsideBase(realBase, realPath)) {
-    return { ok: false, reason: `location path "${path}" resolves outside the project (via symlink)` };
+    return { ok: false, outcome: 'invalid', reason: `location path "${path}" resolves outside the project (via symlink)` };
   }
 
-  let stat;
+  let stat: Stats;
   try {
-    stat = statSync(realPath);
-  } catch {
-    return { ok: false, reason: `location path "${path}" does not exist` };
+    stat = lstatSync(realPath);
+  } catch (error) {
+    return isMissingPathError(error)
+      ? { ok: false, outcome: 'invalid', reason: `location path "${path}" does not exist` }
+      : {
+        ok: false,
+        outcome: 'unverifiable',
+        reason: `location path "${path}" could not be inspected: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+      };
   }
   if (!stat.isFile()) {
-    return { ok: false, reason: `location path "${path}" is not a file` };
+    return { ok: false, outcome: 'invalid', reason: `location path "${path}" is not a file` };
   }
 
-  return { ok: true, realPath };
+  return { ok: true, realPath, stat };
 }
 
 /**
  * true if this location string asserts no location at all — either genuinely
- * empty/undefined, or the A-2 N/A marker. Shared by manager-runner.ts's
- * evidence admission gate (codex 対策#4) so a claim that legacy-normalizes to
+ * empty/undefined, or the N/A marker. Shared by manager-runner.ts's
+ * evidence admission gate (review-integrity protocol) so a claim that legacy-normalizes to
  * "no location" isn't held to the source_quote verbatim-evidence bar, which
  * only makes sense for claims that assert code exists at a specific site.
  */
@@ -151,14 +180,14 @@ export function isLocationClaimAbsent(location: string | undefined): boolean {
 }
 
 export function validateLocationAdmission(cwd: string, location: string | undefined): LocationAdmissionResult {
-  // A-2 機械正規化: N/A は locationless、行範囲は path + 範囲として解釈する。
+  // N/A は locationless、行範囲は path + 範囲として解釈する。
   const trimmed = location?.trim() ?? '';
   if (trimmed.length > 0 && NOT_APPLICABLE_PATTERN.test(trimmed)) {
     return NO_LOCATION_RESULT;
   }
   const rangeMatch = parseFindingLocationRange(trimmed);
   const parsed = rangeMatch !== undefined
-    // 行範囲の実在検証は path で行う（行番号の範囲チェックはしない — codex 裁定）。
+    // 行範囲の実在検証は path で行う（行番号の範囲チェックはしない — Finding Contract）。
     ? { path: rangeMatch.path, line: undefined as number | undefined }
     : parseFindingLocation(location);
   if (parsed === undefined) {
@@ -169,14 +198,32 @@ export function validateLocationAdmission(cwd: string, location: string | undefi
 
   const resolution = resolveRealPathWithinProject(cwd, parsed.path);
   if (!resolution.ok) {
-    return { ok: false, reason: resolution.reason };
+    return { ok: false, outcome: resolution.outcome, reason: resolution.reason };
   }
 
   if (parsed.line !== undefined) {
-    const lineCount = countLines(readFileSync(resolution.realPath, 'utf-8'));
+    if (resolution.stat.size > MAX_EVIDENCE_SOURCE_FILE_BYTES) {
+      return {
+        ok: false,
+        outcome: 'unverifiable',
+        reason: evidenceFileLimitReason(parsed.path, resolution.stat.size),
+      };
+    }
+    let content: string;
+    try {
+      content = readRegularFileNoFollow(resolution.realPath, resolution.stat).toString('utf-8');
+    } catch (error) {
+      return {
+        ok: false,
+        outcome: 'unverifiable',
+        reason: `location path "${parsed.path}" could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    const lineCount = countLines(content);
     if (parsed.line < 1 || parsed.line > lineCount) {
       return {
         ok: false,
+        outcome: 'invalid',
         reason: `location line ${parsed.line} is out of range for "${parsed.path}" (file has ${lineCount} lines)`,
       };
     }
@@ -186,11 +233,11 @@ export function validateLocationAdmission(cwd: string, location: string | undefi
 }
 
 // ---------------------------------------------------------------------------
-// verbatimExcerpt 機械照合（codex 対策#4: typed evidence protocol）
+// verbatimExcerpt 機械照合（review-integrity protocol: typed evidence protocol）
 // ---------------------------------------------------------------------------
 
 /**
- * 単一の verbatimExcerpt に許す最大行数。「極端に広い引用は不採用」（設計書）の
+ * 単一の verbatimExcerpt に許す最大行数。「極端に広い引用は不採用」とする
  * 機械的な上限 — 引用は「この claim を裏づける最小限の証拠」であるべきで、
  * ファイル丸ごとの貼り付けは証拠として機能しない。
  */
@@ -199,10 +246,11 @@ export const MAX_SOURCE_QUOTE_LINES = 200;
 export type SourceQuoteVerificationOutcome =
   | { outcome: 'match'; fileHash: string }
   | { outcome: 'quote-mismatch'; reason: string }
-  | { outcome: 'stale-snapshot'; reason: string };
+  | { outcome: 'stale-snapshot'; reason: string }
+  | { outcome: 'unverifiable'; reason: string; error?: unknown };
 
 /**
- * verbatimExcerpt の決定的機械照合（codex 対策#4 の中核）。三分類（設計書 §C）:
+ * verbatimExcerpt の決定的機械照合（review-integrity protocol の中核）。三分類:
  *   - match: path が project 内実在ファイルで、startLine/endLine が正順かつ
  *     実在範囲内で、verbatimExcerpt がその行範囲の全文と完全一致し、かつ
  *     snapshotId が検証時点の review scope と一致する。
@@ -250,10 +298,32 @@ export function verifySourceQuoteEvidence(
 
   const resolution = resolveRealPathWithinProject(cwd, evidence.path);
   if (!resolution.ok) {
-    return { outcome: 'quote-mismatch', reason: resolution.reason };
+    return resolution.outcome === 'unverifiable'
+      ? {
+        outcome: 'unverifiable',
+        reason: resolution.reason,
+        ...('error' in resolution ? { error: resolution.error } : {}),
+      }
+      : { outcome: 'quote-mismatch', reason: resolution.reason };
   }
 
-  const content = readFileSync(resolution.realPath, 'utf-8');
+  if (resolution.stat.size > MAX_EVIDENCE_SOURCE_FILE_BYTES) {
+    return {
+      outcome: 'unverifiable',
+      reason: evidenceFileLimitReason(evidence.path, resolution.stat.size),
+    };
+  }
+
+  let content: string;
+  try {
+    content = readRegularFileNoFollow(resolution.realPath, resolution.stat).toString('utf-8');
+  } catch (error) {
+    return {
+      outcome: 'unverifiable',
+      reason: `source quote path "${evidence.path}" could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      ...(!isMissingPathError(error) ? { error } : {}),
+    };
+  }
   const lineCount = countLines(content);
   if (evidence.startLine < 1 || evidence.endLine > lineCount) {
     return {
@@ -263,7 +333,7 @@ export function verifySourceQuoteEvidence(
   }
 
   // 完全一致のみ採用（部分行・空白緩和なし）。行全体を要求するため
-  // 「部分行だけの恣意的引用」は構造的に排除される（設計書）。
+  // 「部分行だけの恣意的引用」は構造的に排除される。
   const actualExcerpt = content.split('\n').slice(evidence.startLine - 1, evidence.endLine).join('\n');
   if (actualExcerpt !== evidence.verbatimExcerpt) {
     return {

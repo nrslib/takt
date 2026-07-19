@@ -16,7 +16,7 @@ export const RESUME_ARTIFACTS_FILE_NAME = 'resume-artifacts.json';
  * 区切りは `/` と `\` の双方を扱う — `/` だけだと Windows 形式の
  * `sub\resume-artifacts.json` が予約名判定を通過し、この共通関数を使う
  * 4境界（Zod / writer / reference / doctor）を同時に迂回できてしまう
- * （codex 指摘）。
+ * （boundary requirement）。
  */
 export function isReservedReportFileName(name: string): boolean {
   const normalized = name.trim().toLowerCase();

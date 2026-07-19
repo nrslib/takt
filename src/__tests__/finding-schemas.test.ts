@@ -8,6 +8,7 @@ import {
 } from '../core/models/finding-types.js';
 import {
   FindingLifecycleSchema,
+  FindingConflictAdjudicationAttemptSchema,
   FindingManagerDecisionsJsonSchema,
   FindingManagerOutputJsonSchema,
   FindingSeveritySchema,
@@ -20,6 +21,22 @@ import {
 } from '../core/models/finding-schemas.js';
 
 describe('finding schemas', () => {
+  it('requires an adjudication reservation token', () => {
+    const attempt = {
+      evidenceHash: 'evidence-hash',
+      reservationToken: 'reservation-token',
+      startedAt: {
+        runId: 'run-1',
+        stepName: 'finding-conflict-adjudication',
+        timestamp: '2026-07-17T00:00:00.000Z',
+      },
+    };
+
+    expect(FindingConflictAdjudicationAttemptSchema.parse(attempt)).toEqual(attempt);
+    const { reservationToken: _reservationToken, ...withoutToken } = attempt;
+    expect(() => FindingConflictAdjudicationAttemptSchema.parse(withoutToken)).toThrow();
+  });
+
   it('keeps strict JSON Schema object properties listed in required', () => {
     // provider-facing schema は strict 様式（全 properties が required、optional
     // プロパティ無し）を維持する。OpenAI/Codex 系 native structured output は
@@ -45,6 +62,8 @@ describe('finding schemas', () => {
     expect(decisionsProperties.rawDecisions.items.required).toEqual(Object.keys(decisionsProperties.rawDecisions.items.properties));
     expect(decisionsProperties.disputeDecisions.items.required).toEqual(Object.keys(decisionsProperties.disputeDecisions.items.properties));
     expect(decisionsProperties.conflictDecisions.items.required).toEqual(Object.keys(decisionsProperties.conflictDecisions.items.properties));
+    expect(decisionsProperties.invalidateDecisions.items.required).toEqual(Object.keys(decisionsProperties.invalidateDecisions.items.properties));
+    expect(decisionsProperties.duplicateDecisions.items.required).toEqual(Object.keys(decisionsProperties.duplicateDecisions.items.properties));
   });
 
   it('post-hoc 検証用の寛容版 schema は legacy kind を optional で追加し、typed evidence protocol の3フィールドも required から外した strict 版の上位集合になっている', () => {

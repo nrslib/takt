@@ -30,7 +30,7 @@ export interface FindingContractManagerConfig {
 
 /**
  * The persona the engine-synthesized finding-conflict-adjudication step runs
- * as (Phase B). Fixed to the "supervisor" facet by design — not user-selectable
+ * as. Fixed to the "supervisor" facet — not user-selectable
  * like finding_contract.manager — but the loader must still resolve the facet
  * to a real file so its body reaches the system prompt (workflowParser
  * resolves it whenever the workflow wires `next: finding-conflict-adjudication`
@@ -44,10 +44,10 @@ export interface FindingContractAdjudicatorConfig {
 }
 
 /**
- * 有限停止予算（bounded stop budget; codex 裁定・対策バッチ B1 の拡張）の
- * per-workflow 設定。B1 の fixpoint 判定だけでは、レビュアーが毎ラウンド
+ * 有限停止予算の
+ * per-workflow 設定。fixpoint 判定だけでは、レビュアーが毎ラウンド
  * 別の架空 provisional を1件でも生成し続けると provisional 集合が毎回変わり
- * fixpoint が永久に成立しない（v3-r4 実測）。ここは「モデル挙動に依存しない」
+ * fixpoint が永久に成立しない。ここは「モデル挙動に依存しない」
  * 停止条件を追加する — 累積ラウンド数（と任意で経過時間）が上限を超えたら、
  * fixpoint 未成立でも NEEDS_ADJUDICATION へ収束させる。
  *
@@ -62,8 +62,8 @@ export interface FindingContractStopBudgetConfig {
 }
 
 /**
- * review-integrity 予算（codex 検証ブロッカー#1）の per-workflow 設定。二系統
- * 台帳（codex 対策#4）で全指摘が reviewer anomaly に隔離された run は product gate
+ * review-integrity 予算（review-integrity requirement）の per-workflow 設定。二系統
+ * 台帳（review-integrity protocol）で全指摘が reviewer anomaly に隔離された run は product gate
  * が空になり「即 COMPLETE」で実質レビューされずに通り得た。これを防ぐため、
  * 未昇格 anomaly が残る限り COMPLETE を許さず再レビューへ送る。その再レビューの
  * 回数上限がこれ — 有限回で正しい引用による promote も anomaly 解消もできなければ
@@ -107,9 +107,9 @@ export interface FindingDisputeRecord {
 }
 
 /**
- * v2 梯子設計（raw finding 意味矛盾）の provisional 種別。provisional は新しい
+ * raw finding の意味矛盾を保持する provisional 種別。provisional は新しい
  * status/severity/lifecycle ではなく、status=open の finding に付く optional
- * メタデータ（設計書 §7）。provisional が1件でも open なら final gate は閉じる
+ * メタデータ。provisional が1件でも open なら final gate は閉じる
  * （エンジン最終不変条件 + findings.provisional.count ルート）。
  */
 export const FINDING_PROVISIONAL_KINDS = [
@@ -124,12 +124,11 @@ export const FINDING_PROVISIONAL_KINDS = [
   'interpretation-interrupted',
   'stale-precondition',
   /**
-   * @deprecated レガシー専用（対策バッチ#4 以前に書かれた既存台帳の読み取り
-   * 互換のためだけに残す）。新規コードはこの kind をもう生成しない —
+   * @deprecated 既存台帳の読み取り互換のためだけに残す。新規コードはこの kind をもう生成しない —
    * location 証拠の不成立（存在しないファイル/範囲外行/verbatimExcerpt
    * 不一致）は、product gate を無条件に塞ぐ provisional ではなく reviewer
    * anomaly（二系統台帳の review-integrity 側。REVIEWER_ANOMALY_KINDS 参照）へ
-   * 隔離する（codex 対策#4: typed evidence protocol + verbatimExcerpt 機械照合）。
+   * 隔離する（review-integrity protocol: typed evidence protocol + verbatimExcerpt 機械照合）。
    * 既存 v1 ledger にこの kind の provisional finding が残っていても
    * migration なしで読める。
    */
@@ -139,7 +138,7 @@ export type FindingProvisionalKind = typeof FINDING_PROVISIONAL_KINDS[number];
 
 export interface FindingProvisionalMetadata {
   kind: FindingProvisionalKind;
-  /** 決定的な再発同定キー（sha256(reviewerStableKey, lineageKey, kind, policyVersion)）。行番号・runId・タイムスタンプ・LLM 説明文は入れない（攻撃5対策）。 */
+  /** 決定的な再発同定キー（sha256(reviewerStableKey, lineageKey, kind, policyVersion)）。行番号・runId・タイムスタンプ・LLM 説明文は入れない。 */
   stableKey: string;
   lineageKey: string;
   sourceRawFindingIds: string[];
@@ -182,14 +181,14 @@ export interface FindingLedgerEntry {
    * optional なので既存 ledger は migration なしで読める。
    */
   revision?: number;
-  /** 意味を確定できなかった観測の gate-blocking メタデータ。設計書 §7。 */
+  /** 意味を確定できなかった観測の gate-blocking メタデータ。 */
   provisional?: FindingProvisionalMetadata;
   /**
-   * 証跡不成立で証拠としては不採用になった再観測の履歴（対策バッチ A-3）。
+   * 証跡不成立で証拠としては不採用になった再観測の履歴。
    * location admission に落ちた persists が「実在する open target」を指す場合、
    * 独立 provisional を作らず（target が既に gate を塞いでいるため）ここへ
    * 監査添付する。canonical evidence / revision / status には一切影響しない
-   * （evidence hash の入力にも含めない — 攻撃4の再開口禁止）。
+   * （evidence hash の入力にも含めないため再開口しない）。
    */
   rejectedObservations?: Array<{
     rawFindingId: string;
@@ -201,7 +200,7 @@ export interface FindingLedgerEntry {
 export type FindingRecord = FindingLedgerEntry;
 
 /**
- * ラウンド跨ぎの意味的スナップショット（対策バッチ B1: provisional fixpoint 判定）。
+ * provisional fixpoint 判定用のラウンド跨ぎの意味的スナップショット。
  * 要素は全てソート済み・重複排除済みの文字列配列で、単純な配列等価比較で
  * ラウンド間の「変化なし」を判定できる（fixpoint.ts 参照）。
  */
@@ -226,7 +225,7 @@ export interface FindingLedgerFixpointState {
 }
 
 /**
- * 有限停止予算（bounded stop budget; codex 裁定・対策バッチ B1 の拡張）の
+ * 有限停止予算の
  * ラウンド跨ぎ累積状態。fixpoint が「変化が無いこと」を判定するのに対し、
  * こちらは「消費した量」を追跡する — provisional 集合が毎ラウンド変化し
  * 続けて fixpoint が決して成立しない場合でも、有限ラウンド（または経過時間）で
@@ -241,7 +240,7 @@ export interface FindingLedgerStopBudgetState {
    * 「台帳に永続した適用済み集合へ冪等に追記する」思想）。集合は追記専用なので
    * 巻き戻りもしない。マーカーは (runId, callNamespace, parentStepName,
    * stepIteration) から作る run 内一意の値であり、進捗（resolved の増加等）では
-   * 変化しない — 予算は単調累積のみ（codex: 進捗を churn の停止条件と誤認させない）。
+   * 変化しないため、予算は単調累積のみとなる。
    *
    * 注意: 実 `takt resume` は run slug（= runId）を採り直し stepIterations を
    * リセットするため、resume 後の reviewers 再走はマーカーが変わり「新しい
@@ -269,7 +268,7 @@ export interface FindingLedgerStopBudgetState {
 }
 
 /**
- * review-integrity 予算（codex 検証ブロッカー#1）のラウンド跨ぎ累積状態。
+ * review-integrity 予算（review-integrity requirement）のラウンド跨ぎ累積状態。
  * 未昇格 reviewer anomaly が残る限り product gate とは別の review-integrity gate が
  * COMPLETE を拒否し再レビューへ送る — その再レビュー回数の消費を stop budget と
  * 同じ round-marker 方式（適用済みマーカー集合。crash/replay 冪等）で追跡する。
@@ -293,12 +292,12 @@ export interface FindingLedger {
   rawFindings: RawFinding[];
   conflicts: FindingLedgerConflict[];
   /**
-   * 解釈 WAL（write-ahead log、設計書 §9）。ambiguous raw への manager 解釈を
+   * 解釈 WAL（write-ahead log）。ambiguous raw への manager 解釈を
    * 冪等化する。optional なので既存 v1 ledger は migration なしで読める。
    */
   interpretations?: FindingInterpretationRecord[];
   /**
-   * 対策バッチ B1（provisional fixpoint → NEEDS_ADJUDICATION）: 直近の
+   * provisional fixpoint → NEEDS_ADJUDICATION の判定に使う直近の
    * findings-manager ラウンド終了時点の比較スナップショットと fixpoint 到達
    * 判定。ledger 自体が run を跨いで永続化されるため、resume や再走行を
    * またいだラウンド比較もここだけで完結する（engine 内メモリの
@@ -307,14 +306,14 @@ export interface FindingLedger {
    */
   fixpoint?: FindingLedgerFixpointState;
   /**
-   * 有限停止予算（bounded stop budget; codex 裁定・対策バッチ B1 の拡張）:
+   * 有限停止予算:
    * 累積ラウンド数と（設定されていれば）経過時間の消費状況。fixpoint と同様に
    * ledger 自体が run/resume を跨いで永続化されるため、resume を跨いだ累積も
    * ここだけで完結する。optional なので既存 v1 ledger は migration なしで読める。
    */
   stopBudget?: FindingLedgerStopBudgetState;
   /**
-   * 二系統台帳(codex 対策#4)の review-integrity 側。product finding
+   * 二系統台帳(review-integrity protocol)の review-integrity 側。product finding
    * (findings 配列)とは別の、監査専用・非 gate-blocking の隔離先。
    * verbatimExcerpt 機械照合が「引用不一致」または「対象版が変化(stale)」と
    * 判定した観測がここへ着地し、product gate(COMPLETE 判定)には一切影響しない。
@@ -322,7 +321,7 @@ export interface FindingLedger {
    */
   reviewerAnomalies?: ReviewerAnomalyEntry[];
   /**
-   * review-integrity 予算（codex 検証ブロッカー#1）の消費状況。未昇格 reviewer
+   * review-integrity 予算（review-integrity requirement）の消費状況。未昇格 reviewer
    * anomaly が残ったまま完了した findings-manager ラウンド数を stop budget と
    * 同じ round-marker 方式で追跡する。fixpoint/stopBudget と同様に ledger 自体が
    * run/resume を跨いで永続化されるため、resume を跨いだ累積もここだけで完結する。
@@ -332,17 +331,17 @@ export interface FindingLedger {
 }
 
 // ---------------------------------------------------------------------------
-// v2 梯子設計: 二層スキーマ（candidate / canonical）・capability・CAS・WAL 型
+// 二層スキーマ（candidate / canonical）・capability・CAS・WAL 型
 // ---------------------------------------------------------------------------
 
 /**
  * canonicalizeReviewerRawFinding が candidate に付ける ambiguity code。
- * 設計書 §3 の列挙に対応する。code の有無が taint（ambiguityOrigin）を決める。
+ * code の有無が taint（ambiguityOrigin）を決める。
  */
 export const RAW_AMBIGUITY_CODES = [
   /** relation と targetFindingId の必須・禁止条件が矛盾する。 */
   'relation-target-mismatch',
-  /** legacy kind と relation が矛盾する（v3-r3 gemma の実測パターン）。 */
+  /** legacy kind と relation が矛盾する。 */
   'kind-relation-conflict',
   /** persists が未知の target を指す。 */
   'persists-target-unknown',
@@ -364,9 +363,8 @@ export const RAW_AMBIGUITY_CODES = [
 export type RawAmbiguityCode = typeof RAW_AMBIGUITY_CODES[number];
 
 /**
- * typed evidence protocol(codex 対策#4)の discriminator。source_quote と
- * locationless の2種で足りる(将来 EngineIssuedEvidence 等が増える想定の
- * discriminated union だが、今回はこの2択で十分という codex 裁定)。
+ * review-integrity evidence の種別。現在の Finding Contract が受理するのは、
+ * 実ファイル引用と locationless 根拠の2種だけである。
  */
 export const RAW_FINDING_EVIDENCE_KINDS = ['source_quote', 'locationless'] as const;
 export type RawFindingEvidenceKind = typeof RAW_FINDING_EVIDENCE_KINDS[number];
@@ -403,7 +401,7 @@ export interface ReviewerRawFindingCandidate {
   readonly legacyKind?: RawFindingKind;
 
   /**
-   * typed evidence protocol(codex 対策#4)。candidate factory
+   * typed evidence protocol(review-integrity protocol)。candidate factory
    * (createReviewerRawFindingCandidates)が provider-facing の flat wire
    * フィールド(evidenceKind/verbatimExcerpt/snapshotId)を location と合わせて
    * 組み立て済みの discriminated union にしてから保持する — location と違い
@@ -445,7 +443,7 @@ interface CanonicalRawFindingBase {
   readonly provenance: CanonicalRawFindingProvenance;
 
   /**
-   * typed evidence protocol(codex 対策#4)。candidate の flat evidenceKind/
+   * typed evidence protocol(review-integrity protocol)。candidate の flat evidenceKind/
    * verbatimExcerpt/snapshotId と location から canonicalizeReviewerRawFinding が
    * 組み立てた discriminated union。欠損は「evidence なし」— location 付き claim
    * なら admission-validation.ts の verifySourceQuoteEvidence が無条件で
@@ -471,7 +469,7 @@ export interface AmbiguousCanonicalRawFinding extends CanonicalRawFindingBase {
   /** provisional/manager prompt に安全に載せられる有界の抜粋（本文全文は載せない）。 */
   readonly safeEvidenceExcerpt: string;
   readonly targetFindingId?: string;
-  /** エンジンが発行する権限格子。LLM の出力からは受け取らない（設計書 §4）。 */
+  /** エンジンが発行する権限格子。LLM の出力からは受け取らない。 */
   readonly capabilities: AmbiguousRawCapabilities;
   /** provisional 化・manager prompt 用に保持する元 raw のフィールド（欠損あり得る）。 */
   readonly familyTag?: string;
@@ -497,7 +495,7 @@ export interface AmbiguousRawCapabilities {
 }
 
 /**
- * ambiguous raw に許される唯一の same 経路（設計書 §4.2）。manager の文章判断
+ * ambiguous raw に許される唯一の same 経路。manager の文章判断
  * ではなく、エンジンが正規化フィールドの完全一致 + target open + revision 一致を
  * 確認して発行する。発行はエンジン（raw-capabilities.ts）だけが行う。
  */
@@ -514,7 +512,7 @@ export interface DeterministicSameProof {
 /**
  * manager が ambiguous raw に対して返せる「提案」。台帳操作そのものではない。
  * 権限はエンジン発行の capability（AmbiguousRawCapabilities / SameProof）だけ
- * から決まる（設計書 §4.1）。
+ * から決まる。
  */
 export const AMBIGUOUS_INTERPRETATION_DECISIONS = [
   'create_independent',
@@ -531,7 +529,7 @@ export type AmbiguousInterpretation =
   | { decision: 'provisional'; rawFindingId: string; reason: string };
 
 /**
- * 楽観的前提条件（CAS、設計書 §6）。confirmation を機械処理または prompt へ
+ * 楽観的前提条件（CAS）。confirmation を機械処理または prompt へ
  * 載せた時点の target のスナップショット。保存時の排他区間で再検証する。
  * ambiguous 起源だけでなく全 confirmation（および reopen/invalidate/supersede）
  * に適用する。
@@ -548,7 +546,7 @@ export interface ConfirmationProposal {
   precondition: FindingMutationPrecondition;
 }
 
-/** 解釈 WAL の段階（設計書 §9）。 */
+/** 解釈 WAL の段階。 */
 export const INTERPRETATION_STAGES = [
   'interpretation_started',
   'interpretation_completed',
@@ -595,7 +593,7 @@ export type RawFindingKind = typeof RAW_FINDING_KINDS[number];
 // kind=issue with no target; 'persists' and 'reopened' are issue-kind raws that
 // explicitly reference an existing finding (previously indistinguishable from a
 // fresh 'new' issue except by mechanical familyTag+location matching, which the
-// convergence design removes as an identity signal). 'resolution_confirmation'
+// identity contract excludes as an identity signal). 'resolution_confirmation'
 // mirrors kind=resolution_confirmation. `kind` is retained for backward
 // compatibility (see deriveRawFindingRelation in finding-schemas.ts) but
 // `relation` is authoritative wherever both are present.
@@ -603,7 +601,7 @@ export const RAW_FINDING_RELATIONS = ['new', 'persists', 'resolution_confirmatio
 export type RawFindingRelation = typeof RAW_FINDING_RELATIONS[number];
 
 // ---------------------------------------------------------------------------
-// typed evidence protocol（codex 対策#4: admission control 強化）
+// typed evidence protocol（review-integrity protocol: admission control 強化）
 // ---------------------------------------------------------------------------
 
 /**
@@ -638,11 +636,8 @@ export interface LocationlessEvidence {
 }
 
 /**
- * raw finding の evidence(証拠)。将来 EngineIssuedEvidence 等が増える想定の
- * discriminated union だが、今回は source_quote と locationless の2種で足りる
- * (codex 裁定)。省略可能 — 省略した raw は evidence なしとして扱われ、
- * location 付き claim なら「引用不成立」(reviewer anomaly)の扱いになる
- * (admission-validation.ts の verifySourceQuoteEvidence 参照)。
+ * 省略した raw は evidence なしとして扱われ、location 付き claim は
+ * admission-validation.ts で reviewer anomaly に分類される。
  */
 export type RawFindingEvidence = SourceQuoteEvidence | LocationlessEvidence;
 
@@ -668,14 +663,14 @@ export interface RawFinding {
   /** Ledger finding id this entry references (required for persists/reopened/resolution_confirmation; forbidden for new). */
   targetFindingId?: string;
   /**
-   * 証拠契約(codex 対策#4)。既存 v1 台帳の raw finding には無いため optional —
+   * 証拠契約(review-integrity protocol)。既存 v1 台帳の raw finding には無いため optional —
    * 欠損は「evidence なし」として扱う(migration 不要)。
    */
   evidence?: RawFindingEvidence;
 }
 
 // ---------------------------------------------------------------------------
-// reviewer anomaly（codex 対策#4: 二系統台帳の review-integrity 側）
+// reviewer anomaly（review-integrity protocol: 二系統台帳の review-integrity 側）
 // ---------------------------------------------------------------------------
 
 export const REVIEWER_ANOMALY_KINDS = [
@@ -697,10 +692,10 @@ export const REVIEWER_ANOMALY_KINDS = [
 export type ReviewerAnomalyKind = typeof REVIEWER_ANOMALY_KINDS[number];
 
 /**
- * 二系統台帳(codex 対策#4)の review-integrity レコード。product finding
+ * 二系統台帳(review-integrity protocol)の review-integrity レコード。product finding
  * (FindingLedgerEntry)とは別の型 — status/lifecycle/revision/waivers を持たず、
  * invalidated/resolved/waived という「決着した」語彙も持たない。安全不変条件
- * (設計書 D):
+ * 安全不変条件:
  *   - invalidated/resolved/waived として扱わない(この型にそもそもその状態がない)
  *   - 既存 finding の状態・revision・evidence hash を変更しない(別配列)
  *   - coder/fix ステップへは送らない(findings.open.items に一切現れない)
@@ -795,7 +790,7 @@ export interface FindingManagerDuplicateDecision {
   evidence: string;
 }
 
-// Phase B (conflict adjudication). 'finding_valid': the reviewer's finding is
+// 'finding_valid': the reviewer's finding is
 // legitimate and still stands; with a non-empty actionableFix the conflict is
 // resolved in the reviewer's favor and the workflow routes to the fix path
 // (finding stays open); with an empty actionableFix it is treated exactly like
@@ -851,15 +846,16 @@ export interface FindingConflictAdjudicationRecord {
  * (startedAt.runId matches), a pending attempt — one whose evidenceHash has no
  * completed adjudication record — is a reusable reservation: a rate-limit
  * fallback re-execution of the step may retry the LLM call without recording
- * a second attempt (codex R2).
+ * a second attempt (retry reservation requirement).
  */
 export interface FindingConflictAdjudicationAttempt {
   evidenceHash: string;
+  reservationToken: string;
   startedAt: FindingObservation;
   /**
    * Name of the step the workflow advanced from into the adjudication step
    * when this attempt started. Durable record of the return-to-origin target
-   * (codex R1): a resume that starts directly at the adjudication step has no
+   * (origin-step requirement): a resume that starts directly at the adjudication step has no
    * WorkflowState.previousStep, and guessing among multiple wiring steps
    * (reviewers vs final-gate) would misroute.
    */
@@ -990,12 +986,12 @@ export interface FindingsRuleContext {
    * open findings のうち provisional メタデータ（意味を確定できなかった観測）を
    * 持つもの。open.count にも含まれる（provisional は status=open のため安全側）。
    * builtin workflow はこの count を見て need_replan へルーティングし、エンジンは
-   * count > 0 での COMPLETE 遷移を最終不変条件として拒否する（設計書 §7）。
+   * count > 0 での COMPLETE 遷移を最終不変条件として拒否する。
    */
   provisional: {
     count: number;
     /**
-     * 対策バッチ B1: 直前の findings-manager ラウンドが、その前のラウンドから
+     * 直前の findings-manager ラウンドが、その前のラウンドから
      * 意味的な変化（provisional 集合・substantive finding の status・未裁定
      * conflict のいずれも）が無い fixpoint に達したかどうか。builtin workflow は
      * これを見て NEEDS_ADJUDICATION（要人手裁定の終端状態）へルーティングする
@@ -1005,7 +1001,7 @@ export interface FindingsRuleContext {
     items: Array<{ id: string; kind: string; reason: string }>;
   };
   /**
-   * 有限停止予算（bounded stop budget; codex 裁定・対策バッチ B1 の拡張）の
+   * 有限停止予算の
    * 消費状況。provisional バケットとは独立: fixpoint が「provisional 集合の
    * 意味的な安定」を見るのに対し、こちらは findings-manager の完了ラウンド数
    * （と任意の経過時間）そのものを見る — provisional が churn し続けて
@@ -1026,7 +1022,7 @@ export interface FindingsRuleContext {
     count: number;
   };
   /**
-   * Audit-only visibility (codex #4: two-track ledger, review-integrity side).
+   * Audit-only visibility for the review-integrity side of the ledger.
    * Counts reviewer-anomaly entries (unverifiable location/evidence claims —
    * quote-mismatch or stale-snapshot) that have not yet been promoted to a
    * product finding. Never part of the blocking set: this bucket lives in a
@@ -1037,7 +1033,7 @@ export interface FindingsRuleContext {
   reviewerAnomalies: {
     count: number;
     /**
-     * review-integrity 予算（codex 検証ブロッカー#1）が尽きたか。未昇格 anomaly が
+     * review-integrity 予算（review-integrity requirement）が尽きたか。未昇格 anomaly が
      * 残る限り product gate とは別に COMPLETE を拒否し再レビューへ送るが、有限回で
      * 補完（正しい引用による promote / anomaly 解消）できなければ true になり、
      * builtin は再レビューではなく NEEDS_ADJUDICATION へルーティングする
