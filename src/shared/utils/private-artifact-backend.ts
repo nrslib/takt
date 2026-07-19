@@ -147,6 +147,12 @@ try {
       request.targetIdentity,
       'Private artifact file identity changed before publication: ' + request.targetName,
     );
+    if (process.platform === 'win32') {
+      // Windows は read-only 属性付きターゲットへの rename 置換が EPERM になる。
+      // 同一性確認済みの記述子で属性を外してから置換する（旧 inode は置換で
+      // 破棄されるため、最終的な属性は temporary 側の作成モードに従う）。
+      fs.fchmodSync(targetDescriptor, 0o600);
+    }
     fs.renameSync(request.temporaryName, request.targetName);
     published = true;
     assertIdentity(

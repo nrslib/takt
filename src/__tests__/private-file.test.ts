@@ -240,6 +240,18 @@ function isSiblingTemporaryFile(path: string, finalPath: string): boolean {
   return path !== finalPath && dirname(path) === dirname(finalPath);
 }
 
+// Windows には POSIX のモード・ディレクトリ記述子・rename 原子性の対応物が
+// ない。これらの保証は POSIX ランナー（linux / macOS の CI ジョブ）で検証し、
+// Windows ジョブではクロスプラットフォームな挙動（backend 経由の読み書き・
+// symlink / swap の拒否・内容の保全）だけを検証する。
+const itPosix = process.platform === 'win32' ? it.skip : it;
+
+function expectPosixMode(actualMode: number, expectedMode: number): void {
+  if (process.platform !== 'win32') {
+    expect(actualMode & 0o777).toBe(expectedMode);
+  }
+}
+
 describe('private file artifacts', () => {
   const roots: string[] = [];
 
@@ -276,7 +288,7 @@ describe('private file artifacts', () => {
     }
   });
 
-  it.each([
+  itPosix.each([
     ['temporary-file fstat', 'fstat'],
     ['temporary-file fchmod', 'fchmod'],
     ['partial temporary-file write', 'partialWrite'],
@@ -298,7 +310,7 @@ describe('private file artifacts', () => {
       expect(() => writePrivateFile(file, 'replacement\n')).toThrow(expectedMessage);
 
       expect(readFileSync(file, 'utf-8')).toBe('original\n');
-      expect(statSync(file).mode & 0o777).toBe(0o400);
+      expectPosixMode(statSync(file).mode, 0o400);
       expect(readdirSync(root)).toEqual(['artifact.log']);
     },
   );
@@ -321,7 +333,7 @@ describe('private file artifacts', () => {
     expect(published).toBe(false);
     expect(publicationGuard).toHaveBeenCalledOnce();
     expect(readFileSync(file, 'utf-8')).toBe('original\n');
-    expect(statSync(file).mode & 0o777).toBe(0o400);
+    expectPosixMode(statSync(file).mode, 0o400);
     expect(readdirSync(root)).toEqual(['artifact.log']);
   });
 
@@ -345,7 +357,7 @@ describe('private file artifacts', () => {
       expect(() => appendPrivateFile(file, 'appended\n')).toThrow(`injected ${operation} failure`);
 
       expect(readFileSync(file, 'utf-8')).toBe('original\n');
-      expect(statSync(file).mode & 0o777).toBe(0o400);
+      expectPosixMode(statSync(file).mode, 0o400);
       if (injectedFileFailure.descriptor !== undefined) {
         expect(() => fstatSync(injectedFileFailure.descriptor!)).toThrow();
       }
@@ -366,7 +378,7 @@ describe('private file artifacts', () => {
       expect(() => writePrivateFile(file, 'replacement\n')).toThrow(`injected ${operation} failure`);
 
       expect(readFileSync(file, 'utf-8')).toBe('original\n');
-      expect(statSync(file).mode & 0o777).toBe(0o400);
+      expectPosixMode(statSync(file).mode, 0o400);
       expect(readdirSync(root)).toEqual(['artifact.log']);
       if (injectedFileFailure.descriptor !== undefined) {
         expect(() => fstatSync(injectedFileFailure.descriptor!)).toThrow();
@@ -424,7 +436,7 @@ describe('private file artifacts', () => {
     expect(readdirSync(root)).toEqual(['artifact.log']);
   });
 
-  it('should never expose an empty or partial artifact to a concurrent reader', async () => {
+  itPosix('should never expose an empty or partial artifact to a concurrent reader', async () => {
     const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-file-atomic-reader-'));
     roots.push(root);
     const file = join(root, 'artifact.log');
@@ -644,7 +656,7 @@ describe('private file artifacts', () => {
     expect(readFileSync(outsideFile, 'utf-8')).toBe('outside\n');
   });
 
-  it('should restore a read-only file mode when the file is swapped before the write descriptor opens', () => {
+  itPosix('should restore a read-only file mode when the file is swapped before the write descriptor opens', () => {
     const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-file-read-only-swap-'));
     roots.push(root);
     const file = join(root, 'artifact.log');
@@ -751,7 +763,7 @@ describe('private file artifacts', () => {
     expect(existsSync(join(outsideRuns, 'run-1'))).toBe(false);
   });
 
-  it('should create and repair private directory and file modes under a permissive umask', () => {
+  itPosix('should create and repair private directory and file modes under a permissive umask', () => {
     const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-file-'));
     roots.push(root);
     const directory = join(root, 'logs');
@@ -804,11 +816,11 @@ describe('private file artifacts', () => {
     const logs = join(taktDir, 'runs', 'run-1', 'logs');
 
     expect(() => ensurePrivateDirectory(logs)).toThrow(/symlink/);
-    expect(statSync(outsideRuns).mode & 0o777).toBe(0o755);
+    expectPosixMode(statSync(outsideRuns).mode, 0o755);
     expect(readdirSync(outsideRuns)).toEqual([]);
   });
 
-  it.each([
+  itPosix.each([
     ['ensure', ensurePrivateDirectory],
     ['repair', repairPrivateDirectory],
   ])('should reject an ancestor swap before %s without changing the outside directory', (_operation, secureDirectory) => {
@@ -850,7 +862,7 @@ describe('private file artifacts', () => {
     symlinkSync(outside, linkedParent, 'dir');
 
     expect(() => access(linkedParent)).toThrow(/symlink/);
-    expect(statSync(outside).mode & 0o777).toBe(0o755);
+    expectPosixMode(statSync(outside).mode, 0o755);
     expect(readFileSync(join(outside, 'artifact.log'), 'utf-8')).toBe('unchanged\n');
     expect(readdirSync(outside).sort()).toEqual(['artifact.log', 'existing']);
   });
@@ -875,7 +887,7 @@ describe('private file artifacts', () => {
     const targetParent = join(linkedParent, 'nested');
 
     expect(() => access(targetParent)).toThrow(/symlink/);
-    expect(statSync(outsideNested).mode & 0o777).toBe(0o755);
+    expectPosixMode(statSync(outsideNested).mode, 0o755);
     expect(readFileSync(join(outsideNested, 'artifact.log'), 'utf-8')).toBe('unchanged\n');
     expect(readdirSync(outsideNested).sort()).toEqual(['artifact.log', 'existing']);
   });

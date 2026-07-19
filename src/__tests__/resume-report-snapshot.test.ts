@@ -237,9 +237,14 @@ describe('inheritResumeReportSnapshot', () => {
     inheritResumeReportSnapshot({ cwd, sourceRunSlug: 'source-run', targetRunSlug: 'target-run' });
 
     const targetReports = buildRunPaths(cwd, 'target-run').reportsAbs;
-    expect(statSync(targetReports).mode & 0o777).toBe(0o700);
-    expect(statSync(join(targetReports, 'private-review.md')).mode & 0o777).toBe(0o400);
-    expect(statSync(join(targetReports, RESUME_ARTIFACTS_FILE_NAME)).mode & 0o777).toBe(0o600);
+    expect(readFileSync(join(targetReports, 'private-review.md'), 'utf-8')).toBe('sensitive review');
+    // Windows は POSIX モードを再現しない（read-only 属性のみ）ため、
+    // モードの検証は POSIX ランナーでだけ行う。
+    if (process.platform !== 'win32') {
+      expect(statSync(targetReports).mode & 0o777).toBe(0o700);
+      expect(statSync(join(targetReports, 'private-review.md')).mode & 0o777).toBe(0o400);
+      expect(statSync(join(targetReports, RESUME_ARTIFACTS_FILE_NAME)).mode & 0o777).toBe(0o600);
+    }
   });
 
   it('fails fast when the target reports directory is already non-empty', () => {
