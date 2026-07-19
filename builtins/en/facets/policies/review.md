@@ -129,7 +129,7 @@ Verifying that the full test suite passes is not the reviewer's responsibility. 
 | Closing an individual finding based solely on full-suite passage | REJECT |
 | A behavioral claim not reproduced or verified by execution | REJECT |
 
-If the fixing step's execution records lack evidence for any of its imposed quality gates, report that fact as a finding. Full-suite evidence is the final gate's responsibility, so do not demand it from the fixing step.
+Even when the fixing step's execution records lack evidence for one of its imposed quality gates, do not file that as an issue — evaluating verification results is the final gate's jurisdiction, and a missing-evidence claim would only sit on the completion gate as a mechanically unverifiable provisional. Record the missing evidence as unverified scope, and treat behavioral claims in that scope as not reproduced by execution. Full-suite evidence is the final gate's responsibility, so do not demand it from the fixing step.
 
 Exception: when suite execution is imposed on your own step as a quality gate (the final-gate role), follow the gate's instructions and run it. This section governs reviewers without such gates not spending time on the full suite; it does not exempt an imposed gate.
 
