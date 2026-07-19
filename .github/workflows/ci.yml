@@ -92,7 +92,9 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm run build
+      # build は不要: 対象テストは vitest が src / prompt-evals/*.mjs を直接読む。
+      # ルートの build スクリプトは mkdir -p / cp を使う Unix 前提で Windows の
+      # cmd では実行できない（このジョブの検証対象でもない）。
       - run: npm test -- src/__tests__/private-file.test.ts src/__tests__/resume-report-snapshot.test.ts src/__tests__/promptEvalProbeLifecycle.test.ts
 
   e2e-mock:
