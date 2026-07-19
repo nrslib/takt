@@ -148,12 +148,14 @@ try {
       'Private artifact file identity changed before publication: ' + request.targetName,
     );
     if (process.platform === 'win32') {
-      // Windows は read-only 属性付きターゲットへの rename 置換が EPERM になる。
-      // 直前に同一性を検証済みのターゲットの属性を外してから置換する。
-      // fchmod は O_RDONLY ハンドルに FILE_WRITE_ATTRIBUTES が無く効かない
-      // ため、path 経由の chmod を使う（旧 inode は置換で破棄されるため、
-      // 最終的な属性は temporary 側の作成モードに従う）。
+      // Windows では (1) read-only 属性と (2) 開いたままのターゲットハンドルが
+      // MoveFileEx の置換 rename を EPERM にする。直前に openFile で同一性を
+      // 検証済みのため、属性を外し、ハンドルを閉じてから置換する。クローズと
+      // rename の間の TOCTOU 窓は Windows のセマンティクス上避けられず、
+      // 置換直後の identity 検証（下の assertIdentity）で検出する。
       fs.chmodSync(request.targetName, 0o600);
+      fs.closeSync(targetDescriptor);
+      targetDescriptor = undefined;
     }
     fs.renameSync(request.temporaryName, request.targetName);
     published = true;
