@@ -34,6 +34,7 @@ This review is a defensive quality and security audit performed, on request, aga
 | A current defect is verified in code or evidence and requires correction | Report it as an issue |
 | Evidence is insufficient, the search scope is incomplete, or the result cannot be verified | Record it as unverified scope, not as an issue |
 | Claiming absence or missing wiring | Report a locationless issue only when the original requirement or existing public contract makes existence or wiring necessary and every required route was searched |
+| Questioning whether quality gates were run or their evidence was reported | Not an issue. Evaluating verification results is the final gate's jurisdiction |
 
 - APPROVE means zero issues and REJECT means one or more issues. Never pad issues with approvals, summaries, or normal confirmations.
 

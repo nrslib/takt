@@ -23,26 +23,31 @@ import { addRoundMarker } from './round-marker.js';
  * 補う既定値。「無制限を許さない」設計要請を満たすため、workflow が
  * stop_budget を一切書かなくても有限ラウンドで停止する。長時間継続する
  * provisional churn を大きく下回る値を既定にする。
+ *
+ * 時間上限（max_minutes）に既定値は置かない。守るべき病理（churn）はラウンド数に
+ * 現れるのであって時間には現れず、時間の既定上限は「ラウンドは少ないが 1 ラウンドが
+ * 重い健全な大型 run」を誤って停止させた実測がある（2026-07-20 の PR #1017 再走:
+ * 11/40 ラウンドで収束中に旧既定 90 分側が発火）。壁時計上限が必要なケース
+ * （夜間ベンチ等）だけが max_minutes を明示設定する。
  */
 export const DEFAULT_STOP_BUDGET = Object.freeze({
   /** findings-manager の完了ラウンド数の上限。 */
   maxRounds: 40,
-  /** 最初のラウンドからの経過時間（分）の上限。 */
-  maxMinutes: 90,
 });
 
 export interface ResolvedStopBudgetLimits {
   maxRounds: number;
-  maxMinutes: number;
+  /** 未設定なら時間上限なし（ラウンド上限のみで停止を保証する）。 */
+  maxMinutes: number | undefined;
 }
 
-/** 設定値（省略可）と既定値を合成し、常に両方が確定した上限を返す。この関数だけが既定値適用の唯一の場所。 */
+/** 設定値（省略可）と既定値を合成する。この関数だけが既定値適用の唯一の場所。 */
 export function resolveStopBudgetLimits(
   configured: FindingContractStopBudgetConfig | undefined,
 ): ResolvedStopBudgetLimits {
   return {
     maxRounds: configured?.maxRounds ?? DEFAULT_STOP_BUDGET.maxRounds,
-    maxMinutes: configured?.maxMinutes ?? DEFAULT_STOP_BUDGET.maxMinutes,
+    maxMinutes: configured?.maxMinutes,
   };
 }
 
@@ -79,7 +84,7 @@ export function attachStopBudgetState(
   const roundMarkers = addRoundMarker(previousLedger.stopBudget?.roundMarkers, roundMarker);
   const firstRoundAt = previousLedger.stopBudget?.firstRoundAt ?? nowIso;
   const exhausted = roundMarkers.length >= limits.maxRounds
-    || elapsedMinutes(firstRoundAt, nowIso) >= limits.maxMinutes;
+    || (limits.maxMinutes !== undefined && elapsedMinutes(firstRoundAt, nowIso) >= limits.maxMinutes);
   const stopBudget: FindingLedgerStopBudgetState = { roundMarkers, firstRoundAt, exhausted };
   return { ...nextLedger, stopBudget };
 }

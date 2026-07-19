@@ -79,10 +79,12 @@ describe('resolveStopBudgetLimits', () => {
     expect(Object.isFrozen(DEFAULT_STOP_BUDGET)).toBe(true);
   });
 
-  it('applies both defaults when finding_contract.stop_budget is entirely omitted (undefined must still stop in finite rounds)', () => {
+  it('applies the rounds default and leaves the time cap off when finding_contract.stop_budget is entirely omitted (undefined must still stop in finite rounds)', () => {
+    // 時間上限に既定値は無い: churn はラウンド数に現れる。時間の既定上限は
+    // 「ラウンドは少ないが 1 ラウンドが重い健全な run」を誤停止させた実測がある。
     expect(resolveStopBudgetLimits(undefined)).toEqual({
       maxRounds: DEFAULT_STOP_BUDGET.maxRounds,
-      maxMinutes: DEFAULT_STOP_BUDGET.maxMinutes,
+      maxMinutes: undefined,
     });
   });
 
@@ -93,10 +95,10 @@ describe('resolveStopBudgetLimits', () => {
     });
   });
 
-  it('applies the maxMinutes default when only maxRounds is configured', () => {
+  it('leaves the time cap off when only maxRounds is configured (max_minutes is opt-in)', () => {
     expect(resolveStopBudgetLimits({ maxRounds: 5 })).toEqual({
       maxRounds: 5,
-      maxMinutes: DEFAULT_STOP_BUDGET.maxMinutes,
+      maxMinutes: undefined,
     });
   });
 
@@ -172,6 +174,14 @@ describe('attachStopBudgetState', () => {
     }
     expect(stopBudgetRoundsCompleted(state)).toBe(1);
     expect(state.stopBudget?.exhausted).toBe(false);
+  });
+
+  it('never exhausts by time when maxMinutes is left unset, no matter how much wall-clock passes', () => {
+    const roundsOnly: ResolvedStopBudgetLimits = { maxRounds: 1000, maxMinutes: undefined };
+    const round1 = attachStopBudgetState(ledger(), ledger(), roundsOnly, marker(1), '2026-07-01T00:00:00.000Z');
+    const daysLater = attachStopBudgetState(round1, round1, roundsOnly, marker(2), '2026-07-08T00:00:00.000Z');
+    expect(daysLater.stopBudget?.exhausted).toBe(false);
+    expect(stopBudgetRoundsCompleted(daysLater)).toBe(2);
   });
 
   it('marks exhausted once elapsed minutes reach maxMinutes even while well under the round cap', () => {

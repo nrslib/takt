@@ -18,6 +18,7 @@
 - 「観測した指摘」の family_tag の値を、構造化された familyTag フィールドへそのまま写してください。分類・検索のヒントに過ぎず、既存 finding と同一かどうかの判断には使われません。
 - すべての finding に evidenceKind が必要です。`location` に実在するコードを引用する場合は "source_quote" にしてください。verbatimExcerpt には、その行の内容を一字一句そのまま — 記憶からの再入力・言い換え・翻訳をせず、読んだファイルからそのままコピーしてください。エンジンは verbatimExcerpt を現在のファイル内容とバイト単位で照合します。一致しない引用は確定した欠陥として扱われません（ブロックする指摘にはならず、レビューのため隔離されます）。source_quote の finding には、次の値をそのまま snapshotId にコピーしてください: {{reviewScopeSnapshotId}}
 - 元要件または既存公開契約から存在・配線が必須と導け、必要な全経路を探索済みである場合だけ、存在しないこと・未配線を evidenceKind "locationless" の issue にしてください。単なる探索不足・アクセス不能・証跡未発見は未確認であり issue ではありません。存在しないコードは引用できないため、その場合は location・verbatimExcerpt・snapshotId を空のままにしてください。
+- 品質ゲートの実行・証跡（build / lint / テスト / E2E を実行したか・結果が報告されているか）への要求を raw issue にしないでください。検証結果の評価は final gate の職掌です。テスト不足の指摘は、テストを欠く変更箇所を location と source_quote で特定できる場合だけ issue にしてください。
 - 次の raw findings スキーマに一致する structured output を返してください:
 {{rawFindingsJsonSchema}}
 - raw issue は、現在存在し修正アクションを要する観測欠陥だけにしてください。要約、承認、正常確認、スコープ説明、未確認だけの事項、肯定文を raw issue にしないでください。`approval` や `review-summary` を familyTag に使わないでください。

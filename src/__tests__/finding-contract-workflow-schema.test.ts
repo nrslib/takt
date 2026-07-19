@@ -124,7 +124,7 @@ describe('workflow finding_contract schema', () => {
     expect(workflow.findingContract?.stopBudget).toEqual({ maxRounds: 5, maxMinutes: 30 });
   });
 
-  it('should normalize finding_contract.stop_budget with only max_rounds provided (max_minutes stays unresolved until stop-budget.ts applies its default)', () => {
+  it('should normalize finding_contract.stop_budget with only max_rounds provided (max_minutes stays unset — the time cap is opt-in)', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'finding-contract-workflow-partial-stop-budget',
       finding_contract: {
