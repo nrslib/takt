@@ -100,6 +100,17 @@ function setPrivateDirectoryMode(directoryPath: string): void {
   if (expectedStat === undefined) {
     throw new Error(`Private artifact path is not a directory: ${directoryPath}`);
   }
+  // Windows はディレクトリ記述子への fchmod を持たず EPERM になる。
+  // private-directory-backend の openDirectory と同じく、記述子を開かずに
+  // lstat の同一性確認だけを行い、POSIX モードは適用しない。
+  if (process.platform === 'win32') {
+    const current = lstatSync(directoryPath) as Stats;
+    if (!current.isDirectory() || !hasMatchingDirectoryIdentity(expectedStat, current)) {
+      throw new Error(`Private artifact directory identity changed while opening: ${directoryPath}`);
+    }
+    assertAncestorIdentities(ancestorIdentities);
+    return;
+  }
   const descriptor = openSync(
     directoryPath,
     constants.O_RDONLY | NO_FOLLOW_FLAG | DIRECTORY_FLAG,
