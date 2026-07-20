@@ -620,6 +620,14 @@ describe('ケース5 の出口: 解釈枯渇後の dismiss 裁定', () => {
     expect(saved.findings.filter((finding) => finding.status === 'open')).toEqual([]);
     // 抑止した観測は dismissed finding へ監査添付される（黙って消えない）。
     expect(dismissed.rejectedObservations?.some((observation) => observation.rawFindingId.startsWith('run-3:'))).toBe(true);
+    // 監査レポートの provisionalLandings は実台帳と整合する — 抑止された spec を
+    // 「着地済み」として報告しない。
+    const lastReport = harness.savedReports.at(-1);
+    expect(lastReport?.provisionalLandings ?? []).not.toContainEqual(
+      expect.objectContaining({
+        sourceRawFindingIds: expect.arrayContaining([expect.stringMatching(/^run-3:/)]),
+      }),
+    );
   }, 30_000);
 });
 

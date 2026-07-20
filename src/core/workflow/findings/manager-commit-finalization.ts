@@ -68,7 +68,7 @@ export function reconcileCommitPlan(input: {
   pendingRejectedObservations: RawAdmissionEvaluation['pendingRejectedObservations'];
   rawProvenanceByRawFindingId: Map<string, { reviewerStableKey: string; lineageKey: string }>;
   cleanWire: RawFinding[];
-}): FindingLedger {
+}): { ledger: FindingLedger; landedSpecs: ProvisionalFindingSpec[] } {
   const settlement = settleProvisionalsWithCleanEvidence({
     output: input.managerOutput,
     cleanRawIds: new Set(input.cleanWire.map((wire) => wire.rawFindingId)),
@@ -103,7 +103,7 @@ export function reconcileCommitPlan(input: {
     }),
   );
   const suppressedSpecs = input.provisionalSpecs.filter((spec) => dismissedStableKeys.has(spec.stableKey));
-  const landingSpecs = suppressedSpecs.length > 0
+  const landedSpecs = suppressedSpecs.length > 0
     ? input.provisionalSpecs.filter((spec) => !dismissedStableKeys.has(spec.stableKey))
     : input.provisionalSpecs;
   const reconciled = reconcileFindingLedger({
@@ -111,7 +111,7 @@ export function reconcileCommitPlan(input: {
     previousLedger: input.freshLedger,
     rawFindings: input.rawFindings,
     managerOutput: settledOutput,
-    provisionalFindings: landingSpecs,
+    provisionalFindings: landedSpecs,
     rawProvenanceByRawFindingId: input.rawProvenanceByRawFindingId,
     excludedFromUnmentionedFallbackRawFindingIds: new Set([
       ...input.pendingRejectedObservations.map((pending) => pending.item.wire.rawFindingId),
@@ -126,42 +126,59 @@ export function reconcileCommitPlan(input: {
     },
   });
   const settled = applyProvisionalSettlement(reconciled, settlement, input.runInput.timestamp);
-  return attachSuppressedObservationsToDismissed(settled, suppressedSpecs, {
-    runId: input.runInput.runId,
-    stepName: input.runInput.parentStep.name,
-    timestamp: input.runInput.timestamp,
-  });
+  const attached = attachSuppressedObservationsToDismissed(
+    settled,
+    suppressedSpecs,
+    new Set(settledOutput.dismissedFindings.map((dismissed) => dismissed.findingId)),
+    {
+      runId: input.runInput.runId,
+      stepName: input.runInput.parentStep.name,
+      timestamp: input.runInput.timestamp,
+    },
+  );
+  return { ledger: attached, landedSpecs };
 }
 
 /**
- * dismiss と同一ラウンドで抑止した同一 claim の観測を、dismissed finding の
- * rejectedObservations へ監査添付する（黙って消さない）。status / revision /
- * canonical evidence には影響しない（rejectedObservations の既存契約と同じ）。
+ * dismiss と同一ラウンドで抑止した同一 claim の観測を、**このラウンドで**
+ * dismissed になった finding の rejectedObservations へ監査添付する（黙って
+ * 消さない）。同一 stableKey の spec が複数あっても raw ID を全量集約し、
+ * 過去ラウンドで dismissed になった同 stableKey の finding には添付しない。
+ * status / revision / canonical evidence には影響しない
+ * （rejectedObservations の既存契約と同じ）。
  */
 function attachSuppressedObservationsToDismissed(
   ledger: FindingLedger,
   suppressedSpecs: readonly ProvisionalFindingSpec[],
+  dismissedThisRoundFindingIds: ReadonlySet<string>,
   observedAt: { runId: string; stepName: string; timestamp: string },
 ): FindingLedger {
   if (suppressedSpecs.length === 0) {
     return ledger;
   }
-  const specsByStableKey = new Map(suppressedSpecs.map((spec) => [spec.stableKey, spec]));
+  const rawIdsByStableKey = new Map<string, Set<string>>();
+  for (const spec of suppressedSpecs) {
+    const rawIds = rawIdsByStableKey.get(spec.stableKey) ?? new Set<string>();
+    for (const rawFindingId of spec.sourceRawFindingIds) {
+      rawIds.add(rawFindingId);
+    }
+    rawIdsByStableKey.set(spec.stableKey, rawIds);
+  }
   return {
     ...ledger,
     findings: ledger.findings.map((finding) => {
-      if (finding.status !== 'dismissed' || finding.provisional === undefined) {
+      if (!dismissedThisRoundFindingIds.has(finding.id) || finding.provisional === undefined) {
         return finding;
       }
-      const spec = specsByStableKey.get(finding.provisional.stableKey);
-      if (spec === undefined) {
+      const rawIds = rawIdsByStableKey.get(finding.provisional.stableKey);
+      if (rawIds === undefined) {
         return finding;
       }
       return {
         ...finding,
         rejectedObservations: [
           ...(finding.rejectedObservations ?? []),
-          ...spec.sourceRawFindingIds.map((rawFindingId) => ({
+          ...[...rawIds].map((rawFindingId) => ({
             rawFindingId,
             reason: 'Same-claim observation arrived in the round its provisional was dismissed; recorded for audit only — the dismissal covers this re-assertion',
             observedAt: { runId: observedAt.runId, stepName: observedAt.stepName, timestamp: observedAt.timestamp },
