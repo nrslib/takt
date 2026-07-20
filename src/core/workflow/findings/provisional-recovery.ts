@@ -1,7 +1,7 @@
 import {
   MANAGER_ACTION_RECOVERY_LIMITS,
-  MANAGER_ADJUDICATION_LIMITS,
   MANAGER_INTERPRETATION_LIMITS,
+  RAW_ADJUDICATION_RECOVERY_LIMITS,
   REVIEWER_ENVELOPE_RECOVERY_LIMITS,
 } from './raw-finding-limits.js';
 import type { FindingLedgerEntry, FindingProvisionalMetadata } from './types.js';
@@ -33,7 +33,8 @@ export type ProvisionalRecoveryClass =
   | 'terminal-adjudication';
 
 export function adjudicationAttemptsExhausted(provisional: FindingProvisionalMetadata): boolean {
-  return (provisional.adjudicationAttempts ?? []).length >= MANAGER_ADJUDICATION_LIMITS.maxReplayAttempts;
+  return (provisional.adjudicationAttempts ?? []).length
+    >= RAW_ADJUDICATION_RECOVERY_LIMITS.maxReplayAttempts;
 }
 
 // process failure は dismiss で消さず、既存 stop-budget/fixpoint/loop-monitor が NEEDS_ADJUDICATION へ運ぶ。

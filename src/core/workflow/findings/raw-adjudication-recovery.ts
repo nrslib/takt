@@ -1,9 +1,7 @@
 import { createHash } from 'node:crypto';
-import { createLogger } from '../../../shared/utils/index.js';
 import type { AgentWorkflowStep } from '../../models/types.js';
 import { captureFindingPreconditions } from './finding-preconditions.js';
 import { assembleCleanManagerDecision } from './manager-clean-decision.js';
-import { buildManagerInstruction, parseManagerDecisions, runManagerAttempt } from './manager-agent.js';
 import type { ReviewerIntakeResult } from './manager-admission.js';
 import { evaluateRawAdmission } from './manager-admission.js';
 import type {
@@ -13,6 +11,7 @@ import type {
 } from './manager-contracts.js';
 import { classifyRawFindingsMechanically } from './mechanical-classification.js';
 import { createEmptyManagerOutput } from './manager-output.js';
+import { runRawAdjudicationBatches } from './raw-adjudication-batch-runner.js';
 import {
   releaseRawAdjudicationReservations,
   reserveRawAdjudicationRecovery,
@@ -23,9 +22,8 @@ import {
   canonicalizeReviewerRawFinding,
   toLedgerRawFinding,
 } from './raw-canonicalization.js';
-import type { FindingLedger, FindingManagerDecisions, FindingObservation, RawFinding } from './types.js';
-
-const log = createLogger('raw-adjudication-recovery');
+import { collectLandedRawIds } from './manager-utils.js';
+import type { FindingLedger, FindingObservation, RawFinding } from './types.js';
 
 function emptyIntake(): ReviewerIntakeResult {
   return {
@@ -67,10 +65,16 @@ function buildReplayIntake(input: {
   runId: string;
   parentStepName: string;
   reservations: readonly RawAdjudicationReservation[];
-}): { intake: ReviewerIntakeResult; origins: Map<string, RawAdjudicationReplayOrigin>; failures: Map<string, string> } {
+}): {
+  intake: ReviewerIntakeResult;
+  origins: Map<string, RawAdjudicationReplayOrigin>;
+  failures: Map<string, string>;
+  reservationByRawId: Map<string, RawAdjudicationReservation>;
+} {
   const intake = emptyIntake();
   const origins = new Map<string, RawAdjudicationReplayOrigin>();
   const failures = new Map<string, string>();
+  const reservationByRawId = new Map<string, RawAdjudicationReservation>();
   for (const reservation of input.reservations) {
     const finding = input.ledger.findings.find((entry) => entry.id === reservation.provisionalFindingId);
     if (finding?.provisional === undefined) {
@@ -97,6 +101,7 @@ function buildReplayIntake(input: {
       expectedProvisionalRevision: reservation.expectedRevision,
       attempt,
     });
+    reservationByRawId.set(replayRawId, reservation);
     if (sourceResult.source === undefined) {
       failures.set(replayRawId, finding.provisional.sourceRawFindingIds.length === 0
         ? 'Raw adjudication recovery has no source raw finding id'
@@ -114,18 +119,7 @@ function buildReplayIntake(input: {
       failures.set(replayRawId, `target finding "${wire.targetFindingId}" no longer exists`);
     }
   }
-  return { intake, origins, failures };
-}
-
-function rawOnlyDecisions(decisions: FindingManagerDecisions): FindingManagerDecisions {
-  return {
-    rawDecisions: decisions.rawDecisions,
-    disputeDecisions: [],
-    conflictDecisions: [],
-    invalidateDecisions: [],
-    duplicateDecisions: [],
-    dismissDecisions: [],
-  };
+  return { intake, origins, failures, reservationByRawId };
 }
 
 function admissionFailureReasons(
@@ -137,6 +131,38 @@ function admissionFailureReasons(
       ? []
       : [[item.wire.rawFindingId, 'replay source evidence did not pass current admission'] as const]
   )));
+}
+
+function retainPreparedRecovery(input: {
+  prepared: ReturnType<typeof buildReplayIntake>;
+  retainedRawIds: ReadonlySet<string>;
+  store: RunFindingManagerForStepInput['ledgerStore'];
+  allReservationTokens: ReadonlySet<string>;
+}): {
+  intake: ReviewerIntakeResult;
+  origins: Map<string, RawAdjudicationReplayOrigin>;
+  reservationTokens: Set<string>;
+} {
+  const origins = new Map(
+    [...input.prepared.origins].filter(([rawFindingId]) => input.retainedRawIds.has(rawFindingId)),
+  );
+  const reservationTokens = new Set([...input.prepared.reservationByRawId]
+    .filter(([rawFindingId]) => input.retainedRawIds.has(rawFindingId))
+    .map(([, reservation]) => reservation.reservationToken));
+  const releasedTokens = new Set(
+    [...input.allReservationTokens].filter((token) => !reservationTokens.has(token)),
+  );
+  releaseRawAdjudicationReservations(input.store, releasedTokens);
+  return {
+    intake: {
+      ...input.prepared.intake,
+      items: input.prepared.intake.items.filter(
+        (item) => input.retainedRawIds.has(item.wire.rawFindingId),
+      ),
+    },
+    origins,
+    reservationTokens,
+  };
 }
 
 export async function runRawAdjudicationRecovery(input: {
@@ -209,52 +235,7 @@ async function runReservedRawAdjudicationRecovery(input: {
       [...prepared.origins.values()].map((origin) => origin.provisionalFindingId),
     ),
   });
-  let initialInvalidAttempts: RawAdjudicationRecoveryResult['invalidAttempts'] = [];
-  let decisions: FindingManagerDecisions | undefined;
-  if (mechanical.residualRawFindings.length > 0) {
-    const rawFindingsPath = input.runInput.ledgerStore.saveRawFindings(
-      input.runInput.runId,
-      `${input.runInput.parentStep.name}-replay`,
-      prepared.intake.items.map((item) => item.wire),
-    );
-    const instruction = buildManagerInstruction({
-      contract: input.runInput.contract,
-      previousLedger: input.previousLedger,
-      ledgerCopyPath: input.ledgerCopyPath,
-      rawFindingsPath,
-      residualRawFindings: mechanical.residualRawFindings,
-      mechanicallyClassifiedCount: adjudicableWire.length - mechanical.residualRawFindings.length,
-      priorStepResponseText: undefined,
-      invalidLocationCandidates: new Map(),
-      dismissCandidates: new Map(),
-    });
-    try {
-      const response = await runManagerAttempt({
-        managerStep: input.managerStep,
-        instruction,
-        optionsBuilder: input.runInput.optionsBuilder,
-        stepExecutor: input.runInput.stepExecutor,
-      });
-      decisions = rawOnlyDecisions(parseManagerDecisions(response));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log.warn('Raw adjudication replay call failed', { error: message });
-      decisions = rawOnlyDecisions({
-        rawDecisions: [],
-        disputeDecisions: [],
-        conflictDecisions: [],
-        invalidateDecisions: [],
-        duplicateDecisions: [],
-        dismissDecisions: [],
-      });
-      initialInvalidAttempts = [{
-        attempt: 1,
-        managerOutput: { error: message },
-        validationErrors: [message],
-      }];
-    }
-  }
-  const clean = assembleCleanManagerDecision({
+  const mechanicalClean = assembleCleanManagerDecision({
     previousLedger: input.previousLedger,
     admission: {
       ...admission,
@@ -264,27 +245,68 @@ async function runReservedRawAdjudicationRecovery(input: {
       ),
     },
     mechanical,
-    decisions,
-    initialInvalidAttempts,
+    decisions: undefined,
+    initialInvalidAttempts: [],
     invalidLocationCandidateFindingIds: new Set(),
     dismissCandidateFindingIds: new Set(),
     priorStepResponseText: undefined,
   });
-  for (const spec of clean.cleanProvisionalSpecs) {
-    for (const rawFindingId of spec.sourceRawFindingIds) {
-      failureReasons.set(rawFindingId, spec.reason);
+  let batchExecution = {
+    output: mechanicalClean.managerOutput,
+    failureReasons: new Map<string, string>(),
+    invalidAttempts: mechanicalClean.invalidAttempts,
+    unsupportedRawFindingReports: mechanicalClean.unsupportedRawFindingReports,
+    sentRawIds: new Set<string>(),
+  };
+  const retainedRawIds = new Set([
+    ...failureReasons.keys(),
+    ...collectLandedRawIds(mechanical.output),
+  ]);
+  if (mechanical.residualRawFindings.length > 0) {
+    const rawFindingsPath = input.runInput.ledgerStore.saveRawFindings(
+      input.runInput.runId,
+      `${input.runInput.parentStep.name}-replay`,
+      prepared.intake.items.map((item) => item.wire),
+    );
+    batchExecution = await runRawAdjudicationBatches({
+      runInput: input.runInput,
+      previousLedger: input.previousLedger,
+      managerStep: input.managerStep,
+      ledgerCopyPath: input.ledgerCopyPath,
+      rawFindingsPath,
+      admission,
+      mechanical,
+      mechanicallyClassifiedCount: adjudicableWire.length - mechanical.residualRawFindings.length,
+    });
+    for (const [rawFindingId, reason] of batchExecution.failureReasons) {
+      failureReasons.set(rawFindingId, reason);
+    }
+    for (const rawFindingId of batchExecution.sentRawIds) {
+      retainedRawIds.add(rawFindingId);
     }
   }
+  const retained = retainPreparedRecovery({
+    prepared,
+    retainedRawIds,
+    store: input.runInput.ledgerStore,
+    allReservationTokens: input.reservationTokens,
+  });
+  const cleanWireById = new Map(
+    [...mechanicalClean.cleanWireById].filter(([rawFindingId]) => retainedRawIds.has(rawFindingId)),
+  );
+  const cleanCanonicalById = new Map(
+    [...mechanicalClean.cleanCanonicalById].filter(([rawFindingId]) => retainedRawIds.has(rawFindingId)),
+  );
   return {
-    intake: prepared.intake,
-    output: clean.managerOutput,
-    origins: prepared.origins,
+    intake: retained.intake,
+    output: batchExecution.output,
+    origins: retained.origins,
     failureReasons,
     capturedPreconditions,
-    invalidAttempts: clean.invalidAttempts,
-    unsupportedRawFindingReports: clean.unsupportedRawFindingReports,
-    cleanWireById: clean.cleanWireById,
-    cleanCanonicalById: clean.cleanCanonicalById,
-    reservationTokens: input.reservationTokens,
+    invalidAttempts: batchExecution.invalidAttempts,
+    unsupportedRawFindingReports: batchExecution.unsupportedRawFindingReports,
+    cleanWireById,
+    cleanCanonicalById,
+    reservationTokens: retained.reservationTokens,
   };
 }

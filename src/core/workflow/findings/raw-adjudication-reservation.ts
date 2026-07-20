@@ -1,4 +1,9 @@
 import { classifyProvisionalRecovery, isOpenProvisional } from './provisional-recovery.js';
+import {
+  compareRawAdjudicationCandidates,
+  type RawAdjudicationCandidate,
+} from './raw-adjudication-priority.js';
+import { RAW_ADJUDICATION_RECOVERY_LIMITS } from './raw-finding-limits.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import type { FindingManagerStore, FindingLedgerMutation } from './store.js';
 
@@ -33,10 +38,16 @@ export async function reserveRawAdjudicationRecovery(
   try {
     return await store.updateLedger((ledger) => {
       const roundsCompleted = stopBudgetRoundsCompleted(ledger);
-      const reservations = ledger.findings.flatMap((finding): RawAdjudicationReservation[] => {
-        if (!isOpenProvisional(finding)
-          || classifyProvisionalRecovery(finding.provisional, roundsCompleted) !== 'raw-adjudication') {
-          return [];
+      const candidates = ledger.findings
+        .filter((finding): finding is RawAdjudicationCandidate => (
+          isOpenProvisional(finding)
+          && classifyProvisionalRecovery(finding.provisional, roundsCompleted) === 'raw-adjudication'
+        ))
+        .sort(compareRawAdjudicationCandidates);
+      const reservations: RawAdjudicationReservation[] = [];
+      for (const finding of candidates) {
+        if (reservations.length >= RAW_ADJUDICATION_RECOVERY_LIMITS.maxReplayTargetsPerStep) {
+          break;
         }
         const expectedRevision = finding.revision ?? 1;
         const attempt = (finding.provisional.adjudicationAttempts ?? []).length + 1;
@@ -46,16 +57,16 @@ export async function reserveRawAdjudicationRecovery(
           attempt,
         });
         if (!store.claimAdjudicationReservation(reservationToken)) {
-          return [];
+          continue;
         }
         claimedTokens.add(reservationToken);
-        return [{
+        reservations.push({
           provisionalFindingId: finding.id,
           expectedRevision,
           attempt,
           reservationToken,
-        }];
-      });
+        });
+      }
       return { ledger, result: reservations };
     });
   } catch (error) {

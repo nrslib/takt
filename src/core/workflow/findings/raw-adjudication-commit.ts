@@ -24,24 +24,10 @@ function filterRawIds(
 function filterReplayOutput(input: {
   output: FindingManagerOutput;
   eligibleRawIds: ReadonlySet<string>;
-  origins: ReadonlyMap<string, RawAdjudicationReplayOrigin>;
-  failures: Map<string, string>;
 }): FindingManagerOutput {
   const newFindings = input.output.newFindings.flatMap((finding) => {
     const rawFindingIds = filterRawIds(finding.rawFindingIds, input.eligibleRawIds);
-    if (rawFindingIds.length === 0) {
-      return [];
-    }
-    const processIds = new Set(rawFindingIds.map((rawFindingId) => (
-      input.origins.get(rawFindingId)!.provisionalFindingId
-    )));
-    if (processIds.size !== 1) {
-      for (const rawFindingId of rawFindingIds) {
-        input.failures.set(rawFindingId, 'replay new decision grouped multiple provisional origins');
-      }
-      return [];
-    }
-    return [{ ...finding, rawFindingIds }];
+    return rawFindingIds.length === 0 ? [] : [{ ...finding, rawFindingIds }];
   });
   const filterLanding = <T extends { rawFindingIds: string[] }>(entries: readonly T[]): T[] => (
     entries.flatMap((entry) => {
@@ -150,8 +136,6 @@ export function applyRawAdjudicationRecovery(input: {
   const filteredOutput = filterReplayOutput({
     output: input.recovery.output,
     eligibleRawIds: adjudicableRawIds,
-    origins,
-    failures,
   });
   const freshWireById = new Map(
     admission.cleanAdmitted.map((item) => [item.wire.rawFindingId, item.wire]),

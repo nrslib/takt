@@ -15,6 +15,7 @@ import { validateFindingManagerOutput } from './manager-output-validation.js';
 
 export interface CleanManagerDecisionResult {
   managerOutput: FindingManagerOutput;
+  wholeOutputDiscarded: boolean;
   invalidAttempts: FindingManagerValidationAttemptReport[];
   cleanProvisionalSpecs: ProvisionalFindingSpec[];
   unsupportedRawFindingReports: UnsupportedRawFindingReport[];
@@ -39,6 +40,7 @@ export function assembleCleanManagerDecision(input: {
   let invalidAttempts = [...input.initialInvalidAttempts];
   let cleanProvisionalSpecs: ProvisionalFindingSpec[] = [];
   let unsupportedRawFindingReports: UnsupportedRawFindingReport[] = [];
+  let wholeOutputDiscarded = false;
 
   const landRawAsProvisional = (rawFindingId: string, reason: string, kind: FindingProvisionalKind): void => {
     const wire = cleanWireById.get(rawFindingId);
@@ -107,6 +109,7 @@ export function assembleCleanManagerDecision(input: {
     priorStepResponseText: input.priorStepResponseText,
   });
   if (!finalValidation.ok) {
+    wholeOutputDiscarded = true;
     invalidAttempts = [...invalidAttempts, {
       attempt: invalidAttempts.length + 1,
       managerOutput,
@@ -145,6 +148,7 @@ export function assembleCleanManagerDecision(input: {
 
   return {
     managerOutput,
+    wholeOutputDiscarded,
     invalidAttempts,
     cleanProvisionalSpecs,
     unsupportedRawFindingReports,

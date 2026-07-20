@@ -1,4 +1,8 @@
 import type { FindingLedger, FindingManagerOutput } from './types.js';
+import {
+  compareRawAdjudicationCandidates,
+  type RawAdjudicationCandidate,
+} from './raw-adjudication-priority.js';
 
 export interface ProvisionalReplayOrigin {
   provisionalFindingId: string;
@@ -35,10 +39,16 @@ export function applyReplayOriginSettlement(input: {
   resolvedByMapping: Map<string, string>;
   settledReplayRawIds: Set<string>;
 } {
+  const eligibleProcessesById = new Map(
+    input.freshLedger.findings
+      .filter((finding): finding is RawAdjudicationCandidate => (
+        finding.status === 'open' && finding.provisional !== undefined
+      ))
+      .map((finding) => [finding.id, finding]),
+  );
   const eligibleOrigins = new Map([...input.origins].filter(([, origin]) => {
-    const process = input.freshLedger.findings.find((finding) => finding.id === origin.provisionalFindingId);
-    return process?.status === 'open'
-      && process.provisional !== undefined
+    const process = eligibleProcessesById.get(origin.provisionalFindingId);
+    return process !== undefined
       && (process.revision ?? 1) === origin.expectedProvisionalRevision;
   }));
   let matches = input.output.matches.map((match) => ({ ...match, rawFindingIds: [...match.rawFindingIds] }));
@@ -50,17 +60,18 @@ export function applyReplayOriginSettlement(input: {
       const origin = eligibleOrigins.get(rawFindingId);
       return origin === undefined ? [] : [[rawFindingId, origin] as const];
     });
-    const processIds = new Set(replayOrigins.map(([, origin]) => origin.provisionalFindingId));
-    if (replayOrigins.length === 0 || processIds.size !== 1) {
+    if (replayOrigins.length === 0) {
       return true;
     }
-    const processId = [...processIds][0]!;
-    matches = mergeMatch(matches, processId, replayOrigins.map(([rawFindingId]) => rawFindingId));
-    promotedFindingIds = new Set([...promotedFindingIds, processId]);
-    settledReplayRawIds = new Set([
-      ...settledReplayRawIds,
-      ...replayOrigins.map(([rawFindingId]) => rawFindingId),
-    ]);
+    const processIds = new Set(replayOrigins.map(([, origin]) => origin.provisionalFindingId));
+    const canonicalProcess = [...processIds]
+      .map((processId) => eligibleProcessesById.get(processId)!)
+      .sort(compareRawAdjudicationCandidates)[0]!;
+    matches = mergeMatch(
+      matches,
+      canonicalProcess.id,
+      replayOrigins.map(([rawFindingId]) => rawFindingId),
+    );
     return false;
   });
   for (const match of matches) {

@@ -186,7 +186,7 @@ export interface FindingDismissalRecord {
  * 正本はこの配列（interpretationEpochs とは別系統: あちらは WAL 由来）。
  */
 export interface FindingAdjudicationAttempt {
-  /** 1 始まりの通し番号。上限は raw-finding-limits.ts の MANAGER_ADJUDICATION_LIMITS。 */
+  /** 1 始まりの通し番号。上限は raw-finding-limits.ts の RAW_ADJUDICATION_RECOVERY_LIMITS。 */
   attempt: number;
   /** この attempt のために採番した replay 専用 raw ID（過去 raw ID は current として再利用しない）。 */
   replayRawFindingId: string;
