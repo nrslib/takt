@@ -16,6 +16,7 @@ import { ArpeggioRunner } from './ArpeggioRunner.js';
 import { LoopMonitorJudgeRunner } from './LoopMonitorJudgeRunner.js';
 import { OptionsBuilder } from './OptionsBuilder.js';
 import { ParallelRunner } from './ParallelRunner.js';
+import { recordAgentUsageEvent } from './agent-usage-event.js';
 import { StepExecutor } from './StepExecutor.js';
 import { SystemStepExecutor } from './SystemStepExecutor.js';
 import { TeamLeaderRunner } from './TeamLeaderRunner.js';
@@ -209,6 +210,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     findingLedgerStore: params.findingLedgerStore,
     refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
+    recordSynthesizedAgentUsage: (stepName, providerInfo, success, usage) =>
+      recordAgentUsageEvent(params.options, stepName, 'normal', providerInfo, success, usage),
     getRunId: () => params.runPaths.slug,
     getFindingCallNamespace: () => params.options.findingCallNamespace ?? '',
     ...phaseRelay,

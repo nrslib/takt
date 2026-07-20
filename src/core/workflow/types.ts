@@ -114,7 +114,8 @@ export interface ProviderStreamContext {
 }
 
 export interface DelegatedAgentUsageContext extends ProviderStreamContext {
-  readonly stepType: 'parallel' | 'team_leader';
+  /** 'normal' は実行ループ外の合成ステップ（findings-manager 等）の直接呼び出し。 */
+  readonly stepType: 'parallel' | 'team_leader' | 'normal';
 }
 
 export interface DelegatedAgentUsageResult {

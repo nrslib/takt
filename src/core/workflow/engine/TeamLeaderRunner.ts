@@ -31,7 +31,7 @@ import { isPlanningBudgetError } from './team-leader-budget-errors.js';
 import { resolveInspectToolsForProvider } from './engine-provider-options.js';
 import { resolveAutoRoutingBatch, resolveAutoRoutingRuntime } from '../auto-routing/resolver.js';
 import { InstructionBuildTransaction } from './instruction-build-transaction.js';
-import { recordDelegatedAgentUsage } from './delegated-agent-usage.js';
+import { recordAgentUsageEvent } from './agent-usage-event.js';
 
 const log = createLogger('team-leader-runner');
 
@@ -560,7 +560,7 @@ export class TeamLeaderRunner {
     success: boolean,
     usage?: AgentResponse['providerUsage'],
   ): void {
-    recordDelegatedAgentUsage(
+    recordAgentUsageEvent(
       this.deps.engineOptions,
       step,
       'team_leader',

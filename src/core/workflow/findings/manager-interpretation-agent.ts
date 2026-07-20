@@ -97,7 +97,7 @@ export async function requestInterpretationBatch(input: {
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
   optionsBuilder: OptionsBuilder;
-  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
+  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput' | 'recordSynthesizedAgentUsage'>;
   previousLedger: FindingLedger;
   ambiguousByRawId: ReadonlyMap<string, CanonicalIntakeItem['canonical']>;
   targetsByRawId: ReadonlyMap<string, LadderTarget>;

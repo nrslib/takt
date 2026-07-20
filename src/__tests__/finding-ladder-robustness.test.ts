@@ -164,6 +164,8 @@ function makeHarness(initialLedger: FindingLedger, stopBudget?: { maxRounds?: nu
   };
   const stepExecutor = {
     buildPhase1Instruction: (instruction: string) => instruction,
+    recordSynthesizedAgentUsage: () => {},
+    recordSynthesizedAgentUsage: () => {},
     normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
   };
   const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
@@ -710,6 +712,8 @@ describe('ケース7: resource exhaustion（435 raw・巨大 description・step 
     };
     const stepExecutor = {
       buildPhase1Instruction: (instruction: string) => instruction,
+      recordSynthesizedAgentUsage: () => {},
+      recordSynthesizedAgentUsage: () => {},
       normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
     };
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
@@ -1720,6 +1724,8 @@ describe('v2 追加必須テスト', () => {
         } as never,
         stepExecutor: {
           buildPhase1Instruction: (instruction: string) => instruction,
+          recordSynthesizedAgentUsage: () => {},
+          recordSynthesizedAgentUsage: () => {},
           normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
         } as never,
         cwd: projectCwd,
@@ -2152,6 +2158,8 @@ describe('v2 追加必須テスト', () => {
         } as never,
         stepExecutor: {
           buildPhase1Instruction: (instruction: string) => instruction,
+          recordSynthesizedAgentUsage: () => {},
+          recordSynthesizedAgentUsage: () => {},
           normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
         } as never,
         cwd: projectCwd,

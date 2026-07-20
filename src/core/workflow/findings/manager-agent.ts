@@ -216,10 +216,22 @@ export async function runManagerAttempt(input: {
   managerStep: AgentWorkflowStep;
   instruction: string;
   optionsBuilder: OptionsBuilder;
-  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
+  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput' | 'recordSynthesizedAgentUsage'>;
 }): Promise<AgentResponse> {
   const phase1Instruction = input.stepExecutor.buildPhase1Instruction(input.instruction, input.managerStep);
   const agentOptions = buildManagerAgentOptions(input.optionsBuilder, input.managerStep);
-  const rawResponse = await executeAgent(input.managerStep.persona, phase1Instruction, agentOptions);
+  let rawResponse: AgentResponse;
+  try {
+    rawResponse = await executeAgent(input.managerStep.persona, phase1Instruction, agentOptions);
+  } catch (error) {
+    // 呼び出し自体が失敗しても集計の死角を作らない — usage 欠損の失敗イベントを残す。
+    input.stepExecutor.recordSynthesizedAgentUsage(input.managerStep, false, undefined);
+    throw error;
+  }
+  input.stepExecutor.recordSynthesizedAgentUsage(
+    input.managerStep,
+    rawResponse.status === 'done',
+    rawResponse.providerUsage,
+  );
   return input.stepExecutor.normalizeStructuredOutput(input.managerStep, rawResponse);
 }

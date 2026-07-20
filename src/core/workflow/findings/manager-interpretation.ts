@@ -37,7 +37,7 @@ export async function runAmbiguousLadder(input: {
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
   optionsBuilder: OptionsBuilder;
-  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
+  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput' | 'recordSynthesizedAgentUsage'>;
   observation: FindingObservation;
   workflowName: string;
   callNamespace: string;
