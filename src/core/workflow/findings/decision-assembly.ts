@@ -26,6 +26,7 @@ import { normalizeFindingText, parseFindingLocation } from './location.js';
 import { FILE_LINE_EVIDENCE_PATTERN, hasDisputeClaimFor } from './manager-output-validation.js';
 import { effectiveRawFindingRelation, mergeFindingManagerOutputs } from './mechanical-classification.js';
 import { collectRegeneratedConflictIds, formatConflictId } from './conflict-identity.js';
+import { collectActiveConflictFindingIds, normalizeManagerPlan } from './manager-plan-normalization.js';
 
 /**
  * findings-manager が最終結果（8配列以上）を自力で組み立てると、台帳の不変条件
@@ -500,8 +501,11 @@ function assembleInvalidateDecisions(input: {
   decisions: FindingManagerDecisions['invalidateDecisions'];
   eligibleFindingIds: ReadonlySet<string>;
   transitionedFindingIds: ReadonlySet<string>;
+  /** このラウンドで match / conflict として再観測された finding。dismiss と同じく再観測の証拠が invalidate より優先する。 */
+  reobservedFindingIds: ReadonlySet<string>;
 }): { invalidatedFindings: FindingManagerInvalidatedFinding[]; rejected: RejectedInvalidateDecision[] } {
   const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
+  const activeConflictFindingIds = collectActiveConflictFindingIds(input.previousLedger);
   const invalidatedFindings: FindingManagerInvalidatedFinding[] = [];
   const rejected: RejectedInvalidateDecision[] = [];
   const seenFindingIds = new Set<string>();
@@ -543,6 +547,20 @@ function assembleInvalidateDecisions(input: {
       });
       continue;
     }
+    if (input.reobservedFindingIds.has(decision.findingId)) {
+      rejected.push({
+        findingId: decision.findingId,
+        reason: `Cannot invalidate finding "${decision.findingId}" because it is re-observed (match/conflict) in this output; evidence takes precedence over location invalidation`,
+      });
+      continue;
+    }
+    if (activeConflictFindingIds.has(decision.findingId)) {
+      rejected.push({
+        findingId: decision.findingId,
+        reason: `Cannot invalidate finding "${decision.findingId}" while an active conflict references it; adjudicate the conflict first`,
+      });
+      continue;
+    }
     invalidatedFindings.push({ findingId: decision.findingId, evidence: decision.evidence });
   }
 
@@ -566,11 +584,7 @@ function assembleDismissDecisions(input: {
   reobservedFindingIds: ReadonlySet<string>;
 }): { dismissedFindings: FindingManagerDismissedFinding[]; rejected: RejectedDismissDecision[] } {
   const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
-  const activeConflictFindingIds = new Set(
-    input.previousLedger.conflicts
-      .filter((conflict) => conflict.status === 'active')
-      .flatMap((conflict) => conflict.findingIds),
-  );
+  const activeConflictFindingIds = collectActiveConflictFindingIds(input.previousLedger);
   const dismissedFindings: FindingManagerDismissedFinding[] = [];
   const rejected: RejectedDismissDecision[] = [];
   const seenFindingIds = new Set<string>();
@@ -934,21 +948,41 @@ function mergeFindingOnlyConflicts(
 function partitionCarriedConflicts(
   carried: readonly FindingManagerConflict[],
   previousFindingsById: ReadonlyMap<string, FindingRecord>,
+  existingConflicts: readonly FindingManagerConflict[],
 ): { accepted: FindingManagerConflict[]; rejected: RejectedCarriedConflict[] } {
   const accepted: FindingManagerConflict[] = [];
   const rejected: RejectedCarriedConflict[] = [];
+  // conflict ID が異なっても finding を共有する conflict の併存は
+  // conflicts|conflicts の排他違反になる（mergeFindingOnlyConflicts は
+  // 同一 ID しか畳まない）。同一 ID の carried は merge 側の重複排除に任せて
+  // 通し、finding を共有するだけの部分重複は項目単位で不採用にする。
+  const existingConflictIds = new Set(existingConflicts.map((conflict) => formatConflictId(conflict)));
+  const claimedFindingIds = new Set(existingConflicts.flatMap((conflict) => conflict.findingIds));
   for (const conflict of carried) {
+    if (existingConflictIds.has(formatConflictId(conflict))) {
+      accepted.push(conflict);
+      continue;
+    }
     const offending = conflict.findingIds
       .map((findingId) => {
         const finding = previousFindingsById.get(findingId);
         if (finding === undefined) {
           return `unknown finding id "${findingId}"`;
         }
-        return finding.status === 'open' ? undefined : `finding "${findingId}" with status "${finding.status}"`;
+        if (finding.status !== 'open') {
+          return `finding "${findingId}" with status "${finding.status}"`;
+        }
+        return claimedFindingIds.has(findingId)
+          ? `finding "${findingId}" already referenced by another conflict in this output`
+          : undefined;
       })
       .filter((issue): issue is string => issue !== undefined);
     if (offending.length === 0) {
       accepted.push(conflict);
+      existingConflictIds.add(formatConflictId(conflict));
+      for (const findingId of conflict.findingIds) {
+        claimedFindingIds.add(findingId);
+      }
       continue;
     }
     rejected.push({
@@ -1019,6 +1053,7 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     decisions: input.decisions.invalidateDecisions,
     eligibleFindingIds: input.invalidLocationCandidateFindingIds ?? new Set(),
     transitionedFindingIds: stateTransitionFindingIds,
+    reobservedFindingIds: unresolvedEvidenceFindingIds,
   });
   // dismiss は invalidate と同じ段で確定する（clean 証拠の settlement =
   // stateTransitionFindingIds を優先して不採用にし、確定分は以降の判断の
@@ -1073,6 +1108,7 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
   const carriedResult = partitionCarriedConflicts(
     input.carriedFindingOnlyConflicts ?? [],
     new Map(input.previousLedger.findings.map((finding) => [finding.id, finding])),
+    [...canonicalRaw.conflicts, ...disputeResult.conflicts],
   );
   const conflicts = mergeFindingOnlyConflicts(canonicalRaw.conflicts, [
     ...disputeResult.conflicts,
@@ -1086,7 +1122,10 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     regeneratedConflictIds,
   });
 
-  return {
+  // 統合と同ラウンド証拠の衝突は engine が正規化する（duplicate への match の
+  // canonical への付け替え / conflict が触れる統合の不採用）。ここで確定した
+  // conflicts（dispute 変換・carried 統合済み）を見るため、組み立ての最後に置く。
+  const normalized = normalizeManagerPlan({
     output: {
       ...canonicalRaw,
       conflicts,
@@ -1097,12 +1136,17 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
       duplicateFindings: duplicateResult.duplicateFindings,
       dismissedFindings: dismissResult.dismissedFindings,
     },
+    activeConflictFindingIds: collectActiveConflictFindingIds(input.previousLedger),
+  });
+
+  return {
+    output: normalized.output,
     rejectedRawDecisions: [...rawResult.rejected, ...rejectedCanonicalWaivers],
     rejectedDisputeDecisions: disputeResult.rejected,
     rejectedConflictDecisions: conflictResult.rejected,
     rejectedCarriedConflicts: carriedResult.rejected,
     rejectedInvalidateDecisions: invalidateResult.rejected,
-    rejectedDuplicateDecisions: duplicateResult.rejected,
+    rejectedDuplicateDecisions: [...duplicateResult.rejected, ...normalized.rejectedDuplicateDecisions],
     rejectedDismissDecisions: dismissResult.rejected,
     unsupportedRawDecisions: rawResult.unsupported,
   };

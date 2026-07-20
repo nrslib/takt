@@ -1671,13 +1671,11 @@ describe('assembleManagerOutput carried conflicts', () => {
     expect(result.output.conflicts[0]?.rawFindingIds).toEqual(['raw-1']);
   });
 
-  // 統合判定は formatConflictId の完全一致（finding 集合の一致）。部分重複で判定
-  // すると carried [F-0001, F-0002] が既存 [F-0001] に黙って吸収され、F-0002 側の
-  // 衝突記録が失われる。実運用の producer（waive 変換・canonicalize・raw 'conflict'
-  // 判断）は単一 finding の conflict しか作らないため、複数 finding の carried が
-  // 実際に来た場合は最終検証（同じ finding を指す conflict 2件の拒否）が防衛線に
-  // なる。ここでは統合判定の意味論だけを固定する。
-  it('Given a carried conflict whose finding set differs from the existing conflict When assembled Then it stays a separate entry', () => {
+  // 統合判定は formatConflictId の完全一致（finding 集合の一致）。部分重複の
+  // carried を素通しすると、同じ finding を指す conflict 2件の排他違反で最終検証
+  // が出力全体を破棄する（= そのラウンドの確定判断まで失う）。部分重複は項目
+  // 単位で不採用にし、出力の残りは有効なまま保つ。
+  it('Given a carried conflict that partially overlaps an existing conflict When assembled Then only that carried entry is rejected', () => {
     const ledger = makeLedger({
       findings: [makeFinding({ id: 'F-0001' }), makeFinding({ id: 'F-0002', location: 'src/b.ts:1' })],
     });
@@ -1693,11 +1691,15 @@ describe('assembleManagerOutput carried conflicts', () => {
       ],
     });
 
-    expect(result.rejectedCarriedConflicts).toEqual([]);
-    expect(result.output.conflicts).toHaveLength(2);
+    expect(result.rejectedCarriedConflicts).toHaveLength(1);
+    expect(result.rejectedCarriedConflicts[0]?.findingIds).toEqual(['F-0001', 'F-0002']);
     expect(result.output.conflicts.map((conflict) => conflict.findingIds)).toEqual([
       ['F-0001'],
-      ['F-0001', 'F-0002'],
     ]);
+    expect(validateFindingManagerOutput({
+      previousLedger: ledger,
+      rawFindings: [raw],
+      managerOutput: result.output,
+    }).ok).toBe(true);
   });
 });

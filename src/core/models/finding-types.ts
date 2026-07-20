@@ -127,6 +127,13 @@ export const FINDING_PROVISIONAL_KINDS = [
   'interpretation-interrupted',
   'stale-precondition',
   /**
+   * manager 出力全体が最終不変条件検証で破棄されたラウンドの残余 raw。
+   * 主張が曖昧だったわけではない（raw-meaning-ambiguous とは別物）ため
+   * interpretation ladder の対象にならず、dismiss 候補にもならない —
+   * 処理失敗の証跡なので settlement は clean な後続 raw のみ。
+   */
+  'manager-output-discarded',
+  /**
    * @deprecated 既存台帳の読み取り互換のためだけに残す。新規コードはこの kind をもう生成しない —
    * location 証拠の不成立（存在しないファイル/範囲外行/verbatimExcerpt
    * 不一致）は、product gate を無条件に塞ぐ provisional ではなく reviewer

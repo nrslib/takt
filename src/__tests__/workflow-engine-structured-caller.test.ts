@@ -2383,10 +2383,11 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
   });
 
-  it('最終防衛線に落ちる manager 出力（closed finding への conflict を reopen なしで参照）は出力ごと破棄され、raw は provisional として着地して run が継続する', async () => {
+  it('最終防衛線に落ちる manager 出力（closed finding への conflict を reopen なしで参照）は mechanical 出力へ縮退し、raw は provisional として着地して run が継続する', async () => {
     // v2: 旧実装の invalid_manager_output（run-level 失敗 + 迂回ルール自動選択）は
-    // 廃止。台帳不変条件に反する出力は捨てられ、raw は gate-blocking provisional と
-    // して着地する。workflow rules は findings.provisional.count でルーティングできる。
+    // 廃止。台帳不変条件に反する出力は LLM 判断だけを失って機械分類の確定分へ
+    // 縮退し、残余 raw は gate-blocking provisional として着地する。workflow rules は
+    // findings.provisional.count でルーティングできる。
     const { abortReasons, initialLedger, ledgerPath, ledgerUpdated, result } = await runInvalidManagerRetryFailureWithRules([
       {
         condition: 'when(findings.provisional.count > 0)',
@@ -2404,13 +2405,14 @@ describe('WorkflowEngine structured caller defaults', () => {
       findings: Array<{ id: string; status: string; provisional?: { kind: string } }>;
       conflicts: unknown[];
     };
-    // F-0001 は resolved のまま（conflict も立たない — 出力ごと破棄）。
+    // F-0001 は resolved のまま（conflict も立たない — LLM 判断は破棄）。
     expect(ledger.findings.find((f) => f.id === 'F-0001')?.status).toBe('resolved');
     expect(ledger.conflicts).toEqual([]);
-    // raw-recurrence は provisional として台帳に残る（黙って消えない）。
+    // raw-recurrence は provisional として台帳に残る（黙って消えない）。曖昧だった
+    // わけではないので解釈ラダー対象外の manager-output-discarded で着地する。
     const provisional = ledger.findings.find((f) => f.provisional !== undefined);
     expect(provisional?.status).toBe('open');
-    expect(provisional?.provisional?.kind).toBe('raw-meaning-ambiguous');
+    expect(provisional?.provisional?.kind).toBe('manager-output-discarded');
     void initialLedger;
     expect(ledgerUpdated).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);

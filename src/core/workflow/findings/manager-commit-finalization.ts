@@ -24,6 +24,7 @@ import {
   applyRejectedObservationAttachments,
   settleProvisionalsWithCleanEvidence,
 } from './manager-provisional-settlement.js';
+import { collectActiveConflictFindingIds, normalizeManagerPlan } from './manager-plan-normalization.js';
 
 interface RejectedObservationPlan {
   attachments: Array<{ targetFindingId: string; rawFindingId: string; reason: string }>;
@@ -68,9 +69,16 @@ export function reconcileCommitPlan(input: {
   pendingRejectedObservations: RawAdmissionEvaluation['pendingRejectedObservations'];
   rawProvenanceByRawFindingId: Map<string, { reviewerStableKey: string; lineageKey: string }>;
   cleanWire: RawFinding[];
-}): { ledger: FindingLedger; landedSpecs: ProvisionalFindingSpec[] } {
-  const settlement = settleProvisionalsWithCleanEvidence({
+}): { ledger: FindingLedger; landedSpecs: ProvisionalFindingSpec[]; normalizationRejections: string[] } {
+  // interpretation ladder のマージが superseded 対象への match / conflict を
+  // 追加し得るため、初回 assembly と同じ正規化を保存直前にもう一度通す
+  // （純関数・冪等 — assembly 済み出力には通常 no-op）。
+  const normalized = normalizeManagerPlan({
     output: input.managerOutput,
+    activeConflictFindingIds: collectActiveConflictFindingIds(input.freshLedger),
+  });
+  const settlement = settleProvisionalsWithCleanEvidence({
+    output: normalized.output,
     cleanRawIds: new Set(input.cleanWire.map((wire) => wire.rawFindingId)),
     wireById: new Map(input.rawFindings.map((wire) => [wire.rawFindingId, wire])),
     freshLedger: input.freshLedger,
@@ -136,7 +144,13 @@ export function reconcileCommitPlan(input: {
       timestamp: input.runInput.timestamp,
     },
   );
-  return { ledger: attached, landedSpecs };
+  return {
+    ledger: attached,
+    landedSpecs,
+    normalizationRejections: normalized.rejectedDuplicateDecisions.map((rejection) => (
+      `duplicateDecisions: canonical "${rejection.canonicalFindingId}" (duplicates: ${rejection.duplicateFindingIds.join(', ')}) rejected at save time: ${rejection.reason}`
+    )),
+  };
 }
 
 /**

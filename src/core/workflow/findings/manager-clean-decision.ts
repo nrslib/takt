@@ -3,13 +3,13 @@ import type { FindingLedger, FindingManagerDecisions, FindingManagerOutput } fro
 import type { ProvisionalFindingSpec } from './reconciler.js';
 import type { RawAdmissionEvaluation } from './manager-admission.js';
 import type { classifyRawFindingsMechanically } from './mechanical-classification.js';
+import type { FindingProvisionalKind } from './types.js';
 import { assembleManagerOutput } from './decision-assembly.js';
-import { provisionalSpecForRaw } from './manager-provisional.js';
+import { provisionalSpecForRawKind } from './manager-provisional.js';
 import {
   collectLandedRawIds,
   describeManagerRejections,
 } from './manager-utils.js';
-import { createEmptyManagerOutput } from './manager-output.js';
 import { validateFindingManagerOutput } from './manager-output-validation.js';
 
 export interface CleanManagerDecisionResult {
@@ -39,7 +39,7 @@ export function assembleCleanManagerDecision(input: {
   let cleanProvisionalSpecs: ProvisionalFindingSpec[] = [];
   let unsupportedRawFindingReports: UnsupportedRawFindingReport[] = [];
 
-  const landRawAsProvisional = (rawFindingId: string, reason: string): void => {
+  const landRawAsProvisional = (rawFindingId: string, reason: string, kind: FindingProvisionalKind): void => {
     const wire = cleanWireById.get(rawFindingId);
     const canonical = cleanCanonicalById.get(rawFindingId);
     if (wire === undefined || canonical === undefined || wire.kind === 'resolution_confirmation') {
@@ -47,7 +47,7 @@ export function assembleCleanManagerDecision(input: {
     }
     cleanProvisionalSpecs = [
       ...cleanProvisionalSpecs,
-      provisionalSpecForRaw({ wire, canonical, reason }),
+      provisionalSpecForRawKind({ wire, canonical, reason }, kind),
     ];
   };
 
@@ -72,6 +72,7 @@ export function assembleCleanManagerDecision(input: {
         landRawAsProvisional(
           rejected.rawFindingId,
           `Manager decision (${rejected.decision}) was rejected: ${rejected.reason}`,
+          'raw-meaning-ambiguous',
         );
       }
     }
@@ -80,6 +81,7 @@ export function assembleCleanManagerDecision(input: {
       landRawAsProvisional(
         unsupported.rawFindingId,
         `Manager decided "unsupported" against finding "${unsupported.targetFindingId}": ${unsupported.evidence}`,
+        'raw-meaning-ambiguous',
       );
     }
     const rejectionDescriptions = describeManagerRejections(assembly);
@@ -105,13 +107,35 @@ export function assembleCleanManagerDecision(input: {
       managerOutput,
       validationErrors: finalValidation.errors,
     }];
+    // empty へ落とすと機械分類の確定分（決定的 same / resolution confirmation）
+    // まで消える。pristine な機械分類出力へ縮退し、失うのは LLM 判断だけに
+    // 留める。LLM 由来の provisional spec / unsupported 報告は採用済み判断と
+    // して残さない（invalid attempt の監査記録には残る）。
+    const mechanicalValidation = validateFindingManagerOutput({
+      previousLedger: input.previousLedger,
+      rawFindings: input.admission.cleanWire,
+      managerOutput: input.mechanical.output,
+      priorStepResponseText: input.priorStepResponseText,
+    });
+    if (!mechanicalValidation.ok) {
+      throw new Error(
+        `Mechanical classification output violated ledger invariants; this is an engine bug: ${mechanicalValidation.errors.join('; ')}`,
+      );
+    }
+    managerOutput = input.mechanical.output;
+    cleanProvisionalSpecs = [];
+    unsupportedRawFindingReports = [];
+    const mechanicallyLandedRawIds = collectLandedRawIds(input.mechanical.output);
     for (const wire of input.admission.cleanWire) {
+      if (mechanicallyLandedRawIds.has(wire.rawFindingId)) {
+        continue;
+      }
       landRawAsProvisional(
         wire.rawFindingId,
         'Manager output violated ledger invariants and was discarded; raw finding kept provisional',
+        'manager-output-discarded',
       );
     }
-    managerOutput = createEmptyManagerOutput();
   }
 
   return {

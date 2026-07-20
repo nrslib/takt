@@ -163,7 +163,7 @@ export function buildFindingManagerCommitMutation(
   return {
     ledger: finalized.ledger,
     result: {
-      staleRejections,
+      staleRejections: [...staleRejections, ...reconcilePlan.normalizationRejections],
       admissionRejections: admission.admissionRejections,
       provisionalLandings,
       reviewerAnomalyLandings: finalized.reviewerAnomalyLandings,

@@ -322,6 +322,20 @@ function registerAmbiguousCanonical(value: UnbrandedAmbiguous): AmbiguousCanonic
   return branded;
 }
 
+function deduplicateReviewerId(emittedIds: Set<string>, claimedId: string): string {
+  if (!emittedIds.has(claimedId)) {
+    emittedIds.add(claimedId);
+    return claimedId;
+  }
+  let suffix = 2;
+  while (emittedIds.has(`${claimedId}-dup${suffix}`)) {
+    suffix += 1;
+  }
+  const uniqueId = `${claimedId}-dup${suffix}`;
+  emittedIds.add(uniqueId);
+  return uniqueId;
+}
+
 /**
  * reviewer structured output の rawFindings 配列（未検証 unknown）を candidate に
  * 落とす。個々の項目がどれほど壊れていても throw しない — 欠損は candidate 上で
@@ -337,11 +351,19 @@ export function createReviewerRawFindingCandidates(
     parentStepName: context.parentStepName,
     reviewerPersonaKey: context.reviewerPersonaKey,
   });
+  // reviewer schema は rawFindingId の一意性を強制しない。同一 reviewer が同じ
+  // ID を複数返すと namespaced ID も衝突し、機械分類の出力が rawFindingIds
+  // 重複の最終検証違反になる（= mechanical フォールバックまで壊す）。intake で
+  // 決定的にサフィックスを振り、下流の一意性を保証する。
+  const emittedReviewerIds = new Set<string>();
   return items.map((item, index) => {
     const record = typeof item === 'object' && item !== null && !Array.isArray(item)
       ? item as Record<string, unknown>
       : {};
-    const reviewerRawFindingId = pickString(record.rawFindingId);
+    const claimedId = pickString(record.rawFindingId);
+    const reviewerRawFindingId = claimedId !== undefined
+      ? deduplicateReviewerId(emittedReviewerIds, claimedId)
+      : undefined;
     const intakeId = namespacedRawFindingId(context, reviewerRawFindingId ?? `item-${index + 1}`);
     // 構造化出力の strict 様式では該当なしの欄が空文字で埋まるため、空文字は
     // 未指定として扱う（pickString が弾く）。
