@@ -1,6 +1,5 @@
 import { validateLocationAdmission } from './admission-validation.js';
 import { createEmptyManagerOutput } from './manager-output.js';
-import { isDismissCandidate } from './manager-utils.js';
 import { applyProvisionalSettlement } from './manager-provisional-settlement.js';
 import { classifyProvisionalRecovery, isOpenProvisional } from './provisional-recovery.js';
 import { reconcileManagerActionRecovery } from './reconciler.js';
@@ -61,10 +60,11 @@ function planWaive(
   if (target?.status === 'waived') {
     return { apply: false, settled: true, reason: `finding "${recovery.findingId}" is already waived` };
   }
-  const applies = target?.status === 'open' && target.severity !== 'critical';
-  return applies
-    ? { apply: true, settled: false, reason: 'the finding is currently eligible for waiver' }
-    : { apply: false, settled: false, reason: `finding "${recovery.findingId}" is not currently eligible for waiver` };
+  return {
+    apply: false,
+    settled: false,
+    reason: `finding "${recovery.findingId}" requires a fresh waiver adjudication`,
+  };
 }
 
 function planDuplicate(
@@ -82,26 +82,28 @@ function planDuplicate(
   if (settled) {
     return { apply: false, settled: true, reason: 'the duplicate set is already superseded by the canonical finding' };
   }
-  const applies = canonical?.status === 'open'
-    && duplicates.every((finding) => finding?.status === 'open');
-  return applies
-    ? { apply: true, settled: false, reason: 'the canonical and duplicate findings are all open' }
-    : { apply: false, settled: false, reason: 'the duplicate set is not currently in the required open state' };
+  return {
+    apply: false,
+    settled: false,
+    reason: canonical === undefined
+      ? `canonical finding "${recovery.canonicalFindingId}" no longer exists`
+      : 'the duplicate set requires a fresh adjudication',
+  };
 }
 
 function planDismiss(
   ledger: FindingLedger,
-  roundsCompleted: number,
   recovery: Extract<FindingActionRecovery, { action: 'dismiss' }>,
 ): { apply: boolean; settled: boolean; reason: string } {
   const target = ledger.findings.find((finding) => finding.id === recovery.findingId);
   if (target?.status === 'dismissed') {
     return { apply: false, settled: true, reason: `finding "${recovery.findingId}" is already dismissed` };
   }
-  const applies = target !== undefined && isDismissCandidate(target, roundsCompleted);
-  return applies
-    ? { apply: true, settled: false, reason: 'the provisional is currently eligible for dismissal' }
-    : { apply: false, settled: false, reason: `finding "${recovery.findingId}" is not currently eligible for dismissal` };
+  return {
+    apply: false,
+    settled: false,
+    reason: `finding "${recovery.findingId}" requires a fresh dismissal adjudication`,
+  };
 }
 
 function addActionToOutput(
@@ -124,7 +126,6 @@ function buildActionRecoveryPlan(input: {
   ledger: FindingLedger;
   candidates: readonly ManagerActionRecoveryCandidate[];
   cwd: string;
-  roundsCompleted: number;
 }): ActionRecoveryPlan {
   return input.candidates.reduce<ActionRecoveryPlan>((plan, candidate) => {
     const process = input.ledger.findings.find((finding) => finding.id === candidate.provisionalFindingId);
@@ -141,7 +142,7 @@ function buildActionRecoveryPlan(input: {
         ? planWaive(input.ledger, recovery)
         : recovery.action === 'duplicate'
           ? planDuplicate(input.ledger, recovery)
-          : planDismiss(input.ledger, input.roundsCompleted, recovery);
+          : planDismiss(input.ledger, recovery);
     if (decision.settled) {
       return {
         ...plan,
@@ -204,7 +205,6 @@ export function applyManagerActionRecovery(input: {
   ledger: FindingLedger;
   candidates: readonly ManagerActionRecoveryCandidate[];
   cwd: string;
-  roundsCompleted: number;
   context: FindingReconcileContext;
   observation: FindingObservation;
 }): FindingLedger {

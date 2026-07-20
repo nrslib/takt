@@ -130,7 +130,7 @@ export const FINDING_PROVISIONAL_KINDS = [
    * manager 出力全体が最終不変条件検証で破棄されたラウンドの残余 raw。
    * 主張が曖昧だったわけではない（raw-meaning-ambiguous とは別物）ため
    * interpretation ladder の対象にならない。出口は engine 主導の再裁定
-   * （RawAdjudicationRecovery）と、その枯渇後の管轄裁定。
+   * （RawAdjudicationRecovery）と、その枯渇後の NEEDS_ADJUDICATION 停止。
    */
   'manager-output-discarded',
   /**
@@ -664,6 +664,8 @@ export interface FindingInterpretationRecord {
 
   stage: InterpretationStage;
   startedAt: FindingObservation;
+  /** interpretation_completed と finding mutation の間で同じ decision を二重適用させないため、ledger_applied まで所有権を保持する token。 */
+  reservationToken?: string;
 
   promptPreconditions: FindingMutationPrecondition[];
 

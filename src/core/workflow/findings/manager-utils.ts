@@ -2,7 +2,12 @@ import { validateLocationAdmission } from './admission-validation.js';
 import { classifyProvisionalRecovery, isOpenProvisional } from './provisional-recovery.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import type { AssembleManagerOutputResult } from './decision-assembly.js';
-import type { FindingLedger, FindingLedgerEntry, FindingManagerOutput } from './types.js';
+import {
+  DISMISSABLE_PROVISIONAL_KINDS,
+  type FindingLedger,
+  type FindingLedgerEntry,
+  type FindingManagerOutput,
+} from './types.js';
 
 /**
  * この open provisional が manager の dismiss 裁定対象か。
@@ -13,6 +18,9 @@ import type { FindingLedger, FindingLedgerEntry, FindingManagerOutput } from './
  */
 export function isDismissCandidate(finding: FindingLedgerEntry, roundsCompleted: number): boolean {
   if (!isOpenProvisional(finding)) {
+    return false;
+  }
+  if (!(DISMISSABLE_PROVISIONAL_KINDS as readonly string[]).includes(finding.provisional.kind)) {
     return false;
   }
   return classifyProvisionalRecovery(finding.provisional, roundsCompleted) === 'terminal-adjudication';

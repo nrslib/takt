@@ -90,6 +90,7 @@ function makeHarness(initialLedger: FindingLedger): Harness {
   const savedLedgers: FindingLedger[] = [];
   const savedRawFindings: RawFinding[][] = [];
   const savedValidationReports: FindingManagerValidationReport[] = [];
+  const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
     workflowName: 'peer-review',
     loadLedger: () => ledger,
@@ -100,6 +101,12 @@ function makeHarness(initialLedger: FindingLedger): Harness {
       savedLedgers.push(ledger);
       return Promise.resolve(mutation);
     },
+    claimAdjudicationReservation: (token) => {
+      if (reservations.has(token)) return false;
+      reservations.add(token);
+      return true;
+    },
+    releaseAdjudicationReservation: (token) => { reservations.delete(token); },
     createRunCopy: () => '/tmp/ledger-copy.json',
     saveRawFindings: (_runId, _stepName, rawFindings) => {
       savedRawFindings.push(rawFindings);
@@ -497,6 +504,7 @@ describe('runFindingManagerForStep workflow_call sub-steps', () => {
 
     const savedLedgers: FindingLedger[] = [];
     const savedRawFindings: RawFinding[][] = [];
+    const reservations = new Set<string>();
     const ledgerStore: FindingLedgerStore = {
       workflowName: 'peer-review',
       loadLedger: () => makeLedger(),
@@ -506,6 +514,12 @@ describe('runFindingManagerForStep workflow_call sub-steps', () => {
         savedLedgers.push(mutation.ledger);
         return Promise.resolve(mutation);
       },
+      claimAdjudicationReservation: (token) => {
+        if (reservations.has(token)) return false;
+        reservations.add(token);
+        return true;
+      },
+      releaseAdjudicationReservation: (token) => { reservations.delete(token); },
       createRunCopy: () => '/tmp/ledger-copy.json',
       saveRawFindings: (_runId, _stepName, rawFindings) => {
         savedRawFindings.push(rawFindings);
@@ -917,6 +931,7 @@ describe('runFindingManagerForStep stale rejection excluded from unmentioned fal
 
     const savedLedgers: FindingLedger[] = [];
     const savedValidationReports: FindingManagerValidationReport[] = [];
+    const reservations = new Set<string>();
     const ledgerStore: FindingLedgerStore = {
       workflowName: 'peer-review',
       loadLedger: () => initialLedger,
@@ -926,6 +941,12 @@ describe('runFindingManagerForStep stale rejection excluded from unmentioned fal
         savedLedgers.push(mutation.ledger);
         return Promise.resolve(mutation);
       },
+      claimAdjudicationReservation: (token) => {
+        if (reservations.has(token)) return false;
+        reservations.add(token);
+        return true;
+      },
+      releaseAdjudicationReservation: (token) => { reservations.delete(token); },
       createRunCopy: () => '/tmp/ledger-copy.json',
       saveRawFindings: () => '/tmp/raw-findings.json',
       saveManagerValidationReport: (report) => {

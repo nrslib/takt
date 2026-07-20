@@ -13,13 +13,16 @@ import type {
 } from './manager-contracts.js';
 import { classifyRawFindingsMechanically } from './mechanical-classification.js';
 import { createEmptyManagerOutput } from './manager-output.js';
-import { classifyProvisionalRecovery, isOpenProvisional } from './provisional-recovery.js';
+import {
+  releaseRawAdjudicationReservations,
+  reserveRawAdjudicationRecovery,
+  type RawAdjudicationReservation,
+} from './raw-adjudication-reservation.js';
 import {
   candidateFromLegacyRawFinding,
   canonicalizeReviewerRawFinding,
   toLedgerRawFinding,
 } from './raw-canonicalization.js';
-import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import type { FindingLedger, FindingManagerDecisions, FindingObservation, RawFinding } from './types.js';
 
 const log = createLogger('raw-adjudication-recovery');
@@ -63,20 +66,20 @@ function buildReplayIntake(input: {
   ledger: FindingLedger;
   runId: string;
   parentStepName: string;
+  reservations: readonly RawAdjudicationReservation[];
 }): { intake: ReviewerIntakeResult; origins: Map<string, RawAdjudicationReplayOrigin>; failures: Map<string, string> } {
   const intake = emptyIntake();
   const origins = new Map<string, RawAdjudicationReplayOrigin>();
   const failures = new Map<string, string>();
-  const roundsCompleted = stopBudgetRoundsCompleted(input.ledger);
-  for (const finding of input.ledger.findings) {
-    if (!isOpenProvisional(finding)
-      || classifyProvisionalRecovery(finding.provisional, roundsCompleted) !== 'raw-adjudication') {
-      continue;
+  for (const reservation of input.reservations) {
+    const finding = input.ledger.findings.find((entry) => entry.id === reservation.provisionalFindingId);
+    if (finding?.provisional === undefined) {
+      throw new Error(`Reserved raw adjudication provisional "${reservation.provisionalFindingId}" no longer exists`);
     }
     // 既存台帳には reviewer provenance が無いため、stableKey を replay の canonical 名前空間として使う。
     const reviewerStableKey = finding.provisional.recoveryReviewerStableKey
       ?? finding.provisional.stableKey;
-    const attempt = (finding.provisional.adjudicationAttempts ?? []).length + 1;
+    const attempt = reservation.attempt;
     const replayRawId = replayRawFindingId({
       runId: input.runId,
       parentStepName: input.parentStepName,
@@ -91,7 +94,7 @@ function buildReplayIntake(input: {
     origins.set(replayRawId, {
       provisionalFindingId: finding.id,
       sourceRawFindingId: sourceResult.sourceRawFindingId,
-      expectedProvisionalRevision: finding.revision ?? 1,
+      expectedProvisionalRevision: reservation.expectedRevision,
       attempt,
     });
     if (sourceResult.source === undefined) {
@@ -143,10 +146,35 @@ export async function runRawAdjudicationRecovery(input: {
   ledgerCopyPath: string;
   observation: FindingObservation;
 }): Promise<RawAdjudicationRecoveryResult> {
+  const reservation = await reserveRawAdjudicationRecovery(input.runInput.ledgerStore);
+  const reservationTokens = new Set(reservation.result.map((item) => item.reservationToken));
+  try {
+    return await runReservedRawAdjudicationRecovery({
+      ...input,
+      previousLedger: reservation.ledger,
+      reservations: reservation.result,
+      reservationTokens,
+    });
+  } catch (error) {
+    releaseRawAdjudicationReservations(input.runInput.ledgerStore, reservationTokens);
+    throw error;
+  }
+}
+
+async function runReservedRawAdjudicationRecovery(input: {
+  runInput: RunFindingManagerForStepInput;
+  previousLedger: FindingLedger;
+  managerStep: AgentWorkflowStep;
+  ledgerCopyPath: string;
+  observation: FindingObservation;
+  reservations: readonly RawAdjudicationReservation[];
+  reservationTokens: Set<string>;
+}): Promise<RawAdjudicationRecoveryResult> {
   const prepared = buildReplayIntake({
     ledger: input.previousLedger,
     runId: input.runInput.runId,
     parentStepName: input.runInput.parentStep.name,
+    reservations: input.reservations,
   });
   const capturedPreconditions = captureFindingPreconditions(input.previousLedger);
   if (prepared.intake.items.length === 0) {
@@ -160,6 +188,7 @@ export async function runRawAdjudicationRecovery(input: {
       unsupportedRawFindingReports: [],
       cleanWireById: new Map(),
       cleanCanonicalById: new Map(),
+      reservationTokens: input.reservationTokens,
     };
   }
   const admission = evaluateRawAdmission({
@@ -256,5 +285,6 @@ export async function runRawAdjudicationRecovery(input: {
     unsupportedRawFindingReports: clean.unsupportedRawFindingReports,
     cleanWireById: clean.cleanWireById,
     cleanCanonicalById: clean.cleanCanonicalById,
+    reservationTokens: input.reservationTokens,
   };
 }

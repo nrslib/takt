@@ -74,6 +74,7 @@ export function reconcileCommitPlan(input: {
   explicitResolvedByMapping: ReadonlyMap<string, string>;
   explicitPromotedFindingIds: ReadonlySet<string>;
   recoveryProvisionalRawFindingIds: ReadonlySet<string>;
+  deferredRawFindingIds: ReadonlySet<string>;
   healthyReviewerStableKeys: ReadonlySet<string>;
 }): { ledger: FindingLedger; landedSpecs: ProvisionalFindingSpec[]; normalizationRejections: string[] } {
   // ladder マージ（mergeOutputs）は matches / newFindings / conflicts を後着させる。
@@ -146,6 +147,7 @@ export function reconcileCommitPlan(input: {
       ...input.anomalySpecs.flatMap((spec) => spec.sourceRawFindingIds),
       ...suppressedSpecs.flatMap((spec) => spec.sourceRawFindingIds),
       ...input.recoveryProvisionalRawFindingIds,
+      ...input.deferredRawFindingIds,
     ]),
     context: {
       workflowName: input.runInput.workflowName,
@@ -267,6 +269,7 @@ export function applyCommitLedgerStates(input: {
   baseAnomalySpecs: ReviewerAnomalySpec[];
   pendingRejectedObservations: RawAdmissionEvaluation['pendingRejectedObservations'];
   interpretationResults: Map<string, InterpretationApplicationResult>;
+  interpretationReservations: ReadonlyMap<string, string>;
   observation: FindingObservation;
   verifiedEvidenceCandidates: RawAdmissionEvaluation['verifiedEvidenceCandidates'];
   stopBudgetLimits: ReturnType<typeof resolveStopBudgetLimits>;
@@ -296,6 +299,7 @@ export function applyCommitLedgerStates(input: {
   const applied = markInterpretationsApplied(
     withRejectedObservations,
     input.interpretationResults,
+    input.interpretationReservations,
     input.observation,
   );
   const withPromotions = linkPromotedReviewerAnomalies(applied, input.verifiedEvidenceCandidates);

@@ -165,6 +165,7 @@ function makeHarness(initialLedger: FindingLedger): {
   run: () => ReturnType<typeof runFindingManagerForStep>;
 } {
   let ledgerState = initialLedger;
+  const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
     workflowName: 'peer-review',
     loadLedger: () => ledgerState,
@@ -174,6 +175,12 @@ function makeHarness(initialLedger: FindingLedger): {
       ledgerState = mutation.ledger;
       return Promise.resolve(mutation);
     },
+    claimAdjudicationReservation: (token) => {
+      if (reservations.has(token)) return false;
+      reservations.add(token);
+      return true;
+    },
+    releaseAdjudicationReservation: (token) => { reservations.delete(token); },
     createRunCopy: () => '/tmp/ledger-copy.json',
     saveRawFindings: () => '/tmp/raw-findings.json',
     saveManagerValidationReport: () => '/tmp/manager-report.json',

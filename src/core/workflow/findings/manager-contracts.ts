@@ -64,6 +64,8 @@ export interface LadderTarget {
 }
 
 export interface LadderResult {
+  interpretationReservations: Map<string, string>;
+  deferredRawFindingIds: Set<string>;
   pendingSameWithProof: Array<{
     target: LadderTarget;
     proof: DeterministicSameProof;
@@ -117,4 +119,5 @@ export interface RawAdjudicationRecoveryResult {
   unsupportedRawFindingReports: UnsupportedRawFindingReport[];
   cleanWireById: Map<string, RawFinding>;
   cleanCanonicalById: Map<string, CanonicalIntakeItem['canonical']>;
+  reservationTokens: Set<string>;
 }

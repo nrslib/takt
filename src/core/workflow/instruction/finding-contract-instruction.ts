@@ -55,6 +55,7 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
     isReviewer,
     reviewerHasOpenFindings: isReviewer && contract.hasOpenFindings,
     reviewerHasWaivedFindings: isReviewer && contract.hasWaivedFindings,
+    reviewerHasDismissedFindings: isReviewer && contract.hasDismissedFindings,
     rawFindingsJsonSchema: contract.rawFindingsJsonSchema
       ? renderFencedJsonBlock(contract.rawFindingsJsonSchema)
       : '',

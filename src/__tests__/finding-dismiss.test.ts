@@ -88,6 +88,15 @@ describe('computeDismissCandidates', () => {
         provisional: { ...provisionalEntry().provisional!, kind: 'reviewer-output-overflow', stableKey: 'stable-3' },
       }),
       provisionalEntry({
+        id: 'F-0010',
+        provisional: {
+          ...provisionalEntry().provisional!,
+          kind: 'reviewer-output-overflow',
+          stableKey: 'stable-10',
+          firstObservedRound: undefined,
+        },
+      }),
+      provisionalEntry({
         id: 'F-0004',
         provisional: { ...provisionalEntry().provisional!, kind: 'manager-budget-exhausted', stableKey: 'stable-4' },
       }),
@@ -118,14 +127,14 @@ describe('computeDismissCandidates', () => {
     const candidates = computeDismissCandidates({
       version: 1,
       workflowName: 'test',
-      nextId: 10,
+      nextId: 11,
       updatedAt: '2026-01-01T00:00:00.000Z',
       findings,
       rawFindings: [],
       conflicts: [],
     });
 
-    expect([...candidates.keys()].sort()).toEqual(['F-0001', 'F-0002', 'F-0008', 'F-0009']);
+    expect([...candidates.keys()].sort()).toEqual(['F-0001', 'F-0002', 'F-0009']);
     expect(candidates.get('F-0001')).toContain('unverified-locationless');
   });
 });
@@ -279,6 +288,7 @@ describe('runFindingManagerForStep dismiss round trip', () => {
   it('残余 raw ゼロでも dismiss 候補があれば manager を起動し、裁定で完了ゲートが開く', async () => {
     let ledger = makeLedger([provisionalEntry()]);
     const savedValidationReports: unknown[] = [];
+    const reservations = new Set<string>();
     const ledgerStore: FindingLedgerStore = {
       workflowName: 'peer-review',
       loadLedger: () => ledger,
@@ -288,6 +298,12 @@ describe('runFindingManagerForStep dismiss round trip', () => {
         ledger = mutation.ledger;
         return Promise.resolve(mutation);
       },
+      claimAdjudicationReservation: (token) => {
+        if (reservations.has(token)) return false;
+        reservations.add(token);
+        return true;
+      },
+      releaseAdjudicationReservation: (token) => { reservations.delete(token); },
       createRunCopy: () => '/tmp/ledger-copy.json',
       saveRawFindings: () => '/tmp/raw-findings.json',
       saveManagerValidationReport: (report) => { savedValidationReports.push(report); return '/tmp/report.json'; },

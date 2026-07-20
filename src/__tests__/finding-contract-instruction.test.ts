@@ -13,6 +13,7 @@ function makeContract(overrides: Partial<FindingContractInstructionContext> = {}
     ledgerSummary: { findings: [] },
     hasOpenFindings: false,
     hasWaivedFindings: false,
+    hasDismissedFindings: false,
     ...overrides,
   };
 }
@@ -47,6 +48,7 @@ describe('buildFindingContractInstruction', () => {
           reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
           hasOpenFindings: true,
           hasWaivedFindings: true,
+          hasDismissedFindings: true,
         },
       ]) {
         const rendered = build({ contract, language });
@@ -123,6 +125,29 @@ describe('buildFindingContractInstruction', () => {
       expect(rendered).toContain('familyTag');
       expect(rendered).toContain('kind');
       expect(rendered).toContain('targetFindingId');
+    });
+
+    it('instructs reviewers to reopen dismissed findings in both languages', () => {
+      const en = build({
+        contract: {
+          rawFindingsJsonSchema: REVIEWER_SCHEMA,
+          reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+          hasDismissedFindings: true,
+        },
+      });
+      const ja = build({
+        contract: {
+          rawFindingsJsonSchema: REVIEWER_SCHEMA,
+          reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+          hasDismissedFindings: true,
+        },
+        language: 'ja',
+      });
+
+      expect(en).toContain('listed as dismissed');
+      expect(en).toContain('relation "reopened"');
+      expect(ja).toContain('dismissed になっている指摘');
+      expect(ja).toContain('relation を "reopened"');
     });
   });
 

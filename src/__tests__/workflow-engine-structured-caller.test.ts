@@ -4143,7 +4143,7 @@ describe('WorkflowEngine NEEDS_ADJUDICATION (provisional fixpoint, batch B1)', (
     };
   }
 
-  it('stops at NEEDS_ADJUDICATION once a hallucinated provisional finding reaches a fixpoint across two review rounds, instead of replanning forever', async () => {
+  it('stops at NEEDS_ADJUDICATION once a repeated provisional exhausts interpretation recovery and reaches a fixpoint', async () => {
     vi.mocked(runAgent)
       // Round 1: reviewers report a structurally ambiguous re-report (persists
       // against a target the ledger has never seen). The one-shot relation
@@ -4165,19 +4165,45 @@ describe('WorkflowEngine NEEDS_ADJUDICATION (provisional fixpoint, batch B1)', (
         options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
         return { persona: 'planner', status: 'done', content: 'Replanned.', timestamp: new Date() };
       })
-      // Round 2: reviewers report the exact same claim again (a different
-      // rawFindingId — identity survives, since the ladder's semantic key
-      // strips run-specific ids). The relation clarification is attempted
-      // again (it is per-response, not per-lineage), but codex B1's
-      // same-evidence-reappearance check reattaches this raw to the already
-      // ledger_applied provisional WITHOUT a second manager interpretation
-      // call — content (title/description/severity/familyTag/relation/target)
-      // is byte-identical to round 1, so the evidence hash matches.
+      // The repeated current observation must consume the second interpretation
+      // attempt before the unchanged unresolved state may form a fixpoint.
       .mockImplementationOnce(async (_persona, instruction, options) => {
         options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
         return ambiguousPersistsRawFindingResponse('raw-2', 'F-9001');
       })
-      .mockImplementationOnce(throwingClarificationResponse);
+      .mockImplementationOnce(throwingClarificationResponse)
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return interpretationRunAgentResponse(instruction);
+      })
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return { persona: 'planner', status: 'done', content: 'Replanned.', timestamp: new Date() };
+      })
+      // The third identical observation cannot spend another interpretation
+      // epoch, so the stable unresolved snapshot is now eligible to stop.
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return ambiguousPersistsRawFindingResponse('raw-3', 'F-9001');
+      })
+      .mockImplementationOnce(throwingClarificationResponse)
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return {
+          persona: 'findings-manager',
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            rawDecisions: [],
+            disputeDecisions: [],
+            conflictDecisions: [],
+            invalidateDecisions: [],
+            duplicateDecisions: [],
+            dismissDecisions: [],
+          },
+          timestamp: new Date(),
+        };
+      });
 
     const engine = new WorkflowEngine(buildFixpointWorkflowConfig(), cwd, 'task', {
       projectCwd: cwd,
@@ -4200,10 +4226,7 @@ describe('WorkflowEngine NEEDS_ADJUDICATION (provisional fixpoint, batch B1)', (
     expect(abortReasons[0]).toContain('raw-meaning-ambiguous');
     // Explains why it stopped (CLI-visible reason string).
     expect(abortReasons[0]).toContain('A human must adjudicate');
-    // reviewer1 + clarification1 + interpretation1 + planner + reviewer2 +
-    // clarification2 (round 2's interpretation call is skipped: same-evidence
-    // reappearance reattaches without re-invoking the manager).
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(6);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(11);
 
     // "Open provisional list + origin" is durably recorded (not only in the
     // ephemeral abort reason string) so a human/tool can inspect it later.
@@ -4485,6 +4508,7 @@ describe('WorkflowEngine NEEDS_ADJUDICATION (bounded stop budget, codex-adjudica
   // first — even on a round where fixpoint ALSO holds (both true simultaneously).
   function buildBudgetBeforeFixpointWorkflowConfig(): WorkflowConfig {
     const config = buildBudgetWorkflowConfig();
+    config.findingContract!.stopBudget = { maxRounds: 3 };
     const reviewers = config.steps.find((step) => step.name === 'reviewers')!;
     // Reorder: budget rule first, fixpoint rule second (opposite of builtin).
     reviewers.rules = [
@@ -4498,10 +4522,8 @@ describe('WorkflowEngine NEEDS_ADJUDICATION (bounded stop budget, codex-adjudica
   }
 
   it('records stopReason "budget-exhausted" (from the matched condition) when the budget rule is placed before the fixpoint rule and both hold — not the ledger-inferred fixpoint', async () => {
-    // The SAME hallucination repeats every round → fixpoint IS reached on round
-    // 2, AND the 2-round budget is exhausted on round 2. With the budget rule
-    // placed first, first-match-wins selects the budget rule; stopReason must
-    // reflect that fact, not the ledger's fixpoint.reached === true.
+    // Two interpretation attempts must finish before the repeated unresolved
+    // state is stable, so the budget is aligned to the third round.
     vi.mocked(runAgent)
       .mockImplementationOnce(async (_persona, instruction, options) => {
         options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
@@ -4516,16 +4538,41 @@ describe('WorkflowEngine NEEDS_ADJUDICATION (bounded stop budget, codex-adjudica
         options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
         return { persona: 'planner', status: 'done', content: 'Replanned.', timestamp: new Date() };
       })
-      // Round 2: the EXACT same claim (different rawFindingId, same identity —
-      // same targetFindingId/title/content, so the same evidence hash) →
-      // fixpoint reached AND budget exhausted at the same time. Round 2's
-      // interpretation call is skipped (same-evidence reappearance reattaches
-      // without re-invoking the manager — see the fixpoint describe block).
       .mockImplementationOnce(async (_persona, instruction, options) => {
         options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
         return churnRawFindingResponse('raw-2', 'F-9001', 'Repeated bug');
       })
-      .mockImplementationOnce(throwingClarificationResponse);
+      .mockImplementationOnce(throwingClarificationResponse)
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return interpretationRunAgentResponse(instruction);
+      })
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return { persona: 'planner', status: 'done', content: 'Replanned.', timestamp: new Date() };
+      })
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return churnRawFindingResponse('raw-3', 'F-9001', 'Repeated bug');
+      })
+      .mockImplementationOnce(throwingClarificationResponse)
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return {
+          persona: 'findings-manager',
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            rawDecisions: [],
+            disputeDecisions: [],
+            conflictDecisions: [],
+            invalidateDecisions: [],
+            duplicateDecisions: [],
+            dismissDecisions: [],
+          },
+          timestamp: new Date(),
+        };
+      });
 
     const engine = new WorkflowEngine(buildBudgetBeforeFixpointWorkflowConfig(), cwd, 'task', {
       projectCwd: cwd,

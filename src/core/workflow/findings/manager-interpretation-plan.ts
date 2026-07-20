@@ -7,7 +7,6 @@ import { issueDeterministicSameProofs } from './raw-capabilities.js';
 import {
   countInterpretationEpochs,
   resolveInterpretationAttempt,
-  resolveRecordedInterpretationAttempt,
 } from './interpretation-wal.js';
 import type {
   AmbiguousInterpretation,
@@ -21,6 +20,8 @@ import type { beginInterpretations } from './interpretation-wal.js';
 
 export function emptyLadderResult(ambiguousRawCount: number): LadderResult {
   return {
+    interpretationReservations: new Map(),
+    deferredRawFindingIds: new Set(),
     pendingSameWithProof: [],
     pendingIndependentNew: [],
     pendingConflicts: [],
@@ -69,12 +70,7 @@ export function classifyInitialLadderTargets(input: {
           ))
         )) === true
       ));
-    const resolveAttempt = item.interpretationRecoveryAttempt === true
-      ? resolveInterpretationAttempt
-      : recoveryEvidenceIsRecorded
-        ? resolveRecordedInterpretationAttempt
-        : resolveInterpretationAttempt;
-    const attempt = resolveAttempt({
+    const attempt = resolveInterpretationAttempt({
       ledger: input.previousLedger,
       reviewerStableKey: item.canonical.reviewerStableKey,
       lineageKey: item.canonical.lineageKey,
@@ -150,6 +146,18 @@ export function classifyInterpretationWal(input: {
 }): WalLadderPlan {
   return input.targets.reduce<WalLadderPlan>((plan, target) => {
     const key = target.interpretationKey;
+    if (input.begin.deferredKeys.has(key)) {
+      return {
+        ...plan,
+        result: {
+          ...plan.result,
+          deferredRawFindingIds: new Set([
+            ...plan.result.deferredRawFindingIds,
+            target.wire.rawFindingId,
+          ]),
+        },
+      };
+    }
     if (input.begin.appliedByKey.has(key)) {
       const priorResult = input.begin.appliedByKey.get(key);
       if ((priorResult === 'created' || priorResult === 'matched_with_proof' || priorResult === 'conflict_created')

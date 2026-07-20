@@ -78,6 +78,7 @@
 
 `rawDecisions` のルール。
 - プロンプトに列挙された raw finding 1件につき、ちょうど1エントリを返してください（過不足禁止）。
+- 過去に resolved / waived / dismissed となった finding が再発した場合は `reopened` を使ってください。
 - `findingId` は `same` / `resolved` / `reopened` / `conflict` のとき必須です。`new` と `unsupported` のときは空文字にしてください。
 - `unsupported` は、raw finding が既存 finding を明示参照した（targetFindingId 設定済み）にもかかわらずその参照が成立しない場合に使います。confirmed finding は作らず対象 finding も変更しませんが、raw は gate-blocking provisional として保持されます。
 - 判断だけを返してください。最終結果の組み立て（対応づけ、グルーピング、conflict の形状）は自分で行わず、エンジンが組み立てと台帳の不変条件チェックを行います。

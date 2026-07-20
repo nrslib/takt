@@ -18,6 +18,7 @@ function makeStep(): WorkflowStep {
 function makeContext(options: {
   hasOpenFindings: boolean;
   hasWaivedFindings?: boolean;
+  hasDismissedFindings?: boolean;
   rawFindingsJsonSchema?: Record<string, unknown>;
   language?: 'en' | 'ja';
 }): InstructionContext {
@@ -36,6 +37,7 @@ function makeContext(options: {
       reportLedgerSummary: '{}',
       hasOpenFindings: options.hasOpenFindings,
       hasWaivedFindings: options.hasWaivedFindings ?? false,
+      hasDismissedFindings: options.hasDismissedFindings ?? false,
       // codex 対策#4: rawFindingsJsonSchema と reviewScopeSnapshotId は常に
       // セットで生成される（WorkflowEngineSetup.buildFindingContractInstructionContext
       // 参照）。片方だけの fixture は finding-contract-instruction.ts の

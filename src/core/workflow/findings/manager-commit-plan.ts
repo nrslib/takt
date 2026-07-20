@@ -16,7 +16,7 @@ import { provisionalSpecForRawKind } from './manager-provisional.js';
 import type { ManagerDecisionStageResult, RunFindingManagerForStepInput } from './manager-contracts.js';
 
 import { mergeOutputs, revalidateManagerPlan } from './manager-commit-revalidation.js';
-import { buildLadderCommitPlan } from './manager-ladder-commit-plan.js';
+import { buildLadderCommitPlan, selectCommittableLadder } from './manager-ladder-commit-plan.js';
 import { applyCommitLedgerStates, reconcileCommitPlan } from './manager-commit-finalization.js';
 import {
   applyManagerActionRecovery,
@@ -52,6 +52,7 @@ export interface FindingManagerCommitPlanInput {
 function prepareCommitReconciliation(
   params: FindingManagerCommitPlanInput,
   freshLedger: FindingLedger,
+  ladder: ManagerDecisionStageResult['ladder'],
 ) {
   const admission = retainInterpretationRecoveryForLadder(evaluateRawAdmission({
     cwd: params.input.cwd,
@@ -89,7 +90,7 @@ function prepareCommitReconciliation(
     ...params.managerDecision.cleanProvisionalSpecs.filter((spec) => (
       spec.sourceRawFindingIds.every((rawFindingId) => freshAdmittedRawIds.has(rawFindingId))
     )),
-    ...params.managerDecision.ladder.provisionalSpecs.filter((spec) => (
+    ...ladder.provisionalSpecs.filter((spec) => (
       spec.sourceRawFindingIds.every((rawFindingId) => freshAdmittedRawIds.has(rawFindingId))
     )),
   ];
@@ -124,14 +125,15 @@ export function buildFindingManagerCommitMutation(
     runInput: params.input,
     observation: params.observation,
   });
-  const prepared = prepareCommitReconciliation(params, recoveryLedger);
+  const ladder = selectCommittableLadder(params.managerDecision.ladder, recoveryLedger);
+  const prepared = prepareCommitReconciliation(params, recoveryLedger, ladder);
   const roundsCompleted = stopBudgetRoundsCompleted(freshLedger);
   const actionRecoveryCandidates = collectManagerActionRecoveryCandidates(
     recoveryLedger,
     roundsCompleted,
   );
   const { input, managerDecision } = params;
-  const { managerOutput, ladder } = managerDecision;
+  const { managerOutput } = managerDecision;
   const { admission } = prepared;
 
   const revalidated = revalidateManagerPlan({
@@ -167,13 +169,13 @@ export function buildFindingManagerCommitMutation(
     explicitResolvedByMapping: ladderCommit.recoverySettlements,
     explicitPromotedFindingIds: ladderCommit.recoveryPromotions,
     recoveryProvisionalRawFindingIds: ladderCommit.recoveryProvisionalRawFindingIds,
+    deferredRawFindingIds: ladder.deferredRawFindingIds,
     healthyReviewerStableKeys: params.intake.healthyReviewerStableKeys,
   });
   const settled = applyManagerActionRecovery({
     ledger: reconcilePlan.ledger,
     candidates: actionRecoveryCandidates,
     cwd: input.cwd,
-    roundsCompleted,
     context: {
       workflowName: input.workflowName,
       stepName: input.parentStep.name,
@@ -198,6 +200,7 @@ export function buildFindingManagerCommitMutation(
     baseAnomalySpecs: prepared.anomalySpecs,
     pendingRejectedObservations: admission.pendingRejectedObservations,
     interpretationResults,
+    interpretationReservations: ladder.interpretationReservations,
     observation: params.observation,
     verifiedEvidenceCandidates: admission.verifiedEvidenceCandidates,
     stopBudgetLimits: params.stopBudgetLimits,

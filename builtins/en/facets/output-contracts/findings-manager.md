@@ -78,6 +78,7 @@
 
 Rules for `rawDecisions`:
 - One entry per raw finding listed in the prompt, no more, no fewer.
+- Use `reopened` when a previously resolved, waived, or dismissed finding has reappeared.
 - `findingId` is required for `same`, `resolved`, `reopened`, and `conflict`; leave it as an empty string for `new` and `unsupported`.
 - `unsupported` is for a raw finding that explicitly referenced an existing finding (targetFindingId set) but the reference does not hold up. It creates no confirmed finding and leaves the target unchanged, while the engine retains the raw claim as a gate-blocking provisional.
 - Return only your per-item judgment. Do not assemble the final ledger update (matching, grouping, conflict shape) yourself; the engine does that and enforces the ledger invariants.

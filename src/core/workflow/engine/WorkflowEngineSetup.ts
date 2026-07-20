@@ -27,7 +27,13 @@ import type { StructuredOutputNormalizerRegistry } from './structured-output-nor
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import type { FindingLedgerStore } from '../findings/store.js';
 import { RawFindingsStructuredOutput } from '../findings/manager-runner.js';
-import { ledgerHasOpenFindings, ledgerHasWaivedFindings, renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
+import {
+  ledgerHasDismissedFindings,
+  ledgerHasOpenFindings,
+  ledgerHasWaivedFindings,
+  renderFindingLedgerInstructionSummary,
+  renderFindingLedgerReportSummary,
+} from '../findings/context.js';
 import { renderLoopMonitorFindingsSummary } from '../findings/loop-monitor-summary.js';
 import { computeReviewScopeSnapshotId } from '../findings/snapshot.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
@@ -157,6 +163,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
       hasOpenFindings: ledgerHasOpenFindings(ledger),
       hasWaivedFindings: ledgerHasWaivedFindings(ledger),
+      hasDismissedFindings: ledgerHasDismissedFindings(ledger),
       ...(includeRawFindingsSchema
         ? {
             rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,

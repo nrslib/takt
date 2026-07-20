@@ -115,6 +115,10 @@ export function ledgerHasWaivedFindings(ledger: FindingLedger): boolean {
   return ledger.findings.some((finding) => finding.status === 'waived');
 }
 
+export function ledgerHasDismissedFindings(ledger: FindingLedger): boolean {
+  return ledger.findings.some((finding) => finding.status === 'dismissed');
+}
+
 export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): FindingsRuleContext {
   const openItems = ledger.findings.filter((finding) => finding.status === 'open');
   const activeConflicts = ledger.conflicts.filter((conflict) => conflict.status === 'active');

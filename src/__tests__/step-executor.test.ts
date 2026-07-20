@@ -255,6 +255,7 @@ describe('StepExecutor', () => {
           reportLedgerSummary: {},
           hasOpenFindings: true,
           hasWaivedFindings: false,
+          hasDismissedFindings: false,
         }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,

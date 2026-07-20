@@ -449,6 +449,7 @@ export const FindingInterpretationRecordSchema = z.object({
   policyVersion: z.literal(2),
   stage: z.enum(INTERPRETATION_STAGES),
   startedAt: FindingObservationSchema,
+  reservationToken: nonEmptyString.optional(),
   promptPreconditions: z.array(FindingMutationPreconditionSchema),
   completedAt: FindingObservationSchema.optional(),
   interruptedAt: FindingObservationSchema.optional(),
@@ -879,7 +880,7 @@ export const FindingManagerDecisionsJsonSchema = {
           rawFindingId: { type: 'string', minLength: 1 },
           decision: {
             enum: RAW_DECISION_KINDS,
-            description: 'same = matches an existing open finding (familyTag and line-number differences alone are not disqualifying; judge by failure mode, trigger, impact, and required fix). new = no related finding exists yet. resolved = confirms an existing open finding is fixed. reopened = a previously resolved/waived finding reappeared. conflict = contradicts an existing finding. unsupported = the raw finding explicitly referenced an existing finding (targetFindingId) as persists/reopened but the reference does not hold up; do not fall back to new.',
+            description: 'same = matches an existing open finding (familyTag and line-number differences alone are not disqualifying; judge by failure mode, trigger, impact, and required fix). new = no related finding exists yet. resolved = confirms an existing open finding is fixed. reopened = a previously resolved/waived/dismissed finding reappeared. conflict = contradicts an existing finding. unsupported = the raw finding explicitly referenced an existing finding (targetFindingId) as persists/reopened but the reference does not hold up; do not fall back to new.',
           },
           findingId: {
             type: 'string',
@@ -1052,7 +1053,7 @@ export const RawFindingsOutputJsonSchema = {
           // RawFindingsOutputValidationJsonSchema（下記）にある。
           relation: {
             enum: RAW_FINDING_RELATIONS,
-            description: 'This finding\'s relationship to the ledger. new = a fresh observation with no target (targetFindingId must be empty). persists = you still observe an existing open finding (targetFindingId required). reopened = a previously resolved/waived finding reappeared (targetFindingId required). resolution_confirmation = you verified an open finding is fixed (targetFindingId required).',
+            description: 'This finding\'s relationship to the ledger. new = a fresh observation with no target (targetFindingId must be empty). persists = you still observe an existing open finding (targetFindingId required). reopened = a previously resolved/waived/dismissed finding reappeared (targetFindingId required). resolution_confirmation = you verified an open finding is fixed (targetFindingId required).',
           },
           targetFindingId: {
             type: 'string',

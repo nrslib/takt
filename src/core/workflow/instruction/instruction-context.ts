@@ -15,6 +15,7 @@ export interface FindingContractInstructionContext {
   hasOpenFindings: boolean;
   /** Whether the ledger currently has waived findings. */
   hasWaivedFindings: boolean;
+  hasDismissedFindings: boolean;
   rawFindingsJsonSchema?: Record<string, unknown>;
   /**
    * review-integrity protocol: reviewer が typed evidence protocol の source_quote 主張に

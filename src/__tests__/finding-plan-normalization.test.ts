@@ -318,6 +318,7 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
       explicitResolvedByMapping: new Map(),
       explicitPromotedFindingIds: new Set(),
       recoveryProvisionalRawFindingIds: new Set(),
+      deferredRawFindingIds: new Set(),
       healthyReviewerStableKeys: new Set(),
     });
 

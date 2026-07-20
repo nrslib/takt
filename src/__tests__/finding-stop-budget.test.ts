@@ -299,6 +299,7 @@ function makeRoundHarness(
   run: (reviewerRawFindings: Array<Record<string, unknown>>, timestamp: string) => ReturnType<typeof runFindingManagerForStep>;
 } {
   let ledgerState = initialLedger;
+  const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
     workflowName: 'peer-review',
     loadLedger: () => ledgerState,
@@ -308,6 +309,12 @@ function makeRoundHarness(
       ledgerState = mutation.ledger;
       return Promise.resolve(mutation);
     },
+    claimAdjudicationReservation: (token) => {
+      if (reservations.has(token)) return false;
+      reservations.add(token);
+      return true;
+    },
+    releaseAdjudicationReservation: (token) => { reservations.delete(token); },
     createRunCopy: () => '/tmp/ledger-copy.json',
     saveRawFindings: () => '/tmp/raw-findings.json',
     saveManagerValidationReport: () => '/tmp/manager-report.json',
@@ -438,17 +445,17 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
     expect(stopBudgetRoundsCompleted(harness.currentLedger())).toBe(3);
   });
 
-  it('priority: when fixpoint is reached well before the round budget is exhausted, fixpoint fires first (budget stays false)', async () => {
+  it('priority: when fixpoint is reached after interpretation recovery is exhausted but before the round budget, fixpoint fires first', async () => {
     const harness = makeRoundHarness(emptyLedger(), { maxRounds: 10 });
 
     await harness.run([hallucinatedRaw('r1', 'Same bug', 'src/does-not-exist.ts')], '2026-07-01T00:00:00.000Z');
     await harness.run([hallucinatedRaw('r2', 'Same bug', 'src/does-not-exist.ts')], '2026-07-01T00:01:00.000Z');
+    await harness.run([hallucinatedRaw('r3', 'Same bug', 'src/does-not-exist.ts')], '2026-07-01T00:02:00.000Z');
 
     const context = buildFindingsRuleContext(harness.currentLedger());
     expect(context.provisional.fixpoint).toBe(true);
-    // Only 2 of the 10 allotted rounds were consumed — nowhere near exhausted.
     expect(context.rounds.budgetExhausted).toBe(false);
-    expect(stopBudgetRoundsCompleted(harness.currentLedger())).toBe(2);
+    expect(stopBudgetRoundsCompleted(harness.currentLedger())).toBe(3);
   });
 
   it('progress (a substantive finding resolving) does not reset the round budget — it accumulates monotonically alongside the churn', async () => {
@@ -538,6 +545,7 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
     // was persisted (round counted), then the identical invocation re-runs and
     // re-commits before the workflow checkpoint advanced.
     let ledgerState = emptyLedger();
+    const reservations = new Set<string>();
     const ledgerStore: FindingLedgerStore = {
       workflowName: 'peer-review',
       loadLedger: () => ledgerState,
@@ -547,6 +555,12 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
         ledgerState = mutation.ledger;
         return Promise.resolve(mutation);
       },
+      claimAdjudicationReservation: (token) => {
+        if (reservations.has(token)) return false;
+        reservations.add(token);
+        return true;
+      },
+      releaseAdjudicationReservation: (token) => { reservations.delete(token); },
       createRunCopy: () => '/tmp/ledger-copy.json',
       saveRawFindings: () => '/tmp/raw-findings.json',
       saveManagerValidationReport: () => '/tmp/manager-report.json',

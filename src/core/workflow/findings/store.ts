@@ -73,7 +73,7 @@ export interface FindingArtifactWriter {
 export interface FindingLedgerStore
   extends LedgerRepository, FindingArtifactWriter, AdjudicationReservationRegistry {}
 
-export type FindingManagerStore = LedgerRepository & Pick<
+export type FindingManagerStore = LedgerRepository & AdjudicationReservationRegistry & Pick<
   FindingArtifactWriter,
   'createRunCopy' | 'saveRawFindings' | 'saveManagerValidationReport'
 >;

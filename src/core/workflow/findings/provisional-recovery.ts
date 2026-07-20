@@ -12,28 +12,31 @@ import type { FindingLedgerEntry, FindingProvisionalMetadata } from './types.js'
  *  成功・再試行・終端裁定・fail-fast のいずれかへ必ず進む」。
  *
  * - raw-adjudication: 保存済み source raw を engine が fresh ledger へ再裁定
- *   （RawAdjudicationRecovery）。attempt 枯渇で terminal-adjudication へ遷移。
+ *   （RawAdjudicationRecovery）。枯渇後は claim と処理失敗を分けて終端化する。
  * - interpretation: 解釈ラダーの attempt 前進（InterpretationRecovery）。
- *   epochs 枯渇で terminal-adjudication へ遷移。
+ *   枯渇後は claim と処理失敗を分けて終端化する。
  * - envelope: reviewer 出力 envelope の回復観測で機械 resolve
  *   （ReviewerEnvelopeRecovery）。
  * - action: 対象状態の充足で機械 resolve（ManagerActionRecovery — source raw を
  *   持たない stale action 系）。
  * - terminal-adjudication: recovery を使い切った / 最初から機械処理の余地が無い。
  *   dismiss 候補（内容の管轄裁定）。
+ * - process-failure: engine/reviewer 処理の失敗証跡。dismiss では消さず、
+ *   fixpoint / stop budget から NEEDS_ADJUDICATION へ送る。
  */
 export type ProvisionalRecoveryClass =
   | 'raw-adjudication'
   | 'interpretation'
   | 'envelope'
   | 'action'
+  | 'process-failure'
   | 'terminal-adjudication';
 
 export function adjudicationAttemptsExhausted(provisional: FindingProvisionalMetadata): boolean {
   return (provisional.adjudicationAttempts ?? []).length >= MANAGER_ADJUDICATION_LIMITS.maxReplayAttempts;
 }
 
-// 枯渇後の終端は既存 stop-budget/fixpoint/loop-monitor が NEEDS_ADJUDICATION へ運ぶため、engine 内の別 fail-fast 状態を増やさない。
+// process failure は dismiss で消さず、既存 stop-budget/fixpoint/loop-monitor が NEEDS_ADJUDICATION へ運ぶ。
 
 function envelopeRecoveryExhausted(
   provisional: FindingProvisionalMetadata,
@@ -74,29 +77,30 @@ export function classifyProvisionalRecovery(
       }
       return adjudicationAttemptsExhausted(provisional) ? 'terminal-adjudication' : 'interpretation';
     case 'raw-adjudication-unresolved':
-    case 'manager-output-discarded':
       return adjudicationAttemptsExhausted(provisional) ? 'terminal-adjudication' : 'raw-adjudication';
+    case 'manager-output-discarded':
+      return adjudicationAttemptsExhausted(provisional) ? 'process-failure' : 'raw-adjudication';
     case 'manager-budget-exhausted':
     case 'interpretation-interrupted':
       return provisional.interpretationEpochs >= MANAGER_INTERPRETATION_LIMITS.maxInterpretationEpochsPerLineage
         || adjudicationAttemptsExhausted(provisional)
-        ? 'terminal-adjudication'
+        ? 'process-failure'
         : 'interpretation';
     case 'reviewer-output-overflow':
       return envelopeRecoveryExhausted(provisional, roundsCompleted)
-        ? 'terminal-adjudication'
+        ? 'process-failure'
         : 'envelope';
     case 'stale-precondition':
       // 保存済み source raw があれば再裁定できる。無い stale（invalidate /
       // waive / duplicate / dismiss の action 系）は対象状態の充足で機械 resolve。
       if (provisional.sourceRawFindingIds.length > 0) {
-        return adjudicationAttemptsExhausted(provisional) ? 'terminal-adjudication' : 'raw-adjudication';
+        return adjudicationAttemptsExhausted(provisional) ? 'process-failure' : 'raw-adjudication';
       }
-      return actionRecoveryExhausted(provisional) ? 'terminal-adjudication' : 'action';
+      return actionRecoveryExhausted(provisional) ? 'process-failure' : 'action';
     case 'invalid-location-evidence':
       // legacy kind（新規生成なし）。replay 材料も機械検証経路も無いため、
-      // 読み取り互換で残っている個体は管轄裁定で閉じられるようにする。
-      return 'terminal-adjudication';
+      // manager dismiss で消さず loop monitor に処理失敗として提示する。
+      return 'process-failure';
   }
 }
 

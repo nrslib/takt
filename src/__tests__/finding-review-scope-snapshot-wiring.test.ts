@@ -127,6 +127,7 @@ function makeFindingContractContext(
     reportLedgerSummary: '{"ids":[]}',
     hasOpenFindings: false,
     hasWaivedFindings: false,
+    hasDismissedFindings: false,
     rawFindingsJsonSchema: { type: 'object' },
     reviewScopeSnapshotId: 'round-snapshot-abc123',
     ...overrides,

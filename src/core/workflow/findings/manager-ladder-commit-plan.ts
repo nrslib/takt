@@ -6,7 +6,7 @@ import type {
   FindingManagerOutput,
   InterpretationApplicationResult,
 } from './types.js';
-import type { ManagerDecisionStageResult } from './manager-contracts.js';
+import type { LadderResult, ManagerDecisionStageResult } from './manager-contracts.js';
 import { provisionalSpecForRaw, provisionalSpecForRawKind } from './manager-provisional.js';
 import { fullIdentityKeyOf } from './manager-provisional-settlement.js';
 
@@ -35,6 +35,61 @@ function recoveryOriginIsFresh(
   return process?.status === 'open'
     && process.provisional !== undefined
     && (process.revision ?? 1) === origin.expectedProvisionalRevision;
+}
+
+function ownsCompletedInterpretation(
+  ladder: LadderResult,
+  ledger: FindingLedger,
+  interpretationKey: string,
+): boolean {
+  const reservationToken = ladder.interpretationReservations.get(interpretationKey);
+  return reservationToken !== undefined && ledger.interpretations?.some((record) => (
+    record.interpretationKey === interpretationKey
+    && record.stage === 'interpretation_completed'
+    && record.reservationToken === reservationToken
+  )) === true;
+}
+
+export function selectCommittableLadder(
+  ladder: LadderResult,
+  freshLedger: FindingLedger,
+): LadderResult {
+  const committableKeys = new Set(
+    [...ladder.interpretationReservations.keys()].filter((key) => (
+      ownsCompletedInterpretation(ladder, freshLedger, key)
+    )),
+  );
+  const excludedSpecs = new Set(
+    [...ladder.provisionalByInterpretationKey]
+      .filter(([key]) => !committableKeys.has(key))
+      .map(([, spec]) => spec),
+  );
+  const canCommit = (key: string | undefined, rawFindingId: string): boolean => (
+    !ladder.deferredRawFindingIds.has(rawFindingId)
+    && (key === undefined || committableKeys.has(key))
+  );
+  return {
+    ...ladder,
+    pendingSameWithProof: ladder.pendingSameWithProof.filter((pending) => (
+      canCommit(pending.viaInterpretationKey, pending.target.wire.rawFindingId)
+    )),
+    pendingIndependentNew: ladder.pendingIndependentNew.filter((pending) => (
+      canCommit(pending.viaInterpretationKey, pending.wire.rawFindingId)
+    )),
+    pendingConflicts: ladder.pendingConflicts.filter((pending) => (
+      canCommit(pending.viaInterpretationKey, pending.target.wire.rawFindingId)
+    )),
+    provisionalSpecs: ladder.provisionalSpecs.filter((spec) => (
+      !excludedSpecs.has(spec)
+      && spec.sourceRawFindingIds.every((rawFindingId) => !ladder.deferredRawFindingIds.has(rawFindingId))
+    )),
+    provisionalByInterpretationKey: new Map(
+      [...ladder.provisionalByInterpretationKey].filter(([key]) => committableKeys.has(key)),
+    ),
+    recoveryProvisionalInterpretationKeys: new Set(
+      [...ladder.recoveryProvisionalInterpretationKeys].filter((key) => committableKeys.has(key)),
+    ),
+  };
 }
 
 export function buildLadderCommitPlan(
