@@ -64,19 +64,15 @@ export function classifyProvisionalRecovery(
       // locationless は機械検証も replay も成立しない主張 — 最初から管轄裁定。
       return 'terminal-adjudication';
     case 'raw-meaning-ambiguous':
-      // ladder 由来（epochs >= 1）は解釈の前進が出口。epochs === 0 は WAL の
-      // lineage を持たない legacy な裁定未了（旧バイナリの rejection /
-      // unsupported / unmentioned / stale 経路）— raw-adjudication-unresolved と
-      // 同じ扱い。stableKey は kind を含むため kind の migration はしない
-      // （resume 互換: 同一 claim の別 stableKey 再着地で settlement の一意対応が
-      // 壊れる）。
+      // WAL attempt があれば解釈を前進し、まだ無ければ保存済み raw を再裁定する。
+      // どちらも再裁定 attempt の上限に達したら管轄裁定へ移す。
       if (provisional.interpretationEpochs >= MANAGER_INTERPRETATION_LIMITS.maxInterpretationEpochsPerLineage) {
         return 'terminal-adjudication';
       }
-      if (provisional.interpretationEpochs === 0) {
-        return adjudicationAttemptsExhausted(provisional) ? 'terminal-adjudication' : 'raw-adjudication';
+      if (adjudicationAttemptsExhausted(provisional)) {
+        return 'terminal-adjudication';
       }
-      return adjudicationAttemptsExhausted(provisional) ? 'terminal-adjudication' : 'interpretation';
+      return provisional.interpretationEpochs === 0 ? 'raw-adjudication' : 'interpretation';
     case 'raw-adjudication-unresolved':
       return adjudicationAttemptsExhausted(provisional) ? 'terminal-adjudication' : 'raw-adjudication';
     case 'manager-output-discarded':
@@ -98,10 +94,6 @@ export function classifyProvisionalRecovery(
         return adjudicationAttemptsExhausted(provisional) ? 'process-failure' : 'raw-adjudication';
       }
       return actionRecoveryExhausted(provisional) ? 'process-failure' : 'action';
-    case 'invalid-location-evidence':
-      // legacy kind（新規生成なし）。replay 材料も機械検証経路も無いため、
-      // manager dismiss で消さず loop monitor に処理失敗として提示する。
-      return 'process-failure';
   }
 }
 

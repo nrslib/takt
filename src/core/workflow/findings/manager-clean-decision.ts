@@ -45,7 +45,7 @@ export function assembleCleanManagerDecision(input: {
   const landRawAsProvisional = (rawFindingId: string, reason: string, kind: FindingProvisionalKind): void => {
     const wire = cleanWireById.get(rawFindingId);
     const canonical = cleanCanonicalById.get(rawFindingId);
-    if (wire === undefined || canonical === undefined || wire.kind === 'resolution_confirmation') {
+    if (wire === undefined || canonical === undefined || wire.relation === 'resolution_confirmation') {
       return;
     }
     cleanProvisionalSpecs = [

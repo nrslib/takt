@@ -33,6 +33,7 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
     location: 'src/core/workflow/evaluation/RuleEvaluator.ts:48',
     description: 'The workflow cannot route on open findings.',
     suggestion: 'Read the consolidated finding ledger in deterministic rules.',
+    relation: 'new',
     ...overrides,
   };
 }
@@ -782,7 +783,7 @@ describe('reconcileFindingLedger', () => {
       rawFindings: [
         makeRawFinding({
           rawFindingId: 'raw-confirm',
-          kind: 'resolution_confirmation',
+          relation: 'resolution_confirmation',
           targetFindingId: 'F-0001',
           title: 'Confirmed fixed',
           description: 'Verified at src/index.ts:42.',
@@ -841,7 +842,7 @@ describe('reconcileFindingLedger', () => {
         }),
         makeRawFinding({
           rawFindingId: 'raw-confirm',
-          kind: 'resolution_confirmation',
+          relation: 'resolution_confirmation',
           targetFindingId: 'F-0001',
           title: 'Confirmed fixed',
           description: 'Verified at src/index.ts:42.',
@@ -1048,7 +1049,7 @@ describe('reconcileFindingLedger', () => {
       rawFindings: [
         makeRawFinding({
           rawFindingId: 'raw-confirm-stray',
-          kind: 'resolution_confirmation',
+          relation: 'resolution_confirmation',
           targetFindingId: 'F-9999',
           title: 'Confirmed fixed',
           description: 'Verified but the manager did not cite it.',

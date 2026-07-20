@@ -208,7 +208,7 @@ function validateConfirmationRefsOnlyInResolutions(
   ];
   return issueDecisionRefs.flatMap((ref) => {
     const rawFinding = context.currentRawFindingsById.get(ref.rawFindingId);
-    return rawFinding !== undefined && rawFinding.kind === 'resolution_confirmation'
+    return rawFinding !== undefined && rawFinding.relation === 'resolution_confirmation'
       ? [`Resolution confirmation "${ref.rawFindingId}" cannot be cited as issue evidence in ${ref.decision}`]
       : [];
   });
@@ -495,7 +495,7 @@ function validateResolvedFindingRawFindingIds(
     }
     const currentRawFinding = context.currentRawFindingsById.get(rawFindingId);
     if (currentRawFinding !== undefined) {
-      if (currentRawFinding.kind !== 'resolution_confirmation') {
+      if (currentRawFinding.relation !== 'resolution_confirmation') {
         return [`Resolved finding "${finding.id}" references current raw finding "${rawFindingId}" that is not a resolution_confirmation`];
       }
       if (currentRawFinding.targetFindingId !== finding.id) {
@@ -515,7 +515,7 @@ function validateResolvedFindingRawFindingIds(
   // レビュアーの沈黙（言及なし）や過去の raw だけでは解消させない。
   const hasCurrentConfirmation = rawFindingIds.some((rawFindingId) => {
     const raw = context.currentRawFindingsById.get(rawFindingId);
-    return raw !== undefined && raw.kind === 'resolution_confirmation' && raw.targetFindingId === finding.id;
+    return raw !== undefined && raw.relation === 'resolution_confirmation' && raw.targetFindingId === finding.id;
   });
   if (!hasCurrentConfirmation) {
     errors.push(

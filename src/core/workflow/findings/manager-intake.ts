@@ -182,7 +182,6 @@ export function intakeReviewerOutputs(input: {
           reviewer: canonical.reviewer,
           ...(candidate.relation !== undefined ? { claimedRelation: candidate.relation } : {}),
           ...(candidate.targetFindingId !== undefined ? { claimedTargetFindingId: candidate.targetFindingId } : {}),
-          ...(candidate.legacyKind !== undefined ? { claimedKind: candidate.legacyKind } : {}),
           normalizedRelation: canonical.relation,
           ...(wire.targetFindingId !== undefined ? { wireTargetFindingId: wire.targetFindingId } : {}),
           ambiguityCodes: [...canonical.provenance.ambiguityCodes],

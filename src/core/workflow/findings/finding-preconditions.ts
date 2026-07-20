@@ -16,7 +16,6 @@ import type {
   RawFinding,
 } from './types.js';
 import { computeRawEvidenceHash } from './raw-canonicalization.js';
-import { deriveRawFindingRelation } from './schemas.js';
 
 const EVIDENCE_HASH_ALGORITHM_VERSION = 1;
 
@@ -39,7 +38,7 @@ export function computeFindingEvidenceHash(
       return `missing:${rawFindingId}`;
     }
     return computeRawEvidenceHash({
-      relation: deriveRawFindingRelation(raw.kind, raw.relation, raw.targetFindingId),
+      relation: raw.relation,
       ...(raw.targetFindingId !== undefined ? { targetFindingId: raw.targetFindingId } : {}),
       title: raw.title,
       description: raw.description,
@@ -178,7 +177,7 @@ function hasPostPromptPersists(
     if (raw === undefined) {
       return false;
     }
-    const relation = deriveRawFindingRelation(raw.kind, raw.relation, raw.targetFindingId);
+    const relation = raw.relation;
     return (relation === 'persists' || relation === 'reopened') && raw.targetFindingId === fresh.id;
   });
 }

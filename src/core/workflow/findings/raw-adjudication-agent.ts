@@ -43,9 +43,11 @@ export function prepareRawAdjudicationBatch(input: {
   return prepare(input.queue.slice(0, RAW_ADJUDICATION_RECOVERY_LIMITS.maxReplayCandidatesPerBatch));
 }
 
-function rawOnlyDecisions(decisions: FindingManagerDecisions): FindingManagerDecisions {
+export function rawDecisionsOnly(
+  rawDecisions: FindingManagerDecisions['rawDecisions'],
+): FindingManagerDecisions {
   return {
-    rawDecisions: decisions.rawDecisions,
+    rawDecisions,
     disputeDecisions: [],
     conflictDecisions: [],
     invalidateDecisions: [],
@@ -71,7 +73,7 @@ export async function requestRawAdjudicationBatch(input: {
     throw new Error(`Raw adjudication output exceeded the per-step budget (${input.consumedOutputTokens + outputTokens} estimated tokens)`);
   }
   return {
-    decisions: rawOnlyDecisions(parseManagerDecisions(response)),
+    decisions: rawDecisionsOnly(parseManagerDecisions(response).rawDecisions),
     outputTokens,
   };
 }

@@ -8,7 +8,7 @@
 {{else}}Current finding ledger summary:
 {{/if}}{{ledgerSummary}}
 
-{{#if isReviewer}}- Report every fresh issue you observe as a structured raw finding with relation "new" (empty targetFindingId). `relation` is the authoritative field; do not emit the legacy `kind` field.
+{{#if isReviewer}}- Report every fresh issue you observe as a structured raw finding with relation "new" (empty targetFindingId).
 - `new`, `persists`, `resolution_confirmation`, and `reopened` are evidence-backed raw relations with ledger IDs where required. The findings-manager and engine make final lifecycle decisions and finding-ID matches; reviewers must not assign or decide final state.
 {{/if}}{{#if reviewerHasOpenFindings}}- Each round, verify the open ledger findings that fall within your review scope.
 - When you have confirmed an open finding is fixed, report it as a raw finding with relation "resolution_confirmation", the ledger finding id in targetFindingId, and file:line evidence in description. Findings are only marked resolved through such confirmations.

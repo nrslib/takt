@@ -10,6 +10,7 @@ import type { FindingManagerValidationAttemptReport, UnsupportedRawFindingReport
 import type { FindingLedger, FindingManagerDecisions, FindingManagerOutput, RawFinding } from './types.js';
 import {
   prepareRawAdjudicationBatch,
+  rawDecisionsOnly,
   requestRawAdjudicationBatch,
 } from './raw-adjudication-agent.js';
 import { RAW_ADJUDICATION_RECOVERY_LIMITS } from './raw-finding-limits.js';
@@ -38,19 +39,6 @@ function recordBatchSpecs(
     }
   }
   return failureReasons;
-}
-
-function rawDecisionsOnly(
-  rawDecisions: FindingManagerDecisions['rawDecisions'],
-): FindingManagerDecisions {
-  return {
-    rawDecisions,
-    disputeDecisions: [],
-    conflictDecisions: [],
-    invalidateDecisions: [],
-    duplicateDecisions: [],
-    dismissDecisions: [],
-  };
 }
 
 function appendInvalidAttempts(
@@ -121,8 +109,18 @@ export async function runRawAdjudicationBatches(input: {
       managerStep: rawManagerStep,
       stepExecutor: input.runInput.stepExecutor,
     });
-    if (batch.inputTokens > RAW_ADJUDICATION_RECOVERY_LIMITS.maxInputTokensPerCall
-      || inputTokens + batch.inputTokens > RAW_ADJUDICATION_RECOVERY_LIMITS.maxInputTokensPerStep) {
+    if (batch.inputTokens > RAW_ADJUDICATION_RECOVERY_LIMITS.maxInputTokensPerCall) {
+      const rawFindingId = batch.batch[0]?.rawFindingId;
+      if (rawFindingId !== undefined) {
+        sentRawIds.add(rawFindingId);
+        failureReasons.set(
+          rawFindingId,
+          `Raw adjudication input exceeded the per-call budget (${batch.inputTokens} estimated tokens)`,
+        );
+      }
+      break;
+    }
+    if (inputTokens + batch.inputTokens > RAW_ADJUDICATION_RECOVERY_LIMITS.maxInputTokensPerStep) {
       break;
     }
     const batchRawIds = new Set(batch.batch.map((wire) => wire.rawFindingId));

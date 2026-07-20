@@ -458,6 +458,7 @@ describe('FindingLedgerStore', () => {
       severity: 'high' as const,
       title: 'Secret leak',
       description: 'The reviewer included a secret-shaped string in evidence.',
+      relation: 'new' as const,
     };
 
     store.saveLedger(makeLedger());
@@ -483,7 +484,7 @@ describe('FindingLedgerStore', () => {
     expect(existsSync(join(projectCwd, '.takt/findings/peer-review.json'))).toBe(true);
   });
 
-  it('should migrate legacy version 1 adjudication attempts to stable reservation tokens', () => {
+  it('should reject adjudication attempts without reservation tokens through normal schema validation', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const projectLedgerPath = join(projectCwd, '.takt/findings/peer-review.json');
@@ -510,13 +511,7 @@ describe('FindingLedgerStore', () => {
     }), 'utf-8');
     const store = createStore({ projectCwd, reportDir });
 
-    const firstLoad = store.loadLedger();
-    const secondLoad = store.loadLedger();
-
-    expect(firstLoad.conflicts[0]?.adjudicationAttempts?.[0]?.reservationToken)
-      .toBe('legacy-v1:0:0:C-0001');
-    expect(secondLoad.conflicts[0]?.adjudicationAttempts?.[0]?.reservationToken)
-      .toBe('legacy-v1:0:0:C-0001');
+    expect(() => store.loadLedger()).toThrow(/reservationToken/);
   });
 
   it('should create the run-local ledger copy as owner-only read-only', () => {
@@ -642,6 +637,7 @@ describe('FindingLedgerStore', () => {
       severity: 'high' as const,
       title: 'Open issue',
       description: 'The issue is still present.',
+      relation: 'new' as const,
     };
 
     const firstPath = store.saveRawFindings('run-1', 'reviewers', [rawFinding]);
@@ -651,10 +647,8 @@ describe('FindingLedgerStore', () => {
 
     expect(firstPath).toBe(join(projectCwd, '.takt/findings/raw/run-1.reviewers.json'));
     expect(secondPath).toBe(join(projectCwd, '.takt/findings/raw/run-1.reviewers.2.json'));
-    // parseRawFindings derives relation from kind for backward-compatible input (item 3).
-    const expectedRawFinding = { ...rawFinding, relation: 'new' };
-    expect(JSON.parse(readFileSync(firstPath, 'utf-8'))).toEqual([expectedRawFinding]);
-    expect(JSON.parse(readFileSync(secondPath, 'utf-8'))).toEqual([{ ...expectedRawFinding, rawFindingId: 'raw-2' }]);
+    expect(JSON.parse(readFileSync(firstPath, 'utf-8'))).toEqual([rawFinding]);
+    expect(JSON.parse(readFileSync(secondPath, 'utf-8'))).toEqual([{ ...rawFinding, rawFindingId: 'raw-2' }]);
   });
 
   it('should reject symlinked ledger files before writing outside the projectCwd', () => {
@@ -688,6 +682,7 @@ describe('FindingLedgerStore', () => {
         severity: 'high',
         title: 'Unsafe write',
         description: 'Raw findings must stay inside the projectCwd.',
+        relation: 'new',
       },
     ])).toThrow('Finding ledger path escapes base directory');
     expect(existsSync(join(outsideDir, 'run-1.reviewers.json'))).toBe(false);

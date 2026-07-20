@@ -3,11 +3,9 @@
  *
  * - reviewer structured output は「寛容な per-item parse」で
  *   ReviewerRawFindingCandidate に落とす。1件の不正 raw が配列全体の Zod parse
- *   失敗として run を殺す構造（kind/relation 矛盾1件で
- *   run 全体 abort）をここで断つ。
- * - canonical 生成関数は canonicalizeReviewerRawFinding の1つだけ。reviewer 用・
- *   legacy 用・test 用に別の生成関数を作らない。legacy ledger を読む場合も
- *   candidateFromLegacyRawFinding が candidate を作り、同じ関数を通す。
+ *   失敗として run を殺す構造をここで断つ。
+ * - canonical 生成関数は canonicalizeReviewerRawFinding の1つだけ。reviewer 出力と
+ *   保存済み raw のどちらも candidate を作り、同じ関数を通す。
  * - brand は型レベル（unique symbol）に加えて runtime でも強制する: factory が
  *   WeakSet/WeakMap に登録し、downstream（機械分類・reconciler・manager prompt）
  *   の入口が assertCanonicalRawFinding で照合する。型 assertion や spread で
@@ -21,7 +19,6 @@ import { createHash } from 'node:crypto';
 import {
   FINDING_SEVERITIES,
   RAW_FINDING_EVIDENCE_KINDS,
-  RAW_FINDING_KINDS,
   RAW_FINDING_RELATIONS,
 } from '../../models/finding-types.js';
 import type {
@@ -36,11 +33,9 @@ import type {
   RawFinding,
   RawFindingEvidence,
   RawFindingEvidenceKind,
-  RawFindingKind,
   RawFindingRelation,
   ReviewerRawFindingCandidate,
 } from './types.js';
-import { deriveRawFindingRelation, kindForRelation } from './schemas.js';
 import { normalizeFindingText, parseFindingLocation, parseFindingLocationRange } from './location.js';
 import { RAW_LADDER_POLICY_VERSION } from './raw-finding-limits.js';
 
@@ -49,7 +44,7 @@ import { RAW_LADDER_POLICY_VERSION } from './raw-finding-limits.js';
 // ---------------------------------------------------------------------------
 
 const CANDIDATE_REGISTRY = new WeakSet<object>();
-const CANDIDATE_ORIGINS = new WeakMap<object, 'reviewer' | 'legacy-ledger' | 'system'>();
+const CANDIDATE_ORIGINS = new WeakMap<object, 'reviewer' | 'stored-ledger' | 'system'>();
 const CANONICAL_REGISTRY = new WeakSet<object>();
 
 export function isReviewerRawFindingCandidate(value: unknown): value is ReviewerRawFindingCandidate {
@@ -231,12 +226,6 @@ function pickRelation(value: unknown): RawFindingRelation | undefined {
     : undefined;
 }
 
-function pickKind(value: unknown): RawFindingKind | undefined {
-  return typeof value === 'string' && (RAW_FINDING_KINDS as readonly string[]).includes(value)
-    ? value as RawFindingKind
-    : undefined;
-}
-
 function pickEvidenceKind(value: unknown): RawFindingEvidenceKind | undefined {
   return typeof value === 'string' && (RAW_FINDING_EVIDENCE_KINDS as readonly string[]).includes(value)
     ? value as RawFindingEvidenceKind
@@ -302,7 +291,7 @@ type UnbrandedCandidate = {
 
 function registerCandidate(
   candidate: UnbrandedCandidate,
-  origin: 'reviewer' | 'legacy-ledger' | 'system',
+  origin: 'reviewer' | 'stored-ledger' | 'system',
 ): ReviewerRawFindingCandidate {
   const branded = candidate as unknown as ReviewerRawFindingCandidate;
   CANDIDATE_REGISTRY.add(branded);
@@ -407,7 +396,6 @@ export function createReviewerRawFindingCandidates(
       ...(pickString(record.suggestion) !== undefined ? { suggestion: pickString(record.suggestion)! } : {}),
       ...(pickRelation(record.relation) !== undefined ? { relation: pickRelation(record.relation)! } : {}),
       ...(pickString(record.targetFindingId) !== undefined ? { targetFindingId: pickString(record.targetFindingId)! } : {}),
-      ...(pickKind(record.kind) !== undefined ? { legacyKind: pickKind(record.kind)! } : {}),
       ...(evidence !== undefined ? { evidence } : {}),
       sourceBytes: Buffer.byteLength(JSON.stringify(items[index] ?? null), 'utf-8'),
       reviewer: context.reviewerStepName,
@@ -417,14 +405,12 @@ export function createReviewerRawFindingCandidates(
 }
 
 /**
- * legacy adapter: 既存台帳の RawFinding から candidate を作る。kind → relation の
- * 復元（deriveRawFindingRelation）はこの adapter の中だけに許される。
+ * 保存済み RawFinding から recovery 用 candidate を作る。
  */
-export function candidateFromLegacyRawFinding(
+export function candidateFromStoredRawFinding(
   raw: RawFinding,
   reviewerStableKey: string,
 ): ReviewerRawFindingCandidate {
-  const relation = deriveRawFindingRelation(raw.kind, raw.relation, raw.targetFindingId);
   return registerCandidate({
     intakeId: raw.rawFindingId,
     reviewerStableKey,
@@ -435,15 +421,14 @@ export function candidateFromLegacyRawFinding(
     ...(raw.location !== undefined ? { location: raw.location } : {}),
     description: raw.description,
     ...(raw.suggestion !== undefined ? { suggestion: raw.suggestion } : {}),
-    relation,
+    relation: raw.relation,
     ...(raw.targetFindingId !== undefined ? { targetFindingId: raw.targetFindingId } : {}),
-    ...(raw.kind !== undefined ? { legacyKind: raw.kind } : {}),
     // すでに組み立て済みのネスト形（wire と同じ形）なのでそのまま引き継ぐ。
     ...(raw.evidence !== undefined ? { evidence: raw.evidence } : {}),
     sourceBytes: Buffer.byteLength(JSON.stringify(raw), 'utf-8'),
     reviewer: raw.reviewer,
     stepName: raw.stepName,
-  }, 'legacy-ledger');
+  }, 'stored-ledger');
 }
 
 /**
@@ -560,7 +545,6 @@ function buildSafeEvidenceExcerpt(candidate: ReviewerRawFindingCandidate): strin
 /** ambiguity 検出に必要な raw のフィールド（candidate / 未検証 reviewer 出力の両方が満たせる形）。 */
 export interface RawAmbiguityFields {
   relation?: RawFindingRelation;
-  legacyKind?: RawFindingKind;
   targetFindingId?: string;
   title?: string;
   description?: string;
@@ -589,8 +573,7 @@ export function detectRawFindingAmbiguities(
   const indexes = indexLedgerFindings(ledger);
   const codes: RawAmbiguityCode[] = [];
 
-  // relation は新規 contract の正本。欠損は ambiguity（reviewer 起源では kind から
-  // 推測しない — 「新規 reviewer contract で kind→relation の推測を続けるな」）。
+  // relation は contract の正本。欠損は ambiguity。
   const claimedRelation = fields.relation;
   if (claimedRelation === undefined) {
     codes.push('missing-required-field');
@@ -598,13 +581,6 @@ export function detectRawFindingAmbiguities(
   if (fields.title === undefined || fields.description === undefined
     || fields.severity === undefined || fields.familyTag === undefined) {
     codes.push('missing-required-field');
-  }
-
-  // legacy kind と relation の矛盾（kind=issue +
-  // relation=resolution_confirmation）。parse 失敗ではなく taint にする。
-  if (claimedRelation !== undefined && fields.legacyKind !== undefined
-    && kindForRelation(claimedRelation) !== fields.legacyKind) {
-    codes.push('kind-relation-conflict');
   }
 
   // relation と targetFindingId の必須・禁止条件。
@@ -672,7 +648,6 @@ export function extractLenientRawFields(
   return {
     ...(pickString(record.rawFindingId) !== undefined ? { rawFindingId: pickString(record.rawFindingId)! } : {}),
     ...(pickRelation(record.relation) !== undefined ? { relation: pickRelation(record.relation)! } : {}),
-    ...(pickKind(record.kind) !== undefined ? { legacyKind: pickKind(record.kind)! } : {}),
     ...(pickString(record.targetFindingId) !== undefined ? { targetFindingId: pickString(record.targetFindingId)! } : {}),
     ...(pickString(record.title) !== undefined ? { title: pickString(record.title)! } : {}),
     ...(pickString(record.description) !== undefined ? { description: pickString(record.description)! } : {}),
@@ -710,14 +685,13 @@ export function canonicalizeReviewerRawFinding(
     || context.preserveAmbiguityOrigin === true;
   const allCodes = [...new Set([...priorCodes, ...codes])];
 
-  // canonical の relation/kind は必ず一致する整合ペア。ambiguous で
+  // ambiguous で
   // relation の主張が成立しない場合は最も権限の弱い 'new' に正規化する（権限は
   // capabilities が全遮断しているため、この正規化がゲートを開けることはない）。
   const relationClaimHolds = claimedRelation !== undefined
     && !(claimedRelation === 'new' && candidate.targetFindingId !== undefined)
     && !(claimedRelation !== 'new' && candidate.targetFindingId === undefined);
   const relation: RawFindingRelation = relationClaimHolds ? claimedRelation : 'new';
-  const kind = kindForRelation(relation);
 
   const lineageKey = computeLineageKey({
     ...(candidate.targetFindingId !== undefined ? { targetFindingId: candidate.targetFindingId } : {}),
@@ -743,7 +717,6 @@ export function canonicalizeReviewerRawFinding(
     lineageKey,
     evidenceHash,
     relation,
-    kind,
     reviewer: candidate.reviewer,
     stepName: candidate.stepName,
     provenance: {
@@ -804,7 +777,7 @@ export function canonicalizeReviewerRawFinding(
 /**
  * canonical を ledger v1 の RawFinding wire 形へ落とす。ambiguous で必須文字列が
  * 欠損している場合も schema-valid な監査値で埋める（「不明な raw を黙って消すな」
- * — 監査経路は必ず残す）。relation/kind は canonical の整合ペアをそのまま使う。
+ * — 監査経路は必ず残す）。relation は canonical の値をそのまま使う。
  * relation='new' に正規化された ambiguous の元 targetFindingId 主張は
  * description に追記して監査可能性を保つ（wire schema は new+target を禁止する）。
  */
@@ -829,7 +802,6 @@ export function toLedgerRawFinding(canonical: CanonicalRawFinding): RawFinding {
     ...(canonical.location !== undefined ? { location: canonical.location } : {}),
     description,
     ...(canonical.suggestion !== undefined ? { suggestion: canonical.suggestion } : {}),
-    kind: canonical.kind,
     relation: canonical.relation,
     ...(canonical.relation !== 'new' && canonical.targetFindingId !== undefined
       ? { targetFindingId: canonical.targetFindingId }

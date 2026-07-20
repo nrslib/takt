@@ -4,7 +4,6 @@ import {
   FINDING_LIFECYCLES,
   FINDING_SEVERITIES,
   FINDING_STATUSES,
-  RAW_FINDING_KINDS,
 } from '../core/models/finding-types.js';
 import {
   FindingLifecycleSchema,
@@ -108,9 +107,7 @@ describe('finding schemas', () => {
   it('keeps strict JSON Schema object properties listed in required', () => {
     // provider-facing schema は strict 様式（全 properties が required、optional
     // プロパティ無し）を維持する。OpenAI/Codex 系 native structured output は
-    // これを要求し、違反すると生成前に schema 自体が拒否される。legacy `kind` の
-    // 寛容受理は post-hoc 検証専用の RawFindingsOutputValidationJsonSchema が担う
-    // （下のテスト参照）。
+    // これを要求し、違反すると生成前に schema 自体が拒否される。
     const rawFindingItem = RawFindingsOutputJsonSchema.properties.rawFindings.items;
     expect(rawFindingItem.required).toEqual(Object.keys(rawFindingItem.properties));
     expect(Object.keys(rawFindingItem.properties)).not.toContain('kind');
@@ -134,7 +131,7 @@ describe('finding schemas', () => {
     expect(decisionsProperties.duplicateDecisions.items.required).toEqual(Object.keys(decisionsProperties.duplicateDecisions.items.properties));
   });
 
-  it('post-hoc 検証用の寛容版 schema は legacy kind を optional で追加し、typed evidence protocol の3フィールドも required から外した strict 版の上位集合になっている', () => {
+  it('post-hoc 検証用 schema は typed evidence protocol の3フィールドだけを required から外す', () => {
     const strictItem = RawFindingsOutputJsonSchema.properties.rawFindings.items;
     const lenientItem = RawFindingsOutputValidationJsonSchema.properties.rawFindings.items;
     // required は strict 版から evidenceKind/verbatimExcerpt/snapshotId を除いたもの
@@ -144,12 +141,9 @@ describe('finding schemas', () => {
     expect(lenientItem.required).toEqual(
       strictItem.required.filter((key) => !evidenceFields.includes(key)),
     );
-    // properties は strict 版 + kind のみ（typed evidence の3フィールドは
-    // properties としては残る — optional で受理するだけで、存在自体は許す）。
     expect(Object.keys(lenientItem.properties).sort()).toEqual(
-      [...Object.keys(strictItem.properties), 'kind'].sort(),
+      Object.keys(strictItem.properties).sort(),
     );
-    expect(lenientItem.properties.kind.enum).toEqual(RAW_FINDING_KINDS);
   });
 
   it('uses finding type constants for schema enum values', () => {
@@ -180,6 +174,7 @@ describe('finding schemas', () => {
       location: 'src/core/workflow/findings/manager-runner.ts:72',
       description: 'The findings manager cannot reconcile findings without familyTag.',
       suggestion: 'Keep reviewer raw finding fields complete for reconciliation.',
+      relation: 'new',
     };
     const persistedRawFinding = {
       ...reviewerRawFinding,

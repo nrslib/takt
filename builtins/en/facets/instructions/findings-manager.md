@@ -5,7 +5,7 @@ Compare reviewer raw findings with the previous ledger and return one decision p
 For each raw finding listed in the prompt, return exactly one entry in `rawDecisions`:
 - `same`: the same issue as an existing open finding; set findingId to that finding's ID
 - `new`: no related finding exists yet; leave findingId empty. Do not write a title or severity yourself — the engine uses the raw finding's own title and severity
-- `resolved`: this raw finding has kind resolution_confirmation and confirms an existing open finding is fixed via targetFindingId; set findingId to that finding's ID. Never resolve a finding merely because reviewers stopped mentioning it, and never resolve one based on an issue-kind raw finding or a textual claim of resolution alone
+- `resolved`: this raw finding has relation resolution_confirmation and confirms an existing open finding is fixed via targetFindingId; set findingId to that finding's ID. Never resolve a finding merely because reviewers stopped mentioning it, and never resolve one based on another raw relation or a textual claim of resolution alone
 - `reopened`: a previously resolved, waived, or dismissed finding has reappeared; set findingId to that finding's ID
 - `conflict`: this raw finding contradicts an existing finding (e.g. a resolution confirmation contradicting a re-report); set findingId to the finding it conflicts with
 - `unsupported`: this raw finding explicitly referenced an existing finding (targetFindingId set) as a persists/reopened claim, but the reference does not hold up against the evidence; leave findingId empty. This creates no confirmed finding and leaves the target unchanged, while the engine retains the raw claim as a gate-blocking provisional for audit — do not fall back to `new`

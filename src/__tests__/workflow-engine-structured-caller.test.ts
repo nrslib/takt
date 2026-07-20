@@ -174,6 +174,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           title: 'Existing issue',
           location: 'src/a.ts:10',
           description: 'Existing issue body.',
+          relation: 'new',
         },
       ],
       conflicts: [],
@@ -816,6 +817,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           severity: 'high',
           title: 'Unresolved issue',
           description: 'Still open in the ledger.',
+          relation: 'new',
         },
       ],
       conflicts: [],
@@ -1344,6 +1346,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           severity: 'high',
           title: 'Unresolved issue',
           description: 'Still open in the ledger.',
+          relation: 'new',
         },
       ],
       conflicts: [],
@@ -2048,6 +2051,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           title: 'Existing issue',
           location: 'src/a.ts:10',
           description: 'Existing issue body.',
+          relation: 'new',
         },
       ],
       conflicts: [],
@@ -2240,6 +2244,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           title: 'Existing issue',
           location: 'src/a.ts:10',
           description: 'Existing issue body.',
+          relation: 'new',
         },
       ],
       conflicts: [],
@@ -2427,6 +2432,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       severity: 'high' as const,
       title: 'Existing issue',
       description: 'The workflow cannot route on open findings.',
+      relation: 'new' as const,
     };
     const initialLedger = {
       version: 1,
@@ -2639,6 +2645,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           severity: 'high' as const,
           title: 'Existing issue',
           description: previousEvidenceInjection,
+          relation: 'new',
         },
       ],
       conflicts: [],
@@ -2764,128 +2771,6 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(provisional?.provisional?.kind).toBe('raw-adjudication-unresolved');
     // reviewer 1回 + manager 1回（v2: 再問い合わせ無し）。
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
-  });
-
-  it('provider へ渡る raw findings schema は strict（kind 無し・全 required）のまま、kind 併記出力は post-hoc 寛容検証を通過して intake に届く', async () => {
-    // codex 検証ブロッカー対応の2面分離を engine 経路で固定する:
-    // (1) native structured output の生成拘束用に provider が受け取る
-    //     options.outputSchema は strict 様式（kind プロパティ無し・全 properties
-    //     required — OpenAI/Codex はこれを要求し、違反 schema は生成前に拒否される）。
-    // (2) それでも formless/劣化経路の弱いモデルが kind を併記してきた場合
-    //     （v3-r3 resume 実測）、post-hoc 検証は寛容版 schema で通し、intake の
-    //     canonicalization（kind/relation 整合検証）に到達する。
-    let capturedOutputSchema: Record<string, unknown> | undefined;
-    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
-      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
-      if (schemaText.includes('"rawFindings"')) {
-        capturedOutputSchema = options?.outputSchema as Record<string, unknown>;
-        return {
-          persona,
-          status: 'done',
-          content: 'Review report body.',
-          structuredOutput: {
-            rawFindings: [{
-              rawFindingId: 'raw-1',
-              // strict schema は kind を含まないが、弱いモデルは併記してくる。
-              kind: 'issue',
-              relation: 'new',
-              targetFindingId: '',
-              familyTag: 'bug',
-              severity: 'high',
-              title: 'Issue reported with legacy kind attached',
-              description: 'A real problem carrying the legacy kind field.',
-              suggestion: '',
-              ...verifiedSourceQuoteFields(cwd, 'src/current.ts', 1),
-            }],
-          },
-          timestamp: new Date('2026-06-13T00:00:01.000Z'),
-        };
-      }
-      if (persona === 'findings-manager') {
-        const matches = [...instruction.matchAll(/"rawFindingId":\s*"([^"]+:raw-1)"/g)];
-        const rawFindingId = matches.at(-1)?.[1] ?? '';
-        return {
-          persona,
-          status: 'done',
-          content: '',
-          structuredOutput: {
-            rawDecisions: [{ rawFindingId, decision: 'new', findingId: '', evidence: 'Fresh observation.' }],
-            disputeDecisions: [],
-            conflictDecisions: [],
-            invalidateDecisions: [],
-            duplicateDecisions: [],
-            dismissDecisions: [],
-          },
-          timestamp: new Date('2026-06-13T00:00:02.000Z'),
-        };
-      }
-      return { persona, status: 'done', content: 'ok', timestamp: new Date('2026-06-13T00:00:03.000Z') };
-    });
-
-    const config: WorkflowConfig = {
-      name: 'finding-schema-split-test',
-      maxSteps: 2,
-      initialStep: 'reviewers',
-      findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-      },
-      steps: [
-        makeStep({
-          name: 'reviewers',
-          persona: 'reviewer',
-          instruction: 'Run reviewers.',
-          parallel: [
-            makeStep({
-              name: 'architecture-review',
-              persona: 'architecture-reviewer',
-              instruction: 'Review architecture.',
-              rules: [makeRule('when(true)', 'COMPLETE')],
-            }),
-          ],
-          rules: [
-            makeRule('when(findings.open.count == 1)', 'COMPLETE'),
-            makeRule('when(true)', 'ABORT'),
-          ],
-        }),
-      ],
-    };
-
-    const result = await new WorkflowEngine(config, cwd, 'task', {
-      projectCwd: cwd,
-      provider: 'claude',
-      reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
-    }).run();
-
-    // (1) provider が受け取った schema は strict: kind プロパティ無し・全 required。
-    expect(capturedOutputSchema).toBeDefined();
-    const items = (capturedOutputSchema as {
-      properties: { rawFindings: { items: { properties: Record<string, unknown>; required: string[] } } };
-    }).properties.rawFindings.items;
-    expect(Object.keys(items.properties)).not.toContain('kind');
-    expect(items.required).toEqual(Object.keys(items.properties));
-
-    // (2) kind 併記出力が post-hoc 検証（寛容版）を通過し、intake に到達して
-    //     台帳へ確定 finding として反映された（旧: schema validator が
-    //     $.rawFindings[0].kind で sub-step を殺し intake 不到達 → abort）。
-    expect(result.status).toBe('completed');
-    const ledger = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as {
-      findings: Array<{ title: string; status: string }>;
-      rawFindings: Array<{ rawFindingId: string; kind?: string; relation?: string }>;
-    };
-    expect(ledger.findings).toContainEqual(expect.objectContaining({
-      title: 'Issue reported with legacy kind attached',
-      status: 'open',
-    }));
-    const wire = ledger.rawFindings.find((raw) => raw.rawFindingId.endsWith(':raw-1'));
-    expect(wire?.relation).toBe('new');
   });
 
   it('finding_contract の parallel reviewer は旧 findings キーを raw findings として扱わない', async () => {

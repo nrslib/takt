@@ -179,7 +179,7 @@ function assertResolvedEvidenceRawFindings(input: {
   for (const rawFindingId of input.resolvedRawFindingIds) {
     const currentRawFinding = input.currentRawFindingsById.get(rawFindingId);
     if (currentRawFinding !== undefined) {
-      if (currentRawFinding.kind !== 'resolution_confirmation') {
+      if (currentRawFinding.relation !== 'resolution_confirmation') {
         throw new Error(
           `Resolved finding "${input.finding.id}" references current raw finding "${rawFindingId}" that is not a resolution_confirmation`,
         );
@@ -709,7 +709,7 @@ function reconcileFindingLedgerWithValidator(
   for (const rawFinding of input.rawFindings) {
     // 解消確認は問題の観測ではない（適用されなかった確認の衝突化は呼び出し元の
     // CAS 経路が担う）ため、fallback provisional の対象にしない。
-    if (rawFinding.kind === 'resolution_confirmation') {
+    if (rawFinding.relation === 'resolution_confirmation') {
       continue;
     }
     if (usedRawFindingIds.has(rawFinding.rawFindingId)

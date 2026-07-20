@@ -142,16 +142,6 @@ export const FINDING_PROVISIONAL_KINDS = [
    * 再裁定）と、attempt 枯渇後の管轄裁定（dismiss 候補化）。
    */
   'raw-adjudication-unresolved',
-  /**
-   * @deprecated 既存台帳の読み取り互換のためだけに残す。新規コードはこの kind をもう生成しない —
-   * location 証拠の不成立（存在しないファイル/範囲外行/verbatimExcerpt
-   * 不一致）は、product gate を無条件に塞ぐ provisional ではなく reviewer
-   * anomaly（二系統台帳の review-integrity 側。REVIEWER_ANOMALY_KINDS 参照）へ
-   * 隔離する（review-integrity protocol: typed evidence protocol + verbatimExcerpt 機械照合）。
-   * 既存 v1 ledger にこの kind の provisional finding が残っていても
-   * migration なしで読める。
-   */
-  'invalid-location-evidence',
 ] as const;
 export type FindingProvisionalKind = typeof FINDING_PROVISIONAL_KINDS[number];
 
@@ -429,8 +419,6 @@ export interface FindingLedger {
 export const RAW_AMBIGUITY_CODES = [
   /** relation と targetFindingId の必須・禁止条件が矛盾する。 */
   'relation-target-mismatch',
-  /** legacy kind と relation が矛盾する。 */
-  'kind-relation-conflict',
   /** persists が未知の target を指す。 */
   'persists-target-unknown',
   /** persists が open でない target を指す。 */
@@ -485,9 +473,6 @@ export interface ReviewerRawFindingCandidate {
   readonly relation?: RawFindingRelation;
   readonly targetFindingId?: string;
 
-  /** legacy 入力の検証専用。新規 reviewer contract では出力させない。 */
-  readonly legacyKind?: RawFindingKind;
-
   /**
    * typed evidence protocol(review-integrity protocol)。candidate factory
    * (createReviewerRawFindingCandidates)が provider-facing の flat wire
@@ -509,7 +494,7 @@ export type CanonicalRawFinding =
   | AmbiguousCanonicalRawFinding;
 
 export interface CanonicalRawFindingProvenance {
-  readonly origin: 'reviewer' | 'legacy-ledger' | 'system';
+  readonly origin: 'reviewer' | 'stored-ledger' | 'system';
   readonly ambiguityOrigin: boolean;
   readonly clarificationAttempted: boolean;
   readonly ambiguityCodes: readonly RawAmbiguityCode[];
@@ -523,8 +508,6 @@ interface CanonicalRawFindingBase {
   readonly evidenceHash: string;
 
   readonly relation: RawFindingRelation;
-  readonly kind: RawFindingKind;
-
   readonly reviewer: string;
   readonly stepName: string;
 
@@ -678,18 +661,8 @@ export interface FindingInterpretationRecord {
   applicationResult?: InterpretationApplicationResult;
 }
 
-export const RAW_FINDING_KINDS = ['issue', 'resolution_confirmation'] as const;
-export type RawFindingKind = typeof RAW_FINDING_KINDS[number];
-
-// relation is the successor of `kind`: it states the raw finding's relationship
-// to the ledger, not just whether it's an issue observation. 'new' replaces
-// kind=issue with no target; 'persists' and 'reopened' are issue-kind raws that
-// explicitly reference an existing finding (previously indistinguishable from a
-// fresh 'new' issue except by mechanical familyTag+location matching, which the
-// identity contract excludes as an identity signal). 'resolution_confirmation'
-// mirrors kind=resolution_confirmation. `kind` is retained for backward
-// compatibility (see deriveRawFindingRelation in finding-schemas.ts) but
-// `relation` is authoritative wherever both are present.
+// raw finding と台帳の関係を表す現行契約。新規観測、継続、解消確認、再発を
+// 明示し、targetFindingId の要否を一意に決める。
 export const RAW_FINDING_RELATIONS = ['new', 'persists', 'resolution_confirmation', 'reopened'] as const;
 export type RawFindingRelation = typeof RAW_FINDING_RELATIONS[number];
 
@@ -744,15 +717,8 @@ export interface RawFinding {
   location?: string;
   description: string;
   suggestion?: string;
-  /** Omitted means 'issue' (backward compatible with pre-existing ledgers). */
-  kind?: RawFindingKind;
-  /**
-   * This raw finding's relationship to the ledger. Always present after schema
-   * parsing (deriveRawFindingRelation derives it from `kind` for pre-existing
-   * data); optional on the wire type only because reviewers producing the v1
-   * raw findings JSON schema predate this field.
-   */
-  relation?: RawFindingRelation;
+  /** This raw finding's relationship to the ledger. */
+  relation: RawFindingRelation;
   /** Ledger finding id this entry references (required for persists/reopened/resolution_confirmation; forbidden for new). */
   targetFindingId?: string;
   /**

@@ -13,7 +13,7 @@ import {
  * この open provisional が manager の dismiss 裁定対象か。
  * engine 主導の recovery（解釈の前進 / source raw の再裁定 / 機械 resolve）が
  * 残っている間は候補にしない — recovery を使い切った、または最初から機械処理の
- * 余地が無い（locationless / legacy）provisional だけが内容の管轄裁定へ回る。
+ * 余地が無い locationless provisional だけが内容の管轄裁定へ回る。
  * 分類は provisional-recovery.ts が正本。
  */
 export function isDismissCandidate(finding: FindingLedgerEntry, roundsCompleted: number): boolean {

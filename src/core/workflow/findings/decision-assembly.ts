@@ -355,7 +355,7 @@ function assembleRawDecisions(input: {
       // 修正確認の raw を新規指摘の根拠にはできない。ここで弾かないと最終検証
       // （validateConfirmationRefsOnlyInResolutions）まで生き延び、そこでは
       // 1件の違反が出力全体を無効化する。1件だけ不採用にして再問い合わせに乗せる。
-      if (raw.kind === 'resolution_confirmation') {
+      if (raw.relation === 'resolution_confirmation') {
         reject(decision, `Cannot create a new finding from raw finding "${raw.rawFindingId}" because it is a resolution_confirmation`);
         continue;
       }
@@ -419,11 +419,11 @@ function assembleRawDecisions(input: {
       continue;
     }
 
-    // resolved は resolution_confirmation kind の raw だけを根拠にできる。issue
-    // kind の raw（レビュアーの再報告や、raw finding 本文への prompt injection）を
+    // resolved は relation=resolution_confirmation の raw だけを根拠にできる。
+    // その他の relation（レビュアーの再報告や、raw finding 本文への prompt injection）を
     // 根拠にした resolved を許すと、指摘の未修正を「解消済み」と偽装できてしまう。
     if (decision.decision === 'resolved'
-      && (raw.kind !== 'resolution_confirmation' || raw.targetFindingId !== findingId)) {
+      && (raw.relation !== 'resolution_confirmation' || raw.targetFindingId !== findingId)) {
       reject(decision, `Cannot resolve finding "${findingId}" using raw finding "${raw.rawFindingId}" because it is not a resolution_confirmation targeting that finding`);
       continue;
     }

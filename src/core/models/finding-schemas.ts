@@ -9,10 +9,9 @@ import type {
   RawFinding,
   RawFindingRelation,
 } from './finding-types.js';
-import type { AmbiguousInterpretation, RawFindingKind } from './finding-types.js';
+import type { AmbiguousInterpretation } from './finding-types.js';
 import {
   AMBIGUOUS_INTERPRETATION_DECISIONS,
-  RAW_FINDING_KINDS,
   RAW_FINDING_RELATIONS,
   CONFLICT_DECISION_KINDS,
   DISPUTE_DECISION_KINDS,
@@ -217,80 +216,26 @@ export const FindingLedgerEntrySchema = z.object({
   }).strict()).optional(),
 }).strict();
 
-/**
- * relation → kind の唯一の機械導出。`kind` は入力上の判断項目に
- * しない: canonical 側では relation と kind を必須にし、必ずこの関数の結果と
- * 一致させる。逆方向（kind → relation の推測）は legacy adapter
- * （deriveRawFindingRelation 経由）だけに許される。
- */
-export function kindForRelation(relation: RawFindingRelation): RawFindingKind {
-  return relation === 'resolution_confirmation' ? 'resolution_confirmation' : 'issue';
-}
-
-/**
- * Derives the authoritative `relation` from a parsed raw finding whose `relation`
- * field may be absent (pre-existing data, or a schema predating this field).
- * Backward compatibility rule: relation undefined + kind 'resolution_confirmation'
- * -> 'resolution_confirmation'; relation undefined + kind 'issue'/undefined with
- * targetFindingId set -> 'persists' (this is how pre-relation ledgers recorded
- * a re-report against an existing finding); relation undefined + kind
- * 'issue'/undefined with no targetFindingId -> 'new'.
- *
- * This is the single authoritative derivation: schema parsing uses it here, and
- * effectiveRawFindingRelation (core/workflow/findings/mechanical-classification.ts)
- * delegates to it for hand-built raws that never went through the schema.
- */
-export function deriveRawFindingRelation(
-  kind: RawFinding['kind'],
-  relation: RawFindingRelation | undefined,
-  targetFindingId: string | undefined,
-): RawFindingRelation {
-  if (relation !== undefined) {
-    return relation;
-  }
-  if (kind === 'resolution_confirmation') {
-    return 'resolution_confirmation';
-  }
-  return targetFindingId !== undefined ? 'persists' : 'new';
-}
-
 interface RawFindingRelationFields {
-  kind?: RawFinding['kind'];
-  relation?: RawFindingRelation;
+  relation: RawFindingRelation;
   targetFindingId?: string;
 }
 
 /**
- * Derives `relation` and validates the invariants from the feature spec in one
- * pass: relation=new forbids targetFindingId; every other relation requires it;
- * kind and relation must agree where both are present (kept for the transition
- * period — relation is authoritative, kind is retained for callers that have not
- * migrated). Shared by RawFindingSchema and ReviewerRawFindingSchema so the two
- * wire shapes (manager-facing vs. reviewer-facing) can't drift.
+ * relation と targetFindingId の現行契約を検証する。relation=new は target を
+ * 禁止し、それ以外は target を必須とする。
  */
-function resolveRawFindingRelation<T extends RawFindingRelationFields>(
+function validateRawFindingRelation<T extends RawFindingRelationFields>(
   value: T,
   ctx: z.RefinementCtx,
-): T & { relation: RawFindingRelation } {
-  const relation = deriveRawFindingRelation(value.kind, value.relation, value.targetFindingId);
+): void {
+  const relation = value.relation;
   if (relation === 'new' && value.targetFindingId !== undefined) {
     ctx.addIssue({ code: 'custom', message: '"new" raw findings must not set targetFindingId', path: ['targetFindingId'] });
   }
   if (relation !== 'new' && value.targetFindingId === undefined) {
     ctx.addIssue({ code: 'custom', message: `"${relation}" raw findings require targetFindingId`, path: ['targetFindingId'] });
   }
-  if (value.kind !== undefined) {
-    const kindImpliesConfirmation = value.kind === 'resolution_confirmation';
-    const relationIsConfirmation = relation === 'resolution_confirmation';
-    if (kindImpliesConfirmation !== relationIsConfirmation) {
-      ctx.addIssue({
-        code: 'custom',
-        message: `kind "${value.kind}" is inconsistent with relation "${relation}"`,
-        path: ['relation'],
-      });
-    }
-  }
-  return { ...value, relation };
 }
 
 const RawFindingFieldsSchema = z.object({
@@ -305,15 +250,14 @@ const RawFindingFieldsSchema = z.object({
   location: z.string().optional().transform((value) => (value ? value : undefined)),
   description: nonEmptyString,
   suggestion: z.string().optional().transform((value) => (value ? value : undefined)),
-  kind: z.enum(RAW_FINDING_KINDS).optional(),
-  relation: z.enum(RAW_FINDING_RELATIONS).optional(),
+  relation: z.enum(RAW_FINDING_RELATIONS),
   targetFindingId: nonEmptyString.optional(),
   // typed evidence protocol（review-integrity protocol）。既存 v1 台帳の raw finding には
   // 無いため optional — 欠損は「evidence なし」として扱う（migration 不要）。
   evidence: RawFindingEvidenceSchema.optional(),
 }).strict();
 
-export const RawFindingSchema = RawFindingFieldsSchema.transform(resolveRawFindingRelation);
+export const RawFindingSchema = RawFindingFieldsSchema.superRefine(validateRawFindingRelation);
 
 const ReviewerRawFindingFieldsSchema = z.object({
   rawFindingId: nonEmptyString,
@@ -325,15 +269,14 @@ const ReviewerRawFindingFieldsSchema = z.object({
   location: z.string().optional().transform((value) => (value ? value : undefined)),
   description: nonEmptyString,
   suggestion: z.string().optional().transform((value) => (value ? value : undefined)),
-  kind: z.enum(RAW_FINDING_KINDS).optional(),
-  relation: z.enum(RAW_FINDING_RELATIONS).optional(),
+  relation: z.enum(RAW_FINDING_RELATIONS),
   // 構造化出力の strict 様式では全プロパティが required になるため、
   // issue 行は空文字で埋める。空文字は未指定として扱う。
   targetFindingId: z.string().optional().transform((value) => (value ? value : undefined)),
   evidence: RawFindingEvidenceSchema.optional(),
 }).strict();
 
-export const ReviewerRawFindingSchema = ReviewerRawFindingFieldsSchema.transform(resolveRawFindingRelation);
+export const ReviewerRawFindingSchema = ReviewerRawFindingFieldsSchema.superRefine(validateRawFindingRelation);
 
 export const FindingConflictAdjudicationOutcomeSchema = z.enum(FINDING_CONFLICT_ADJUDICATION_OUTCOMES);
 export const FindingConflictAdjudicationTransitionSchema = z.enum(FINDING_CONFLICT_ADJUDICATION_TRANSITIONS);
@@ -501,45 +444,6 @@ export const FindingLedgerSchema = z.object({
   // review-integrity 予算（review-integrity requirement）。optional。
   reviewIntegrity: FindingLedgerReviewIntegrityStateSchema.optional(),
 }).strict();
-
-function migrateLegacyAdjudicationAttempts(value: unknown): unknown {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    return value;
-  }
-  const ledger = value as Record<string, unknown>;
-  if (ledger['version'] !== 1 || !Array.isArray(ledger['conflicts'])) {
-    return value;
-  }
-  return {
-    ...ledger,
-    conflicts: ledger['conflicts'].map((candidate, conflictIndex) => {
-      if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) {
-        return candidate;
-      }
-      const conflict = candidate as Record<string, unknown>;
-      if (!Array.isArray(conflict['adjudicationAttempts'])) {
-        return candidate;
-      }
-      return {
-        ...conflict,
-        adjudicationAttempts: conflict['adjudicationAttempts'].map((attempt, attemptIndex) => {
-          if (
-            attempt === null
-            || typeof attempt !== 'object'
-            || Array.isArray(attempt)
-            || 'reservationToken' in attempt
-          ) {
-            return attempt;
-          }
-          return {
-            ...attempt,
-            reservationToken: `legacy-v1:${conflictIndex}:${attemptIndex}:${String(conflict['id'])}`,
-          };
-        }),
-      };
-    }),
-  };
-}
 
 /**
  * findings-manager の ambiguous 解釈フェーズが返す structured output の JSON
@@ -1044,13 +948,6 @@ export const RawFindingsOutputJsonSchema = {
         required: ['rawFindingId', 'relation', 'targetFindingId', 'familyTag', 'severity', 'title', 'location', 'evidenceKind', 'verbatimExcerpt', 'snapshotId', 'description', 'suggestion'],
         properties: {
           rawFindingId: { type: 'string', minLength: 1 },
-          // relation が正本。legacy の `kind` はこの
-          // provider-facing schema には存在しない（OpenAI/Codex 系の native
-          // structured output は全 properties required の strict 様式を要求する
-          // ため optional プロパティを置けない。native 経路は schema が生成を
-          // 拘束するのでそもそも kind を出せず、寛容化は不要）。kind 併記を
-          // 受理する寛容版は post-hoc 検証専用の
-          // RawFindingsOutputValidationJsonSchema（下記）にある。
           relation: {
             enum: RAW_FINDING_RELATIONS,
             description: 'This finding\'s relationship to the ledger. new = a fresh observation with no target (targetFindingId must be empty). persists = you still observe an existing open finding (targetFindingId required). reopened = a previously resolved/waived/dismissed finding reappeared (targetFindingId required). resolution_confirmation = you verified an open finding is fixed (targetFindingId required).',
@@ -1094,16 +991,12 @@ export const RawFindingsOutputJsonSchema = {
 } as const;
 
 /**
- * post-hoc 検証専用の寛容版 raw findings schema（review-integrity requirement対応）。
+ * post-hoc 検証専用の raw findings schema（review-integrity requirement対応）。
  *
  * RawFindingsOutputJsonSchema（provider-facing、strict 様式）と役割を分離する:
- * - provider へ渡すのは strict 版のみ（native structured output は全 properties
- *   required を要求し、optional の kind を含む schema は生成前に拒否される）。
+ * - provider へ渡すのは strict 版のみ。
  * - schema が生成を拘束しない formless/劣化経路（opencode+ollama 等）の出力は
- *   こちらで検証する。弱いモデルは訂正1回でも legacy `kind` 併記をやめない
- *   ため、kind を optional で受理し、意味の検証
- *   （kind/relation 矛盾 → 正規化・claimedKind 監査・ambiguity taint）は intake
- *   の canonicalization に委ねる。
+ *   こちらで検証する。
  * - typed evidence protocol（review-integrity protocol）の evidenceKind/verbatimExcerpt/
  *   snapshotId も同じ理由で required から外す。schema が生成を拘束できない
  *   経路のモデルがこれらを省略しても、structured output 全体を無効にしては
@@ -1124,20 +1017,13 @@ export const RawFindingsOutputValidationJsonSchema = {
         required: RawFindingsOutputJsonSchema.properties.rawFindings.items.required.filter(
           (key: string) => !(LENIENT_RAW_FINDING_EVIDENCE_FIELDS as readonly string[]).includes(key),
         ),
-        properties: {
-          ...RawFindingsOutputJsonSchema.properties.rawFindings.items.properties,
-          kind: {
-            enum: RAW_FINDING_KINDS,
-            description: 'Legacy field; do not emit. relation is authoritative. If present, it is checked for consistency with relation.',
-          },
-        },
       },
     },
   },
 } as const;
 
 export function parseFindingLedger(value: unknown): FindingLedger {
-  return FindingLedgerSchema.parse(migrateLegacyAdjudicationAttempts(value));
+  return FindingLedgerSchema.parse(value);
 }
 
 export function parseRawFindings(value: unknown): RawFinding[] {

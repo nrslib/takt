@@ -24,6 +24,7 @@ function makeRawFinding(rawFindingId: string): RawFinding {
     title: 'Conflicting review conclusion',
     location: 'src/example.ts:1',
     description: 'The review evidence conflicts.',
+    relation: 'new',
   };
 }
 

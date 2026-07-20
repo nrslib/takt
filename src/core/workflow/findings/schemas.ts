@@ -30,8 +30,6 @@ export {
   ReviewerAnomalyEntrySchema,
   ReviewerRawFindingSchema,
   SourceQuoteEvidenceSchema,
-  deriveRawFindingRelation,
-  kindForRelation,
   parseAmbiguousInterpretations,
   parseFindingConflictAdjudicationOutput,
   parseFindingLedger,

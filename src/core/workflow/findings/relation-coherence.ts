@@ -1,7 +1,7 @@
 /**
- * relation/target/kind の意味矛盾をレビュアへ1回だけ突き返す。
+ * relation/target の意味矛盾をレビュアへ1回だけ突き返す。
  *
- * reviewer structured output のうち relation/target/kind の意味矛盾がある raw
+ * reviewer structured output のうち relation/target の意味矛盾がある raw
  * について、同一 reviewer session へ1回だけ明確化を求める。対象は 'new' 衝突
  * だけでなく、detectRawFindingAmbiguities（raw-canonicalization.ts と共有する
  * 唯一の検出実装）が返す全 ambiguity のうち、relation / targetFindingId の
@@ -39,7 +39,6 @@ const log = createLogger('finding-relation-coherence');
  */
 const CLARIFIABLE_AMBIGUITY_CODES: ReadonlySet<RawAmbiguityCode> = new Set([
   'relation-target-mismatch',
-  'kind-relation-conflict',
   'persists-target-unknown',
   'persists-target-not-open',
   'reopened-target-open',
@@ -125,9 +124,6 @@ function describeMismatch(mismatch: AmbiguousRawMismatch): string {
     switch (code) {
       case 'relation-target-mismatch':
         parts.push('relation and targetFindingId contradict each other ("new" must have no target; every other relation requires one)');
-        break;
-      case 'kind-relation-conflict':
-        parts.push('the legacy "kind" field contradicts "relation" (set relation correctly; kind is derived from it)');
         break;
       case 'persists-target-unknown':
         parts.push(`relation "persists" references target "${mismatch.targetFindingId ?? '?'}" which does not exist in the ledger`);
@@ -289,7 +285,7 @@ export async function clarifyAmbiguousRawRelationsOnce(
   };
 }
 
-/** Content identity for the regeneration contract. relation / targetFindingId / kind は含めない（それらの付け替えが correction の目的）。 */
+/** Content identity for the regeneration contract. relation / targetFindingId は含めない（それらの付け替えが correction の目的）。 */
 function rawContentKey(fields: ReturnType<typeof extractLenientRawFields>): string {
   return JSON.stringify([
     fields.title ?? '',
@@ -307,7 +303,7 @@ function rawContentKey(fields: ReturnType<typeof extractLenientRawFields>): stri
  *
  * - rawFindingId の集合が元と完全一致（追加・削除・重複なし）
  * - 全 raw の内容（title/description/location/severity/suggestion/familyTag）不変
- * - 指摘されていない raw は relation / targetFindingId / kind も不変
+ * - 指摘されていない raw は relation / targetFindingId も不変
  *
  * 1件でも違反があれば訂正全体を不採用にし、元の出力を使う。
  */
@@ -345,8 +341,7 @@ export function findRegenerationContractViolation(
     }
     if (!flaggedIds.has(fields.rawFindingId)) {
       const relationChanged = fields.relation !== originalRaw.relation
-        || fields.targetFindingId !== originalRaw.targetFindingId
-        || fields.legacyKind !== originalRaw.legacyKind;
+        || fields.targetFindingId !== originalRaw.targetFindingId;
       if (relationChanged) {
         return `regenerated output changed relation/targetFindingId of non-flagged rawFindingId "${fields.rawFindingId}"`;
       }

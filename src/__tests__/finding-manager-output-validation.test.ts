@@ -41,6 +41,7 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
     severity: 'high',
     title: 'Current issue',
     description: 'The issue is present in the current review.',
+    relation: 'new',
     ...overrides,
   };
 }
@@ -325,7 +326,7 @@ describe('validateFindingManagerOutput', () => {
   it('should reject a waive combined with a resolution for the same finding', () => {
     const confirmation = makeRawFinding({
       rawFindingId: 'raw-confirmation',
-      kind: 'resolution_confirmation',
+      relation: 'resolution_confirmation',
       targetFindingId: 'F-0001',
     });
     const result = validateFindingManagerOutput({
@@ -472,7 +473,7 @@ describe('validateFindingManagerOutput', () => {
   it('should reject a findingId referenced by multiple state-changing decisions', () => {
     const confirmation = makeRawFinding({
       rawFindingId: 'raw-confirmation',
-      kind: 'resolution_confirmation',
+      relation: 'resolution_confirmation',
       targetFindingId: 'F-0001',
     });
     const result = validateFindingManagerOutput({
@@ -552,7 +553,7 @@ describe('validateFindingManagerOutput', () => {
   it('should reject a conflict on a finding that is also resolved', () => {
     const confirmation = makeRawFinding({
       rawFindingId: 'raw-confirmation',
-      kind: 'resolution_confirmation',
+      relation: 'resolution_confirmation',
       targetFindingId: 'F-0001',
     });
     const result = validateFindingManagerOutput({
@@ -715,7 +716,7 @@ describe('validateFindingManagerOutput', () => {
       rawFindings: [
         makeRawFinding({
           rawFindingId: 'raw-confirm',
-          kind: 'resolution_confirmation',
+          relation: 'resolution_confirmation',
           targetFindingId: 'F-0001',
           title: 'Confirmed fixed',
           description: 'Verified at src/index.ts:42 that the issue is resolved.',
@@ -735,7 +736,7 @@ describe('validateFindingManagerOutput', () => {
       rawFindings: [
         makeRawFinding({
           rawFindingId: 'raw-confirm',
-          kind: 'resolution_confirmation',
+          relation: 'resolution_confirmation',
           targetFindingId: 'F-0099',
           title: 'Confirmed fixed',
           description: 'Verified elsewhere.',
@@ -761,7 +762,7 @@ describe('validateFindingManagerOutput', () => {
       rawFindings: [
         makeRawFinding({
           rawFindingId: 'raw-confirm',
-          kind: 'resolution_confirmation',
+          relation: 'resolution_confirmation',
           targetFindingId: 'F-0001',
           title: 'Confirmed fixed',
           description: 'Verified at src/index.ts:42.',
@@ -850,22 +851,19 @@ describe('validateFindingManagerOutput', () => {
   });
 });
 
-describe('finding-schemas backward compatibility', () => {
-  it('should parse pre-existing raw findings without kind or targetFindingId', () => {
-    const parsed = parseRawFindings([
+describe('finding raw schemas', () => {
+  it('should require relation', () => {
+    expect(() => parseRawFindings([
       {
-        rawFindingId: 'raw-old',
+        rawFindingId: 'raw-invalid',
         stepName: 'arch-review',
         reviewer: 'arch-review',
         familyTag: 'bug',
         severity: 'high',
-        title: 'Old entry',
-        description: 'Stored before the kind field existed.',
+        title: 'Missing relation',
+        description: 'The current contract requires relation.',
       },
-    ]);
-
-    expect(parsed[0]?.kind).toBeUndefined();
-    expect(parsed[0]?.targetFindingId).toBeUndefined();
+    ])).toThrow();
   });
 
   it('should treat empty location and suggestion from structured output as unset', () => {
@@ -876,7 +874,7 @@ describe('finding-schemas backward compatibility', () => {
         severity: 'low',
         title: 'Confirmed fixed',
         description: 'Verified at src/index.ts:42.',
-        kind: 'resolution_confirmation',
+        relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
         location: '',
         suggestion: '',
@@ -895,12 +893,12 @@ describe('finding-schemas backward compatibility', () => {
         severity: 'low',
         title: 'Issue entry',
         description: 'Strict structured output fills every field.',
-        kind: 'issue',
+        relation: 'new',
         targetFindingId: '',
       },
     ]);
 
-    expect(parsed[0]?.kind).toBe('issue');
+    expect(parsed[0]?.relation).toBe('new');
     expect(parsed[0]?.targetFindingId).toBeUndefined();
   });
 });

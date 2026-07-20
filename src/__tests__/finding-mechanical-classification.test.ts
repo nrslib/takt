@@ -20,6 +20,7 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
     severity: 'high',
     title: 'Current issue',
     description: 'The issue is present in the current review.',
+    relation: 'new',
     ...overrides,
   };
 }
@@ -57,7 +58,6 @@ describe('classifyRawFindingsMechanically resolution confirmations (case 3)', ()
   it('Given a resolution confirmation targeting an open finding When classified Then it lands in resolvedFindings without residual', () => {
     const raw = makeRawFinding({
       rawFindingId: 'raw-confirm',
-      kind: 'resolution_confirmation',
       relation: 'resolution_confirmation',
       targetFindingId: 'F-0001',
       description: 'Verified fixed at src/a.ts:10.',
@@ -71,8 +71,8 @@ describe('classifyRawFindingsMechanically resolution confirmations (case 3)', ()
 
   it('Given multiple confirmations for the same finding When classified Then rawFindingIds are merged into one entry', () => {
     const raws = [
-      makeRawFinding({ rawFindingId: 'raw-c1', kind: 'resolution_confirmation', relation: 'resolution_confirmation', targetFindingId: 'F-0001' }),
-      makeRawFinding({ rawFindingId: 'raw-c2', kind: 'resolution_confirmation', relation: 'resolution_confirmation', targetFindingId: 'F-0001' }),
+      makeRawFinding({ rawFindingId: 'raw-c1', relation: 'resolution_confirmation', targetFindingId: 'F-0001' }),
+      makeRawFinding({ rawFindingId: 'raw-c2', relation: 'resolution_confirmation', targetFindingId: 'F-0001' }),
     ];
     const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: raws });
     expect(result.output.resolvedFindings).toHaveLength(1);
@@ -80,7 +80,7 @@ describe('classifyRawFindingsMechanically resolution confirmations (case 3)', ()
   });
 
   it('Given a confirmation targeting a missing finding When classified Then it goes to residual', () => {
-    const raw = makeRawFinding({ rawFindingId: 'raw-confirm', kind: 'resolution_confirmation', relation: 'resolution_confirmation', targetFindingId: 'F-9999' });
+    const raw = makeRawFinding({ rawFindingId: 'raw-confirm', relation: 'resolution_confirmation', targetFindingId: 'F-9999' });
     const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: [raw] });
     expect(result.output.resolvedFindings).toEqual([]);
     expect(result.residualRawFindings).toEqual([raw]);
@@ -88,7 +88,7 @@ describe('classifyRawFindingsMechanically resolution confirmations (case 3)', ()
 
   it('Given a confirmation targeting an already resolved finding When classified Then it goes to residual', () => {
     const ledger = makeLedger({ findings: [makeFinding({ status: 'resolved' })] });
-    const raw = makeRawFinding({ rawFindingId: 'raw-confirm', kind: 'resolution_confirmation', relation: 'resolution_confirmation', targetFindingId: 'F-0001' });
+    const raw = makeRawFinding({ rawFindingId: 'raw-confirm', relation: 'resolution_confirmation', targetFindingId: 'F-0001' });
     const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
     expect(result.residualRawFindings).toEqual([raw]);
   });
@@ -206,7 +206,7 @@ describe('classifyRawFindingsMechanically exact duplicate content (case 1)', () 
 
   it('Given a fully mechanical round When validated with the real validator Then the output passes', () => {
     const raws = [
-      makeRawFinding({ rawFindingId: 'raw-confirm', kind: 'resolution_confirmation', relation: 'resolution_confirmation', targetFindingId: 'F-0001', description: 'Verified.' }),
+      makeRawFinding({ rawFindingId: 'raw-confirm', relation: 'resolution_confirmation', targetFindingId: 'F-0001', description: 'Verified.' }),
     ];
     const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: raws });
     const validation = validateFindingManagerOutput({
@@ -267,7 +267,6 @@ describe('classifyRawFindingsMechanically conflicting signals', () => {
   it('Given a confirmation and a re-reported issue for the same finding When classified Then all related raws fall to residual', () => {
     const confirmation = makeRawFinding({
       rawFindingId: 'raw-confirm',
-      kind: 'resolution_confirmation',
       relation: 'resolution_confirmation',
       targetFindingId: 'F-0001',
     });

@@ -1,6 +1,5 @@
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import { normalizeFindingText, parseFindingLocation } from './location.js';
-import { deriveRawFindingRelation } from './schemas.js';
 import { createEmptyManagerOutput } from './manager-output.js';
 import type { FindingLedger, FindingManagerOutput, RawFinding } from './types.js';
 
@@ -31,14 +30,10 @@ export interface MechanicalClassificationResult {
 }
 
 /**
- * raw finding の実効 relation。schema（parseReviewerRawFindings /
- * parseRawFindings）を通った raw は常に relation を持つが、テストや古い経路の
- * 手組み raw に備えて finding-schemas.ts の deriveRawFindingRelation（導出の
- * 正本）へ委譲するフォールバックを持つ。decision-assembly.ts（'new' 判断の
- * 明示参照検査）と manager-runner.ts（強制 new 化の除外）も同じ導出を共有する。
+ * raw finding の relation を返す。現行契約では必須フィールドである。
  */
-export function effectiveRawFindingRelation(raw: Pick<RawFinding, 'kind' | 'relation' | 'targetFindingId'>): NonNullable<RawFinding['relation']> {
-  return deriveRawFindingRelation(raw.kind, raw.relation, raw.targetFindingId);
+export function effectiveRawFindingRelation(raw: Pick<RawFinding, 'relation'>): RawFinding['relation'] {
+  return raw.relation;
 }
 
 /** Exact-duplicate identity key for case 1: normalized (path, title, description, suggestion). Line number is deliberately excluded (evidence of current position, not identity). */

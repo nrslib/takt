@@ -75,7 +75,6 @@ function sourceRaw(index: number, descriptionChars = 0): RawFinding {
     location: quote.location,
     description: `Distinct issue ${index}.${suffix}`,
     suggestion: `Fix issue ${index}.`,
-    kind: 'issue',
     relation: 'new',
     evidence: {
       kind: 'source_quote',
@@ -388,6 +387,19 @@ describe('bounded raw adjudication recovery', () => {
     expect(recovery.origins).toHaveLength(20);
   });
 
+  it('records an unsplittable single-item input overflow as a consumed failure', async () => {
+    const harness = makeHarness(makeBacklog({ count: 1, descriptionChars: 100_000 }));
+
+    const recovery = await harness.runRecovery();
+    const committed = applyRecovery(harness, recovery);
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(recovery.origins).toHaveLength(1);
+    expect(harness.released).toHaveLength(0);
+    expect([...recovery.failureReasons.values()][0]).toContain('per-call budget');
+    expect(committed.findings[0]?.provisional?.adjudicationAttempts).toHaveLength(1);
+  });
+
   it('measures and sends the schema-appended fallback prompt without transforming it twice', async () => {
     const harness = makeHarness(makeBacklog({ count: 1 }), { provider: 'cursor' });
     executeAgentMock.mockImplementation(async (_persona, instruction) => managerResponse(instruction as string));
@@ -530,7 +542,6 @@ describe('bounded raw adjudication recovery', () => {
     const confirmations = Array.from({ length: 20 }, (_, offset): RawFinding => ({
       ...sourceRaw(offset + 1),
       rawFindingId: `confirmation-${offset + 1}`,
-      kind: 'resolution_confirmation',
       relation: 'resolution_confirmation',
       targetFindingId: target.id,
     }));

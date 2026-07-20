@@ -1,5 +1,5 @@
 import {
-  candidateFromLegacyRawFinding,
+  candidateFromStoredRawFinding,
   canonicalizeReviewerRawFinding,
   toLedgerRawFinding,
 } from './raw-canonicalization.js';
@@ -131,7 +131,7 @@ export function collectInterpretationRecoveryPlan(input: {
         }],
       };
     }
-    const candidate = candidateFromLegacyRawFinding(
+    const candidate = candidateFromStoredRawFinding(
       source,
       recoveryReviewerStableKey(finding.provisional),
     );

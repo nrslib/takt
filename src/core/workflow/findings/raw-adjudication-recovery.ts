@@ -18,7 +18,7 @@ import {
   type RawAdjudicationReservation,
 } from './raw-adjudication-reservation.js';
 import {
-  candidateFromLegacyRawFinding,
+  candidateFromStoredRawFinding,
   canonicalizeReviewerRawFinding,
   toLedgerRawFinding,
 } from './raw-canonicalization.js';
@@ -110,7 +110,7 @@ function buildReplayIntake(input: {
     }
     const source = sourceResult.source;
     const replayRaw = { ...source, rawFindingId: replayRawId };
-    const candidate = candidateFromLegacyRawFinding(replayRaw, reviewerStableKey);
+    const candidate = candidateFromStoredRawFinding(replayRaw, reviewerStableKey);
     const canonical = canonicalizeReviewerRawFinding(candidate, { ledger: input.ledger }).canonical;
     const wire = toLedgerRawFinding(canonical);
     intake.items.push({ canonical, wire });

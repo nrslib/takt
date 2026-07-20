@@ -89,7 +89,6 @@ const V3R4_AI_ANTIPATTERN_REVIEW_2ND_RAW_FINDINGS: Array<Record<string, unknown>
     location: 'src/core/workflowExecutor.ts:45',
     description: "The generated code calls `provider.executeWithRetryAsync()`, but the provider interface only defines `executeWithRetry()`. This appears to be an AI hallucination of a common naming pattern.",
     suggestion: 'Change `executeWithRetryAsync()` to `executeWithRetry()`.',
-    kind: 'issue',
     relation: 'new',
   },
   {
@@ -100,7 +99,6 @@ const V3R4_AI_ANTIPATTERN_REVIEW_2ND_RAW_FINDINGS: Array<Record<string, unknown>
     location: 'src/shared/utils/stringHelper.ts:12',
     description: 'The AI introduced a complex Strategy pattern for a string transformation that is only used in one place, increasing cognitive load without providing actual extensibility.',
     suggestion: 'Inline the logic into a simple utility function.',
-    kind: 'issue',
     relation: 'new',
   },
   {
@@ -111,7 +109,6 @@ const V3R4_AI_ANTIPATTERN_REVIEW_2ND_RAW_FINDINGS: Array<Record<string, unknown>
     location: 'src/features/config/configLoader.ts:88',
     description: 'The method `validateLegacyConfigFormat` was generated but is never called within the codebase, likely a leftover from a previous prompt iteration.',
     suggestion: 'Remove the unused method.',
-    kind: 'issue',
     relation: 'new',
   },
   {
@@ -122,7 +119,6 @@ const V3R4_AI_ANTIPATTERN_REVIEW_2ND_RAW_FINDINGS: Array<Record<string, unknown>
     location: 'src/app/cli/commands/setup.ts:30',
     description: 'The AI added default empty strings to almost all parameters in the setup command, which hides configuration errors that should be explicitly reported to the user.',
     suggestion: 'Remove defaults for required configuration fields and implement proper validation errors.',
-    kind: 'issue',
     relation: 'new',
   },
   {
@@ -133,7 +129,6 @@ const V3R4_AI_ANTIPATTERN_REVIEW_2ND_RAW_FINDINGS: Array<Record<string, unknown>
     location: 'src/core/logging/logger.ts:110',
     description: 'The AI implemented a remote syslog exporter that was not requested in the requirements, adding unnecessary dependencies.',
     suggestion: 'Remove the syslog exporter logic.',
-    kind: 'issue',
     relation: 'new',
   },
   {
@@ -144,7 +139,6 @@ const V3R4_AI_ANTIPATTERN_REVIEW_2ND_RAW_FINDINGS: Array<Record<string, unknown>
     location: 'src/features/api/client.ts:55',
     description: 'The AI used a try-catch block that swallows errors and returns null, whereas the rest of the project uses a Result type for explicit error handling.',
     suggestion: 'Refactor the method to return a `Result<T, E>` type.',
-    kind: 'issue',
     relation: 'new',
   },
   {
@@ -155,7 +149,6 @@ const V3R4_AI_ANTIPATTERN_REVIEW_2ND_RAW_FINDINGS: Array<Record<string, unknown>
     location: 'src/shared/constants.ts:20',
     description: 'The AI added a mapping for a version of the config file that was deprecated three versions ago and is no longer supported by the system.',
     suggestion: 'Remove the legacy mapping logic.',
-    kind: 'issue',
     relation: 'new',
   },
 ];

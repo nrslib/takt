@@ -57,7 +57,7 @@ export function revalidateManagerPlan(input: {
     }
     const wire = input.cleanWireById.get(rejected.rawFindingId);
     const canonical = input.cleanCanonicalById.get(rejected.rawFindingId);
-    if (wire === undefined || canonical === undefined || wire.kind === 'resolution_confirmation') {
+    if (wire === undefined || canonical === undefined || wire.relation === 'resolution_confirmation') {
       return [];
     }
     return [provisionalSpecForRawKind({

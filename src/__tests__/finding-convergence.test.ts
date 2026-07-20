@@ -1,9 +1,8 @@
 /**
  * Focused tests for the Finding Contract convergence design (Phase A):
  * raw admission validation (item 1), duplicateDecisions/superseded (item 6),
- * invalidate/invalidated (item 1/4), relation schema invariants (item 3/7),
- * and backward compatibility with a pre-existing (real, pre-Phase-A) v1
- * ledger (item 8). Items 1/2/4/5 mechanical-classification and grouping-key
+ * invalidate/invalidated (item 1/4), and relation schema invariants (item 3/7).
+ * Items 1/2/4/5 mechanical-classification and grouping-key
  * behavior are covered in finding-mechanical-classification.test.ts and
  * finding-decision-assembly.test.ts; this file covers the remaining pipeline
  * seams (admission -> assembly -> reconcile) and schema invariants.
@@ -46,6 +45,7 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
     severity: 'high',
     title: 'Current issue',
     description: 'The issue is present in the current review.',
+    relation: 'new',
     ...overrides,
   };
 }
@@ -417,7 +417,6 @@ describe('item 1/4: raw admission validation and invalidate', () => {
         location: 'src/does-not-exist.ts:99',
         description: 'This location does not correspond to any file in the reviewed code.',
         suggestion: '',
-        kind: 'issue',
         relation: 'new',
         targetFindingId: '',
       }],
@@ -626,7 +625,6 @@ describe('item 1/4: raw admission validation and invalidate', () => {
         title: 'Existing issue still present',
         description: 'Claims the already-resolved F-0001 still persists.',
         suggestion: '',
-        kind: 'issue',
         relation: 'persists',
         targetFindingId: 'F-0001',
         // 機械照合済み evidence（typed evidence protocol、codex 対策#4）で
@@ -687,34 +685,7 @@ describe('item 7: relation schema invariants', () => {
     }])).toThrow();
   });
 
-  it('Given the legacy kind-only format (no relation) When parsed Then relation is derived and the entry is accepted', () => {
-    const [issueParsed] = parseRawFindings([{
-      rawFindingId: 'raw-1',
-      stepName: 's',
-      reviewer: 'r',
-      familyTag: 'bug',
-      severity: 'high',
-      title: 't',
-      description: 'd',
-      kind: 'issue',
-    }]);
-    expect(issueParsed?.relation).toBe('new');
-
-    const [confirmationParsed] = parseRawFindings([{
-      rawFindingId: 'raw-2',
-      stepName: 's',
-      reviewer: 'r',
-      familyTag: 'bug',
-      severity: 'high',
-      title: 't',
-      description: 'd',
-      kind: 'resolution_confirmation',
-      targetFindingId: 'F-0001',
-    }]);
-    expect(confirmationParsed?.relation).toBe('resolution_confirmation');
-  });
-
-  it('Given a kind/relation combination that disagree When parsed Then it is rejected', () => {
+  it('Given an unknown field instead of relation When parsed Then normal strict validation rejects it', () => {
     expect(() => parseRawFindings([{
       rawFindingId: 'raw-1',
       stepName: 's',
@@ -723,36 +694,8 @@ describe('item 7: relation schema invariants', () => {
       severity: 'high',
       title: 't',
       description: 'd',
-      kind: 'resolution_confirmation',
-      relation: 'persists',
-      targetFindingId: 'F-0001',
-    }])).toThrow();
-  });
-});
-
-describe('item 8: backward compatibility with a pre-existing (real) v1 ledger', () => {
-  it('Given the real v3-r2 finding ledger (pre-Phase-A, no relation/invalidated/superseded data) When parsed Then it loads without migration and open/status aggregation works', () => {
-    const fixturePath = fileURLToPath(new URL('./fixtures/v3-r2-ledger.json', import.meta.url));
-    const raw: unknown = JSON.parse(readFileSync(fixturePath, 'utf-8'));
-
-    const ledger = parseFindingLedger(raw);
-    expect(ledger.version).toBe(1);
-    expect(ledger.findings.length).toBeGreaterThan(0);
-    const findingIds = new Set(ledger.findings.map((finding) => finding.id));
-    const targetFindingIds = ledger.rawFindings
-      .map((rawFinding) => rawFinding.targetFindingId)
-      .filter((targetFindingId): targetFindingId is string => targetFindingId !== undefined);
-    expect(targetFindingIds.length).toBeGreaterThan(0);
-    expect(targetFindingIds.every((targetFindingId) => findingIds.has(targetFindingId))).toBe(true);
-    // 既存データは invalidated/superseded を一切含まない。新状態は追加的で
-    // あり、読み込みに移行処理は要求されない。
-    expect(ledger.findings.every((f) => f.status === 'open' || f.status === 'resolved' || f.status === 'waived')).toBe(true);
-
-    // 既存機能（open 集計）がそのまま動く。
-    const ruleContext = buildFindingsRuleContext(ledger);
-    const expectedOpen = ledger.findings.filter((f) => f.status === 'open').length;
-    expect(ruleContext.open.count).toBe(expectedOpen);
-    expect(ruleContext.open.count).toBeGreaterThan(0);
+      kind: 'issue',
+    }])).toThrow(/Unrecognized key/);
   });
 });
 
@@ -841,7 +784,7 @@ describe('B4: v3-r2 F-0016 raw-group replay against the real ledger', () => {
 
   it('Given the three real F-0016 raws replayed with their explicit targets When classified, assembled and reconciled Then each lands on its own target finding and no single finding re-merges them', () => {
     const ledger = loadFixtureLedger();
-    // 実データそのもの（kind: issue + targetFindingId → relation persists 導出）。
+    // 現行 relation/targetFindingId を持つ実データ。
     // rawFindingId だけ replay 用に付け替える（台帳内の既存 id と衝突するため）。
     const replayRaws = RAW_SUFFIXES.map((suffix) => ({
       ...pickRaw(ledger, suffix),
@@ -905,7 +848,6 @@ describe('B4: v3-r2 F-0016 raw-group replay against the real ledger', () => {
       return {
         ...rest,
         rawFindingId: `${original.rawFindingId}:no-target`,
-        kind: 'issue' as const,
         relation: 'new' as const,
       };
     });

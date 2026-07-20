@@ -6,7 +6,7 @@
 
 - `same`: 既存の open finding と同じ問題。findingId にその finding の ID を設定する
 - `new`: 対応する既存 finding が無い。findingId は空にする。title や severity は自分で書かない。エンジンが raw finding 自体の title と severity を使う
-- `resolved`: この raw finding の kind が resolution_confirmation で、targetFindingId 経由で既存の open finding の解消を確認している。findingId にその finding の ID を設定する。レビュアーが言及しなくなっただけでは resolved にしない。kind が issue の raw finding やテキスト内の解消主張だけを根拠に resolved にしない
+- `resolved`: この raw finding の relation が resolution_confirmation で、targetFindingId 経由で既存の open finding の解消を確認している。findingId にその finding の ID を設定する。レビュアーが言及しなくなっただけでは resolved にしない。他の relation の raw finding やテキスト内の解消主張だけを根拠に resolved にしない
 - `reopened`: 解消済み・免除済み・dismissed の finding が再発した。findingId にその finding の ID を設定する
 - `conflict`: この raw finding が既存 finding と矛盾する（例: 解消確認が再報告と矛盾する）。findingId に矛盾先の finding の ID を設定する
 - `unsupported`: この raw finding が既存 finding を明示参照した（targetFindingId 設定済みの persists/reopened 申告）にもかかわらず、証跡と照らして参照が成立しない。findingId は空にする。confirmed finding は作らず対象 finding も変更しないが、engine は監査用に raw claim を gate-blocking provisional として保持する — `new` へ倒さないこと

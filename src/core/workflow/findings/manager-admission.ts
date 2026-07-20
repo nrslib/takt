@@ -141,7 +141,7 @@ function evaluateRejectedItem(input: {
     location: item.wire.location ?? '',
     reason: classification.reason,
   };
-  if (item.wire.kind === 'resolution_confirmation') {
+  if (item.wire.relation === 'resolution_confirmation') {
     return { pool, rejection };
   }
 

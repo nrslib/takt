@@ -89,7 +89,6 @@ export type {
   RawFinding,
   RawFindingEvidence,
   RawFindingEvidenceKind,
-  RawFindingKind,
   RawFindingRelation,
   ReviewerAnomalyEntry,
   ReviewerAnomalyKind,

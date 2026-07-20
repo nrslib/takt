@@ -48,7 +48,6 @@ interface WireRaw {
   description: string;
   relation: string;
   targetFindingId: string;
-  kind: string;
   suggestion: string;
 }
 
@@ -62,7 +61,6 @@ function makeRawItem(overrides: Partial<WireRaw> = {}): WireRaw {
     description: 'A different observation of token logging.',
     relation: 'new',
     targetFindingId: '',
-    kind: 'issue',
     suggestion: '',
     ...overrides,
   };
@@ -103,25 +101,11 @@ describe('detectClarifiableRawMismatches', () => {
       ],
     });
     const raws = [
-      makeRawItem({ rawFindingId: 'raw-p', relation: 'persists', targetFindingId: 'F-0001', kind: 'issue' }),
-      makeRawItem({ rawFindingId: 'raw-r', relation: 'reopened', targetFindingId: 'F-0003', kind: 'issue', title: 'Fixed one came back', location: 'src/three.ts:2' }),
-      makeRawItem({ rawFindingId: 'raw-c', relation: 'resolution_confirmation', targetFindingId: 'F-0002', kind: 'resolution_confirmation', title: 'Another one is fixed', location: 'src/two.ts:1' }),
+      makeRawItem({ rawFindingId: 'raw-p', relation: 'persists', targetFindingId: 'F-0001' }),
+      makeRawItem({ rawFindingId: 'raw-r', relation: 'reopened', targetFindingId: 'F-0003', title: 'Fixed one came back', location: 'src/three.ts:2' }),
+      makeRawItem({ rawFindingId: 'raw-c', relation: 'resolution_confirmation', targetFindingId: 'F-0002', title: 'Another one is fixed', location: 'src/two.ts:1' }),
     ];
     expect(detectClarifiableRawMismatches(raws, ledger)).toHaveLength(0);
-  });
-
-  it('v3-r3 実測パターン: kind=issue + relation=resolution_confirmation は kind-relation-conflict として検出する', () => {
-    const raw = makeRawItem({
-      rawFindingId: 'raw-gemma',
-      relation: 'resolution_confirmation',
-      targetFindingId: 'F-0001',
-      kind: 'issue',
-      title: 'F-0001 is fixed',
-      location: 'src/secret.ts:12',
-    });
-    const mismatches = detectClarifiableRawMismatches([raw], makeLedger());
-    expect(mismatches).toHaveLength(1);
-    expect(mismatches[0]!.codes).toContain('kind-relation-conflict');
   });
 
   it('persists が未知 / 非 open target を指す矛盾を検出する', () => {

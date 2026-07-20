@@ -8,7 +8,7 @@
 {{else}}現在の台帳サマリ:
 {{/if}}{{ledgerSummary}}
 
-{{#if isReviewer}}- 観測した新規の問題はすべて、relation を "new"（targetFindingId は空）にした構造化 raw finding として報告してください。relation が正本のフィールドです。legacy の kind フィールドは出力しないでください。
+{{#if isReviewer}}- 観測した新規の問題はすべて、relation を "new"（targetFindingId は空）にした構造化 raw finding として報告してください。
 - `new` / `persists` / `resolution_confirmation` / `reopened` は、証跡と必要な ledger ID を添える raw relation です。最終 lifecycle 判定と finding ID の対応づけは findings-manager とエンジンが行うため、レビュワーは最終状態を採番・判定しないでください。
 {{/if}}{{#if reviewerHasOpenFindings}}- 毎ラウンド、自分のレビュー範囲に入る open な台帳の指摘を検証してください。
 - open な指摘が修正済みだと確認できたら、relation を "resolution_confirmation"、targetFindingId に台帳の finding ID、description に file:line の証跡を書いた raw finding として報告してください。指摘が resolved になる経路はこの確認だけです。

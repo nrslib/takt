@@ -208,8 +208,6 @@ export interface RawNormalizationAuditRecord {
   claimedRelation?: string;
   /** レビュアが主張した元の targetFindingId。 */
   claimedTargetFindingId?: string;
-  /** レビュアが送ってきた legacy kind（送られていた場合）。 */
-  claimedKind?: string;
   /** canonical に採用された整合 relation。 */
   normalizedRelation: string;
   /** wire（台帳の rawFindings）に残した targetFindingId。undefined = 除外された。 */

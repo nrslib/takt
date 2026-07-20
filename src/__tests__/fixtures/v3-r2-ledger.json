@@ -754,7 +754,7 @@
       "location": "src/features/tasks/prReviewImageAttachments.ts:50",
       "description": "`getGHAuthToken` executes `gh auth token` using `execFileSync`. If the `gh` CLI is not installed or not in the PATH, this will throw a synchronous error that is not caught within `downloadImage` or `resolvePrReviewImageAttachments`'s primary try-catch until it reaches the caller. While the caller (`addTask` or `runPipeline`) has a try-catch, the failure of a single token fetch (which should be constant per execution) could be handled more gracefully. More importantly, `execFileSync` might fail with an error that is not a standard `Error` object or may have a confusing message.",
       "suggestion": "Wrap `execFileSync` in a try-catch and provide a clear error message indicating that the `gh` CLI is required and must be authenticated.",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-063948-pr-task-attachments-takt-add-p:reviewers:1:robustness-review:robustness-002",
@@ -766,7 +766,7 @@
       "location": "src/features/tasks/prReviewImageAttachments.ts:137",
       "description": "`resolvePrReviewImageAttachments` performs `fs.mkdtempSync` and `fs.writeFileSync` inside a loop. If `fs.writeFileSync` fails (e.g., disk full, permission issue) for the N-th image, the `catch` block at line 173 cleans up the `tempDir`. However, if multiple images were already written, they are all deleted. This is correct for cleanup, but the error propagation is generic. More concerning is that the function is `async` but uses `Sync` methods for filesystem operations, which can block the event loop, though usually acceptable for CLI tools.",
       "suggestion": "Consider using `fs.promises` for consistency with the `async` nature of the function, although not strictly a robustness failure.",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-063948-pr-task-attachments-takt-add-p:reviewers:1:robustness-review:robustness-003",
@@ -778,7 +778,7 @@
       "location": "src/features/tasks/prReviewImageAttachments.ts:137",
       "description": "In `resolvePrReviewImageAttachments`, the `tempDir` is created using `fs.mkdtempSync(path.join(fs.realpathSync(process.cwd()), 'takt-pr-images-'))`. If `process.cwd()` is a directory where the user does not have write permissions, this will fail immediately. The current implementation assumes the current working directory is writable.",
       "suggestion": "Use the OS temporary directory (`os.tmpdir()`) for temporary image storage instead of `process.cwd()`, ensuring the tool works even when the project root is read-only.",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-063948-pr-task-attachments-takt-add-p:reviewers:1:robustness-review:robustness-004",
@@ -790,7 +790,7 @@
       "location": "src/features/tasks/prReviewImageAttachments.ts:55",
       "description": "The `downloadImage` function uses `fetch` and reads the body via a reader to enforce a size limit (`MAX_PR_REVIEW_IMAGE_ATTACHMENT_BYTES`). However, `getGHAuthToken` is called for every single image download in the loop at line 123. `gh auth token` is a relatively expensive shell call. If a PR has dozens of images, this will significantly slow down the process and spam the shell.",
       "suggestion": "Fetch the auth token once at the beginning of `resolvePrReviewImageAttachments` and pass it to `downloadImage`.",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:1:arch-review:res-f0001-v1",
@@ -801,8 +801,8 @@
       "title": "Confirmed fix for potential crash on missing gh CLI",
       "location": "src/features/tasks/prReviewImageAttachments.ts:51",
       "description": "`getGHAuthToken` (src/features/tasks/prReviewImageAttachments.ts:51) wraps `execFileSync` in a try-catch block and provides a clear error message, resolving F-0001.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0001"
+      "targetFindingId": "F-0001",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:1:arch-review:res-f0002-v1",
@@ -813,8 +813,8 @@
       "title": "Confirmed synchronous FS operations for CLI context",
       "location": "src/features/tasks/prReviewImageAttachments.ts:124",
       "description": "`resolvePrReviewImageAttachments` (src/features/tasks/prReviewImageAttachments.ts:124) uses synchronous FS operations. This is acceptable for a CLI tool's task preparation phase and maintains compatibility with current test patterns, resolving F-0002.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0002"
+      "targetFindingId": "F-0002",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:1:arch-review:res-f0003-v1",
@@ -825,8 +825,8 @@
       "title": "Confirmed fix for temp directory in read-only CWD",
       "location": "src/features/tasks/prReviewImageAttachments.ts:124",
       "description": "The temporary directory is now created using `os.tmpdir()` at src/features/tasks/prReviewImageAttachments.ts:124, eliminating the dependency on the current working directory's writability, resolving F-0003.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0003"
+      "targetFindingId": "F-0003",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:1:arch-review:res-f0004-v1",
@@ -837,8 +837,8 @@
       "title": "Confirmed fix for redundant shell calls for GH token acquisition",
       "location": "src/features/tasks/prReviewImageAttachments.ts:129",
       "description": "The GitHub auth token is fetched once at the beginning of `resolvePrReviewImageAttachments` (src/features/tasks/prReviewImageAttachments.ts:129) and passed to `downloadImage`, resolving the redundant shell call issue F-0004.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0004"
+      "targetFindingId": "F-0004",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:1:ai-antipattern-review:RES-F-0001-V3",
@@ -849,8 +849,8 @@
       "title": "Fixed potential crash on missing gh CLI",
       "location": "src/features/tasks/prReviewImageAttachments.ts:51-56",
       "description": "`getGHAuthToken` (src/features/tasks/prReviewImageAttachments.ts:51-56) now correctly wraps `execFileSync` in a try-catch block and throws a descriptive Error message if the `gh` CLI is not installed or authenticated, preventing an unhandled synchronous crash.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0001"
+      "targetFindingId": "F-0001",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:1:ai-antipattern-review:RES-F-0003-V3",
@@ -861,8 +861,8 @@
       "title": "Fixed potential crash on read-only CWD",
       "location": "src/features/tasks/prReviewImageAttachments.ts:124",
       "description": "`resolvePrReviewImageAttachments` now creates the temporary directory using `tmpdir()` from `node:os` (src/features/tasks/prReviewImageAttachments.ts:124) instead of `process.cwd()`, ensuring that the directory is created in a guaranteed writable system location.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0003"
+      "targetFindingId": "F-0003",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:1:ai-antipattern-review:RES-F-0004-V3",
@@ -873,8 +873,8 @@
       "title": "Fixed redundant shell calls for GH token",
       "location": "src/features/tasks/prReviewImageAttachments.ts:129,138",
       "description": "The GitHub authentication token is now retrieved once per call to `resolvePrReviewImageAttachments` (src/features/tasks/prReviewImageAttachments.ts:129) and passed to `downloadImage` (src/features/tasks/prReviewImageAttachments.ts:138), eliminating redundant `gh auth token` shell calls for each image.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0004"
+      "targetFindingId": "F-0004",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:1:contract-lifecycle-review:res-F-0001-v4",
@@ -885,8 +885,8 @@
       "title": "Confirmed fix for Potential crash on missing gh CLI in getGHAuthToken",
       "location": "src/features/tasks/prReviewImageAttachments.ts:51-56",
       "description": "In `src/features/tasks/prReviewImageAttachments.ts:51-56`, `getGHAuthToken` wraps `execFileSync` in a try-catch and throws a descriptive Error. F-0001 is resolved.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0001"
+      "targetFindingId": "F-0001",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:1:contract-lifecycle-review:res-F-0003-v4",
@@ -897,8 +897,8 @@
       "title": "Confirmed fix for Temporary directory creation in potentially read-only CWD",
       "location": "src/features/tasks/prReviewImageAttachments.ts:124",
       "description": "In `src/features/tasks/prReviewImageAttachments.ts:124`, `fs.mkdtempSync` now uses `tmpdir()` from `node:os` instead of `process.cwd()`. F-0003 is resolved.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0003"
+      "targetFindingId": "F-0003",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:1:contract-lifecycle-review:res-F-0004-v4",
@@ -909,8 +909,8 @@
       "title": "Confirmed fix for Redundant shell calls for GH token acquisition",
       "location": "src/features/tasks/prReviewImageAttachments.ts:129,138",
       "description": "`getGHAuthToken` is now called once at line 129 and passed to `downloadImage` at line 138, rather than being called inside the loop. F-0004 is resolved.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0004"
+      "targetFindingId": "F-0004",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:1:robustness-review:res-001-new-run",
@@ -921,8 +921,8 @@
       "title": "Resolution of Potential crash on missing gh CLI in getGHAuthToken",
       "location": "src/features/tasks/prReviewImageAttachments.ts:51-56",
       "description": "Confirmed that `getGHAuthToken` now wraps `execFileSync` in a try-catch block and throws a descriptive Error (src/features/tasks/prReviewImageAttachments.ts:51-56).",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0001"
+      "targetFindingId": "F-0001",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:1:robustness-review:res-002-new-run",
@@ -933,8 +933,8 @@
       "title": "Resolution of Temporary directory creation in potentially read-only CWD",
       "location": "src/features/tasks/prReviewImageAttachments.ts:124",
       "description": "Confirmed that the temporary directory is now created using `tmpdir()` from `node:os` instead of `process.cwd()` (src/features/tasks/prReviewImageAttachments.ts:124), solving the read-only CWD issue.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0003"
+      "targetFindingId": "F-0003",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:1:robustness-review:res-003-new-run",
@@ -945,8 +945,8 @@
       "title": "Resolution of Redundant shell calls for GH token acquisition",
       "location": "src/features/tasks/prReviewImageAttachments.ts:129-138",
       "description": "Confirmed that `getGHAuthToken` is now called once outside the loop (src/features/tasks/prReviewImageAttachments.ts:129) and the token is passed into `downloadImage` (src/features/tasks/prReviewImageAttachments.ts:138), eliminating redundant shell calls.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0004"
+      "targetFindingId": "F-0004",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:1:robustness-review:robustness-006-new-run",
@@ -958,7 +958,7 @@
       "location": "src/features/tasks/prReviewImageAttachments.ts:149",
       "description": "The function `resolvePrReviewImageAttachments` still uses `fs.writeFileSync` (line 149) and `fs.rmSync` (lines 175, 180) within an `async` function. While acceptable for CLI tools, this remains as an area for potential improvement to avoid blocking the event loop. This corresponds to the original issue F-0002.",
       "suggestion": "Consider using `fs.promises.writeFile` and `fs.promises.rm` for fully non-blocking I/O.",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:2:arch-review:res-f0001-v2",
@@ -969,8 +969,8 @@
       "title": "Confirmed fix for potential crash on missing gh CLI",
       "location": "src/features/tasks/prReviewImageAttachments.ts:51",
       "description": "`getGHAuthToken` (src/features/tasks/prReviewImageAttachments.ts:51) wraps `execFileSync` in a try-catch block and provides a specific error message, resolving F-0001.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0001"
+      "targetFindingId": "F-0001",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:2:arch-review:res-f0002-v2",
@@ -981,8 +981,8 @@
       "title": "Synchronous FS operations maintained for CLI compatibility",
       "location": "src/features/tasks/prReviewImageAttachments.ts:124",
       "description": "The `resolvePrReviewImageAttachments` function still uses synchronous FS operations (`fs.mkdtempSync` at L124, `fs.writeFileSync` at L149, `fs.rmSync` at L175, L180). While the previous iterations concluded that this is acceptable for a CLI tool's task setup phase and to maintain test compatibility, it remains an observed pattern in an `async` function. However, since it's not causing regression or failure in the CLI context, it is confirmed as a \"low\" severity a-priori accepted state (persists).",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0002"
+      "targetFindingId": "F-0002",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:2:arch-review:res-f0003-v2",
@@ -993,8 +993,8 @@
       "title": "Confirmed fix for temp directory in read-only CWD",
       "location": "src/features/tasks/prReviewImage uma.ts:124",
       "description": "`tempDir` is created using `os.tmpdir()` (src/features/tasks/prReviewImageAttachments.ts:124), ensuring the feature works even if the current working directory is read-only, resolving F-0003.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0003"
+      "targetFindingId": "F-0003",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:2:arch-review:res-f0004-v2",
@@ -1005,8 +1005,8 @@
       "title": "Confirmed fix for redundant shell calls for GH token acquisition",
       "location": "src/features/tasks/prReviewImageAttachments.ts:129",
       "description": "The GitHub auth token is now fetched once per execution of `resolvePrReviewImageAttachments` (src/features/tasks/prReviewImageAttachments.ts:129) and passed to `downloadImage` as an argument, eliminating redundant shell calls in the image download loop, resolving F-0004.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0004"
+      "targetFindingId": "F-0004",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:2:ai-antipattern-review:RES-F-0001-V4",
@@ -1017,8 +1017,8 @@
       "title": "Fixed potential crash on missing gh CLI",
       "location": "src/features/tasks/prReviewImageAttachments.ts:51-56",
       "description": "`getGHAuthToken` (src/features/tasks/prReviewImageAttachments.ts:51-56) now correctly wraps `execFileSync` in a try-catch block and throws a descriptive Error message if the `gh` CLI is not installed or authenticated, preventing an unhandled synchronous crash.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0001"
+      "targetFindingId": "F-0001",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:2:ai-antipattern-review:RES-F-0003-V4",
@@ -1029,8 +1029,8 @@
       "title": "Fixed potential crash on read-only CWD",
       "location": "src/features/tasks/prReviewImageAttachments.ts:124",
       "description": "`resolvePrReviewImageAttachments` now creates the temporary directory using `tmpdir()` from `node:os` (src/features/tasks/prReviewImageAttachments.ts:124) instead of `process.cwd()`, ensuring that the directory is created in a guaranteed writable system location.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0003"
+      "targetFindingId": "F-0003",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:2:ai-antipattern-review:RES-F-0004-V4",
@@ -1041,8 +1041,8 @@
       "title": "Fixed redundant shell calls for GH token acquisition",
       "location": "src/features/tasks/prReviewImageAttachments.ts:129,138",
       "description": "The GitHub authentication token is now retrieved once per call to `resolvePrReviewImageAttachments` (src/features/tasks/prReviewImageAttachments.ts:129) and passed to `downloadImage` (src/features/tasks/prReviewImageAttachments.ts:138), eliminating redundant `gh auth token` shell calls for each image.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0004"
+      "targetFindingId": "F-0004",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:2:contract-lifecycle-review:res-F-0001-v5",
@@ -1053,8 +1053,8 @@
       "title": "Confirmed fix for Potential crash on missing gh CLI in getGHAuthToken",
       "location": "src/features/tasks/prReviewImageAttachments.ts:51-56",
       "description": "In `src/features/tasks/prReviewImageAttachments.ts:51-56`, `getGHAuthToken` wraps `execFileSync` in a try-catch and throws a descriptive Error. F-0001 is resolved.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0001"
+      "targetFindingId": "F-0001",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:2:contract-lifecycle-review:res-F-0003-v5",
@@ -1065,8 +1065,8 @@
       "title": "Confirmed fix for Temporary directory creation in potentially read-only CWD",
       "location": "src/features/tasks/prReviewImageAttachments.ts:124",
       "description": "In `src/features/tasks/prReviewImageAttachments.ts:124`, `fs.mkdtempSync` now uses `tmpdir()` from `node:os` instead of `process.cwd()`. F-0003 is resolved.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0003"
+      "targetFindingId": "F-0003",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:2:contract-lifecycle-review:res-F-0004-v5",
@@ -1077,8 +1077,8 @@
       "title": "Confirmed fix for Redundant shell calls for GH token acquisition",
       "location": "src/features/tasks/prReviewImageAttachments.ts:129,138",
       "description": "`getGHAuthToken` is now called once at line 129 and passed to `downloadImage` at line 138, rather than being called inside the loop. F-0004 is resolved.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0004"
+      "targetFindingId": "F-0004",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:2:robustness-review:res-001-final-2",
@@ -1089,8 +1089,8 @@
       "title": "Resolution of Potential crash on missing gh CLI in getGHAuthToken",
       "location": "src/features/tasks/prReviewImageAttachments.ts:51-56",
       "description": "Confirmed that `getGHAuthToken` now wraps `execFileSync` in a try-catch block and throws a descriptive Error (src/features/tasks/prReviewImageAttachments.ts:51-56).",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0001"
+      "targetFindingId": "F-0001",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:2:robustness-review:res-002-final-2",
@@ -1101,8 +1101,8 @@
       "title": "Resolution of Temporary directory creation in potentially read-only CWD",
       "location": "src/features/tasks/prReviewImageAttachments.ts:124",
       "description": "Confirmed that the temporary directory is now created using `tmpdir()` from `node:os` instead of `process.cwd()` (src/features/tasks/prReviewImageAttachments.ts:124), solving the read-only CWD issue.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0003"
+      "targetFindingId": "F-0003",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:2:robustness-review:res-003-final-2",
@@ -1113,8 +1113,8 @@
       "title": "Resolution of Redundant shell calls for GH token acquisition",
       "location": "src/features/tasks/prReviewImageAttachments.ts:129-138",
       "description": "Confirmed that `getGHAuthToken` is now called once outside the loop (src/features/tasks/prReviewImageAttachments.ts:129) and the token is passed into `downloadImage` (src/features/tasks/prReviewImageAttachments.ts:138), eliminating redundant shell calls.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0004"
+      "targetFindingId": "F-0004",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:2:robustness-review:robustness-006-final-2",
@@ -1126,7 +1126,7 @@
       "location": "src/features/tasks/prReviewImageAttachments.ts:149",
       "description": "The function `resolvePrReviewImageAttachments` still uses `fs.writeFileSync` (line 149) and `fs.rmSync` (lines 175, 180) within an `async` function. While acceptable for CLI tools, this remains as an area for potential improvement to avoid blocking the event loop. This corresponds to the original issue F-0002.",
       "suggestion": "Consider using `fs.promises.writeFile` and `fs.promises.rm` for fully non-blocking I/O.",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:3:arch-review:F-0002-persist",
@@ -1138,8 +1138,8 @@
       "location": "src/features/tasks/prReviewImageAttachments.ts:124,149,175,180",
       "description": "The function `resolvePrReviewImageAttachments` in `src/features/tasks/prReviewImage umaAttachments.ts` still uses synchronous filesystem operations (`fs.mkdtempSync` at line 124, `fs.writeFileSync` at line 149, and `fs.rmSync` at lines 175 and 180) within an `async` function. While acknowledged as acceptable for a CLI tool in previous iterations, this remains a potential performance bottleneck as it blocks the Node.js event loop. This is a continuation of the issue tracked as F-0002.",
       "suggestion": "Consider replacing `fs.mkdtempSync`, `fs.writeFileSync`, and `fs.rmSync` with their asynchronous equivalents from `fs.promises` to prevent event loop blocking.",
-      "kind": "issue",
-      "targetFindingId": "F-0002"
+      "targetFindingId": "F-0002",
+      "relation": "persists"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:3:ai-antipattern-review:RES-F-0001-V5",
@@ -1150,8 +1150,8 @@
       "title": "Fixed potential crash on missing gh CLI",
       "location": "src/features/tasks/prReviewImageAttachments.ts:51-56",
       "description": "`getGHAuthToken` (src/features/tasks/prReviewImageAttachments.ts:51-56) wraps `execFileSync` in a try-catch block and throws a descriptive error if the `gh` CLI is not installed or authenticated. Verified as resolved.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0001"
+      "targetFindingId": "F-0001",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:3:ai-antipattern-review:RES-F-0003-V5",
@@ -1162,8 +1162,8 @@
       "title": "Fixed potential crash on read-only CWD",
       "location": "src/features/tasks/prReviewImageAttachments.ts:124",
       "description": "`resolvePrReviewImageLAttachments` now uses `tmpdir()` from `node:os` (src/features/tasks/prReviewImageAttachments.ts:124) to create the temporary directory, ensuring it is in a writable location regardless of the current working directory's permissions. Verified as resolved.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0003"
+      "targetFindingId": "F-0003",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:3:ai-antipattern-review:RES-F-0004-V5",
@@ -1174,8 +1174,8 @@
       "title": "Fixed redundant shell calls for GH token acquisition",
       "location": "src/features/tasks/prReviewImageAttachments.ts:129,138",
       "description": "The GitHub auth token is now fetched once at the beginning of `resolvePrReviewImageAttachments` (src/features/tasks/prReviewImageAttachments.ts:129) and passed to `downloadImage` (src/features/tasks/prReviewImageAttachments.ts:138), avoiding redundant shell calls. Verified as resolved.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0004"
+      "targetFindingId": "F-0004",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:3:contract-lifecycle-review:res-F-0001-v6",
@@ -1186,8 +1186,8 @@
       "title": "Confirmed fix for Potential crash on missing gh CLI in getGHAuthToken",
       "location": "src/features/tasks/prReviewImageAttachments.ts:51-56",
       "description": "In `src/features/tasks/prReviewImageAttachments.ts:51-56`, `getGHAuthToken` wraps `execFileSync` in a try-catch and throws a descriptive Error. F-0001 is resolved.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0001"
+      "targetFindingId": "F-0001",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:3:contract-lifecycle-review:res-F-0003-v6",
@@ -1198,8 +1198,8 @@
       "title": "Confirmed fix for Temporary directory creation in potentially read-only CWD",
       "location": "src/features/tasks/prReviewImageAttachments.ts:124",
       "description": "In `src/features/tasks/prReviewImageAttachments.ts:124`, `fs.mkdtempSync` now uses `tmpdir()` from `node:os` instead of `process.cwd()`. F-0003 is resolved.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0003"
+      "targetFindingId": "F-0003",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:3:contract-lifecycle-review:res-F-0004-v6",
@@ -1210,8 +1210,8 @@
       "title": "Confirmed fix for Redundant shell calls for GH token acquisition",
       "location": "src/features/tasks/prReviewImageAttachments.ts:129,138",
       "description": "`getGHAuthToken` is now called once at line 129 and passed to `downloadImage` at line 138, rather than being called inside the loop. F-0004 is resolved.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0004"
+      "targetFindingId": "F-0004",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:3:robustness-review:res-001-final-3",
@@ -1222,8 +1222,8 @@
       "title": "Resolution of Potential crash on missing gh CLI in getGHAuthToken",
       "location": "src/features/tasks/prReviewImageAttachments.ts:51-56",
       "description": "Confirmed that `getGHAuthToken` now wraps `execFileSync` in a try-catch block and throws a descriptive Error (src/features/tasks/prReviewImageAttachments.ts:51-56).",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0001"
+      "targetFindingId": "F-0001",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:3:robustness-review:res-002-final-3",
@@ -1234,8 +1234,8 @@
       "title": "Resolution of Temporary directory creation in potentially read-only CWD",
       "location": "src/features/tasks/prReviewImageAttachments.ts:124",
       "description": "Confirmed that the temporary directory is now created using `tmpdir()` from `node:os` instead of `process.cwd()` (src/features/tasks/prReviewImageAttachments.ts:124), solving the read-only CWD issue.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0003"
+      "targetFindingId": "F-0003",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:3:robustness-review:res-003-final-3",
@@ -1246,8 +1246,8 @@
       "title": "Resolution of Redundant shell calls for GH token acquisition",
       "location": "src/features/tasks/prReviewImageAttachments.ts:129-138",
       "description": "Confirmed that `getGHAuthToken` is now called once outside the loop (src/features/tasks/prReviewImageAttachments.ts:129) and the token is passed into `downloadImage` (src/features/tasks/prReviewImageAttachments.ts:138), eliminating redundant shell calls.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0004"
+      "targetFindingId": "F-0004",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-122055-pr-task-attachments-takt-add-p:reviewers:3:robustness-review:robustness-006-final-3",
@@ -1259,7 +1259,7 @@
       "location": "src/features/tasks/prReviewImageAttachments.ts:149",
       "description": "The function `resolvePrReviewImageAttachments` still uses `fs.writeFileSync` (line 149) and `fs.rmSync` (lines 175, 180) within an `async` function. While acceptable for CLI tools, this remains as an area for potential improvement to avoid blocking the event loop. This corresponds to the original issue F-0002.",
       "suggestion": "Consider using `fs.promises.writeFile` and `fs.promises.rm` for fully non-blocking I/O.",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:1:arch-review:F-0002-resolved",
@@ -1270,8 +1270,8 @@
       "title": "Synchronous FS operations in async function resolved",
       "location": "src/features/tasks/prReviewImageAttachments.ts:131,156,182,187",
       "description": "The `resolvePrReviewImageAttachments` function now uses `fsPromises.mkdtemp`, `fsPromises.writeFile`, and `fsPromises.rm`, effectively removing synchronous FS operations within the async flow. Verified in `src/features/tasks/prReviewImageAttachments.ts:131, 156, 182, 187`.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0002"
+      "targetFindingId": "F-0002",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:1:ai-antipattern-review:rf-001",
@@ -1282,8 +1282,8 @@
       "title": "Synchronous FS operations in async function resolved",
       "location": "src/features/tasks/prReviewImageAttachments.ts:131,156,182,187",
       "description": "The function `resolvePrReviewImageAttachments` has been updated to use `fsPromises.mkdtemp` (line 131), `fsPromises.writeFile` (line 156), and `fsPromises.rm` (lines 182 and 187), replacing the synchronous versions reported in F-0002.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0002"
+      "targetFindingId": "F-0002",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:1:ai-antipattern-review:rf-002",
@@ -1294,8 +1294,8 @@
       "title": "Synchronous FS operations in async function resolved",
       "location": "src/features/tasks/prReviewImageAttachments.ts:131,156,182,187",
       "description": "The synchronous filesystem operations (`fs.mkdtempSync`, `fs.writeFileSync`, `fs.rmSync`) identified in F-0005 have been replaced with their asynchronous equivalents from `fsPromises`.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0005"
+      "targetFindingId": "F-0005",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:1:contract-lifecycle-review:res-F-0002-v2",
@@ -1306,8 +1306,8 @@
       "title": "Confirmed resolution of Synchronous FS operations in async function",
       "location": "src/features/tasks/prReviewImageAttachments.ts:131,156,182,187",
       "description": "In `src/features/tasks/prReviewImageAttachments.ts`, `fsPromises.mkdtemp` (L131), `fsPromises.writeFile` (L156), and `fsPromises.rm` (L182, 187) are now used. This replaces the synchronous filesystem operations identified in F-0002.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0002"
+      "targetFindingId": "F-0002",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:1:contract-lifecycle-review:res-F-0005-v2",
@@ -1318,8 +1318,8 @@
       "title": "Confirmed resolution of Synchronous FS operations in async function (F-0005)",
       "location": "src/features/tasks/prReviewImageAttachments.ts:182,187",
       "description": "In `src/features/tasks/prReviewImageAttachments.ts`, the use of asynchronous `fsPromises.rm` (L182, 187) ensures the event loop is not blocked, which also resolves the concerns raised in F-0005.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0005"
+      "targetFindingId": "F-0005",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:1:robustness-review:res-005-final",
@@ -1330,8 +1330,8 @@
       "title": "Resolution of Synchronous FS operations in async function",
       "location": "src/features/tasks/prReviewImageAttachments.ts:131,156,182,187",
       "description": "Confirmed that `resolvePrReviewImageAttachments` now uses `fsPromises.mkdtemp` (line 131), `fsPromises.writeFile` (line 156), and `fsPromises.rm` (lines 182, 187). This resolves the potential event loop blocking issue.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0002"
+      "targetFindingId": "F-0002",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:2:arch-review:F-0005-resolved-async-fs",
@@ -1342,8 +1342,8 @@
       "title": "Synchronous FS operations in async function resolved",
       "location": "src/features/tasks/prReviewImageAttachments.ts:131,156,182,187",
       "description": "The `resolvePrReviewImageAttachments` function has been updated to use `fsPromises.mkdtemp` (line 131), `fsPromises.writeFile` (line 156), and `fsPromises.rm` (lines 182, 187). This successfully removes the synchronous FS operations that were previously flagged in F-0005 (and F-0002). Verified the updated implementation in `src/features/tasks/prReviewImageAttachments.ts`.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0005"
+      "targetFindingId": "F-0005",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:2:ai-antipattern-review:RF-0001",
@@ -1354,8 +1354,8 @@
       "title": "Synchronous FS operations in async function",
       "location": "src/features/tasks/prReviewImageAttachments.ts:131,156,182,187",
       "description": "Verified that synchronous FS operations (mkdtempSync, writeFileSync, rmSync) have been replaced with their asynchronous equivalents from `fsPromises` (mkdtemp, writeFile, rm).",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0005"
+      "targetFindingId": "F-0005",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:2:contract-lifecycle-review:res-F-0002-v3",
@@ -1366,8 +1366,8 @@
       "title": "Confirmed resolution of Synchronous FS operations in async function",
       "location": "src/features/tasks/prReviewImageAttachments.ts:131,156,182,187",
       "description": "In `src/features/tasks/prReviewImageAttachments.ts`, `fsPromises.mkdtemp` (L131), `fsPromises.writeFile` (L156), and `fsPromises.rm` (L182, 187) are now used. This fully replaces the synchronous filesystem operations identified in F-0002 and F-0005.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0002"
+      "targetFindingId": "F-0002",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:2:contract-lifecycle-review:res-F-0005-v3",
@@ -1378,8 +1378,8 @@
       "title": "Confirmed resolution of Synchronous FS operations in async function (F-0005)",
       "location": "src/features/tasks/prReviewImageAttachments.ts:182,187",
       "description": "The use of asynchronous `fsPromises.rm` (L182, 187) and other `fsPromises` methods ensures the event loop is not blocked, resolving F-0005.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0005"
+      "targetFindingId": "F-0005",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:2:robustness-review:res-005-final-run2",
@@ -1390,8 +1390,8 @@
       "title": "Resolution of Synchronous FS operations in async function",
       "location": "src/features/tasks/prReviewImageAttachments.ts:131,156,182,187",
       "description": "Confirmed that `resolvePrReviewImageAttachments` now uses `fsPromises.mkdtemp` (line 131), `fsPromises.writeFile` (line 156), and `fsPromises.rm` (lines 182, 187). This resolves the potential event loop blocking issue.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0002"
+      "targetFindingId": "F-0002",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:final-gate:1:merge-readiness-review:MRR-RAW-001",
@@ -1403,7 +1403,7 @@
       "location": "src/app/cli/routing.ts:296",
       "description": "PR 画像は resolvePrReviewImageAttachments() が返す cleanupAttachments でのみ削除されますが、executeDefaultAction() は result.attachments が存在する場合に prCleanupAttachments を呼びません。実際の interactive/quiet 経路では createSessionImageAttachmentStore(initialInput?.attachments) が初期 PR 添付を result.attachments に含め、cleanupInteractiveResultAttachments(result) は sessionDir だけを削除するため、PR 画像の tempPath は残ります。確認箇所: src/features/interactive/imageAttachments.ts:135, src/features/interactive/imageAttachments.ts:163。",
       "suggestion": "dispatchConversationAction 完了後は、result のセッション添付 cleanup と PR 添付 cleanup を別責務として両方実行してください。PR 添付が result.attachments に含まれていても、コピー/実行/保存が終わった後に prCleanupAttachments を必ず await する構造にしてください。",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:final-gate:1:merge-readiness-review:MRR-RAW-002",
@@ -1415,7 +1415,7 @@
       "location": "src/features/tasks/add/index.ts:231",
       "description": "addTask() の --pr 経路は resolvePrReviewImageAttachments() 後、saveTaskFile() が正常終了した場合だけ line 237 で cleanupAttachments() を呼びます。saveTaskFile()/prepareTaskSpecDirectory()/promoteTaskAttachments() が失敗すると、resolvePrReviewImageAttachments() が作成した一時ディレクトリは catch/finally で解放されません。副作用の例外経路が正常経路と同じ cleanup 契約を満たしていないため、PR コメント画像がローカルに残ります。",
       "suggestion": "resolvePrReviewImageAttachments() の戻り値を取得した後は try/finally で saveTaskFile() と displayTaskCreationResult() を囲み、保存成功・保存失敗のどちらでも cleanupAttachments() を await してください。",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:final-gate:1:supervise:supervise-20260711-001-pr-body-only-add-pr",
@@ -1427,7 +1427,7 @@
       "location": "src/features/tasks/add/index.ts:197",
       "description": "要件は `takt add --pr <number>` で PR 本文・通常コメント・review thread コメント内の画像 URL を検出することだが、現在の `addTask` は `prReview.reviews.length === 0 && prReview.comments.length === 0` の場合に即 return する。`PrReviewData.body` は `formatPrReviewAsTask` に含まれるため、PR 本文だけに `![...](https://github.com/user-attachments/assets/...)` があるケースでも、本文を整形・画像抽出する前に `PR #... has no review comments` としてタスク作成を中止する。対応するテストも `src/__tests__/addTask.test.ts:355` で body の有無を見ずに comments/reviews 空を拒否する挙動を固定しており、PR 本文画像の要件を満たしていない。",
       "suggestion": "`addTask` の空判定に `prReview.body` を含め、PR 本文が存在する場合は `formatPrReviewAsTask` と `resolvePrReviewImageAttachments` へ進ませる。PR 本文のみの画像が `attachments/image-1.png` と `order.md` の添付画像セクションに保存される回帰テストを追加する。",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:final-gate:1:supervise:supervise-20260711-002-pr-attachment-cleanup-leak",
@@ -1439,7 +1439,7 @@
       "location": "src/app/cli/routing.ts:296",
       "description": "PR 画像ダウンロードは一時ファイルを作る副作用を伴うが、cleanup が全経路で閉じていない。`executeDefaultAction` では `resolvePrInput` 後に `prCleanupAttachments` を保持するが、workflow 選択キャンセル (`src/app/cli/routing.ts:155`) や interactive mode 選択キャンセル (`src/app/cli/routing.ts:172`) では cleanup 前に return する。また通常の interactive 経路でも、初期 PR attachments は `createSessionImageAttachmentStore(initialInput?.attachments)` から `result.attachments` として返り得るため、`result.attachments ? undefined : prCleanupAttachments` の条件により PR 由来の cleanup がスキップされる。さらに `addTask --pr` でも `saveTaskFile` 成功後にだけ `cleanupAttachments` を呼ぶため、保存処理が失敗すると一時ディレクトリが残る。これは状態整合性・後片付け要件の未充足で、既存テストは正常終了後の cleanup しか検証していない。",
       "suggestion": "PR 画像 attachment の所有権を明確にし、`resolvePrInput` / `addTask --pr` で取得した cleanup を、キャンセル・例外・保存失敗・interactive result attachments 有無に関係なく `finally` で一度だけ実行する。workflow キャンセル、mode キャンセル、保存失敗、interactive execute 成功時に PR 一時ディレクトリが削除されるテストを追加する。",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:arch-review:res-F-0006",
@@ -1450,8 +1450,8 @@
       "title": "interactive --pr で PR 画像の一時ディレクトリが解放されない",
       "location": "src/app/cli/routing.ts:299",
       "description": "src/app/cli/routing.ts:299 で `await cleanupResult()` が呼ばれるようになり、その中で `prCleanupAttachments` が確実に実行される構造に変更されたことを確認しました。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:arch-review:res-F-0007",
@@ -1462,8 +1462,8 @@
       "title": "takt add --pr の保存失敗時にダウンロード済み画像が残る",
       "location": "src/features/tasks/add/index.ts:234",
       "description": "src/features/tasks/add/index.ts:224-234 にて `try-finally` ブロックが導入され、`saveTaskFile` の成否に関わらず `resolvedAttachments?.cleanupAttachments()` が呼ばれるようになったことを確認しました。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:arch-review:res-F-0008",
@@ -1474,8 +1474,8 @@
       "title": "takt add --pr rejects PR-body-only image attachments before extraction",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "src/features/tasks/add/index.ts:197 の空判定に `!prReview.body?.trim()` が追加され、PR本文のみに内容がある場合に適切に処理が継続されるようになったことを確認しました。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:arch-review:res-F-0009",
@@ -1486,8 +1486,8 @@
       "title": "PR image temporary attachments are not cleaned on several non-happy paths",
       "location": "src/app/cli/routing.ts:157",
       "description": "src/app/cli/routing.ts:157 および 173 の早期 return 前に `await prCleanupAttachments?.()` が追加され、また `executeDefaultAction` の `finally` で `cleanupResult` が呼ばれることで、主要なキャンセル/失敗経路でのリソース解放が担保されたことを確認しました。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0009"
+      "targetFindingId": "F-0009",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:ai-antipattern-review:FINDING-001",
@@ -1499,7 +1499,7 @@
       "location": "src/core/workflowExecutor.ts:45",
       "description": "The AI has introduced a complex generic wrapper for a simple data transformation that is only used in one place, increasing cognitive load without providing actual extensibility.",
       "suggestion": "Simplify the implementation by removing the generic wrapper and using a direct function call.",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:coding-review:confirm-F-0006",
@@ -1510,8 +1510,8 @@
       "title": "Resolved: interactive --pr で PR 画像の一時ディレクトリが解放されない",
       "location": "src/app/cli/routing.ts:156,173,301",
       "description": "F-0006: In `src/app/cli/routing.ts`, `prCleanupAttachments` is now awaited in the finally block via `cleanupResult()` (lines 293-301) and in cancellation paths (lines 156, 173). Verified.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:coding-review:confirm-F-0007",
@@ -1522,8 +1522,8 @@
       "title": "Resolved: takt add --pr の保存失敗時にダウンロード済み画像が残る",
       "location": "src/features/tasks/add/index.ts:234",
       "description": "F-0007: In `src/features/tasks/add/index.ts`, the `resolvePrReviewImageAttachments` result is now wrapped in a try-finally block (lines 220-235), ensuring `cleanupAttachments()` is called even if `saveTaskFile` fails. Verified.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:coding-review:confirm-F-0008",
@@ -1534,8 +1534,8 @@
       "title": "Resolved: takt add --pr rejects PR-body-only image attachments before extraction",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "F-0008: In `src/features/tasks/add/index.ts`, the condition for rejecting PR tasks now includes `!prReview.body?.trim()` (line 197), allowing tasks to be created from PR bodies alone. Verified.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:coding-review:confirm-F-0009",
@@ -1546,8 +1546,8 @@
       "title": "Resolved: PR image temporary attachments are not cleaned on several non-happy paths",
       "location": "src/app/cli/routing.ts:301, src/features/tasks/add/index.ts:234, src/features/pipeline/execute.ts:55, src/features/pipeline/steps.ts:268",
       "description": "F-0009: The systemic cleanup issues across `routing.ts` (finally block), `add/index.ts` (try-finally), and `pipeline/execute.ts` (finally block) have been addressed by ensuring the async `cleanupAttachments` is awaited in all exit paths. Verified.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0009"
+      "targetFindingId": "F-0009",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:contract-lifecycle-review:res-F-0006-v2",
@@ -1558,8 +1558,8 @@
       "title": "Confirmed fix for interactive --pr PR image temporary directory leak",
       "location": "src/app/cli/routing.ts:156,173,299",
       "description": "In `src/app/cli/routing.ts`, `prCleanupAttachments` is now awaited in the `finally` block (L299) and in early return paths for workflow or mode cancellation (L156, 173). This ensures that temporary PR image directories are always cleaned up regardless of whether the interactive session resulted in its own attachments or was cancelled. This resolves F-0006 and F-0009.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:contract-lifecycle-review:res-F-0007-v2",
@@ -1570,8 +1570,8 @@
       "title": "Confirmed fix for takt add --pr temporary images leak on save failure",
       "location": "src/features/tasks/add/index.ts:221-238",
       "description": "In `src/features/tasks/add/index.ts`, the call to `resolvePrReviewImageAttachments` and the subsequent `saveTaskFile` are now wrapped in a `try...finally` block (L221-238), ensuring that `resolvedAttachments.cleanupAttachments()` is always called even if saving the task file fails. This resolves F-0007.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:contract-lifecycle-review:res-F-0008-v2",
@@ -1582,8 +1582,8 @@
       "title": "Confirmed fix for takt add --pr rejects PR-body-only image attachments",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In `src/features/tasks/add/index.ts:197`, the condition for rejecting PR tasks now includes `!prReview.body?.trim()`. This ensures that PRs containing images only in the body are no longer rejected, fulfilling the original requirement and resolving F-0008.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:robustness-review:res-005-final-run3",
@@ -1594,8 +1594,8 @@
       "title": "Resolution of Synchronous FS operations in async function",
       "location": "src/features/tasks/prReviewImageAttachments.ts:131,156,182,187",
       "description": "Confirmed that `resolvePrReviewImageAttachments` now uses `fsPromises.mkdtemp` (line 131), `fsPromises.writeFile` (line 156), and `fsPromises.rm` (lines 182, 187). This resolves the potential event loop blocking issue reported in F-0002 and F-0005.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0005"
+      "targetFindingId": "F-0005",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:robustness-review:res-006-final-run3",
@@ -1606,8 +1606,8 @@
       "title": "Resolution of PR-body-only image attachment rejection",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "Confirmed that `addTask` in `src/features/tasks/add/index.ts` now includes `prReview.body?.trim()` in its check for empty PRs (line 197), allowing PRs with only a body (containing images) to be processed. This resolves F-0008.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:robustness-review:res-007-final-run3",
@@ -1618,8 +1618,8 @@
       "title": "Resolution of PR image temporary attachments leak in routing",
       "location": "src/app/cli/routing.ts:155,172,299",
       "description": "Confirmed that `executeDefaultAction` in `src/app/cli/routing.ts` now `await`s `prCleanupAttachments` in the `finally` block (line 299) and also handles cleanup upon workflow/mode cancellation (lines 155, 172). This addresses the cleanup leak described in F-0006 and F-0009.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:3:robustness-review:res-008-final-run3",
@@ -1630,8 +1630,8 @@
       "title": "Resolution of PR image cleanup failure on save error in addTask",
       "location": "src/features/tasks/add/index.ts:216-236",
       "description": "Confirmed that `addTask` in `src/features/tasks/add/index.ts` now uses a `try...finally` block (lines 216-236) to ensure `resolvedAttachments.cleanupAttachments()` is called regardless of whether `saveTaskFile` succeeds or fails. This resolves F-0007 and the relevant part of F-0009.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:arch-review:res-F-0006-final",
@@ -1642,8 +1642,8 @@
       "title": "interactive --pr で PR 画像の一時ディレクトリが解放されない",
       "location": "src/app/cli/routing.ts:299",
       "description": "src/app/cli/routing.ts:157, 173 および 299 にて、PR添付ファイルの一時ディレクトリを解放する `prCleanupAttachments` が、キャンセル経路および正常・異常終了後の finally ブロックで確実に await 実行される構造になっていることを確認しました。これにより F-0006 および F-0009 のリソースリークが解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:arch-review:res-F-0007-final",
@@ -1654,8 +1654,8 @@
       "title": "takt add --pr の保存失敗時にダウンロード済み画像が残る",
       "location": "src/features/tasks/add/index.ts:234",
       "description": "src/features/tasks/add/index.ts:224-234 にて `try-finally` ブロックが導入され、`saveTaskFile` の成否に関わらず `resolvedAttachments?.cleanupAttachments()` が呼ばれる構造であることを確認しました。これにより F-0007 の保存失敗時のリソースリークが解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:arch-review:res-F-0008-final",
@@ -1666,8 +1666,8 @@
       "title": "takt add --pr rejects PR-body-only image attachments before extraction",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "src/features/tasks/add/index.ts:197 において、空判定条件に `!prReview.body?.trim()` が追加され、PR本文のみに内容（画像含む）がある場合でも処理が継続されることを確認しました。これにより F-0008 の要件不足が解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:arch-review:res-F-0009-final",
@@ -1678,8 +1678,8 @@
       "title": "PR image temporary attachments are not cleaned on several non-happy paths",
       "location": "src/app/cli/routing.ts:157",
       "description": "F-0006, F-0007 の修正に加え、src/app/cli/routing.ts のキャンセル経路における cleanup 追加により、あらゆる正常・異常・中断経路で PR 一時資源が解放される構造が完結していることを確認しました。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0009"
+      "targetFindingId": "F-0009",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:ai-antipattern-review:F-0011",
@@ -1691,7 +1691,7 @@
       "location": "src/features/tasks/list/taskInstructionActions.ts:171",
       "description": "The current implementation has introduced extensive changes to resource cleanup logic across multiple files (e.g., `src/features/interactive/interactive.ts`, `src/features/tasks/list/taskInstructionActions.ts`, `src/features/tasks/list/taskRetryActions.ts`, `src/features/tasks/resume/index.ts`). While it addresses the previous cleanup issues (F-0006, F-0007, F-0009), it introduces a pattern where `cleanupInteractiveResultAttachments` is called in `finally` blocks of high-level action handlers. However, this creates a potential for double-cleanup or premature cleanup if the `result` object is passed across boundaries. Specifically, the `ImageAttachmentCleanupOwner` interface is used to attach cleanup to the result, but the responsibility for calling it is scattered across various `finally` blocks in the CLI routing and feature layers. This is a fragile pattern that may lead to \"use-after-cleanup\" if an async process still references the attachments after the `finally` block executes.",
       "suggestion": "Centralize the attachment lifecycle management. Instead of scattering `finally` blocks with `cleanupInteractiveResultAttachments`, use a scoped resource manager or ensure the ownership of the cleanup function is strictly tied to the final sink of the result object.",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:coding-review:confirm-F-0006-rev3",
@@ -1702,8 +1702,8 @@
       "title": "Resolved: interactive --pr で PR 画像の一時ディレクトリが解放されない",
       "location": "src/app/cli/routing.ts:156,173,301",
       "description": "F-0006: In `src/app/cli/routing.ts`, `prCleanupAttachments` is now awaited in the finally block via `cleanupResult()` (lines 293-301) and in cancellation paths (lines 156, 173). Verified.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:coding-review:confirm-F-0007-rev3",
@@ -1714,8 +1714,8 @@
       "title": "Resolved: takt add --pr の保存失敗時にダウンロード済み画像が残る",
       "location": "src/features/tasks/add/index.ts:234",
       "description": "F-0007: In `src/features/tasks/add/index.ts`, the `resolvePrReviewImageAttachments` result is now wrapped in a try-finally block (lines 220-235), ensuring `cleanupAttachments()` is called even if `saveTaskFile` fails. Verified.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:coding-review:confirm-F-0008-rev3",
@@ -1726,8 +1726,8 @@
       "title": "Resolved: takt add --pr rejects PR-body-only image attachments before extraction",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "F-0008: In `src/features/tasks/add/index.ts`, the condition for rejecting PR tasks now includes `!prReview.body?.trim()` (line 197), allowing tasks to be created from PR bodies alone. Verified.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:coding-review:confirm-F-0009-rev3",
@@ -1738,8 +1738,8 @@
       "title": "Resolved: PR image temporary attachments are not cleaned on several non-happy paths",
       "location": "src/app/cli/routing.ts:301, src/features/tasks/add/index.ts:234, src/features/pipeline/execute.ts:55, src/features/pipeline/steps.ts:268",
       "description": "F-0009: The systemic cleanup issues across `routing.ts` (finally block), `add/index.ts` (try-finally), and `pipeline/execute.ts` (finally block) have been addressed by ensuring the async `cleanupAttachments` is awaited in all exit paths. Verified.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0009"
+      "targetFindingId": "F-0009",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:contract-lifecycle-review:res-F-0006-v3",
@@ -1750,8 +1750,8 @@
       "title": "Confirmed fix for interactive --pr PR image temporary directory leak",
       "location": "src/app/cli/routing.ts:156,173,299",
       "description": "In `src/app/cli/routing.ts`, `prCleanupAttachments` is now awaited in the `finally` block (L299) and in early return paths for workflow or mode cancellation (L156, 173). This ensures that temporary PR image directories are always cleaned up. This resolves F-0006 and F-0009.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:contract-lifecycle-review:res-F-0007-v3",
@@ -1762,8 +1762,8 @@
       "title": "Confirmed fix for takt add --pr temporary images leak on save failure",
       "location": "src/features/tasks/add/index.ts:221-238",
       "description": "In `src/features/tasks/add/index.ts`, the call to `resolvePrReviewImageAttachments` and `saveTaskFile` are wrapped in a `try...finally` block (L221-238), ensuring `cleanupAttachments` is always called. This resolves F-0007.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:contract-lifecycle-review:res-F-0008-v3",
@@ -1774,8 +1774,8 @@
       "title": "Confirmed fix for takt add --pr rejects PR-body-only image attachments",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In `src/features/tasks/add/index.ts:197`, the check for empty PRs now includes `!prReview.body?.trim()`, ensuring PRs with images only in the body are processed. This resolves F-0008.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:robustness-review:RF-001",
@@ -1786,8 +1786,8 @@
       "title": "PR-body-only image attachments are now supported",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In src/features/tasks/add/index.ts:197, the condition has been updated to `if (prReview.reviews.length === 0 && prReview.comments.length === 0 && !prReview.body?.trim())`, which now correctly allows proceeding if only the PR body contains content (and potentially images), resolving F-0008.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:robustness-review:RF-002",
@@ -1798,8 +1798,8 @@
       "title": "PR image temporary attachments are cleaned up on save failure",
       "location": "src/features/tasks/add/index.ts:239",
       "description": "In src/features/tasks/add/index.ts:239, a `finally` block has been added to call `await resolvedAttachments?.cleanupAttachments()`, ensuring that temporary image directories are removed regardless of whether `saveTaskFile` succeeds or fails, resolving F-0007.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:robustness-review:RF-003",
@@ -1810,8 +1810,8 @@
       "title": "Interactive mode now cleans up PR attachments",
       "location": "src/app/cli/routing.ts:254",
       "description": "In src/app/cli/routing.ts:254, the `cleanupResult` function now explicitly calls `await prCleanupAttachments?.()`, and this is executed in the `finally` block at line 302. This ensures PR attachments are cleaned up even when result attachments are present, resolving F-0006.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:4:robustness-review:RF-004",
@@ -1822,8 +1822,8 @@
       "title": "PR image attachments are cleaned up on workflow/mode cancellation",
       "location": "src/app/cli/routing.ts:158",
       "description": "In src/app/cli/routing.ts:158 and 175, `await prCleanupAttachments?.()` has been added to the cancellation paths for workflow and mode selection. Combined with the `finally` block at line 302 for the main execution path, this addresses the leak scenarios described in F-0009.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0009"
+      "targetFindingId": "F-0009",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:arch-review:res-F-0006-final-2",
@@ -1834,8 +1834,8 @@
       "title": "interactive --pr で PR 画像の一時ディレクトリが解放されない",
       "location": "src/app/cli/routing.ts:299",
       "description": "src/app/cli/routing.ts:157, 173 および 299 にて、PR添付ファイルの一時ディレクトリを解放する `prCleanupAttachments` が、キャンセル経路および正常・異常終了後の finally ブロックで確実に await 実行される構造になっていることを確認しました。これにより F-0006 および F-0009 のリソースリークが解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:arch-review:res-F-0007-final-2",
@@ -1846,8 +1846,8 @@
       "title": "takt add --pr の保存失敗時にダウンロード済み画像が残る",
       "location": "src/features/tasks/add/index.ts:234",
       "description": "src/features/tasks/add/index.ts:224-234 にて `try-finally` ブロックが導入され、`saveTaskFile` の成否に関わらず `resolvedAttachments?.cleanupAttachments()` が呼ばれる構造であることを確認しました。これにより F-0007 の保存失敗時のリソースリークが解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:arch-review:res-F-0008-final-2",
@@ -1858,8 +1858,8 @@
       "title": "takt add --pr rejects PR-body-only image attachments before extraction",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "src/features/tasks/add/index.ts:197 において、空判定条件に `!prReview.body?.trim()` が追加され、PR本文のみに内容（画像含む）がある場合でも処理が継続されることを確認しました。これにより F-0008 の要件不足が解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:arch-review:res-F-0009-final-2",
@@ -1870,8 +1870,8 @@
       "title": "PR image temporary attachments are not cleaned on several non-happy paths",
       "location": "src/app/cli/routing.ts:157",
       "description": "F-0006, F-0007 の修正に加え、src/app/cli/routing.ts のキャンセル経路における cleanup 追加により、あらゆる正常・異常・中断経路で PR 一時資源が解放される構造が完結していることを確認しました。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0009"
+      "targetFindingId": "F-0009",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:ai-antipattern-review:F-0011-persists",
@@ -1883,7 +1883,7 @@
       "location": "src/features/tasks/list/taskInstructionActions.ts:171",
       "description": "The distributed cleanup pattern for image attachments is still present. The cleanup responsibilities are scattered across multiple `finally` blocks in `src/features/tasks/list/taskInstructionActions.ts`, `src/features/tasks/list/taskRetryActions.ts`, and `src/features/tasks/resume/index.ts`. This remains a fragile design where the ownership of the cleanup function is not centrally managed, risking \"use-after-cleanup\" or inconsistent resource release if the result object is passed through different processing layers.",
       "suggestion": "Implement a centralized resource management strategy (e.g., a scoped session manager) that ensures all temporary attachments associated with a specific interaction are cleaned up exactly once at the end of the interaction's total lifecycle, rather than relying on individual feature-layer `finally` blocks.",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:coding-review:RF-001",
@@ -1894,8 +1894,8 @@
       "title": "interactive --pr で PR 画像の一時ディレクトリが解放されない",
       "location": "src/app/cli/routing.ts:299",
       "description": "src/app/cli/routing.ts:299 にて `cleanupResult` 関数が定義され、その中で `prCleanupAttachments` と `cleanupInteractiveResultAttachments(result)` の両方が await されるようになりました。これにより、interactive 経路での PR 画像一時ディレクトリの解放が保証されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:coding-review:RF-002",
@@ -1906,8 +1906,8 @@
       "title": "takt add --pr の保存失敗時にダウンロード済み画像が残る",
       "location": "src/features/tasks/add/index.ts:235",
       "description": "src/features/tasks/add/index.ts:226-236 にて、`resolvePrReviewImageAttachments` の実行後、`saveTaskFile` および `displayTaskCreationResult` が `try...finally` ブロックで囲まれ、`finally` 内で `resolvedAttachments?.cleanupAttachments()` が確実に呼び出される実装になりました。保存失敗時も一時ディレクトリが解放されます。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:coding-review:RF-003",
@@ -1918,8 +1918,8 @@
       "title": "takt add --pr rejects PR-body-only image attachments before extraction",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "src/features/tasks/add/index.ts:197 の空判定に `!prReview.body?.trim()` が追加され、PR 本文のみに内容（画像を含む）がある場合にタスク作成が中断される問題が解消されました。また、`src/__tests__/addTask.test.ts:355` のテストケースもこの変更に合わせて更新されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:coding-review:RF-004",
@@ -1930,8 +1930,8 @@
       "title": "PR image temporary attachments are not cleaned on several non-happy paths",
       "location": "src/app/cli/routing.ts:156",
       "description": "src/app/cli/routing.ts:156 および 173 にて、workflow 選択キャンセル時および mode 選択キャンセル時に `await prCleanupAttachments?.()` が追加されました。また、`executeDefaultAction` の最終的な `finally` ブロックで `cleanupResult` (prCleanupAttachments を含む) が実行されるため、主要な非正常系経路での漏洩が解消されています。pipeline 経路においても `src/features/pipeline/steps.ts:273` で `finally` 処理が実装されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0009"
+      "targetFindingId": "F-0009",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:contract-lifecycle-review:res-F-0006-v4",
@@ -1942,8 +1942,8 @@
       "title": "Confirmed fix for interactive --pr PR image temporary directory leak",
       "location": "src/app/cli/routing.ts:156,173,299",
       "description": "In `src/app/cli/routing.ts`, `prCleanupAttachments` is now awaited in the `finally` block (L299) and in early return paths for workflow or mode cancellation (L156, 173). This ensures that temporary PR image directories are always cleaned up. This resolves F-0006 and F-0009.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:contract-lifecycle-review:res-F-0007-v4",
@@ -1954,8 +1954,8 @@
       "title": "Confirmed fix for takt add --pr temporary images leak on save failure",
       "location": "src/features/tasks/add/index.ts:221-238",
       "description": "In `src/features/tasks/add/index.ts`, the call to `resolvePrReviewImageAttachments` and `saveTaskFile` are wrapped in a `try...finally` block (L221-238), ensuring `cleanupAttachments` is always called. This resolves F-0007.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:contract-lifecycle-review:res-F-0008-v4",
@@ -1966,8 +1966,8 @@
       "title": "Confirmed fix for takt add --pr rejects PR-body-only image attachments",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In `src/features/tasks/add/index.ts:197`, the check for empty PRs now includes `!prReview.body?.trim()`, ensuring PRs with images only in the body are processed. This resolves F-0008.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:robustness-review:RF-001",
@@ -1978,8 +1978,8 @@
       "title": "PR-body-only image attachments are now supported",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In src/features/tasks/add/index.ts:197, the condition has been updated to `if (prReview.reviews.length === 0 && prReview.comments.length === 0 && !prReview.body?.trim())`, which now correctly allows proceeding if only the PR body contains content (and potentially images), resolving F-0008.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:robustness-review:RF-002",
@@ -1990,8 +1990,8 @@
       "title": "PR image temporary attachments are cleaned up on save failure",
       "location": "src/features/tasks/add/index.ts:239",
       "description": "In src/features/tasks/add/index.ts:239, a `finally` block has been added to call `await resolvedAttachments?.cleanupAttachments()`, ensuring that temporary image directories are removed regardless of whether `saveTaskFile` succeeds or fails, resolving F-0007.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:robustness-review:RF-003",
@@ -2002,8 +2002,8 @@
       "title": "Interactive mode now cleans up PR attachments",
       "location": "src/app/cli/routing.ts:254",
       "description": "In src/app/cli/routing.ts:254, the `cleanupResult` function now explicitly calls `await prCleanupAttachments?.()`, and this is executed in the `finally` block at line 302. This ensures PR attachments are cleaned up even when result attachments are present, resolving F-0006.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:5:robustness-review:RF-004",
@@ -2014,8 +2014,8 @@
       "title": "PR image attachments are cleaned up on workflow/mode cancellation",
       "location": "src/app/cli/routing.ts:158",
       "description": "In src/app/cli/routing.ts:158 and 175, `await prCleanupAttachments?.()` has been added to the cancellation paths for workflow and mode selection. Combined with the `finally` block at line 302 for the main execution path, this addresses the leak scenarios described in F-0009.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0009"
+      "targetFindingId": "F-0009",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:arch-review:res-F-0006-final-3",
@@ -2026,8 +2026,8 @@
       "title": "interactive --pr で PR 画像の一時ディレクトリが解放されない",
       "location": "src/app/cli/routing.ts:302",
       "description": "src/app/cli/routing.ts:158, 175 および 302 にて、PR添付ファイルの一時ディレクトリを解放する `prCleanupAttachments` が、キャンセル経路および正常・異常終了後の finally ブロックで確実に await 実行される構造になっていることを確認しました。これにより F-0006 および F-0009 のリソースリークが解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:arch-review:res-F-0007-final-3",
@@ -2038,8 +2038,8 @@
       "title": "takt add --pr の保存失敗時にダウンロード済み画像が残る",
       "location": "src/features/tasks/add/index.ts:234",
       "description": "src/features/tasks/add/index.ts:224-234 にて `try-finally` ブロックが導入され、`saveTaskFile` の成否に関わらず `resolvedAttachments?.cleanupAttachments()` が呼ばれる構造であることを確認しました。これにより F-0007 の保存失敗時のリソースリークが解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:arch-review:res-F-0008-final-3",
@@ -2050,8 +2050,8 @@
       "title": "takt add --pr rejects PR-body-only image attachments before extraction",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "src/features/tasks/add/index.ts:197 において、空判定条件に `!prReview.body?.trim()` が追加され、PR本文のみに内容（画像含む）がある場合でも処理が継続されることを確認しました。これにより F-0008 の要件不足が解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:arch-review:res-F-0009-final-3",
@@ -2062,8 +2062,8 @@
       "title": "PR image temporary attachments are not cleaned on several non-happy paths",
       "location": "src/app/cli/routing.ts:158",
       "description": "F-0006, F-0007 の修正に加え、src/app/cli/routing.ts のキャンセル経路における cleanup 追加により、あらゆる正常・異常・中断経路で PR 一時資源が解放される構造が完結していることを確認しました。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0009"
+      "targetFindingId": "F-0009",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:ai-antipattern-review:finding-1",
@@ -2075,7 +2075,7 @@
       "location": "src/core/executor.ts:45",
       "description": "The code calls a method that does not exist in the current version of the library.",
       "suggestion": "Verify the API documentation and use the correct method name.",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:ai-antipattern-review:finding-2",
@@ -2087,7 +2087,7 @@
       "location": "src/shared/utils.ts:12",
       "description": "The AI introduced a complex generic wrapper for a simple utility function, increasing cognitive load without benefit.",
       "suggestion": "Simplify the function signature to a concrete implementation.",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:ai-antipattern-review:finding-3",
@@ -2099,7 +2099,7 @@
       "location": "src/features/module.ts:88",
       "description": "The generated code includes several helper methods that are never called within the class or external modules.",
       "suggestion": "Remove unused private methods to keep the codebase clean.",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:coding-review:RF-0001",
@@ -2110,8 +2110,8 @@
       "title": "takt add --pr の保存失敗時にダウンロード済み画像が残る",
       "location": "src/features/tasks/add/index.ts:233-240",
       "description": "resolvePrReviewImageAttachments() の後に try/finally ブロックが導入され、saveTaskFile() の成否に関わらず cleanupAttachments() が呼び出されるようになったことを確認。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:coding-review:RF-0002",
@@ -2122,8 +2122,8 @@
       "title": "takt add --pr rejects PR-body-only image attachments before extraction",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "空判定に `!prReview.body?.trim()` が追加され、PR 本文のみに内容がある場合にタスク作成が継続されるようになったことを確認。また、対応するテストケースが `src/__tests__/addTask.test.ts:312` に追加されていることを確認。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:coding-review:RF-0003",
@@ -2134,8 +2134,8 @@
       "title": "interactive --pr で PR 画像の一時ディレクトリが解放されない",
       "location": "src/app/cli/routing.ts:253-302",
       "description": "cleanupResult 関数が導入され、dispatchConversationAction の finally ブロックで prCleanupAttachments と cleanupInteractiveResultAttachments の両方が呼び出される構造になったことを確認。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:contract-lifecycle-review:res-F-0006-v5",
@@ -2146,8 +2146,8 @@
       "title": "Confirmed fix for interactive --pr PR image temporary directory leak",
       "location": "src/app/cli/routing.ts:156,173,299",
       "description": "In `src/app/cli/routing.ts`, `prCleanupAttachments` is now awaited in the `finally` block (L299) and in early return paths for workflow or mode cancellation (L156, 173). This ensures that temporary PR image directories are always cleaned up. This resolves F-0006 and F-0009.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:contract-lifecycle-review:res-F-0007-v5",
@@ -2158,8 +2158,8 @@
       "title": "Confirmed fix for takt add --pr temporary images leak on save failure",
       "location": "src/features/tasks/add/index.ts:221-238",
       "description": "In `src/features/tasks/add/index.ts`, the call to `resolvePrReviewImageAttachments` and `saveTaskFile` are wrapped in a `try...finally` block (L221-238), ensuring `cleanupAttachments` is always called. This resolves F-0007.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:contract-lifecycle-review:res-F-0008-v5",
@@ -2170,8 +2170,8 @@
       "title": "Confirmed fix for takt add --pr rejects PR-body-only image attachments",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In `src/features/tasks/add/index.ts:197`, the check for empty PRs now includes `!prReview.body?.trim()`, ensuring PRs with images only in the body are processed. This resolves F-0008.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:robustness-review:RF-005",
@@ -2182,8 +2182,8 @@
       "title": "PR-body-only image attachments are now supported",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In src/features/tasks/add/index.ts:197, the condition has been updated to `if (prReview.reviews.length === 0 && prReview.comments.length === 0 && !prReview.body?.trim())`, which now correctly allows proceeding if only the PR body contains content (and potentially images), resolving F-0008.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:robustness-review:RF-006",
@@ -2194,8 +2194,8 @@
       "title": "PR image temporary attachments are cleaned up on save failure",
       "location": "src/features/tasks/add/index.ts:239",
       "description": "In src/features/tasks/add/index.ts:239, a `finally` block has been added to call `await resolvedAttachments?.cleanupAttachments()`, ensuring that temporary image directories are removed regardless of whether `saveTaskFile` succeeds or fails, resolving F-0007.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:robustness-review:RF-007",
@@ -2206,8 +2206,8 @@
       "title": "Interactive mode now cleans up PR attachments",
       "location": "src/app/cli/routing.ts:254",
       "description": "In src/app/cli/routing.ts:254, the `cleanupResult` function now explicitly calls `await prCleanupAttachments?.()`, and this is executed in the `finally` block at line 302. This ensures PR attachments are cleaned up even when result attachments are present, resolving F-0006.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:arch-review:res-F-0006-final-4",
@@ -2218,8 +2218,8 @@
       "title": "interactive --pr で PR 画像の一時ディレクトリが解放されない",
       "location": "src/app/cli/routing.ts:302",
       "description": "src/app/cli/routing.ts:158, 175 および 302 にて、PR添付ファイルの一時ディレクトリを解放する `prCleanupAttachments` が、キャンセル経路および正常・異常終了後の finally ブロックで確実に await 実行される構造になっていることを確認しました。これにより F-0006 および F-0009 のリソースリークが解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:arch-review:res-F-0007-final-4",
@@ -2230,8 +2230,8 @@
       "title": "takt add --pr の保存失敗時にダウンロード済み画像が残る",
       "location": "src/features/tasks/add/index.ts:234",
       "description": "src/features/tasks/add/index.ts:224-234 にて `try-finally` ブロックが導入され、`saveTaskFile` の成否に関わらず `resolvedAttachments?.cleanupAttachments()` が呼ばれる構造であることを確認しました。これにより F-0007 の保存失敗時のリソースリークが解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:arch-review:res-F-0008-final-4",
@@ -2242,8 +2242,8 @@
       "title": "takt add --pr rejects PR-body-only image attachments before extraction",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "src/features/tasks/add/index.ts:197 において、空判定条件に `!prReview.body?.trim()` が追加され、PR本文のみに内容（画像含む）がある場合でも処理が継続されることを確認しました。これにより F-0008 の要件不足が解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:arch-review:res-F-0009-final-4",
@@ -2254,8 +2254,8 @@
       "title": "PR image temporary attachments are not cleaned on several non-happy paths",
       "location": "src/app/cli/routing.ts:158",
       "description": "F-0006, F-0007 の修正に加え、src/app/cli/routing.ts のキャンセル経路における cleanup 追加により、あらゆる正常・異常・中断経路で PR 一時資源が解放される構造が完結していることを確認しました。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0009"
+      "targetFindingId": "F-0009",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:ai-antipattern-review:finding-201",
@@ -2267,7 +2267,7 @@
       "location": "src/features/tasks/prReviewImageAttachments.ts:165",
       "description": "The current implementation of resolvePrReviewImageAttachments uses a simple loop and `String.prototype.replace` with RegExp for replacing URLs with placeholders. For large PR descriptions or comments with many images, this could lead to inefficient string allocations. While not a critical performance bug, it's a suboptimal pattern for content processing in a CLI tool that might handle large summaries.",
       "suggestion": "Consider using a single-pass replacement strategy or a more efficient buffer-based approach if performance becomes an issue.",
-      "kind": "issue"
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:ai-antipattern-review:finding-202",
@@ -2279,8 +2279,8 @@
       "location": "src/app/cli/routing.ts:299",
       "description": "In src/features/tasks/add/index.ts:218, the resolvePrReviewImageAttachments call is wrapped in a try-finally block, and its cleanupAttachments is called in the finally block. This is a good improvement over previous findings. However, in src/app/cli/routing.ts:155 and :172, the prCleanupAttachments is called upon interactive cancellation. In src/app/cli/routing.ts:299, a combined cleanup function is used. This distributed cleanup logic is still present and fragile, as it relies on multiple call sites to remember to await the cleanup. This is a continuation of the architectural issue described in F-0011.",
       "suggestion": "Implement a centralized session/resource manager for temporary attachments to ensure consistent cleanup regardless of the exit path.",
-      "kind": "issue",
-      "targetFindingId": "F-0011"
+      "targetFindingId": "F-0011",
+      "relation": "persists"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:ai-antipattern-review:finding-203",
@@ -2291,8 +2291,8 @@
       "title": "Verified resolution of PR body-only image attachments rejection",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "I have verified that the check in src/features/tasks/add/index.ts:197 now includes `!prReview.body?.trim()`, which correctly addresses the issue where PRs with only a body (and no comments/reviews) were rejected. The corresponding test case in `src/__tests__/addTask.test.ts` also covers this scenario.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:ai-antipattern-review:finding-204",
@@ -2303,8 +2303,8 @@
       "title": "Verified resolution of temporary image leak in addTask --pr failure path",
       "location": "src/features/tasks/add/index.ts:233",
       "description": "I have verified that in src/features/tasks/add/index.ts, the resolvePrReviewImageAttachments call and subsequent saveTaskFile call are now wrapped in a try-finally block (lines 218-233), ensuring that cleanupAttachments is called even if saveTaskFile fails. This resolves the leak in the --pr path of addTask.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:coding-review:RF-0001",
@@ -2315,8 +2315,8 @@
       "title": "takt add --pr now handles PR-body-only image attachments",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "The condition `if (prReview.reviews.length === 0 && prReview.comments.length === 0 && !prReview.body?.trim())` now correctly allows processing when the PR body has content, even if comments/reviews are empty. Verified by test `should save PR body-only images as task attachments when adding with --pr` in `src/__tests__/addTask.test.ts:316`.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:coding-review:RF-0002",
@@ -2327,8 +2327,8 @@
       "title": "takt add --pr image attachments are cleaned up on failure",
       "location": "src/features/tasks/add/index.ts:236",
       "description": "The `resolvePrReviewImageAttachments` call and subsequent `saveTaskFile` are now wrapped in a `try...finally` block that ensures `resolvedAttachments?.cleanupAttachments()` is called regardless of success or failure. Verified by test `should save downloaded PR review images as task attachments when adding with --pr` in `src/__tests__/addTask.test.ts:298`.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:coding-review:RF-0003",
@@ -2339,8 +2339,8 @@
       "title": "interactive --pr image attachments are cleaned up in routing",
       "location": "src/app/cli/routing.ts:305",
       "description": "A `cleanupResult` function was introduced in `executeDefaultAction` which calls both `prCleanupAttachments()` and `cleanupInteractiveResultAttachments(result)` within the `finally` block. Verified by test `should pass downloaded PR review images to the interactive seed and cleanup after handling` in `src/__tests__/cli-routing-pr-resolve.test.ts:312`.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:contract-lifecycle-review:res-F-0006-v6",
@@ -2351,8 +2351,8 @@
       "title": "Confirmed fix for interactive --pr PR image temporary directory leak",
       "location": "src/app/cli/routing.ts:156,173,299",
       "description": "In `src/app/cli/routing.ts`, `prCleanupAttachments` is now awaited in the `finally` block (L299) and in early return paths for workflow or mode cancellation (L156, 173). This ensures that temporary PR image directories are always cleaned up. This resolves F-0006 and F-0009.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:contract-lifecycle-review:res-F-0007-v6",
@@ -2363,8 +2363,8 @@
       "title": "Confirmed fix for takt add --pr temporary images leak on save failure",
       "location": "src/features/tasks/add/index.ts:221-238",
       "description": "In `src/features/tasks/add/index.ts`, the call to `resolvePrReviewImageAttachments` and `saveTaskFile` are wrapped in a `try...finally` block (L221-238), ensuring `cleanupAttachments` is always called. This resolves F-0007.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:contract-lifecycle-review:res-F-0008-v6",
@@ -2375,8 +2375,8 @@
       "title": "Confirmed fix for takt add --pr rejects PR-body-only image attachments",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In `src/features/tasks/add/index.ts:197`, the check for empty PRs now includes `!prReview.body?.trim()`, ensuring PRs with images only in the body are processed. This resolves F-0008.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:robustness-review:RF-008",
@@ -2387,8 +2387,8 @@
       "title": "PR-body-only image attachments are now supported",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In src/features/tasks/add/index.ts:197, the condition has been updated to `if (prReview.reviews.length === 0 && prReview.comments.length === 0 && !prReview.body?.trim())`, which now correctly allows proceeding if only the PR body contains content (and potentially images), resolving F-0008.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:robustness-review:RF-009",
@@ -2399,8 +2399,8 @@
       "title": "PR image temporary attachments are cleaned up on save failure",
       "location": "src/features/tasks/add/index.ts:239",
       "description": "In src/features/tasks/add/index.ts:239, a `finally` block has been added to call `await resolvedAttachments?.cleanupAttachments()`, ensuring that temporary image directories are removed regardless of whether `saveTaskFile` succeeds or fails, resolving F-0007.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:7:robustness-review:RF-010",
@@ -2411,8 +2411,8 @@
       "title": "Interactive mode now cleans up PR attachments",
       "location": "src/app/cli/routing.ts:254",
       "description": "In src/app/cli/routing.ts:254, the `cleanupResult` function now explicitly calls `await prCleanupAttachments?.()`, and this is executed in the `finally` block at line 302. This ensures PR attachments are cleaned up even when result attachments are present, resolving F-0006.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:arch-review:res-F-0006-final-5",
@@ -2423,8 +2423,8 @@
       "title": "interactive --pr で PR 画像の一時ディレクトリが解放されない",
       "location": "src/app/cli/routing.ts:302",
       "description": "src/app/cli/routing.ts:158, 175 および 302 にて、PR添付ファイルの一時ディレクトリを解放する `prCleanupAttachments` が、キャンセル経路および正常・異常終了後の finally ブロックで確実に await 実行される構造になっていることを確認しました。これにより F-0006 および F-0009 のリソースリークが解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:arch-review:res-F-0007-final-5",
@@ -2435,8 +2435,8 @@
       "title": "takt add --pr の保存失敗時にダウンロード済み画像が残る",
       "location": "src/features/tasks/add/index.ts:234",
       "description": "src/features/tasks/add/index.ts:224-234 にて `try-finally` ブロックが導入され、`saveTaskFile` の成否に関わらず `resolvedAttachments?.cleanupAttachments()` が呼ばれる構造であることを確認しました。これにより F-0007 の保存失敗時のリソースリークが解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:arch-review:res-F-0008-final-5",
@@ -2447,8 +2447,8 @@
       "title": "takt add --pr rejects PR-body-only image attachments before extraction",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "src/features/tasks/add/index.ts:197 において、空判定条件に `!prReview.body?.trim()` が追加され、PR本文のみに内容（画像含む）がある場合でも処理が継続されることを確認しました。これにより F-0008 の要件不足が解消されています。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:arch-review:res-F-0009-final-5",
@@ -2459,8 +2459,8 @@
       "title": "PR image temporary attachments are not cleaned on several non-happy paths",
       "location": "src/app/cli/routing.ts:158",
       "description": "F-0006, F-0007 の修正に加え、src/app/cli/routing.ts のキャンセル経路における cleanup 追加により、あらゆる正常・異常・中断経路で PR 一時資源が解放される構造が完結していることを確認しました。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0009"
+      "targetFindingId": "F-0009",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:ai-antipattern-review:finding-205",
@@ -2472,8 +2472,8 @@
       "location": "src/app/cli/routing.ts:299",
       "description": "I have verified that the distributed cleanup logic for image attachments is still present and fragmented across multiple call sites in `src/app/cli/routing.ts`. Specifically, `prCleanupAttachments` is called manually in several locations (e.g., lines 155, 172, and 299), and it is bundled with `cleanupInteractiveResultAttachments` in a combined `cleanupResult` function. This architecture still relies on each call site correctly implementing the cleanup chain, which is the exact structural weakness described in F-0011. The issue persists despite some improvements in `addTask`.",
       "suggestion": "Implement a centralized resource management system (e.g., a session-scoped attachment manager) that tracks all temporary resources and ensures they are cleaned up exactly once at the end of the CLI session, removing the need for manual `cleanupAttachments` calls across the routing logic.",
-      "kind": "issue",
-      "targetFindingId": "F-0011"
+      "targetFindingId": "F-0011",
+      "relation": "persists"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:ai-antipattern-review:finding-206",
@@ -2485,8 +2485,8 @@
       "location": "src/features/tasks/prReviewImageAttachments.ts:165",
       "description": "The loop and `String.prototype.replace` usage in `src/features/tasks/prReviewImageAttachments.ts:165` remains a suboptimal pattern for content processing. While acceptable for small inputs, it's an AI-typical approach that lacks consideration for efficiency in large-scale text processing. Since this was previously flagged and no performance-oriented improvement was made, it remains an issue.",
       "suggestion": "Use a more efficient replacement strategy, such as a single-pass replacement with a callback function in `replace()` if applicable, or a buffer-based approach.",
-      "kind": "issue",
-      "targetFindingId": "F-0015"
+      "targetFindingId": "F-0015",
+      "relation": "persists"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:coding-review:RF-001",
@@ -2497,8 +2497,8 @@
       "title": "takt add --pr rejects PR-body-only image attachments before extraction",
       "location": "src/features/tasks/add/index.ts:194",
       "description": "Verified that the check `if (prReview.reviews.length === 0 && prReview.comments.length === 0 && !prReview.body?.trim())` now correctly allows tasks with only PR body content. Also verified by the addition of the test case `should save PR body-only images as task attachments when adding with --pr` in `src/__tests__/addTask.test.ts:318`.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:coding-review:RF-002",
@@ -2509,8 +2509,8 @@
       "title": "takt add --pr の保存失敗時にダウンロード済み画像が残る",
       "location": "src/features/tasks/add/index.ts:235",
       "description": "Verified that `resolvePrReviewImageAttachments` is now wrapped in a `try...finally` block, and `resolvedAttachments?.cleanupAttachments()` is called in the `finally` block, ensuring temporary images are deleted regardless of `saveTaskFile` success or failure.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:coding-review:RF-003",
@@ -2521,8 +2521,8 @@
       "title": "interactive --pr で PR 画像の一時ディレクトリが解放されない",
       "location": "src/app/cli/routing.ts:299",
       "description": "Verified that `executeDefaultAction` now defines a `cleanupResult` function (line 243) that awaits `prCleanupAttachments?.()` and `cleanupInteractiveResultAttachments(result)`, and this is called in the `finally` block (line 300).",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:contract-lifecycle-review:res-F-0006-final",
@@ -2533,8 +2533,8 @@
       "title": "Confirmed fix for interactive --pr PR image temporary directory leak",
       "location": "src/app/cli/routing.ts:158,175,302",
       "description": "In `src/app/cli/routing.ts`, the `prCleanupAttachments` callback is correctly awaited in the `finally` block (L302) and early return paths (L158, L175). This ensures that temporary PR image directories are cleaned up regardless of the outcome of the interactive session. This resolves F-0006.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:contract-lifecycle-review:res-F-0007-final",
@@ -2545,8 +2545,8 @@
       "title": "Confirmed fix for takt add --pr temporary images leak on save failure",
       "location": "src/features/tasks/add/index.ts:223-240",
       "description": "In `src/features/tasks/add/index.ts`, the `resolvePrReviewImageAttachments` call and subsequent `saveTaskFile` are wrapped in a `try...finally` block (L223-240). The `cleanupAttachments` callback is awaited in the `finally` block (L240), ensuring temporary images are removed even if task saving fails. This resolves F-0007.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:contract-lifecycle-review:res-F-0008-final",
@@ -2557,8 +2557,8 @@
       "title": "Confirmed fix for takt add --pr rejects PR-body-only image attachments",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In `src/features/tasks/add/index.ts:197`, the check for empty PR content now explicitly includes `!prReview.body?.trim()`. This prevents the command from rejecting PRs that have images in the body but no comments or reviews, fulfilling the requirement to extract images from the PR body. This resolves F-0008.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:robustness-review:RF-011",
@@ -2569,8 +2569,8 @@
       "title": "PR-body-only image attachments are now supported",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In src/features/tasks/add/index.ts:197, the condition has been updated to `if (prReview.reviews.length === 0 && prReview.comments.length === 0 && !prReview.body?.trim())`, which now correctly allows proceeding if only the PR body contains content (and potentially images), resolving F-0008.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:robustness-review:RF-012",
@@ -2581,8 +2581,8 @@
       "title": "PR image temporary attachments are cleaned up on save failure",
       "location": "src/features/tasks/add/index.ts:239",
       "description": "In src/features/tasks/add/index.ts:239, a `finally` block has been added to call `await resolvedAttachments?.cleanupAttachments()`, ensuring that temporary image directories are removed regardless of whether `saveTaskFile` succeeds or fails, resolving F-0007.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:robustness-review:RF-013",
@@ -2593,8 +2593,8 @@
       "title": "Interactive mode now cleans up PR attachments",
       "location": "src/app/cli/routing.ts:254",
       "description": "In src/app/cli/routing.ts:254, the `cleanupResult` function now explicitly calls `await prCleanupAttachments?.()`, and this is executed in the `finally` block at line 302. This ensures PR attachments are cleaned up even when result attachments are present, resolving F-0006.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:9:ai-antipattern-review:F-0006-REVISITED",
@@ -2606,8 +2606,8 @@
       "location": "src/app/cli/routing.ts:302",
       "description": "`src/app/cli/routing.ts:302` で `cleanupResult` を呼び出しているが、`dispatchConversationAction` の内部で `execute`, `create_issue`, `save_task` が呼ばれ、その中で `selectAndExecuteTask` や `saveTaskFromInteractive` が実行される。これらの処理に時間がかかる場合や、途中で例外が発生した場合、`prCleanupAttachments` は `finally` ブロックで呼ばれるため解放はされるが、`result.attachments` に PR 添付が含まれている場合、それは `cleanupInteractiveResultAttachments` (L255) では削除されず、PR 添付としてのライフサイクル管理が不十分である。特に `interactiveSeed` (L186) で `prAttachments` が注入されており、これが `result.attachments` に引き継がれた場合、元の `prCleanupAttachments` との整合性が崩れるリスクがある。",
       "suggestion": "PR添付のリソース管理をセッション添付とは明確に分離し、`dispatchConversationAction` の完了後、結果に関わらず `prCleanupAttachments` が確実に一度だけ呼ばれることを保証する構造にしてください。",
-      "kind": "issue",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "persists"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:9:ai-antipattern-review:F-0011-REVISITED",
@@ -2619,8 +2619,8 @@
       "location": "src/app/cli/routing.ts:302",
       "description": "`src/app/cli/routing.ts` において、`prCleanupAttachments` の呼び出しが L158, L175, L302 に分散しており、コールサイトごとに解放責任を負わせる構造である。これは F-0011 で指摘された「脆弱な分散クリーンアップパターン」そのままであり、構造的な改善がなされていない。",
       "suggestion": "セッションスコープのリソースマネージャーを導入し、CLI終了時に一括して一時ファイルをクリーンアップする仕組みを導入してください。",
-      "kind": "issue",
-      "targetFindingId": "F-0011"
+      "targetFindingId": "F-0011",
+      "relation": "persists"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:9:ai-antipattern-review:F-0015-RESOLVED",
@@ -2631,8 +2631,8 @@
       "title": "Inefficient string replacement in a loop",
       "location": "src/features/tasks/prReviewImageAttachments.ts:174",
       "description": "`src/features/tasks/prReviewImageAttachments.ts:174-181` において、`taskContent.replace` に `combinedPattern` とコールバック関数を使用する実装に変更されており、以前のループ内での `replace` 繰り返し呼び出し（F-0015）が解消されている。1パスで全ての置換が行われるため、効率的な実装となっている。",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0015"
+      "targetFindingId": "F-0015",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:9:coding-review:RF-0001",
@@ -2643,8 +2643,8 @@
       "title": "takt add --pr now correctly handles PR-body-only image attachments",
       "location": "src/features/tasks/add/index.ts:194",
       "description": "Verified that the condition in `addTask` now includes `!prReview.body?.trim()`, allowing PRs with only body content (and images) to proceed to image extraction and task creation. Confirmed via the new test case in `src/__tests__/addTask.test.ts:312`.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:9:coding-review:RF-0002",
@@ -2655,8 +2655,8 @@
       "title": "takt add --pr now ensures cleanup of downloaded images on failure",
       "location": "src/features/tasks/add/index.ts:232",
       "description": "The call to `resolvePrReviewImageAttachments` is now wrapped in a `try...finally` block, ensuring `resolvedAttachments?.cleanupAttachments()` is executed regardless of whether `saveTaskFile` succeeds or fails.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:9:coding-review:RF-0003",
@@ -2667,8 +2667,8 @@
       "title": "Interactive mode now correctly cleans up PR image attachments",
       "location": "src/app/cli/routing.ts:302",
       "description": "A `cleanupResult` function was introduced that orchestrates both `prCleanupAttachments()` and `cleanupInteractiveResultAttachments(result)`. This is called in the `finally` block of `executeDefaultAction`, ensuring that temporary PR image directories are deleted even if the user cancels or an error occurs during interaction.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:9:contract-lifecycle-review:res-F-0006-v9",
@@ -2679,8 +2679,8 @@
       "title": "Confirmed fix for interactive --pr PR image temporary directory leak",
       "location": "src/app/cli/routing.ts:158,175,302",
       "description": "In `src/app/cli/routing.ts`, the `prCleanupAttachments` callback is awaited in the `finally` block (L302) and during interactive cancellation (L158, L175). This ensures the temporary directory created by `resolvePrReviewImageAttachments` is removed. This resolves F-0006.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:9:contract-lifecycle-review:res-F-0007-v9",
@@ -2691,8 +2691,8 @@
       "title": "Confirmed fix for takt add --pr temporary images leak on save failure",
       "location": "src/features/tasks/add/index.ts:223-240",
       "description": "In `src/features/tasks/add/index.ts`, a `try...finally` block (L223-240) ensures that `resolvedAttachments.cleanupAttachments()` is called regardless of whether `saveTaskFile` succeeds or fails. This resolves F-0007.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:9:contract-lifecycle-review:res-F-0008-v9",
@@ -2703,8 +2703,8 @@
       "title": "Confirmed fix for takt add --pr rejects PR-body-only image attachments",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In `src/features/tasks/add/index.ts:197`, the condition `!prReview.body?.trim()` was added to the empty PR check. This ensures that PRs containing only a body with images are not rejected, satisfying the requirement. This resolves F-0008.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:9:robustness-review:RF-014",
@@ -2715,8 +2715,8 @@
       "title": "PR-body-only image attachments are now supported",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In src/features/tasks/add/index.ts:197, the condition has been updated to `if (prReview.reviews.length === 0 && prReview.comments.length === 0 && !prReview.body?.trim())`, which now correctly allows proceeding if only the PR body contains content (and potentially images), resolving F-0008.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0008"
+      "targetFindingId": "F-0008",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:9:robustness-review:RF-015",
@@ -2727,8 +2727,8 @@
       "title": "PR image temporary attachments are cleaned up on save failure",
       "location": "src/features/tasks/add/index.ts:239",
       "description": "In src/features/tasks/add/index.ts:239, a `finally` block has been added to call `await resolvedAttachments?.cleanupAttachments()`, ensuring that temporary image directories are removed regardless of whether `saveTaskFile` succeeds or fails, resolving F-0007.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0007"
+      "targetFindingId": "F-0007",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:9:robustness-review:RF-016",
@@ -2739,8 +2739,8 @@
       "title": "Interactive mode now cleans up PR attachments",
       "location": "src/app/cli/routing.ts:254",
       "description": "In src/app/cli/routing.ts:254, the `cleanupResult` function now explicitly calls `await prCleanupAttachments?.()`, and this is executed in the `finally` block at line 302. This ensures PR attachments are cleaned up even when result attachments are present, resolving F-0006.",
-      "kind": "resolution_confirmation",
-      "targetFindingId": "F-0006"
+      "targetFindingId": "F-0006",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:arch-review:arch-rev-10-1",
@@ -2750,9 +2750,9 @@
       "location": "src/app/cli/routing.ts:302",
       "description": "src/app/cli/routing.ts:129, 146, 160, 177, 302 で prCleanupAttachments?.() が個別に呼び出されており、コールサイトごとに解放責任を負わせる構造である。これは F-0011 および F-0017 で指摘された「脆弱な分散クリーンアップパターン」であり、構造的な改善がなされていない。",
       "suggestion": "セッションスコープのリソースマネージャーを導入し、CLI終了時に一括して一時ファイルをクリーンアップする仕組みを導入してください。",
-      "kind": "issue",
       "reviewer": "arch-review",
-      "stepName": "arch-review"
+      "stepName": "arch-review",
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0011-ROUTING",
@@ -2762,10 +2762,10 @@
       "location": "src/app/cli/routing.ts:302",
       "description": "`src/app/cli/routing.ts` において、`prCleanupAttachments` の呼び出しが L129, L146, L160, L177, L302 に分散して手動で行われており、リソース管理の責任が各コールサイトに分散している。これは F-0011 で指摘された「脆弱な分散クリーンアップパターン」であり、構造的な改善（セッションスコープのマネージャー導入等）がなされていない。",
       "suggestion": "セッションスコープのリソースマネージャーを導入し、CLI終了時に一括して一時ファイルをクリーンアップする仕組みを導入することで、手動のクリーンアップ呼び出しを排除してください。",
-      "kind": "issue",
       "targetFindingId": "F-0011",
       "reviewer": "ai-antipattern-review",
-      "stepName": "ai-antipattern-review"
+      "stepName": "ai-antipattern-review",
+      "relation": "persists"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0006-ROUTING",
@@ -2775,10 +2775,10 @@
       "location": "src/app/cli/routing.ts:302",
       "description": "`src/app/cli/routing.ts:302` の `finally` ブロックで `prCleanupAttachments` が呼ばれているが、`interactiveSeed` (L192) で注入された PR 添付が `result.attachments` に引き継がれた場合、`cleanupInteractiveResultAttachments(result)` (L303) ではこれらの PR 添付（tempPath）を適切に処理できず、元の PR 添付としてのライフサイクル管理と整合性が取れなくなるリスクがある。特に、`dispatchConversationAction` 内の各アクションが成功/失敗した際のリソース状態が不透明である。",
       "suggestion": "PR添付のリソース管理をセッション添付とは明確に分離し、`dispatchConversationAction` の完了後、結果に関わらず `prCleanupAttachments` が確実に一度だけ呼ばれることを保証する構造にしてください。",
-      "kind": "issue",
       "targetFindingId": "F-0006",
       "reviewer": "ai-antipattern-review",
-      "stepName": "ai-antipattern-review"
+      "stepName": "ai-antipattern-review",
+      "relation": "persists"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0017-ROUTING",
@@ -2788,10 +2788,10 @@
       "location": "src/app/cli/routing.ts:302",
       "description": "`src/app/cli/routing.ts:302` に基づくクリーンアップ構造は、F-0017 で指摘された通り、分散した呼び出し箇所に依存しており、リソース解放のタイミングが不透明である。",
       "suggestion": "F-0011 同様、集中管理されたマネージャーによる一括解放へ移行してください。",
-      "kind": "issue",
       "targetFindingId": "F-0017",
       "reviewer": "ai-antipattern-review",
-      "stepName": "ai-antipattern-review"
+      "stepName": "ai-antipattern-review",
+      "relation": "persists"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-RESOLVE-F-0007-ADD",
@@ -2800,10 +2800,10 @@
       "title": "Resolved: takt add --pr cleanup on failure",
       "location": "src/features/tasks/add/index.ts:240",
       "description": "`src/features/tasks/add/index.ts:239-241` にて `try/finally` ブロックが導入され、`resolvedAttachments?.cleanupAttachments()` が確実に呼ばれるようになっている。これにより、保存失敗時などの例外経路でも一時ディレクトリが解放される。",
-      "kind": "resolution_confirmation",
       "targetFindingId": "F-0007",
       "reviewer": "ai-antipattern-review",
-      "stepName": "ai-antipattern-review"
+      "stepName": "ai-antipattern-review",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-RESOLVE-F-0008-ADD",
@@ -2812,10 +2812,10 @@
       "title": "Resolved: takt add --pr accepts PR-body-only image attachments",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "`src/features/tasks/add/index.ts:197` にて `if (prReview.reviews.length === 0 && prReview.comments.length === 0 && !prReview.body?.trim())` と修正されており、PR 本文のみが存在する場合でも処理が続行されるようになっている。これにより PR 本文内の画像抽出が可能となった。",
-      "kind": "resolution_confirmation",
       "targetFindingId": "F-0008",
       "reviewer": "ai-antipattern-review",
-      "stepName": "ai-antipattern-review"
+      "stepName": "ai-antipattern-review",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-RESOLVE-F-0015-PR-IMGS",
@@ -2824,10 +2824,10 @@
       "title": "Resolved: Inefficient string replacement in prReviewImageAttachments.ts",
       "location": "src/features/tasks/prReviewImageAttachments.ts:174",
       "description": "`src/features/tasks/prReviewImageAttachments.ts:170-181` にて、正規表現による一括置換とコールバック関数 `(match, mdGroup, mdUrl, htmlGroup, htmlUrl) => { ... }` を使用した実装に変更されており、ループ内での `replace` 呼び出しを回避した効率的な処理が実装されている。",
-      "kind": "resolution_confirmation",
       "targetFindingId": "F-0015",
       "reviewer": "ai-antipattern-review",
-      "stepName": "ai-antipattern-review"
+      "stepName": "ai-antipattern-review",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:coding-review:finding-1",
@@ -2837,9 +2837,9 @@
       "location": "src/core/workflowExecutor.ts:142",
       "description": "The current implementation updates the workflow state without ensuring the previous async operation has completed, potentially leading to inconsistent state transitions.",
       "suggestion": "Implement a mutex or a sequential queue to handle state updates for a specific workflow instance.",
-      "kind": "issue",
       "reviewer": "coding-review",
-      "stepName": "coding-review"
+      "stepName": "coding-review",
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:coding-review:finding-2",
@@ -2849,9 +2849,9 @@
       "location": "src/__tests__/workflowLoader.test.ts",
       "description": "The workflow loader tests cover valid and invalid YAML, but do not explicitly test the behavior when an empty file is provided.",
       "suggestion": "Add a test case that verifies the loader returns a proper error or empty state when loading an empty file.",
-      "kind": "issue",
       "reviewer": "coding-review",
-      "stepName": "coding-review"
+      "stepName": "coding-review",
+      "relation": "new"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:contract-lifecycle-review:res-F-0006-v10",
@@ -2860,10 +2860,10 @@
       "title": "Confirmed fix for interactive --pr PR image temporary directory leak",
       "location": "src/app/cli/routing.ts:158,175,302",
       "description": "In `src/app/cli/routing.ts`, `prCleanupAttachments` is called in `finally` block (L302) and early returns (L158, L175). This confirms the fix for F-0006.",
-      "kind": "resolution_confirmation",
       "targetFindingId": "F-0006",
       "reviewer": "contract-lifecycle-review",
-      "stepName": "contract-lifecycle-review"
+      "stepName": "contract-lifecycle-review",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:contract-lifecycle-review:res-F-0007-v10",
@@ -2872,10 +2872,10 @@
       "title": "Confirmed fix for takt add --pr temporary images leak on save failure",
       "location": "src/features/tasks/add/index.ts:240",
       "description": "In `src/features/tasks/add/index.ts`, `resolvedAttachments?.cleanupAttachments()` is awaited in the `finally` block (L240). This confirms the fix for F-0007.",
-      "kind": "resolution_confirmation",
       "targetFindingId": "F-0007",
       "reviewer": "contract-lifecycle-review",
-      "stepName": "contract-lifecycle-review"
+      "stepName": "contract-lifecycle-review",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:contract-lifecycle-review:res-F-0008-v10",
@@ -2884,10 +2884,10 @@
       "title": "Confirmed fix for takt add --pr rejects PR-body-only image attachments",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In `src/features/tasks/add/index.ts:197`, the check `!prReview.body?.trim()` prevents rejection of PRs with body-only images. This confirms the fix for F-0008.",
-      "kind": "resolution_confirmation",
       "targetFindingId": "F-0008",
       "reviewer": "contract-lifecycle-review",
-      "stepName": "contract-lifecycle-review"
+      "stepName": "contract-lifecycle-review",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:robustness-review:RF-017",
@@ -2896,10 +2896,10 @@
       "title": "PR-body-only image attachments are now supported",
       "location": "src/features/tasks/add/index.ts:197",
       "description": "In src/features/tasks/add/index.ts:197, the condition has been updated to `if (prReview.reviews.length === 0 && prReview.comments.length === 0 && !prReview.body?.trim())`, which now correctly allows proceeding if only the PR body contains content (and potentially images), resolving F-0008.",
-      "kind": "resolution_confirmation",
       "targetFindingId": "F-0008",
       "reviewer": "robustness-review",
-      "stepName": "robustness-review"
+      "stepName": "robustness-review",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:robustness-review:RF-018",
@@ -2908,10 +2908,10 @@
       "title": "PR image temporary attachments are cleaned up on save failure",
       "location": "src/features/tasks/add/index.ts:239",
       "description": "In src/features/tasks/add/index.ts:239, a `finally` block has been added to call `await resolvedAttachments?.cleanupAttachments()`, ensuring that temporary image directories are removed regardless of whether `saveTaskFile` succeeds or fails, resolving F-0007.",
-      "kind": "resolution_confirmation",
       "targetFindingId": "F-0007",
       "reviewer": "robustness-review",
-      "stepName": "robustness-review"
+      "stepName": "robustness-review",
+      "relation": "resolution_confirmation"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:robustness-review:RF-019",
@@ -2920,10 +2920,10 @@
       "title": "Interactive mode now cleans up PR attachments",
       "location": "src/app/cli/routing.ts:254",
       "description": "In src/app/cli/routing.ts:254, the `cleanupResult` function now explicitly calls `await prCleanupAttachments?.()`, and this is executed in the `finally` block at line 302. This ensures PR attachments are cleaned up even when result attachments are present, resolving F-0006.",
-      "kind": "resolution_confirmation",
       "targetFindingId": "F-0006",
       "reviewer": "robustness-review",
-      "stepName": "robustness-review"
+      "stepName": "robustness-review",
+      "relation": "resolution_confirmation"
     }
   ],
   "conflicts": [

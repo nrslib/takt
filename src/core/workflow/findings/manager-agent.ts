@@ -23,9 +23,9 @@ export const RAW_FINDINGS_SCHEMA_REF = 'takt.findings.raw.v1';
 export { FINDING_MANAGER_SCHEMA_REF } from './manager-step.js';
 export const RawFindingsStructuredOutput = {
   schemaRef: RAW_FINDINGS_SCHEMA_REF,
-  /** provider-facing（strict 様式・kind 無し）。native structured output の生成拘束用。 */
+  /** provider-facing strict schema。native structured output の生成拘束用。 */
   schema: RawFindingsOutputJsonSchema,
-  /** post-hoc 検証用の寛容版（legacy kind を optional で受理）。provider へは渡さない。 */
+  /** post-hoc 検証用 schema。provider へは渡さない。 */
   validationSchema: RawFindingsOutputValidationJsonSchema,
 } as const;
 

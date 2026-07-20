@@ -8,7 +8,7 @@ import { classifyProvisionalRecovery } from '../core/workflow/findings/provision
 import {
   computeBaseInterpretationKey,
   computeInterpretationAttemptKey,
-  candidateFromLegacyRawFinding,
+  candidateFromStoredRawFinding,
   canonicalizeReviewerRawFinding,
   toLedgerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
@@ -73,7 +73,6 @@ function raw(rawFindingId: string): RawFinding {
     severity: 'high',
     title: 'Incorrect state transition',
     description: 'The transition leaves the state inconsistent.',
-    kind: 'issue',
     relation: 'new',
     evidence: { kind: 'locationless', explanation: 'State transition is absent.' },
   };
@@ -168,13 +167,28 @@ describe('provisional recovery', () => {
     expect(classifyProvisionalRecovery(process.provisional!, 2)).toBe('terminal-adjudication');
   });
 
+  it('applies the replay attempt limit to raw ambiguity recovery with and without a WAL epoch', () => {
+    for (const interpretationEpochs of [0, 1]) {
+      const process = provisional(`F-000${interpretationEpochs + 1}`, 'raw-meaning-ambiguous');
+      process.provisional!.interpretationEpochs = interpretationEpochs;
+      process.provisional!.adjudicationAttempts = [1, 2].map((attempt) => ({
+        attempt,
+        replayRawFindingId: `replay-${interpretationEpochs}-${attempt}`,
+        reason: 'manager returned no substantive outcome',
+        at: observation,
+      }));
+
+      expect(classifyProvisionalRecovery(process.provisional!, 2)).toBe('terminal-adjudication');
+    }
+  });
+
   it('records a replay admission failure inside the commit mutation', () => {
     const processFinding = provisional('F-0001', 'raw-adjudication-unresolved');
     const source = raw('source-1');
     const current = ledger([processFinding], [source]);
     const replaySource = { ...source, rawFindingId: 'replay-1' };
     const canonical = canonicalizeReviewerRawFinding(
-      candidateFromLegacyRawFinding(replaySource, 'reviewer-stable-a'),
+      candidateFromStoredRawFinding(replaySource, 'reviewer-stable-a'),
       { ledger: current },
     ).canonical;
     const wire = toLedgerRawFinding(canonical);
@@ -412,7 +426,7 @@ describe('provisional recovery', () => {
     const wire = raw('raw-1');
     const current = ledger([]);
     const canonical = canonicalizeReviewerRawFinding(
-      candidateFromLegacyRawFinding(wire, 'reviewer-stable-a'),
+      candidateFromStoredRawFinding(wire, 'reviewer-stable-a'),
       { ledger: current },
     ).canonical;
     const baseInterpretationKey = computeBaseInterpretationKey({
@@ -463,12 +477,12 @@ describe('provisional recovery', () => {
     const processFinding = provisional('F-0001', 'manager-budget-exhausted');
     const source: RawFinding = {
       ...raw('source-1'),
-      kind: 'resolution_confirmation',
-      relation: 'new',
+      relation: 'persists',
+      targetFindingId: processFinding.id,
     };
     const current = ledger([processFinding], [source]);
     const canonical = canonicalizeReviewerRawFinding(
-      candidateFromLegacyRawFinding(source, 'reviewer-stable-a'),
+      candidateFromStoredRawFinding(source, 'reviewer-stable-a'),
       { ledger: current },
     ).canonical;
     processFinding.provisional!.lineageKey = canonical.lineageKey;
@@ -488,6 +502,7 @@ describe('provisional recovery', () => {
       policyVersion: 2,
       stage: 'ledger_applied',
       startedAt: observation,
+      reservationToken: 'completed-attempt-owner',
       promptPreconditions: [],
       appliedAt: observation,
       applicationResult: 'provisional_created',
@@ -586,7 +601,7 @@ describe('provisional recovery', () => {
     const source = raw('source-1');
     const current = ledger([processFinding], [source]);
     const canonical = canonicalizeReviewerRawFinding(
-      candidateFromLegacyRawFinding(source, 'reviewer-stable-a'),
+      candidateFromStoredRawFinding(source, 'reviewer-stable-a'),
       { ledger: current },
     ).canonical;
     processFinding.provisional!.lineageKey = canonical.lineageKey;

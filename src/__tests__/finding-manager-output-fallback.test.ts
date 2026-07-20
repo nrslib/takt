@@ -60,7 +60,6 @@ const CONFIRMATION_RAW: RawFinding = {
   severity: 'medium',
   title: '解消を確認',
   description: '修正を確認した。',
-  kind: 'resolution_confirmation',
   relation: 'resolution_confirmation',
   targetFindingId: 'F-0001',
 };
