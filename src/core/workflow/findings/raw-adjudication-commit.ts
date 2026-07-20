@@ -29,12 +29,12 @@ function filterReplayOutput(input: {
 }): FindingManagerOutput {
   const newFindings = input.output.newFindings.flatMap((finding) => {
     const rawFindingIds = filterRawIds(finding.rawFindingIds, input.eligibleRawIds);
-    const processIds = new Set(rawFindingIds.map((rawFindingId) => (
-      input.origins.get(rawFindingId)!.provisionalFindingId
-    )));
     if (rawFindingIds.length === 0) {
       return [];
     }
+    const processIds = new Set(rawFindingIds.map((rawFindingId) => (
+      input.origins.get(rawFindingId)!.provisionalFindingId
+    )));
     if (processIds.size !== 1) {
       for (const rawFindingId of rawFindingIds) {
         input.failures.set(rawFindingId, 'replay new decision grouped multiple provisional origins');

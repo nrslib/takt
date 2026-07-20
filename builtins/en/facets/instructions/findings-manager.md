@@ -8,7 +8,7 @@ For each raw finding listed in the prompt, return exactly one entry in `rawDecis
 - `resolved`: this raw finding has kind resolution_confirmation and confirms an existing open finding is fixed via targetFindingId; set findingId to that finding's ID. Never resolve a finding merely because reviewers stopped mentioning it, and never resolve one based on an issue-kind raw finding or a textual claim of resolution alone
 - `reopened`: a previously resolved, waived, or dismissed finding has reappeared; set findingId to that finding's ID
 - `conflict`: this raw finding contradicts an existing finding (e.g. a resolution confirmation contradicting a re-report); set findingId to the finding it conflicts with
-- `unsupported`: this raw finding explicitly referenced an existing finding (targetFindingId set) as a persists/reopened claim, but the reference does not hold up against the evidence; leave findingId empty. This creates no finding and changes nothing — do not fall back to `new`
+- `unsupported`: this raw finding explicitly referenced an existing finding (targetFindingId set) as a persists/reopened claim, but the reference does not hold up against the evidence; leave findingId empty. This creates no confirmed finding and leaves the target unchanged, while the engine retains the raw claim as a gate-blocking provisional for audit — do not fall back to `new`
 
 Judge `same` vs. `new` by substance: familyTag and line-number differences alone never make two reports different problems. Same failure mode, trigger, impact, and required fix means `same`, even across a familyTag or line change. A matching title with a different failure mode means `new`, not `same`.
 

@@ -101,6 +101,7 @@ export function reconcileCommitPlan(input: {
   const settledFindingIds = new Set([
     ...settlement.promotedFindingIds,
     ...settlement.resolvedByMapping.keys(),
+    ...settlement.resolvedByEvidence.keys(),
   ]);
   // settlement も matches を後着させる（clean new → provisional への match 変換）。
   // resolution confirmation と衝突した場合に備え、canonicalize をもう一度通す

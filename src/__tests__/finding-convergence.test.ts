@@ -22,6 +22,7 @@ import { parseFindingLedger, parseRawFindings } from '../core/models/finding-sch
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type { FindingLedger, FindingLedgerEntry, FindingLedgerStore, FindingManagerDecisions, RawFinding } from '../core/workflow/findings/types.js';
+import { createFindingAdjudicationReservation } from './helpers/finding-adjudication-reservation.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
@@ -346,7 +347,6 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     let ledger = initialLedger;
     const savedLedgers: FindingLedger[] = [];
     const savedValidationReports: unknown[] = [];
-    const reservations = new Set<string>();
     const ledgerStore: FindingLedgerStore = {
       workflowName: 'peer-review',
       loadLedger: () => ledger,
@@ -359,12 +359,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
         savedLedgers.push(ledger);
         return Promise.resolve(mutation);
       },
-      claimAdjudicationReservation: (token) => {
-        if (reservations.has(token)) return false;
-        reservations.add(token);
-        return true;
-      },
-      releaseAdjudicationReservation: (token) => { reservations.delete(token); },
+      ...createFindingAdjudicationReservation(),
       createRunCopy: () => join(projectDir, 'ledger-copy.json'),
       saveRawFindings: () => join(projectDir, 'raw-findings.json'),
       saveManagerValidationReport: (report) => {

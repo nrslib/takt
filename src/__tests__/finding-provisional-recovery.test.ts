@@ -624,6 +624,8 @@ describe('provisional recovery', () => {
     const settled = applyProvisionalSettlement(current, settlement, observation.timestamp);
 
     expect(settled.findings[0]?.status).toBe('resolved');
+    expect(settled.findings[0]?.resolvedEvidence)
+      .toBe('A later output from the same reviewer passed the intake envelope.');
     expect(classifyProvisionalRecovery(overflow.provisional!, 2)).toBe('envelope');
     expect(classifyProvisionalRecovery(overflow.provisional!, 3)).toBe('process-failure');
   });

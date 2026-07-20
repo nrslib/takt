@@ -218,6 +218,7 @@ export function applyManagerActionRecovery(input: {
     output: plan.output,
     promotedFindingIds: new Set(),
     resolvedByMapping: plan.settlements,
+    resolvedByEvidence: new Map(),
     settledReplayRawIds: new Set(),
   }, input.context.timestamp);
   return recordActionRecoveryFailures(settled, plan.failures, input.candidates, input.observation);

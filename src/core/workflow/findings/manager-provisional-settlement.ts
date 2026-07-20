@@ -18,6 +18,7 @@ export interface ProvisionalSettlement {
   promotedFindingIds: Set<string>;
   /** clean な決定的 same により解消する provisional finding id → 対応 target。 */
   resolvedByMapping: Map<string, string>;
+  resolvedByEvidence: Map<string, string>;
   settledReplayRawIds: Set<string>;
 }
 
@@ -72,6 +73,7 @@ export function settleProvisionalsWithCleanEvidence(input: {
       output: input.output,
       promotedFindingIds: new Set(),
       resolvedByMapping: new Map(),
+      resolvedByEvidence: new Map(),
       settledReplayRawIds: new Set(),
     };
   }
@@ -144,6 +146,7 @@ export function settleProvisionalsWithCleanEvidence(input: {
     ...input.explicitResolvedByMapping,
     ...replay.resolvedByMapping,
   ]);
+  let resolvedByEvidence = new Map<string, string>();
   for (const finding of openProvisionals) {
     if (finding.provisional?.kind !== 'reviewer-output-overflow') {
       continue;
@@ -156,9 +159,9 @@ export function settleProvisionalsWithCleanEvidence(input: {
             === finding.provisional!.stableKey,
         );
     if (healed) {
-      resolvedByMapping = new Map([
-        ...resolvedByMapping,
-        [finding.id, 'a later output from the same reviewer passed the intake envelope'],
+      resolvedByEvidence = new Map([
+        ...resolvedByEvidence,
+        [finding.id, 'A later output from the same reviewer passed the intake envelope.'],
       ]);
     }
   }
@@ -253,6 +256,7 @@ export function settleProvisionalsWithCleanEvidence(input: {
     output: { ...replay.output, newFindings, matches },
     promotedFindingIds,
     resolvedByMapping,
+    resolvedByEvidence,
     settledReplayRawIds: replay.settledReplayRawIds,
   };
 }
@@ -304,7 +308,9 @@ export function applyProvisionalSettlement(
   settlement: ProvisionalSettlement,
   timestamp: string,
 ): FindingLedger {
-  if (settlement.promotedFindingIds.size === 0 && settlement.resolvedByMapping.size === 0) {
+  if (settlement.promotedFindingIds.size === 0
+    && settlement.resolvedByMapping.size === 0
+    && settlement.resolvedByEvidence.size === 0) {
     return ledger;
   }
   return {
@@ -324,6 +330,17 @@ export function applyProvisionalSettlement(
           lifecycle: 'resolved' as const,
           resolvedAt: timestamp,
           resolvedEvidence: `Deterministically settled through ${mappedTarget}`,
+          revision: (finding.revision ?? 1) + 1,
+        };
+      }
+      const resolvedEvidence = settlement.resolvedByEvidence.get(finding.id);
+      if (resolvedEvidence !== undefined && finding.status === 'open' && finding.provisional !== undefined) {
+        return {
+          ...finding,
+          status: 'resolved' as const,
+          lifecycle: 'resolved' as const,
+          resolvedAt: timestamp,
+          resolvedEvidence,
           revision: (finding.revision ?? 1) + 1,
         };
       }

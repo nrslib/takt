@@ -9,7 +9,7 @@
 - `resolved`: この raw finding の kind が resolution_confirmation で、targetFindingId 経由で既存の open finding の解消を確認している。findingId にその finding の ID を設定する。レビュアーが言及しなくなっただけでは resolved にしない。kind が issue の raw finding やテキスト内の解消主張だけを根拠に resolved にしない
 - `reopened`: 解消済み・免除済み・dismissed の finding が再発した。findingId にその finding の ID を設定する
 - `conflict`: この raw finding が既存 finding と矛盾する（例: 解消確認が再報告と矛盾する）。findingId に矛盾先の finding の ID を設定する
-- `unsupported`: この raw finding が既存 finding を明示参照した（targetFindingId 設定済みの persists/reopened 申告）にもかかわらず、証跡と照らして参照が成立しない。findingId は空にする。finding は作られず、何も変更されない — `new` へ倒さないこと
+- `unsupported`: この raw finding が既存 finding を明示参照した（targetFindingId 設定済みの persists/reopened 申告）にもかかわらず、証跡と照らして参照が成立しない。findingId は空にする。confirmed finding は作らず対象 finding も変更しないが、engine は監査用に raw claim を gate-blocking provisional として保持する — `new` へ倒さないこと
 
 same か new かは表面ではなく意味で判断してください。familyTag や行番号の差だけでは「別問題」にはなりません。failure mode・発生条件・影響・必要な修正が同じなら、familyTag や行が変わっていても same です。タイトルが一致していても failure mode が異なるなら same ではなく new です。
 
