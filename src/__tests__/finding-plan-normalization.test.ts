@@ -6,6 +6,7 @@ import {
   transferSupersededMatches,
 } from '../core/workflow/findings/manager-plan-normalization.js';
 import { validateFindingManagerOutput } from '../core/workflow/findings/manager-output-validation.js';
+import { reconcileCommitPlan } from '../core/workflow/findings/manager-commit-finalization.js';
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
 import { createReviewerRawFindingCandidates } from '../core/workflow/findings/raw-canonicalization.js';
@@ -279,6 +280,51 @@ describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () =>
   });
 });
 
+describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
+  it('後着証拠が同じ conflict を再生成する場合、その resolve を不採用にして active を保つ', () => {
+    const conflict = makeConflict({ id: 'C-0001', findingIds: ['F-0001'], rawFindingIds: ['raw-old'] });
+    const freshLedger = makeLedger(
+      [makeFinding({ id: 'F-0001' })],
+      { conflicts: [conflict] },
+    );
+    const ladderRaw = makeRaw({ rawFindingId: 'raw-ladder' });
+
+    const result = reconcileCommitPlan({
+      runInput: {
+        workflowName: 'peer-review',
+        callNamespace: '',
+        runId: 'run-2',
+        timestamp: '2026-07-02T00:00:00.000Z',
+        cwd: process.cwd(),
+        parentStep: { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false },
+      } as never,
+      freshLedger,
+      rawFindings: [ladderRaw],
+      managerOutput: outputWith({
+        // manager は C-0001 を resolve したが、ladder マージが同じ署名の
+        // conflict（F-0001）を後着させた
+        resolvedConflicts: [{ conflictId: 'C-0001', evidence: 'adjudicated' }],
+        conflicts: [{
+          findingIds: ['F-0001'],
+          rawFindingIds: ['raw-ladder'],
+          description: 'Ladder evidence disagrees again.',
+        }],
+      }),
+      provisionalSpecs: [],
+      anomalySpecs: [],
+      pendingRejectedObservations: [],
+      rawProvenanceByRawFindingId: new Map(),
+      cleanWire: [],
+    });
+
+    expect(result.normalizationRejections.some((rejection) => (
+      rejection.includes('C-0001') && rejection.includes('regenerated')
+    ))).toBe(true);
+    const savedConflict = result.ledger.conflicts.find((entry) => entry.id === 'C-0001')!;
+    expect(savedConflict.status).toBe('active');
+  });
+});
+
 describe('assembleManagerOutput → 保存正規化 → reconciler（ラウンド2事故の再現形）', () => {
   const ledger = makeLedger([
     makeFinding({ id: 'F-0001', rawFindingIds: ['raw-old-1'] }),
@@ -457,14 +503,18 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
     expect(new Set(intakeIds).size).toBe(3);
   });
 
-  it('ID 未指定の内部採番と明示 ID の衝突も一意化する', () => {
+  it('内部採番は明示 ID を避け、一意な明示 ID は元の文字列のまま保持する', () => {
+    // 明示 ID の改名は clarification の priorAmbiguityCodesByRawId 相関を壊し、
+    // 訂正済み raw の taint（ambiguityOrigin）が外れて clean 権限を得てしまう。
+    // ずれるのは常に内部採番の側でなければならない。
     const candidates = createReviewerRawFindingCandidates([
       { title: 'a', severity: 'low', description: 'a' },
       { rawFindingId: 'item-1', title: 'b', severity: 'low', description: 'b' },
     ], context);
 
     expect(candidates[0]!.reviewerRawFindingId).toBeUndefined();
-    expect(candidates[1]!.reviewerRawFindingId).toBe('item-1-dup2');
+    expect(candidates[1]!.reviewerRawFindingId).toBe('item-1');
+    expect(candidates[0]!.intakeId).toContain('item-1-dup2');
     expect(new Set(candidates.map((candidate) => candidate.intakeId)).size).toBe(2);
   });
 

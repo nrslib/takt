@@ -322,18 +322,15 @@ function registerAmbiguousCanonical(value: UnbrandedAmbiguous): AmbiguousCanonic
   return branded;
 }
 
-function deduplicateReviewerId(emittedIds: Set<string>, claimedId: string): string {
-  if (!emittedIds.has(claimedId)) {
-    emittedIds.add(claimedId);
-    return claimedId;
+function findFreeLocalId(usedIds: ReadonlySet<string>, baseId: string): string {
+  if (!usedIds.has(baseId)) {
+    return baseId;
   }
   let suffix = 2;
-  while (emittedIds.has(`${claimedId}-dup${suffix}`)) {
+  while (usedIds.has(`${baseId}-dup${suffix}`)) {
     suffix += 1;
   }
-  const uniqueId = `${claimedId}-dup${suffix}`;
-  emittedIds.add(uniqueId);
-  return uniqueId;
+  return `${baseId}-dup${suffix}`;
 }
 
 /**
@@ -354,18 +351,32 @@ export function createReviewerRawFindingCandidates(
   // reviewer schema は rawFindingId の一意性を強制しない。同一 reviewer が同じ
   // ID を複数返すと namespaced ID も衝突し、機械分類の出力が rawFindingIds
   // 重複の最終検証違反になる（= mechanical フォールバックまで壊す）。intake で
-  // 決定的にサフィックスを振り、下流の一意性を保証する。
-  const emittedReviewerIds = new Set<string>();
-  return items.map((item, index) => {
-    const record = typeof item === 'object' && item !== null && !Array.isArray(item)
+  // 決定的に一意化して下流の一意性を保証する。
+  //
+  // ただし明示 ID を全件先に予約し、一意な明示 ID は必ず元の文字列のまま保持する。
+  // clarification の priorAmbiguityCodesByRawId は素の明示 ID キーで、改名すると
+  // 訂正済み raw の taint（ambiguityOrigin）が外れて clean 権限を得てしまう。
+  // 内部採番（item-N）と重複明示 ID のサフィックスだけが予約集合を避けて生成される。
+  const records = items.map((item) => (
+    typeof item === 'object' && item !== null && !Array.isArray(item)
       ? item as Record<string, unknown>
-      : {};
-    // 明示 ID と ID 未指定時の内部採番（item-N）は同じ使用済み集合で一意化する —
-    // 別集合だと「1件目が未指定（item-1）・2件目が明示 "item-1"」で intakeId が
-    // 衝突する。reviewerRawFindingId は明示 ID があった場合だけ持つ（未指定の
-    // 意味論 — clarification 相関に参加しない — を保つ）。
-    const claimedId = pickString(record.rawFindingId);
-    const localId = deduplicateReviewerId(emittedReviewerIds, claimedId ?? `item-${index + 1}`);
+      : {}
+  ));
+  const claimedIds = records.map((record) => pickString(record.rawFindingId));
+  const usedLocalIds = new Set(claimedIds.filter((id): id is string => id !== undefined));
+  const emittedClaimedIds = new Set<string>();
+  return records.map((record, index) => {
+    const claimedId = claimedIds[index];
+    let localId: string;
+    if (claimedId !== undefined && !emittedClaimedIds.has(claimedId)) {
+      emittedClaimedIds.add(claimedId);
+      localId = claimedId;
+    } else {
+      localId = findFreeLocalId(usedLocalIds, claimedId ?? `item-${index + 1}`);
+      usedLocalIds.add(localId);
+    }
+    // reviewerRawFindingId は明示 ID があった場合だけ持つ（未指定の意味論 —
+    // clarification 相関に参加しない — を保つ）。
     const reviewerRawFindingId = claimedId !== undefined ? localId : undefined;
     const intakeId = namespacedRawFindingId(context, localId);
     // 構造化出力の strict 様式では該当なしの欄が空文字で埋まるため、空文字は
@@ -391,7 +402,7 @@ export function createReviewerRawFindingCandidates(
       ...(pickString(record.targetFindingId) !== undefined ? { targetFindingId: pickString(record.targetFindingId)! } : {}),
       ...(pickKind(record.kind) !== undefined ? { legacyKind: pickKind(record.kind)! } : {}),
       ...(evidence !== undefined ? { evidence } : {}),
-      sourceBytes: Buffer.byteLength(JSON.stringify(item ?? null), 'utf-8'),
+      sourceBytes: Buffer.byteLength(JSON.stringify(items[index] ?? null), 'utf-8'),
       reviewer: context.reviewerStepName,
       stepName: context.reviewerStepName,
     }, 'reviewer');
