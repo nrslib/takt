@@ -74,6 +74,7 @@ workflow_categories:
       - review-fix-takt-default-high
       - takt-default-for-local-llm
       - takt-default-high
+      - takt-default-team-high
   🖥️ ローカルLLM:
     workflows:
       - takt-default-for-local-llm

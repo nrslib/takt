@@ -61,7 +61,7 @@ Organized by category.
 | 🧪 Testing | `unit-test` | Unit test focused workflow: test analysis -> test implementation -> review -> fix. |
 | | `e2e-test` | E2E test focused workflow: E2E analysis -> E2E implementation -> review -> fix (Vitest-based E2E flow). |
 | 🎵 TAKT Development | `takt-default` | TAKT development workflow: plan → write tests → draft (implement + AI self-review) → peer-review (specialists + merge-readiness + fix) → supervise → complete. |
-| | `takt-default-team-leader` | TAKT development workflow with team leader: plan → write tests → team-leader draft → peer-review (specialists + merge-readiness + fix) → supervise → complete. |
+| | `takt-default-team-high` | Team Leader variant of takt-default-high. The leader decomposes implementation and fixes for members, followed by the same six compact specialist reviews, Finding Contract, and final gate. Provider and model remain configurable. |
 | | `takt-default-high` | Enhanced high-cost variant of takt-default: direct implementation and fixes, six compact specialist reviews, Finding Contract, and a merge-readiness/supervisor final gate. |
 | | `review-fix-takt-default` | TAKT development code review + fix loop: gather → plan → tests → draft → peer-review (specialists + merge-readiness + fix) → supervise. |
 | | `peer-review-for-local-llm` | peer-review with an added implementation-semantics reviewer, aligned with the for-local-llm lineage. Specialist parallel reviewers ⇄ fix loop, followed by the parallel merge-readiness/supervise final gate. |

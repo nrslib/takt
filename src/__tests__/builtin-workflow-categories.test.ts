@@ -35,6 +35,7 @@ describe('builtin workflow categories', () => {
 
       expect(workflows).toContain('auto-improvement-loop');
       expect(workflows).toContain('takt-default-high');
+      expect(workflows).toContain('takt-default-team-high');
       expect(workflows).toContain('review-fix-takt-default-high');
     });
   }

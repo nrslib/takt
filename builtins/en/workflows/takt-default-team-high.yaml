@@ -1,0 +1,310 @@
+name: takt-default-team-high
+description: "Team Leader variant of takt-default-high: plan, tests, Team Leader-directed implementation, six compact specialist reviews, Team Leader-directed fixes, and a fail-closed final gate."
+finding_contract:
+  ledger_path: .takt/findings/takt-default-team-high.json
+  raw_findings_path: .takt/findings/takt-default-team-high/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+max_steps: 200
+initial_step: plan
+
+loop_monitors:
+  - cycle: [plan, write_tests, implement, reviewers, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The latest fix completed rather than stalled
+          next: reviewers
+        - condition: Replanning is making progress on blockers
+          next: plan
+        - condition: The same blocker repeats without a viable replan
+          next: NEEDS_ADJUDICATION
+  - cycle: [reviewers, fix]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: Findings decrease and fixes are reflected
+          next: reviewers
+        - condition: The same finding repeats but replanning may resolve it
+          next: plan
+        - condition: The same finding repeats without a viable replan
+          next: NEEDS_ADJUDICATION
+  - cycle: [reviewers, final-gate, fix]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: Findings decrease and fixes are reflected
+          next: reviewers
+        - condition: The same finding repeats but replanning may resolve it
+          next: plan
+        - condition: The same finding repeats without a viable replan
+          next: NEEDS_ADJUDICATION
+
+steps:
+  - name: plan
+    tags: [plan]
+    edit: false
+    persona: planner
+    knowledge: architecture
+    instruction: plan
+    rules:
+      - condition: Requirements are clear and implementable
+        next: write_tests
+      - condition: User is asking a question rather than requesting implementation
+        next: COMPLETE
+      - condition: Requirements are unclear or insufficient
+        next: ABORT
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+
+  - name: write_tests
+    tags: [coding, test-planning]
+    edit: true
+    persona: coder
+    policy: [coding, testing]
+    knowledge: [takt, architecture, unit-testing, e2e-testing, implementation-semantics]
+    required_permission_mode: edit
+    instruction: write-tests-first
+    rules:
+      - condition: Tests written
+        next: implement
+      - condition: Skip test writing because target is not yet implemented
+        next: implement
+      - condition: Cannot proceed with writing tests
+        next: plan
+      - condition: User input required for confirmation
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - name: test-report.md
+          format: test-report
+
+  - name: implement
+    tags: [leader]
+    edit: true
+    persona: coder
+    policy: coding
+    knowledge: [takt, architecture, implementation-semantics]
+    required_permission_mode: edit
+    pass_previous_response: true
+    team_leader:
+      max_concurrency: 2
+      initial_max_parts: 2
+      max_total_parts: 6
+      fail_on_part_error: false
+      part_tags: [coding]
+      part_persona: coder
+      part_edit: true
+      part_permission_mode: edit
+    instruction: team-leader-implement
+    rules:
+      - condition: Implementation complete
+        next: reviewers
+      - condition: Cannot proceed with implementation
+        next: plan
+
+  - name: reviewers
+    tags: [review]
+    parallel:
+      - name: arch-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: architecture-reviewer
+        policy: review
+        knowledge: architecture
+        instruction: review-arch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: architect-review.md
+              format: architecture-review-finding-contract
+      - name: ai-antipattern-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: ai-antipattern-reviewer
+        policy: [review, ai-antipattern]
+        instruction: ai-antipattern-review
+        rules:
+          - condition: No AI-specific issues
+          - condition: AI-specific issues found
+        output_contracts:
+          report:
+            - name: ai-antipattern-review.md
+              format: ai-antipattern-review-finding-contract
+      - name: coding-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: coding-reviewer
+        policy: [review, coding]
+        instruction: review-coding
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review-finding-contract
+      - name: implementation-semantics-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: implementation-semantics-reviewer
+        policy: review
+        knowledge: implementation-semantics
+        instruction: review-implementation-semantics
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: implementation-semantics-review.md
+              format: implementation-semantics-review-finding-contract
+      - name: contract-lifecycle-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: contract-lifecycle-reviewer
+        policy: review
+        knowledge: contract-lifecycle
+        instruction: contract-lifecycle-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: contract-lifecycle-review.md
+              format: contract-lifecycle-review-finding-contract
+      - name: robustness-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: robustness-reviewer
+        policy: review
+        knowledge: robustness
+        instruction: robustness-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: robustness-review.md
+              format: robustness-review-finding-contract
+    rules:
+      - condition: all("approved", "No AI-specific issues", "approved", "approved", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
+        next: final-gate
+      - condition: any("approved", "needs_fix", "No AI-specific issues", "AI-specific issues found") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        next: final-gate
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: plan
+      - condition: any("needs_fix", "AI-specific issues found") && when(findings.conflicts.count == 0)
+        next: fix
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
+        next: fix
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+
+  - name: final-gate
+    tags: [review, final-gate]
+    parallel:
+      - name: merge-readiness-review
+        tags: [review, final-gate, merge-readiness]
+        edit: false
+        session: compact
+        persona: merge-readiness-reviewer
+        policy: review
+        instruction: review-merge-readiness
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: merge-readiness-review.md
+              format: merge-readiness-review-finding-contract
+      - name: supervise
+        tags: [review, final-gate, supervise]
+        edit: false
+        session: compact
+        persona: supervisor
+        policy: review
+        knowledge: [architecture, takt]
+        instruction: supervise-finding-contract
+        rules:
+          - condition: approved
+          - condition: needs_fix
+          - condition: need_replan
+        output_contracts:
+          report:
+            - name: supervisor-validation.md
+              format: supervisor-validation-finding-contract
+            - name: supervisor-gate-summary.md
+              format: supervisor-gate-summary-finding-contract
+              use_judge: false
+    rules:
+      - condition: any("approved", "needs_fix", "need_replan") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
+        next: NEEDS_ADJUDICATION
+      - condition: any("approved", "needs_fix", "need_replan") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        next: reviewers
+      - condition: all("approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
+        next: COMPLETE
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: plan
+      - condition: any("need_replan") && when(findings.conflicts.count == 0)
+        next: plan
+      - condition: any("needs_fix") && when(findings.conflicts.count == 0)
+        next: fix
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
+        next: fix
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+
+  - name: fix
+    tags: [leader]
+    edit: true
+    persona: coder
+    policy: [coding, testing]
+    knowledge: [takt, architecture, implementation-semantics]
+    required_permission_mode: edit
+    team_leader:
+      max_concurrency: 2
+      initial_max_parts: 2
+      max_total_parts: 6
+      fail_on_part_error: false
+      part_tags: [coding]
+      part_persona: coder
+      part_edit: true
+      part_permission_mode: edit
+    instruction: team-leader-fix
+    rules:
+      - condition: Fixes are complete
+        next: reviewers
+      - condition: Cannot proceed with fixes, or human judgment is required
+        next: plan

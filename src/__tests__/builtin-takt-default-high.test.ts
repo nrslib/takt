@@ -12,10 +12,22 @@ type WorkflowStep = {
   name?: string;
   kind?: string;
   call?: string;
+  tags?: string[];
+  edit?: boolean;
   instruction?: unknown;
   persona?: unknown;
   session?: string;
-  team_leader?: unknown;
+  pass_previous_response?: boolean;
+  team_leader?: {
+    max_concurrency?: number;
+    initial_max_parts?: number;
+    max_total_parts?: number;
+    fail_on_part_error?: boolean;
+    part_tags?: string[];
+    part_persona?: string;
+    part_edit?: boolean;
+    part_permission_mode?: string;
+  };
   provider?: unknown;
   model?: unknown;
   parallel?: WorkflowStep[];
@@ -47,7 +59,7 @@ const localWorkflows = [
   'dual-for-local-llm',
   'peer-review-for-local-llm',
 ] as const;
-const builtinWorkflowFilesPerLocale = 58;
+const builtinWorkflowFilesPerLocale = 59;
 
 const genericInstructionNames = [
   'review-arch',
@@ -181,6 +193,19 @@ function stepByName(steps: WorkflowStep[], name: string): WorkflowStep {
   return step;
 }
 
+function withoutTeamLeaderOverrides(step: WorkflowStep): Record<string, unknown> {
+  const overriddenFields = new Set([
+    'tags',
+    'instruction',
+    'session',
+    'pass_previous_response',
+    'team_leader',
+  ]);
+  return Object.fromEntries(
+    Object.entries(step).filter(([key]) => !overriddenFields.has(key)),
+  );
+}
+
 function isLocalFacetReference(value: unknown): value is string {
   return typeof value === 'string' && value.endsWith('-for-local-llm');
 }
@@ -239,7 +264,7 @@ function createProjectWithLanguage(locale: typeof locales[number]): string {
 
 describe('takt-default-high builtin workflow', () => {
   for (const locale of locales) {
-    it(`${locale} uses the high-capability direct implementation and six-reviewer design`, () => {
+    it(`${locale} uses the enhanced direct implementation and six-reviewer design`, () => {
       const workflow = readYaml<Workflow>(locale, join('workflows', 'takt-default-high.yaml'));
       const steps = workflow.steps ?? [];
       const implement = stepByName(steps, 'implement');
@@ -296,7 +321,66 @@ describe('takt-default-high builtin workflow', () => {
       expect(finalGate.rules?.map((rule) => rule.next)).toContain('NEEDS_ADJUDICATION');
     });
 
-    it(`${locale} provides a Finding Contract review/fix entrypoint for the high-capability design`, () => {
+    it(`${locale} uses Team Leaders only for implementation and fixes in takt-default-team-high`, () => {
+      const direct = readYaml<Workflow>(locale, join('workflows', 'takt-default-high.yaml'));
+      const team = readYaml<Workflow>(locale, join('workflows', 'takt-default-team-high.yaml'));
+      const directSteps = direct.steps ?? [];
+      const teamSteps = team.steps ?? [];
+      const directImplement = stepByName(directSteps, 'implement');
+      const directFix = stepByName(directSteps, 'fix');
+      const implement = stepByName(teamSteps, 'implement');
+      const fix = stepByName(teamSteps, 'fix');
+
+      expect(team).toMatchObject({
+        name: 'takt-default-team-high',
+        max_steps: 200,
+        initial_step: 'plan',
+        finding_contract: {
+          ledger_path: '.takt/findings/takt-default-team-high.json',
+          raw_findings_path: '.takt/findings/takt-default-team-high/raw',
+        },
+      });
+      expect(teamSteps.map((step) => step.name)).toEqual(directSteps.map((step) => step.name));
+      expect(team.loop_monitors).toEqual(direct.loop_monitors);
+      for (const name of ['plan', 'write_tests', 'reviewers', 'final-gate']) {
+        expect(stepByName(teamSteps, name)).toEqual(stepByName(directSteps, name));
+      }
+      expect(withoutTeamLeaderOverrides(implement)).toEqual(withoutTeamLeaderOverrides(directImplement));
+      expect(withoutTeamLeaderOverrides(fix)).toEqual(withoutTeamLeaderOverrides(directFix));
+
+      const expectedTeamLeader = {
+        max_concurrency: 2,
+        initial_max_parts: 2,
+        max_total_parts: 6,
+        fail_on_part_error: false,
+        part_tags: ['coding'],
+        part_persona: 'coder',
+        part_edit: true,
+        part_permission_mode: 'edit',
+      };
+      expect(implement).toMatchObject({
+        tags: ['leader'],
+        edit: true,
+        instruction: 'team-leader-implement',
+        pass_previous_response: true,
+        team_leader: expectedTeamLeader,
+      });
+      expect(fix).toMatchObject({
+        tags: ['leader'],
+        edit: true,
+        instruction: 'team-leader-fix',
+        team_leader: expectedTeamLeader,
+      });
+      expect(implement.session).toBeUndefined();
+      expect(fix.session).toBeUndefined();
+      expect(fix.pass_previous_response).toBeUndefined();
+      expect(teamSteps.map((step) => step.name)).not.toContain('ai-antipattern-review-1st');
+      expect(collectLocalFacetReferences(team)).toEqual([]);
+      expect(hasFixedProviderOrModelOnStep(teamSteps)).toBe(false);
+      expect(team.workflow_config).toBeUndefined();
+    });
+
+    it(`${locale} provides a Finding Contract review/fix entrypoint for the enhanced direct design`, () => {
       const workflow = readYaml<Workflow>(locale, join('workflows', 'review-fix-takt-default-high.yaml'));
       const reviewFixDefault = readYaml<Workflow>(locale, join('workflows', 'review-fix-takt-default.yaml'));
       const taktDefaultHigh = readYaml<Workflow>(locale, join('workflows', 'takt-default-high.yaml'));
@@ -463,15 +547,17 @@ describe('takt-default-high builtin workflow', () => {
       expect(peerReview.rules?.map((rule) => rule.next)).toEqual(['COMPLETE', 'plan', 'ABORT']);
     });
 
-    it(`${locale} loads and doctors takt-default-high through the standard validation path`, () => {
+    it(`${locale} loads and doctors high workflows through the standard validation path`, () => {
       const projectDir = createProjectWithLanguage(locale);
-      const workflowPath = join(process.cwd(), 'builtins', locale, 'workflows', 'takt-default-high.yaml');
 
       try {
-        const workflow = loadWorkflowFromFile(workflowPath, projectDir);
-        expect(workflow).toMatchObject({ name: 'takt-default-high', initialStep: 'plan', maxSteps: 200 });
-        expect(() => validateWorkflowConfig(workflow, { projectCwd: projectDir })).not.toThrow();
-        expect(inspectWorkflowFile(workflowPath, projectDir).diagnostics).toEqual([]);
+        for (const name of ['takt-default-high', 'takt-default-team-high']) {
+          const workflowPath = join(process.cwd(), 'builtins', locale, 'workflows', `${name}.yaml`);
+          const workflow = loadWorkflowFromFile(workflowPath, projectDir);
+          expect(workflow).toMatchObject({ name, initialStep: 'plan', maxSteps: 200 });
+          expect(() => validateWorkflowConfig(workflow, { projectCwd: projectDir })).not.toThrow();
+          expect(inspectWorkflowFile(workflowPath, projectDir).diagnostics).toEqual([]);
+        }
       } finally {
         rmSync(projectDir, { recursive: true, force: true });
       }
