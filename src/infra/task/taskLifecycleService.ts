@@ -12,6 +12,7 @@ import {
   buildTerminalTaskRecord,
   generateTaskName,
 } from './taskRecordMutations.js';
+import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
 
 export class TaskLifecycleService {
   constructor(
@@ -47,6 +48,10 @@ export class TaskLifecycleService {
         owner_pid: null,
         ...options,
       });
+      const conflict = findActiveTaskTargetConflict(current.tasks, record);
+      if (conflict) {
+        throw conflict;
+      }
       return { tasks: [...current.tasks, record] };
     });
 

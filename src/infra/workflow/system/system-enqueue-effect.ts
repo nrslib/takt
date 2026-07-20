@@ -15,6 +15,9 @@ import { createIssueFromTaskResult } from '../../task/issueTask.js';
 import { fetchPrContext } from './system-git-context.js';
 import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 import type { CloseIssueResult } from '../../git/index.js';
+import { existsSync } from 'node:fs';
+import { ActiveTaskTargetConflictError, findActiveTaskTargetConflict } from '../../task/activeTaskTarget.js';
+import { TaskStore } from '../../task/store.js';
 
 function filterIssueLabels(issue: WorkflowEnqueueIssueConfig): string[] | undefined {
   const labels = issue.labels?.filter((label) => label.trim().length > 0);
@@ -63,6 +66,42 @@ function buildIssueEnqueueFailureResult(failure: IssueEnqueueFailure): Record<st
   };
 }
 
+function buildDuplicateEnqueueResult(error: ActiveTaskTargetConflictError): Record<string, unknown> {
+  return {
+    success: false,
+    failed: false,
+    duplicate: true,
+    target: error.target,
+    existing_task: {
+      name: error.existingTaskName,
+      status: error.existingTaskStatus,
+    },
+  };
+}
+
+/**
+ * Detect duplicates on targets known before any external processing (git
+ * provider calls, base branch resolution), so a known conflict is reported as
+ * `duplicate` even when those external steps would fail. The task lifecycle
+ * repeats the check while holding TaskStore's process-wide file lock.
+ */
+function findKnownTargetConflict(
+  projectCwd: string,
+  payload: { mode: 'new' | 'from_pr'; pr?: number; issue_number?: number },
+): ActiveTaskTargetConflictError | undefined {
+  const candidate = payload.mode === 'from_pr'
+    ? (payload.pr !== undefined ? { pr_number: payload.pr } : undefined)
+    : (payload.issue_number !== undefined ? { issue: payload.issue_number } : undefined);
+  if (candidate === undefined) {
+    return undefined;
+  }
+  const store = new TaskStore(projectCwd);
+  if (!existsSync(store.getTasksFilePath())) {
+    return undefined;
+  }
+  return findActiveTaskTargetConflict(store.read().tasks, candidate);
+}
+
 async function createIssueBackedTask(
   options: SystemStepServicesOptions,
   payload: {
@@ -85,7 +124,7 @@ async function createIssueBackedTask(
     issueOutputMode: 'silent',
     ...(payload.worktree?.enabled === true ? { worktree: true } : {}),
     ...(payload.worktree?.auto_pr === true ? { autoPr: true } : {}),
-    ...(payload.worktree?.draft_pr === true ? { draftPr: true } : {}),
+    ...(payload.worktree?.draft_pr !== undefined ? { draftPr: payload.worktree.draft_pr } : {}),
     ...(payload.worktree?.managed_pr === true ? { managedPr: true } : {}),
     ...(payload.baseBranch !== undefined ? { taskContext: { baseBranch: payload.baseBranch } } : {}),
   }, {
@@ -111,52 +150,66 @@ export async function enqueueTaskEffect(
     workflow: string;
     task: string;
     pr?: number;
+    issue_number?: number;
     issue?: WorkflowEnqueueIssueConfig;
     base_branch?: string | WorkflowEnqueueBaseBranchConfig;
     worktree?: WorkflowEnqueueWorktreeConfig;
   },
 ): Promise<Record<string, unknown>> {
+  const knownConflict = findKnownTargetConflict(options.projectCwd, payload);
+  if (knownConflict) {
+    return buildDuplicateEnqueueResult(knownConflict);
+  }
+
   const baseBranch = resolveValidatedBaseBranch(options.projectCwd, payload.base_branch);
 
-  if (payload.mode === 'new') {
-    if (payload.issue?.create === true) {
-      return createIssueBackedTask(options, {
+  try {
+    if (payload.mode === 'new') {
+      if (payload.issue?.create === true) {
+        return createIssueBackedTask(options, {
+          workflow: payload.workflow,
+          task: payload.task,
+          issue: payload.issue,
+          ...(baseBranch !== undefined ? { baseBranch } : {}),
+          ...(payload.worktree !== undefined ? { worktree: payload.worktree } : {}),
+        });
+      }
+      const created = await saveEnqueuedTaskFile(options.projectCwd, payload.task, {
         workflow: payload.workflow,
-        task: payload.task,
-        issue: payload.issue,
-        ...(baseBranch !== undefined ? { baseBranch } : {}),
-        ...(payload.worktree !== undefined ? { worktree: payload.worktree } : {}),
+        ...(payload.issue_number !== undefined ? { issue: payload.issue_number } : {}),
+        ...(payload.worktree?.enabled === true ? { worktree: true } : {}),
+        ...(baseBranch ? { baseBranch } : {}),
+        ...(payload.worktree?.auto_pr === true ? { autoPr: true } : {}),
+        ...(payload.worktree?.draft_pr !== undefined ? { draftPr: payload.worktree.draft_pr } : {}),
+        ...(payload.worktree?.managed_pr === true ? { managedPr: true } : {}),
       });
+      return { success: true, failed: false, ...created };
     }
+
+    if (payload.pr == null || !Number.isSafeInteger(payload.pr) || payload.pr <= 0) {
+      throw new Error('System effect requires positive safe integer field "pr"');
+    }
+
+    const pr = fetchPrContext(options.projectCwd, payload.pr, options.gitProvider);
+    const requestedBaseBranch = baseBranch ?? pr.baseRefName;
+    if (!requestedBaseBranch) {
+      return { success: false, failed: true, error: 'PR base branch is not available' };
+    }
+    const prBaseBranch = baseBranch ?? resolveBaseBranch(options.projectCwd, requestedBaseBranch).branch;
     const created = await saveEnqueuedTaskFile(options.projectCwd, payload.task, {
       workflow: payload.workflow,
-      ...(payload.worktree?.enabled === true ? { worktree: true } : {}),
-      ...(baseBranch ? { baseBranch } : {}),
-      ...(payload.worktree?.auto_pr === true ? { autoPr: true } : {}),
-      ...(payload.worktree?.draft_pr === true ? { draftPr: true } : {}),
-      ...(payload.worktree?.managed_pr === true ? { managedPr: true } : {}),
+      worktree: true,
+      branch: pr.headRefName,
+      baseBranch: prBaseBranch,
+      autoPr: false,
+      shouldPublishBranchToOrigin: true,
+      prNumber: payload.pr,
     });
-    return { success: true, failed: false, ...created };
+    return { success: true, failed: false, ...created, prNumber: payload.pr };
+  } catch (error) {
+    if (error instanceof ActiveTaskTargetConflictError) {
+      return buildDuplicateEnqueueResult(error);
+    }
+    throw error;
   }
-
-  if (payload.pr == null || !Number.isSafeInteger(payload.pr) || payload.pr <= 0) {
-    throw new Error('System effect requires positive safe integer field "pr"');
-  }
-
-  const pr = fetchPrContext(options.projectCwd, payload.pr, options.gitProvider);
-  const requestedBaseBranch = baseBranch ?? pr.baseRefName;
-  if (!requestedBaseBranch) {
-    return { success: false, failed: true, error: 'PR base branch is not available' };
-  }
-  const prBaseBranch = baseBranch ?? resolveBaseBranch(options.projectCwd, requestedBaseBranch).branch;
-  const created = await saveEnqueuedTaskFile(options.projectCwd, payload.task, {
-    workflow: payload.workflow,
-    worktree: true,
-    branch: pr.headRefName,
-    baseBranch: prBaseBranch,
-    autoPr: false,
-    shouldPublishBranchToOrigin: true,
-    prNumber: payload.pr,
-  });
-  return { success: true, failed: false, ...created, prNumber: payload.pr };
 }

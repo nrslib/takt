@@ -38,7 +38,7 @@ import {
   resolveEffectiveAutoRouting,
 } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import { initAnalyticsWriter } from '../../analytics/index.js';
-import { ensureWorktreeTaktGitignore } from '../../../infra/task/projectLocalTaktSync.js';
+import { ensureWorktreeTaktRuntimeProtection } from '../../../infra/task/projectLocalTaktSync.js';
 import { AnalyticsEmitter } from './analyticsEmitter.js';
 import { createOutputFns, createPrefixedStreamHandler } from './outputFns.js';
 import { RunMetaManager } from './runMeta.js';
@@ -151,7 +151,7 @@ export async function createWorkflowExecutionBootstrap(
     throw new Error(`Invalid reportDirName: ${runSlug}`);
   }
   if (isWorktree) {
-    ensureWorktreeTaktGitignore(cwd);
+    ensureWorktreeTaktRuntimeProtection(cwd);
   }
 
   const runPaths = buildRunPaths(cwd, runSlug);

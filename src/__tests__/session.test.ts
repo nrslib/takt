@@ -2,7 +2,7 @@
  * Tests for session log incremental writes and pointer management
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, readFileSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -44,6 +44,7 @@ describe('NDJSON log', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(projectDir, { recursive: true, force: true });
   });
 
@@ -116,6 +117,48 @@ describe('NDJSON log', () => {
         expect(parsed2.step).toBe('plan');
         expect(parsed2.content).toBe('Plan completed');
       }
+    });
+
+    it('should recreate a deleted log directory, warn about possible data loss, and continue writing', () => {
+      const filepath = initTestNdjsonLog('sess-deleted-logs', 'task', 'wf', projectDir);
+      const logsDir = join(projectDir, '.takt', 'runs', 'test-run', 'logs');
+      rmSync(logsDir, { recursive: true, force: true });
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+      appendNdjsonLine(filepath, {
+        type: 'step_start',
+        step: 'implement',
+        persona: 'coder',
+        iteration: 1,
+        timestamp: '2026-07-17T10:17:01.000Z',
+      });
+
+      expect(existsSync(filepath)).toBe(true);
+      expect(JSON.parse(readFileSync(filepath, 'utf-8'))).toMatchObject({
+        type: 'step_start',
+        step: 'implement',
+      });
+      expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining(
+        'Log directory disappeared during execution and was recreated',
+      ));
+      expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining(
+        'Previous log entries may have been lost',
+      ));
+    });
+
+    it('should propagate log write failures other than a missing path', () => {
+      const blockingPath = join(projectDir, 'not-a-directory');
+      writeFileSync(blockingPath, 'file blocks log directory creation', 'utf-8');
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+      expect(() => appendNdjsonLine(join(blockingPath, 'session.jsonl'), {
+        type: 'step_start',
+        step: 'implement',
+        persona: 'coder',
+        iteration: 1,
+        timestamp: '2026-07-17T10:17:01.000Z',
+      })).toThrow();
+      expect(stderrSpy).not.toHaveBeenCalled();
     });
   });
 

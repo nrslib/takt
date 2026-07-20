@@ -98,11 +98,21 @@ export function validateSystemEffectPayload(
     if (payload.workflow !== undefined) requireString(payload.workflow, 'workflow');
     if (payload.task !== undefined) requireString(payload.task, 'task');
     if (payload.pr !== undefined) requireNumber(payload.pr, 'pr');
+    if (payload.issue_number !== undefined) requireNumber(payload.issue_number, 'issue_number');
     if (payload.base_branch !== undefined) validateBaseBranchPayload(payload.base_branch);
     if (payload.issue !== undefined) validateIssuePayload(payload.issue);
     if (payload.worktree !== undefined) validateWorktreePayload(payload.worktree);
     if (payload.mode === 'new' && payload.pr !== undefined) {
       throw new Error('System effect mode "new" does not allow field "pr"');
+    }
+    if (
+      payload.issue_number !== undefined
+      && typeof payload.issue === 'object'
+      && payload.issue !== null
+      && !Array.isArray(payload.issue)
+      && (payload.issue as Record<string, unknown>).create === true
+    ) {
+      throw new Error('System effect does not allow "issue_number" when "issue.create" is true');
     }
     if (payload.mode === 'from_pr') {
       if (payload.pr === undefined) {
@@ -110,6 +120,9 @@ export function validateSystemEffectPayload(
       }
       if (payload.issue !== undefined) {
         throw new Error('System effect mode "from_pr" does not allow field "issue"');
+      }
+      if (payload.issue_number !== undefined) {
+        throw new Error('System effect mode "from_pr" does not allow field "issue_number"');
       }
       if (payload.worktree !== undefined) {
         throw new Error('System effect mode "from_pr" does not allow field "worktree"');

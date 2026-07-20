@@ -1842,7 +1842,7 @@ describe('DefaultSystemStepServices', () => {
       worktree: {
         enabled: true,
         auto_pr: true,
-        draft_pr: true,
+        draft_pr: false,
         managed_pr: true,
       },
     } as never;
@@ -1859,7 +1859,7 @@ describe('DefaultSystemStepServices', () => {
       worktree: {
         enabled: true,
         auto_pr: true,
-        draft_pr: true,
+        draft_pr: false,
         managed_pr: true,
       },
     } as never;
@@ -1881,7 +1881,7 @@ describe('DefaultSystemStepServices', () => {
       worktree: true,
       baseBranch: 'improve',
       autoPr: true,
-      draftPr: true,
+      draftPr: false,
       managedPr: true,
     });
     expect(mockResolveBaseBranch).toHaveBeenCalledWith('/repo', 'improve');
@@ -1891,6 +1891,51 @@ describe('DefaultSystemStepServices', () => {
       taskName: 'task-1',
       tasksFile: '/repo/.takt/tasks.yaml',
       issueNumber: 586,
+    });
+  });
+
+  it('preserves an explicit non-draft setting when enqueueing without a new issue', async () => {
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+    });
+
+    const result = await services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'new',
+      workflow: 'takt-default',
+      task: '{structured:plan.dummy_field}',
+      worktree: {
+        enabled: true,
+        auto_pr: true,
+        draft_pr: false,
+        managed_pr: true,
+      },
+    } as never, {
+      mode: 'new',
+      workflow: 'takt-default',
+      task: 'Implement follow-up effect',
+      worktree: {
+        enabled: true,
+        auto_pr: true,
+        draft_pr: false,
+        managed_pr: true,
+      },
+    }, {} as never);
+
+    expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Implement follow-up effect', {
+      workflow: 'takt-default',
+      worktree: true,
+      autoPr: true,
+      draftPr: false,
+      managedPr: true,
+    });
+    expect(result).toEqual({
+      success: true,
+      failed: false,
+      taskName: 'task-1',
+      tasksFile: '/repo/.takt/tasks.yaml',
     });
   });
 
