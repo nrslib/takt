@@ -155,6 +155,7 @@ function seedLedger(ledgerPath: string): void {
       title: 'Disputed issue',
       location: 'src/a.ts:5',
       description: 'The bug is present.',
+      relation: 'new',
     }],
     conflicts: [{
       id: 'C-0001',
