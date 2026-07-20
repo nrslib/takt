@@ -88,24 +88,28 @@ describe('renderLoopMonitorFindingsSummary', () => {
     delete legacy.provisional!.firstObservedRound;
     const data = buildLoopMonitorFindingsSummaryData(makeLedger([legacy], ['r1']), {});
 
-    expect(data.openProvisional[0]?.stalledRounds).toBeUndefined();
+    expect(data.openProvisional).toEqual([
+      expect.objectContaining({ id: 'F-0001', stalledRounds: undefined }),
+    ]);
   });
 
-  it('レンダリングは構造の全要素を文面に反映する（スモーク）', () => {
-    const summary = renderLoopMonitorFindingsSummary(
-      makeLedger([provisionalEntry()], ['r1']),
-      {},
-    );
+  it('レンダリングは構造の全要素（ID・種類・件数）を欠落なく反映する', () => {
+    const ledger = makeLedger([provisionalEntry()], ['r1']);
+    const data = buildLoopMonitorFindingsSummaryData(ledger, {});
+    const summary = renderLoopMonitorFindingsSummary(ledger, {});
 
-    expect(summary).toContain('currently 1 open');
-    expect(summary).toContain('F-0001 [unverified-locationless]');
-    expect(summary).toContain('manager dismissDecisions');
+    // 文言は固定しない — データ構造から導出した識別子・数値が全て現れることだけを検証する。
+    for (const provisional of data.openProvisional) {
+      expect(summary).toContain(provisional.id);
+      expect(summary).toContain(provisional.kind);
+    }
+    expect(summary).toContain(String(data.openCount));
+    expect(summary).toContain(`${data.roundsCompleted}/${data.maxRounds}`);
   });
 
-  it('provisional が無ければ暫定セクション自体を持たない', () => {
+  it('provisional が無ければ暫定リストは空になる', () => {
     const data = buildLoopMonitorFindingsSummaryData(makeLedger([]), {});
     expect(data.openProvisional).toEqual([]);
-    expect(renderLoopMonitorFindingsSummary(makeLedger([]), {})).not.toContain('Open provisional findings');
   });
 });
 

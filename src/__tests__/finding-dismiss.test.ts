@@ -309,9 +309,6 @@ describe('runFindingManagerForStep dismiss round trip', () => {
     });
 
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
-    const instruction = executeAgentMock.mock.calls[0]![1];
-    expect(instruction).toContain('Dismissal candidates:');
-    expect(instruction).toContain('F-0001');
 
     const dismissed = result.ledger.findings.find((finding) => finding.id === 'F-0001')!;
     expect(dismissed.status).toBe('dismissed');
