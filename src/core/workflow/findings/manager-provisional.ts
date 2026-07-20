@@ -1,5 +1,10 @@
 import type { ProvisionalFindingSpec } from './reconciler.js';
-import type { CanonicalRawFinding, FindingProvisionalKind, RawFinding } from './types.js';
+import type {
+  CanonicalRawFinding,
+  FindingActionRecovery,
+  FindingProvisionalKind,
+  RawFinding,
+} from './types.js';
 import {
   computeLineageKey,
   computeProvisionalStableKey,
@@ -10,6 +15,21 @@ interface RawProvisionalSpecInput {
   wire: RawFinding;
   canonical: Pick<CanonicalRawFinding, 'reviewerStableKey' | 'lineageKey'>;
   reason: string;
+}
+
+function actionRecoveryLineageTag(action: FindingActionRecovery): string {
+  switch (action.action) {
+    case 'invalidate':
+    case 'waive':
+    case 'dismiss':
+      return `${action.action}:${action.findingId}`;
+    case 'duplicate':
+      return [
+        action.action,
+        action.canonicalFindingId,
+        ...[...action.duplicateFindingIds].sort(),
+      ].join(':');
+  }
 }
 
 export function provisionalSpecForRaw(input: RawProvisionalSpecInput): ProvisionalFindingSpec {
@@ -36,6 +56,7 @@ export function provisionalSpecForRawKind(
     description: input.wire.description,
     ...(input.wire.suggestion !== undefined ? { suggestion: input.wire.suggestion } : {}),
     reviewers: [input.wire.reviewer],
+    recoveryReviewerStableKey: input.canonical.reviewerStableKey,
   };
 }
 
@@ -48,6 +69,7 @@ export function stalePreconditionSpec(input: {
   targetLocation?: string;
   sourceRawFindingIds: string[];
   reason: string;
+  actionRecovery?: FindingActionRecovery;
 }): ProvisionalFindingSpec {
   const reviewerStableKey = computeReviewerStableKey({
     workflowName: input.workflowName,
@@ -59,6 +81,9 @@ export function stalePreconditionSpec(input: {
     targetFindingId: input.targetFindingId,
     ...(input.targetLocation !== undefined ? { location: input.targetLocation } : {}),
     title: input.targetTitle,
+    ...(input.actionRecovery !== undefined
+      ? { familyTag: actionRecoveryLineageTag(input.actionRecovery) }
+      : {}),
   });
   return {
     kind: 'stale-precondition',
@@ -70,5 +95,7 @@ export function stalePreconditionSpec(input: {
     severity: 'high',
     description: input.reason,
     reviewers: ['findings-manager'],
+    recoveryReviewerStableKey: reviewerStableKey,
+    ...(input.actionRecovery !== undefined ? { actionRecovery: input.actionRecovery } : {}),
   };
 }

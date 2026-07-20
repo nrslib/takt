@@ -12,6 +12,7 @@ import type {
   FindingManagerConflict,
   FindingManagerOutput,
   RawFinding,
+  FindingActionRecovery,
 } from './types.js';
 import type { ManagerDecisionStageResult, RunFindingManagerForStepInput } from './manager-contracts.js';
 
@@ -43,7 +44,7 @@ export function revalidateManagerPlan(input: {
     // fresh ledger に対して候補を再計算する: 初回判断と保存の間に clean 証拠で
     // settle された（open でなくなった）対象への dismiss は stale として不採用になる。
     dismissCandidateFindingIds: new Set(
-      computeDismissCandidates(input.freshLedger.findings).keys(),
+      computeDismissCandidates(input.freshLedger).keys(),
     ),
   });
   const freshLandedRawIds = collectLandedRawIds(freshAssembly.output);
@@ -113,7 +114,12 @@ function applyPreconditionChecks(input: {
   let staleDetails: string[] = [];
   let extraConflicts: FindingManagerConflict[] = [];
 
-  const specFor = (findingId: string, sourceRawFindingIds: string[], reason: string): void => {
+  const specFor = (
+    findingId: string,
+    sourceRawFindingIds: string[],
+    reason: string,
+    actionRecovery?: FindingActionRecovery,
+  ): void => {
     const fresh = input.freshLedger.findings.find((finding) => finding.id === findingId);
     provisionalSpecs = [...provisionalSpecs, stalePreconditionSpec({
       workflowName: input.workflowName,
@@ -124,6 +130,7 @@ function applyPreconditionChecks(input: {
       ...(fresh?.location !== undefined ? { targetLocation: fresh.location } : {}),
       sourceRawFindingIds,
       reason,
+      ...(actionRecovery !== undefined ? { actionRecovery } : {}),
     })];
     staleDetails = [...staleDetails, reason];
   };
@@ -168,10 +175,16 @@ function applyPreconditionChecks(input: {
     sourceRawFindingIds: string[],
     expectedStatuses: ReadonlyArray<FindingLedgerEntry['status']>,
     action: string,
+    actionRecovery?: FindingActionRecovery,
   ): boolean => {
     const captured = input.captured.get(findingId);
     if (captured === undefined) {
-      specFor(findingId, sourceRawFindingIds, `${action} targets finding "${findingId}" that did not exist when the prompt snapshot was taken`);
+      specFor(
+        findingId,
+        sourceRawFindingIds,
+        `${action} targets finding "${findingId}" that did not exist when the prompt snapshot was taken`,
+        actionRecovery,
+      );
       return false;
     }
     const check = checkFindingPrecondition({ captured, freshLedger: input.freshLedger, expectedStatuses });
@@ -181,30 +194,73 @@ function applyPreconditionChecks(input: {
     if (check.outcome === 'idempotent-resolved') {
       return false;
     }
-    specFor(findingId, sourceRawFindingIds, `${action} for "${findingId}" was not applied (${check.outcome}): ${check.detail}`);
+    specFor(
+      findingId,
+      sourceRawFindingIds,
+      `${action} for "${findingId}" was not applied (${check.outcome}): ${check.detail}`,
+      actionRecovery,
+    );
     return false;
   };
 
   const reopenedFindings = input.output.reopenedFindings.filter((reopened) => (
-    checkClosingDecision(reopened.findingId, [...reopened.rawFindingIds], ['resolved', 'waived'], 'Reopen')
+    checkClosingDecision(reopened.findingId, [...reopened.rawFindingIds], ['resolved', 'waived', 'dismissed'], 'Reopen')
   ));
   const invalidatedFindings = input.output.invalidatedFindings.filter((invalidated) => (
-    checkClosingDecision(invalidated.findingId, [], ['open'], 'Invalidate')
+    checkClosingDecision(invalidated.findingId, [], ['open'], 'Invalidate', {
+      action: 'invalidate',
+      findingId: invalidated.findingId,
+      evidence: invalidated.evidence,
+    })
   ));
   const waivedFindings = input.output.waivedFindings.filter((waived) => (
-    checkClosingDecision(waived.findingId, [], ['open'], 'Waive')
+    checkClosingDecision(waived.findingId, [], ['open'], 'Waive', {
+      action: 'waive',
+      findingId: waived.findingId,
+      reason: waived.reason,
+      evidence: waived.evidence,
+    })
   ));
   const duplicateFindings = input.output.duplicateFindings.filter((duplicate) => {
     const allIds = [duplicate.canonicalFindingId, ...duplicate.duplicateFindingIds];
-    return allIds.every((findingId) => (
-      checkClosingDecision(findingId, [], ['open'], 'Supersede')
-    ));
+    const failures = allIds.flatMap((findingId) => {
+      const captured = input.captured.get(findingId);
+      if (captured === undefined) {
+        return [`Supersede targets finding "${findingId}" that did not exist when the prompt snapshot was taken`];
+      }
+      const check = checkFindingPrecondition({
+        captured,
+        freshLedger: input.freshLedger,
+        expectedStatuses: ['open'],
+      });
+      if (check.outcome === 'ok') {
+        return [];
+      }
+      return check.outcome === 'idempotent-resolved'
+        ? [`Supersede for "${findingId}" was not applied because it was already resolved`]
+        : [`Supersede for "${findingId}" was not applied (${check.outcome}): ${check.detail}`];
+    });
+    if (failures.length === 0) {
+      return true;
+    }
+    specFor(duplicate.canonicalFindingId, [], failures.join('; '), {
+      action: 'duplicate',
+      canonicalFindingId: duplicate.canonicalFindingId,
+      duplicateFindingIds: [...duplicate.duplicateFindingIds],
+      evidence: duplicate.evidence,
+    });
+    return false;
   });
   // dismiss も他の終端遷移と同水準の楽観的前提条件を通す: manager 判断中に
   // 同じ provisional へ新しい観測が積まれて revision が進んでいたら、古い
   // 判断のままでは却下しない（stale として不採用 → 次ラウンドで再裁定）。
   const dismissedFindings = input.output.dismissedFindings.filter((dismissed) => (
-    checkClosingDecision(dismissed.findingId, [], ['open'], 'Dismiss')
+    checkClosingDecision(dismissed.findingId, [], ['open'], 'Dismiss', {
+      action: 'dismiss',
+      findingId: dismissed.findingId,
+      basis: dismissed.basis,
+      reason: dismissed.reason,
+    })
   ));
 
   return {

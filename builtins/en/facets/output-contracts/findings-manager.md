@@ -79,7 +79,7 @@
 Rules for `rawDecisions`:
 - One entry per raw finding listed in the prompt, no more, no fewer.
 - `findingId` is required for `same`, `resolved`, `reopened`, and `conflict`; leave it as an empty string for `new` and `unsupported`.
-- `unsupported` is for a raw finding that explicitly referenced an existing finding (targetFindingId set) but the reference does not hold up; it creates no finding and changes nothing.
+- `unsupported` is for a raw finding that explicitly referenced an existing finding (targetFindingId set) but the reference does not hold up. It creates no confirmed finding and leaves the target unchanged, while the engine retains the raw claim as a gate-blocking provisional.
 - Return only your per-item judgment. Do not assemble the final ledger update (matching, grouping, conflict shape) yourself; the engine does that and enforces the ledger invariants.
 - familyTag and line-number differences are hints, not identity — judge `same` vs `new` by failure mode, trigger, impact, and required fix.
 
@@ -94,6 +94,7 @@ Rules for `dismissDecisions`:
 - Only finding ids the prompt lists as dismissal candidates (open provisional findings whose claims cannot be settled mechanically) are eligible. The engine rejects dismissals outside the list.
 - `basis` is `out_of_scope` (the claim is outside the finding contract's jurisdiction — for example, demands about verification-result reporting belong to the final gate) or `unverifiable_claim` (the claim can never be substantiated).
 - Keep a candidate open (leave it out) when the underlying concern is real and could still be settled by later clean review evidence. A dismissal means "outside adjudication scope", never "fixed", and stays on the ledger with an audit record.
+- An engine decision rejection, stale findingId, unsupported decision, or missing decision is not itself grounds for dismissal. Evaluate the raw claim and keep it open when it describes a real code concern.
 - Leave empty when there are no candidates or every candidate deserves to stay open.
 
 Interpretation phase (separate call, when ambiguous raw findings exist):

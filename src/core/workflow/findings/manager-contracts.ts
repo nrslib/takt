@@ -21,6 +21,8 @@ import type {
   FindingManagerOutput,
   RawFinding,
 } from './types.js';
+import type { CanonicalIntakeItem, ReviewerIntakeResult } from './manager-admission.js';
+import type { CapturedFindingPrecondition } from './finding-preconditions.js';
 
 export interface RunFindingManagerForStepInput {
   contract: FindingContractConfig;
@@ -51,7 +53,14 @@ export type FindingManagerRunResult = {
 export interface LadderTarget {
   canonical: CanonicalRawFinding;
   wire: RawFinding;
+  baseInterpretationKey: string;
   interpretationKey: string;
+  attemptOrdinal: number;
+  interpretationRecoveryAttempt?: boolean;
+  recoveryOrigin?: {
+    provisionalFindingId: string;
+    expectedProvisionalRevision: number;
+  };
 }
 
 export interface LadderResult {
@@ -60,7 +69,11 @@ export interface LadderResult {
     proof: DeterministicSameProof;
     viaInterpretationKey?: string;
   }>;
-  pendingIndependentNew: Array<{ wire: RawFinding; viaInterpretationKey?: string }>;
+  pendingIndependentNew: Array<{
+    wire: RawFinding;
+    viaInterpretationKey?: string;
+    recoveryOrigin?: LadderTarget['recoveryOrigin'];
+  }>;
   pendingConflicts: Array<{
     target: LadderTarget;
     targetFindingId: string;
@@ -68,7 +81,11 @@ export interface LadderResult {
   }>;
   provisionalSpecs: ProvisionalFindingSpec[];
   provisionalByInterpretationKey: Map<string, ProvisionalFindingSpec>;
-  pendingAppliedReattach: Array<{ target: LadderTarget }>;
+  pendingAppliedReattach: Array<{
+    target: LadderTarget;
+    applicationResult: 'created' | 'matched_with_proof' | 'conflict_created';
+  }>;
+  recoveryProvisionalInterpretationKeys: Set<string>;
   stats: InterpretationStatsReport;
 }
 
@@ -80,4 +97,24 @@ export interface ManagerDecisionStageResult {
   cleanWireById: Map<string, RawFinding>;
   cleanCanonicalById: Map<string, CanonicalRawFinding>;
   ladder: LadderResult;
+  rawRecovery: RawAdjudicationRecoveryResult;
+}
+
+export interface RawAdjudicationReplayOrigin {
+  provisionalFindingId: string;
+  sourceRawFindingId: string;
+  expectedProvisionalRevision: number;
+  attempt: number;
+}
+
+export interface RawAdjudicationRecoveryResult {
+  intake: ReviewerIntakeResult;
+  output: FindingManagerOutput;
+  origins: Map<string, RawAdjudicationReplayOrigin>;
+  failureReasons: Map<string, string>;
+  capturedPreconditions: Map<string, CapturedFindingPrecondition>;
+  invalidAttempts: FindingManagerValidationAttemptReport[];
+  unsupportedRawFindingReports: UnsupportedRawFindingReport[];
+  cleanWireById: Map<string, RawFinding>;
+  cleanCanonicalById: Map<string, CanonicalIntakeItem['canonical']>;
 }

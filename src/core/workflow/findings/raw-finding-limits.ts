@@ -69,6 +69,14 @@ export const MANAGER_ADJUDICATION_LIMITS = {
   maxReplayAttempts: 2,
 } as const;
 
+export const MANAGER_ACTION_RECOVERY_LIMITS = {
+  maxAttempts: 2,
+} as const;
+
+export const REVIEWER_ENVELOPE_RECOVERY_LIMITS = {
+  maxUnavailableRounds: 2,
+} as const;
+
 /** stable key / WAL のポリシー版数。上限・格子の互換が壊れる変更で上げる。 */
 export const RAW_LADDER_POLICY_VERSION = 2 as const;
 

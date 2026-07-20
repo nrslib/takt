@@ -186,7 +186,7 @@ export interface RawAdmissionRejectionReport {
   reason: string;
 }
 
-/** Raw finding decided 'unsupported': it explicitly referenced an existing finding but the reference did not hold up. No finding is created or changed; kept for audit only (see decision-assembly.ts's UnsupportedRawDecision). */
+/** unsupported は target を変えず confirmed finding も作らないため、gate-blocking provisional と併せて裁定根拠を監査する。 */
 export interface UnsupportedRawFindingReport {
   rawFindingId: string;
   targetFindingId: string;

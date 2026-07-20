@@ -7,6 +7,7 @@ import type {
 } from './manager-contracts.js';
 import { runManagerDecisionStage } from './manager-decision.js';
 import { prepareFindingManagerRound } from './manager-preparation.js';
+import { retainInterpretationRecoveryForLadder } from './interpretation-recovery.js';
 
 const log = createLogger('finding-manager-runner');
 
@@ -25,11 +26,11 @@ export async function runFindingManagerForStep(
   input: RunFindingManagerForStepInput,
 ): Promise<FindingManagerRunResult> {
   const prepared = prepareFindingManagerRound(input);
-  const admission = evaluateRawAdmission({
+  const admission = retainInterpretationRecoveryForLadder(evaluateRawAdmission({
     cwd: input.cwd,
     previousLedger: prepared.previousLedger,
     intake: prepared.intake,
-  });
+  }), prepared.intake);
   const managerDecision = await runManagerDecisionStage({
     input,
     previousLedger: prepared.previousLedger,
@@ -43,6 +44,7 @@ export async function runFindingManagerForStep(
     input,
     previousLedger: prepared.previousLedger,
     intake: prepared.intake,
+    interpretationRecoveryFailures: prepared.interpretationRecoveryFailures,
     admission,
     managerDecision,
     observation: prepared.observation,

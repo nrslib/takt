@@ -71,6 +71,10 @@ export function reconcileCommitPlan(input: {
   pendingRejectedObservations: RawAdmissionEvaluation['pendingRejectedObservations'];
   rawProvenanceByRawFindingId: Map<string, { reviewerStableKey: string; lineageKey: string }>;
   cleanWire: RawFinding[];
+  explicitResolvedByMapping: ReadonlyMap<string, string>;
+  explicitPromotedFindingIds: ReadonlySet<string>;
+  recoveryProvisionalRawFindingIds: ReadonlySet<string>;
+  healthyReviewerStableKeys: ReadonlySet<string>;
 }): { ledger: FindingLedger; landedSpecs: ProvisionalFindingSpec[]; normalizationRejections: string[] } {
   // ladder マージ（mergeOutputs）は matches / newFindings / conflicts を後着させる。
   // 閉じる決定との衝突をここで一括正規化し、残った統合の match 転写もこの1回で
@@ -84,6 +88,10 @@ export function reconcileCommitPlan(input: {
     cleanRawIds: new Set(input.cleanWire.map((wire) => wire.rawFindingId)),
     wireById: new Map(input.rawFindings.map((wire) => [wire.rawFindingId, wire])),
     freshLedger: input.freshLedger,
+    explicitResolvedByMapping: input.explicitResolvedByMapping,
+    explicitPromotedFindingIds: input.explicitPromotedFindingIds,
+    healthyReviewerStableKeys: input.healthyReviewerStableKeys,
+    replayOrigins: new Map(),
   });
   // clean 証拠による settlement（昇格 / 決定的 same による解消）が確定した
   // provisional への dismiss は不採用にする — clean 証拠が常に管轄裁定より
@@ -137,6 +145,7 @@ export function reconcileCommitPlan(input: {
       ...input.pendingRejectedObservations.map((pending) => pending.item.wire.rawFindingId),
       ...input.anomalySpecs.flatMap((spec) => spec.sourceRawFindingIds),
       ...suppressedSpecs.flatMap((spec) => spec.sourceRawFindingIds),
+      ...input.recoveryProvisionalRawFindingIds,
     ]),
     context: {
       workflowName: input.runInput.workflowName,

@@ -4,6 +4,7 @@ import type { ReviewerRelationClarification } from './relation-coherence.js';
 import {
   canonicalizeReviewerRawFinding,
   computeOverflowStableKey,
+  computeReviewerStableKey,
   createOverflowRawCandidate,
   createReviewerRawFindingCandidates,
   extractLenientRawFields,
@@ -45,6 +46,7 @@ export function intakeReviewerOutputs(input: {
     overflowReports: [],
     clarifications: [],
     rawNormalizations: [],
+    healthyReviewerStableKeys: new Set(),
   };
   let admittedCount = 0;
   let admittedBytes = 0;
@@ -122,6 +124,7 @@ export function intakeReviewerOutputs(input: {
         severity: 'high',
         description: wire.description,
         reviewers: [subResult.subStep.name],
+        recoveryReviewerStableKey: canonical.reviewerStableKey,
       });
       log.warn('Reviewer output exceeded Finding Contract limits; replaced with a single overflow provisional', {
         reviewer: subResult.subStep.name,
@@ -132,6 +135,12 @@ export function intakeReviewerOutputs(input: {
 
     admittedCount += items.length;
     admittedBytes += jsonBytes;
+    result.healthyReviewerStableKeys.add(computeReviewerStableKey({
+      workflowName: input.workflowName,
+      callNamespace: input.callNamespace,
+      parentStepName: input.parentStepName,
+      reviewerPersonaKey: context.reviewerPersonaKey,
+    }));
     const candidates = createReviewerRawFindingCandidates(items, context);
     const clarification = subResult.relationClarification;
     for (const candidate of candidates) {

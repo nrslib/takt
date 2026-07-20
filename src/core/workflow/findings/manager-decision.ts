@@ -19,6 +19,7 @@ import { buildManagerInstruction, parseManagerDecisions, runManagerAttempt } fro
 import { runAmbiguousLadder } from './manager-interpretation.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { assembleCleanManagerDecision } from './manager-clean-decision.js';
+import { runRawAdjudicationRecovery } from './raw-adjudication-recovery.js';
 
 const log = createLogger('finding-manager-decision');
 
@@ -51,9 +52,16 @@ export async function runManagerDecisionStage(params: {
     taintedAdmitted,
     provisionalOnlyLadderRawIds,
   } = admission;
+  const rawRecovery = await runRawAdjudicationRecovery({
+    runInput: input,
+    previousLedger,
+    managerStep,
+    ledgerCopyPath,
+    observation,
+  });
   const invalidLocationCandidates = computeInvalidLocationCandidates(input.cwd, previousLedger.findings);
   const invalidLocationCandidateFindingIds = new Set(invalidLocationCandidates.keys());
-  const dismissCandidates = computeDismissCandidates(previousLedger.findings);
+  const dismissCandidates = computeDismissCandidates(previousLedger);
   const dismissCandidateFindingIds = new Set(dismissCandidates.keys());
   const mechanical = classifyRawFindingsMechanically({ previousLedger, rawFindings: cleanWire });
   const hasDisputeClaims = hasDisputeClaimsHeading(input.priorStepResponseText);
@@ -159,5 +167,6 @@ export async function runManagerDecisionStage(params: {
     cleanWireById,
     cleanCanonicalById,
     ladder,
+    rawRecovery,
   };
 }

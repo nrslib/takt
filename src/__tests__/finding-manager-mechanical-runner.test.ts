@@ -306,7 +306,7 @@ describe('runFindingManagerForStep rejected decisions land as provisional (no re
     expect(accepted?.provisional).toBeUndefined();
     const rejected = ledger?.findings.find((entry) => entry.title === 'Another unmatched issue');
     expect(rejected?.status).toBe('open');
-    expect(rejected?.provisional).toMatchObject({ kind: 'raw-meaning-ambiguous', gateEffect: 'block' });
+    expect(rejected?.provisional).toMatchObject({ kind: 'raw-adjudication-unresolved', gateEffect: 'block' });
     expect(harness.savedValidationReports).toHaveLength(1);
     expect(harness.savedValidationReports[0]?.ledgerUpdated).toBe(true);
     expect(harness.savedValidationReports[0]?.provisionalLandings?.some(
@@ -357,7 +357,7 @@ describe('runFindingManagerForStep rejected decisions land as provisional (no re
     const ledger = harness.savedLedgers.at(-1);
     const landed = ledger?.findings.find((entry) => entry.title === 'New unmatched issue');
     expect(landed?.status).toBe('open');
-    expect(landed?.provisional).toMatchObject({ kind: 'raw-meaning-ambiguous' });
+    expect(landed?.provisional).toMatchObject({ kind: 'raw-adjudication-unresolved' });
     expect(harness.savedValidationReports).toHaveLength(1);
     expect(harness.savedValidationReports[0]?.ledgerUpdated).toBe(true);
   });
@@ -1000,7 +1000,7 @@ describe('runFindingManagerForStep stale rejection excluded from unmentioned fal
     expect(savedLedger?.findings.find((f) => f.id === 'F-0001')?.status).toBe('resolved');
     const landed = savedLedger?.findings.find((f) => f.title === 'Restated existing issue');
     expect(landed?.status).toBe('open');
-    expect(landed?.provisional).toMatchObject({ kind: 'raw-meaning-ambiguous', gateEffect: 'block' });
+    expect(landed?.provisional).toMatchObject({ kind: 'raw-adjudication-unresolved', gateEffect: 'block' });
     // 除外した理由は validation report に残る。
     expect(savedValidationReports).toHaveLength(1);
     expect(savedValidationReports[0]?.ledgerUpdated).toBe(true);

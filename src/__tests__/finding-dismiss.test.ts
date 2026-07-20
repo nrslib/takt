@@ -37,6 +37,7 @@ function provisionalEntry(overrides: Partial<FindingLedgerEntry> = {}): FindingL
       lastObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
       interpretationEpochs: 0,
       gateEffect: 'block',
+      firstObservedRound: 1,
     },
     ...overrides,
   };
@@ -90,15 +91,41 @@ describe('computeDismissCandidates', () => {
         id: 'F-0004',
         provisional: { ...provisionalEntry().provisional!, kind: 'manager-budget-exhausted', stableKey: 'stable-4' },
       }),
+      provisionalEntry({
+        id: 'F-0008',
+        provisional: { ...provisionalEntry().provisional!, kind: 'invalid-location-evidence', stableKey: 'stable-8' },
+      }),
+      provisionalEntry({
+        id: 'F-0009',
+        provisional: {
+          ...provisionalEntry().provisional!,
+          kind: 'raw-adjudication-unresolved',
+          stableKey: 'stable-9',
+          adjudicationAttempts: [1, 2].map((attempt) => ({
+            attempt,
+            replayRawFindingId: `replay-${attempt}`,
+            reason: 'no substantive outcome',
+            at: provisionalEntry().lastSeen,
+          })),
+        },
+      }),
       // provisional でない open finding — 候補にしない
       provisionalEntry({ id: 'F-0005', provisional: undefined }),
       // open でない provisional — 候補にしない
       provisionalEntry({ id: 'F-0006', status: 'resolved' }),
     ];
 
-    const candidates = computeDismissCandidates(findings);
+    const candidates = computeDismissCandidates({
+      version: 1,
+      workflowName: 'test',
+      nextId: 10,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      findings,
+      rawFindings: [],
+      conflicts: [],
+    });
 
-    expect([...candidates.keys()].sort()).toEqual(['F-0001', 'F-0002']);
+    expect([...candidates.keys()].sort()).toEqual(['F-0001', 'F-0002', 'F-0008', 'F-0009']);
     expect(candidates.get('F-0001')).toContain('unverified-locationless');
   });
 });

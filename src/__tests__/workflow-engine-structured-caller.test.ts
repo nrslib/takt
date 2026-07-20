@@ -1833,7 +1833,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(result.status).toBe('aborted');
     expect(abortReasons[0]).toContain('Cannot COMPLETE');
     expect(abortReasons[0]).toContain('provisional');
-    expect(abortReasons[0]).toContain('raw-meaning-ambiguous');
+    expect(abortReasons[0]).toContain('raw-adjudication-unresolved');
     expect(abortReasons[0]).toContain('findings.provisional.count');
     void expectedReason;
     const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
@@ -1842,7 +1842,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(ledger.findings.find((f) => f.id === 'F-0001')?.status).toBe('open');
     const provisional = ledger.findings.find((f) => f.provisional !== undefined);
     expect(provisional?.status).toBe('open');
-    expect(provisional?.provisional?.kind).toBe('raw-meaning-ambiguous');
+    expect(provisional?.provisional?.kind).toBe('raw-adjudication-unresolved');
     expect(existsSync(join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'raw', 'test-report-dir.reviewers.json'))).toBe(true);
     // 台帳は更新され、run は fix まで進んでいる（黙って止まらない）。
     expect(result.stepOutputs.has('fix')).toBe(true);
@@ -2761,7 +2761,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(ledger.findings).toContainEqual(expect.objectContaining({ id: 'F-0001', status: 'open' }));
     const provisional = ledger.findings.find((f) => f.title === 'Current issue');
     expect(provisional?.status).toBe('open');
-    expect(provisional?.provisional?.kind).toBe('raw-meaning-ambiguous');
+    expect(provisional?.provisional?.kind).toBe('raw-adjudication-unresolved');
     // reviewer 1回 + manager 1回（v2: 再問い合わせ無し）。
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
   });

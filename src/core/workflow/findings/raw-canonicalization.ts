@@ -172,12 +172,19 @@ export function computeOverflowStableKey(reviewerStableKey: string): string {
   return sha256Of(reviewerStableKey, 'reviewer-output-overflow');
 }
 
-export function computeInterpretationKey(input: {
+export function computeBaseInterpretationKey(input: {
   reviewerStableKey: string;
   lineageKey: string;
   candidateEvidenceHash: string;
 }): string {
-  return sha256Of('interpretation-key', input.reviewerStableKey, input.lineageKey, input.candidateEvidenceHash, String(RAW_LADDER_POLICY_VERSION));
+  return sha256Of('interpretation-base-key', input.reviewerStableKey, input.lineageKey, input.candidateEvidenceHash, String(RAW_LADDER_POLICY_VERSION));
+}
+
+export function computeInterpretationAttemptKey(
+  baseInterpretationKey: string,
+  attemptOrdinal: number,
+): string {
+  return sha256Of('interpretation-attempt-key', baseInterpretationKey, String(attemptOrdinal));
 }
 
 // ---------------------------------------------------------------------------
@@ -491,6 +498,7 @@ export interface RawCanonicalizationContext {
   clarificationAttempted?: boolean;
   /** correction 前の ambiguity codes。taint は同一梯子内では消さない。 */
   priorAmbiguityCodes?: readonly RawAmbiguityCode[];
+  preserveAmbiguityOrigin?: boolean;
 }
 
 export type CanonicalizationResult =
@@ -697,7 +705,9 @@ export function canonicalizeReviewerRawFinding(
 
   const priorCodes = context.priorAmbiguityCodes ?? [];
   const clarificationAttempted = context.clarificationAttempted === true;
-  const ambiguityOrigin = codes.length > 0 || priorCodes.length > 0;
+  const ambiguityOrigin = codes.length > 0
+    || priorCodes.length > 0
+    || context.preserveAmbiguityOrigin === true;
   const allCodes = [...new Set([...priorCodes, ...codes])];
 
   // canonical の relation/kind は必ず一致する整合ペア。ambiguous で

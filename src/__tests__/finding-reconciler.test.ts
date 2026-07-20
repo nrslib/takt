@@ -454,7 +454,7 @@ describe('reconcileFindingLedger', () => {
         title: 'Dropped raw finding',
         rawFindingIds: ['raw-unmentioned'],
         provisional: expect.objectContaining({
-          kind: 'raw-meaning-ambiguous',
+          kind: 'raw-adjudication-unresolved',
           sourceRawFindingIds: ['raw-unmentioned'],
           gateEffect: 'block',
         }),

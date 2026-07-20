@@ -2,9 +2,7 @@ import type { FindingContractConfig, WorkflowConfig } from '../../models/types.j
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
 import {
-  computeLineageKey,
   computeProvisionalStableKey,
-  computeReviewerStableKey,
 } from './raw-canonicalization.js';
 import { MANAGER_INTERPRETATION_LIMITS } from './raw-finding-limits.js';
 import {
@@ -57,6 +55,8 @@ export async function runAmbiguousLadder(input: {
     input.ledgerStore,
     interpretationTargets.map((target): NewInterpretationInput => ({
       interpretationKey: target.interpretationKey,
+      baseInterpretationKey: target.baseInterpretationKey,
+      attemptOrdinal: target.attemptOrdinal,
       reviewerStableKey: target.canonical.reviewerStableKey,
       lineageKey: target.canonical.lineageKey,
       candidateEvidenceHash: target.canonical.evidenceHash,
@@ -127,27 +127,31 @@ export async function runAmbiguousLadder(input: {
   }
 
   if (leftover.length > 0) {
-    const reviewerStableKey = computeReviewerStableKey({
-      workflowName: input.workflowName,
-      callNamespace: input.callNamespace,
-      parentStepName: input.parentStepName,
-      reviewerPersonaKey: 'findings-manager',
-    });
-    const lineageKey = computeLineageKey({ title: 'Finding manager interpretation budget exhausted' });
+    const leftoverByLineage = new Map(
+      leftover.map((target) => [target.canonical.lineageKey, target]),
+    );
     result = {
       ...result,
-      provisionalSpecs: [...result.provisionalSpecs, {
-        kind: 'manager-budget-exhausted',
-        stableKey: computeProvisionalStableKey({ reviewerStableKey, lineageKey, provisionalKind: 'manager-budget-exhausted' }),
-        lineageKey,
-        sourceRawFindingIds: leftover.map((target) => target.wire.rawFindingId),
-        reason: `Manager interpretation budget was exhausted before ${leftover.length} ambiguous raw finding(s) could be interpreted. Affected lineages: ${leftover.map((target) => target.canonical.lineageKey.slice(0, 12)).join(', ')}`,
-        title: 'Finding manager interpretation budget exhausted',
-        severity: 'high',
-        description: `Uninterpreted ambiguous observations remain (${leftover.length}); they block the final gate until a later round interprets or settles them.`,
-        reviewers: ['findings-manager'],
-      }],
-      stats: { ...result.stats, budgetExhaustedLineages: leftover.length },
+      provisionalSpecs: [
+        ...result.provisionalSpecs,
+        ...[...leftoverByLineage.values()].map((target) => ({
+          kind: 'manager-budget-exhausted' as const,
+          stableKey: computeProvisionalStableKey({
+            reviewerStableKey: target.canonical.reviewerStableKey,
+            lineageKey: target.canonical.lineageKey,
+            provisionalKind: 'manager-budget-exhausted',
+          }),
+          lineageKey: target.canonical.lineageKey,
+          sourceRawFindingIds: [target.wire.rawFindingId],
+          reason: 'Manager interpretation budget was exhausted before this lineage could be interpreted',
+          title: `Pending interpretation: ${target.wire.title}`,
+          severity: 'high' as const,
+          description: target.wire.description,
+          reviewers: [target.wire.reviewer],
+          recoveryReviewerStableKey: target.canonical.reviewerStableKey,
+        })),
+      ],
+      stats: { ...result.stats, budgetExhaustedLineages: leftoverByLineage.size },
     };
   }
   return applyInterpretationDecisions({

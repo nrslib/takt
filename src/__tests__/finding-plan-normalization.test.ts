@@ -315,6 +315,10 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
       pendingRejectedObservations: [],
       rawProvenanceByRawFindingId: new Map(),
       cleanWire: [],
+      explicitResolvedByMapping: new Map(),
+      explicitPromotedFindingIds: new Set(),
+      recoveryProvisionalRawFindingIds: new Set(),
+      healthyReviewerStableKeys: new Set(),
     });
 
     expect(result.normalizationRejections.some((rejection) => (

@@ -12,6 +12,7 @@ import { resolveReviewIntegrityLimits } from './review-integrity.js';
 import { resolveStopBudgetLimits } from './stop-budget.js';
 import type { ProvisionalLandingReport, RawAdmissionRejectionReport, ReviewerAnomalyLandingReport } from './store.js';
 import type { FindingLedger, FindingObservation } from './types.js';
+import type { InterpretationRecoveryFailure } from './interpretation-recovery.js';
 
 export interface CommitFindingManagerRoundResult {
   nextLedger: FindingLedger;
@@ -32,6 +33,7 @@ export async function commitFindingManagerRound(params: {
   input: RunFindingManagerForStepInput;
   previousLedger: FindingLedger;
   intake: ReviewerIntakeResult;
+  interpretationRecoveryFailures: InterpretationRecoveryFailure[];
   admission: RawAdmissionEvaluation;
   managerDecision: ManagerDecisionStageResult;
   observation: FindingObservation;
@@ -68,10 +70,16 @@ function saveCommitReport(
     runId: input.runId,
     stepName: input.parentStep.name,
     managerOutput: managerDecision.managerOutput,
-    invalidAttempts: managerDecision.invalidAttempts,
+    invalidAttempts: [
+      ...managerDecision.rawRecovery.invalidAttempts,
+      ...managerDecision.invalidAttempts,
+    ],
     staleRejections: committed.staleRejections,
     admissionRejections: committed.admissionRejections,
-    unsupportedRawFindingReports: managerDecision.unsupportedRawFindingReports,
+    unsupportedRawFindingReports: [
+      ...managerDecision.rawRecovery.unsupportedRawFindingReports,
+      ...managerDecision.unsupportedRawFindingReports,
+    ],
     overflowReports: intake.overflowReports,
     provisionalLandings: committed.provisionalLandings,
     reviewerAnomalyLandings: committed.reviewerAnomalyLandings,

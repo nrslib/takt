@@ -79,7 +79,7 @@
 `rawDecisions` のルール。
 - プロンプトに列挙された raw finding 1件につき、ちょうど1エントリを返してください（過不足禁止）。
 - `findingId` は `same` / `resolved` / `reopened` / `conflict` のとき必須です。`new` と `unsupported` のときは空文字にしてください。
-- `unsupported` は、raw finding が既存 finding を明示参照した（targetFindingId 設定済み）にもかかわらずその参照が成立しない場合に使います。finding は作られず、何も変更されません。
+- `unsupported` は、raw finding が既存 finding を明示参照した（targetFindingId 設定済み）にもかかわらずその参照が成立しない場合に使います。confirmed finding は作らず対象 finding も変更しませんが、raw は gate-blocking provisional として保持されます。
 - 判断だけを返してください。最終結果の組み立て（対応づけ、グルーピング、conflict の形状）は自分で行わず、エンジンが組み立てと台帳の不変条件チェックを行います。
 - familyTag と行番号の差はヒントに過ぎません。same か new かは failure mode・発生条件・影響・必要な修正で判断してください。
 
@@ -94,6 +94,7 @@
 - プロンプトが dismiss 候補として列挙した finding id（機械で確定できない open な暫定 finding）のみが対象です。リスト外への dismiss はエンジンが不採用にします。
 - `basis` は `out_of_scope`（主張が finding contract の管轄外 — 例: 検証結果の報告有無への要求は final gate の職掌）または `unverifiable_claim`（恒久的に検証不能な主張）です。
 - 懸念が実在し、後続の clean なレビュー証拠で確定し得るなら dismiss せず open のままにしてください。dismiss は「修正済み」ではなく「審査対象外」の裁定であり、監査記録付きで台帳に残ります。
+- エンジンによる decision rejection、stale findingId、unsupported、decision 欠落そのものは dismiss の根拠にしないでください。raw の内容を評価し、実在するコード上の懸念なら open のまま残してください。
 - 候補が無い、またはすべて open のままにする場合は空配列にしてください。
 
 解釈フェーズ（ambiguous な raw finding が存在するときの別呼び出し）:

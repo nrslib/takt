@@ -7,6 +7,12 @@ import { buildFindingManagerStep } from './manager-step.js';
 import { computeRoundMarker } from './round-marker.js';
 import { resolveReviewIntegrityLimits } from './review-integrity.js';
 import { resolveStopBudgetLimits } from './stop-budget.js';
+import { stopBudgetRoundsCompleted } from './stop-budget.js';
+import {
+  attachInterpretationRecoveryOrigins,
+  collectInterpretationRecoveryPlan,
+  type InterpretationRecoveryFailure,
+} from './interpretation-recovery.js';
 import type { RunFindingManagerForStepInput } from './manager-contracts.js';
 
 export interface PreparedFindingManagerRound {
@@ -17,6 +23,7 @@ export interface PreparedFindingManagerRound {
   stopBudgetRoundMarker: string;
   reviewIntegrityLimits: ReturnType<typeof resolveReviewIntegrityLimits>;
   intake: ReviewerIntakeResult;
+  interpretationRecoveryFailures: InterpretationRecoveryFailure[];
   rawFindingsPath: string;
   managerStep: AgentWorkflowStep;
   providerInfo: StepProviderInfo;
@@ -40,7 +47,7 @@ export function prepareFindingManagerRound(
     stepIteration: input.stepIteration,
   });
   const reviewIntegrityLimits = resolveReviewIntegrityLimits(input.contract.reviewBudget);
-  const intake = intakeReviewerOutputs({
+  const reviewerIntake = intakeReviewerOutputs({
     subResults: input.subResults,
     previousLedger,
     workflowName: input.workflowName,
@@ -49,6 +56,21 @@ export function prepareFindingManagerRound(
     stepIteration: input.stepIteration,
     runId: input.runId,
   });
+  const roundsCompleted = stopBudgetRoundsCompleted(previousLedger);
+  const currentItems = attachInterpretationRecoveryOrigins({
+    ledger: previousLedger,
+    currentItems: reviewerIntake.items,
+    roundsCompleted,
+  });
+  const interpretationRecovery = collectInterpretationRecoveryPlan({
+    ledger: previousLedger,
+    currentItems,
+    roundsCompleted,
+  });
+  const intake: ReviewerIntakeResult = {
+    ...reviewerIntake,
+    items: [...interpretationRecovery.items, ...currentItems],
+  };
   const rawFindingsPath = input.ledgerStore.saveRawFindings(
     input.runId,
     input.parentStep.name,
@@ -86,6 +108,7 @@ export function prepareFindingManagerRound(
     stopBudgetRoundMarker,
     reviewIntegrityLimits,
     intake,
+    interpretationRecoveryFailures: interpretationRecovery.failures,
     rawFindingsPath,
     managerStep,
     providerInfo: input.optionsBuilder.resolveStepProviderModel(managerStep),

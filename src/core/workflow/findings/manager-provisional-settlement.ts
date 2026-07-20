@@ -1,5 +1,9 @@
-import { computeLineageKey } from './raw-canonicalization.js';
+import { computeLineageKey, computeOverflowStableKey } from './raw-canonicalization.js';
 import { normalizeFindingText, parseFindingLocation } from './location.js';
+import {
+  applyReplayOriginSettlement,
+  type ProvisionalReplayOrigin,
+} from './manager-replay-settlement.js';
 import type {
   FindingLedger,
   FindingLedgerEntry,
@@ -14,6 +18,7 @@ export interface ProvisionalSettlement {
   promotedFindingIds: Set<string>;
   /** clean な決定的 same により解消する provisional finding id → 対応 target。 */
   resolvedByMapping: Map<string, string>;
+  settledReplayRawIds: Set<string>;
 }
 
 /**
@@ -54,13 +59,27 @@ export function settleProvisionalsWithCleanEvidence(input: {
   cleanRawIds: ReadonlySet<string>;
   wireById: ReadonlyMap<string, RawFinding>;
   freshLedger: FindingLedger;
+  explicitResolvedByMapping: ReadonlyMap<string, string>;
+  explicitPromotedFindingIds: ReadonlySet<string>;
+  healthyReviewerStableKeys: ReadonlySet<string>;
+  replayOrigins: ReadonlyMap<string, ProvisionalReplayOrigin>;
 }): ProvisionalSettlement {
   const openProvisionals = input.freshLedger.findings.filter(
     (finding) => finding.status === 'open' && finding.provisional !== undefined,
   );
   if (openProvisionals.length === 0) {
-    return { output: input.output, promotedFindingIds: new Set(), resolvedByMapping: new Map() };
+    return {
+      output: input.output,
+      promotedFindingIds: new Set(),
+      resolvedByMapping: new Map(),
+      settledReplayRawIds: new Set(),
+    };
   }
+  const replay = applyReplayOriginSettlement({
+    output: input.output,
+    origins: input.replayOrigins,
+    freshLedger: input.freshLedger,
+  });
   const provisionalById = new Map(openProvisionals.map((finding) => [finding.id, finding]));
 
   // 一意な identity / lineage だけを索引に載せる（重複 identity は候補から除外）。
@@ -117,13 +136,37 @@ export function settleProvisionalsWithCleanEvidence(input: {
     });
   };
 
-  let promotedFindingIds = new Set<string>();
-  let resolvedByMapping = new Map<string, string>();
-  let matches = input.output.matches.map((match) => ({ ...match, rawFindingIds: [...match.rawFindingIds] }));
+  let promotedFindingIds = new Set([
+    ...replay.promotedFindingIds,
+    ...input.explicitPromotedFindingIds,
+  ]);
+  let resolvedByMapping = new Map<string, string>([
+    ...input.explicitResolvedByMapping,
+    ...replay.resolvedByMapping,
+  ]);
+  for (const finding of openProvisionals) {
+    if (finding.provisional?.kind !== 'reviewer-output-overflow') {
+      continue;
+    }
+    const reviewerStableKey = finding.provisional.recoveryReviewerStableKey;
+    const healed = reviewerStableKey !== undefined
+      ? input.healthyReviewerStableKeys.has(reviewerStableKey)
+      : [...input.healthyReviewerStableKeys].some(
+          (healthyReviewerStableKey) => computeOverflowStableKey(healthyReviewerStableKey)
+            === finding.provisional!.stableKey,
+        );
+    if (healed) {
+      resolvedByMapping = new Map([
+        ...resolvedByMapping,
+        [finding.id, 'a later output from the same reviewer passed the intake envelope'],
+      ]);
+    }
+  }
+  let matches = replay.output.matches.map((match) => ({ ...match, rawFindingIds: [...match.rawFindingIds] }));
 
   let groupCandidates = new Map<string, { provisional: FindingLedgerEntry; groups: Array<FindingManagerOutput['newFindings'][number]> }>();
   let unmatchedGroups: FindingManagerOutput['newFindings'] = [];
-  for (const group of input.output.newFindings) {
+  for (const group of replay.output.newFindings) {
     const cleanRawId = group.rawFindingIds.find((rawFindingId) => input.cleanRawIds.has(rawFindingId));
     const wire = cleanRawId !== undefined ? input.wireById.get(cleanRawId) : undefined;
     const provisional = wire !== undefined ? findProvisionalForCleanRaw(wire) : undefined;
@@ -207,9 +250,10 @@ export function settleProvisionalsWithCleanEvidence(input: {
   }
 
   return {
-    output: { ...input.output, newFindings, matches },
+    output: { ...replay.output, newFindings, matches },
     promotedFindingIds,
     resolvedByMapping,
+    settledReplayRawIds: replay.settledReplayRawIds,
   };
 }
 
@@ -269,6 +313,7 @@ export function applyProvisionalSettlement(
       if (settlement.promotedFindingIds.has(finding.id) && finding.provisional !== undefined) {
         const promoted = { ...finding };
         delete promoted.provisional;
+        promoted.revision = (finding.revision ?? 1) + 1;
         return promoted;
       }
       const mappedTarget = settlement.resolvedByMapping.get(finding.id);
@@ -278,7 +323,7 @@ export function applyProvisionalSettlement(
           status: 'resolved' as const,
           lifecycle: 'resolved' as const,
           resolvedAt: timestamp,
-          resolvedEvidence: `Deterministically mapped to finding "${mappedTarget}" by clean review evidence`,
+          resolvedEvidence: `Deterministically settled through ${mappedTarget}`,
           revision: (finding.revision ?? 1) + 1,
         };
       }

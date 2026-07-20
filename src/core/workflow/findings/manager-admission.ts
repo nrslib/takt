@@ -17,6 +17,11 @@ import { isLocationClaimAbsent, verifySourceQuoteEvidence } from './admission-va
 export interface CanonicalIntakeItem {
   canonical: CanonicalRawFinding;
   wire: RawFinding;
+  recoveryOrigin?: {
+    provisionalFindingId: string;
+    expectedProvisionalRevision: number;
+  };
+  interpretationRecoveryAttempt?: true;
 }
 
 export interface ReviewerIntakeResult {
@@ -26,6 +31,7 @@ export interface ReviewerIntakeResult {
   overflowReports: ReviewerOutputOverflowReport[];
   clarifications: Array<{ reviewer: string; flaggedRawFindingIds: string[] }>;
   rawNormalizations: RawNormalizationAuditRecord[];
+  healthyReviewerStableKeys: Set<string>;
 }
 
 export interface RawAdmissionEvaluation {

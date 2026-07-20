@@ -1,22 +1,4 @@
-/**
- * ambiguous raw 解釈の write-ahead log。
- *
- * ambiguous raw への manager 解釈を冪等化する。処理順序:
- *
- * 1. `interpretation_started` を台帳へ保存（updateLedger）
- * 2. manager を呼ぶ（排他区間の外 — LLM 呼び出しを updateLedger の同期 mutator に
- *    入れてはならない）
- * 3. schema・capability 検証済み decision を `interpretation_completed` として保存
- * 4. 最新台帳を再読込し、前提条件を検証
- * 5. finding mutation と `ledger_applied` を同じ updateLedger 内で保存
- *
- * resume 規則:
- * - レコードなし → started を書いて manager 呼び出し
- * - `interpretation_started` のみ（前回 run の中断）→ manager を再呼び出さず
- *   `interpretation-interrupted` provisional
- * - `interpretation_completed` → 保存済み decision を再利用（再問い合わせしない）
- * - `ledger_applied` → no-op（記録済み結果を返す）
- */
+/** attempt 固有キーにより、中断済み呼び出しの再利用を防ぎつつ completed decision の同一 attempt 内再利用を保つ。 */
 
 import type {
   AmbiguousInterpretation,
@@ -27,6 +9,10 @@ import type {
   InterpretationApplicationResult,
 } from './types.js';
 import type { LedgerRepository } from './store.js';
+import {
+  computeBaseInterpretationKey,
+  computeInterpretationAttemptKey,
+} from './raw-canonicalization.js';
 
 export function findInterpretationRecord(
   ledger: FindingLedger,
@@ -37,6 +23,8 @@ export function findInterpretationRecord(
 
 export interface NewInterpretationInput {
   interpretationKey: string;
+  baseInterpretationKey: string;
+  attemptOrdinal: number;
   reviewerStableKey: string;
   lineageKey: string;
   candidateEvidenceHash: string;
@@ -44,23 +32,11 @@ export interface NewInterpretationInput {
 }
 
 export interface BeginInterpretationsResult {
-  /**
-   * 既存レコードの状態別分類。呼び出し元はこの分類に従い、
-   * - freshlyStarted: manager 呼び出しに進む
-   * - interrupted: 再呼び出しせず interpretation-interrupted provisional
-   * - completed: 保存済み decision を再利用
-   * - applied: no-op
-   */
-  freshlyStartedKeys: Set<string>;
-  interruptedKeys: Set<string>;
+  interruptedPriorKeys: Set<string>;
   completedByKey: Map<string, AmbiguousInterpretation>;
   appliedByKey: Map<string, InterpretationApplicationResult | undefined>;
 }
 
-/**
- * batch 対象の解釈レコードを分類し、未登録のものへ started を書き込む。
- * 全て1回の updateLedger（排他区間、同期 mutator）で行う。
- */
 export async function beginInterpretations(
   store: LedgerRepository,
   inputs: readonly NewInterpretationInput[],
@@ -68,8 +44,7 @@ export async function beginInterpretations(
 ): Promise<BeginInterpretationsResult> {
   const mutation = await store.updateLedger((ledger) => {
     const result: BeginInterpretationsResult = {
-      freshlyStartedKeys: new Set(),
-      interruptedKeys: new Set(),
+      interruptedPriorKeys: new Set(),
       completedByKey: new Map(),
       appliedByKey: new Map(),
     };
@@ -77,9 +52,32 @@ export async function beginInterpretations(
     for (const input of inputs) {
       const existing = interpretations.find((record) => record.interpretationKey === input.interpretationKey);
       if (existing === undefined) {
-        result.freshlyStartedKeys.add(input.interpretationKey);
+        const interruptedPriorKeys = new Set(
+          interpretations
+            .filter((record) => (
+              record.stage === 'interpretation_started'
+              && baseKeyOf(record) === input.baseInterpretationKey
+            ))
+            .map((record) => record.interpretationKey),
+        );
+        for (const priorKey of interruptedPriorKeys) {
+          result.interruptedPriorKeys.add(priorKey);
+        }
+        for (let index = 0; index < interpretations.length; index += 1) {
+          const record = interpretations[index]!;
+          if (!interruptedPriorKeys.has(record.interpretationKey)) {
+            continue;
+          }
+          interpretations[index] = {
+            ...record,
+            stage: 'interpretation_interrupted',
+            interruptedAt: observation,
+          };
+        }
         interpretations.push({
           interpretationKey: input.interpretationKey,
+          baseInterpretationKey: input.baseInterpretationKey,
+          attemptOrdinal: input.attemptOrdinal,
           reviewerStableKey: input.reviewerStableKey,
           lineageKey: input.lineageKey,
           candidateEvidenceHash: input.candidateEvidenceHash,
@@ -98,14 +96,67 @@ export async function beginInterpretations(
         result.completedByKey.set(input.interpretationKey, existing.validatedDecision);
         continue;
       }
-      // started のまま残っている = 前回 run が manager 呼び出し中に中断された。
-      // 同じ run 内で started を書いたキーは freshlyStartedKeys に入るため、
-      // ここへ来るのは resume（別 run）だけ。再呼び出しせず provisional へ。
-      result.interruptedKeys.add(input.interpretationKey);
+      throw new Error(`Interpretation attempt "${input.interpretationKey}" cannot be resumed from stage "${existing.stage}"`);
     }
     return { ledger: { ...ledger, interpretations }, result };
   });
   return mutation.result;
+}
+
+function baseKeyOf(record: FindingInterpretationRecord): string {
+  return record.baseInterpretationKey ?? computeBaseInterpretationKey({
+    reviewerStableKey: record.reviewerStableKey,
+    lineageKey: record.lineageKey,
+    candidateEvidenceHash: record.candidateEvidenceHash,
+  });
+}
+
+function resolveInterpretationAttemptWithPolicy(input: {
+  ledger: FindingLedger;
+  reviewerStableKey: string;
+  lineageKey: string;
+  candidateEvidenceHash: string;
+  reuseAppliedProvisional: boolean;
+}): { baseInterpretationKey: string; interpretationKey: string; attemptOrdinal: number } {
+  const baseInterpretationKey = computeBaseInterpretationKey(input);
+  const records = (input.ledger.interpretations ?? [])
+    .filter((record) => baseKeyOf(record) === baseInterpretationKey)
+    .sort((left, right) => (left.attemptOrdinal ?? 1) - (right.attemptOrdinal ?? 1));
+  const latest = records.at(-1);
+  const latestOrdinal = latest?.attemptOrdinal ?? (latest === undefined ? 0 : 1);
+  const advances = latest?.stage === 'interpretation_started'
+    || latest?.stage === 'interpretation_interrupted'
+    || (!input.reuseAppliedProvisional
+      && latest?.stage === 'ledger_applied'
+      && (latest.applicationResult === 'provisional_created'
+        || latest.applicationResult === 'provisional_updated'
+        || latest.applicationResult === 'stale_precondition'));
+  const attemptOrdinal = advances ? latestOrdinal + 1 : Math.max(1, latestOrdinal);
+  return {
+    baseInterpretationKey,
+    interpretationKey: latest !== undefined && !advances
+      ? latest.interpretationKey
+      : computeInterpretationAttemptKey(baseInterpretationKey, attemptOrdinal),
+    attemptOrdinal,
+  };
+}
+
+export function resolveInterpretationAttempt(input: {
+  ledger: FindingLedger;
+  reviewerStableKey: string;
+  lineageKey: string;
+  candidateEvidenceHash: string;
+}): { baseInterpretationKey: string; interpretationKey: string; attemptOrdinal: number } {
+  return resolveInterpretationAttemptWithPolicy({ ...input, reuseAppliedProvisional: false });
+}
+
+export function resolveRecordedInterpretationAttempt(input: {
+  ledger: FindingLedger;
+  reviewerStableKey: string;
+  lineageKey: string;
+  candidateEvidenceHash: string;
+}): { baseInterpretationKey: string; interpretationKey: string; attemptOrdinal: number } {
+  return resolveInterpretationAttemptWithPolicy({ ...input, reuseAppliedProvisional: true });
 }
 
 /** 検証済み decision を interpretation_completed として保存する。 */

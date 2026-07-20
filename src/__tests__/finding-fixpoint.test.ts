@@ -255,6 +255,32 @@ describe('computeFixpointSnapshot', () => {
     expect(snapshot1).toEqual(snapshot2);
     expect(snapshot1.provisionalKeys).toEqual(['aaa', 'zzz']);
   });
+
+  it('treats a bounded recovery attempt as progress instead of a fixpoint', () => {
+    const before = ledger({ findings: [provisionalFinding({
+      provisional: {
+        ...provisionalFinding().provisional!,
+        kind: 'raw-adjudication-unresolved',
+      },
+    })] });
+    const after = ledger({ findings: [provisionalFinding({
+      provisional: {
+        ...provisionalFinding().provisional!,
+        kind: 'raw-adjudication-unresolved',
+        adjudicationAttempts: [{
+          attempt: 1,
+          replayRawFindingId: 'replay-1',
+          reason: 'no substantive outcome',
+          at: observation(),
+        }],
+      },
+    })] });
+
+    expect(computeFixpointSnapshot(before).provisionalKeys).toEqual(['stable-key-a']);
+    expect(computeFixpointSnapshot(after).provisionalKeys).toEqual([
+      'stable-key-a:recovery:0:1:0:0',
+    ]);
+  });
 });
 
 describe('attachFixpointState', () => {

@@ -1,7 +1,8 @@
 import { validateLocationAdmission } from './admission-validation.js';
 import { classifyProvisionalRecovery, isOpenProvisional } from './provisional-recovery.js';
+import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import type { AssembleManagerOutputResult } from './decision-assembly.js';
-import type { FindingLedgerEntry, FindingManagerOutput } from './types.js';
+import type { FindingLedger, FindingLedgerEntry, FindingManagerOutput } from './types.js';
 
 /**
  * この open provisional が manager の dismiss 裁定対象か。
@@ -10,11 +11,11 @@ import type { FindingLedgerEntry, FindingManagerOutput } from './types.js';
  * 余地が無い（locationless / legacy）provisional だけが内容の管轄裁定へ回る。
  * 分類は provisional-recovery.ts が正本。
  */
-export function isDismissCandidate(finding: FindingLedgerEntry): boolean {
+export function isDismissCandidate(finding: FindingLedgerEntry, roundsCompleted: number): boolean {
   if (!isOpenProvisional(finding)) {
     return false;
   }
-  return classifyProvisionalRecovery(finding.provisional) === 'terminal-adjudication';
+  return classifyProvisionalRecovery(finding.provisional, roundsCompleted) === 'terminal-adjudication';
 }
 
 /**
@@ -22,11 +23,12 @@ export function isDismissCandidate(finding: FindingLedgerEntry): boolean {
  * 候補条件は isDismissCandidate が唯一の定義。
  */
 export function computeDismissCandidates(
-  findings: readonly FindingLedgerEntry[],
+  ledger: FindingLedger,
 ): Map<string, string> {
   const candidates = new Map<string, string>();
-  for (const finding of findings) {
-    if (!isDismissCandidate(finding)) {
+  const roundsCompleted = stopBudgetRoundsCompleted(ledger);
+  for (const finding of ledger.findings) {
+    if (!isDismissCandidate(finding, roundsCompleted)) {
       continue;
     }
     candidates.set(

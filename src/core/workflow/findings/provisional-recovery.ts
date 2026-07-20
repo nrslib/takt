@@ -1,4 +1,9 @@
-import { MANAGER_ADJUDICATION_LIMITS, MANAGER_INTERPRETATION_LIMITS } from './raw-finding-limits.js';
+import {
+  MANAGER_ACTION_RECOVERY_LIMITS,
+  MANAGER_ADJUDICATION_LIMITS,
+  MANAGER_INTERPRETATION_LIMITS,
+  REVIEWER_ENVELOPE_RECOVERY_LIMITS,
+} from './raw-finding-limits.js';
 import type { FindingLedgerEntry, FindingProvisionalMetadata } from './types.js';
 
 /**
@@ -28,7 +33,28 @@ export function adjudicationAttemptsExhausted(provisional: FindingProvisionalMet
   return (provisional.adjudicationAttempts ?? []).length >= MANAGER_ADJUDICATION_LIMITS.maxReplayAttempts;
 }
 
-export function classifyProvisionalRecovery(provisional: FindingProvisionalMetadata): ProvisionalRecoveryClass {
+// 枯渇後の終端は既存 stop-budget/fixpoint/loop-monitor が NEEDS_ADJUDICATION へ運ぶため、engine 内の別 fail-fast 状態を増やさない。
+
+function envelopeRecoveryExhausted(
+  provisional: FindingProvisionalMetadata,
+  roundsCompleted: number,
+): boolean {
+  if (provisional.firstObservedRound === undefined) {
+    return true;
+  }
+  return roundsCompleted - provisional.firstObservedRound
+    >= REVIEWER_ENVELOPE_RECOVERY_LIMITS.maxUnavailableRounds;
+}
+
+function actionRecoveryExhausted(provisional: FindingProvisionalMetadata): boolean {
+  return provisional.actionRecovery === undefined
+    || (provisional.actionRecoveryAttempts ?? []).length >= MANAGER_ACTION_RECOVERY_LIMITS.maxAttempts;
+}
+
+export function classifyProvisionalRecovery(
+  provisional: FindingProvisionalMetadata,
+  roundsCompleted: number,
+): ProvisionalRecoveryClass {
   switch (provisional.kind) {
     case 'unverified-locationless':
       // locationless は機械検証も replay も成立しない主張 — 最初から管轄裁定。
@@ -46,22 +72,27 @@ export function classifyProvisionalRecovery(provisional: FindingProvisionalMetad
       if (provisional.interpretationEpochs === 0) {
         return adjudicationAttemptsExhausted(provisional) ? 'terminal-adjudication' : 'raw-adjudication';
       }
-      return 'interpretation';
+      return adjudicationAttemptsExhausted(provisional) ? 'terminal-adjudication' : 'interpretation';
     case 'raw-adjudication-unresolved':
     case 'manager-output-discarded':
       return adjudicationAttemptsExhausted(provisional) ? 'terminal-adjudication' : 'raw-adjudication';
     case 'manager-budget-exhausted':
     case 'interpretation-interrupted':
-      return 'interpretation';
+      return provisional.interpretationEpochs >= MANAGER_INTERPRETATION_LIMITS.maxInterpretationEpochsPerLineage
+        || adjudicationAttemptsExhausted(provisional)
+        ? 'terminal-adjudication'
+        : 'interpretation';
     case 'reviewer-output-overflow':
-      return 'envelope';
+      return envelopeRecoveryExhausted(provisional, roundsCompleted)
+        ? 'terminal-adjudication'
+        : 'envelope';
     case 'stale-precondition':
       // 保存済み source raw があれば再裁定できる。無い stale（invalidate /
       // waive / duplicate / dismiss の action 系）は対象状態の充足で機械 resolve。
       if (provisional.sourceRawFindingIds.length > 0) {
         return adjudicationAttemptsExhausted(provisional) ? 'terminal-adjudication' : 'raw-adjudication';
       }
-      return 'action';
+      return actionRecoveryExhausted(provisional) ? 'terminal-adjudication' : 'action';
     case 'invalid-location-evidence':
       // legacy kind（新規生成なし）。replay 材料も機械検証経路も無いため、
       // 読み取り互換で残っている個体は管轄裁定で閉じられるようにする。

@@ -52,11 +52,14 @@ function exactDuplicateKey(raw: Pick<RawFinding, 'title' | 'description' | 'sugg
 }
 
 /** Indexes every raw finding attached to an open ledger finding by its exact-duplicate key, for case-1 matching. */
-function buildExactDuplicateIndex(ledger: FindingLedger): Map<string, string> {
+function buildExactDuplicateIndex(
+  ledger: FindingLedger,
+  excludedFindingIds: ReadonlySet<string>,
+): Map<string, string> {
   const rawById = new Map(ledger.rawFindings.map((raw) => [raw.rawFindingId, raw]));
   const index = new Map<string, string>();
   for (const finding of ledger.findings) {
-    if (finding.status !== 'open') {
+    if (finding.status !== 'open' || excludedFindingIds.has(finding.id)) {
       continue;
     }
     for (const rawFindingId of finding.rawFindingIds) {
@@ -78,11 +81,17 @@ function buildExactDuplicateIndex(ledger: FindingLedger): Map<string, string> {
 export function classifyRawFindingsMechanically(input: {
   previousLedger: FindingLedger;
   rawFindings: RawFinding[];
+  excludedFindingIdsFromExactDuplicateIndex?: ReadonlySet<string>;
 }): MechanicalClassificationResult {
   const output = createEmptyManagerOutput();
   const residualRawFindings: RawFinding[] = [];
   const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
-  const exactDuplicateIndex = buildExactDuplicateIndex(input.previousLedger);
+  const exactDuplicateIndex = buildExactDuplicateIndex(
+    input.previousLedger,
+    input.excludedFindingIdsFromExactDuplicateIndex === undefined
+      ? new Set()
+      : input.excludedFindingIdsFromExactDuplicateIndex,
+  );
 
   const resolvedByFindingId = new Map<string, { findingId: string; rawFindingIds: string[]; evidence: string }>();
   const matchesByFindingId = new Map<string, { findingId: string; rawFindingIds: string[] }>();

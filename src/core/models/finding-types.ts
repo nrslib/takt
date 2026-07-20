@@ -194,6 +194,23 @@ export interface FindingAdjudicationAttempt {
   at: FindingObservation;
 }
 
+export interface FindingActionRecoveryAttempt {
+  attempt: number;
+  reason: string;
+  at: FindingObservation;
+}
+
+export type FindingActionRecovery =
+  | { action: 'invalidate'; findingId: string; evidence: string }
+  | { action: 'waive'; findingId: string; reason: string; evidence: string }
+  | {
+      action: 'duplicate';
+      canonicalFindingId: string;
+      duplicateFindingIds: string[];
+      evidence: string;
+    }
+  | { action: 'dismiss'; findingId: string; basis: FindingDismissalBasis; reason: string };
+
 export interface FindingProvisionalMetadata {
   kind: FindingProvisionalKind;
   /** 決定的な再発同定キー（sha256(reviewerStableKey, lineageKey, kind, policyVersion)）。行番号・runId・タイムスタンプ・LLM 説明文は入れない。 */
@@ -208,6 +225,9 @@ export interface FindingProvisionalMetadata {
   gateEffect: 'block';
   /** engine 主導の再裁定の失敗履歴（新しい順ではなく attempt 順）。optional — 既存 ledger は migration なしで読める。 */
   adjudicationAttempts?: FindingAdjudicationAttempt[];
+  actionRecovery?: FindingActionRecovery;
+  actionRecoveryAttempts?: FindingActionRecoveryAttempt[];
+  recoveryReviewerStableKey?: string;
   /**
    * この provisional が最初に観測された manager ラウンド序数（stop budget の
    * roundsCompleted + 1）。loop monitor judge へ渡す滞留ラウンド数の導出に使う。
@@ -241,7 +261,7 @@ export interface FindingLedgerEntry {
   invalidatedEvidence?: string;
   /** Set when status/lifecycle becomes 'superseded' by a duplicateDecisions merge. */
   supersededByFindingId?: string;
-  /** Set when status/lifecycle becomes 'dismissed' by a manager dismissDecisions adjudication (provisional-only; see DISMISSABLE_PROVISIONAL_KINDS). */
+  /** 人間が dismiss 裁定を後から覆しても根拠を監査できるよう、reopen 後も保持する。 */
   dismissal?: FindingDismissalRecord;
   /**
    * 楽観的前提条件（CAS）の版数。エントリを変更するたびに +1。省略時（既存 v1
@@ -273,7 +293,7 @@ export type FindingRecord = FindingLedgerEntry;
  * ラウンド間の「変化なし」を判定できる（fixpoint.ts 参照）。
  */
 export interface FindingLedgerFixpointSnapshot {
-  /** open provisional の意味的同一性キー（stableKey）集合。 */
+  /** recovery の前進を「変化なし」と誤判定して早期停止しないため、attempt の進行もキーへ含める。 */
   provisionalKeys: string[];
   /** provisional でない finding（あらゆる status）の "id:status" 集合。 */
   substantiveEntries: string[];
@@ -617,6 +637,7 @@ export interface ConfirmationProposal {
 /** 解釈 WAL の段階。 */
 export const INTERPRETATION_STAGES = [
   'interpretation_started',
+  'interpretation_interrupted',
   'interpretation_completed',
   'ledger_applied',
 ] as const;
@@ -633,8 +654,9 @@ export const INTERPRETATION_APPLICATION_RESULTS = [
 export type InterpretationApplicationResult = typeof INTERPRETATION_APPLICATION_RESULTS[number];
 
 export interface FindingInterpretationRecord {
-  /** sha256(reviewerStableKey, lineageKey, candidateEvidenceHash, policyVersion)。 */
   interpretationKey: string;
+  baseInterpretationKey?: string;
+  attemptOrdinal?: number;
   reviewerStableKey: string;
   lineageKey: string;
   candidateEvidenceHash: string;
@@ -646,6 +668,7 @@ export interface FindingInterpretationRecord {
   promptPreconditions: FindingMutationPrecondition[];
 
   completedAt?: FindingObservation;
+  interruptedAt?: FindingObservation;
   /** schema・capability 検証済みの manager 提案。resume 時はこれを再利用し再問い合わせしない。 */
   validatedDecision?: AmbiguousInterpretation;
 

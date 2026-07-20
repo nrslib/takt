@@ -90,6 +90,7 @@ describe('unverifiable propagation', () => {
         overflowReports: [],
         clarifications: [],
         rawNormalizations: [],
+        healthyReviewerStableKeys: new Set(),
       },
     })).toThrow(/could not be verified: injected EIO/);
     expect(ledger.findings[0]?.status).toBe('open');

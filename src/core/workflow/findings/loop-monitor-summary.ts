@@ -54,7 +54,7 @@ export function buildLoopMonitorFindingsSummaryData(
         stalledRounds: provisional.firstObservedRound !== undefined
           ? roundsCompleted - provisional.firstObservedRound + 1
           : undefined,
-        dismissable: isDismissCandidate(finding),
+        dismissable: isDismissCandidate(finding, roundsCompleted),
       };
     }),
     activeConflictCount: ledger.conflicts.filter((conflict) => conflict.status === 'active').length,

@@ -141,6 +141,37 @@ export const FindingProvisionalMetadataSchema = z.object({
     reason: nonEmptyString,
     at: FindingObservationSchema,
   }).strict()).optional(),
+  actionRecovery: z.discriminatedUnion('action', [
+    z.object({
+      action: z.literal('invalidate'),
+      findingId: nonEmptyString,
+      evidence: nonEmptyString,
+    }).strict(),
+    z.object({
+      action: z.literal('waive'),
+      findingId: nonEmptyString,
+      reason: nonEmptyString,
+      evidence: nonEmptyString,
+    }).strict(),
+    z.object({
+      action: z.literal('duplicate'),
+      canonicalFindingId: nonEmptyString,
+      duplicateFindingIds: z.array(nonEmptyString).min(1),
+      evidence: nonEmptyString,
+    }).strict(),
+    z.object({
+      action: z.literal('dismiss'),
+      findingId: nonEmptyString,
+      basis: z.enum(FINDING_DISMISSAL_BASES),
+      reason: nonEmptyString,
+    }).strict(),
+  ]).optional(),
+  actionRecoveryAttempts: z.array(z.object({
+    attempt: z.number().int().positive(),
+    reason: nonEmptyString,
+    at: FindingObservationSchema,
+  }).strict()).optional(),
+  recoveryReviewerStableKey: nonEmptyString.optional(),
 }).strict();
 
 export const FindingLedgerEntrySchema = z.object({
@@ -410,6 +441,8 @@ const StoredAmbiguousInterpretationSchema = z.object({
 
 export const FindingInterpretationRecordSchema = z.object({
   interpretationKey: nonEmptyString,
+  baseInterpretationKey: nonEmptyString.optional(),
+  attemptOrdinal: z.number().int().positive().optional(),
   reviewerStableKey: nonEmptyString,
   lineageKey: nonEmptyString,
   candidateEvidenceHash: nonEmptyString,
@@ -418,6 +451,7 @@ export const FindingInterpretationRecordSchema = z.object({
   startedAt: FindingObservationSchema,
   promptPreconditions: z.array(FindingMutationPreconditionSchema),
   completedAt: FindingObservationSchema.optional(),
+  interruptedAt: FindingObservationSchema.optional(),
   validatedDecision: StoredAmbiguousInterpretationSchema.optional(),
   appliedAt: FindingObservationSchema.optional(),
   applicationResult: z.enum(INTERPRETATION_APPLICATION_RESULTS).optional(),

@@ -14,10 +14,35 @@
  */
 import { computeConflictEvidenceHash, isLedgerConflictUnadjudicated } from './adjudication-evidence.js';
 import { computeReviewScopeSnapshotId } from './snapshot.js';
+import { stopBudgetRoundsCompleted } from './stop-budget.js';
+import { REVIEWER_ENVELOPE_RECOVERY_LIMITS } from './raw-finding-limits.js';
 import type { FindingLedger, FindingLedgerFixpointSnapshot, FindingLedgerFixpointState } from './types.js';
 
 function sortedUnique(values: Iterable<string>): string[] {
   return [...new Set(values)].sort();
+}
+
+function provisionalFixpointKey(
+  finding: FindingLedger['findings'][number] & { provisional: NonNullable<FindingLedger['findings'][number]['provisional']> },
+  roundsCompleted: number,
+): string {
+  const provisional = finding.provisional;
+  const envelopeRounds = provisional.kind === 'reviewer-output-overflow'
+    && provisional.firstObservedRound !== undefined
+    ? Math.min(
+        REVIEWER_ENVELOPE_RECOVERY_LIMITS.maxUnavailableRounds,
+        Math.max(0, roundsCompleted - provisional.firstObservedRound + 1),
+      )
+    : 0;
+  const progress = [
+    provisional.interpretationEpochs,
+    provisional.adjudicationAttempts?.length ?? 0,
+    provisional.actionRecoveryAttempts?.length ?? 0,
+    envelopeRounds,
+  ];
+  return progress.every((value) => value === 0)
+    ? provisional.stableKey
+    : `${provisional.stableKey}:recovery:${progress.join(':')}`;
 }
 
 /**
@@ -29,10 +54,13 @@ function sortedUnique(values: Iterable<string>): string[] {
  * 要素を変える）。
  */
 export function computeFixpointSnapshot(ledger: FindingLedger, cwd: string): FindingLedgerFixpointSnapshot {
+  const roundsCompleted = stopBudgetRoundsCompleted(ledger);
   const provisionalKeys = sortedUnique(
     ledger.findings
-      .filter((finding) => finding.status === 'open' && finding.provisional !== undefined)
-      .map((finding) => finding.provisional!.stableKey),
+      .filter((finding): finding is FindingLedger['findings'][number] & {
+        provisional: NonNullable<FindingLedger['findings'][number]['provisional']>;
+      } => finding.status === 'open' && finding.provisional !== undefined)
+      .map((finding) => provisionalFixpointKey(finding, roundsCompleted)),
   );
 
   // 終端した provisional（dismissed 等）も id:status で含める: provisionalKeys

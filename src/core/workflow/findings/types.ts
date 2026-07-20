@@ -30,6 +30,8 @@ export type {
   ConflictDecisionKind,
   DeterministicSameProof,
   FindingInterpretationRecord,
+  FindingActionRecovery,
+  FindingActionRecoveryAttempt,
   FindingMutationPrecondition,
   FindingProvisionalKind,
   FindingProvisionalMetadata,
