@@ -557,6 +557,72 @@ describe('ケース5: 永久機関（同一 lineage の ambiguous raw を run/it
   }, 30_000);
 });
 
+describe('ケース5 の出口: 解釈枯渇後の dismiss 裁定', () => {
+  it('dismiss と同一ラウンドに同じ claim の raw が再来しても、新 ID の open provisional は復活せずゲートが開く', async () => {
+    const harness = makeHarness(makeLedger({
+      findings: [makeFinding({ status: 'resolved', lifecycle: 'resolved' })],
+    }));
+    let dismissTargetId: string | undefined;
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      if (!(instruction as string).includes('## Ambiguous raw finding interpretation')) {
+        // 解釈枯渇後の decisions 相談: 提示された候補を dismiss する。
+        return {
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            rawDecisions: [],
+            disputeDecisions: [],
+            conflictDecisions: [],
+            invalidateDecisions: [],
+            duplicateDecisions: [],
+            dismissDecisions: dismissTargetId !== undefined
+              ? [{ findingId: dismissTargetId, basis: 'unverifiable_claim', reason: '解釈2 epoch と再観測でも確定できない主張' }]
+              : [],
+          },
+        } as unknown as AgentResponse;
+      }
+      const rawId = extractResidualRawIdFromInterpretationInstruction(instruction as string, 'p-1');
+      return interpretationResponse([
+        { decision: 'provisional', rawFindingId: rawId, proofId: '', targetFindingId: '', reason: 'Cannot determine.' },
+      ]);
+    });
+
+    // round 1-2: 解釈 epoch を使い切る（provisional は同一 ID で滞留）。
+    for (let round = 1; round <= 2; round += 1) {
+      await harness.run({
+        runId: `run-${round}`,
+        reviewerRawFindings: [{
+          ...AMBIGUOUS_PERSISTS_RAW,
+          description: `Claims the resolved issue persists (attempt #${round}).`,
+          ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 20 + round),
+        }],
+      });
+    }
+    const provisionalBefore = harness.currentLedger().findings.find((finding) => finding.provisional !== undefined);
+    expect(provisionalBefore?.status).toBe('open');
+    dismissTargetId = provisionalBefore!.id;
+
+    // round 3: 同じ claim の raw が再来し、同一ラウンドで manager が dismiss を裁定する。
+    const result = await harness.run({
+      runId: 'run-3',
+      reviewerRawFindings: [{
+        ...AMBIGUOUS_PERSISTS_RAW,
+        description: 'Claims the resolved issue persists (attempt #3).',
+        ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 23),
+      }],
+    });
+
+    const saved = result.ledger;
+    const dismissed = saved.findings.find((finding) => finding.id === dismissTargetId)!;
+    expect(dismissed.status).toBe('dismissed');
+    expect(dismissed.dismissal?.basis).toBe('unverifiable_claim');
+    // 同じ claim の再来は新 ID の open provisional として復活しない — ゲートが開く。
+    expect(saved.findings.filter((finding) => finding.status === 'open')).toEqual([]);
+    // 抑止した観測は dismissed finding へ監査添付される（黙って消えない）。
+    expect(dismissed.rejectedObservations?.some((observation) => observation.rawFindingId.startsWith('run-3:'))).toBe(true);
+  }, 30_000);
+});
+
 describe('ケース5 変種: 同一 evidence 再送（codex B1）', () => {
   it('applied 済みと同一 evidence の raw を再送しても provisional は増殖せず、同じエントリへ帰属して manager も呼ばれない', async () => {
     const harness = makeHarness(makeLedger({
