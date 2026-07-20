@@ -39,4 +39,4 @@ dismiss は「修正済み」ではなく「審査対象外」の裁定です。
 
 ## 重複 finding
 
-これとは別に、表示された open finding の中に重複が無いか確認してください。同じ根本問題なのに、レビュアーが違う familyTag を使った、または違う行を引用したために別々に立った finding です。重複グループごとに `duplicateDecisions` に1エントリを返してください: canonicalFindingId（残すもの）、duplicateFindingIds（他方。統合され superseded になります）、evidence です。本当に同一問題の場合だけ使い、単に関連しているだけの finding には使わないでください。重複が無ければ `duplicateDecisions` を空配列にしてください。
+これとは別に、表示された open finding の中に重複が無いか確認してください。同じ根本問題なのに、レビュアーが違う familyTag を使った、違う行を引用した、またはラウンドを跨いで言い換えたために別々に立った finding です。言い換えは同一問題として扱ってください。重複グループごとに `duplicateDecisions` に1エントリを返してください: canonicalFindingId（残すもの）、duplicateFindingIds（他方。統合され superseded になります）、evidence です。本当に同一問題の場合だけ使い、単に関連しているだけの finding には使わないでください。重複が無ければ `duplicateDecisions` を空配列にしてください。

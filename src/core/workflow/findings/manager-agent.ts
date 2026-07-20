@@ -113,6 +113,27 @@ function extractSymbols(text: string | undefined): Set<string> {
   return symbols;
 }
 
+/**
+ * 同一ファイルを引用する open finding のグループ（2件以上）。言い換え増殖
+ * （同じ問題が別 familyTag・別行で別 finding として積まれる — 実測: RFC 3339
+ * 系 7 変種）の統合判断を manager に明示的に促すための決定的ヒント。
+ * 判断そのものは manager の duplicateDecisions（と engine の検証）に委ねる。
+ */
+function collectDuplicateLocusGroups(ledger: FindingLedger): Map<string, FindingLedger['findings']> {
+  const byPath = new Map<string, FindingLedger['findings']>();
+  for (const finding of ledger.findings) {
+    if (finding.status !== 'open' || finding.provisional !== undefined) {
+      continue;
+    }
+    const path = parseFindingLocation(finding.location)?.path;
+    if (path === undefined) {
+      continue;
+    }
+    byPath.set(path, [...(byPath.get(path) ?? []), finding]);
+  }
+  return new Map([...byPath.entries()].filter(([, findings]) => findings.length >= 2));
+}
+
 function collectFullDetailFindingIds(ledger: FindingLedger, residualRawFindings: readonly RawFinding[]): Set<string> {
   const ids = new Set<string>();
   for (const conflict of ledger.conflicts) {
@@ -178,6 +199,13 @@ export function buildManagerInstruction(input: {
   const dismissCandidatesBlock = [...input.dismissCandidates.entries()]
     .map(([findingId, description]) => `- ${findingId}: ${description}`)
     .join('\n');
+  const duplicateLocusGroups = collectDuplicateLocusGroups(input.previousLedger);
+  const duplicateLocusGroupsBlock = [...duplicateLocusGroups.entries()]
+    .map(([path, findings]) => [
+      `- ${path}:`,
+      ...findings.map((finding) => `  - ${finding.id} [${finding.severity}] ${finding.title}`),
+    ].join('\n'))
+    .join('\n');
   return loadTemplate('finding_manager_instruction', 'en', {
     managerInstruction: mechanicalNote,
     outputContract: input.contract.manager.outputContract,
@@ -189,6 +217,8 @@ export function buildManagerInstruction(input: {
     invalidateCandidatesBlock,
     hasDismissCandidates: input.dismissCandidates.size > 0,
     dismissCandidatesBlock,
+    hasDuplicateLocusGroups: duplicateLocusGroups.size > 0,
+    duplicateLocusGroupsBlock,
     coderResponse: renderFencedTextBlock(input.priorStepResponseText ?? '(no prior step response)'),
   });
 }
