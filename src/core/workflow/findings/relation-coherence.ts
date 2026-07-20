@@ -79,11 +79,26 @@ export function detectClarifiableRawMismatches(
   items: readonly unknown[],
   ledger: FindingLedger,
 ): AmbiguousRawMismatch[] {
+  // 同一 ID が複数回現れる場合、その ID では項目を一意に相関できない
+  // （訂正指示・regenerated 照合・intake の priorAmbiguityCodesByRawId 参照が
+  // すべて素の ID キー）。intake 側は2回目以降を決定的サフィックスで別 ID に
+  // するため、素の ID で束ねると別項目へ誤適用する。重複 ID は clarification
+  // 対象から外し、そのまま ladder へ進める。
+  const idCounts = new Map<string, number>();
+  for (const item of items) {
+    const rawFindingId = extractLenientRawFields(item).rawFindingId;
+    if (rawFindingId !== undefined) {
+      idCounts.set(rawFindingId, (idCounts.get(rawFindingId) ?? 0) + 1);
+    }
+  }
   const mismatches: AmbiguousRawMismatch[] = [];
   for (const item of items) {
     const fields = extractLenientRawFields(item);
     if (fields.rawFindingId === undefined) {
       // id の無い raw は訂正指示で参照できない。そのまま ladder へ。
+      continue;
+    }
+    if ((idCounts.get(fields.rawFindingId) ?? 0) > 1) {
       continue;
     }
     const detection = detectRawFindingAmbiguities(fields, ledger);

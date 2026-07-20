@@ -26,7 +26,7 @@ import { normalizeFindingText, parseFindingLocation } from './location.js';
 import { FILE_LINE_EVIDENCE_PATTERN, hasDisputeClaimFor } from './manager-output-validation.js';
 import { effectiveRawFindingRelation, mergeFindingManagerOutputs } from './mechanical-classification.js';
 import { collectRegeneratedConflictIds, formatConflictId } from './conflict-identity.js';
-import { collectActiveConflictFindingIds, normalizeManagerPlan } from './manager-plan-normalization.js';
+import { collectActiveConflictFindingIds, rejectConflictTouchedDuplicates } from './manager-plan-normalization.js';
 
 /**
  * findings-manager が最終結果（8配列以上）を自力で組み立てると、台帳の不変条件
@@ -1122,10 +1122,11 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     regeneratedConflictIds,
   });
 
-  // 統合と同ラウンド証拠の衝突は engine が正規化する（duplicate への match の
-  // canonical への付け替え / conflict が触れる統合の不採用）。ここで確定した
-  // conflicts（dispute 変換・carried 統合済み）を見るため、組み立ての最後に置く。
-  const normalized = normalizeManagerPlan({
+  // conflict が触れる統合はここで不採用にする（確定した conflicts — dispute 変換・
+  // carried 統合済み — を見るため組み立ての最後）。superseded への match の転写は
+  // ここでは行わない: 後着の conflict（ladder / fresh ledger）で統合が覆ると転写を
+  // 戻せないため、保存直前の normalizeMergedManagerPlan が1回だけ転写する。
+  const normalized = rejectConflictTouchedDuplicates({
     output: {
       ...canonicalRaw,
       conflicts,

@@ -360,11 +360,14 @@ export function createReviewerRawFindingCandidates(
     const record = typeof item === 'object' && item !== null && !Array.isArray(item)
       ? item as Record<string, unknown>
       : {};
+    // 明示 ID と ID 未指定時の内部採番（item-N）は同じ使用済み集合で一意化する —
+    // 別集合だと「1件目が未指定（item-1）・2件目が明示 "item-1"」で intakeId が
+    // 衝突する。reviewerRawFindingId は明示 ID があった場合だけ持つ（未指定の
+    // 意味論 — clarification 相関に参加しない — を保つ）。
     const claimedId = pickString(record.rawFindingId);
-    const reviewerRawFindingId = claimedId !== undefined
-      ? deduplicateReviewerId(emittedReviewerIds, claimedId)
-      : undefined;
-    const intakeId = namespacedRawFindingId(context, reviewerRawFindingId ?? `item-${index + 1}`);
+    const localId = deduplicateReviewerId(emittedReviewerIds, claimedId ?? `item-${index + 1}`);
+    const reviewerRawFindingId = claimedId !== undefined ? localId : undefined;
+    const intakeId = namespacedRawFindingId(context, localId);
     // 構造化出力の strict 様式では該当なしの欄が空文字で埋まるため、空文字は
     // 未指定として扱う（pickString が弾く）。
     const evidence = resolveRawFindingEvidence({

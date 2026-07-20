@@ -5,6 +5,7 @@ import type { RawAdmissionEvaluation } from './manager-admission.js';
 import type { classifyRawFindingsMechanically } from './mechanical-classification.js';
 import type { FindingProvisionalKind } from './types.js';
 import { assembleManagerOutput } from './decision-assembly.js';
+import { transferSupersededMatches } from './manager-plan-normalization.js';
 import { provisionalSpecForRawKind } from './manager-provisional.js';
 import {
   collectLandedRawIds,
@@ -95,10 +96,14 @@ export function assembleCleanManagerDecision(input: {
     managerOutput = assembly.output;
   }
 
+  // matches|supersededFindings は保存直前の転写（normalizeMergedManagerPlan）で
+  // 解消される予定の併存なので、検証は転写後のビューに対して行う。保存される
+  // 計画は未転写のまま — 後着 conflict で統合が覆ったとき match を元の finding に
+  // 残すため（転写は保存直前の1回だけ）。
   const finalValidation = validateFindingManagerOutput({
     previousLedger: input.previousLedger,
     rawFindings: input.admission.cleanWire,
-    managerOutput,
+    managerOutput: transferSupersededMatches(managerOutput),
     priorStepResponseText: input.priorStepResponseText,
   });
   if (!finalValidation.ok) {

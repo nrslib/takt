@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { assembleManagerOutput } from '../core/workflow/findings/decision-assembly.js';
-import { normalizeManagerPlan } from '../core/workflow/findings/manager-plan-normalization.js';
+import {
+  normalizeMergedManagerPlan,
+  rejectConflictTouchedDuplicates,
+  transferSupersededMatches,
+} from '../core/workflow/findings/manager-plan-normalization.js';
 import { validateFindingManagerOutput } from '../core/workflow/findings/manager-output-validation.js';
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
 import { createReviewerRawFindingCandidates } from '../core/workflow/findings/raw-canonicalization.js';
+import { detectClarifiableRawMismatches } from '../core/workflow/findings/relation-coherence.js';
 import type {
   FindingLedger,
   FindingLedgerConflict,
@@ -34,7 +39,7 @@ function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLe
   return {
     version: 1,
     workflowName: 'peer-review',
-    nextId: findings.length + 1,
+    nextId: 100,
     updatedAt: '2026-07-01T00:00:00.000Z',
     rawFindings: [],
     conflicts: [],
@@ -86,39 +91,30 @@ function outputWith(overrides: Partial<FindingManagerOutput>): FindingManagerOut
   return { ...createEmptyManagerOutput(), ...overrides };
 }
 
-describe('normalizeManagerPlan', () => {
+describe('transferSupersededMatches', () => {
   it('superseded 対象への match を canonical へ付け替え、既存の canonical match と統合する', () => {
-    const normalized = normalizeManagerPlan({
-      output: outputWith({
-        matches: [
-          { findingId: 'F-0001', rawFindingIds: ['raw-1'] },
-          { findingId: 'F-0006', rawFindingIds: ['raw-6'] },
-          { findingId: 'F-0008', rawFindingIds: ['raw-8', 'raw-1'] },
-        ],
-        duplicateFindings: [
-          { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006', 'F-0008'], evidence: '同一問題の言い換え' },
-        ],
-      }),
-      activeConflictFindingIds: new Set(),
-    });
+    const transferred = transferSupersededMatches(outputWith({
+      matches: [
+        { findingId: 'F-0001', rawFindingIds: ['raw-1'] },
+        { findingId: 'F-0006', rawFindingIds: ['raw-6'] },
+        { findingId: 'F-0008', rawFindingIds: ['raw-8', 'raw-1'] },
+      ],
+      duplicateFindings: [
+        { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006', 'F-0008'], evidence: '同一問題の言い換え' },
+      ],
+    }));
 
-    expect(normalized.rejectedDuplicateDecisions).toEqual([]);
-    expect(normalized.output.matches).toEqual([
+    expect(transferred.matches).toEqual([
       { findingId: 'F-0001', rawFindingIds: ['raw-1', 'raw-6', 'raw-8'] },
     ]);
-    expect(normalized.output.duplicateFindings).toHaveLength(1);
-
-    // 冪等: 付け替え後の出力に再適用しても変化しない
-    const again = normalizeManagerPlan({
-      output: normalized.output,
-      activeConflictFindingIds: new Set(),
-    });
-    expect(again.output).toEqual(normalized.output);
-    expect(again.rejectedDuplicateDecisions).toEqual([]);
+    // 冪等: 再適用しても変化しない
+    expect(transferSupersededMatches(transferred)).toEqual(transferred);
   });
+});
 
-  it('出力内の conflict が duplicate に触れる統合は不採用にし、match は付け替えない', () => {
-    const normalized = normalizeManagerPlan({
+describe('rejectConflictTouchedDuplicates', () => {
+  it('出力内の conflict が duplicate に触れる統合は不採用にする', () => {
+    const result = rejectConflictTouchedDuplicates({
       output: outputWith({
         matches: [{ findingId: 'F-0006', rawFindingIds: ['raw-6'] }],
         conflicts: [{
@@ -133,17 +129,14 @@ describe('normalizeManagerPlan', () => {
       activeConflictFindingIds: new Set(),
     });
 
-    expect(normalized.output.duplicateFindings).toEqual([]);
-    expect(normalized.output.matches).toEqual([{ findingId: 'F-0006', rawFindingIds: ['raw-6'] }]);
-    expect(normalized.rejectedDuplicateDecisions).toHaveLength(1);
-    expect(normalized.rejectedDuplicateDecisions[0]).toMatchObject({
-      canonicalFindingId: 'F-0001',
-      duplicateFindingIds: ['F-0006'],
-    });
+    expect(result.output.duplicateFindings).toEqual([]);
+    // 転写はしない — match は元の finding のまま
+    expect(result.output.matches).toEqual([{ findingId: 'F-0006', rawFindingIds: ['raw-6'] }]);
+    expect(result.rejectedDuplicateDecisions).toHaveLength(1);
   });
 
   it('台帳の active conflict が canonical に触れる統合も不採用にする', () => {
-    const normalized = normalizeManagerPlan({
+    const result = rejectConflictTouchedDuplicates({
       output: outputWith({
         duplicateFindings: [
           { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006'], evidence: '言い換え' },
@@ -152,24 +145,153 @@ describe('normalizeManagerPlan', () => {
       activeConflictFindingIds: new Set(['F-0001']),
     });
 
-    expect(normalized.output.duplicateFindings).toEqual([]);
-    expect(normalized.rejectedDuplicateDecisions).toHaveLength(1);
+    expect(result.output.duplicateFindings).toEqual([]);
+    expect(result.rejectedDuplicateDecisions).toHaveLength(1);
   });
 });
 
-describe('assembleManagerOutput の統合正規化（ラウンド2事故の再現形）', () => {
+describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () => {
+  it('後着 conflict が duplicate に触れたら統合を不採用にし、match は元の finding に残す', () => {
+    // codex #3 のケース: assembly 段では conflict なし → 統合受理（未転写）、
+    // ladder マージが F-0006 への conflict を後着させる。
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        matches: [{ findingId: 'F-0006', rawFindingIds: ['raw-6'] }],
+        conflicts: [{
+          findingIds: ['F-0006'],
+          rawFindingIds: ['raw-ladder'],
+          description: 'Ladder interpretation conflicts with F-0006.',
+        }],
+        duplicateFindings: [
+          { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006'], evidence: '言い換え' },
+        ],
+      }),
+      activeConflictFindingIds: new Set(),
+    });
+
+    expect(result.output.duplicateFindings).toEqual([]);
+    // 転写されていない: F-0006 の観測は F-0006 に残り、F-0001 は汚れない
+    expect(result.output.matches).toEqual([{ findingId: 'F-0006', rawFindingIds: ['raw-6'] }]);
+    expect(result.rejections.some((rejection) => rejection.includes('duplicateDecisions'))).toBe(true);
+  });
+
+  it('conflict が無ければ統合を受理し、match をこの1回で canonical へ転写する', () => {
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        matches: [{ findingId: 'F-0006', rawFindingIds: ['raw-6'] }],
+        duplicateFindings: [
+          { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006'], evidence: '言い換え' },
+        ],
+      }),
+      activeConflictFindingIds: new Set(),
+    });
+
+    expect(result.output.duplicateFindings).toHaveLength(1);
+    expect(result.output.matches).toEqual([{ findingId: 'F-0001', rawFindingIds: ['raw-6'] }]);
+    expect(result.rejections).toEqual([]);
+  });
+
+  it('resolved と後着 conflict の併存は canonicalize 規則で conflict へ畳む', () => {
+    // codex #1 のケース: clean confirmation が resolvedFindings、ladder が同じ
+    // finding へ conflict — 排他違反のまま reconciler へ渡すと保存が throw する。
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-confirm'], evidence: 'fixed' }],
+        conflicts: [{
+          findingIds: ['F-0001'],
+          rawFindingIds: ['raw-ladder'],
+          description: 'Ladder evidence says it persists.',
+        }],
+      }),
+      activeConflictFindingIds: new Set(),
+    });
+
+    expect(result.output.resolvedFindings).toEqual([]);
+    expect(result.output.conflicts).toHaveLength(1);
+    expect(result.output.conflicts[0]!.rawFindingIds).toEqual(
+      expect.arrayContaining(['raw-ladder', 'raw-confirm']),
+    );
+  });
+
+  it('後着 match が触れた invalidate / dismiss は項目単位で不採用にする', () => {
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        matches: [
+          { findingId: 'F-0001', rawFindingIds: ['raw-ladder-1'] },
+          { findingId: 'F-0002', rawFindingIds: ['raw-ladder-2'] },
+        ],
+        invalidatedFindings: [{ findingId: 'F-0001', evidence: 'location unresolvable' }],
+        dismissedFindings: [{ findingId: 'F-0002', basis: 'out_of_scope', reason: '管轄外' }],
+      }),
+      activeConflictFindingIds: new Set(),
+    });
+
+    expect(result.output.invalidatedFindings).toEqual([]);
+    expect(result.output.dismissedFindings).toEqual([]);
+    expect(result.rejections).toHaveLength(2);
+  });
+
+  it('後着証拠が触れた waive は disputeNote へ降格し finding を open に保つ', () => {
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-ladder'] }],
+        waivedFindings: [{ findingId: 'F-0001', reason: '修正不能', evidence: 'src/a.ts:10' }],
+      }),
+      activeConflictFindingIds: new Set(),
+    });
+
+    expect(result.output.waivedFindings).toEqual([]);
+    expect(result.output.disputeNotes).toEqual([
+      { findingId: 'F-0001', reason: '修正不能', evidence: 'src/a.ts:10' },
+    ]);
+  });
+
+  it('同一 finding 集合の conflict は統合し、部分重複する後着 conflict は不採用にする', () => {
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        conflicts: [
+          { findingIds: ['F-0001'], rawFindingIds: ['raw-a'], description: 'Disagreement A.' },
+          { findingIds: ['F-0001'], rawFindingIds: ['raw-b'], description: 'Disagreement A again.' },
+          { findingIds: ['F-0001', 'F-0002'], rawFindingIds: [], description: 'Partial overlap.' },
+        ],
+      }),
+      activeConflictFindingIds: new Set(),
+    });
+
+    expect(result.output.conflicts).toHaveLength(1);
+    expect(result.output.conflicts[0]!.rawFindingIds.sort()).toEqual(['raw-a', 'raw-b']);
+    expect(result.rejections.some((rejection) => rejection.includes('already referenced by another conflict'))).toBe(true);
+  });
+
+  it('reopened と同じ finding への後着 match は reopened の観測へ畳む', () => {
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-ladder'] }],
+        reopenedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-reopen'], evidence: 'waive 前提が崩れた' }],
+      }),
+      activeConflictFindingIds: new Set(),
+    });
+
+    expect(result.output.matches).toEqual([]);
+    expect(result.output.reopenedFindings).toEqual([
+      { findingId: 'F-0001', rawFindingIds: ['raw-reopen', 'raw-ladder'], evidence: 'waive 前提が崩れた' },
+    ]);
+  });
+});
+
+describe('assembleManagerOutput → 保存正規化 → reconciler（ラウンド2事故の再現形）', () => {
   const ledger = makeLedger([
     makeFinding({ id: 'F-0001', rawFindingIds: ['raw-old-1'] }),
     makeFinding({ id: 'F-0006', rawFindingIds: ['raw-old-6'], title: '候補に存在しない初期値が非表示のまま確定結果へ混入する' }),
     makeFinding({ id: 'F-0008', rawFindingIds: ['raw-old-8'], title: '候補にない初期選択が非表示のまま確定・実行される' }),
-  ], { nextId: 9 });
+  ]);
   const persistsRaws = [
     makeRaw({ rawFindingId: 'raw-6', relation: 'persists', targetFindingId: 'F-0006' }),
     makeRaw({ rawFindingId: 'raw-8', relation: 'persists', targetFindingId: 'F-0008' }),
   ];
 
-  it('same + duplicateDecisions の併記を受理し、最終検証を通る出力に正規化する', () => {
-    const result = assembleManagerOutput({
+  it('same + duplicateDecisions の併記が全経路を通って superseded と観測統合に着地する', () => {
+    const assembly = assembleManagerOutput({
       previousLedger: ledger,
       residualRawFindings: persistsRaws,
       decisions: makeDecisions({
@@ -184,22 +306,26 @@ describe('assembleManagerOutput の統合正規化（ラウンド2事故の再�
       checkMissingDecisions: true,
     });
 
-    expect(result.rejectedDuplicateDecisions).toEqual([]);
-    expect(result.output.duplicateFindings).toHaveLength(1);
-    expect(result.output.matches.map((match) => match.findingId)).toEqual(['F-0001']);
-    expect(result.output.matches[0]!.rawFindingIds.sort()).toEqual(['raw-6', 'raw-8']);
-
-    const validation = validateFindingManagerOutput({
+    expect(assembly.rejectedDuplicateDecisions).toEqual([]);
+    // assembly 段では未転写（保存直前の1回だけ転写する）
+    expect(assembly.output.matches.map((match) => match.findingId).sort()).toEqual(['F-0006', 'F-0008']);
+    // 決定段の最終検証は転写ビューで通る
+    expect(validateFindingManagerOutput({
       previousLedger: ledger,
       rawFindings: persistsRaws,
-      managerOutput: result.output,
+      managerOutput: transferSupersededMatches(assembly.output),
+    }).ok).toBe(true);
+
+    const normalized = normalizeMergedManagerPlan({
+      output: assembly.output,
+      activeConflictFindingIds: new Set(),
     });
-    expect(validation.ok).toBe(true);
+    expect(normalized.output.matches.map((match) => match.findingId)).toEqual(['F-0001']);
 
     const reconciled = reconcileFindingLedger({
       previousLedger: ledger,
       rawFindings: persistsRaws,
-      managerOutput: result.output,
+      managerOutput: normalized.output,
       context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-02T00:00:00.000Z' },
     });
     const statusById = new Map(reconciled.findings.map((finding) => [finding.id, finding.status]));
@@ -230,12 +356,11 @@ describe('assembleManagerOutput の統合正規化（ラウンド2事故の再�
 
     expect(result.output.duplicateFindings).toEqual([]);
     expect(result.rejectedDuplicateDecisions).toHaveLength(1);
-    const validation = validateFindingManagerOutput({
+    expect(validateFindingManagerOutput({
       previousLedger: ledger,
       rawFindings: persistsRaws,
-      managerOutput: result.output,
-    });
-    expect(validation.ok).toBe(true);
+      managerOutput: transferSupersededMatches(result.output),
+    }).ok).toBe(true);
   });
 });
 
@@ -256,11 +381,6 @@ describe('invalidate と同ラウンド証拠の衝突', () => {
 
     expect(result.output.invalidatedFindings).toEqual([]);
     expect(result.rejectedInvalidateDecisions).toHaveLength(1);
-    expect(validateFindingManagerOutput({
-      previousLedger: ledger,
-      rawFindings: [raw],
-      managerOutput: result.output,
-    }).ok).toBe(true);
   });
 
   it('active conflict が参照する finding への invalidate は不採用にする', () => {
@@ -337,6 +457,17 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
     expect(new Set(intakeIds).size).toBe(3);
   });
 
+  it('ID 未指定の内部採番と明示 ID の衝突も一意化する', () => {
+    const candidates = createReviewerRawFindingCandidates([
+      { title: 'a', severity: 'low', description: 'a' },
+      { rawFindingId: 'item-1', title: 'b', severity: 'low', description: 'b' },
+    ], context);
+
+    expect(candidates[0]!.reviewerRawFindingId).toBeUndefined();
+    expect(candidates[1]!.reviewerRawFindingId).toBe('item-1-dup2');
+    expect(new Set(candidates.map((candidate) => candidate.intakeId)).size).toBe(2);
+  });
+
   it('ID 未指定の項目は従来どおり reviewerRawFindingId を持たない', () => {
     const candidates = createReviewerRawFindingCandidates([
       { title: 'a', severity: 'low', description: 'a' },
@@ -345,5 +476,26 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
 
     expect(candidates.every((candidate) => candidate.reviewerRawFindingId === undefined)).toBe(true);
     expect(new Set(candidates.map((candidate) => candidate.intakeId)).size).toBe(2);
+  });
+});
+
+describe('detectClarifiableRawMismatches の重複 ID 除外', () => {
+  it('同一 ID が複数回現れる場合は clarification 対象から外す（素の ID で相関できない）', () => {
+    const ledger = makeLedger([makeFinding({ id: 'F-0001', status: 'resolved', lifecycle: 'resolved' })]);
+    // resolved な finding への persists 主張は clarifiable なミスマッチになる形
+    const item = {
+      rawFindingId: 'x',
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+      title: 'まだ残っている',
+      severity: 'medium',
+      description: 'まだ残っている',
+    };
+
+    const unique = detectClarifiableRawMismatches([item], ledger);
+    const duplicated = detectClarifiableRawMismatches([item, { ...item, description: '別内容' }], ledger);
+
+    expect(unique.length).toBeGreaterThan(0);
+    expect(duplicated).toEqual([]);
   });
 });

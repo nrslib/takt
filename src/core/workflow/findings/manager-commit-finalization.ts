@@ -24,7 +24,8 @@ import {
   applyRejectedObservationAttachments,
   settleProvisionalsWithCleanEvidence,
 } from './manager-provisional-settlement.js';
-import { collectActiveConflictFindingIds, normalizeManagerPlan } from './manager-plan-normalization.js';
+import { collectActiveConflictFindingIds, normalizeMergedManagerPlan } from './manager-plan-normalization.js';
+import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 
 interface RejectedObservationPlan {
   attachments: Array<{ targetFindingId: string; rawFindingId: string; reason: string }>;
@@ -70,10 +71,10 @@ export function reconcileCommitPlan(input: {
   rawProvenanceByRawFindingId: Map<string, { reviewerStableKey: string; lineageKey: string }>;
   cleanWire: RawFinding[];
 }): { ledger: FindingLedger; landedSpecs: ProvisionalFindingSpec[]; normalizationRejections: string[] } {
-  // interpretation ladder のマージが superseded 対象への match / conflict を
-  // 追加し得るため、初回 assembly と同じ正規化を保存直前にもう一度通す
-  // （純関数・冪等 — assembly 済み出力には通常 no-op）。
-  const normalized = normalizeManagerPlan({
+  // ladder マージ（mergeOutputs）は matches / newFindings / conflicts を後着させる。
+  // 閉じる決定との衝突をここで一括正規化し、残った統合の match 転写もこの1回で
+  // 行う（reconciler の最終検証がこの後に走る）。
+  const normalized = normalizeMergedManagerPlan({
     output: input.managerOutput,
     activeConflictFindingIds: collectActiveConflictFindingIds(input.freshLedger),
   });
@@ -91,14 +92,19 @@ export function reconcileCommitPlan(input: {
     ...settlement.promotedFindingIds,
     ...settlement.resolvedByMapping.keys(),
   ]);
-  const settledOutput = settledFindingIds.size > 0
-    ? {
-        ...settlement.output,
-        dismissedFindings: settlement.output.dismissedFindings.filter(
-          (dismissed) => !settledFindingIds.has(dismissed.findingId),
-        ),
-      }
-    : settlement.output;
+  // settlement も matches を後着させる（clean new → provisional への match 変換）。
+  // resolution confirmation と衝突した場合に備え、canonicalize をもう一度通す
+  // （純・冪等 — 衝突が無ければ no-op）。
+  const settledOutput = canonicalizeFindingManagerOutput(
+    settledFindingIds.size > 0
+      ? {
+          ...settlement.output,
+          dismissedFindings: settlement.output.dismissedFindings.filter(
+            (dismissed) => !settledFindingIds.has(dismissed.findingId),
+          ),
+        }
+      : settlement.output,
+  );
   // dismiss と同一ラウンドに同じ主張（stableKey）の raw が再来した場合、その
   // provisional spec を着地させない — 裁定は claim の再発同定キー単位で有効で、
   // 着地を許すと dismissed の傍から同じ claim が新 ID の open provisional として
@@ -147,9 +153,7 @@ export function reconcileCommitPlan(input: {
   return {
     ledger: attached,
     landedSpecs,
-    normalizationRejections: normalized.rejectedDuplicateDecisions.map((rejection) => (
-      `duplicateDecisions: canonical "${rejection.canonicalFindingId}" (duplicates: ${rejection.duplicateFindingIds.join(', ')}) rejected at save time: ${rejection.reason}`
-    )),
+    normalizationRejections: normalized.rejections,
   };
 }
 
