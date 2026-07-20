@@ -3,7 +3,7 @@ import {
   checkFindingPrecondition,
   type CapturedFindingPrecondition,
 } from './finding-preconditions.js';
-import { collectLandedRawIds, computeInvalidLocationCandidates, describeManagerRejections } from './manager-utils.js';
+import { collectLandedRawIds, computeDismissCandidates, computeInvalidLocationCandidates, describeManagerRejections } from './manager-utils.js';
 import { provisionalSpecForRaw, stalePreconditionSpec } from './manager-provisional.js';
 import type { ProvisionalFindingSpec } from './reconciler.js';
 import type {
@@ -39,6 +39,11 @@ export function revalidateManagerPlan(input: {
     priorStepResponseText: input.runInput.priorStepResponseText,
     invalidLocationCandidateFindingIds: new Set(
       computeInvalidLocationCandidates(input.runInput.cwd, input.freshLedger.findings).keys(),
+    ),
+    // fresh ledger に対して候補を再計算する: 初回判断と保存の間に clean 証拠で
+    // settle された（open でなくなった）対象への dismiss は stale として不採用になる。
+    dismissCandidateFindingIds: new Set(
+      computeDismissCandidates(input.freshLedger.findings).keys(),
     ),
   });
   const freshLandedRawIds = collectLandedRawIds(freshAssembly.output);

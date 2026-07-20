@@ -85,6 +85,7 @@ function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): Findin
     conflictDecisions: [],
     invalidateDecisions: [],
     duplicateDecisions: [],
+    dismissDecisions: [],
     ...overrides,
   };
 }
@@ -469,6 +470,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
           conflictDecisions: [],
           invalidateDecisions: [{ findingId: 'F-0012', evidence: 'Confirmed the cited file does not exist in the reviewed code.' }],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
       } as unknown as AgentResponse;
     });
@@ -516,6 +518,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
           conflictDecisions: [],
           invalidateDecisions: [{ findingId: 'F-0012', evidence: 'The cited file does not exist in the reviewed code.' }],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
       } as unknown as AgentResponse;
     });
@@ -609,6 +612,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
       } as unknown as AgentResponse;
     });

@@ -1128,6 +1128,7 @@ describe('finding-conflict-adjudication engine detour', () => {
             conflictDecisions: [{ conflictId: 'C-0001', decision: 'keep', evidence: 'Reviewers still disagree.' }],
             invalidateDecisions: [],
             duplicateDecisions: [],
+            dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };

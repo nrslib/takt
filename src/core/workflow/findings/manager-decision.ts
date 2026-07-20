@@ -7,6 +7,7 @@ import type {
 import { classifyRawFindingsMechanically } from './mechanical-classification.js';
 import type { RawAdmissionEvaluation } from './manager-admission.js';
 import {
+  computeDismissCandidates,
   computeInvalidLocationCandidates,
 } from './manager-utils.js';
 import { hasDisputeClaimsHeading } from './manager-output-validation.js';
@@ -52,13 +53,19 @@ export async function runManagerDecisionStage(params: {
   } = admission;
   const invalidLocationCandidates = computeInvalidLocationCandidates(input.cwd, previousLedger.findings);
   const invalidLocationCandidateFindingIds = new Set(invalidLocationCandidates.keys());
+  const dismissCandidates = computeDismissCandidates(previousLedger.findings);
+  const dismissCandidateFindingIds = new Set(dismissCandidates.keys());
   const mechanical = classifyRawFindingsMechanically({ previousLedger, rawFindings: cleanWire });
   const hasDisputeClaims = hasDisputeClaimsHeading(input.priorStepResponseText);
   const hasActiveConflict = previousLedger.conflicts.some((conflict) => conflict.status === 'active');
+  // dismiss 候補（滞留する provisional）が1件でもあれば、残余 raw がゼロでも
+  // manager を起動する — 起動しないと候補が裁定されないまま完了ゲートを
+  // 塞ぎ続ける（1ラウンド税の成立条件）。
   const needsAgent = mechanical.residualRawFindings.length > 0
     || hasDisputeClaims
     || hasActiveConflict
-    || invalidLocationCandidateFindingIds.size > 0;
+    || invalidLocationCandidateFindingIds.size > 0
+    || dismissCandidateFindingIds.size > 0;
 
   let initialInvalidAttempts: FindingManagerValidationAttemptReport[] = [];
   let decisions: FindingManagerDecisions | undefined;
@@ -72,6 +79,7 @@ export async function runManagerDecisionStage(params: {
       mechanicallyClassifiedCount: cleanWire.length - mechanical.residualRawFindings.length,
       priorStepResponseText: input.priorStepResponseText,
       invalidLocationCandidates,
+      dismissCandidates,
     });
     try {
       const response = await runManagerAttempt({
@@ -86,7 +94,7 @@ export async function runManagerDecisionStage(params: {
       // 全て provisional へ着地し、機械分類の確定分だけを適用する。
       const message = error instanceof Error ? error.message : String(error);
       log.warn('Finding manager decisions call failed; landing residual raws as provisional', { error: message });
-      decisions = { rawDecisions: [], disputeDecisions: [], conflictDecisions: [], invalidateDecisions: [], duplicateDecisions: [] };
+      decisions = { rawDecisions: [], disputeDecisions: [], conflictDecisions: [], invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [] };
       initialInvalidAttempts = [
         { attempt: 1, managerOutput: { error: message }, validationErrors: [message] },
       ];
@@ -100,6 +108,7 @@ export async function runManagerDecisionStage(params: {
     decisions,
     initialInvalidAttempts,
     invalidLocationCandidateFindingIds,
+    dismissCandidateFindingIds,
     priorStepResponseText: input.priorStepResponseText,
   });
   const {

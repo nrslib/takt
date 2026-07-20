@@ -2813,6 +2813,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             conflictDecisions: [],
             invalidateDecisions: [],
             duplicateDecisions: [],
+            dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };

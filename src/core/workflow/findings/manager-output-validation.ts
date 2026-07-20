@@ -45,6 +45,7 @@ export function validateFindingManagerOutput(
       waivedFindings: input.managerOutput.waivedFindings ?? [],
       disputeNotes: input.managerOutput.disputeNotes ?? [],
       invalidatedFindings: input.managerOutput.invalidatedFindings ?? [],
+      dismissedFindings: input.managerOutput.dismissedFindings ?? [],
       duplicateFindings: input.managerOutput.duplicateFindings ?? [],
     },
   };
@@ -279,6 +280,7 @@ function validateFindingDecisionRefs(
     ...managerOutput.resolvedFindings.map((resolved) => resolved.findingId),
     ...managerOutput.reopenedFindings.map((reopened) => reopened.findingId),
     ...managerOutput.invalidatedFindings.map((invalidated) => invalidated.findingId),
+    ...managerOutput.dismissedFindings.map((dismissed) => dismissed.findingId),
     ...managerOutput.duplicateFindings.flatMap((duplicate) => duplicate.duplicateFindingIds),
   ]);
   // disputeNotes は matches / conflicts との併存を意図的に許す（同ラウンドで
@@ -309,6 +311,7 @@ function validateFindingDecisionRefs(
     ...waivedErrors,
     ...disputeErrors,
     ...validateInvalidatedFindings(managerOutput, context),
+    ...validateDismissedFindings(managerOutput, context),
     ...validateDuplicateFindings(managerOutput, context),
     ...validateFindingDecisionSets(managerOutput, context.previousFindingsById),
   ];
@@ -333,6 +336,35 @@ function validateInvalidatedFindings(
     seen.add(invalidated.findingId);
     return [
       ...validateFindingDecision(invalidated.findingId, decision, 'invalidate', ['open'], context),
+      ...duplicateErrors,
+    ];
+  });
+}
+
+/**
+ * dismissedFindings の最終防衛線。eligibility（open な provisional かつ
+ * DISMISSABLE_PROVISIONAL_KINDS の候補集合か）は assembleManagerOutput 側の
+ * 責務。ここでは構造的な整合だけを見る: 既知の finding か、open か、
+ * provisional か、重複記録が無いか。
+ */
+function validateDismissedFindings(
+  managerOutput: FindingManagerOutput,
+  context: ValidationContext,
+): string[] {
+  const seen = new Set<string>();
+  return managerOutput.dismissedFindings.flatMap((dismissed, index) => {
+    const decision = `dismissedFindings[${index}]`;
+    const duplicateErrors = seen.has(dismissed.findingId)
+      ? [`Duplicate dismiss decision for finding "${dismissed.findingId}" in ${decision}`]
+      : [];
+    seen.add(dismissed.findingId);
+    const finding = context.previousFindingsById.get(dismissed.findingId);
+    const provisionalErrors = finding !== undefined && finding.provisional === undefined
+      ? [`Cannot dismiss finding "${dismissed.findingId}" because it is not provisional (${decision})`]
+      : [];
+    return [
+      ...validateFindingDecision(dismissed.findingId, decision, 'dismiss', ['open'], context),
+      ...provisionalErrors,
       ...duplicateErrors,
     ];
   });

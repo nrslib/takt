@@ -19,6 +19,7 @@ import {
   FINDING_CONFLICT_ADJUDICATION_OUTCOMES,
   FINDING_CONFLICT_ADJUDICATION_TRANSITIONS,
   FINDING_CONFLICT_STATUSES,
+  FINDING_DISMISSAL_BASES,
   FINDING_LIFECYCLES,
   FINDING_PROVISIONAL_KINDS,
   FINDING_SEVERITIES,
@@ -164,6 +165,11 @@ export const FindingLedgerEntrySchema = z.object({
   invalidatedAt: Rfc3339TimestampSchema.optional(),
   invalidatedEvidence: nonEmptyString.optional(),
   supersededByFindingId: nonEmptyString.optional(),
+  dismissal: z.object({
+    basis: z.enum(FINDING_DISMISSAL_BASES),
+    reason: nonEmptyString,
+    decidedAt: FindingObservationSchema,
+  }).strict().optional(),
   revision: z.number().int().positive().optional(),
   provisional: FindingProvisionalMetadataSchema.optional(),
   rejectedObservations: z.array(z.object({
@@ -601,6 +607,11 @@ export const FindingManagerOutputSchema = z.object({
     duplicateFindingIds: z.array(nonEmptyString).min(1),
     evidence: nonEmptyString,
   }).strict()).optional().default([]),
+  dismissedFindings: z.array(z.object({
+    findingId: nonEmptyString,
+    basis: z.enum(FINDING_DISMISSAL_BASES),
+    reason: nonEmptyString,
+  }).strict()).optional().default([]),
 }).strict();
 
 // LLM に返させるのは判断だけ。8配列への組み立てと不変条件の強制は
@@ -633,6 +644,13 @@ export const FindingManagerInvalidateDecisionSchema = z.object({
   evidence: nonEmptyString,
 }).strict();
 
+/** Candidate eligibility（open な provisional かつ DISMISSABLE_PROVISIONAL_KINDS）は decision-assembly.ts が強制する。 */
+export const FindingManagerDismissDecisionSchema = z.object({
+  findingId: nonEmptyString,
+  basis: z.enum(FINDING_DISMISSAL_BASES),
+  reason: nonEmptyString,
+}).strict();
+
 export const FindingManagerDuplicateDecisionSchema = z.object({
   canonicalFindingId: nonEmptyString,
   duplicateFindingIds: z.array(nonEmptyString).min(1),
@@ -645,12 +663,13 @@ export const FindingManagerDecisionsSchema = z.object({
   conflictDecisions: z.array(FindingManagerConflictDecisionSchema),
   invalidateDecisions: z.array(FindingManagerInvalidateDecisionSchema).optional().default([]),
   duplicateDecisions: z.array(FindingManagerDuplicateDecisionSchema).optional().default([]),
+  dismissDecisions: z.array(FindingManagerDismissDecisionSchema).optional().default([]),
 }).strict();
 
 export const FindingManagerOutputJsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['matches', 'newFindings', 'resolvedFindings', 'reopenedFindings', 'conflicts', 'resolvedConflicts', 'waivedFindings', 'disputeNotes', 'invalidatedFindings', 'duplicateFindings'],
+  required: ['matches', 'newFindings', 'resolvedFindings', 'reopenedFindings', 'conflicts', 'resolvedConflicts', 'waivedFindings', 'disputeNotes', 'invalidatedFindings', 'duplicateFindings', 'dismissedFindings'],
   properties: {
     matches: {
       type: 'array',
@@ -780,6 +799,19 @@ export const FindingManagerOutputJsonSchema = {
         },
       },
     },
+    dismissedFindings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['findingId', 'basis', 'reason'],
+        properties: {
+          findingId: { type: 'string', minLength: 1 },
+          basis: { enum: FINDING_DISMISSAL_BASES },
+          reason: { type: 'string', minLength: 1 },
+        },
+      },
+    },
   },
 } as const;
 
@@ -793,7 +825,7 @@ export const FindingManagerOutputJsonSchema = {
 export const FindingManagerDecisionsJsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['rawDecisions', 'disputeDecisions', 'conflictDecisions', 'invalidateDecisions', 'duplicateDecisions'],
+  required: ['rawDecisions', 'disputeDecisions', 'conflictDecisions', 'invalidateDecisions', 'duplicateDecisions', 'dismissDecisions'],
   properties: {
     rawDecisions: {
       type: 'array',
@@ -875,6 +907,23 @@ export const FindingManagerDecisionsJsonSchema = {
           canonicalFindingId: { type: 'string', minLength: 1 },
           duplicateFindingIds: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
           evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    dismissDecisions: {
+      type: 'array',
+      description: 'One optional adjudication per finding id listed as a dismissal candidate in the prompt (open provisional findings whose claims cannot be settled mechanically). Dismiss a candidate only when its claim is outside the finding contract\'s jurisdiction (e.g. demands about verification-result reporting, which belong to the final gate) or can never be substantiated. Leave empty when there are no candidates or every candidate deserves to stay open. You cannot dismiss a finding that is not in the candidate list.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['findingId', 'basis', 'reason'],
+        properties: {
+          findingId: { type: 'string', minLength: 1 },
+          basis: {
+            enum: FINDING_DISMISSAL_BASES,
+            description: 'out_of_scope = the claim belongs to another mechanism (e.g. final gate). unverifiable_claim = the claim can never be substantiated by evidence.',
+          },
+          reason: { type: 'string', minLength: 1 },
         },
       },
     },

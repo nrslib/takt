@@ -17,6 +17,7 @@ export type DecisionCategory =
   | 'waivedFindings'
   | 'conflicts'
   | 'invalidatedFindings'
+  | 'dismissedFindings'
   | 'supersededFindings'
   | 'canonicalFindings';
 
@@ -77,6 +78,9 @@ export function collectDecisionSets(
   }
   for (const invalidated of managerOutput.invalidatedFindings) {
     add(invalidated.findingId, 'invalidatedFindings');
+  }
+  for (const dismissed of managerOutput.dismissedFindings) {
+    add(dismissed.findingId, 'dismissedFindings');
   }
   // canonical は match/conflict との併存だけを許す。closed 遷移との併存を
   // 検出しないと、同一ラウンドで duplicate 統合した指摘を waive 等で閉じられる。

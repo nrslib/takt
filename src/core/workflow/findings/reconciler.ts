@@ -429,6 +429,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       disputeNotes: input.managerOutput.disputeNotes ?? [],
       invalidatedFindings: input.managerOutput.invalidatedFindings ?? [],
       duplicateFindings: input.managerOutput.duplicateFindings ?? [],
+      dismissedFindings: input.managerOutput.dismissedFindings ?? [],
     },
   };
   const validation = validateFindingManagerOutput({
@@ -578,6 +579,29 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       revision: bumpRevision(finding),
       invalidatedAt: input.context.timestamp,
       invalidatedEvidence: invalidated.evidence,
+    });
+  }
+
+  // dismiss はエンジンが decision-assembly.ts で候補集合（open な provisional
+  // かつ DISMISSABLE_PROVISIONAL_KINDS）と照合済みの裁定だけを通してくる。
+  // 監査記録（basis / reason / decidedAt）を残して終端し、黙って消さない。
+  for (const dismissed of input.managerOutput.dismissedFindings) {
+    assertKnownFinding(knownFindingIds, dismissed.findingId);
+    const finding = updatedById.get(dismissed.findingId)!;
+    assertFindingStatus(finding, 'open', 'dismiss');
+    if (finding.provisional === undefined) {
+      throw new Error(`Cannot dismiss finding "${dismissed.findingId}" because it is not provisional`);
+    }
+    updatedById.set(dismissed.findingId, {
+      ...finding,
+      status: 'dismissed',
+      lifecycle: 'dismissed',
+      revision: bumpRevision(finding),
+      dismissal: {
+        basis: dismissed.basis,
+        reason: dismissed.reason,
+        decidedAt: observationFromContext(input.context),
+      },
     });
   }
 

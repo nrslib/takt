@@ -12,5 +12,6 @@ export function createEmptyManagerOutput(): FindingManagerOutput {
     disputeNotes: [],
     invalidatedFindings: [],
     duplicateFindings: [],
+    dismissedFindings: [],
   };
 }

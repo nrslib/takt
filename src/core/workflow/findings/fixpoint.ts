@@ -35,9 +35,12 @@ export function computeFixpointSnapshot(ledger: FindingLedger, cwd: string): Fin
       .map((finding) => finding.provisional!.stableKey),
   );
 
+  // 終端した provisional（dismissed 等）も id:status で含める: provisionalKeys
+  // からは消えるが、終端という状態変化そのものをスナップショット差分として
+  // 監査可能にする（dismiss 直後のラウンドが「変化なし」と誤判定されない）。
   const substantiveEntries = sortedUnique(
     ledger.findings
-      .filter((finding) => finding.provisional === undefined)
+      .filter((finding) => finding.provisional === undefined || finding.status !== 'open')
       .map((finding) => `${finding.id}:${finding.status}`),
   );
 

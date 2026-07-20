@@ -58,6 +58,14 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
         title: finding.title,
         supersededBy: finding.supersededByFindingId,
       })),
+    dismissed: ledger.findings
+      .filter((finding) => finding.status === 'dismissed')
+      .map((finding) => ({
+        id: finding.id,
+        title: finding.title,
+        basis: finding.dismissal?.basis,
+        reason: finding.dismissal?.reason,
+      })),
     conflicts: ledger.conflicts.map((conflict) => ({
       id: conflict.id,
       status: conflict.status,
@@ -89,6 +97,9 @@ export function renderFindingLedgerReportSummary(ledger: FindingLedger): string 
       .map((finding) => finding.id),
     supersededFindingIds: ledger.findings
       .filter((finding) => finding.status === 'superseded')
+      .map((finding) => finding.id),
+    dismissedFindingIds: ledger.findings
+      .filter((finding) => finding.status === 'dismissed')
       .map((finding) => finding.id),
     conflictIds: ledger.conflicts.map((conflict) => conflict.id),
   }, null, 2);

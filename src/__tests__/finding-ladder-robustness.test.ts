@@ -590,6 +590,7 @@ describe('ケース6: no-op ゲート回避（空配列・unknown id・unsupport
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
         timestamp: new Date('2026-06-14T00:00:01.000Z'),
       } as unknown as AgentResponse;
@@ -729,6 +730,7 @@ describe('ケース7: resource exhaustion（435 raw・巨大 description・step 
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
         timestamp: new Date(),
       } as unknown as AgentResponse;
@@ -1191,6 +1193,7 @@ describe('v2 追加必須テスト', () => {
         conflictDecisions: [],
         invalidateDecisions: [],
         duplicateDecisions: [],
+        dismissDecisions: [],
       }))(),
       timestamp: new Date(),
     } as unknown as AgentResponse);
@@ -1206,6 +1209,7 @@ describe('v2 追加必須テスト', () => {
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
         timestamp: new Date(),
       } as unknown as AgentResponse;
@@ -1331,6 +1335,7 @@ describe('v2 追加必須テスト', () => {
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
         timestamp: new Date(),
       } as unknown as AgentResponse;
@@ -1445,6 +1450,7 @@ describe('v2 追加必須テスト', () => {
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
         timestamp: new Date(),
       } as unknown as AgentResponse;
@@ -1549,6 +1555,7 @@ describe('v2 追加必須テスト', () => {
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
         timestamp: new Date(),
       } as unknown as AgentResponse;
@@ -1942,6 +1949,7 @@ describe('v2 追加必須テスト', () => {
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
         timestamp: new Date(),
       } as unknown as AgentResponse;

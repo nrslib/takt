@@ -28,6 +28,7 @@ export function assembleCleanManagerDecision(input: {
   decisions: FindingManagerDecisions | undefined;
   initialInvalidAttempts: FindingManagerValidationAttemptReport[];
   invalidLocationCandidateFindingIds: ReadonlySet<string>;
+  dismissCandidateFindingIds: ReadonlySet<string>;
   priorStepResponseText: string | undefined;
 }): CleanManagerDecisionResult {
   const cleanWireById = new Map(input.admission.cleanWire.map((wire) => [wire.rawFindingId, wire]));
@@ -60,6 +61,7 @@ export function assembleCleanManagerDecision(input: {
       checkMissingDecisions: true,
       mechanicalOutput: input.mechanical.output,
       invalidLocationCandidateFindingIds: input.invalidLocationCandidateFindingIds,
+      dismissCandidateFindingIds: input.dismissCandidateFindingIds,
     });
     const landedRawIds = collectLandedRawIds(assembly.output);
     for (const rejected of assembly.rejectedRawDecisions) {

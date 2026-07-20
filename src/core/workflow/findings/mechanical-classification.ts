@@ -208,5 +208,6 @@ export function mergeFindingManagerOutputs(
     disputeNotes: [...base.disputeNotes, ...extra.disputeNotes],
     invalidatedFindings: [...base.invalidatedFindings, ...extra.invalidatedFindings],
     duplicateFindings: [...base.duplicateFindings, ...extra.duplicateFindings],
+    dismissedFindings: [...base.dismissedFindings, ...extra.dismissedFindings],
   });
 }

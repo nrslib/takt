@@ -159,6 +159,7 @@ export function buildManagerInstruction(input: {
   mechanicallyClassifiedCount: number;
   priorStepResponseText?: string;
   invalidLocationCandidates: Map<string, string>;
+  dismissCandidates: Map<string, string>;
 }): string {
   const managerInputLedger = buildManagerInputLedger(
     input.previousLedger,
@@ -174,6 +175,9 @@ export function buildManagerInstruction(input: {
   const invalidateCandidatesBlock = [...input.invalidLocationCandidates.entries()]
     .map(([findingId, reason]) => `- ${findingId}: ${reason}`)
     .join('\n');
+  const dismissCandidatesBlock = [...input.dismissCandidates.entries()]
+    .map(([findingId, description]) => `- ${findingId}: ${description}`)
+    .join('\n');
   return loadTemplate('finding_manager_instruction', 'en', {
     managerInstruction: mechanicalNote,
     outputContract: input.contract.manager.outputContract,
@@ -183,6 +187,8 @@ export function buildManagerInstruction(input: {
     rawFindings: renderFencedJsonBlock(input.residualRawFindings),
     hasInvalidateCandidates: input.invalidLocationCandidates.size > 0,
     invalidateCandidatesBlock,
+    hasDismissCandidates: input.dismissCandidates.size > 0,
+    dismissCandidatesBlock,
     coderResponse: renderFencedTextBlock(input.priorStepResponseText ?? '(no prior step response)'),
   });
 }

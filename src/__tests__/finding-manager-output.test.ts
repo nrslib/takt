@@ -17,6 +17,7 @@ describe('finding manager output construction', () => {
       disputeNotes: [],
       invalidatedFindings: [],
       duplicateFindings: [],
+      dismissedFindings: [],
     });
     for (const key of Object.keys(first) as Array<keyof typeof first>) {
       expect(first[key]).not.toBe(second[key]);

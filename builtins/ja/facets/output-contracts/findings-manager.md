@@ -65,6 +65,13 @@
       "duplicateFindingIds": ["F-0017", "F-0018"],
       "evidence": "3件とも同じ分散ロックの cleanup 漏れを指しており、レビュアーが異なる familyTag・異なる行を引用しただけ"
     }
+  ],
+  "dismissDecisions": [
+    {
+      "findingId": "F-0021",
+      "basis": "out_of_scope",
+      "reason": "品質ゲートの実行証跡への要求であり、検証結果の評価は final gate の職掌。コードの欠陥を主張していない"
+    }
   ]
 }
 ```
@@ -82,6 +89,12 @@
 `invalidateDecisions` と `duplicateDecisions` のルール。
 - `invalidateDecisions` はプロンプトが invalidate 候補として列挙した finding id のみが対象です（エンジンが location の決定的検証を既に済ませています）。候補が無い、またはすべてに同意しない場合は空配列にしてください。
 - `duplicateDecisions` は同一の根本問題である open finding のためのものです。重複が見つからなければ空配列にしてください。
+
+`dismissDecisions` のルール。
+- プロンプトが dismiss 候補として列挙した finding id（機械で確定できない open な暫定 finding）のみが対象です。リスト外への dismiss はエンジンが不採用にします。
+- `basis` は `out_of_scope`（主張が finding contract の管轄外 — 例: 検証結果の報告有無への要求は final gate の職掌）または `unverifiable_claim`（恒久的に検証不能な主張）です。
+- 懸念が実在し、後続の clean なレビュー証拠で確定し得るなら dismiss せず open のままにしてください。dismiss は「修正済み」ではなく「審査対象外」の裁定であり、監査記録付きで台帳に残ります。
+- 候補が無い、またはすべて open のままにする場合は空配列にしてください。
 
 解釈フェーズ（ambiguous な raw finding が存在するときの別呼び出し）:
 - エンジンは「Ambiguous raw finding interpretation」プロンプトであなたを呼ぶことがあります。そこでは ambiguous raw finding 1件につき1つの「提案」を `interpretations` で返します: `create_independent`、`same_with_proof`（プロンプトでエンジンが発行した proofId がある場合のみ）、`open_conflict`、`provisional` のいずれかです。
