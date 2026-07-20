@@ -338,11 +338,19 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     language: params.options.language,
     updatePersonaSession: params.updatePersonaSession,
     resolveNextStepFromDone: params.resolveNextStepFromDone as never,
-    onStepStart: (step, iteration, instruction, providerInfo) => {
-      params.emitEvent('step:start', step, iteration, instruction, providerInfo, params.config.name);
+    onStepStart: (step, iteration, instruction, providerInfo, resumeStepName) => {
+      params.emitEvent(
+        'step:start',
+        step,
+        iteration,
+        instruction,
+        providerInfo,
+        params.config.name,
+        resumeStepName,
+      );
     },
-    onStepComplete: (step, response, instruction) => {
-      params.emitEvent('step:complete', step, response, instruction);
+    onStepComplete: (step, response, instruction, resumeStepName) => {
+      params.emitEvent('step:complete', step, response, instruction, resumeStepName);
     },
     emitCollectedReports: () => {
       for (const { step, filePath, fileName } of stepExecutor.drainReportFiles()) {

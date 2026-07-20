@@ -398,6 +398,19 @@ describe('bounded raw adjudication recovery', () => {
     expect(harness.released).toHaveLength(0);
     expect([...recovery.failureReasons.values()][0]).toContain('per-call budget');
     expect(committed.findings[0]?.provisional?.adjudicationAttempts).toHaveLength(1);
+    expect(committed.findings[0]?.revision).toBe(1);
+  });
+
+  it('rejects a replay failure when the expected attempt was already recorded', async () => {
+    const harness = makeHarness(makeBacklog({ count: 1, descriptionChars: 100_000 }));
+    const recovery = await harness.runRecovery();
+    const firstCommit = applyRecovery(harness, recovery);
+    harness.replaceLedger(() => firstCommit);
+
+    const duplicateCommit = applyRecovery(harness, recovery);
+
+    expect(duplicateCommit.findings[0]?.provisional?.adjudicationAttempts).toHaveLength(1);
+    expect(duplicateCommit.findings[0]?.revision).toBe(1);
   });
 
   it('measures and sends the schema-appended fallback prompt without transforming it twice', async () => {
@@ -681,7 +694,6 @@ describe('bounded raw adjudication recovery', () => {
       findings: ledger.findings.map((finding) => firstIds.has(finding.id)
         ? {
           ...finding,
-          revision: 2,
           provisional: {
             ...finding.provisional!,
             adjudicationAttempts: [{
@@ -705,7 +717,6 @@ describe('bounded raw adjudication recovery', () => {
       findings: ledger.findings.map((finding) => secondIds.has(finding.id)
         ? {
           ...finding,
-          revision: (finding.revision ?? 1) + 1,
           provisional: {
             ...finding.provisional!,
             adjudicationAttempts: [

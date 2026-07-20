@@ -59,7 +59,8 @@ function collectEligibleOrigins(input: {
     const process = input.freshLedger.findings.find((finding) => finding.id === origin.provisionalFindingId);
     return process?.status === 'open'
       && process.provisional !== undefined
-      && (process.revision ?? 1) === origin.expectedProvisionalRevision;
+      && (process.revision ?? 1) === origin.expectedProvisionalRevision
+      && (process.provisional.adjudicationAttempts ?? []).length === origin.attempt - 1;
   }));
 }
 
@@ -82,13 +83,13 @@ function recordReplayFailures(input: {
       if (failure === undefined
         || finding.status !== 'open'
         || finding.provisional === undefined
-        || (finding.revision ?? 1) !== failure.origin.expectedProvisionalRevision) {
+        || (finding.revision ?? 1) !== failure.origin.expectedProvisionalRevision
+        || (finding.provisional.adjudicationAttempts ?? []).length !== failure.origin.attempt - 1) {
         return finding;
       }
       const attempts = finding.provisional.adjudicationAttempts ?? [];
       return {
         ...finding,
-        revision: (finding.revision ?? 1) + 1,
         provisional: {
           ...finding.provisional,
           adjudicationAttempts: [...attempts, {

@@ -7,7 +7,7 @@ finding_contract:
     persona: findings-manager
     instruction: findings-manager
     output_contract: findings-manager
-max_steps: 50
+max_steps: 200
 initial_step: gather
 
 loop_monitors:

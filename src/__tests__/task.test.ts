@@ -784,6 +784,30 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(file.tasks[0]?.auto_requeue_count).toBe(2);
   });
 
+  it('should not auto-requeue a failure explicitly marked as not retryable', () => {
+    writeTasksFile(testDir, [createFailedRecord({
+      failure: {
+        step: 'review',
+        error: 'Finding adjudication is required',
+        retryable: false,
+      },
+    })]);
+
+    const result = (runner as AutoRequeueCapableRunner).autoRequeueFailedTask('task-a', {
+      maxAttempts: 2,
+    });
+
+    const file = loadTasksFile(testDir);
+    expect(result).toEqual({
+      requeued: false,
+      attempt: 0,
+      maxAttempts: 2,
+      reason: 'failure_not_retryable',
+    });
+    expect(file.tasks[0]?.status).toBe('failed');
+    expect(file.tasks[0]?.auto_requeue_count).toBeUndefined();
+  });
+
   it('should not update tasks.yaml when max auto-requeue attempts have been reached', () => {
     const { service, store } = createRetryServiceWithState({
       tasks: [createFailedRecord({ auto_requeue_count: 2 }) as unknown as TaskRecord],

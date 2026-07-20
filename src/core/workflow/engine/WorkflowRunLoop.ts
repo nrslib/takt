@@ -332,7 +332,7 @@ function abortWorkflow(
   if (options.clearLastOutput) {
     deps.state.lastOutput = undefined;
   }
-  deps.emit('workflow:abort', deps.state, reason);
+  deps.emit('workflow:abort', deps.state, reason, kind);
   return buildWorkflowAbortResult(kind, deps.state.currentStep, reason);
 }
 
@@ -577,7 +577,15 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       : '';
     deps.setActiveStep(step, activeIteration);
     const providerInfo = deps.resolveStepProviderModel(step, stepRuntime);
-    deps.emit('step:start', step, activeIteration, stepInstruction, providerInfo, deps.getWorkflowName());
+    deps.emit(
+      'step:start',
+      step,
+      activeIteration,
+      stepInstruction,
+      providerInfo,
+      deps.getWorkflowName(),
+      step.name,
+    );
 
     try {
       const startedAt = Date.now();
@@ -609,7 +617,12 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       if (stepRuntime?.fallback) {
         deps.state.pendingFallback = undefined;
       }
-      deps.emit('step:complete', step, response, instruction);
+      deps.emit('step:complete', step, response, instruction, step.name);
+
+      if (result.terminalAbort !== undefined) {
+        abort = abortWorkflow(deps, result.terminalAbort.kind, result.terminalAbort.reason);
+        break;
+      }
 
       if (response.status === 'rate_limited') {
         const currentProvider = completedProviderInfo;
@@ -864,6 +877,11 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   );
   if (stepRuntime?.fallback) {
     deps.state.pendingFallback = undefined;
+  }
+
+  if (result.terminalAbort !== undefined) {
+    const abort = abortWorkflow(deps, result.terminalAbort.kind, result.terminalAbort.reason);
+    return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
   }
 
   if (response.status === 'blocked') {

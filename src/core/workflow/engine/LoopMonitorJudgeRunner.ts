@@ -19,8 +19,8 @@ interface LoopMonitorJudgeRunnerDeps {
   language?: string;
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;
-  onStepStart: (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo | undefined) => void;
-  onStepComplete: (step: WorkflowStep, response: AgentResponse, instruction: string) => void;
+  onStepStart: (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo | undefined, resumeStepName: string) => void;
+  onStepComplete: (step: WorkflowStep, response: AgentResponse, instruction: string, resumeStepName: string) => void;
   emitCollectedReports: () => void;
   resetCycleDetector: () => void;
   /**
@@ -66,7 +66,13 @@ export class LoopMonitorJudgeRunner {
       : baseInstruction;
 
     const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(judgeStep, resolvedRuntime);
-    this.deps.onStepStart(judgeStep, this.deps.state.iteration, prebuiltInstruction, providerInfo);
+    this.deps.onStepStart(
+      judgeStep,
+      this.deps.state.iteration,
+      prebuiltInstruction,
+      providerInfo,
+      triggeringStep.name,
+    );
 
     const { response, instruction } = await this.deps.stepExecutor.runNormalStep(
       judgeStep,
@@ -79,7 +85,7 @@ export class LoopMonitorJudgeRunner {
     );
 
     this.deps.emitCollectedReports();
-    this.deps.onStepComplete(judgeStep, response, instruction);
+    this.deps.onStepComplete(judgeStep, response, instruction, triggeringStep.name);
 
     if (response.status !== 'done') {
       // 監視は衛生装置であり、判定役自身の障害（プロバイダエラー等）で

@@ -239,6 +239,8 @@ function formatAutoRequeueSkipReason(reason: AutoRequeueSkipReason): string {
       return 'task is not failed';
     case 'max_attempts_reached':
       return 'max attempts reached';
+    case 'failure_not_retryable':
+      return 'failure is not retryable';
     case 'missing_failed_step':
       return 'failed step is missing';
     case 'missing_failure_detail':

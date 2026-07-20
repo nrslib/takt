@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { assembleCleanManagerDecision } from '../core/workflow/findings/manager-clean-decision.js';
 import { classifyRawFindingsMechanically } from '../core/workflow/findings/mechanical-classification.js';
 import type {
@@ -113,7 +113,99 @@ function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): Findin
   };
 }
 
+function makeActiveConflictDuplicateScenario() {
+  const observedAt = { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' };
+  const previousLedger = makeLedger([
+    makeFinding(),
+    makeFinding({ id: 'F-0002', rawFindingIds: ['raw-old-2'] }),
+  ]);
+  previousLedger.conflicts = [{
+    id: 'C-0001',
+    status: 'active',
+    findingIds: ['F-0002'],
+    rawFindingIds: ['raw-conflict'],
+    description: 'F-0002 is disputed.',
+    firstSeen: observedAt,
+    lastSeen: observedAt,
+  }];
+  return {
+    previousLedger,
+    output: {
+      matches: [],
+      newFindings: [],
+      resolvedFindings: [],
+      reopenedFindings: [],
+      conflicts: [],
+      resolvedConflicts: [],
+      waivedFindings: [],
+      disputeNotes: [],
+      invalidatedFindings: [],
+      duplicateFindings: [{
+        canonicalFindingId: 'F-0001',
+        duplicateFindingIds: ['F-0002'],
+        evidence: 'Same underlying issue.',
+      }],
+      dismissedFindings: [],
+    },
+  };
+}
+
 describe('assembleCleanManagerDecision の mechanical フォールバック', () => {
+  beforeEach(() => {
+    validateMock.mockReset();
+  });
+
+  it('最終検証は active conflict に触れる duplicate を除いた保存時ビューを使う', () => {
+    const { previousLedger, output } = makeActiveConflictDuplicateScenario();
+    validateMock.mockReturnValue({ ok: true });
+
+    const result = assembleCleanManagerDecision({
+      previousLedger,
+      admission: makeAdmission([]),
+      mechanical: {
+        output,
+        residualRawFindings: [],
+      } as ReturnType<typeof classifyRawFindingsMechanically>,
+      decisions: undefined,
+      initialInvalidAttempts: [],
+      invalidLocationCandidateFindingIds: new Set(),
+      dismissCandidateFindingIds: new Set(),
+      priorStepResponseText: undefined,
+    });
+
+    expect(result.managerOutput.duplicateFindings).toHaveLength(1);
+    expect(validateMock).toHaveBeenCalledWith(expect.objectContaining({
+      managerOutput: expect.objectContaining({ duplicateFindings: [] }),
+    }));
+  });
+
+  it('mechanical フォールバックも active conflict に触れる duplicate を除いた保存時ビューで検証する', () => {
+    const { previousLedger, output } = makeActiveConflictDuplicateScenario();
+    validateMock
+      .mockReturnValueOnce({ ok: false, errors: ['synthetic invariant violation'] })
+      .mockReturnValueOnce({ ok: true });
+
+    const result = assembleCleanManagerDecision({
+      previousLedger,
+      admission: makeAdmission([]),
+      mechanical: {
+        output,
+        residualRawFindings: [],
+      } as ReturnType<typeof classifyRawFindingsMechanically>,
+      decisions: undefined,
+      initialInvalidAttempts: [],
+      invalidLocationCandidateFindingIds: new Set(),
+      dismissCandidateFindingIds: new Set(),
+      priorStepResponseText: undefined,
+    });
+
+    expect(result.managerOutput.duplicateFindings).toEqual(output.duplicateFindings);
+    expect(validateMock).toHaveBeenCalledTimes(2);
+    for (const call of validateMock.mock.calls) {
+      expect(call[0].managerOutput.duplicateFindings).toEqual([]);
+    }
+  });
+
   it('最終検証に落ちたら empty ではなく mechanical 出力へ縮退し、残余 raw を manager-output-discarded で保持する', () => {
     const previousLedger = makeLedger([makeFinding()]);
     const cleanWire = [CONFIRMATION_RAW, ISSUE_RAW];

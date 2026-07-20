@@ -1785,6 +1785,7 @@ steps:
     ]);
 
     const startedProviderInfo: Array<{ provider: string | undefined; model: string | undefined }> = [];
+    const resumeSteps: Array<{ observedStep: string; resumeStep: string }> = [];
     engine = new WorkflowEngine(config, tmpDir, 'Align workflow_call runtime context', createWorkflowCallOptions(tmpDir, {
       provider: 'claude',
       model: 'parent-model',
@@ -1795,7 +1796,8 @@ steps:
         },
       },
     }));
-    engine.on('step:start', (step, _iteration, _instruction, providerInfo) => {
+    engine.on('step:start', (step, _iteration, _instruction, providerInfo, _workflowName, resumeStepName) => {
+      resumeSteps.push({ observedStep: step.name, resumeStep: resumeStepName });
       if (step.name === 'delegate') {
         startedProviderInfo.push(providerInfo);
       }
@@ -1808,6 +1810,11 @@ steps:
       { provider: 'claude', model: 'parent-model' },
       { provider: 'claude', model: 'parent-model' },
     ]);
+    expect(resumeSteps).toContainEqual({ observedStep: 'review', resumeStep: 'delegate' });
+    expect(resumeSteps).toContainEqual({
+      observedStep: '_loop_judge_delegate_delegate',
+      resumeStep: 'delegate',
+    });
     const childCall = vi.mocked(runAgent).mock.calls.find(([persona]) => String(persona).includes('reviewer'));
     const judgeCall = vi.mocked(runAgent).mock.calls.find(([persona]) => String(persona).includes('supervisor'));
     expect(childCall?.[2]).toEqual(expect.objectContaining({
@@ -4177,15 +4184,16 @@ steps:
       stepIterations: new Map(),
       status: 'aborted',
     } as WorkflowState;
+    const runWithResult = vi.fn().mockResolvedValue({
+      state: childState,
+      abort: {
+        kind: 'step_transition',
+        reason: 'Abort due to child ABORT rule',
+      },
+    });
     const createEngine = vi.fn().mockReturnValue({
       on: vi.fn(),
-      runWithResult: vi.fn().mockResolvedValue({
-        state: childState,
-        abort: {
-          kind: 'step_transition',
-          reason: 'Abort due to child ABORT rule',
-        },
-      }),
+      runWithResult,
     });
     const runner = new WorkflowCallRunner({
       getConfig: () => parentConfig,
@@ -4223,6 +4231,27 @@ steps:
 
     expect(result.response.content).toBe('child abort output');
     expect(result.response.matchedRuleIndex).toBe(1);
+    expect(result.terminalAbort).toBeUndefined();
+
+    runWithResult.mockResolvedValue({
+      state: childState,
+      abort: {
+        kind: 'needs_adjudication',
+        reason: 'Finding adjudication is required',
+      },
+    });
+
+    const adjudicationResult = await runner.run(parentConfig.steps[0] as never);
+
+    expect(adjudicationResult.terminalAbort).toEqual({
+      kind: 'needs_adjudication',
+      reason: 'Finding adjudication is required',
+      failure: {
+        kind: 'needs_adjudication',
+        step: 'delegate',
+        reason: 'Finding adjudication is required',
+      },
+    });
   });
 
   it('WorkflowCallRunner は non-step_transition abort で reason と lastOutput がなくても ABORT を優先する', async () => {

@@ -181,8 +181,40 @@ describe('WorkflowCallExecutor', () => {
     const childOptions = createEngine.mock.calls[0]?.[3];
     expect(childOptions?.traceTaskMetadata).toBe(traceTaskMetadata);
     expect(childEngine.on).toHaveBeenCalledWith('step:start', expect.any(Function));
-    listeners.get('step:start')?.('payload');
-    expect(emit).toHaveBeenCalledWith('step:start', 'payload');
+    const childStep = childConfig.steps[0];
+    const childProviderInfo = { provider: 'mock', model: 'test-model' };
+    listeners.get('step:start')?.(
+      childStep,
+      3,
+      'child instruction',
+      childProviderInfo,
+      childConfig.name,
+      childStep?.name,
+    );
+    expect(emit).toHaveBeenCalledWith(
+      'step:start',
+      childStep,
+      3,
+      'child instruction',
+      childProviderInfo,
+      childConfig.name,
+      step.name,
+    );
+    expect(childEngine.on).toHaveBeenCalledWith('step:complete', expect.any(Function));
+    const childResponse = makeResponse({ content: 'relayed response' });
+    listeners.get('step:complete')?.(
+      childStep,
+      childResponse,
+      'child instruction',
+      childStep?.name,
+    );
+    expect(emit).toHaveBeenCalledWith(
+      'step:complete',
+      childStep,
+      childResponse,
+      'child instruction',
+      step.name,
+    );
     expect(childEngine.on).toHaveBeenCalledWith('findings:ledger', expect.any(Function));
     const ledger: FindingLedger = {
       version: 1,
