@@ -15,6 +15,7 @@ import { validateFindingManagerOutput } from './manager-output-validation.js';
 import { computeLineageKey, computeProvisionalStableKey, computeReviewerStableKey } from './raw-canonicalization.js';
 import { countInterpretationEpochs, normalizeProvisionalInterpretationEpochs } from './interpretation-wal.js';
 import { formatConflictId, formatConflictSignature } from './conflict-identity.js';
+import { stopBudgetRoundsCompleted } from './stop-budget.js';
 
 /**
  * provisional finding の upsert 指示。stableKey が同じ
@@ -867,6 +868,9 @@ function applyProvisionalFindingSpecs(input: {
         lastObservedAt: observation,
         interpretationEpochs: countInterpretationEpochs(input.ledger, spec.lineageKey),
         gateEffect: 'block',
+        // このラウンドの marker は commit 側で reconcile 後に追記されるため、
+        // 現在ラウンド序数 = 記録済みラウンド数 + 1。
+        firstObservedRound: stopBudgetRoundsCompleted(input.ledger) + 1,
       },
     };
     createdByStableKey.set(spec.stableKey, entry);

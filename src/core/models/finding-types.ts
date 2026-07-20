@@ -6,7 +6,9 @@ export const FINDING_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const
 // finding is valid but won't be fixed) — critical findings can never be waived,
 // but CAN be invalidated, because invalidation says the finding was never real.
 // 'superseded': the finding was merged into a canonical duplicate (duplicateDecisions).
-// Both are terminal, additive statuses: existing v1 ledgers need no migration
+// 'dismissed': a provisional finding's claim was adjudicated out of the
+// contract's jurisdiction or permanently unverifiable (dismissDecisions).
+// All are terminal, additive statuses: existing v1 ledgers need no migration
 // because a ledger that never produces these values is unaffected.
 export const FINDING_STATUSES = ['open', 'resolved', 'waived', 'invalidated', 'superseded', 'dismissed'] as const;
 export const FINDING_LIFECYCLES = ['new', 'persists', 'resolved', 'reopened', 'waived', 'invalidated', 'superseded', 'dismissed'] as const;
@@ -172,6 +174,12 @@ export interface FindingProvisionalMetadata {
   /** この lineage に対する自動 manager 解釈の消費 epoch 数。上限は raw-finding-limits.ts の MAX_INTERPRETATION_EPOCHS_PER_LINEAGE。 */
   interpretationEpochs: number;
   gateEffect: 'block';
+  /**
+   * この provisional が最初に観測された manager ラウンド序数（stop budget の
+   * roundsCompleted + 1）。loop monitor judge へ渡す滞留ラウンド数の導出に使う。
+   * optional — 既存 v1 ledger は migration なしで読める（欠落時は滞留不明）。
+   */
+  firstObservedRound?: number;
 }
 
 export interface FindingLedgerEntry {

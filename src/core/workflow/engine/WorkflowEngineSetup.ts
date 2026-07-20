@@ -28,6 +28,7 @@ import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import type { FindingLedgerStore } from '../findings/store.js';
 import { RawFindingsStructuredOutput } from '../findings/manager-runner.js';
 import { ledgerHasOpenFindings, ledgerHasWaivedFindings, renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
+import { renderLoopMonitorFindingsSummary } from '../findings/loop-monitor-summary.js';
 import { computeReviewScopeSnapshotId } from '../findings/snapshot.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 
@@ -342,6 +343,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       }
     },
     resetCycleDetector: params.resetCycleDetector,
+    ...(params.findingContract && params.findingLedgerStore
+      ? {
+          getFindingsSummaryForJudge: () =>
+            renderLoopMonitorFindingsSummary(params.findingLedgerStore!.loadLedger(), params.findingContract!),
+        }
+      : {}),
   });
 
   return {

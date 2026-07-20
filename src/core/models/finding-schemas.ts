@@ -134,6 +134,7 @@ export const FindingProvisionalMetadataSchema = z.object({
   lastObservedAt: FindingObservationSchema,
   interpretationEpochs: z.number().int().min(0),
   gateEffect: z.literal('block'),
+  firstObservedRound: z.number().int().positive().optional(),
 }).strict();
 
 export const FindingLedgerEntrySchema = z.object({
