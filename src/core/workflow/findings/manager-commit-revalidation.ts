@@ -4,7 +4,7 @@ import {
   type CapturedFindingPrecondition,
 } from './finding-preconditions.js';
 import { collectLandedRawIds, computeDismissCandidates, computeInvalidLocationCandidates, describeManagerRejections } from './manager-utils.js';
-import { provisionalSpecForRaw, stalePreconditionSpec } from './manager-provisional.js';
+import { provisionalSpecForRawKind, stalePreconditionSpec } from './manager-provisional.js';
 import type { ProvisionalFindingSpec } from './reconciler.js';
 import type {
   FindingLedger,
@@ -59,11 +59,11 @@ export function revalidateManagerPlan(input: {
     if (wire === undefined || canonical === undefined || wire.kind === 'resolution_confirmation') {
       return [];
     }
-    return [provisionalSpecForRaw({
+    return [provisionalSpecForRawKind({
       wire,
       canonical,
       reason: `Decision (${rejected.decision}) became stale against the freshly reloaded ledger: ${rejected.reason}`,
-    })];
+    }, 'raw-adjudication-unresolved')];
   });
   const preconditions = applyPreconditionChecks({
     output: freshAssembly.output,

@@ -735,7 +735,8 @@ describe('ケース6: no-op ゲート回避（空配列・unknown id・unsupport
     // して無視される。i-1（欠落）は provisional として残る。
     const context = buildFindingsRuleContext(saved);
     expect(context.provisional.count).toBeGreaterThanOrEqual(1);
-    expect(context.provisional.items.some((item) => item.kind === 'raw-meaning-ambiguous')).toBe(true);
+    // 欠落 raw は裁定未了（RawAdjudicationRecovery 管轄）として保持される
+    expect(context.provisional.items.some((item) => item.kind === 'raw-adjudication-unresolved')).toBe(true);
     const provisional = saved.findings.find((finding) => finding.title === 'Unhandled new issue');
     expect(provisional?.status).toBe('open');
     expect(provisional?.provisional?.gateEffect).toBe('block');

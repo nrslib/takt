@@ -129,10 +129,19 @@ export const FINDING_PROVISIONAL_KINDS = [
   /**
    * manager 出力全体が最終不変条件検証で破棄されたラウンドの残余 raw。
    * 主張が曖昧だったわけではない（raw-meaning-ambiguous とは別物）ため
-   * interpretation ladder の対象にならず、dismiss 候補にもならない —
-   * 処理失敗の証跡なので settlement は clean な後続 raw のみ。
+   * interpretation ladder の対象にならない。出口は engine 主導の再裁定
+   * （RawAdjudicationRecovery）と、その枯渇後の管轄裁定。
    */
   'manager-output-discarded',
+  /**
+   * 裁定プロセスが substantive outcome へ到達しなかった raw の保持
+   * （decision の却下 / unsupported 裁定 / decision 欠落 / 保存時 stale /
+   * deterministic proof の stale）。主張が曖昧だったわけではないため
+   * interpretation ladder の対象にならない。出口は engine 主導の再裁定
+   * （RawAdjudicationRecovery: 保存済み source raw を fresh ledger に対して
+   * 再裁定）と、attempt 枯渇後の管轄裁定（dismiss 候補化）。
+   */
+  'raw-adjudication-unresolved',
   /**
    * @deprecated 既存台帳の読み取り互換のためだけに残す。新規コードはこの kind をもう生成しない —
    * location 証拠の不成立（存在しないファイル/範囲外行/verbatimExcerpt
@@ -147,15 +156,17 @@ export const FINDING_PROVISIONAL_KINDS = [
 export type FindingProvisionalKind = typeof FINDING_PROVISIONAL_KINDS[number];
 
 /**
- * manager の dismissDecisions が却下してよい provisional 種別。
- * 検証不能な主張（locationless）と意味曖昧（raw-meaning-ambiguous）は
- * 内容の管轄裁定が可能だが、overflow / budget / interrupted / stale 系は
- * 「処理失敗の証跡」であり、manager が消すと final gate の迂回路になるため
- * 候補にしない（settlement は clean な後続 raw のみ）。
+ * manager の dismissDecisions が却下してよい provisional 種別の静的な下限。
+ * 実際の候補判定は provisional-recovery.ts の分類が正本 — kind だけでなく
+ * 「その provisional に engine 主導の recovery（解釈 / 再裁定）が残っているか」
+ * を見る。recovery が残る間は候補にせず、枯渇後に内容の管轄裁定へ回す。
+ * overflow / budget / interrupted / stale 系は「処理失敗の証跡」であり、
+ * manager が消すと final gate の迂回路になるため候補にしない。
  */
 export const DISMISSABLE_PROVISIONAL_KINDS = [
   'raw-meaning-ambiguous',
   'unverified-locationless',
+  'raw-adjudication-unresolved',
 ] as const satisfies readonly FindingProvisionalKind[];
 
 /** dismiss 裁定の根拠分類。out_of_scope: finding contract の管轄外（例: 検証結果の評価は final gate の職掌）。unverifiable_claim: 機械検証も後続 clean 証拠も成立し得ない主張。 */
@@ -167,6 +178,20 @@ export interface FindingDismissalRecord {
   basis: FindingDismissalBasis;
   reason: string;
   decidedAt: FindingObservation;
+}
+
+/**
+ * engine 主導の再裁定（RawAdjudicationRecovery）1回分の失敗記録。成功した
+ * replay は provisional 自体を閉じるため記録されない — 残るのは失敗の監査だけ。
+ * 正本はこの配列（interpretationEpochs とは別系統: あちらは WAL 由来）。
+ */
+export interface FindingAdjudicationAttempt {
+  /** 1 始まりの通し番号。上限は raw-finding-limits.ts の MANAGER_ADJUDICATION_LIMITS。 */
+  attempt: number;
+  /** この attempt のために採番した replay 専用 raw ID（過去 raw ID は current として再利用しない）。 */
+  replayRawFindingId: string;
+  reason: string;
+  at: FindingObservation;
 }
 
 export interface FindingProvisionalMetadata {
@@ -181,6 +206,8 @@ export interface FindingProvisionalMetadata {
   /** この lineage に対する自動 manager 解釈の消費 epoch 数。上限は raw-finding-limits.ts の MAX_INTERPRETATION_EPOCHS_PER_LINEAGE。 */
   interpretationEpochs: number;
   gateEffect: 'block';
+  /** engine 主導の再裁定の失敗履歴（新しい順ではなく attempt 順）。optional — 既存 ledger は migration なしで読める。 */
+  adjudicationAttempts?: FindingAdjudicationAttempt[];
   /**
    * この provisional が最初に観測された manager ラウンド序数（stop budget の
    * roundsCompleted + 1）。loop monitor judge へ渡す滞留ラウンド数の導出に使う。

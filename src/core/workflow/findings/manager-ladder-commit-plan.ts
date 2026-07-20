@@ -7,7 +7,7 @@ import type {
   InterpretationApplicationResult,
 } from './types.js';
 import type { ManagerDecisionStageResult } from './manager-contracts.js';
-import { provisionalSpecForRaw } from './manager-provisional.js';
+import { provisionalSpecForRaw, provisionalSpecForRawKind } from './manager-provisional.js';
 import { fullIdentityKeyOf } from './manager-provisional-settlement.js';
 
 export interface LadderCommitPlan {
@@ -44,13 +44,15 @@ export function buildLadderCommitPlan(
   const withMatches = ladder.pendingSameWithProof.reduce<LadderCommitPlan>((plan, pending) => {
     const verification = verifySameProofAgainstLedger(pending.proof, freshLedger);
     if (!verification.ok) {
+      // proof 経路は解釈ラダーを通らず WAL を持たない — ambiguous のまま落とすと
+      // epochs=0 が恒久化する。裁定未了として RawAdjudicationRecovery の管轄へ。
       return {
         ...plan,
-        provisionalSpecs: [...plan.provisionalSpecs, provisionalSpecForRaw({
+        provisionalSpecs: [...plan.provisionalSpecs, provisionalSpecForRawKind({
           wire: pending.target.wire,
           canonical: pending.target.canonical,
           reason: `Deterministic same proof became stale before save: ${verification.reason}`,
-        })],
+        }, 'raw-adjudication-unresolved')],
         interpretationResults: withInterpretationResult(
           plan.interpretationResults,
           pending.viaInterpretationKey,

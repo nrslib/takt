@@ -706,8 +706,8 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       familyTag: rawFinding.familyTag,
     });
     provisionalSpecs.push({
-      kind: 'raw-meaning-ambiguous',
-      stableKey: computeProvisionalStableKey({ reviewerStableKey, lineageKey, provisionalKind: 'raw-meaning-ambiguous' }),
+      kind: 'raw-adjudication-unresolved',
+      stableKey: computeProvisionalStableKey({ reviewerStableKey, lineageKey, provisionalKind: 'raw-adjudication-unresolved' }),
       lineageKey,
       sourceRawFindingIds: [rawFinding.rawFindingId],
       reason: `Raw finding "${rawFinding.rawFindingId}" was not referenced by any decision; kept as a gate-blocking provisional instead of being dropped or promoted to a new finding`,

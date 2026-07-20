@@ -59,6 +59,16 @@ export const MANAGER_INTERPRETATION_LIMITS = {
   maxInterpretationEpochsPerLineage: 2,
 } as const;
 
+/**
+ * engine 主導の再裁定（RawAdjudicationRecovery）の上限。
+ * maxReplayAttempts は「初回着地の失敗後に engine が再裁定を試みる回数」で、
+ * 解釈 epoch（初回を含む解釈 attempt 総数）とは別カウンタ・別意味。
+ * 枯渇後は dismiss 候補（内容の管轄裁定）へ回す。
+ */
+export const MANAGER_ADJUDICATION_LIMITS = {
+  maxReplayAttempts: 2,
+} as const;
+
 /** stable key / WAL のポリシー版数。上限・格子の互換が壊れる変更で上げる。 */
 export const RAW_LADDER_POLICY_VERSION = 2 as const;
 

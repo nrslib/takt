@@ -73,7 +73,7 @@ export function assembleCleanManagerDecision(input: {
         landRawAsProvisional(
           rejected.rawFindingId,
           `Manager decision (${rejected.decision}) was rejected: ${rejected.reason}`,
-          'raw-meaning-ambiguous',
+          'raw-adjudication-unresolved',
         );
       }
     }
@@ -82,7 +82,7 @@ export function assembleCleanManagerDecision(input: {
       landRawAsProvisional(
         unsupported.rawFindingId,
         `Manager decided "unsupported" against finding "${unsupported.targetFindingId}": ${unsupported.evidence}`,
-        'raw-meaning-ambiguous',
+        'raw-adjudication-unresolved',
       );
     }
     const rejectionDescriptions = describeManagerRejections(assembly);
