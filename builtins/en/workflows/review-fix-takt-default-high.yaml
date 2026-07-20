@@ -1,5 +1,5 @@
 name: review-fix-takt-default-high
-description: "Finding Contract review/fix workflow for high-capability models: gathers the review target, then plans, writes tests, implements directly, runs six compact specialist reviews, applies direct fixes, and closes through a fail-closed final gate."
+description: "Enhanced variant of review-fix-takt-default with a Finding Contract: gathers the review target, then plans, writes tests, implements directly, runs six compact specialist reviews, applies direct fixes, and closes through a fail-closed final gate."
 finding_contract:
   ledger_path: .takt/findings/review-fix-takt-default-high.json
   raw_findings_path: .takt/findings/review-fix-takt-default-high/raw

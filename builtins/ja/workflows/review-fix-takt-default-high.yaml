@@ -1,5 +1,5 @@
 name: review-fix-takt-default-high
-description: 高能力モデル向けの Finding Contract 付き TAKT review/fix workflow。レビュー対象の収集後、計画、テスト、直接実装、6観点の compact 並列レビュー、直接修正、fail-closed 最終ゲートを実行する。
+description: review-fix-takt-default の強化版となる Finding Contract 付き TAKT review/fix workflow。レビュー対象の収集後、計画、テスト、直接実装、6観点の compact 並列レビュー、直接修正、fail-closed 最終ゲートを実行する。
 finding_contract:
   ledger_path: .takt/findings/review-fix-takt-default-high.json
   raw_findings_path: .takt/findings/review-fix-takt-default-high/raw

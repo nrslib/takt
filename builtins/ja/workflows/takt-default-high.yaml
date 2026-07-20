@@ -1,5 +1,5 @@
 name: takt-default-high
-description: 高能力モデル向けの強化 TAKT 開発 workflow。計画、テスト、直接実装、6観点の compact 並列レビュー、直接修正、fail-closed 最終ゲートで構成する。
+description: takt-default の強化版 TAKT 開発 workflow。計画、テスト、直接実装、6観点の compact 並列レビュー、直接修正、fail-closed 最終ゲートで構成する。
 finding_contract:
   ledger_path: .takt/findings/takt-default-high.json
   raw_findings_path: .takt/findings/takt-default-high/raw

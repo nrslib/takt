@@ -1,5 +1,5 @@
 name: takt-default-high
-description: "Enhanced TAKT development workflow for high-capability models: plan, tests, direct implementation, six compact specialist reviews, direct fixes, and a fail-closed final gate."
+description: "Enhanced variant of takt-default: plan, tests, direct implementation, six compact specialist reviews, direct fixes, and a fail-closed final gate."
 finding_contract:
   ledger_path: .takt/findings/takt-default-high.json
   raw_findings_path: .takt/findings/takt-default-high/raw
