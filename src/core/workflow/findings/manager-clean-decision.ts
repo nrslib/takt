@@ -5,7 +5,10 @@ import type { RawAdmissionEvaluation } from './manager-admission.js';
 import type { classifyRawFindingsMechanically } from './mechanical-classification.js';
 import type { FindingProvisionalKind } from './types.js';
 import { assembleManagerOutput } from './decision-assembly.js';
-import { transferSupersededMatches } from './manager-plan-normalization.js';
+import {
+  collectActiveConflictFindingIds,
+  normalizeMergedManagerPlan,
+} from './manager-plan-normalization.js';
 import { provisionalSpecForRawKind } from './manager-provisional.js';
 import {
   collectLandedRawIds,
@@ -98,14 +101,16 @@ export function assembleCleanManagerDecision(input: {
     managerOutput = assembly.output;
   }
 
-  // matches|supersededFindings は保存直前の転写（normalizeMergedManagerPlan）で
-  // 解消される予定の併存なので、検証は転写後のビューに対して行う。保存される
-  // 計画は未転写のまま — 後着 conflict で統合が覆ったとき match を元の finding に
-  // 残すため（転写は保存直前の1回だけ）。
+  // 保存直前と同じ正規化ビューに対して検証する。保存される計画は未正規化の
+  // まま保ち、後着 conflict を含む fresh ledger に対して commit 時に再正規化する。
+  const validationView = normalizeMergedManagerPlan({
+    output: managerOutput,
+    activeConflictFindingIds: collectActiveConflictFindingIds(input.previousLedger),
+  }).output;
   const finalValidation = validateFindingManagerOutput({
     previousLedger: input.previousLedger,
     rawFindings: input.admission.cleanWire,
-    managerOutput: transferSupersededMatches(managerOutput),
+    managerOutput: validationView,
     priorStepResponseText: input.priorStepResponseText,
   });
   if (!finalValidation.ok) {
@@ -119,10 +124,14 @@ export function assembleCleanManagerDecision(input: {
     // まで消える。pristine な機械分類出力へ縮退し、失うのは LLM 判断だけに
     // 留める。LLM 由来の provisional spec / unsupported 報告は採用済み判断と
     // して残さない（invalid attempt の監査記録には残る）。
+    const mechanicalValidationView = normalizeMergedManagerPlan({
+      output: input.mechanical.output,
+      activeConflictFindingIds: collectActiveConflictFindingIds(input.previousLedger),
+    }).output;
     const mechanicalValidation = validateFindingManagerOutput({
       previousLedger: input.previousLedger,
       rawFindings: input.admission.cleanWire,
-      managerOutput: input.mechanical.output,
+      managerOutput: mechanicalValidationView,
       priorStepResponseText: input.priorStepResponseText,
     });
     if (!mechanicalValidation.ok) {

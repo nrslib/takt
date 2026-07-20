@@ -126,6 +126,7 @@ export interface DelegatedAgentUsageResult {
 export interface StepRunResult {
   response: AgentResponse;
   instruction: string;
+  terminalAbort?: WorkflowAbortResult;
   providerInfo?: StepProviderInfo;
   consumedStepIterations?: readonly string[];
   qualityGateFailure?: {
@@ -213,8 +214,8 @@ export type WorkflowCallResolver = (request: WorkflowCallResolutionRequest) => W
 
 /** Events emitted by workflow engine */
 export interface WorkflowEvents {
-  'step:start': (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo, workflowName: string) => void;
-  'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string) => void;
+  'step:start': (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo, workflowName: string, resumeStepName: string) => void;
+  'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string, resumeStepName: string) => void;
   'routing:decision': (
     step: WorkflowStep,
     response: AgentResponse,
@@ -258,7 +259,7 @@ export interface WorkflowEvents {
     iteration?: number,
   ) => void;
   'workflow:complete': (state: WorkflowState) => void;
-  'workflow:abort': (state: WorkflowState, reason: string) => void;
+  'workflow:abort': (state: WorkflowState, reason: string, kind: WorkflowAbortKind) => void;
   'iteration:limit': (iteration: number, maxSteps: number) => void;
   'step:loop_detected': (step: WorkflowStep, consecutiveCount: number) => void;
   'step:cycle_detected': (monitor: LoopMonitorConfig, cycleCount: number) => void;

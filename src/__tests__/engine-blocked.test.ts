@@ -247,7 +247,11 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
 
     expect(state.status).toBe('aborted');
     expect(onUserInput).not.toHaveBeenCalled();
-    expect(abortFn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('Transport error'));
+    expect(abortFn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining('Transport error'),
+      'step_error',
+    );
   });
 
 });

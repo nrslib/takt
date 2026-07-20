@@ -48,6 +48,7 @@ export function buildTaskResult(params: BuildTaskResultParams): TaskResult {
     executionLog: runResult.lastMessage ? [runResult.lastMessage] : [],
     failureStep: runResult.lastStep,
     failureLastMessage: runResult.lastMessage,
+    failureRetryable: runResult.retryable,
     startedAt,
     completedAt,
     ...(branch ? { branch } : {}),

@@ -162,6 +162,7 @@ export class TaskLifecycleService {
       step: result.failureStep,
       error: result.response,
       last_message: result.failureLastMessage ?? result.executionLog[result.executionLog.length - 1],
+      retryable: result.failureRetryable,
     };
 
     this.store.update((current) => {

@@ -15,6 +15,7 @@ export type AutoRequeueSkipReason =
   | 'disabled'
   | 'task_not_failed'
   | 'max_attempts_reached'
+  | 'failure_not_retryable'
   | 'missing_failed_step'
   | 'missing_failure_detail';
 
@@ -68,6 +69,14 @@ function getAutoRequeueSkipResult(
       attempt: currentAttempts,
       maxAttempts,
       reason: 'max_attempts_reached',
+    };
+  }
+  if (target.failure?.retryable === false) {
+    return {
+      requeued: false,
+      attempt: currentAttempts,
+      maxAttempts,
+      reason: 'failure_not_retryable',
     };
   }
   if (!target.failure?.step?.trim()) {

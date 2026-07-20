@@ -3,7 +3,7 @@ import type { WorkflowResumePointEntry } from '../../../core/models/index.js';
 import type { WorkflowEngine } from '../../../core/workflow/index.js';
 import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
-import type { StepProviderInfo } from '../../../core/workflow/types.js';
+import type { StepProviderInfo, WorkflowAbortKind } from '../../../core/workflow/types.js';
 import { extractBlockedPrompt } from '../../../core/workflow/engine/transitions.js';
 import { CONFIGURED_PROVIDER_OPTION_VALUE } from '../../../core/workflow/providerOptionsRedaction.js';
 import type { ProviderType, StreamEvent } from '../../../shared/types/provider.js';
@@ -28,6 +28,7 @@ import {
 
 export interface WorkflowExecutionEventState {
   abortReason?: string;
+  abortKind?: WorkflowAbortKind;
   exceededInfo?: ExceededInfo;
   lastStepContent?: string;
   lastStepName?: string;
@@ -342,7 +343,10 @@ export function bindWorkflowExecutionEvents(
   );
 
   deps.engine.on('phase:start', (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
-    deps.runMetaManager.updatePhase(step.name, iteration, phase);
+    if (state.currentStepName === undefined) {
+      throw new Error(`Phase ${phase} started before a resumable step was recorded`);
+    }
+    deps.runMetaManager.updatePhase(state.currentStepName, iteration, phase);
     deps.sessionLogger.onPhaseStart(
       step,
       phase,
@@ -356,7 +360,10 @@ export function bindWorkflowExecutionEvents(
   });
 
   deps.engine.on('phase:complete', (step, phase, phaseName, content, phaseStatus, phaseError, phaseExecutionId, iteration) => {
-    deps.runMetaManager.updatePhase(step.name, iteration, phase);
+    if (state.currentStepName === undefined) {
+      throw new Error(`Phase ${phase} completed before a resumable step was recorded`);
+    }
+    deps.runMetaManager.updatePhase(state.currentStepName, iteration, phase);
     deps.sessionLogger.setIteration(state.currentIteration);
     deps.sessionLogger.onPhaseComplete(
       step,
@@ -383,11 +390,11 @@ export function bindWorkflowExecutionEvents(
     );
   });
 
-  deps.engine.on('step:start', (step, iteration, instruction, providerInfo, workflowName) => {
+  deps.engine.on('step:start', (step, iteration, instruction, providerInfo, workflowName, resumeStepName) => {
     state.currentIteration = iteration;
-    state.currentStepName = step.name;
+    state.currentStepName = resumeStepName;
     state.lastResumePoint = getResumePoint();
-    deps.runMetaManager.updateStep(step.name, iteration, state.lastResumePoint);
+    deps.runMetaManager.updateStep(resumeStepName, iteration, state.lastResumePoint);
     emitWorkflowExecutionEvent(
       deps.eventSink,
       {
@@ -459,11 +466,11 @@ export function bindWorkflowExecutionEvents(
     deps.sessionLogger.onStepStart(step, iteration, instruction, state.lastResumePoint?.stack, providerInfo);
   });
 
-  deps.engine.on('step:complete', (step, response, instruction) => {
+  deps.engine.on('step:complete', (step, response, instruction, resumeStepName) => {
     syncLatestResumePoint();
     state.lastStepContent = response.content;
-    state.lastStepName = step.name;
-    state.currentStepName = step.name;
+    state.lastStepName = resumeStepName;
+    state.currentStepName = state.lastStepName;
 
     if (deps.displayRef.current) {
       deps.displayRef.current.flush();
@@ -650,7 +657,7 @@ export function bindWorkflowExecutionEvents(
     );
   });
 
-  deps.engine.on('workflow:abort', (workflowState, reason) => {
+  deps.engine.on('workflow:abort', (workflowState, reason, kind) => {
     interruptAllQueries();
     syncLatestResumePoint();
     if (deps.displayRef.current) {
@@ -659,6 +666,7 @@ export function bindWorkflowExecutionEvents(
     }
     deps.prefixWriter?.flush();
     state.abortReason = reason;
+    state.abortKind = kind;
     state.sessionLog = finalizeWorkflowAbort(
       state.sessionLog,
       reason,

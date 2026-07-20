@@ -114,6 +114,60 @@ function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): Findin
 }
 
 describe('assembleCleanManagerDecision の mechanical フォールバック', () => {
+  it('最終検証は active conflict に触れる duplicate を除いた保存時ビューを使う', () => {
+    const observedAt = { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' };
+    const previousLedger = makeLedger([
+      makeFinding(),
+      makeFinding({ id: 'F-0002', rawFindingIds: ['raw-old-2'] }),
+    ]);
+    previousLedger.conflicts = [{
+      id: 'C-0001',
+      status: 'active',
+      findingIds: ['F-0002'],
+      rawFindingIds: ['raw-conflict'],
+      description: 'F-0002 is disputed.',
+      firstSeen: observedAt,
+      lastSeen: observedAt,
+    }];
+    const output = {
+      matches: [],
+      newFindings: [],
+      resolvedFindings: [],
+      reopenedFindings: [],
+      conflicts: [],
+      resolvedConflicts: [],
+      waivedFindings: [],
+      disputeNotes: [],
+      invalidatedFindings: [],
+      duplicateFindings: [{
+        canonicalFindingId: 'F-0001',
+        duplicateFindingIds: ['F-0002'],
+        evidence: 'Same underlying issue.',
+      }],
+      dismissedFindings: [],
+    };
+    validateMock.mockReturnValue({ ok: true });
+
+    const result = assembleCleanManagerDecision({
+      previousLedger,
+      admission: makeAdmission([]),
+      mechanical: {
+        output,
+        residualRawFindings: [],
+      } as ReturnType<typeof classifyRawFindingsMechanically>,
+      decisions: undefined,
+      initialInvalidAttempts: [],
+      invalidLocationCandidateFindingIds: new Set(),
+      dismissCandidateFindingIds: new Set(),
+      priorStepResponseText: undefined,
+    });
+
+    expect(result.managerOutput.duplicateFindings).toHaveLength(1);
+    expect(validateMock).toHaveBeenCalledWith(expect.objectContaining({
+      managerOutput: expect.objectContaining({ duplicateFindings: [] }),
+    }));
+  });
+
   it('最終検証に落ちたら empty ではなく mechanical 出力へ縮退し、残余 raw を manager-output-discarded で保持する', () => {
     const previousLedger = makeLedger([makeFinding()]);
     const cleanWire = [CONFIRMATION_RAW, ISSUE_RAW];

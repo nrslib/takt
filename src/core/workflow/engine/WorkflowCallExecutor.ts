@@ -244,10 +244,24 @@ export class WorkflowCallExecutor {
     });
   }
 
-  private relayChildEvents(childEngine: WorkflowCallChildEngine): void {
+  private relayChildEvents(childEngine: WorkflowCallChildEngine, resumeStepName: string): void {
+    childEngine.on('step:start', (...args) => {
+      const [step, iteration, instruction, providerInfo, workflowName] = args;
+      this.deps.emit(
+        'step:start',
+        step,
+        iteration,
+        instruction,
+        providerInfo,
+        workflowName,
+        resumeStepName,
+      );
+    });
+    childEngine.on('step:complete', (...args) => {
+      const [step, response, instruction] = args;
+      this.deps.emit('step:complete', step, response, instruction, resumeStepName);
+    });
     for (const eventName of [
-      'step:start',
-      'step:complete',
       'routing:decision',
       'step:report',
       'findings:ledger',
@@ -362,7 +376,7 @@ export class WorkflowCallExecutor {
 
     const childEngine = this.deps.createEngine(request.childWorkflow, this.deps.getCwd(), this.deps.task, childOptions);
 
-    this.relayChildEvents(childEngine);
+    this.relayChildEvents(childEngine, request.step.name);
     const childResult = await childEngine.runWithResult();
     const childState = childResult.state;
     if (executeOptions.syncParentState) {

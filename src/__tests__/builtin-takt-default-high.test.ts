@@ -274,7 +274,7 @@ describe('takt-default-high builtin workflow', () => {
 
       expect(workflow).toMatchObject({
         name: 'takt-default-high',
-        max_steps: 200,
+        max_steps: 50,
         finding_contract: {
           ledger_path: '.takt/findings/takt-default-high.json',
           raw_findings_path: '.takt/findings/takt-default-high/raw',
@@ -333,7 +333,7 @@ describe('takt-default-high builtin workflow', () => {
 
       expect(team).toMatchObject({
         name: 'takt-default-team-high',
-        max_steps: 200,
+        max_steps: 50,
         initial_step: 'plan',
         finding_contract: {
           ledger_path: '.takt/findings/takt-default-team-high.json',
@@ -391,7 +391,7 @@ describe('takt-default-high builtin workflow', () => {
       expect(workflow).toMatchObject({
         name: 'review-fix-takt-default-high',
         initial_step: 'gather',
-        max_steps: 200,
+        max_steps: 50,
         finding_contract: {
           ledger_path: '.takt/findings/review-fix-takt-default-high.json',
           raw_findings_path: '.takt/findings/review-fix-takt-default-high/raw',
@@ -554,7 +554,7 @@ describe('takt-default-high builtin workflow', () => {
         for (const name of ['takt-default-high', 'takt-default-team-high']) {
           const workflowPath = join(process.cwd(), 'builtins', locale, 'workflows', `${name}.yaml`);
           const workflow = loadWorkflowFromFile(workflowPath, projectDir);
-          expect(workflow).toMatchObject({ name, initialStep: 'plan', maxSteps: 200 });
+          expect(workflow).toMatchObject({ name, initialStep: 'plan', maxSteps: 50 });
           expect(() => validateWorkflowConfig(workflow, { projectCwd: projectDir })).not.toThrow();
           expect(inspectWorkflowFile(workflowPath, projectDir).diagnostics).toEqual([]);
         }
