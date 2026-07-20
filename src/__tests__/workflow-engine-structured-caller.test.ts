@@ -229,7 +229,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
-            invalidateDecisions: [], duplicateDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -547,7 +547,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawDecisions: [{ rawFindingId, decision: 'new', findingId: '', evidence: 'No related open finding.' }],
             disputeDecisions: [],
             conflictDecisions: [],
-            invalidateDecisions: [], duplicateDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -1006,7 +1006,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           status: 'done',
           content: '{}',
           structuredOutput: {
-            rawDecisions: [], disputeDecisions: [], conflictDecisions: [], invalidateDecisions: [], duplicateDecisions: [],
+            rawDecisions: [], disputeDecisions: [], conflictDecisions: [], invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -1358,7 +1358,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           status: 'done',
           content: '{}',
           structuredOutput: {
-            rawDecisions: [], disputeDecisions: [], conflictDecisions: [], invalidateDecisions: [], duplicateDecisions: [],
+            rawDecisions: [], disputeDecisions: [], conflictDecisions: [], invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -1552,7 +1552,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
-            invalidateDecisions: [], duplicateDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -1905,7 +1905,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
-            invalidateDecisions: [], duplicateDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -2110,7 +2110,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
-            invalidateDecisions: [], duplicateDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -2295,7 +2295,7 @@ describe('WorkflowEngine structured caller defaults', () => {
               { findingId: 'F-0001', decision: 'waive', reason: 'frozen contract', evidence: 'src/types.ts:94' },
             ],
             conflictDecisions: [],
-            invalidateDecisions: [], duplicateDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -2515,7 +2515,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
-            invalidateDecisions: [], duplicateDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -2698,7 +2698,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawDecisions: [],
             disputeDecisions: [],
             conflictDecisions: [],
-            invalidateDecisions: [], duplicateDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -3082,7 +3082,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
-            invalidateDecisions: [], duplicateDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -3204,7 +3204,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
-            invalidateDecisions: [], duplicateDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -3315,7 +3315,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
-            invalidateDecisions: [], duplicateDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -3447,7 +3447,7 @@ describe('WorkflowEngine structured caller defaults', () => {
               ],
               disputeDecisions: [],
               conflictDecisions: [],
-              invalidateDecisions: [], duplicateDecisions: [],
+              invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
             }),
             '```',
           ].join('\n'),
@@ -3583,7 +3583,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
-            invalidateDecisions: [], duplicateDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date('2026-07-10T00:00:02.000Z'),
         };
@@ -3772,7 +3772,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawDecisions: [{ rawFindingId, decision: 'new', findingId: '', evidence: 'No related open finding.' }],
             disputeDecisions: [],
             conflictDecisions: [],
-            invalidateDecisions: [], duplicateDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date(),
         };
@@ -3930,7 +3930,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawDecisions: [{ rawFindingId, decision: 'new', findingId: '', evidence: 'No related open finding.' }],
             disputeDecisions: [],
             conflictDecisions: [],
-            invalidateDecisions: [], duplicateDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [],
           },
           timestamp: new Date(),
         };
