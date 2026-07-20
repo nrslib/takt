@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderLoopMonitorFindingsSummary } from '../core/workflow/findings/loop-monitor-summary.js';
+import { buildLoopMonitorFindingsSummaryData, renderLoopMonitorFindingsSummary } from '../core/workflow/findings/loop-monitor-summary.js';
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
 import { computeReviewerStableKey, computeLineageKey, computeProvisionalStableKey } from '../core/workflow/findings/raw-canonicalization.js';
@@ -48,7 +48,7 @@ function makeLedger(findings: FindingLedgerEntry[], roundMarkers: string[] = [])
 }
 
 describe('renderLoopMonitorFindingsSummary', () => {
-  it('完了ゲート充足状況・滞留ラウンド数・解消経路を機械生成する', () => {
+  it('完了ゲート充足状況・滞留ラウンド数・解消経路を構造として導出する', () => {
     const ledger = makeLedger(
       [
         provisionalEntry(),
@@ -66,31 +66,46 @@ describe('renderLoopMonitorFindingsSummary', () => {
       ['r1', 'r2', 'r3', 'r4', 'r5', 'r6'],
     );
 
-    const summary = renderLoopMonitorFindingsSummary(ledger, {});
+    const data = buildLoopMonitorFindingsSummaryData(ledger, {});
 
-    expect(summary).toContain('currently 3 open (1 substantive, 2 gate-blocking provisional)');
-    expect(summary).toContain('Manager rounds completed: 6/40');
-    // firstObservedRound=1、6ラウンド完了 → 6ラウンド滞留
-    expect(summary).toContain('F-0001 [unverified-locationless]');
-    expect(summary).toContain('stalled for 6 manager round(s)');
-    expect(summary).toContain('manager dismissDecisions');
-    // overflow 系は clean 証拠のみが解消経路
-    expect(summary).toMatch(/F-0002 \[reviewer-output-overflow\].*settlement: later clean evidence only/);
+    expect(data).toMatchObject({
+      openCount: 3,
+      openSubstantiveCount: 1,
+      activeConflictCount: 0,
+      roundsCompleted: 6,
+      maxRounds: 40,
+    });
+    expect(data.openProvisional).toEqual([
+      // firstObservedRound=1、6ラウンド完了 → 6ラウンド滞留。locationless は裁定可能
+      expect.objectContaining({ id: 'F-0001', kind: 'unverified-locationless', stalledRounds: 6, dismissable: true }),
+      // overflow 系は処理失敗の証跡なので裁定不可（clean 証拠のみが解消経路）
+      expect.objectContaining({ id: 'F-0002', kind: 'reviewer-output-overflow', stalledRounds: 2, dismissable: false }),
+    ]);
   });
 
-  it('firstObservedRound の無い既存台帳の provisional は滞留不明として表示する', () => {
+  it('firstObservedRound の無い既存台帳の provisional は滞留不明（undefined）になる', () => {
     const legacy = provisionalEntry();
     delete legacy.provisional!.firstObservedRound;
-    const summary = renderLoopMonitorFindingsSummary(makeLedger([legacy], ['r1']), {});
+    const data = buildLoopMonitorFindingsSummaryData(makeLedger([legacy], ['r1']), {});
 
-    expect(summary).toContain('an unknown number of rounds');
+    expect(data.openProvisional[0]?.stalledRounds).toBeUndefined();
   });
 
-  it('provisional が無ければゲート状態とラウンド消費だけを出す', () => {
-    const summary = renderLoopMonitorFindingsSummary(makeLedger([]), {});
+  it('レンダリングは構造の全要素を文面に反映する（スモーク）', () => {
+    const summary = renderLoopMonitorFindingsSummary(
+      makeLedger([provisionalEntry()], ['r1']),
+      {},
+    );
 
-    expect(summary).toContain('currently 0 open');
-    expect(summary).not.toContain('Open provisional findings');
+    expect(summary).toContain('currently 1 open');
+    expect(summary).toContain('F-0001 [unverified-locationless]');
+    expect(summary).toContain('manager dismissDecisions');
+  });
+
+  it('provisional が無ければ暫定セクション自体を持たない', () => {
+    const data = buildLoopMonitorFindingsSummaryData(makeLedger([]), {});
+    expect(data.openProvisional).toEqual([]);
+    expect(renderLoopMonitorFindingsSummary(makeLedger([]), {})).not.toContain('Open provisional findings');
   });
 });
 

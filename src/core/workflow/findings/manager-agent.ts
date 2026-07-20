@@ -119,7 +119,7 @@ function extractSymbols(text: string | undefined): Set<string> {
  * 系 7 変種）の統合判断を manager に明示的に促すための決定的ヒント。
  * 判断そのものは manager の duplicateDecisions（と engine の検証）に委ねる。
  */
-function collectDuplicateLocusGroups(ledger: FindingLedger): Map<string, FindingLedger['findings']> {
+export function collectDuplicateLocusGroups(ledger: FindingLedger): Map<string, FindingLedger['findings']> {
   const byPath = new Map<string, FindingLedger['findings']>();
   for (const finding of ledger.findings) {
     if (finding.status !== 'open' || finding.provisional !== undefined) {
