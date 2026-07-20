@@ -165,7 +165,6 @@ function makeHarness(initialLedger: FindingLedger, stopBudget?: { maxRounds?: nu
   const stepExecutor = {
     buildPhase1Instruction: (instruction: string) => instruction,
     recordSynthesizedAgentUsage: () => {},
-    recordSynthesizedAgentUsage: () => {},
     normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
   };
   const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
@@ -494,7 +493,26 @@ describe('ケース5: 永久機関（同一 lineage の ambiguous raw を run/it
       findings: [makeFinding({ status: 'resolved', lifecycle: 'resolved' })],
     }));
     let interpretationCalls = 0;
+    let dismissConsultations = 0;
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      // 解釈 epoch 枯渇後は provisional が dismiss 候補になり、decisions manager
+      // への相談が始まる（永久機関の設計上の出口）。ここでは manager が裁定を
+      // 保留する（空 decisions）ケースとして扱い、解釈呼び出しとは別に数える。
+      if (!(instruction as string).includes('## Ambiguous raw finding interpretation')) {
+        dismissConsultations += 1;
+        return {
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            rawDecisions: [],
+            disputeDecisions: [],
+            conflictDecisions: [],
+            invalidateDecisions: [],
+            duplicateDecisions: [],
+            dismissDecisions: [],
+          },
+        } as unknown as AgentResponse;
+      }
       interpretationCalls += 1;
       const rawId = extractResidualRawIdFromInterpretationInstruction(instruction as string, 'p-1');
       return interpretationResponse([
@@ -533,6 +551,9 @@ describe('ケース5: 永久機関（同一 lineage の ambiguous raw を run/it
     const after = await harness.run({ runId: 'run-5', reviewerRawFindings: [] });
     expect(after.ledger.findings.filter((finding) => finding.provisional !== undefined)[0]?.status).toBe('open');
     expect(interpretationCalls).toBe(2);
+    // 解釈枯渇後（3ラウンド目以降）は dismiss 候補として decisions manager に
+    // 相談され続ける — 解釈の無限化は止まったまま、裁定という出口が開いている。
+    expect(dismissConsultations).toBeGreaterThan(0);
   }, 30_000);
 });
 
@@ -713,7 +734,6 @@ describe('ケース7: resource exhaustion（435 raw・巨大 description・step 
     };
     const stepExecutor = {
       buildPhase1Instruction: (instruction: string) => instruction,
-      recordSynthesizedAgentUsage: () => {},
       recordSynthesizedAgentUsage: () => {},
       normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
     };
@@ -1732,7 +1752,6 @@ describe('v2 追加必須テスト', () => {
         stepExecutor: {
           buildPhase1Instruction: (instruction: string) => instruction,
           recordSynthesizedAgentUsage: () => {},
-          recordSynthesizedAgentUsage: () => {},
           normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
         } as never,
         cwd: projectCwd,
@@ -2166,7 +2185,6 @@ describe('v2 追加必須テスト', () => {
         } as never,
         stepExecutor: {
           buildPhase1Instruction: (instruction: string) => instruction,
-          recordSynthesizedAgentUsage: () => {},
           recordSynthesizedAgentUsage: () => {},
           normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
         } as never,

@@ -71,9 +71,15 @@ describe('computeDismissCandidates', () => {
   it('open な provisional のうち裁定可能な kind だけを候補にする', () => {
     const findings = [
       provisionalEntry({ id: 'F-0001' }),
+      // 解釈 epoch を使い切った ambiguous — 解釈ラダーの所有権が切れたので候補
       provisionalEntry({
         id: 'F-0002',
-        provisional: { ...provisionalEntry().provisional!, kind: 'raw-meaning-ambiguous', stableKey: 'stable-2' },
+        provisional: { ...provisionalEntry().provisional!, kind: 'raw-meaning-ambiguous', stableKey: 'stable-2', interpretationEpochs: 2 },
+      }),
+      // 解釈 epoch が残る ambiguous — 解釈ラダーが所有権を持つ間は候補にしない
+      provisionalEntry({
+        id: 'F-0007',
+        provisional: { ...provisionalEntry().provisional!, kind: 'raw-meaning-ambiguous', stableKey: 'stable-7', interpretationEpochs: 1 },
       }),
       // 処理失敗の証跡 — 候補にしない
       provisionalEntry({

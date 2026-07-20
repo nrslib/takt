@@ -200,6 +200,12 @@ function applyPreconditionChecks(input: {
       checkClosingDecision(findingId, [], ['open'], 'Supersede')
     ));
   });
+  // dismiss も他の終端遷移と同水準の楽観的前提条件を通す: manager 判断中に
+  // 同じ provisional へ新しい観測が積まれて revision が進んでいたら、古い
+  // 判断のままでは却下しない（stale として不採用 → 次ラウンドで再裁定）。
+  const dismissedFindings = input.output.dismissedFindings.filter((dismissed) => (
+    checkClosingDecision(dismissed.findingId, [], ['open'], 'Dismiss')
+  ));
 
   return {
     output: {
@@ -209,6 +215,7 @@ function applyPreconditionChecks(input: {
       invalidatedFindings,
       waivedFindings,
       duplicateFindings,
+      dismissedFindings,
       conflicts: [...input.output.conflicts, ...extraConflicts],
     },
     provisionalSpecs,

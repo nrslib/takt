@@ -187,7 +187,6 @@ function makeHarness(initialLedger: FindingLedger): {
   const stepExecutor = {
     buildPhase1Instruction: (instruction: string) => instruction,
     recordSynthesizedAgentUsage: () => {},
-    recordSynthesizedAgentUsage: () => {},
     normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
   };
   const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;

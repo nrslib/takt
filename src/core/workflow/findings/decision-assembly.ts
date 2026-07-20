@@ -562,6 +562,8 @@ function assembleDismissDecisions(input: {
   decisions: FindingManagerDecisions['dismissDecisions'];
   eligibleFindingIds: ReadonlySet<string>;
   transitionedFindingIds: ReadonlySet<string>;
+  /** このラウンドで match / conflict として再観測された finding。clean 証拠の再観測は dismiss より優先する。 */
+  reobservedFindingIds: ReadonlySet<string>;
 }): { dismissedFindings: FindingManagerDismissedFinding[]; rejected: RejectedDismissDecision[] } {
   const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
   const activeConflictFindingIds = new Set(
@@ -600,6 +602,13 @@ function assembleDismissDecisions(input: {
       rejected.push({
         findingId: decision.findingId,
         reason: `Cannot dismiss finding "${decision.findingId}" because clean evidence settles it in this output`,
+      });
+      continue;
+    }
+    if (input.reobservedFindingIds.has(decision.findingId)) {
+      rejected.push({
+        findingId: decision.findingId,
+        reason: `Cannot dismiss finding "${decision.findingId}" because it is re-observed (match/conflict) in this output; evidence takes precedence over jurisdiction adjudication`,
       });
       continue;
     }
@@ -1019,6 +1028,7 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     decisions: input.decisions.dismissDecisions,
     eligibleFindingIds: input.dismissCandidateFindingIds ?? new Set(),
     transitionedFindingIds: stateTransitionFindingIds,
+    reobservedFindingIds: unresolvedEvidenceFindingIds,
   });
   const withInvalidateTransitioned = new Set([
     ...stateTransitionFindingIds,

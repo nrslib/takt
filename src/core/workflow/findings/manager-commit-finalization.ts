@@ -75,11 +75,27 @@ export function reconcileCommitPlan(input: {
     wireById: new Map(input.rawFindings.map((wire) => [wire.rawFindingId, wire])),
     freshLedger: input.freshLedger,
   });
+  // clean 証拠による settlement（昇格 / 決定的 same による解消）が確定した
+  // provisional への dismiss は不採用にする — clean 証拠が常に管轄裁定より
+  // 優先（settlement 側が status を変えるため、残すと reconciler の
+  // 「1 finding = 1 決定」検証で出力全体が落ちる）。
+  const settledFindingIds = new Set([
+    ...settlement.promotedFindingIds,
+    ...settlement.resolvedByMapping.keys(),
+  ]);
+  const settledOutput = settledFindingIds.size > 0
+    ? {
+        ...settlement.output,
+        dismissedFindings: settlement.output.dismissedFindings.filter(
+          (dismissed) => !settledFindingIds.has(dismissed.findingId),
+        ),
+      }
+    : settlement.output;
   const reconciled = reconcileFindingLedger({
     priorStepResponseText: input.runInput.priorStepResponseText,
     previousLedger: input.freshLedger,
     rawFindings: input.rawFindings,
-    managerOutput: settlement.output,
+    managerOutput: settledOutput,
     provisionalFindings: input.provisionalSpecs,
     rawProvenanceByRawFindingId: input.rawProvenanceByRawFindingId,
     excludedFromUnmentionedFallbackRawFindingIds: new Set([

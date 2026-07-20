@@ -5,7 +5,7 @@ import {
   RawFindingsOutputValidationJsonSchema,
   parseFindingManagerDecisions,
 } from './schemas.js';
-import { normalizeFindingText, parseFindingLocation } from './location.js';
+import { normalizeFindingText, parseFindingLocation, parseFindingLocationRange } from './location.js';
 import type {
   FindingLedger,
   FindingManagerDecisions,
@@ -125,7 +125,10 @@ function collectDuplicateLocusGroups(ledger: FindingLedger): Map<string, Finding
     if (finding.status !== 'open' || finding.provisional !== undefined) {
       continue;
     }
-    const path = parseFindingLocation(finding.location)?.path;
+    // 行範囲形式（path:10-20）は parseFindingLocation では path に範囲ごと
+    // 含まれてしまうため、先に範囲として解釈する（admission と同じ受理形式）。
+    const path = parseFindingLocationRange(finding.location)?.path
+      ?? parseFindingLocation(finding.location)?.path;
     if (path === undefined) {
       continue;
     }

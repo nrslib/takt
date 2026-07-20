@@ -54,11 +54,19 @@ describe('buildManagerInstruction duplicate locus groups', () => {
       openFinding('F-0003', '別ファイルの単独指摘', 'src/core/workflow/findings/store.ts:10'),
     ]));
 
-    expect(instruction).toContain('src/core/models/rfc3339.ts:');
-    expect(instruction).toContain('F-0001');
-    expect(instruction).toContain('F-0002');
+    // セクション見出しとグループ本文を直接検証する（台帳 JSON 側にも id/path が
+    // 現れるため、単なる contain では偽陽性になる）。
+    // グループブロックはこの見出し文と「Return only structured output」の間に
+    // 出力される。後続の台帳 JSON に同じ id/path が現れるため境界で区切る。
+    const afterHeading = instruction.split('cite the same file')[1] ?? '';
+    const section = afterHeading.split('Return only structured output')[0] ?? '';
+    expect(section).toContain('- src/core/models/rfc3339.ts:');
+    // 行範囲形式（:55-60）の location も同一ファイルとしてグループ化される
+    expect(section).toContain('  - F-0001 [medium]');
+    expect(section).toContain('  - F-0002 [medium]');
     // 単独ファイルの finding はグループに現れない
-    expect(instruction).not.toContain('- src/core/workflow/findings/store.ts:');
+    expect(section).not.toContain('- src/core/workflow/findings/store.ts:');
+    expect(section).not.toContain('F-0003');
   });
 
   it('グループが無いときは統合候補セクション自体を出さない', () => {

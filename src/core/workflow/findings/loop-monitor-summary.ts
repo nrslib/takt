@@ -1,10 +1,8 @@
 import type { FindingLedger } from './types.js';
-import { DISMISSABLE_PROVISIONAL_KINDS } from '../../models/finding-types.js';
+import { isDismissCandidate } from './manager-utils.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import { resolveStopBudgetLimits } from './stop-budget.js';
 import type { FindingContractConfig } from './types.js';
-
-const DISMISSABLE_KIND_SET: ReadonlySet<string> = new Set(DISMISSABLE_PROVISIONAL_KINDS);
 
 /**
  * loop monitor judge へ注入する findings 状態の派生サマリ。judge は台帳の
@@ -30,7 +28,7 @@ export function renderLoopMonitorFindingsSummary(
     const stalledRounds = provisional.firstObservedRound !== undefined
       ? roundsCompleted - provisional.firstObservedRound + 1
       : undefined;
-    const settlement = DISMISSABLE_KIND_SET.has(provisional.kind)
+    const settlement = isDismissCandidate(finding)
       ? 'settlement: later clean evidence OR manager dismissDecisions'
       : 'settlement: later clean evidence only';
     return `- ${finding.id} [${provisional.kind}] ${finding.title} — stalled for ${stalledRounds !== undefined ? `${stalledRounds} manager round(s)` : 'an unknown number of rounds'}; ${settlement}`;
