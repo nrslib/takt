@@ -29,7 +29,7 @@ export interface RunFindingManagerForStepInput {
   workflowModel?: WorkflowConfig['model'];
   ledgerStore: FindingManagerStore;
   optionsBuilder: OptionsBuilder;
-  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
+  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput' | 'recordSynthesizedAgentUsage'>;
   parentStep: WorkflowStep;
   stepIteration: number;
   subResults: FindingManagerSubStepResult[];

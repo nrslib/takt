@@ -15,6 +15,7 @@ import { validateFindingManagerOutput } from './manager-output-validation.js';
 import { computeLineageKey, computeProvisionalStableKey, computeReviewerStableKey } from './raw-canonicalization.js';
 import { countInterpretationEpochs, normalizeProvisionalInterpretationEpochs } from './interpretation-wal.js';
 import { formatConflictId, formatConflictSignature } from './conflict-identity.js';
+import { stopBudgetRoundsCompleted } from './stop-budget.js';
 
 /**
  * provisional finding の upsert 指示。stableKey が同じ
@@ -429,6 +430,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       disputeNotes: input.managerOutput.disputeNotes ?? [],
       invalidatedFindings: input.managerOutput.invalidatedFindings ?? [],
       duplicateFindings: input.managerOutput.duplicateFindings ?? [],
+      dismissedFindings: input.managerOutput.dismissedFindings ?? [],
     },
   };
   const validation = validateFindingManagerOutput({
@@ -578,6 +580,29 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       revision: bumpRevision(finding),
       invalidatedAt: input.context.timestamp,
       invalidatedEvidence: invalidated.evidence,
+    });
+  }
+
+  // dismiss はエンジンが decision-assembly.ts で候補集合（open な provisional
+  // かつ DISMISSABLE_PROVISIONAL_KINDS）と照合済みの裁定だけを通してくる。
+  // 監査記録（basis / reason / decidedAt）を残して終端し、黙って消さない。
+  for (const dismissed of input.managerOutput.dismissedFindings) {
+    assertKnownFinding(knownFindingIds, dismissed.findingId);
+    const finding = updatedById.get(dismissed.findingId)!;
+    assertFindingStatus(finding, 'open', 'dismiss');
+    if (finding.provisional === undefined) {
+      throw new Error(`Cannot dismiss finding "${dismissed.findingId}" because it is not provisional`);
+    }
+    updatedById.set(dismissed.findingId, {
+      ...finding,
+      status: 'dismissed',
+      lifecycle: 'dismissed',
+      revision: bumpRevision(finding),
+      dismissal: {
+        basis: dismissed.basis,
+        reason: dismissed.reason,
+        decidedAt: observationFromContext(input.context),
+      },
     });
   }
 
@@ -843,6 +868,9 @@ function applyProvisionalFindingSpecs(input: {
         lastObservedAt: observation,
         interpretationEpochs: countInterpretationEpochs(input.ledger, spec.lineageKey),
         gateEffect: 'block',
+        // このラウンドの marker は commit 側で reconcile 後に追記されるため、
+        // 現在ラウンド序数 = 記録済みラウンド数 + 1。
+        firstObservedRound: stopBudgetRoundsCompleted(input.ledger) + 1,
       },
     };
     createdByStableKey.set(spec.stableKey, entry);

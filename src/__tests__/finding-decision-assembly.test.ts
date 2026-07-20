@@ -77,6 +77,7 @@ function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): Findin
     conflictDecisions: [],
     invalidateDecisions: [],
     duplicateDecisions: [],
+    dismissDecisions: [],
     ...overrides,
   };
 }

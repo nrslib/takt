@@ -6,6 +6,7 @@ import type {
   FindingManagerDecisions,
   FindingManagerDisputeNote,
   FindingManagerDuplicateDecision,
+  FindingManagerDismissedFinding,
   FindingManagerInvalidatedFinding,
   FindingManagerMatch,
   FindingManagerNewFinding,
@@ -80,6 +81,11 @@ export interface RejectedDuplicateDecision {
   reason: string;
 }
 
+export interface RejectedDismissDecision {
+  findingId: string;
+  reason: string;
+}
+
 /**
  * raw finding 単位の audit-only 記録。'unsupported' 判定になった raw は
  * finding を作らず対象 finding の状態も変えない（disputeNotes とは別の、
@@ -107,6 +113,7 @@ export interface AssembleManagerOutputResult {
   rejectedCarriedConflicts: RejectedCarriedConflict[];
   rejectedInvalidateDecisions: RejectedInvalidateDecision[];
   rejectedDuplicateDecisions: RejectedDuplicateDecision[];
+  rejectedDismissDecisions: RejectedDismissDecision[];
   /** Raw findings decided 'unsupported' this round. Excluded from the "unmentioned raw -> new finding" fallback by the caller (manager-runner.ts). */
   unsupportedRawDecisions: UnsupportedRawDecision[];
 }
@@ -167,6 +174,17 @@ export interface AssembleManagerOutputInput {
    * save (e.g. the file now exists) is rejected as stale instead of applied.
    */
   invalidLocationCandidateFindingIds?: ReadonlySet<string>;
+  /**
+   * Finding ids the engine offered as dismissal candidates (open provisional
+   * findings whose kind is in DISMISSABLE_PROVISIONAL_KINDS — see
+   * computeDismissCandidates in manager-utils.ts). The manager's
+   * dismissDecisions may only select from this set; the LLM's reason alone
+   * never grants authority to dismiss a finding outside it. Defaults to empty.
+   * The save-time re-assembly recomputes the candidates against the freshly
+   * reloaded ledger, so a dismissal whose target was settled by clean evidence
+   * between the initial judgment and the save is rejected as stale.
+   */
+  dismissCandidateFindingIds?: ReadonlySet<string>;
 }
 
 interface GroupedFindingDecision {
@@ -532,6 +550,82 @@ function assembleInvalidateDecisions(input: {
 }
 
 /**
+ * manager が dismissDecisions で選んだ finding id を、engine が事前に構築した
+ * 候補集合（open な provisional かつ DISMISSABLE_PROVISIONAL_KINDS）と照合して
+ * から適用する。invalidate と同じ授権モデル: LLM の reason だけでは dismiss を
+ * 成立させない。clean な後続証拠による settlement が同ラウンドにある finding は
+ * そちらを優先して dismiss を不採用にし、active conflict が参照する finding は
+ * 裁定（adjudication）経路を迂回させないため拒否する。
+ */
+function assembleDismissDecisions(input: {
+  previousLedger: FindingLedger;
+  decisions: FindingManagerDecisions['dismissDecisions'];
+  eligibleFindingIds: ReadonlySet<string>;
+  transitionedFindingIds: ReadonlySet<string>;
+  /** このラウンドで match / conflict として再観測された finding。clean 証拠の再観測は dismiss より優先する。 */
+  reobservedFindingIds: ReadonlySet<string>;
+}): { dismissedFindings: FindingManagerDismissedFinding[]; rejected: RejectedDismissDecision[] } {
+  const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
+  const activeConflictFindingIds = new Set(
+    input.previousLedger.conflicts
+      .filter((conflict) => conflict.status === 'active')
+      .flatMap((conflict) => conflict.findingIds),
+  );
+  const dismissedFindings: FindingManagerDismissedFinding[] = [];
+  const rejected: RejectedDismissDecision[] = [];
+  const seenFindingIds = new Set<string>();
+
+  for (const decision of input.decisions) {
+    if (seenFindingIds.has(decision.findingId)) {
+      rejected.push({ findingId: decision.findingId, reason: `Duplicate dismiss decision for finding id "${decision.findingId}"` });
+      continue;
+    }
+    seenFindingIds.add(decision.findingId);
+
+    const finding = findingsById.get(decision.findingId);
+    if (finding === undefined) {
+      rejected.push({ findingId: decision.findingId, reason: `Unknown finding id "${decision.findingId}"` });
+      continue;
+    }
+    if (finding.status !== 'open') {
+      rejected.push({ findingId: decision.findingId, reason: `Cannot dismiss finding "${decision.findingId}" because it is not open` });
+      continue;
+    }
+    if (!input.eligibleFindingIds.has(decision.findingId)) {
+      rejected.push({
+        findingId: decision.findingId,
+        reason: `Cannot dismiss finding "${decision.findingId}" because the engine did not offer it as a dismissal candidate`,
+      });
+      continue;
+    }
+    if (input.transitionedFindingIds.has(decision.findingId)) {
+      rejected.push({
+        findingId: decision.findingId,
+        reason: `Cannot dismiss finding "${decision.findingId}" because clean evidence settles it in this output`,
+      });
+      continue;
+    }
+    if (input.reobservedFindingIds.has(decision.findingId)) {
+      rejected.push({
+        findingId: decision.findingId,
+        reason: `Cannot dismiss finding "${decision.findingId}" because it is re-observed (match/conflict) in this output; evidence takes precedence over jurisdiction adjudication`,
+      });
+      continue;
+    }
+    if (activeConflictFindingIds.has(decision.findingId)) {
+      rejected.push({
+        findingId: decision.findingId,
+        reason: `Cannot dismiss finding "${decision.findingId}" while an active conflict references it; adjudicate the conflict first`,
+      });
+      continue;
+    }
+    dismissedFindings.push({ findingId: decision.findingId, basis: decision.basis, reason: decision.reason });
+  }
+
+  return { dismissedFindings, rejected };
+}
+
+/**
  * duplicateDecisions を構造的に検証してそのまま適用対象へ通す。canonical/
  * duplicates はすべて previousLedger 上で open であること、自己参照が無いこと、
  * 同ラウンド内で canonical/duplicate の役割が食い違わない（連鎖・循環にならない）
@@ -893,6 +987,7 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     disputeNotes: [],
     invalidatedFindings: [],
     duplicateFindings: [],
+    dismissedFindings: [],
   };
 
   // 機械分類の結果が渡されたら、ここで raw decisions の組み立て結果と merge して
@@ -925,9 +1020,20 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     eligibleFindingIds: input.invalidLocationCandidateFindingIds ?? new Set(),
     transitionedFindingIds: stateTransitionFindingIds,
   });
+  // dismiss は invalidate と同じ段で確定する（clean 証拠の settlement =
+  // stateTransitionFindingIds を優先して不採用にし、確定分は以降の判断の
+  // 除外集合へ足し込む）。
+  const dismissResult = assembleDismissDecisions({
+    previousLedger: input.previousLedger,
+    decisions: input.decisions.dismissDecisions,
+    eligibleFindingIds: input.dismissCandidateFindingIds ?? new Set(),
+    transitionedFindingIds: stateTransitionFindingIds,
+    reobservedFindingIds: unresolvedEvidenceFindingIds,
+  });
   const withInvalidateTransitioned = new Set([
     ...stateTransitionFindingIds,
     ...invalidateResult.invalidatedFindings.map((invalidated) => invalidated.findingId),
+    ...dismissResult.dismissedFindings.map((dismissed) => dismissed.findingId),
   ]);
   const duplicateResult = assembleDuplicateDecisions({
     previousLedger: input.previousLedger,
@@ -989,6 +1095,7 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
       disputeNotes: disputeResult.disputeNotes,
       invalidatedFindings: invalidateResult.invalidatedFindings,
       duplicateFindings: duplicateResult.duplicateFindings,
+      dismissedFindings: dismissResult.dismissedFindings,
     },
     rejectedRawDecisions: [...rawResult.rejected, ...rejectedCanonicalWaivers],
     rejectedDisputeDecisions: disputeResult.rejected,
@@ -996,6 +1103,7 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     rejectedCarriedConflicts: carriedResult.rejected,
     rejectedInvalidateDecisions: invalidateResult.rejected,
     rejectedDuplicateDecisions: duplicateResult.rejected,
+    rejectedDismissDecisions: dismissResult.rejected,
     unsupportedRawDecisions: rawResult.unsupported,
   };
 }
@@ -1104,8 +1212,14 @@ export function flattenManagerOutputToDecisions(output: FindingManagerOutput): F
     evidence: duplicate.evidence,
   }));
 
+  const dismissDecisions: FindingManagerDecisions['dismissDecisions'] = output.dismissedFindings.map((dismissed) => ({
+    findingId: dismissed.findingId,
+    basis: dismissed.basis,
+    reason: dismissed.reason,
+  }));
+
   return {
-    decisions: { rawDecisions, disputeDecisions, conflictDecisions, invalidateDecisions, duplicateDecisions },
+    decisions: { rawDecisions, disputeDecisions, conflictDecisions, invalidateDecisions, duplicateDecisions, dismissDecisions },
     carriedFindingOnlyConflicts,
   };
 }

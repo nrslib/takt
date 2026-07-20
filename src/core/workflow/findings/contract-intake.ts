@@ -63,7 +63,7 @@ export interface FindingContractIntakeInput {
   workflowModel?: WorkflowConfig['model'];
   ledgerStore: FindingManagerStore;
   optionsBuilder: OptionsBuilder;
-  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
+  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput' | 'recordSynthesizedAgentUsage'>;
   /** raw admission validation（manager-runner.ts の cwd 引数を参照）に使う実行 cwd。 */
   cwd: string;
   parentStep: WorkflowStep;

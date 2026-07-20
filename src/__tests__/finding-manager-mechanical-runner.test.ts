@@ -116,6 +116,7 @@ function makeHarness(initialLedger: FindingLedger): Harness {
   };
   const stepExecutor = {
     buildPhase1Instruction: (instruction: string) => instruction,
+    recordSynthesizedAgentUsage: () => {},
     normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
   };
   const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
@@ -518,6 +519,7 @@ describe('runFindingManagerForStep workflow_call sub-steps', () => {
     };
     const stepExecutor = {
       buildPhase1Instruction: (instruction: string) => instruction,
+      recordSynthesizedAgentUsage: () => {},
       normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
     };
     const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
@@ -659,6 +661,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     };
     const stepExecutor = {
       buildPhase1Instruction: (instruction: string) => instruction,
+      recordSynthesizedAgentUsage: () => {},
       normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
     };
     const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
@@ -792,6 +795,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     };
     const stepExecutor = {
       buildPhase1Instruction: (instruction: string) => instruction,
+      recordSynthesizedAgentUsage: () => {},
       normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
     };
     const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
@@ -935,6 +939,7 @@ describe('runFindingManagerForStep stale rejection excluded from unmentioned fal
     };
     const stepExecutor = {
       buildPhase1Instruction: (instruction: string) => instruction,
+      recordSynthesizedAgentUsage: () => {},
       normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
     };
     const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;

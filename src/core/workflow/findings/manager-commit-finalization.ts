@@ -68,23 +68,55 @@ export function reconcileCommitPlan(input: {
   pendingRejectedObservations: RawAdmissionEvaluation['pendingRejectedObservations'];
   rawProvenanceByRawFindingId: Map<string, { reviewerStableKey: string; lineageKey: string }>;
   cleanWire: RawFinding[];
-}): FindingLedger {
+}): { ledger: FindingLedger; landedSpecs: ProvisionalFindingSpec[] } {
   const settlement = settleProvisionalsWithCleanEvidence({
     output: input.managerOutput,
     cleanRawIds: new Set(input.cleanWire.map((wire) => wire.rawFindingId)),
     wireById: new Map(input.rawFindings.map((wire) => [wire.rawFindingId, wire])),
     freshLedger: input.freshLedger,
   });
+  // clean 証拠による settlement（昇格 / 決定的 same による解消）が確定した
+  // provisional への dismiss は不採用にする — clean 証拠が常に管轄裁定より
+  // 優先（settlement 側が status を変えるため、残すと reconciler の
+  // 「1 finding = 1 決定」検証で出力全体が落ちる）。
+  const settledFindingIds = new Set([
+    ...settlement.promotedFindingIds,
+    ...settlement.resolvedByMapping.keys(),
+  ]);
+  const settledOutput = settledFindingIds.size > 0
+    ? {
+        ...settlement.output,
+        dismissedFindings: settlement.output.dismissedFindings.filter(
+          (dismissed) => !settledFindingIds.has(dismissed.findingId),
+        ),
+      }
+    : settlement.output;
+  // dismiss と同一ラウンドに同じ主張（stableKey）の raw が再来した場合、その
+  // provisional spec を着地させない — 裁定は claim の再発同定キー単位で有効で、
+  // 着地を許すと dismissed の傍から同じ claim が新 ID の open provisional として
+  // 復活し、ゲートが開かないまま dismissed が増殖する。抑止した観測は
+  // 監査添付（rejectedObservations）として dismissed finding に残す。
+  const dismissedStableKeys = new Set(
+    settledOutput.dismissedFindings.flatMap((dismissed) => {
+      const finding = input.freshLedger.findings.find((entry) => entry.id === dismissed.findingId);
+      return finding?.provisional !== undefined ? [finding.provisional.stableKey] : [];
+    }),
+  );
+  const suppressedSpecs = input.provisionalSpecs.filter((spec) => dismissedStableKeys.has(spec.stableKey));
+  const landedSpecs = suppressedSpecs.length > 0
+    ? input.provisionalSpecs.filter((spec) => !dismissedStableKeys.has(spec.stableKey))
+    : input.provisionalSpecs;
   const reconciled = reconcileFindingLedger({
     priorStepResponseText: input.runInput.priorStepResponseText,
     previousLedger: input.freshLedger,
     rawFindings: input.rawFindings,
-    managerOutput: settlement.output,
-    provisionalFindings: input.provisionalSpecs,
+    managerOutput: settledOutput,
+    provisionalFindings: landedSpecs,
     rawProvenanceByRawFindingId: input.rawProvenanceByRawFindingId,
     excludedFromUnmentionedFallbackRawFindingIds: new Set([
       ...input.pendingRejectedObservations.map((pending) => pending.item.wire.rawFindingId),
       ...input.anomalySpecs.flatMap((spec) => spec.sourceRawFindingIds),
+      ...suppressedSpecs.flatMap((spec) => spec.sourceRawFindingIds),
     ]),
     context: {
       workflowName: input.runInput.workflowName,
@@ -93,7 +125,68 @@ export function reconcileCommitPlan(input: {
       timestamp: input.runInput.timestamp,
     },
   });
-  return applyProvisionalSettlement(reconciled, settlement, input.runInput.timestamp);
+  const settled = applyProvisionalSettlement(reconciled, settlement, input.runInput.timestamp);
+  const attached = attachSuppressedObservationsToDismissed(
+    settled,
+    suppressedSpecs,
+    new Set(settledOutput.dismissedFindings.map((dismissed) => dismissed.findingId)),
+    {
+      runId: input.runInput.runId,
+      stepName: input.runInput.parentStep.name,
+      timestamp: input.runInput.timestamp,
+    },
+  );
+  return { ledger: attached, landedSpecs };
+}
+
+/**
+ * dismiss と同一ラウンドで抑止した同一 claim の観測を、**このラウンドで**
+ * dismissed になった finding の rejectedObservations へ監査添付する（黙って
+ * 消さない）。同一 stableKey の spec が複数あっても raw ID を全量集約し、
+ * 過去ラウンドで dismissed になった同 stableKey の finding には添付しない。
+ * status / revision / canonical evidence には影響しない
+ * （rejectedObservations の既存契約と同じ）。
+ */
+function attachSuppressedObservationsToDismissed(
+  ledger: FindingLedger,
+  suppressedSpecs: readonly ProvisionalFindingSpec[],
+  dismissedThisRoundFindingIds: ReadonlySet<string>,
+  observedAt: { runId: string; stepName: string; timestamp: string },
+): FindingLedger {
+  if (suppressedSpecs.length === 0) {
+    return ledger;
+  }
+  const rawIdsByStableKey = new Map<string, Set<string>>();
+  for (const spec of suppressedSpecs) {
+    const rawIds = rawIdsByStableKey.get(spec.stableKey) ?? new Set<string>();
+    for (const rawFindingId of spec.sourceRawFindingIds) {
+      rawIds.add(rawFindingId);
+    }
+    rawIdsByStableKey.set(spec.stableKey, rawIds);
+  }
+  return {
+    ...ledger,
+    findings: ledger.findings.map((finding) => {
+      if (!dismissedThisRoundFindingIds.has(finding.id) || finding.provisional === undefined) {
+        return finding;
+      }
+      const rawIds = rawIdsByStableKey.get(finding.provisional.stableKey);
+      if (rawIds === undefined) {
+        return finding;
+      }
+      return {
+        ...finding,
+        rejectedObservations: [
+          ...(finding.rejectedObservations ?? []),
+          ...[...rawIds].map((rawFindingId) => ({
+            rawFindingId,
+            reason: 'Same-claim observation arrived in the round its provisional was dismissed; recorded for audit only — the dismissal covers this re-assertion',
+            observedAt: { runId: observedAt.runId, stepName: observedAt.stepName, timestamp: observedAt.timestamp },
+          })),
+        ],
+      };
+    }),
+  };
 }
 
 export function applyCommitLedgerStates(input: {

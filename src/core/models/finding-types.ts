@@ -6,10 +6,12 @@ export const FINDING_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const
 // finding is valid but won't be fixed) — critical findings can never be waived,
 // but CAN be invalidated, because invalidation says the finding was never real.
 // 'superseded': the finding was merged into a canonical duplicate (duplicateDecisions).
-// Both are terminal, additive statuses: existing v1 ledgers need no migration
+// 'dismissed': a provisional finding's claim was adjudicated out of the
+// contract's jurisdiction or permanently unverifiable (dismissDecisions).
+// All are terminal, additive statuses: existing v1 ledgers need no migration
 // because a ledger that never produces these values is unaffected.
-export const FINDING_STATUSES = ['open', 'resolved', 'waived', 'invalidated', 'superseded'] as const;
-export const FINDING_LIFECYCLES = ['new', 'persists', 'resolved', 'reopened', 'waived', 'invalidated', 'superseded'] as const;
+export const FINDING_STATUSES = ['open', 'resolved', 'waived', 'invalidated', 'superseded', 'dismissed'] as const;
+export const FINDING_LIFECYCLES = ['new', 'persists', 'resolved', 'reopened', 'waived', 'invalidated', 'superseded', 'dismissed'] as const;
 export const FINDING_CONFLICT_STATUSES = ['active', 'resolved'] as const;
 
 export type FindingSeverity = typeof FINDING_SEVERITIES[number];
@@ -137,6 +139,29 @@ export const FINDING_PROVISIONAL_KINDS = [
 ] as const;
 export type FindingProvisionalKind = typeof FINDING_PROVISIONAL_KINDS[number];
 
+/**
+ * manager の dismissDecisions が却下してよい provisional 種別。
+ * 検証不能な主張（locationless）と意味曖昧（raw-meaning-ambiguous）は
+ * 内容の管轄裁定が可能だが、overflow / budget / interrupted / stale 系は
+ * 「処理失敗の証跡」であり、manager が消すと final gate の迂回路になるため
+ * 候補にしない（settlement は clean な後続 raw のみ）。
+ */
+export const DISMISSABLE_PROVISIONAL_KINDS = [
+  'raw-meaning-ambiguous',
+  'unverified-locationless',
+] as const satisfies readonly FindingProvisionalKind[];
+
+/** dismiss 裁定の根拠分類。out_of_scope: finding contract の管轄外（例: 検証結果の評価は final gate の職掌）。unverifiable_claim: 機械検証も後続 clean 証拠も成立し得ない主張。 */
+export const FINDING_DISMISSAL_BASES = ['out_of_scope', 'unverifiable_claim'] as const;
+export type FindingDismissalBasis = typeof FINDING_DISMISSAL_BASES[number];
+
+/** manager の dismiss 裁定の監査記録。黙って消さない — 理由と判断時点を finding に残し、人間が後から覆せる。 */
+export interface FindingDismissalRecord {
+  basis: FindingDismissalBasis;
+  reason: string;
+  decidedAt: FindingObservation;
+}
+
 export interface FindingProvisionalMetadata {
   kind: FindingProvisionalKind;
   /** 決定的な再発同定キー（sha256(reviewerStableKey, lineageKey, kind, policyVersion)）。行番号・runId・タイムスタンプ・LLM 説明文は入れない。 */
@@ -149,6 +174,12 @@ export interface FindingProvisionalMetadata {
   /** この lineage に対する自動 manager 解釈の消費 epoch 数。上限は raw-finding-limits.ts の MAX_INTERPRETATION_EPOCHS_PER_LINEAGE。 */
   interpretationEpochs: number;
   gateEffect: 'block';
+  /**
+   * この provisional が最初に観測された manager ラウンド序数（stop budget の
+   * roundsCompleted + 1）。loop monitor judge へ渡す滞留ラウンド数の導出に使う。
+   * optional — 既存 v1 ledger は migration なしで読める（欠落時は滞留不明）。
+   */
+  firstObservedRound?: number;
 }
 
 export interface FindingLedgerEntry {
@@ -176,6 +207,8 @@ export interface FindingLedgerEntry {
   invalidatedEvidence?: string;
   /** Set when status/lifecycle becomes 'superseded' by a duplicateDecisions merge. */
   supersededByFindingId?: string;
+  /** Set when status/lifecycle becomes 'dismissed' by a manager dismissDecisions adjudication (provisional-only; see DISMISSABLE_PROVISIONAL_KINDS). */
+  dismissal?: FindingDismissalRecord;
   /**
    * 楽観的前提条件（CAS）の版数。エントリを変更するたびに +1。省略時（既存 v1
    * ledger）は 1 とみなす（finding-preconditions.ts の findingRevision 参照）。
@@ -784,6 +817,13 @@ export interface FindingManagerInvalidatedFinding {
   evidence: string;
 }
 
+/** Applied only to open provisional findings whose kind is in DISMISSABLE_PROVISIONAL_KINDS and that the engine offered as candidates. The LLM's reason alone never dismisses a finding outside the candidate set. */
+export interface FindingManagerDismissedFinding {
+  findingId: string;
+  basis: FindingDismissalBasis;
+  reason: string;
+}
+
 /** Merges duplicateFindingIds into canonicalFindingId (rawFindingIds/reviewers/disputes) and marks the duplicates 'superseded'. Never used to resolve or waive — "superseded" and "fixed" are different claims. */
 export interface FindingManagerDuplicateDecision {
   canonicalFindingId: string;
@@ -890,6 +930,7 @@ export interface FindingManagerOutput {
   disputeNotes: FindingManagerDisputeNote[];
   invalidatedFindings: FindingManagerInvalidatedFinding[];
   duplicateFindings: FindingManagerDuplicateDecision[];
+  dismissedFindings: FindingManagerDismissedFinding[];
 }
 
 // FindingManagerOutput（上記）は台帳の内部表現として残すが、LLM に直接組み立てさせる
@@ -947,6 +988,19 @@ export interface FindingManagerInvalidateDecision {
   evidence: string;
 }
 
+/**
+ * Proposal to dismiss an open provisional finding whose claim the manager
+ * adjudicates as out of the contract's jurisdiction or permanently unverifiable.
+ * The manager may only choose from the candidate finding ids the engine
+ * offered (open provisional entries whose kind is in
+ * DISMISSABLE_PROVISIONAL_KINDS — see computeDismissCandidates).
+ */
+export interface FindingManagerDismissDecision {
+  findingId: string;
+  basis: FindingDismissalBasis;
+  reason: string;
+}
+
 /** LLM が返す「判断だけ」の出力。組み立て・不変条件の強制は decision-assembly.ts が行う。 */
 export interface FindingManagerDecisions {
   rawDecisions: FindingManagerRawDecision[];
@@ -954,6 +1008,7 @@ export interface FindingManagerDecisions {
   conflictDecisions: FindingManagerConflictDecision[];
   invalidateDecisions: FindingManagerInvalidateDecision[];
   duplicateDecisions: FindingManagerDuplicateDecision[];
+  dismissDecisions: FindingManagerDismissDecision[];
 }
 
 export interface FindingReconcileContext {

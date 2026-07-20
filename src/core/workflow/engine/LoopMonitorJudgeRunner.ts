@@ -23,6 +23,13 @@ interface LoopMonitorJudgeRunnerDeps {
   onStepComplete: (step: WorkflowStep, response: AgentResponse, instruction: string) => void;
   emitCollectedReports: () => void;
   resetCycleDetector: () => void;
+  /**
+   * finding contract 有効時のみ。エンジン計算済みの findings 状態
+   * （完了ゲートの充足状況・暫定の滞留ラウンド数・解消経路）を judge の
+   * instruction 末尾へ注入する（loop-monitor-summary.ts 参照）。store を
+   * runner に直接読ませず、Setup が構築した読み取り依存だけを渡す。
+   */
+  getFindingsSummaryForJudge?: () => string | undefined;
 }
 
 export class LoopMonitorJudgeRunner {
@@ -46,13 +53,17 @@ export class LoopMonitorJudgeRunner {
     const maxSteps = this.deps.getMaxSteps();
     this.deps.state.iteration++;
     const stepIteration = incrementStepIteration(this.deps.state, judgeStep.name);
-    const prebuiltInstruction = this.deps.stepExecutor.buildInstruction(
+    const baseInstruction = this.deps.stepExecutor.buildInstruction(
       judgeStep,
       stepIteration,
       this.deps.state,
       this.deps.task,
       maxSteps,
     );
+    const findingsSummary = this.deps.getFindingsSummaryForJudge?.();
+    const prebuiltInstruction = findingsSummary !== undefined
+      ? `${baseInstruction}\n\n## Findings state (engine-computed)\n${findingsSummary}`
+      : baseInstruction;
 
     const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(judgeStep, resolvedRuntime);
     this.deps.onStepStart(judgeStep, this.deps.state.iteration, prebuiltInstruction, providerInfo);

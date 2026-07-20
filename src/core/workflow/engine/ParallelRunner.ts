@@ -51,7 +51,7 @@ import type { WorkflowCallIsolatedStateSync, WorkflowCallSessionUpdates } from '
 import { compactSessionBeforePhase1 } from './session-compaction.js';
 import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
 import { StructuredOutputSchemaError } from './structured-output-schema-validator.js';
-import { recordDelegatedAgentUsage } from './delegated-agent-usage.js';
+import { recordAgentUsageEvent } from './agent-usage-event.js';
 
 const log = createLogger('parallel-runner');
 
@@ -579,7 +579,7 @@ export class ParallelRunner {
             success: boolean,
             usage: AgentResponse['providerUsage'],
           ): void => {
-            recordDelegatedAgentUsage(
+            recordAgentUsageEvent(
               this.deps.engineOptions,
               subStep.name,
               'parallel',
@@ -1038,7 +1038,7 @@ export class ParallelRunner {
     try {
       response = await executeAgent(subStep.persona, instruction, options);
     } catch (error) {
-      recordDelegatedAgentUsage(
+      recordAgentUsageEvent(
         this.deps.engineOptions,
         subStep.name,
         'parallel',
@@ -1048,7 +1048,7 @@ export class ParallelRunner {
       );
       throw error;
     }
-    recordDelegatedAgentUsage(
+    recordAgentUsageEvent(
       this.deps.engineOptions,
       subStep.name,
       'parallel',

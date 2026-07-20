@@ -3,7 +3,7 @@ import {
   checkFindingPrecondition,
   type CapturedFindingPrecondition,
 } from './finding-preconditions.js';
-import { collectLandedRawIds, computeInvalidLocationCandidates, describeManagerRejections } from './manager-utils.js';
+import { collectLandedRawIds, computeDismissCandidates, computeInvalidLocationCandidates, describeManagerRejections } from './manager-utils.js';
 import { provisionalSpecForRaw, stalePreconditionSpec } from './manager-provisional.js';
 import type { ProvisionalFindingSpec } from './reconciler.js';
 import type {
@@ -39,6 +39,11 @@ export function revalidateManagerPlan(input: {
     priorStepResponseText: input.runInput.priorStepResponseText,
     invalidLocationCandidateFindingIds: new Set(
       computeInvalidLocationCandidates(input.runInput.cwd, input.freshLedger.findings).keys(),
+    ),
+    // fresh ledger に対して候補を再計算する: 初回判断と保存の間に clean 証拠で
+    // settle された（open でなくなった）対象への dismiss は stale として不採用になる。
+    dismissCandidateFindingIds: new Set(
+      computeDismissCandidates(input.freshLedger.findings).keys(),
     ),
   });
   const freshLandedRawIds = collectLandedRawIds(freshAssembly.output);
@@ -195,6 +200,12 @@ function applyPreconditionChecks(input: {
       checkClosingDecision(findingId, [], ['open'], 'Supersede')
     ));
   });
+  // dismiss も他の終端遷移と同水準の楽観的前提条件を通す: manager 判断中に
+  // 同じ provisional へ新しい観測が積まれて revision が進んでいたら、古い
+  // 判断のままでは却下しない（stale として不採用 → 次ラウンドで再裁定）。
+  const dismissedFindings = input.output.dismissedFindings.filter((dismissed) => (
+    checkClosingDecision(dismissed.findingId, [], ['open'], 'Dismiss')
+  ));
 
   return {
     output: {
@@ -204,6 +215,7 @@ function applyPreconditionChecks(input: {
       invalidatedFindings,
       waivedFindings,
       duplicateFindings,
+      dismissedFindings,
       conflicts: [...input.output.conflicts, ...extraConflicts],
     },
     provisionalSpecs,

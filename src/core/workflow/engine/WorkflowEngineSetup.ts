@@ -16,6 +16,7 @@ import { ArpeggioRunner } from './ArpeggioRunner.js';
 import { LoopMonitorJudgeRunner } from './LoopMonitorJudgeRunner.js';
 import { OptionsBuilder } from './OptionsBuilder.js';
 import { ParallelRunner } from './ParallelRunner.js';
+import { recordAgentUsageEvent } from './agent-usage-event.js';
 import { StepExecutor } from './StepExecutor.js';
 import { SystemStepExecutor } from './SystemStepExecutor.js';
 import { TeamLeaderRunner } from './TeamLeaderRunner.js';
@@ -27,6 +28,7 @@ import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import type { FindingLedgerStore } from '../findings/store.js';
 import { RawFindingsStructuredOutput } from '../findings/manager-runner.js';
 import { ledgerHasOpenFindings, ledgerHasWaivedFindings, renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
+import { renderLoopMonitorFindingsSummary } from '../findings/loop-monitor-summary.js';
 import { computeReviewScopeSnapshotId } from '../findings/snapshot.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 
@@ -209,6 +211,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     findingLedgerStore: params.findingLedgerStore,
     refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
+    recordSynthesizedAgentUsage: (stepName, providerInfo, success, usage) =>
+      recordAgentUsageEvent(params.options, stepName, 'normal', providerInfo, success, usage),
     getRunId: () => params.runPaths.slug,
     getFindingCallNamespace: () => params.options.findingCallNamespace ?? '',
     ...phaseRelay,
@@ -339,6 +343,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       }
     },
     resetCycleDetector: params.resetCycleDetector,
+    ...(params.findingContract && params.findingLedgerStore
+      ? {
+          getFindingsSummaryForJudge: () =>
+            renderLoopMonitorFindingsSummary(params.findingLedgerStore!.loadLedger(), params.findingContract!),
+        }
+      : {}),
   });
 
   return {

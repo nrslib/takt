@@ -126,7 +126,7 @@ export function buildFindingManagerCommitMutation(
   ];
   const interpretationResults = ladderCommit.interpretationResults;
   const merged = mergeOutputs(output, ladderCommit.output);
-  const settled = reconcileCommitPlan({
+  const reconcilePlan = reconcileCommitPlan({
     runInput: input,
     freshLedger,
     rawFindings: prepared.reconcileRawFindings,
@@ -137,7 +137,10 @@ export function buildFindingManagerCommitMutation(
     rawProvenanceByRawFindingId: prepared.rawProvenanceByRawFindingId,
     cleanWire: admission.cleanWire,
   });
-  const provisionalLandings = specs.map((spec): ProvisionalLandingReport => ({
+  const settled = reconcilePlan.ledger;
+  // 監査レポートには実際に着地した spec だけを載せる（dismiss と同一ラウンドで
+  // 抑止された同一 claim の spec は着地していない — reconcileCommitPlan 参照）。
+  const provisionalLandings = reconcilePlan.landedSpecs.map((spec): ProvisionalLandingReport => ({
     kind: spec.kind,
     stableKey: spec.stableKey,
     reason: spec.reason,

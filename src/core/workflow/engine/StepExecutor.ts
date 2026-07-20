@@ -19,7 +19,8 @@ import type {
   WorkflowConfig,
   WorkflowResumePointEntry,
 } from '../../models/types.js';
-import type { PhaseName, PhasePromptParts, JudgeStageEntry, RuntimeStepResolution, StepRunResult } from '../types.js';
+import type { PhaseName, PhasePromptParts, JudgeStageEntry, RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
+import type { ProviderUsageSnapshot } from '../../models/response.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
@@ -96,6 +97,13 @@ export interface StepExecutorDeps {
   readonly findingLedgerStore?: FindingLedgerStore;
   readonly refreshFindingsState: () => void;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
+  /** 合成ステップ（findings-manager 等）の LLM 呼び出しを usage-events へ記録する。 */
+  readonly recordSynthesizedAgentUsage: (
+    stepName: string,
+    providerInfo: StepProviderInfo,
+    success: boolean,
+    usage: ProviderUsageSnapshot | undefined,
+  ) => void;
   readonly getRunId: () => string;
   /** raw finding id 衝突対策の呼び出し名前空間。トップレベルでは空文字列。 */
   readonly getFindingCallNamespace: () => string;
@@ -308,6 +316,22 @@ export class StepExecutor {
       instruction,
       step.structuredOutput.schema,
       this.deps.getLanguage() ?? 'en',
+    );
+  }
+
+  /**
+   * 実行ループを通らない合成ステップ（findings-manager / findings-interpreter）
+   * の LLM 呼び出しを usage-events へ記録する。通常ステップは step:complete
+   * イベント経由、parallel / team_leader は recordDelegatedAgentUsage 経由で
+   * 記録されるが、合成ステップの executeAgent 直呼びはどちらの経路にも
+   * 乗らず、トークン集計の死角になっていた。
+   */
+  recordSynthesizedAgentUsage(step: WorkflowStep, success: boolean, usage: ProviderUsageSnapshot | undefined): void {
+    this.deps.recordSynthesizedAgentUsage(
+      step.name,
+      this.deps.optionsBuilder.resolveStepProviderModel(step),
+      success,
+      usage,
     );
   }
 

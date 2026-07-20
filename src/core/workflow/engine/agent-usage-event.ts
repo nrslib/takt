@@ -1,10 +1,10 @@
 import type { ProviderUsageSnapshot } from '../../models/response.js';
 import type { StepProviderInfo, WorkflowEngineOptions } from '../types.js';
 
-export function recordDelegatedAgentUsage(
+export function recordAgentUsageEvent(
   options: WorkflowEngineOptions,
   step: string,
-  stepType: 'parallel' | 'team_leader',
+  stepType: 'parallel' | 'team_leader' | 'normal',
   providerInfo: StepProviderInfo,
   success: boolean,
   usage: ProviderUsageSnapshot | undefined,

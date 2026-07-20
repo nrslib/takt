@@ -5,7 +5,7 @@ import {
   RawFindingsOutputValidationJsonSchema,
   parseFindingManagerDecisions,
 } from './schemas.js';
-import { normalizeFindingText, parseFindingLocation } from './location.js';
+import { normalizeFindingText, parseFindingLocation, parseFindingLocationRange } from './location.js';
 import type {
   FindingLedger,
   FindingManagerDecisions,
@@ -113,6 +113,30 @@ function extractSymbols(text: string | undefined): Set<string> {
   return symbols;
 }
 
+/**
+ * 同一ファイルを引用する open finding のグループ（2件以上）。言い換え増殖
+ * （同じ問題が別 familyTag・別行で別 finding として積まれる — 実測: RFC 3339
+ * 系 7 変種）の統合判断を manager に明示的に促すための決定的ヒント。
+ * 判断そのものは manager の duplicateDecisions（と engine の検証）に委ねる。
+ */
+export function collectDuplicateLocusGroups(ledger: FindingLedger): Map<string, FindingLedger['findings']> {
+  const byPath = new Map<string, FindingLedger['findings']>();
+  for (const finding of ledger.findings) {
+    if (finding.status !== 'open' || finding.provisional !== undefined) {
+      continue;
+    }
+    // 行範囲形式（path:10-20）は parseFindingLocation では path に範囲ごと
+    // 含まれてしまうため、先に範囲として解釈する（admission と同じ受理形式）。
+    const path = parseFindingLocationRange(finding.location)?.path
+      ?? parseFindingLocation(finding.location)?.path;
+    if (path === undefined) {
+      continue;
+    }
+    byPath.set(path, [...(byPath.get(path) ?? []), finding]);
+  }
+  return new Map([...byPath.entries()].filter(([, findings]) => findings.length >= 2));
+}
+
 function collectFullDetailFindingIds(ledger: FindingLedger, residualRawFindings: readonly RawFinding[]): Set<string> {
   const ids = new Set<string>();
   for (const conflict of ledger.conflicts) {
@@ -159,6 +183,7 @@ export function buildManagerInstruction(input: {
   mechanicallyClassifiedCount: number;
   priorStepResponseText?: string;
   invalidLocationCandidates: Map<string, string>;
+  dismissCandidates: Map<string, string>;
 }): string {
   const managerInputLedger = buildManagerInputLedger(
     input.previousLedger,
@@ -174,6 +199,16 @@ export function buildManagerInstruction(input: {
   const invalidateCandidatesBlock = [...input.invalidLocationCandidates.entries()]
     .map(([findingId, reason]) => `- ${findingId}: ${reason}`)
     .join('\n');
+  const dismissCandidatesBlock = [...input.dismissCandidates.entries()]
+    .map(([findingId, description]) => `- ${findingId}: ${description}`)
+    .join('\n');
+  const duplicateLocusGroups = collectDuplicateLocusGroups(input.previousLedger);
+  const duplicateLocusGroupsBlock = [...duplicateLocusGroups.entries()]
+    .map(([path, findings]) => [
+      `- ${path}:`,
+      ...findings.map((finding) => `  - ${finding.id} [${finding.severity}] ${finding.title}`),
+    ].join('\n'))
+    .join('\n');
   return loadTemplate('finding_manager_instruction', 'en', {
     managerInstruction: mechanicalNote,
     outputContract: input.contract.manager.outputContract,
@@ -183,6 +218,10 @@ export function buildManagerInstruction(input: {
     rawFindings: renderFencedJsonBlock(input.residualRawFindings),
     hasInvalidateCandidates: input.invalidLocationCandidates.size > 0,
     invalidateCandidatesBlock,
+    hasDismissCandidates: input.dismissCandidates.size > 0,
+    dismissCandidatesBlock,
+    hasDuplicateLocusGroups: duplicateLocusGroups.size > 0,
+    duplicateLocusGroupsBlock,
     coderResponse: renderFencedTextBlock(input.priorStepResponseText ?? '(no prior step response)'),
   });
 }
@@ -216,10 +255,22 @@ export async function runManagerAttempt(input: {
   managerStep: AgentWorkflowStep;
   instruction: string;
   optionsBuilder: OptionsBuilder;
-  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
+  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput' | 'recordSynthesizedAgentUsage'>;
 }): Promise<AgentResponse> {
   const phase1Instruction = input.stepExecutor.buildPhase1Instruction(input.instruction, input.managerStep);
   const agentOptions = buildManagerAgentOptions(input.optionsBuilder, input.managerStep);
-  const rawResponse = await executeAgent(input.managerStep.persona, phase1Instruction, agentOptions);
+  let rawResponse: AgentResponse;
+  try {
+    rawResponse = await executeAgent(input.managerStep.persona, phase1Instruction, agentOptions);
+  } catch (error) {
+    // 呼び出し自体が失敗しても集計の死角を作らない — usage 欠損の失敗イベントを残す。
+    input.stepExecutor.recordSynthesizedAgentUsage(input.managerStep, false, undefined);
+    throw error;
+  }
+  input.stepExecutor.recordSynthesizedAgentUsage(
+    input.managerStep,
+    rawResponse.status === 'done',
+    rawResponse.providerUsage,
+  );
   return input.stepExecutor.normalizeStructuredOutput(input.managerStep, rawResponse);
 }

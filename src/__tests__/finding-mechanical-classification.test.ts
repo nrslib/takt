@@ -231,6 +231,7 @@ describe('mergeFindingManagerOutputs', () => {
       disputeNotes: [],
       invalidatedFindings: [],
       duplicateFindings: [],
+      dismissedFindings: [],
       ...overrides,
     };
   }

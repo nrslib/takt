@@ -164,6 +164,7 @@ function makeHarness(initialLedger: FindingLedger, stopBudget?: { maxRounds?: nu
   };
   const stepExecutor = {
     buildPhase1Instruction: (instruction: string) => instruction,
+    recordSynthesizedAgentUsage: () => {},
     normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
   };
   const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
@@ -492,7 +493,26 @@ describe('ケース5: 永久機関（同一 lineage の ambiguous raw を run/it
       findings: [makeFinding({ status: 'resolved', lifecycle: 'resolved' })],
     }));
     let interpretationCalls = 0;
+    let dismissConsultations = 0;
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      // 解釈 epoch 枯渇後は provisional が dismiss 候補になり、decisions manager
+      // への相談が始まる（永久機関の設計上の出口）。ここでは manager が裁定を
+      // 保留する（空 decisions）ケースとして扱い、解釈呼び出しとは別に数える。
+      if (!(instruction as string).includes('## Ambiguous raw finding interpretation')) {
+        dismissConsultations += 1;
+        return {
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            rawDecisions: [],
+            disputeDecisions: [],
+            conflictDecisions: [],
+            invalidateDecisions: [],
+            duplicateDecisions: [],
+            dismissDecisions: [],
+          },
+        } as unknown as AgentResponse;
+      }
       interpretationCalls += 1;
       const rawId = extractResidualRawIdFromInterpretationInstruction(instruction as string, 'p-1');
       return interpretationResponse([
@@ -531,6 +551,83 @@ describe('ケース5: 永久機関（同一 lineage の ambiguous raw を run/it
     const after = await harness.run({ runId: 'run-5', reviewerRawFindings: [] });
     expect(after.ledger.findings.filter((finding) => finding.provisional !== undefined)[0]?.status).toBe('open');
     expect(interpretationCalls).toBe(2);
+    // 解釈枯渇後（3ラウンド目以降）は dismiss 候補として decisions manager に
+    // 相談され続ける — 解釈の無限化は止まったまま、裁定という出口が開いている。
+    expect(dismissConsultations).toBeGreaterThan(0);
+  }, 30_000);
+});
+
+describe('ケース5 の出口: 解釈枯渇後の dismiss 裁定', () => {
+  it('dismiss と同一ラウンドに同じ claim の raw が再来しても、新 ID の open provisional は復活せずゲートが開く', async () => {
+    const harness = makeHarness(makeLedger({
+      findings: [makeFinding({ status: 'resolved', lifecycle: 'resolved' })],
+    }));
+    let dismissTargetId: string | undefined;
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      if (!(instruction as string).includes('## Ambiguous raw finding interpretation')) {
+        // 解釈枯渇後の decisions 相談: 提示された候補を dismiss する。
+        return {
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            rawDecisions: [],
+            disputeDecisions: [],
+            conflictDecisions: [],
+            invalidateDecisions: [],
+            duplicateDecisions: [],
+            dismissDecisions: dismissTargetId !== undefined
+              ? [{ findingId: dismissTargetId, basis: 'unverifiable_claim', reason: '解釈2 epoch と再観測でも確定できない主張' }]
+              : [],
+          },
+        } as unknown as AgentResponse;
+      }
+      const rawId = extractResidualRawIdFromInterpretationInstruction(instruction as string, 'p-1');
+      return interpretationResponse([
+        { decision: 'provisional', rawFindingId: rawId, proofId: '', targetFindingId: '', reason: 'Cannot determine.' },
+      ]);
+    });
+
+    // round 1-2: 解釈 epoch を使い切る（provisional は同一 ID で滞留）。
+    for (let round = 1; round <= 2; round += 1) {
+      await harness.run({
+        runId: `run-${round}`,
+        reviewerRawFindings: [{
+          ...AMBIGUOUS_PERSISTS_RAW,
+          description: `Claims the resolved issue persists (attempt #${round}).`,
+          ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 20 + round),
+        }],
+      });
+    }
+    const provisionalBefore = harness.currentLedger().findings.find((finding) => finding.provisional !== undefined);
+    expect(provisionalBefore?.status).toBe('open');
+    dismissTargetId = provisionalBefore!.id;
+
+    // round 3: 同じ claim の raw が再来し、同一ラウンドで manager が dismiss を裁定する。
+    const result = await harness.run({
+      runId: 'run-3',
+      reviewerRawFindings: [{
+        ...AMBIGUOUS_PERSISTS_RAW,
+        description: 'Claims the resolved issue persists (attempt #3).',
+        ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 23),
+      }],
+    });
+
+    const saved = result.ledger;
+    const dismissed = saved.findings.find((finding) => finding.id === dismissTargetId)!;
+    expect(dismissed.status).toBe('dismissed');
+    expect(dismissed.dismissal?.basis).toBe('unverifiable_claim');
+    // 同じ claim の再来は新 ID の open provisional として復活しない — ゲートが開く。
+    expect(saved.findings.filter((finding) => finding.status === 'open')).toEqual([]);
+    // 抑止した観測は dismissed finding へ監査添付される（黙って消えない）。
+    expect(dismissed.rejectedObservations?.some((observation) => observation.rawFindingId.startsWith('run-3:'))).toBe(true);
+    // 監査レポートの provisionalLandings は実台帳と整合する — 抑止された spec を
+    // 「着地済み」として報告しない。
+    const lastReport = harness.savedReports.at(-1);
+    expect(lastReport?.provisionalLandings ?? []).not.toContainEqual(
+      expect.objectContaining({
+        sourceRawFindingIds: expect.arrayContaining([expect.stringMatching(/^run-3:/)]),
+      }),
+    );
   }, 30_000);
 });
 
@@ -588,6 +685,7 @@ describe('ケース6: no-op ゲート回避（空配列・unknown id・unsupport
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
         timestamp: new Date('2026-06-14T00:00:01.000Z'),
       } as unknown as AgentResponse;
@@ -710,6 +808,7 @@ describe('ケース7: resource exhaustion（435 raw・巨大 description・step 
     };
     const stepExecutor = {
       buildPhase1Instruction: (instruction: string) => instruction,
+      recordSynthesizedAgentUsage: () => {},
       normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
     };
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
@@ -725,6 +824,7 @@ describe('ケース7: resource exhaustion（435 raw・巨大 description・step 
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
         timestamp: new Date(),
       } as unknown as AgentResponse;
@@ -1187,6 +1287,7 @@ describe('v2 追加必須テスト', () => {
         conflictDecisions: [],
         invalidateDecisions: [],
         duplicateDecisions: [],
+        dismissDecisions: [],
       }))(),
       timestamp: new Date(),
     } as unknown as AgentResponse);
@@ -1202,6 +1303,7 @@ describe('v2 追加必須テスト', () => {
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
         timestamp: new Date(),
       } as unknown as AgentResponse;
@@ -1327,6 +1429,7 @@ describe('v2 追加必須テスト', () => {
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
         timestamp: new Date(),
       } as unknown as AgentResponse;
@@ -1441,6 +1544,7 @@ describe('v2 追加必須テスト', () => {
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
         timestamp: new Date(),
       } as unknown as AgentResponse;
@@ -1545,6 +1649,7 @@ describe('v2 追加必須テスト', () => {
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
         timestamp: new Date(),
       } as unknown as AgentResponse;
@@ -1720,6 +1825,7 @@ describe('v2 追加必須テスト', () => {
         } as never,
         stepExecutor: {
           buildPhase1Instruction: (instruction: string) => instruction,
+          recordSynthesizedAgentUsage: () => {},
           normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
         } as never,
         cwd: projectCwd,
@@ -1936,6 +2042,7 @@ describe('v2 追加必須テスト', () => {
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
+          dismissDecisions: [],
         },
         timestamp: new Date(),
       } as unknown as AgentResponse;
@@ -2152,6 +2259,7 @@ describe('v2 追加必須テスト', () => {
         } as never,
         stepExecutor: {
           buildPhase1Instruction: (instruction: string) => instruction,
+          recordSynthesizedAgentUsage: () => {},
           normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
         } as never,
         cwd: projectCwd,

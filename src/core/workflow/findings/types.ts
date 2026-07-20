@@ -63,6 +63,8 @@ export type {
   FindingManagerDisputeDecision,
   FindingManagerDisputeNote,
   FindingManagerDuplicateDecision,
+  FindingManagerDismissDecision,
+  FindingManagerDismissedFinding,
   FindingManagerInvalidateDecision,
   FindingManagerInvalidatedFinding,
   FindingManagerMatch,
