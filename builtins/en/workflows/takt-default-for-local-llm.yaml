@@ -438,8 +438,8 @@ steps:
       - condition: all("approved", "No AI-specific issues", "approved", "approved", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: final-gate
       # If provisional findings reached a semantic fixpoint since the previous
-      # round (no meaningful change), replanning cannot resolve them either
-      # (convergence batch B1). Abort instead of repeating the exhausted replan.
+      # round (no meaningful change), route through a requirements-preserving
+      # replan (convergence batch B1) and let the loop monitor bound repetition.
       # Review-integrity gate (codex 対策#4 / verification blocker #1): if the product
       # gate is clear (no open findings) but unpromoted reviewer anomalies remain, hand
       # to final-gate — which re-reviews up to the review-integrity budget, then

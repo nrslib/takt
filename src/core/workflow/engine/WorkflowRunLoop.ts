@@ -370,6 +370,31 @@ function finalizeCompletionOrAbort(
   return undefined;
 }
 
+type TerminalTransitionResult =
+  | { handled: false }
+  | { handled: true; abort?: WorkflowAbortResult };
+
+function handleTerminalTransition(
+  deps: WorkflowRunLoopDeps,
+  nextStep: string,
+): TerminalTransitionResult {
+  if (nextStep === COMPLETE_STEP) {
+    const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
+    if (gateAbort) {
+      return { handled: true, abort: gateAbort };
+    }
+    deps.emit('workflow:complete', deps.state);
+    return { handled: true };
+  }
+  if (nextStep === ABORT_STEP) {
+    return {
+      handled: true,
+      abort: abortWorkflow(deps, 'step_transition', 'Workflow aborted by step transition'),
+    };
+  }
+  return { handled: false };
+}
+
 function validateUserInputRuntime(
   deps: WorkflowRunLoopDeps,
   step: WorkflowStep,
@@ -690,17 +715,9 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         nextStep,
       });
 
-      if (nextStep === COMPLETE_STEP) {
-        const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
-        if (gateAbort) {
-          abort = gateAbort;
-          break;
-        }
-        deps.emit('workflow:complete', deps.state);
-        break;
-      }
-      if (nextStep === ABORT_STEP) {
-        abort = abortWorkflow(deps, 'step_transition', 'Workflow aborted by step transition');
+      const naturalTerminal = handleTerminalTransition(deps, nextStep);
+      if (naturalTerminal.handled) {
+        abort = naturalTerminal.abort;
         break;
       }
 
@@ -715,17 +732,9 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         nextStep = await deps.runLoopMonitorJudge(cycleCheck.monitor, cycleCheck.cycleCount, step, stepRuntime, nextStep);
       }
 
-      if (nextStep === COMPLETE_STEP) {
-        const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
-        if (gateAbort) {
-          abort = gateAbort;
-          break;
-        }
-        deps.emit('workflow:complete', deps.state);
-        break;
-      }
-      if (nextStep === ABORT_STEP) {
-        abort = abortWorkflow(deps, 'step_transition', 'Workflow aborted by step transition');
+      const monitoredTerminal = handleTerminalTransition(deps, nextStep);
+      if (monitoredTerminal.handled) {
+        abort = monitoredTerminal.abort;
         break;
       }
       advanceActiveStep(deps, nextStep, deps.state.iteration);

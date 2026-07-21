@@ -317,7 +317,16 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
-  it('warns when a finding fixpoint or exhausted budget routes directly to ABORT', async () => {
+  it.each([
+    [
+      'a finding fixpoint',
+      'when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)',
+    ],
+    [
+      'an exhausted finding budget',
+      'when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)',
+    ],
+  ])('warns when %s routes directly to ABORT', async (_caseName, findingCondition) => {
     writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
     const filePath = writeWorkflow(projectDir, '.takt/workflows/direct-budget-abort.yaml', `name: direct-budget-abort
 max_steps: 10
@@ -338,7 +347,7 @@ steps:
         rules:
           - condition: approved
     rules:
-      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+      - condition: ${findingCondition}
         next: ABORT
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
         next: reviewers
@@ -352,7 +361,19 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
-  it('warns when a replan monitor contains the source step but cannot fire on the route back to replan', async () => {
+  it.each([
+    [
+      'a finding fixpoint',
+      'when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)',
+    ],
+    [
+      'an exhausted finding budget',
+      'when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)',
+    ],
+  ])('warns when the replan monitor for %s cannot fire on the route back to replan', async (
+    _caseName,
+    findingCondition,
+  ) => {
     writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
     writeWorkflow(projectDir, '.takt/facets/personas/planner.md', 'You are a planner.');
     const filePath = writeWorkflow(projectDir, '.takt/workflows/non-firing-budget-monitor.yaml', `name: non-firing-budget-monitor
@@ -391,7 +412,7 @@ steps:
         rules:
           - condition: approved
     rules:
-      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+      - condition: ${findingCondition}
         next: replan
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
         next: replan
