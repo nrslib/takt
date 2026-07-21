@@ -39,14 +39,14 @@ steps:
         return: needs_review
       - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: supervise
+      - condition: needs_fix && when(findings.conflicts.count == 0)
+        return: needs_fix
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
         return: need_replan
       - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
         return: need_replan
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
         return: need_replan
-      - condition: needs_fix && when(findings.conflicts.count == 0)
-        return: needs_fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         return: needs_fix
       - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
@@ -74,6 +74,8 @@ steps:
         return: needs_review
       - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE
+      - condition: needs_fix && when(findings.conflicts.count == 0)
+        return: needs_fix
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
         return: need_replan
       - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
@@ -82,8 +84,6 @@ steps:
         return: need_replan
       - condition: need_replan && when(findings.conflicts.count == 0)
         return: need_replan
-      - condition: needs_fix && when(findings.conflicts.count == 0)
-        return: needs_fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         return: needs_fix
       - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
