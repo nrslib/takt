@@ -72,7 +72,7 @@ loop_monitors:
           next: plan
         - condition: unproductive (the same findings repeat), and replanning is unlikely to help
           next: ABORT
-  - cycle: [reviewers, merge-readiness-review, fix]
+  - cycle: [reviewers, final-gate, fix]
     threshold: 3
     judge:
       persona: supervisor
@@ -84,19 +84,6 @@ loop_monitors:
           next: plan
         - condition: unproductive (the same findings repeat), and replanning is unlikely to help
           next: ABORT
-  - cycle: [reviewers, merge-readiness-review, supervise, fix]
-    threshold: 3
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-reviewers-fix
-      rules:
-        - condition: converging (findings decreasing, fixes applied)
-          next: reviewers
-        - condition: unproductive (the same findings repeat), but replanning could break the deadlock
-          next: plan
-        - condition: unproductive (the same findings repeat), and replanning is unlikely to help
-          next: ABORT
-
 steps:
   - name: plan
     tags:
@@ -324,7 +311,7 @@ steps:
               format: implementation-semantics-review-finding-contract
     rules:
       - condition: all("approved", "No AI-specific issues", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
-        next: merge-readiness-review
+        next: final-gate
       # If provisional findings reached a semantic fixpoint since the previous
       # round (no meaningful change), replanning cannot resolve them either
       # (convergence batch B1). Route to the human-adjudication terminal state
@@ -336,7 +323,7 @@ steps:
       # nothing to fix (the observations were isolated as unverifiable), and an anomaly
       # must be sent to re-review, never to fix.
       - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
-        next: merge-readiness-review
+        next: final-gate
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
         next: NEEDS_ADJUDICATION
       # If the cumulative findings-manager round count (or elapsed time, when
@@ -360,94 +347,29 @@ steps:
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
 
-  # Run sequentially so supervise can inspect merge-readiness evidence.
-  # Without supervise reconciling new / persisting / resolved findings, merge-readiness
-  # re-reports the same issues every round and reviewers -> merge-readiness-review -> supervise/fix never
-  # closes (measured: 56 cycles over 9 hours).
-  - name: merge-readiness-review
-    tags:
-      - review
-      - final-gate
-      - merge-readiness
-    edit: false
-    persona: merge-readiness-reviewer
-    policy: review
-    provider_options:
-      extends: review-readonly
-    pass_previous_response: false
-    instruction: review-merge-readiness
+  # Keep merge-readiness review and supervision sequential inside the FC-aware final gate.
+  # The child workflow inherits this workflow's Finding Contract and shared ledger.
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-finding-contract-final-gate-for-local-llm
+    args:
+      supervise_knowledge:
+        - backend
+        - cqrs-es
+        - architecture
     rules:
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
-        next: reviewers
-      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
-        next: supervise
-      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
-        next: plan
-      - condition: needs_fix && when(findings.conflicts.count == 0)
-        next: fix
-      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
-        next: fix
-      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
-        next: finding-conflict-adjudication
-      - condition: when(findings.conflicts.count > 0)
-        next: ABORT
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review-finding-contract
-
-  - name: supervise
-    tags:
-      - review
-      - final-gate
-      - supervise
-    edit: false
-    persona: supervisor
-    policy: review
-    knowledge:
-      - backend
-      - cqrs-es
-      - architecture
-    provider_options:
-      extends: review-readonly
-    pass_previous_response: false
-    instruction: supervise-finding-contract
-    rules:
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
-        next: reviewers
-      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
+      - condition: COMPLETE
         next: COMPLETE
-      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+      - condition: needs_review
+        next: reviewers
+      - condition: need_replan
         next: plan
-      - condition: need_replan && when(findings.conflicts.count == 0)
-        next: plan
-      - condition: needs_fix && when(findings.conflicts.count == 0)
+      - condition: needs_fix
         next: fix
-      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
-        next: fix
-      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+      - condition: needs_conflict_adjudication
         next: finding-conflict-adjudication
-      - condition: when(findings.conflicts.count > 0)
+      - condition: ABORT
         next: ABORT
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation-finding-contract
-        - name: supervisor-gate-summary.md
-          format: supervisor-gate-summary-finding-contract
-          use_judge: false
 
   - name: fix
     tags:

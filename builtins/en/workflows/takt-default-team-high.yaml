@@ -35,7 +35,7 @@ loop_monitors:
           next: plan
         - condition: The same finding repeats without a viable replan
           next: NEEDS_ADJUDICATION
-  - cycle: [reviewers, merge-readiness-review, fix]
+  - cycle: [reviewers, final-gate, fix]
     threshold: 3
     judge:
       persona: supervisor
@@ -47,19 +47,6 @@ loop_monitors:
           next: plan
         - condition: The same finding repeats without a viable replan
           next: NEEDS_ADJUDICATION
-  - cycle: [reviewers, merge-readiness-review, supervise, fix]
-    threshold: 3
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-reviewers-fix
-      rules:
-        - condition: Findings decrease and fixes are reflected
-          next: reviewers
-        - condition: The same finding repeats but replanning may resolve it
-          next: plan
-        - condition: The same finding repeats without a viable replan
-          next: NEEDS_ADJUDICATION
-
 steps:
   - name: plan
     tags: [plan]
@@ -220,9 +207,9 @@ steps:
               format: robustness-review-finding-contract
     rules:
       - condition: all("approved", "No AI-specific issues", "approved", "approved", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
-        next: merge-readiness-review
+        next: final-gate
       - condition: any("approved", "needs_fix", "No AI-specific issues", "AI-specific issues found") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
-        next: merge-readiness-review
+        next: final-gate
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
         next: NEEDS_ADJUDICATION
       - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
@@ -238,77 +225,26 @@ steps:
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
 
-  - name: merge-readiness-review
-    tags: [review, final-gate, merge-readiness]
-    edit: false
-    session: compact
-    persona: merge-readiness-reviewer
-    policy: review
-    instruction: review-merge-readiness
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-finding-contract-final-gate
+    args:
+      supervise_knowledge:
+        - architecture
+        - takt
     rules:
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
-        next: reviewers
-      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
-        next: supervise
-      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
-        next: plan
-      - condition: needs_fix && when(findings.conflicts.count == 0)
-        next: fix
-      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
-        next: fix
-      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
-        next: finding-conflict-adjudication
-      - condition: when(findings.conflicts.count > 0)
-        next: ABORT
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review-finding-contract
-
-  - name: supervise
-    tags: [review, final-gate, supervise]
-    edit: false
-    session: compact
-    persona: supervisor
-    policy: review
-    knowledge: [architecture, takt]
-    instruction: supervise-finding-contract
-    rules:
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
-        next: reviewers
-      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
+      - condition: COMPLETE
         next: COMPLETE
-      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+      - condition: needs_review
+        next: reviewers
+      - condition: need_replan
         next: plan
-      - condition: need_replan && when(findings.conflicts.count == 0)
-        next: plan
-      - condition: needs_fix && when(findings.conflicts.count == 0)
+      - condition: needs_fix
         next: fix
-      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
-        next: fix
-      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+      - condition: needs_conflict_adjudication
         next: finding-conflict-adjudication
-      - condition: when(findings.conflicts.count > 0)
+      - condition: ABORT
         next: ABORT
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation-finding-contract
-        - name: supervisor-gate-summary.md
-          format: supervisor-gate-summary-finding-contract
-          use_judge: false
 
   - name: fix
     tags: [leader]

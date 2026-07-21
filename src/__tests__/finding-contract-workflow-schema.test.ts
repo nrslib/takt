@@ -346,6 +346,65 @@ describe('workflow finding_contract schema', () => {
     ).toThrow('step "review" uses findings.* rule but finding_contract is not configured');
   });
 
+  it('should defer findings rule validation for a callable subworkflow that requires an inherited Finding Contract', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'finding-contract-child',
+      subworkflow: {
+        callable: true,
+        visibility: 'internal',
+        requires_finding_contract: true,
+      },
+      initial_step: 'review',
+      max_steps: 2,
+      steps: [
+        {
+          name: 'review',
+          persona: 'reviewer',
+          instruction: 'Review the change.',
+          rules: [{ when: 'findings.open.count == 0', next: 'COMPLETE' }],
+        },
+      ],
+    }, '/tmp/project');
+
+    expect(workflow.findingContract).toBeUndefined();
+    expect(workflow.subworkflow).toMatchObject({
+      callable: true,
+      visibility: 'internal',
+      requiresFindingContract: true,
+    });
+  });
+
+  it('should reject a subworkflow that both requires inheritance and declares its own Finding Contract', () => {
+    expect(() => normalizeWorkflowConfig({
+      name: 'ambiguous-finding-contract-child',
+      subworkflow: {
+        callable: true,
+        requires_finding_contract: true,
+      },
+      finding_contract: {
+        ledger_path: '.takt/findings/child.json',
+        raw_findings_path: '.takt/findings/child/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          output_contract: 'findings-manager',
+        },
+      },
+      initial_step: 'review',
+      max_steps: 2,
+      steps: [
+        {
+          name: 'review',
+          persona: 'reviewer',
+          instruction: 'Review the change.',
+          rules: [{ condition: 'approved', next: 'COMPLETE' }],
+        },
+      ],
+    }, '/tmp/project')).toThrow(
+      'subworkflow.requires_finding_contract cannot be combined with a local finding_contract',
+    );
+  });
+
   it('should reject loop monitor judge findings rules when finding_contract is not configured', () => {
     expect(() =>
       normalizeWorkflowConfig({

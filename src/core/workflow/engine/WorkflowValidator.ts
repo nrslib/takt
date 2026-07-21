@@ -324,6 +324,20 @@ function validateFindingContractInheritanceConflict(
   }
 }
 
+function validateRequiredInheritedFindingContract(
+  config: WorkflowConfig,
+  options: WorkflowEngineOptions,
+): void {
+  if (
+    config.subworkflow?.requiresFindingContract === true
+    && options.inheritedFindingContract === undefined
+  ) {
+    throw new Error(
+      `Configuration error: workflow "${config.name}" requires a finding_contract inherited from a workflow_call caller`,
+    );
+  }
+}
+
 function validateAgentStepProviderModel(
   step: WorkflowConfig['steps'][number],
   options: WorkflowEngineOptions,
@@ -436,6 +450,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   validateFindingContractManagerProviderModel(config, options);
   validateFindingConflictAdjudicationReservedName(config);
   validateParallelSubStepNamesUnique(config);
+  validateRequiredInheritedFindingContract(config, options);
   validateFindingContractInheritanceConflict(config, options);
   validateFindingContractOutputFormatRequiresContract(config, findingContractEnabled);
   validateFindingContractDelegatedIntake(config, findingContractEnabled);

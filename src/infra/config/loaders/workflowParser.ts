@@ -54,6 +54,7 @@ function normalizeSubworkflowConfig(
   return {
     callable: raw.callable,
     visibility: raw.visibility,
+    requiresFindingContract: raw.requires_finding_contract,
     returns: raw.returns,
     params: raw.params
       ? Object.fromEntries(
@@ -192,8 +193,9 @@ function validateFindingsRulesRequireContract(
   steps: readonly WorkflowStep[],
   loopMonitors: readonly LoopMonitorConfig[] | undefined,
   findingContract: FindingContractConfig | undefined,
+  requiresInheritedFindingContract: boolean,
 ): void {
-  if (findingContract) {
+  if (findingContract || requiresInheritedFindingContract) {
     return;
   }
 
@@ -241,6 +243,14 @@ export function normalizeWorkflowConfig(
   workflowCommandGatesPolicy?: WorkflowCommandGatesConfig,
 ): WorkflowConfig {
   const parsedRaw = WorkflowConfigRawSchema.parse(raw);
+  if (
+    parsedRaw.finding_contract !== undefined
+    && parsedRaw.subworkflow?.requires_finding_contract === true
+  ) {
+    throw new Error(
+      'Configuration error: subworkflow.requires_finding_contract cannot be combined with a local finding_contract',
+    );
+  }
   const callableDiscovery = callableArgMode === 'discovery'
     ? prepareCallableSubworkflowDiscoveryArgs(parsedRaw)
     : { raw: parsedRaw, callableArgs };
@@ -303,7 +313,12 @@ export function normalizeWorkflowConfig(
 
   const loopMonitors = normalizeLoopMonitors(parsed.loop_monitors, workflowDir, sections, context);
   const findingContract = normalizeFindingContractConfig(parsed.finding_contract, workflowDir, sections, context);
-  validateFindingsRulesRequireContract(steps, loopMonitors, findingContract);
+  validateFindingsRulesRequireContract(
+    steps,
+    loopMonitors,
+    findingContract,
+    parsed.subworkflow?.requires_finding_contract === true,
+  );
   resolveFindingConflictAdjudicator(findingContract, steps, loopMonitors, workflowDir, sections, context);
 
   return {

@@ -1,0 +1,103 @@
+name: merge-readiness-finding-contract-final-gate-for-local-llm
+description: merge-readiness の証跡を記録し、supervise が共有台帳を検証するローカル LLM 向け Finding Contract 最終ゲート。
+subworkflow:
+  callable: true
+  visibility: internal
+  requires_finding_contract: true
+  returns:
+    - needs_review
+    - need_replan
+    - needs_fix
+    - needs_conflict_adjudication
+  params:
+    supervise_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+        - takt
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 5
+initial_step: merge-readiness-review
+steps:
+  - name: merge-readiness-review
+    tags: [review, final-gate, merge-readiness]
+    edit: false
+    persona: merge-readiness-reviewer
+    policy: review
+    provider_options:
+      extends: review-readonly
+    pass_previous_response: false
+    instruction: review-merge-readiness
+    rules:
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        return: needs_review
+      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
+        next: supervise
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        return: need_replan
+      - condition: needs_fix && when(findings.conflicts.count == 0)
+        return: needs_fix
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
+        return: needs_fix
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        return: needs_conflict_adjudication
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+    output_contracts:
+      report:
+        - name: merge-readiness-review.md
+          format: merge-readiness-review-finding-contract
+
+  - name: supervise
+    tags: [review, final-gate, supervise]
+    edit: false
+    persona: supervisor
+    policy: review
+    knowledge:
+      $param: supervise_knowledge
+    provider_options:
+      extends: review-readonly
+    pass_previous_response: false
+    instruction: supervise-finding-contract
+    rules:
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        return: needs_review
+      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
+        next: COMPLETE
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        return: need_replan
+      - condition: need_replan && when(findings.conflicts.count == 0)
+        return: need_replan
+      - condition: needs_fix && when(findings.conflicts.count == 0)
+        return: needs_fix
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
+        return: needs_fix
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        return: needs_conflict_adjudication
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation-finding-contract
+        - name: supervisor-gate-summary.md
+          format: supervisor-gate-summary-finding-contract
+          use_judge: false

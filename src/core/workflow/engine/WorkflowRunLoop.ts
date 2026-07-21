@@ -88,13 +88,12 @@ interface WorkflowRunLoopDeps {
    */
   checkCompletionGate: () => { ok: true } | { ok: false; reason: string };
   /**
-   * review-integrity gate 単独（review-integrity requirement）: 未昇格 reviewer anomaly のみを
-   * 見る。returnValue 終端（`return: X`）に適用する。`return: need_replan` のような
-   * 「未解決 provisional を呼び出し元へハンドバックするシグナル」を provisional gate で
-   * 塞がないよう、returnValue 経路では product gate ではなくこの gate を使う。ただし
-   * 未昇格 anomaly が残ったまま 'completed' になるのはどの完了経路でも許さない。
+   * returnValue 終端（`return: X`）の gate。自前の Finding Contract を持つ
+   * workflow では review-integrity を検証する。親から契約を継承した callable
+   * workflow では、return は最終完了ではなく契約所有者への制御返却なので通し、
+   * 最終的な COMPLETE は親の completion gate が検証する。
    */
-  checkReviewIntegrityGate: () => { ok: true } | { ok: false; reason: string };
+  checkReturnValueGate: () => { ok: true } | { ok: false; reason: string };
   /**
    * `next: NEEDS_ADJUDICATION` 到達時に
    * 呼ぶ。現在 open な provisional finding とその発生元を監査レポートへ永続化し
@@ -390,8 +389,8 @@ function buildInterruptedIterationResult(
  *
  * gate 結果は呼び出し元が選ぶ:
  *   - COMPLETE 遷移 → checkCompletionGate（product gate + review-integrity gate）
- *   - returnValue 終端 → checkReviewIntegrityGate（未昇格 anomaly のみ。provisional の
- *     ハンドバックは許すが、review integrity 違反はどの経路でも 'completed' を許さない）
+ *   - returnValue 終端 → checkReturnValueGate（自前契約なら review-integrity を検証し、
+ *     継承契約なら契約所有者への制御返却として許可する）
  */
 function finalizeCompletionOrAbort(
   deps: WorkflowRunLoopDeps,
@@ -711,11 +710,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
 
       if (transition.returnValue !== undefined) {
-        // returnValue 終端も review-integrity gate を必ず通す（review-integrity requirement:
-        // かつてここは gate を呼ばず直接 completed にしており、未昇格 anomaly を
-        // 残したまま完了できる迂回路だった）。provisional は returnValue で呼び出し元へ
-        // ハンドバックされ得るため product gate ではなく review-integrity gate を使う。
-        const gateAbort = finalizeCompletionOrAbort(deps, deps.checkReviewIntegrityGate());
+        const gateAbort = finalizeCompletionOrAbort(deps, deps.checkReturnValueGate());
         if (gateAbort) {
           abort = gateAbort;
           break;
@@ -977,8 +972,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
 
   if (transition.returnValue !== undefined) {
-    // returnValue 終端も review-integrity gate を必ず通す（review-integrity requirement）。
-    const gateAbort = finalizeCompletionOrAbort(deps, deps.checkReviewIntegrityGate());
+    const gateAbort = finalizeCompletionOrAbort(deps, deps.checkReturnValueGate());
     if (gateAbort) {
       return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort: gateAbort };
     }

@@ -55,7 +55,7 @@ function makeDeps(state: WorkflowState, step: WorkflowStep, recordNeedsAdjudicat
     emit: vi.fn(),
     updateMaxSteps: vi.fn(),
     checkCompletionGate: vi.fn(() => ({ ok: true as const })),
-    checkReviewIntegrityGate: vi.fn(() => ({ ok: true as const })),
+    checkReturnValueGate: vi.fn(() => ({ ok: true as const })),
     recordNeedsAdjudication,
     persistPreviousResponseSnapshot: vi.fn(),
   };

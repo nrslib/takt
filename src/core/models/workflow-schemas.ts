@@ -365,6 +365,7 @@ export const ParallelSubStepRawSchema = z.union([
 const WorkflowSubworkflowRawSchema = z.object({
   callable: z.boolean().optional(),
   visibility: z.enum(['internal']).optional(),
+  requires_finding_contract: z.literal(true).optional(),
   returns: z.array(z.string().min(1)).optional(),
   params: z.record(z.string().min(1), WorkflowParamDeclarationRawSchema).optional(),
 }).strict().superRefine((data, ctx) => {
@@ -381,7 +382,7 @@ const WorkflowSubworkflowRawSchema = z.object({
     return;
   }
 
-  for (const field of ['visibility', 'returns', 'params'] as const) {
+  for (const field of ['visibility', 'requires_finding_contract', 'returns', 'params'] as const) {
     if (data[field] !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

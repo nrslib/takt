@@ -122,6 +122,42 @@ steps:
     ]);
   });
 
+  it('rejects a Finding Contract subworkflow when its caller does not provide the required contract', () => {
+    writeProjectWorkflow('parent.yaml', `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+    writeProjectWorkflow('child.yaml', `name: child
+subworkflow:
+  callable: true
+  visibility: internal
+  requires_finding_contract: true
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review with the inherited ledger
+    rules:
+      - condition: when(findings.open.count == 0)
+        next: COMPLETE
+`);
+
+    const parent = loadProjectWorkflow('parent.yaml');
+    expect(() => workflowResolver.validateWorkflowCallContracts(parent, projectDir)).toThrow(
+      /workflow "child".*requires a finding_contract inherited from its caller/s,
+    );
+  });
+
   it('prefers parent workflow metadata over fallback context for nested relative workflow_call resolution', () => {
     const rootWorkflowPath = join(externalDir, 'root.yaml');
     const childWorkflowPath = join(externalDir, 'child', 'child.yaml');

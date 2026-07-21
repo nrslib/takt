@@ -494,11 +494,16 @@ rate_limit_fallback:
 
 ```yaml
 subworkflow:
+  callable: true
   visibility: internal
+  requires_finding_contract: true
   params:
-    - name: impl_knowledge
-      required: true
+    impl_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
 ```
+
+子が継承した `findings.*` 状態や Finding Contract 用出力形式を使う場合、または同じ要件を持つ別のサブワークフローへ委譲する場合は、`requires_finding_contract: true` を指定します。直近の呼出元は `finding_contract` を宣言するか、さらに上位の呼出元へ同じ要件を宣言する必要があります。連鎖内の各子は独自の台帳を作らず、契約所有元と同じ契約・台帳を使用します。
 
 ## 例
 

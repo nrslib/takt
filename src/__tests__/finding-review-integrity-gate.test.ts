@@ -219,6 +219,72 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(abortReason).toContain('reviewer anomaly');
   });
 
+  it('allows an inherited-contract child to return an anomaly routing signal while the parent remains responsible for final completion', async () => {
+    mockReviewerEmitsHallucination();
+
+    const childConfig: WorkflowConfig = {
+      name: 'finding-contract-final-gate-child',
+      subworkflow: {
+        callable: true,
+        requiresFindingContract: true,
+        returns: ['needs_review'],
+      },
+      maxSteps: 3,
+      initialStep: 'reviewers',
+      provider: 'claude',
+      steps: [
+        reviewerStep([{
+          condition: 'when(findings.reviewerAnomalies.count > 0)',
+          returnValue: 'needs_review',
+        }]),
+      ],
+    };
+    const parentConfig: WorkflowConfig = {
+      name: 'finding-contract-final-gate-parent',
+      maxSteps: 6,
+      initialStep: 'final-gate',
+      provider: 'claude',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+      },
+      steps: [
+        {
+          name: 'final-gate',
+          kind: 'workflow_call',
+          call: childConfig.name,
+          personaDisplayName: 'final-gate',
+          instruction: '',
+          passPreviousResponse: true,
+          rules: [{ condition: 'needs_review', next: 'handle-review-signal' }],
+        },
+        makeStep({
+          name: 'handle-review-signal',
+          persona: 'handler',
+          instruction: 'Handle the child routing signal.',
+          rules: [makeRule('when(true)', 'NEEDS_ADJUDICATION')],
+        }),
+      ],
+    };
+
+    const engine = new WorkflowEngine(parentConfig, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+      workflowCallResolver: () => childConfig,
+    });
+    let abortReason = '';
+    engine.on('workflow:abort', (_state, reason: string) => { abortReason = reason; });
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('aborted');
+    expect(abortReason).toContain('NEEDS_ADJUDICATION');
+    expect(vi.mocked(runAgent).mock.calls.some(([persona]) => persona === 'handler')).toBe(true);
+  });
+
   it('bounded 再レビュー → NEEDS_ADJUDICATION: anomaly が残る限り再レビューへ送り、review_budget を使い切ったら人手裁定へ収束する（有限で止まる）', async () => {
     mockReviewerEmitsHallucination();
 

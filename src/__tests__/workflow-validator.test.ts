@@ -1259,6 +1259,42 @@ describe('validateWorkflowConfig', () => {
       })).not.toThrow();
     });
 
+    it('fails fast when a subworkflow requires an inherited Finding Contract but is run directly', () => {
+      const workflow = createWorkflow({
+        name: 'finding-contract-child',
+        subworkflow: { callable: true, requiresFindingContract: true },
+      });
+
+      expect(() => validateWorkflowConfig(workflow, {
+        projectCwd: process.cwd(),
+      })).toThrow(
+        /workflow "finding-contract-child" requires a finding_contract inherited from a workflow_call caller/,
+      );
+    });
+
+    it('accepts a subworkflow requirement when the caller supplies the inherited Finding Contract', () => {
+      const workflow = createWorkflow({
+        name: 'finding-contract-child',
+        subworkflow: { callable: true, requiresFindingContract: true },
+      });
+
+      expect(() => validateWorkflowConfig(workflow, {
+        projectCwd: process.cwd(),
+        inheritedFindingContract: {
+          contract: {
+            ledgerPath: '.takt/findings/peer-review.json',
+            rawFindingsPath: '.takt/findings/raw',
+            manager: {
+              persona: 'findings-manager',
+              instruction: 'findings-manager',
+              outputContract: 'findings-manager',
+            },
+          },
+          ledgerStore: createFakeLedgerStore(),
+        },
+      })).not.toThrow();
+    });
+
     it('fails fast when a workflow declares its own finding_contract while also inheriting one from a workflow_call parent', () => {
       const workflow = createWorkflow({
         findingContract: {

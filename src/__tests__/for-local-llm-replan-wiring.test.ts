@@ -89,13 +89,7 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
     const monitors = workflow!.loopMonitors ?? [];
     expect(monitors.map((monitor) => monitor.cycle)).toContainEqual([
       'reviewers',
-      'merge-readiness-review',
-      'fix',
-    ]);
-    expect(monitors.map((monitor) => monitor.cycle)).toContainEqual([
-      'reviewers',
-      'merge-readiness-review',
-      'supervise',
+      'final-gate',
       'fix',
     ]);
     const replanMonitor = monitors.find((monitor) => monitor.cycle.includes('plan'));
@@ -109,7 +103,7 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
 
     // ai-antipattern-review-1st ⇄ ai-antipattern-fix は行き詰まっても reviewers へ委ねる設計。
     // ここは実装直後の自己レビューに過ぎず、plan への再計画や ABORT は
-    // 下流の reviewers/fix・reviewers/merge-readiness-review/(supervise/)fix 監視が最終的に担うため持たない。
+    // 下流の reviewers/fix・reviewers/final-gate/fix 監視が最終的に担うため持たない。
     const antipatternMonitor = monitors.find((monitor) => monitor.cycle.includes('ai-antipattern-review-1st'));
     expect(antipatternMonitor).toBeDefined();
     const antipatternNexts = antipatternMonitor!.judge!.rules.map((rule) => rule.next);
@@ -142,9 +136,12 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
     languageState.value = lang;
     const workflow = loadWorkflow(name, process.cwd());
     expect(workflow).toBeDefined();
+    const finalGate = loadWorkflow('merge-readiness-finding-contract-final-gate-for-local-llm', process.cwd());
+    expect(finalGate).toBeDefined();
 
     for (const stepName of ['reviewers', 'merge-readiness-review', 'supervise']) {
-      const step = workflow!.steps.find((candidate) => candidate.name === stepName);
+      const source = stepName === 'reviewers' ? workflow! : finalGate!;
+      const step = source.steps.find((candidate) => candidate.name === stepName);
       expect(step, `step "${stepName}" should exist`).toBeDefined();
       const rules = step!.rules ?? [];
 
@@ -155,7 +152,9 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
       expect(fixpointRuleIndex, `step "${stepName}" should route fixpoint to NEEDS_ADJUDICATION`).toBeGreaterThanOrEqual(0);
       expect(rules[fixpointRuleIndex]!.condition).toContain('findings.provisional.fixpoint');
 
-      const replanRuleIndex = rules.findIndex((rule) => rule.next === 'plan' && rule.condition.includes('findings.provisional.count'));
+      const replanRuleIndex = rules.findIndex((rule) => (
+        rule.next === 'plan' || rule.returnValue === 'need_replan'
+      ) && rule.condition.includes('findings.provisional.count'));
       expect(replanRuleIndex, `step "${stepName}" should still route provisional.count to plan`).toBeGreaterThanOrEqual(0);
 
       // first-match-wins: fixpoint must be checked before the generic
@@ -176,15 +175,20 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
     languageState.value = lang;
     const workflow = loadWorkflow(name, process.cwd());
     expect(workflow).toBeDefined();
+    const finalGate = loadWorkflow('merge-readiness-finding-contract-final-gate-for-local-llm', process.cwd());
+    expect(finalGate).toBeDefined();
 
     for (const stepName of ['reviewers', 'merge-readiness-review', 'supervise']) {
-      const step = workflow!.steps.find((candidate) => candidate.name === stepName);
+      const source = stepName === 'reviewers' ? workflow! : finalGate!;
+      const step = source.steps.find((candidate) => candidate.name === stepName);
       expect(step, `step "${stepName}" should exist`).toBeDefined();
       const rules = step!.rules ?? [];
 
       const fixpointRuleIndex = rules.findIndex((rule) => rule.condition.includes('findings.provisional.fixpoint') && rule.next === 'NEEDS_ADJUDICATION');
       const budgetRuleIndex = rules.findIndex((rule) => rule.condition.includes('findings.rounds.budgetExhausted') && rule.next === 'NEEDS_ADJUDICATION');
-      const replanRuleIndex = rules.findIndex((rule) => rule.next === 'plan' && rule.condition.includes('findings.provisional.count'));
+      const replanRuleIndex = rules.findIndex((rule) => (
+        rule.next === 'plan' || rule.returnValue === 'need_replan'
+      ) && rule.condition.includes('findings.provisional.count'));
 
       expect(fixpointRuleIndex, `step "${stepName}" should route fixpoint to NEEDS_ADJUDICATION`).toBeGreaterThanOrEqual(0);
       expect(budgetRuleIndex, `step "${stepName}" should route the exhausted stop budget to NEEDS_ADJUDICATION`).toBeGreaterThanOrEqual(0);

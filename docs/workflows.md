@@ -495,11 +495,16 @@ Declare a workflow as a subworkflow that accepts parameters from a parent's `wor
 
 ```yaml
 subworkflow:
+  callable: true
   visibility: internal
+  requires_finding_contract: true
   params:
-    - name: impl_knowledge
-      required: true
+    impl_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
 ```
+
+Set `requires_finding_contract: true` when the child consumes inherited `findings.*` state or Finding Contract output formats, or delegates to another subworkflow with the same requirement. The immediate caller must either declare `finding_contract` or require it from its own caller. Every child in the chain uses the owning caller's contract and the same ledger rather than creating its own ledger.
 
 ## Examples
 

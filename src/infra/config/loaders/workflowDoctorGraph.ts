@@ -125,11 +125,10 @@ function createDoctorGraph(raw: RawWorkflow): DoctorGraph {
  * validateNeedsAdjudicationRuleContract: `next: finding-conflict-adjudication`
  * and `next: NEEDS_ADJUDICATION` only make sense when a finding ledger exists
  * to evaluate against. Doctor runs on the raw (pre-load) config, so the check
- * is against `finding_contract` presence directly rather than the resolved
- * WorkflowConfig#findingContract / inheritedFindingContract the engine uses at
- * runtime — a callable subworkflow that expects to inherit its contract from a
- * parent workflow_call is out of scope here, matching the other doctor checks
- * that inspect one workflow file at a time.
+ * accepts either a local `finding_contract` or an explicit callable
+ * `subworkflow.requires_finding_contract` declaration. Cross-workflow
+ * validation separately verifies that the caller actually provides the
+ * inherited contract.
  */
 function targetRequiresFindingContract(rule: DoctorGraphRule): boolean {
   return rule.next !== undefined && CONTRACT_REQUIRED_NEXT.has(rule.next);
@@ -141,7 +140,8 @@ export function validateDoctorGraph(
 ): void {
   const config = createDoctorGraph(raw);
   const stepNames = new Set(config.steps.map((step) => step.name));
-  const findingContractConfigured = raw.finding_contract !== undefined;
+  const findingContractConfigured = raw.finding_contract !== undefined
+    || raw.subworkflow?.requires_finding_contract === true;
 
   if (!stepNames.has(config.initialStep)) {
     diagnostics.push({

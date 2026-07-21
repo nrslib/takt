@@ -3478,7 +3478,7 @@ describe('WorkflowEngine structured caller defaults', () => {
 
     const childConfig: WorkflowConfig = {
       name: 'child-inherits-finding-contract',
-      subworkflow: { callable: true },
+      subworkflow: { callable: true, requiresFindingContract: true },
       maxSteps: 3,
       initialStep: 'reviewers',
       steps: [

@@ -72,7 +72,7 @@ function makeDeps(
     emit: vi.fn(),
     updateMaxSteps: vi.fn(),
     checkCompletionGate: vi.fn(() => ({ ok: true as const })),
-    checkReviewIntegrityGate: vi.fn(() => ({ ok: true as const })),
+    checkReturnValueGate: vi.fn(() => ({ ok: true as const })),
     recordNeedsAdjudication: vi.fn(() => 'NEEDS_ADJUDICATION: provisional findings reached a fixpoint'),
     persistPreviousResponseSnapshot: vi.fn((targetState: WorkflowState, stepName: string, stepIteration: number, content: string) => {
       targetState.previousResponseSourcePath = `.takt/runs/test/context/previous_responses/${stepName}.${stepIteration}.snapshot.md`;

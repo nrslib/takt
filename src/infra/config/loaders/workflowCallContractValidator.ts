@@ -83,6 +83,15 @@ function validateWorkflowCallContractsRecursive(
       continue;
     }
 
+    const parentProvidesFindingContract = workflow.findingContract !== undefined
+      || workflow.subworkflow?.requiresFindingContract === true;
+    if (childWorkflow.subworkflow?.requiresFindingContract === true && !parentProvidesFindingContract) {
+      throw new Error(
+        `Configuration error: workflow_call step "${step.name}" calls workflow "${childWorkflow.name}", `
+        + 'which requires a finding_contract inherited from its caller, but the calling workflow does not provide one',
+      );
+    }
+
     validateWorkflowCallContractsRecursive(
       childWorkflow,
       projectCwd,

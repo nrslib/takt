@@ -142,6 +142,7 @@ export interface WorkflowSubworkflowParamConfig {
 export interface WorkflowSubworkflowConfig {
   callable?: boolean;
   visibility?: 'internal';
+  requiresFindingContract?: true;
   returns?: string[];
   params?: Record<string, WorkflowSubworkflowParamConfig>;
 }
