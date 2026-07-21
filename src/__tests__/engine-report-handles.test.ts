@@ -891,6 +891,109 @@ describe('WorkflowEngine report handle integration', () => {
     });
   });
 
+  it('should use an earlier same-run reviewer when the nearest workflow call has no report outputs', async () => {
+    // Given
+    const emptyGateConfig: WorkflowConfig = {
+      name: 'empty-report-gate',
+      subworkflow: { callable: true },
+      maxSteps: 1,
+      initialStep: 'gate',
+      steps: [makeStep('gate', { rules: [makeRule('COMPLETE', 'COMPLETE')] })],
+    };
+    const config: WorkflowConfig = {
+      name: 'same-run-report-fallback',
+      maxSteps: 3,
+      initialStep: 'review',
+      steps: [
+        makeStep('review', {
+          outputContracts: [{ name: 'earlier-review.md', format: '# Earlier Review' }],
+          rules: [makeRule('approved', 'final-gate')],
+        }),
+        makeStep('final-gate', {
+          kind: 'workflow_call',
+          call: 'empty-report-gate',
+          rules: [makeRule('COMPLETE', 'fix')],
+        }),
+        makeStep('fix', {
+          instruction: 'Current reports:\n{peer_reports}',
+          passPreviousResponse: false,
+          rules: [makeRule('Fix complete', 'COMPLETE')],
+        }),
+      ],
+    };
+    const currentReportPath = join(reportDir, 'earlier-review.md');
+    writeReport(reportDir, 'earlier-review.md', 'same-run earlier review');
+    const engine = new WorkflowEngine(config, cloneCwd, 'test task', {
+      projectCwd,
+      startStep: 'fix',
+      workflowCallResolver: () => emptyGateConfig,
+    });
+    engines.push(engine);
+    mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    // When
+    const state = await engine.run();
+
+    // Then
+    expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain(currentReportPath);
+  });
+
+  it('should resolve report sources once while inheriting and injecting an earlier reviewer on requeue', async () => {
+    // Given
+    const emptyGateConfig: WorkflowConfig = {
+      name: 'empty-requeue-gate',
+      subworkflow: { callable: true },
+      maxSteps: 1,
+      initialStep: 'gate',
+      steps: [makeStep('gate', { rules: [makeRule('COMPLETE', 'COMPLETE')] })],
+    };
+    const config: WorkflowConfig = {
+      name: 'requeue-report-fallback',
+      maxSteps: 3,
+      initialStep: 'review',
+      steps: [
+        makeStep('review', {
+          outputContracts: [{ name: 'earlier-review.md', format: '# Earlier Review' }],
+          rules: [makeRule('approved', 'final-gate')],
+        }),
+        makeStep('final-gate', {
+          kind: 'workflow_call',
+          call: 'empty-requeue-gate',
+          rules: [makeRule('COMPLETE', 'fix')],
+        }),
+        makeStep('fix', {
+          instruction: 'Inherited reports:\n{peer_reports}',
+          passPreviousResponse: false,
+          rules: [makeRule('Fix complete', 'COMPLETE')],
+        }),
+      ],
+    };
+    const sourceReportDir = join(cloneCwd, '.takt', 'runs', '20260717-source-run', 'reports');
+    writeReport(sourceReportDir, 'earlier-review.md', 'requeued earlier review');
+    const workflowCallResolver = vi.fn(() => emptyGateConfig);
+    const engine = new WorkflowEngine(config, cloneCwd, 'test task', {
+      projectCwd,
+      startStep: 'fix',
+      resumeSource: { sourceRunSlug: '20260717-source-run', resumeMode: 'requeue' },
+      workflowCallResolver,
+    });
+    engines.push(engine);
+    mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    // When
+    const state = await engine.run();
+
+    // Then
+    const inheritedReportPath = join(reportDir, 'earlier-review.md');
+    expect(state.status).toBe('completed');
+    expect(readFileSync(inheritedReportPath, 'utf-8')).toBe('requeued earlier review');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain(inheritedReportPath);
+    expect(workflowCallResolver).toHaveBeenCalledOnce();
+  });
+
   it('should traverse same-name workflows from distinct sources while discovering reports', () => {
     // Given
     const secondWorkflow = attachWorkflowOpaqueRef({

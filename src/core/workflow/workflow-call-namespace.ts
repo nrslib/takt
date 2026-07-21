@@ -12,7 +12,7 @@ export function workflowCallNamespacePathsMatch(left: readonly string[], right: 
 }
 
 function normalizeWorkflowCallNamespaceSegment(segment: string): string {
-  return /^iteration-(?:\d+|\*)--step-[^/]+(?:--workflow-[^/]+)?$/.test(segment)
+  return /^iteration-(?:\d+|\*)--step-[^/]+--workflow-[^/]+$/.test(segment)
     ? segment.replace(/^iteration-\d+--/, 'iteration-*--')
     : segment;
 }

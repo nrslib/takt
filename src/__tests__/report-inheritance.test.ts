@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 import { inheritReviewReports } from '../core/workflow/report-inheritance.js';
+import { workflowCallNamespaceSegmentsMatch } from '../core/workflow/workflow-call-namespace.js';
 
 const sourceRunSlug = '20260717-source-run';
 const currentRunSlug = '20260717-current-run';
@@ -20,7 +21,7 @@ function sourceReportPath(projectDirectory: string, namespace: string[], reportN
 }
 
 function targetReportDirectory(projectDirectory: string): string {
-  return join(projectDirectory, '.takt', 'runs', currentRunSlug, 'reports', 'subworkflows', 'iteration-2--step-peer-review');
+  return join(projectDirectory, '.takt', 'runs', currentRunSlug, 'reports', 'subworkflows', 'iteration-2--step-peer-review--workflow-peer-review');
 }
 
 function writeSourceReport(
@@ -54,41 +55,52 @@ afterEach(() => {
 });
 
 describe('inheritReviewReports', () => {
+  it('should normalize iterations only for generated workflow-call namespaces', () => {
+    expect(workflowCallNamespaceSegmentsMatch(
+      'iteration-1--step-peer-review--workflow-reviewers',
+      'iteration-2--step-peer-review--workflow-reviewers',
+    )).toBe(true);
+    expect(workflowCallNamespaceSegmentsMatch(
+      'iteration-1--step-peer-review',
+      'iteration-2--step-peer-review',
+    )).toBe(false);
+  });
+
   it('should copy the newest review report from a previous nested workflow into the current report directory', () => {
     // Given
     const projectDirectory = createProjectDirectory();
     mkdirSync(join(projectDirectory, '.takt', 'runs', sourceRunSlug, 'reports'), { recursive: true });
     const olderPath = writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'iteration-1--step-peer-review'],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'older review',
       new Date('2026-07-17T00:00:00.000Z'),
     );
     const latestPath = writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'iteration-2--step-peer-review'],
+      ['subworkflows', 'iteration-2--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'latest review',
       new Date('2026-07-17T00:01:00.000Z'),
     );
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'iteration-2--step-peer-review'],
+      ['subworkflows', 'iteration-2--step-peer-review--workflow-peer-review'],
       '05-arch-review.md.20260717T000200Z',
       'historical review',
       new Date('2026-07-17T00:02:00.000Z'),
     );
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'iteration-2--step-peer-review'],
+      ['subworkflows', 'iteration-2--step-peer-review--workflow-peer-review'],
       'findings-ledger.json',
       '{"findings":[]}',
       new Date('2026-07-17T00:02:00.000Z'),
     );
     const securityPath = writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'iteration-2--step-peer-review'],
+      ['subworkflows', 'iteration-2--step-peer-review--workflow-peer-review'],
       '06-security-review.md',
       'security review',
       new Date('2026-07-17T00:01:00.000Z'),
@@ -117,7 +129,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'iteration-1--step-peer-review'],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'arch review',
       new Date('2026-07-17T00:00:00.000Z'),
@@ -161,7 +173,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     const unreadablePath = writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'iteration-1--step-peer-review'],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'unreadable review',
       new Date('2026-07-17T00:00:00.000Z'),
@@ -184,7 +196,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     const invalidReportPath = sourceReportPath(
       projectDirectory,
-      ['subworkflows', 'iteration-1--step-peer-review'],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
     );
     mkdirSync(join(invalidReportPath, '..'), { recursive: true });
@@ -205,14 +217,14 @@ describe('inheritReviewReports', () => {
   it('should reject symlinked and directory candidates without preventing valid sibling reports from being copied', () => {
     // Given
     const projectDirectory = createProjectDirectory();
-    const namespace = ['subworkflows', 'iteration-1--step-peer-review'];
+    const namespace = ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'];
     const invalidDirectory = sourceReportPath(projectDirectory, namespace, '05-arch-review.md');
     mkdirSync(invalidDirectory, { recursive: true });
     const symlinkPath = sourceReportPath(projectDirectory, namespace, '06-security-review.md');
     symlinkSync(join(projectDirectory, 'outside-report.md'), symlinkPath);
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'iteration-2--step-peer-review'],
+      ['subworkflows', 'iteration-2--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'valid arch review',
       new Date('2026-07-17T00:01:00.000Z'),
@@ -235,7 +247,7 @@ describe('inheritReviewReports', () => {
   it('should classify a directory-only report candidate as an invalid source', () => {
     // Given
     const projectDirectory = createProjectDirectory();
-    mkdirSync(sourceReportPath(projectDirectory, ['subworkflows', 'iteration-1--step-peer-review'], '05-arch-review.md'), { recursive: true });
+    mkdirSync(sourceReportPath(projectDirectory, ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'], '05-arch-review.md'), { recursive: true });
 
     // When
     const result = inherit(projectDirectory);
@@ -293,7 +305,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'iteration-1--step-peer-review'],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'source review',
       new Date('2026-07-17T00:00:00.000Z'),
@@ -318,7 +330,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     const sourcePath = writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'iteration-1--step-peer-review'],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'source review',
       new Date('2026-07-17T00:00:00.000Z'),
@@ -378,7 +390,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     const sourcePath = writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'iteration-1--step-peer-review'],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       'reviews/architect-review.md',
       'architecture review',
       new Date('2026-07-17T00:00:00.000Z'),
@@ -461,7 +473,7 @@ describe('inheritReviewReports', () => {
     const reportName = win32.join('reviews', 'architect-review.md');
     const sourcePath = writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'iteration-1--step-peer-review'],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       'reviews/architect-review.md',
       'architecture review',
       new Date('2026-07-17T00:00:00.000Z'),
@@ -489,7 +501,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'iteration-1--step-peer-review'],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'source review',
       new Date('2026-07-17T00:00:00.000Z'),
@@ -508,7 +520,7 @@ describe('inheritReviewReports', () => {
     expect(result.skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({ reason: expect.stringContaining('target_unavailable') }),
     ]));
-    expect(existsSync(join(outsideDirectory, 'subworkflows', 'iteration-2--step-peer-review', '05-arch-review.md'))).toBe(false);
+    expect(existsSync(join(outsideDirectory, 'subworkflows', 'iteration-2--step-peer-review--workflow-peer-review', '05-arch-review.md'))).toBe(false);
   });
 
   it('should skip an oversized source report without reading or copying it', () => {
@@ -516,7 +528,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     const reportPath = sourceReportPath(
       projectDirectory,
-      ['subworkflows', 'iteration-1--step-peer-review'],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
     );
     mkdirSync(join(reportPath, '..'), { recursive: true });
@@ -648,7 +660,7 @@ describe('inheritReviewReports', () => {
     }
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'iteration-1--step-peer-review'],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'boundary-entry report',
       new Date('2026-07-17T00:00:00.000Z'),

@@ -25,25 +25,41 @@ export interface InheritedReportSourceResolverContext {
 export function resolveInheritedReviewReportNamesWithDiagnostics(
   context: InheritedReportSourceResolverContext,
 ): InheritedReviewReportNamesResult {
-  const sources = resolveReviewReportSourceSteps(context.step, context.workflow.steps);
-  return combineReportNameResults(sources.map((source) => resolveWorkflowStepReportNames(
-    source,
-    context,
-    [],
-    new Set([getWorkflowReference(context.workflow)]),
-    context.resumeStackPrefix.length + 1,
-  )));
+  const failures: string[] = [];
+  for (const sources of resolveReviewReportSourceStepGroups(context.step, context.workflow.steps)) {
+    const result = combineReportNameResults(sources.map((source) => resolveWorkflowStepReportNames(
+      source,
+      context,
+      [],
+      new Set([getWorkflowReference(context.workflow)]),
+      context.resumeStackPrefix.length + 1,
+    )));
+    failures.push(...result.failures);
+    if (result.reportNames.length > 0) {
+      return combineReportNameResults([
+        { reportNames: result.reportNames, failures },
+      ]);
+    }
+  }
+  return combineReportNameResults([{ reportNames: [], failures }]);
 }
 
 export function resolveReviewReportSourceSteps(
   step: WorkflowStep,
   workflowSteps: ReadonlyArray<WorkflowStep>,
 ): WorkflowStep[] {
+  return resolveReviewReportSourceStepGroups(step, workflowSteps)[0] ?? [];
+}
+
+function resolveReviewReportSourceStepGroups(
+  step: WorkflowStep,
+  workflowSteps: ReadonlyArray<WorkflowStep>,
+): WorkflowStep[][] {
   const parallelParent = workflowSteps.find((candidate) =>
     candidate.parallel?.some((parallelStep) => parallelStep.name === step.name),
   );
   if (parallelParent?.parallel) {
-    return parallelParent.parallel.filter((peerStep) => peerStep.name !== step.name);
+    return [parallelParent.parallel.filter((peerStep) => peerStep.name !== step.name)];
   }
 
   const currentIndex = workflowSteps.findIndex((candidate) => candidate.name === step.name);
@@ -51,18 +67,24 @@ export function resolveReviewReportSourceSteps(
     return [];
   }
 
+  const candidates: WorkflowStep[][] = [];
   for (let index = currentIndex - 1; index >= 0; index -= 1) {
     const candidate = workflowSteps[index]!;
     const peerSteps = candidate.parallel?.filter(hasReportOutputs);
     if (peerSteps && peerSteps.length > 0) {
-      return peerSteps;
+      candidates.push(peerSteps);
+      break;
     }
-    if (hasReportOutputs(candidate) || candidate.kind === 'workflow_call') {
-      return [candidate];
+    if (hasReportOutputs(candidate)) {
+      candidates.push([candidate]);
+      break;
+    }
+    if (candidate.kind === 'workflow_call') {
+      candidates.push([candidate]);
     }
   }
 
-  return [];
+  return candidates;
 }
 
 function resolveWorkflowCallReportNames(
