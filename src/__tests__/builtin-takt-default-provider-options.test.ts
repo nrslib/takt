@@ -430,6 +430,19 @@ describe('builtin takt-default provider_options refs', () => {
       expect(sequentialGateCount).toBe(18);
     });
 
+    it(`${locale} loop monitors should reference existing workflow steps`, () => {
+      for (const file of readdirSync(workflowDir(locale)).filter((name) => name.endsWith('.yaml'))) {
+        const workflow = loadBuiltinWorkflow(locale, file);
+        const stepNames = new Set((workflow.steps ?? []).map((step) => step.name));
+
+        for (const monitor of workflow.loop_monitors ?? []) {
+          for (const stepName of monitor.cycle ?? []) {
+            expect(stepNames.has(stepName), `${file}: loop monitor step ${stepName}`).toBe(true);
+          }
+        }
+      }
+    });
+
     it(`${locale} takt-default should not enable Finding Contract`, () => {
       const workflow = loadBuiltinWorkflow(locale, 'takt-default.yaml');
       const normalized = normalizeBuiltinWorkflow(workflow, locale);
@@ -500,7 +513,7 @@ describe('builtin takt-default provider_options refs', () => {
       expect(reviewers?.rules?.map((rule) => rule.condition)).toEqual([
         `all("approved", "${antipatternOk}", "approved", "approved", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)`,
         // codex 対策#4 / 検証ブロッカー#1: product gate が空でも未昇格 anomaly が
-        // 残るなら fix へ落とさず final-gate（再レビュー/裁定）へ渡す。
+        // 残るなら fix へ落とさず merge-readiness-review（再レビュー/裁定）へ渡す。
         `any("approved", "needs_fix", "${antipatternOk}", "${antipatternNg}") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)`,
         // 対策バッチ B1: provisional が直前ラウンドから意味的な変化の無い
         // fixpoint に達した場合、再計画では解消し得ない。plan への差し戻しの

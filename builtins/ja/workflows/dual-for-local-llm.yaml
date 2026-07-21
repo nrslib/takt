@@ -72,10 +72,19 @@ loop_monitors:
           next: plan
         - condition: 非生産的（同じ指摘が繰り返される）で、再計画でも打開できる見込みがない
           next: ABORT
-  - cycle:
-      - reviewers
-      - final-gate
-      - fix
+  - cycle: [reviewers, merge-readiness-review, fix]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（指摘数が減少、修正が反映されている）
+          next: reviewers
+        - condition: 非生産的（同じ指摘が繰り返される）だが、計画の立て直しで打開できる見込みがある
+          next: plan
+        - condition: 非生産的（同じ指摘が繰り返される）で、再計画でも打開できる見込みがない
+          next: ABORT
+  - cycle: [reviewers, merge-readiness-review, supervise, fix]
     threshold: 3
     judge:
       persona: supervisor
@@ -373,7 +382,7 @@ steps:
 
   # merge-readiness-review の証跡を supervise が確認できるよう逐次実行する。
   # supervise が新規・継続・解消を突き合わせないと、merge-readiness が毎周同じ指摘を
-  # 新規として出し直し、reviewers → final-gate → fix が閉じない（実測: 56 周・9 時間）。
+  # 新規として出し直し、reviewers → merge-readiness-review → supervise / fix が閉じない（実測: 56 周・9 時間）。
   - name: merge-readiness-review
     tags:
       - review

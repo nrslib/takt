@@ -87,6 +87,17 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
     expect(fixNexts).not.toContain('ABORT');
 
     const monitors = workflow!.loopMonitors ?? [];
+    expect(monitors.map((monitor) => monitor.cycle)).toContainEqual([
+      'reviewers',
+      'merge-readiness-review',
+      'fix',
+    ]);
+    expect(monitors.map((monitor) => monitor.cycle)).toContainEqual([
+      'reviewers',
+      'merge-readiness-review',
+      'supervise',
+      'fix',
+    ]);
     const replanMonitor = monitors.find((monitor) => monitor.cycle.includes('plan'));
     expect(replanMonitor).toBeDefined();
     expect(replanMonitor!.cycle).toEqual(['plan', 'write_tests', 'implement', 'reviewers', 'fix']);
@@ -98,7 +109,7 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
 
     // ai-antipattern-review-1st ⇄ ai-antipattern-fix は行き詰まっても reviewers へ委ねる設計。
     // ここは実装直後の自己レビューに過ぎず、plan への再計画や ABORT は
-    // 下流の reviewers/fix・reviewers/final-gate/fix 監視が最終的に担うため持たない。
+    // 下流の reviewers/fix・reviewers/merge-readiness-review/(supervise/)fix 監視が最終的に担うため持たない。
     const antipatternMonitor = monitors.find((monitor) => monitor.cycle.includes('ai-antipattern-review-1st'));
     expect(antipatternMonitor).toBeDefined();
     const antipatternNexts = antipatternMonitor!.judge!.rules.map((rule) => rule.next);
@@ -137,10 +148,9 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
       expect(step, `step "${stepName}" should exist`).toBeDefined();
       const rules = step!.rules ?? [];
 
-      // final gate の各ステップは codex 対策#4 の review-integrity ルール（reviewerAnomalies の
-      // budgetExhausted → NEEDS_ADJUDICATION）も持つため、fixpoint ルールは
-      // condition で特定する（単なる next==NEEDS_ADJUDICATION では anomaly ルールに
-      // 先にヒットしてしまう）。
+      // 各ステップは review-integrity の anomaly ルールも持つ。supervise 自身の
+      // Finding Contract 取込でも新しい anomaly が生じ得るため、MRR 後でも必要。
+      // fixpoint ルールは condition で特定する。
       const fixpointRuleIndex = rules.findIndex((rule) => rule.next === 'NEEDS_ADJUDICATION' && rule.condition.includes('findings.provisional.fixpoint'));
       expect(fixpointRuleIndex, `step "${stepName}" should route fixpoint to NEEDS_ADJUDICATION`).toBeGreaterThanOrEqual(0);
       expect(rules[fixpointRuleIndex]!.condition).toContain('findings.provisional.fixpoint');

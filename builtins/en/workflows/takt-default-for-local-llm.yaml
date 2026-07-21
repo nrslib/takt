@@ -72,10 +72,19 @@ loop_monitors:
           next: plan
         - condition: unproductive (the same findings repeat), and replanning is unlikely to help
           next: ABORT
-  - cycle:
-      - reviewers
-      - final-gate
-      - fix
+  - cycle: [reviewers, merge-readiness-review, fix]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: converging (findings decreasing, fixes applied)
+          next: reviewers
+        - condition: unproductive (the same findings repeat), but replanning could break the deadlock
+          next: plan
+        - condition: unproductive (the same findings repeat), and replanning is unlikely to help
+          next: ABORT
+  - cycle: [reviewers, merge-readiness-review, supervise, fix]
     threshold: 3
     judge:
       persona: supervisor
@@ -430,7 +439,7 @@ steps:
 
   # Run sequentially so supervise can inspect merge-readiness evidence.
   # Without supervise reconciling new / persisting / resolved findings, merge-readiness
-  # re-reports the same issues every round and reviewers -> final-gate -> fix never
+  # re-reports the same issues every round and reviewers -> merge-readiness-review -> supervise/fix never
   # closes (measured: 56 cycles over 9 hours).
   - name: merge-readiness-review
     tags:
