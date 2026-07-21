@@ -74,6 +74,7 @@ export type {
 export { COMPLETE_STEP, ABORT_STEP } from '../constants.js';
 
 const workflowRunExecutors = new WeakMap<WorkflowEngine, () => Promise<WorkflowRunResult>>();
+const FIX_STEP_NAME = 'fix';
 
 function getWorkflowRunExecutor(engine: WorkflowEngine): () => Promise<WorkflowRunResult> {
   const executor = workflowRunExecutors.get(engine);
@@ -606,7 +607,7 @@ export class WorkflowEngine extends EventEmitter {
   private inheritPreviousReviewReports(): void {
     const resumeSource = this.options.resumeSource;
     const currentStep = this.config.steps.find((step) => step.name === this.state.currentStep);
-    if (!resumeSource || !currentStep || currentStep.name !== 'fix' || !this.isResumeTarget(currentStep)) {
+    if (!resumeSource || !currentStep || currentStep.name !== FIX_STEP_NAME || !this.isResumeTarget(currentStep)) {
       return;
     }
     try {
@@ -679,7 +680,7 @@ export class WorkflowEngine extends EventEmitter {
   }
 
   private getReviewReportPaths(step: WorkflowStep): readonly string[] {
-    if (step.name !== 'fix') {
+    if (step.name !== FIX_STEP_NAME) {
       return [];
     }
     try {

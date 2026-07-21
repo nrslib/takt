@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, type Stats } from 'node:fs';
 import { join, relative } from 'node:path';
 import type { WorkflowStep } from '../../models/types.js';
 import { getReportFiles } from '../evaluation/rule-utils.js';
@@ -45,10 +45,18 @@ export function resolveCurrentReviewReportPathsWithDiagnostics(
   excludedPaths: ReadonlySet<string>,
 ): CurrentReviewReportPathsResult {
   const scan = existsSync(reportDir) ? scanReportEntries(reportDir) : { entries: [] };
+  const statByPath = new Map<string, Stats>();
+  const statFor = (path: string): Stats => {
+    const cached = statByPath.get(path);
+    if (cached) return cached;
+    const stat = lstatSync(path);
+    statByPath.set(path, stat);
+    return stat;
+  };
   const paths = reportNames.flatMap((reportName) => {
     const matchingPaths = scan.entries
-      .filter((path) => !excludedPaths.has(path) && lstatSync(path).isFile() && reportPathMatches(path, reportDir, reportName))
-      .sort((left, right) => lstatSync(right).mtimeMs - lstatSync(left).mtimeMs || left.localeCompare(right));
+      .filter((path) => !excludedPaths.has(path) && statFor(path).isFile() && reportPathMatches(path, reportDir, reportName))
+      .sort((left, right) => statFor(right).mtimeMs - statFor(left).mtimeMs || left.localeCompare(right));
     const path = matchingPaths[0];
     return path ? [{ reportName, path }] : [];
   });
