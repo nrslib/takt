@@ -7,7 +7,12 @@ vi.mock('../agents/runner.js', () => ({
 }));
 
 vi.mock('../infra/resources/schema-loader.js', () => ({
-  loadEvaluationSchema: vi.fn(() => ({ type: 'evaluation' })),
+  loadEvaluationSchema: vi.fn(() => ({
+    type: 'object',
+    required: ['matched_index', 'reason'],
+    properties: { matched_index: { type: 'integer' }, reason: { type: 'string' } },
+    additionalProperties: false,
+  })),
 }));
 
 function doneResponse(content: string, structuredOutput?: Record<string, unknown>) {
@@ -26,7 +31,7 @@ describe('evaluateCondition judge instruction contract', () => {
   });
 
   it('should pass agent output and judge conditions to runAgent', async () => {
-    vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { matched_index: 1 }));
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { matched_index: 1, reason: 'needs fix' }));
 
     await evaluateCondition(
       'worker result with a unique regression summary',
@@ -44,7 +49,9 @@ describe('evaluateCondition judge instruction contract', () => {
     expect(instruction).toContain('approved when verification passes');
     expect(runAgent).toHaveBeenCalledWith(undefined, instruction, expect.objectContaining({
       cwd: '/repo',
-      outputSchema: { type: 'evaluation' },
+      outputSchema: expect.objectContaining({
+        required: ['matched_index', 'reason'],
+      }),
     }));
   });
 });

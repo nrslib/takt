@@ -65,6 +65,166 @@ describe('workflow finding_contract schema', () => {
     );
   });
 
+  // 有限停止予算（codex 裁定・対策バッチ B1 の拡張）。
+  it('should leave findingContract.stopBudget undefined when stop_budget is omitted (defaults are applied lazily by stop-budget.ts, not at normalization time)', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'finding-contract-workflow-no-stop-budget',
+      finding_contract: {
+        ledger_path: '.takt/findings/peer-review.json',
+        raw_findings_path: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          output_contract: 'findings-manager',
+        },
+      },
+      initial_step: 'peer-review',
+      max_steps: 2,
+      steps: [
+        {
+          name: 'peer-review',
+          persona: 'reviewer',
+          instruction: 'Review the change.',
+          rules: [{ when: 'findings.open.count == 0', next: 'COMPLETE' }],
+        },
+      ],
+    }, '/tmp/project');
+
+    expect(workflow.findingContract?.stopBudget).toBeUndefined();
+  });
+
+  it('should normalize finding_contract.stop_budget with both max_rounds and max_minutes provided', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'finding-contract-workflow-stop-budget',
+      finding_contract: {
+        ledger_path: '.takt/findings/peer-review.json',
+        raw_findings_path: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          output_contract: 'findings-manager',
+        },
+        stop_budget: {
+          max_rounds: 5,
+          max_minutes: 30,
+        },
+      },
+      initial_step: 'peer-review',
+      max_steps: 2,
+      steps: [
+        {
+          name: 'peer-review',
+          persona: 'reviewer',
+          instruction: 'Review the change.',
+          rules: [{ when: 'findings.open.count == 0', next: 'COMPLETE' }],
+        },
+      ],
+    }, '/tmp/project');
+
+    expect(workflow.findingContract?.stopBudget).toEqual({ maxRounds: 5, maxMinutes: 30 });
+  });
+
+  it('should normalize finding_contract.stop_budget with only max_rounds provided (max_minutes stays unset — the time cap is opt-in)', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'finding-contract-workflow-partial-stop-budget',
+      finding_contract: {
+        ledger_path: '.takt/findings/peer-review.json',
+        raw_findings_path: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          output_contract: 'findings-manager',
+        },
+        stop_budget: {
+          max_rounds: 5,
+        },
+      },
+      initial_step: 'peer-review',
+      max_steps: 2,
+      steps: [
+        {
+          name: 'peer-review',
+          persona: 'reviewer',
+          instruction: 'Review the change.',
+          rules: [{ when: 'findings.open.count == 0', next: 'COMPLETE' }],
+        },
+      ],
+    }, '/tmp/project');
+
+    expect(workflow.findingContract?.stopBudget).toEqual({ maxRounds: 5 });
+  });
+
+  it('should reject unknown finding_contract.stop_budget fields instead of silently accepting contract drift', () => {
+    expect(() =>
+      normalizeWorkflowConfig({
+        name: 'invalid-stop-budget-workflow',
+        finding_contract: {
+          ledger_path: '.takt/findings/peer-review.json',
+          raw_findings_path: '.takt/findings/raw',
+          manager: {
+            persona: 'findings-manager',
+            instruction: 'findings-manager',
+            output_contract: 'findings-manager',
+          },
+          stop_budget: {
+            max_rounds: 5,
+            max_rounds_per_step: 5,
+          },
+        },
+        initial_step: 'peer-review',
+        max_steps: 2,
+        steps: [
+          {
+            name: 'peer-review',
+            persona: 'reviewer',
+            instruction: 'Review the change.',
+            rules: [{ condition: 'done', next: 'COMPLETE' }],
+          },
+        ],
+      }, '/tmp/project'),
+    ).toThrow();
+  });
+
+  it('should reject invalid finding_contract.stop_budget raw shapes (non-positive or non-integer)', () => {
+    const invalidStopBudgets: unknown[] = [
+      { max_rounds: 0 },
+      { max_rounds: -1 },
+      { max_rounds: 1.5 },
+      { max_rounds: 'five' },
+      { max_minutes: 0 },
+      { max_minutes: -1 },
+      { max_minutes: 1.5 },
+    ];
+
+    for (const stopBudget of invalidStopBudgets) {
+      expect(() =>
+        normalizeWorkflowConfig({
+          name: 'invalid-stop-budget-shape-workflow',
+          finding_contract: {
+            ledger_path: '.takt/findings/peer-review.json',
+            raw_findings_path: '.takt/findings/raw',
+            manager: {
+              persona: 'findings-manager',
+              instruction: 'findings-manager',
+              output_contract: 'findings-manager',
+            },
+            stop_budget: stopBudget,
+          },
+          initial_step: 'peer-review',
+          max_steps: 2,
+          steps: [
+            {
+              name: 'peer-review',
+              persona: 'reviewer',
+              instruction: 'Review the change.',
+              rules: [{ condition: 'done', next: 'COMPLETE' }],
+            },
+          ],
+        }, '/tmp/project'),
+      ).toThrow();
+    }
+  });
+
   it('should preserve finding manager provider and model through workflow normalization', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'finding-contract-manager-provider-workflow',

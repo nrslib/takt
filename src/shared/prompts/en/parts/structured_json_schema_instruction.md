@@ -12,3 +12,5 @@ Return exactly one fenced JSON block that matches this JSON schema:
 ```
 
 Do not include any text before or after the JSON block.
+
+Do not call StructuredOutput; that tool is unavailable for this request.

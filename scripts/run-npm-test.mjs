@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
-import { basename } from 'node:path';
+import { basename, isAbsolute, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import {
+  serialGitTestFiles,
+  serialWorkflowTestFiles,
+} from './test-classification.mjs';
+import { resolveNpmInvocation } from './npm-invocation.mjs';
 
 const UNIT_SHARDS = ['1/4', '2/4', '3/4', '4/4'];
 const NO_ARG_UNIT_RUN_OPTIONS = ['--maxWorkers=1'];
@@ -64,35 +69,35 @@ export function selectNpmTestRuns(args) {
   }
 
   const targets = splitTestTargets(args);
-  if (targets.integration.length === 0) {
-    return [{
-      npmArgs: ['run', 'test:unit:parallel', '--', ...targets.shared, ...targets.unit],
-    }];
+  if (!hasExplicitTargets(targets)) {
+    return buildDefaultRuns(targets.shared);
   }
-  if (targets.unit.length === 0) {
-    return [{
-      npmArgs: ['run', 'test:it:parallel', '--', ...targets.shared, ...targets.integration],
-    }];
-  }
-
   return [
-    {
-      npmArgs: ['run', 'test:unit:parallel', '--', ...targets.shared, ...targets.unit],
-    },
-    {
-      npmArgs: ['run', 'test:it:parallel', '--', ...targets.shared, ...targets.integration],
-    },
-  ];
+    buildTargetedRun('test:unit:parallel', targets.shared, targets.unit),
+    buildTargetedRun('test:it:parallel', targets.shared, targets.integration),
+    buildTargetedRun('test:it:serial:git', targets.shared, targets.serialGit),
+    buildTargetedRun('test:it:serial:workflow', targets.shared, targets.serialWorkflow),
+  ].filter((run) => run !== undefined);
 }
 
-export function hasIntegrationTestTarget(args) {
-  return args.some(isIntegrationTestTarget);
+function buildDefaultRuns(shared) {
+  const separator = shared.length > 0 ? ['--', ...shared] : [];
+  return [{ npmArgs: ['run', 'test:unit:parallel', ...separator] }];
+}
+
+function hasExplicitTargets(targets) {
+  return targets.unit.length > 0
+    || targets.integration.length > 0
+    || targets.serialGit.length > 0
+    || targets.serialWorkflow.length > 0;
 }
 
 function splitTestTargets(args) {
   const shared = [];
   const unit = [];
   const integration = [];
+  const serialGit = [];
+  const serialWorkflow = [];
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -110,14 +115,25 @@ function splitTestTargets(args) {
           shared[shared.length - 1] = normalizeOptionalOptionWithoutValue(arg);
         }
       }
+    } else if (isSerialGitTarget(arg)) {
+      serialGit.push(normalizeTestTarget(arg));
+    } else if (isSerialWorkflowTarget(arg)) {
+      serialWorkflow.push(normalizeTestTarget(arg));
     } else if (isIntegrationTestTarget(arg)) {
-      integration.push(arg);
+      integration.push(normalizeTestTarget(arg));
     } else {
-      unit.push(arg);
+      unit.push(normalizeTestTarget(arg));
     }
   }
 
-  return { shared, unit, integration };
+  return { shared, unit, integration, serialGit, serialWorkflow };
+}
+
+function buildTargetedRun(script, shared, targets) {
+  if (targets.length === 0) {
+    return undefined;
+  }
+  return { npmArgs: ['run', script, '--', ...shared, ...targets] };
 }
 
 function isRequiredValueOption(arg) {
@@ -165,11 +181,35 @@ function isIntegrationTestTarget(arg) {
     || fileName.endsWith('.performance.test.ts');
 }
 
+function isSerialGitTarget(arg) {
+  return serialGitTestFiles.includes(normalizeTestTarget(arg));
+}
+
+function isSerialWorkflowTarget(arg) {
+  return serialWorkflowTestFiles.includes(normalizeTestTarget(arg));
+}
+
+function normalizeTestTarget(arg) {
+  const slashNormalized = arg.replaceAll('\\', '/');
+  const workspaceRelative = isAbsolute(slashNormalized)
+    ? relative(process.cwd(), slashNormalized).replaceAll('\\', '/')
+    : slashNormalized.replace(/^\.\//, '');
+  if (workspaceRelative.includes('/')) {
+    return workspaceRelative;
+  }
+  const matchingClassifiedTargets = [...serialGitTestFiles, ...serialWorkflowTestFiles]
+    .filter((target) => basename(target) === workspaceRelative);
+  return matchingClassifiedTargets.length === 1
+    ? matchingClassifiedTargets[0]
+    : workspaceRelative;
+}
+
 async function runNpmCommand(npmArgs) {
   return new Promise((resolve) => {
-    const child = spawn('npm', npmArgs, {
+    const invocation = resolveNpmInvocation(process.execPath, process.env.npm_execpath);
+    const child = spawn(invocation.executable, [...invocation.args, ...npmArgs], {
       stdio: 'inherit',
-      shell: process.platform === 'win32',
+      shell: false,
     });
 
     child.on('exit', (code, signal) => {
@@ -189,7 +229,7 @@ async function runNpmCommand(npmArgs) {
   });
 }
 
-export async function runNpmTest(args, runCommand) {
+export async function runNpmTest(args, runCommand = runNpmCommand) {
   const runs = selectNpmTestRuns(args);
   const results = args.length === 0
     ? await runNpmTestCommandsSequentially(runs, runCommand)
@@ -208,15 +248,15 @@ export async function runNpmTest(args, runCommand) {
 }
 
 async function runNpmTestCommandsSequentially(runs, runCommand) {
-  let results = [];
+  const results = [];
   for (const run of runs) {
     const result = await runCommand(run.npmArgs);
-    results = [...results, { run, result }];
+    results.push({ run, result });
   }
   return results;
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  const code = await runNpmTest(process.argv.slice(2), runNpmCommand);
+  const code = await runNpmTest(process.argv.slice(2));
   process.exit(code);
 }

@@ -6,7 +6,6 @@ import { isPlanningBudgetError } from './team-leader-budget-errors.js';
 export interface TeamLeaderExecutionOptions {
   initialParts: PartDefinition[];
   maxConcurrency: number;
-  refillThreshold: number;
   maxTotalParts?: number;
   abortSignal?: AbortSignal;
   runPart: (part: PartDefinition, partIndex: number) => Promise<PartResult>;
@@ -15,7 +14,6 @@ export interface TeamLeaderExecutionOptions {
       partResults: PartResult[];
       scheduledIds: string[];
       remainingPartBudget: number;
-      unfinishedScheduledPartCount: number;
     }
   ) => Promise<MorePartsResponse>;
   onPartQueued?: (part: PartDefinition, partIndex: number) => void;
@@ -42,7 +40,7 @@ export async function runTeamLeaderExecution(
   options.abortSignal?.throwIfAborted();
   const maxTotalParts = options.maxTotalParts ?? DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS;
   if (options.initialParts.length > maxTotalParts) {
-    throw new Error(`Initial team leader parts exceed max_total_parts: ${options.initialParts.length} > ${maxTotalParts}`);
+    throw new Error(`Initial team leader parts exceed total part budget: ${options.initialParts.length} > ${maxTotalParts}`);
   }
 
   const queue: PartDefinition[] = [...options.initialParts];
@@ -53,21 +51,9 @@ export async function runTeamLeaderExecution(
 
   let nextPartIndex = 0;
   let leaderDone = false;
-  let deferredDoneReason: string | undefined;
-
   const tryPlanMoreParts = async (): Promise<void> => {
     options.abortSignal?.throwIfAborted();
     if (leaderDone) {
-      return;
-    }
-
-    if (deferredDoneReason && plannedParts.length === partResults.length && partResults.every(isSuccessfulPartResult)) {
-      options.onPlanningDone?.({
-        reason: deferredDoneReason,
-        plannedParts: plannedParts.length,
-        completedParts: partResults.length,
-      });
-      leaderDone = true;
       return;
     }
 
@@ -82,15 +68,10 @@ export async function runTeamLeaderExecution(
         partResults,
         scheduledIds: [...scheduledIds],
         remainingPartBudget,
-        unfinishedScheduledPartCount: plannedParts.length - partResults.length,
       });
       options.abortSignal?.throwIfAborted();
 
       if (feedback.done) {
-        if (plannedParts.length > partResults.length) {
-          deferredDoneReason = feedback.reasoning;
-          return;
-        }
         options.onPlanningDone?.({
           reason: feedback.reasoning,
           plannedParts: plannedParts.length,
@@ -110,9 +91,6 @@ export async function runTeamLeaderExecution(
       }
 
       if (newParts.length === 0) {
-        if (plannedParts.length > partResults.length) {
-          return;
-        }
         options.onPlanningNoNewParts?.({
           reason: feedback.reasoning,
           plannedParts: plannedParts.length,
@@ -125,7 +103,6 @@ export async function runTeamLeaderExecution(
       assertPlannedPartsWithinLimit(plannedParts.length, newParts.length, maxTotalParts);
       plannedParts.push(...newParts);
       queue.push(...newParts);
-      deferredDoneReason = undefined;
       options.onPartsAdded?.({
         parts: newParts,
         reason: feedback.reasoning,
@@ -171,7 +148,7 @@ export async function runTeamLeaderExecution(
         continue;
       }
 
-      if (queue.length <= options.refillThreshold) {
+      if (queue.length === 0 && running.size === 0) {
         await tryPlanMoreParts();
       }
       continue;
@@ -185,10 +162,6 @@ export async function runTeamLeaderExecution(
   }
 
   return { plannedParts, partResults };
-}
-
-function isSuccessfulPartResult(result: PartResult): boolean {
-  return result.response.status === 'done';
 }
 
 function assertPlannedPartsWithinLimit(

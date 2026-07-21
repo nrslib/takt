@@ -70,7 +70,10 @@ export function normalizeOutputContracts(
       throw new Error(`Failed to resolve output contract order "${entry.order}" for report "${entry.name}"`);
     }
 
-    return { name: entry.name, useJudge: entry.use_judge ?? true, format, order };
+    // formatRef は解決前の facet 参照名を保持する。format は本文へ解決済みのため、
+    // "*-finding-contract" 命名規約の検証（WorkflowValidator の fail-fast チェック）
+    // はこちらでしか行えない。
+    return { name: entry.name, useJudge: entry.use_judge ?? true, format, formatRef: entry.format, order };
   });
 
   return result.length > 0 ? result : undefined;
@@ -112,7 +115,6 @@ export function normalizeTeamLeader(
   if (!raw) {
     return undefined;
   }
-
   const { personaSpec, personaPath } = resolvePersona(raw.persona, sections, workflowDir, context);
   const { personaSpec: partPersona, personaPath: partPersonaPath } = resolvePersona(raw.part_persona, sections, workflowDir, context);
   const rawPersona = raw.persona?.trim();
@@ -132,8 +134,9 @@ export function normalizeTeamLeader(
     personaDisplayName,
     providerRoutingPersonaKey,
     maxConcurrency: raw.max_concurrency ?? raw.max_parts ?? 3,
+    ...(raw.initial_max_parts !== undefined ? { initialMaxParts: raw.initial_max_parts } : {}),
     maxTotalParts: raw.max_total_parts ?? DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS,
-    refillThreshold: raw.refill_threshold ?? 0,
+    ...(raw.fail_on_part_error !== undefined ? { failOnPartError: raw.fail_on_part_error } : {}),
     timeoutMs: raw.timeout_ms ?? 900000,
     inspectTools: normalizeTeamLeaderInspectTools(raw.inspect_tools),
     partPersona,

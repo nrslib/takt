@@ -1,28 +1,27 @@
 ```markdown
 # Implementation Semantics Review
-
 ## Result: APPROVE / REJECT
-
 ## Summary
-{1-2 sentence summary of the review outcome}
-
-## Observed Findings
-| # | family_tag | Severity | Location | Problem | Breaking Condition | Suggested Fix |
-|---|------------|----------|----------|---------|--------------------|---------------|
-| 1 | data-structure | High / Medium / Low | `src/file.ts:42` | {problem} | {which input or state breaks it} | {suggested fix} |
-
+{1-2 sentence conclusion}
 ## Verification Evidence
-- Diff check: {what was verified}
-- Citation check: {confirmation that every cited file:line was verified against the actual code}
-
-## REJECT Criteria
-- REJECT only when at least one blocking finding exists
+| State or Generated Identifier | Existing Namespace | Downstream Syntax | Concrete Failure Condition | Result |
+|-------------------------------|--------------------|-------------------|----------------------------|--------|
+| {target} | {existing input or reserved word} | {storage, display, or lookup} | {collision or inconsistency condition} | {verified result or unverified} |
+## Re-scan Evidence
+| Checked Chapters | Unverified Chapters (only when any) | Checked Route | Current Evidence | Result |
+|------------------|------------------------------------|---------------|------------------|--------|
+| Checked Chapters N/N | {unverified chapters; otherwise "none"} | {cumulative diff, code, and test} | {current file:line or execution evidence} | {verified result or unverified} |
+## Observed Findings
+| # | family_tag | Severity | Location | Issue | Impact or Failure Condition | Fix Direction |
+|---|------------|----------|----------|-------|-----------------------------|---------------|
+| 1 | identifier-namespace | high / medium / low | `file:line` | {current observed defect} | {impact or condition} | {fix direction} |
+## Resolution Confirmations
+| Ledger Reference | Original Acceptance Criteria | Confirmation Evidence |
+|------------------|------------------------------|-----------------------|
+| {existing finding} | {expected result} | `file:line` |
+## Output Consistency
+- Markdown Observed Findings and structured issues, and Markdown Resolution Confirmations and structured confirmations, must each be the same set.
+- APPROVE means zero issues; REJECT means one or more issues. Do not make approvals or summaries issues.
 ```
 
-**Cognitive-load rules:**
-- APPROVE -> summary only (within 5 lines)
-- REJECT -> only the relevant findings in the table (within 30 lines)
-
-**Cognitive-load rules:**
-- APPROVE -> summary only (within 5 lines)
-- REJECT -> only the relevant findings in the table (within 30 lines)
+**Cognitive-load rule:** Even for APPROVE, include the one aggregated re-scan row; group like targets and stay within 30 lines. For REJECT, include only relevant rows.

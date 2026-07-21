@@ -18,6 +18,30 @@ workflow_config:
 
 loop_monitors:
   - cycle:
+      - ai-antipattern-review-1st
+      - ai-antipattern-fix
+    threshold: 5
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-ai-antipattern-fix-1st
+      rules:
+        - condition: Healthy (making progress)
+          next: ai-antipattern-review-1st
+        - condition: Unproductive (no improvement)
+          next: reviewers
+  - cycle:
+      - ai-antipattern-fix
+      - ai-antipattern-no-fix
+    threshold: 5
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-ai-antipattern-fix-1st
+      rules:
+        - condition: Healthy (making progress)
+          next: ai-antipattern-review-1st
+        - condition: Unproductive (no improvement)
+          next: reviewers
+  - cycle:
       - plan
       - write_tests
       - implement
@@ -146,9 +170,75 @@ steps:
     instruction: implement
     rules:
       - condition: Implementation is complete
-        next: reviewers
+        next: ai-antipattern-review-1st
       - condition: Cannot proceed with implementation (environment issue or missing information)
         next: plan
+
+  # Same step as dual.yaml. Clears AI-specific issues right after
+  # implementation, before the perspective reviewers run. Weak models need this.
+  - name: ai-antipattern-review-1st
+    session_key: ai-antipattern-review-1st
+    tags:
+      - review
+    edit: false
+    persona: ai-antipattern-reviewer
+    policy:
+      - review
+      - ai-antipattern
+    provider_options:
+      extends: review-readonly
+    instruction: ai-antipattern-review-for-local-llm
+    rules:
+      - condition: No AI-specific issues
+        next: reviewers
+      - condition: AI-specific issues found
+        next: ai-antipattern-fix
+    output_contracts:
+      report:
+        - name: ai-antipattern-review-1st.md
+          format: ai-antipattern-review-finding-contract
+
+  - name: ai-antipattern-fix
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - frontend
+      - react
+      - backend
+      - architecture
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    pass_previous_response: false
+    instruction: ai-antipattern-fix
+    rules:
+      - condition: AI issues fixed
+        next: ai-antipattern-review-1st
+      - condition: No fix needed (verified target files/spec)
+        next: ai-antipattern-no-fix
+      - condition: Cannot proceed, insufficient info
+        next: ai-antipattern-no-fix
+
+  - name: ai-antipattern-no-fix
+    tags:
+      - review
+    edit: false
+    persona: architecture-reviewer-for-local-llm
+    policy: review
+    provider_options:
+      extends: review-files
+    instruction: arbitrate-review-1st
+    rules:
+      - condition: ai-antipattern-review-1st's findings are valid (fix required)
+        next: ai-antipattern-fix
+      - condition: ai-antipattern-fix's judgment is valid (no fix needed)
+        next: reviewers
 
   - name: reviewers
     tags:
@@ -158,12 +248,12 @@ steps:
         tags:
           - review
         edit: false
-        persona: architecture-reviewer
+        persona: architecture-reviewer-for-local-llm
         policy:
           - review
         knowledge:
           - architecture
-        instruction: review-arch
+        instruction: review-arch-for-local-llm
         rules:
           - condition: approved
           - condition: needs_fix
@@ -193,6 +283,7 @@ steps:
               format: frontend-review-finding-contract
 
       - name: ai-antipattern-review
+        session_key: ai-antipattern-review-finding-contract
         tags:
           - review
         edit: false
@@ -201,7 +292,7 @@ steps:
           - review
           - ai-antipattern
         pass_previous_response: false
-        instruction: ai-antipattern-review
+        instruction: ai-antipattern-review-for-local-llm
         rules:
           - condition: No AI-specific issues
           - condition: AI-specific issues found
@@ -219,7 +310,7 @@ steps:
           - review
           - coding
         pass_previous_response: false
-        instruction: review-coding
+        instruction: review-coding-for-local-llm
         rules:
           - condition: approved
           - condition: needs_fix
@@ -238,7 +329,7 @@ steps:
         knowledge:
           - implementation-semantics
         pass_previous_response: false
-        instruction: review-implementation-semantics
+        instruction: review-implementation-semantics-for-local-llm
         rules:
           - condition: approved
           - condition: needs_fix
@@ -249,37 +340,142 @@ steps:
     rules:
       - condition: all("approved", "approved", "No AI-specific issues", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: final-gate
-      - condition: any("needs_fix", "needs_fix", "AI-specific issues found", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)
+      # If provisional findings reached a semantic fixpoint since the previous
+      # round (no meaningful change), replanning cannot resolve them either
+      # (convergence batch B1). Route to the human-adjudication terminal state
+      # before falling back to the replan rule below.
+      # Review-integrity gate (codex 対策#4 / verification blocker #1): if the product
+      # gate is clear (no open findings) but unpromoted reviewer anomalies remain, hand
+      # to final-gate — which re-reviews up to the review-integrity budget, then
+      # adjudicates — instead of falling through to the fix rules below. There is
+      # nothing to fix (the observations were isolated as unverifiable), and an anomaly
+      # must be sent to re-review, never to fix.
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        next: final-gate
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      # If the cumulative findings-manager round count (or elapsed time, when
+      # configured) exceeds finding_contract.stop_budget, the provisional set
+      # may still be churning (never reaching a fixpoint) — route to the same
+      # human-adjudication terminal state instead of replanning forever
+      # (bounded stop budget, codex-adjudicated extension of convergence batch B1).
+      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      # Provisional findings (observations whose meaning could not be determined)
+      # are system findings the fixer cannot address directly; replan instead of
+      # looping the fixer (raw-finding ladder design v2).
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: plan
+      - condition: any("needs_fix", "AI-specific issues found") && when(findings.conflicts.count == 0)
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix
-      - condition: ai("There are unadjudicated findings.conflicts. Choose fix only when a concrete code change by the coder can resolve them. Do not choose it for reviewer disagreements or anything requiring human judgment.")
-        next: fix
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
 
+  # Parallel, like takt-default's merge-readiness-final-gate subworkflow.
+  # Without supervise reconciling new / persisting / resolved findings, merge-readiness
+  # re-reports the same issues every round and reviewers -> final-gate -> fix never
+  # closes (measured: 56 cycles over 9 hours).
   - name: final-gate
     tags:
       - review
       - final-gate
-    edit: false
-    persona: merge-readiness-reviewer
-    policy: review
-    pass_previous_response: false
-    instruction: review-merge-readiness
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review-finding-contract
+    parallel:
+      - name: merge-readiness-review
+        tags:
+          - review
+          - final-gate
+          - merge-readiness
+        edit: false
+        persona: merge-readiness-reviewer
+        policy: review
+        provider_options:
+          extends: review-readonly
+        pass_previous_response: false
+        instruction: review-merge-readiness
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: merge-readiness-review.md
+              format: merge-readiness-review-finding-contract
+
+      - name: supervise
+        tags:
+          - review
+          - final-gate
+          - supervise
+        edit: false
+        persona: supervisor
+        policy: review
+        knowledge:
+          - frontend
+          - react
+          - backend
+          - architecture
+        provider_options:
+          extends: review-readonly
+        pass_previous_response: false
+        instruction: supervise-finding-contract
+        rules:
+          - condition: approved
+          - condition: needs_fix
+          - condition: need_replan
+        output_contracts:
+          report:
+            - name: supervisor-validation.md
+              format: supervisor-validation-finding-contract
+            - name: supervisor-gate-summary.md
+              format: supervisor-gate-summary-finding-contract
+              use_judge: false
     rules:
-      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
+      # Review-integrity gate (codex 対策#4 / verification blocker #1): unpromoted
+      # reviewer anomalies mean at least one reviewer made a claim whose evidence
+      # did not mechanically verify (quote-mismatch / stale-snapshot). An anomaly is
+      # NOT a product finding, so it never blocks the product gate (open/conflicts)
+      # — but a run whose entire review landed in anomalies would otherwise reach an
+      # empty product gate and COMPLETE without having been soundly reviewed. So
+      # while any unpromoted anomaly remains, do NOT COMPLETE: re-review (reviewers)
+      # until a correctly-quoted finding promotes it, and once the review-integrity
+      # budget is exhausted route to human adjudication (mirrors the provisional
+      # fixpoint / stop-budget terminals). The engine completion gate is fail-closed
+      # for this even if a workflow omits the wiring below.
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        next: reviewers
+      - condition: all("approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE
-      - condition: needs_fix && when(findings.conflicts.count == 0)
+      # If provisional findings reached a semantic fixpoint since the previous
+      # round (no meaningful change), replanning cannot resolve them either
+      # (convergence batch B1). Route to the human-adjudication terminal state
+      # before falling back to the replan rule below.
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      # If the cumulative findings-manager round count (or elapsed time, when
+      # configured) exceeds finding_contract.stop_budget, the provisional set
+      # may still be churning (never reaching a fixpoint) — route to the same
+      # human-adjudication terminal state instead of replanning forever
+      # (bounded stop budget, codex-adjudicated extension of convergence batch B1).
+      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      # Provisional findings (observations whose meaning could not be determined)
+      # are system findings the fixer cannot address directly; replan instead of
+      # looping the fixer (raw-finding ladder design v2).
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: plan
+      - condition: any("need_replan") && when(findings.conflicts.count == 0)
+        next: plan
+      - condition: any("needs_fix") && when(findings.conflicts.count == 0)
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix
-      - condition: ai("There are unadjudicated findings.conflicts. Choose fix only when a concrete code change by the coder can resolve them. Do not choose it for reviewer disagreements or anything requiring human judgment.")
-        next: fix
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
 

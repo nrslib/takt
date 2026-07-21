@@ -3,7 +3,7 @@ import { isPlanningBudgetError } from '../core/workflow/engine/team-leader-budge
 
 describe('isPlanningBudgetError', () => {
   it('既知の parts 予算超過エラーだけを planning budget error として扱う', () => {
-    expect(isPlanningBudgetError(new Error('Initial team leader parts exceed max_total_parts: 3 > 2'))).toBe(true);
+    expect(isPlanningBudgetError(new Error('Initial team leader parts exceed total part budget: 3 > 2'))).toBe(true);
     expect(isPlanningBudgetError(new Error('Team leader planned parts exceed max_total_parts: 4 > 3'))).toBe(true);
     expect(isPlanningBudgetError(new Error('Team leader produced too many total parts: 2 > max_total_parts 1'))).toBe(true);
     expect(isPlanningBudgetError(new Error('Structured output produced too many total parts: 6 > max_total_parts 5'))).toBe(true);

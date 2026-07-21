@@ -19,6 +19,7 @@ import { buildJudgeConditions } from '../../../agents/judge-utils.js';
 import { AggregateEvaluator } from './AggregateEvaluator.js';
 import { evaluateWhenExpression } from './when-evaluator.js';
 import { findImmediateDeterministicMatch, hasUnquotedFindingsReference, isDeferredDeterministicCondition, isDeterministicCondition, isFindingsCondition, unwrapWhenCondition } from './rule-utils.js';
+import { RuleDetectionExhaustedError } from './RuleDetectionExhaustedError.js';
 
 const log = createLogger('rule-evaluator');
 
@@ -146,7 +147,7 @@ export class RuleEvaluator {
       return { index: deferredDeterministicIndex, method: 'auto_select' };
     }
 
-    throw new Error(`Status not found for step "${this.step.name}": no rule matched after all detection phases`);
+    throw new RuleDetectionExhaustedError(this.step.name);
   }
 
   private hasFindingsCondition(): boolean {

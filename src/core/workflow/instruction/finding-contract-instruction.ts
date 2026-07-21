@@ -24,15 +24,45 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
   const { contract, language, renderFencedJsonBlock } = input;
   const isReviewer = Boolean(contract.rawFindingsJsonSchema);
 
+  // review-integrity protocol: rawFindingsJsonSchema と reviewScopeSnapshotId は同じ
+  // includeRawFindingsSchema 条件下で必ずセットで生成される（WorkflowEngineSetup.ts
+  // の buildFindingContractInstructionContext 参照）。reviewer 用の
+  // FindingContractInstructionContext を組む経路が reviewScopeSnapshotId の配線を
+  // 落とすと、reviewer は空文字列の snapshotId を source_quote evidence に echo し、
+  // manager 側の決定的検証（verifySourceQuoteEvidence）が必ず stale-snapshot で弾く
+  // ようになる。引用が完全に正確でも product finding へ絶対に昇格できず、reviewer
+  // anomaly に落ち続けるという重大な machine-detectable な配線バグであるにも
+  // かかわらず、`?? ''` によるサイレントな空文字 fallback はこれを不可視にする
+  // （実際に ParallelRunner が inline で context を組み立てて発生させていた）。
+  // このモジュール一帯は fail-closed 方針（ledger store 欠落等は throw）を取って
+  // おり、ここも唯一の発見場所として throw で止める。呼び出し側は
+  // optionsBuilder.buildFindingContractInstructionContext(step, true) 経由で
+  // context を組み立てる限りこの分岐に到達しない。
+  if (isReviewer && !contract.reviewScopeSnapshotId) {
+    throw new Error(
+      'Finding contract reviewer instruction is missing reviewScopeSnapshotId even though '
+      + 'rawFindingsJsonSchema is present. This is a wiring bug in the caller that built the '
+      + 'FindingContractInstructionContext: rawFindingsJsonSchema and reviewScopeSnapshotId must '
+      + 'always be set together (see WorkflowEngineSetup.buildFindingContractInstructionContext). '
+      + 'Build the context via optionsBuilder.buildFindingContractInstructionContext(step, true) '
+      + 'instead of constructing it inline.',
+    );
+  }
+
   const rendered = loadTemplate('parts/finding_contract_instruction', language, {
     ledgerCopyPath: contract.ledgerCopyPath,
     ledgerSummary: renderFencedJsonBlock(contract.ledgerSummary),
     isReviewer,
     reviewerHasOpenFindings: isReviewer && contract.hasOpenFindings,
     reviewerHasWaivedFindings: isReviewer && contract.hasWaivedFindings,
+    reviewerHasDismissedFindings: isReviewer && contract.hasDismissedFindings,
     rawFindingsJsonSchema: contract.rawFindingsJsonSchema
       ? renderFencedJsonBlock(contract.rawFindingsJsonSchema)
       : '',
+    // review-integrity protocol: reviewer step のときだけ設定される（instruction-context.ts
+    // 参照）。空文字は「該当なし」— テンプレート側は isReviewer と一緒にしか
+    // 出さない。
+    reviewScopeSnapshotId: contract.reviewScopeSnapshotId ?? '',
     // 異議申告のガイドは open な指摘が存在するときだけ注入する。台帳が空の
     // 段階（初回 implement 等）では無意味であり、無関係なプロトコル文が
     // 弱いモデルのツール呼び出しを不安定化させることを実走で確認済み。

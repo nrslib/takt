@@ -1,6 +1,6 @@
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import type { AgentResponse, FallbackContext, LoopMonitorConfig, RateLimitFallbackProvider, WorkflowMaxSteps, WorkflowState, WorkflowStep } from '../../models/types.js';
-import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
+import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES, NEEDS_ADJUDICATION_STEP } from '../constants.js';
 import type {
   RuntimeStepResolution,
   StepProviderInfo,
@@ -71,11 +71,63 @@ interface WorkflowRunLoopDeps {
   buildInstruction: (step: WorkflowStep, stepIteration: number) => string;
   buildPhase1Instruction: (step: WorkflowStep, instruction: string, runtime?: RuntimeStepResolution) => string;
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
+  /** auto-routing ルーター・promotion 評価への入力専用（補完前の解決）。 */
+  resolveStepProviderModelBeforeAutoRouting: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
   resolveRuntimeForStep: (step: WorkflowStep) => RuntimeStepResolution | undefined;
   setActiveStep: (step: WorkflowStep, iteration: number) => void;
   addUserInput: (input: string) => void;
   emit: (event: string, ...args: unknown[]) => void;
   updateMaxSteps: (maxSteps: number) => void;
+  /**
+   * COMPLETE 遷移直前のエンジン最終不変条件: open な
+   * provisional finding が1件でもあれば COMPLETE を拒否する。バックストップ
+   * 発火は「workflow rules が findings.provisional.count を処理していない」
+   * 設定不備なので fail-fast abort（house の「マッチなしは黙ってデフォルトを
+   * 選ばず fail-fast」と同じ扱い）。violation.reason には provisional の
+   * id / kind / reason と修正ガイダンスを含める。
+   */
+  checkCompletionGate: () => { ok: true } | { ok: false; reason: string };
+  /**
+   * review-integrity gate 単独（review-integrity requirement）: 未昇格 reviewer anomaly のみを
+   * 見る。returnValue 終端（`return: X`）に適用する。`return: need_replan` のような
+   * 「未解決 provisional を呼び出し元へハンドバックするシグナル」を provisional gate で
+   * 塞がないよう、returnValue 経路では product gate ではなくこの gate を使う。ただし
+   * 未昇格 anomaly が残ったまま 'completed' になるのはどの完了経路でも許さない。
+   */
+  checkReviewIntegrityGate: () => { ok: true } | { ok: false; reason: string };
+  /**
+   * `next: NEEDS_ADJUDICATION` 到達時に
+   * 呼ぶ。現在 open な provisional finding とその発生元を監査レポートへ永続化し
+   * （FindingLedgerStore.saveNeedsAdjudicationReport）、人間可読な abort reason
+   * 文字列を返す副作用込みの操作 — 純粋な "build" ではないため checkCompletionGate
+   * と違う名前にしている。matchedCondition には「NEEDS_ADJUDICATION へ遷移させた
+   * ルールの condition（事実）」を渡す（停止理由を台帳状態から推定させず、実際に
+   * マッチした条件から分類させるため）。
+   */
+  recordNeedsAdjudication: (matchedCondition?: string) => string;
+}
+
+/**
+ * NEEDS_ADJUDICATION へ遷移させたルールの condition を返す。step 自身のルールが
+ * 直接 NEEDS_ADJUDICATION を指した場合（transition.nextStep）だけ、その matched
+ * rule の condition を信頼する — loop-monitor judge override は nextStep を
+ * NEEDS_ADJUDICATION に変え得るが response.matchedRuleIndex は step の元ルール
+ * （非終端）を指したままなので、judge のルール condition は表に出ない。その場合は
+ * undefined を返し、停止理由は 'unclassified' として記録される。
+ */
+function matchedNeedsAdjudicationCondition(
+  step: WorkflowStep,
+  response: AgentResponse,
+  transition: WorkflowRuleTransition,
+): string | undefined {
+  if (transition.nextStep !== NEEDS_ADJUDICATION_STEP) {
+    return undefined;
+  }
+  const index = response.matchedRuleIndex;
+  if (index == null) {
+    return undefined;
+  }
+  return step.rules?.[index]?.condition;
 }
 
 async function resolveStepPromotionRuntime(
@@ -89,7 +141,7 @@ async function resolveStepPromotionRuntime(
     previousResponseContent: deps.state.lastOutput?.content ?? '',
     structuredCaller: deps.options.structuredCaller,
     childProcessEnv: deps.options.childProcessEnv,
-    resolveStepProviderModel: deps.resolveStepProviderModel,
+    resolveStepProviderModel: deps.resolveStepProviderModelBeforeAutoRouting,
   }, step, stepIteration, runtime);
 }
 
@@ -109,7 +161,7 @@ async function resolveStepAutoRoutingRuntime(
     return runtime;
   }
 
-  const currentProviderInfo = deps.resolveStepProviderModel(step, runtime);
+  const currentProviderInfo = deps.resolveStepProviderModelBeforeAutoRouting(step, runtime);
   const autoRuntime = await resolveAutoRoutingRuntime({
     autoRouting: deps.options.autoRouting,
     step: {
@@ -250,6 +302,10 @@ function withFallbackRuntime(
 
 function advanceActiveStep(deps: WorkflowRunLoopDeps, nextStep: string, iteration: number): void {
   const resolvedStep = deps.getStep(nextStep);
+  // The engine-synthesized finding-conflict-adjudication step resolves its
+  // return-to-origin transition from this record (see
+  // WorkflowEngineStepCoordinator.resolveTransitionFromDone).
+  deps.state.previousStep = deps.state.currentStep;
   deps.state.currentStep = nextStep;
   deps.setActiveStep(resolvedStep, iteration);
 }
@@ -276,7 +332,7 @@ function abortWorkflow(
   if (options.clearLastOutput) {
     deps.state.lastOutput = undefined;
   }
-  deps.emit('workflow:abort', deps.state, reason);
+  deps.emit('workflow:abort', deps.state, reason, kind);
   return buildWorkflowAbortResult(kind, deps.state.currentStep, reason);
 }
 
@@ -322,6 +378,30 @@ function buildInterruptedIterationResult(
     ...(loopDetected !== undefined ? { loopDetected } : {}),
     abort,
   };
+}
+
+/**
+ * 全ての完了経路（COMPLETE 遷移・returnValue 終端）が必ず通る fail-closed の
+ * 一元判定（review-integrity requirement）。渡された gate 結果を評価し、通れば state.status を
+ * 'completed' にして undefined を返す。塞がっていれば完了させず abort を返す。
+ * どの完了終端もこの関数だけで status='completed' を確定させることで、gate を
+ * 迂回する完了経路（かつて returnValue 終端が gate を呼ばず直接 completed にして
+ * いた穴）を構造的に無くす。
+ *
+ * gate 結果は呼び出し元が選ぶ:
+ *   - COMPLETE 遷移 → checkCompletionGate（product gate + review-integrity gate）
+ *   - returnValue 終端 → checkReviewIntegrityGate（未昇格 anomaly のみ。provisional の
+ *     ハンドバックは許すが、review integrity 違反はどの経路でも 'completed' を許さない）
+ */
+function finalizeCompletionOrAbort(
+  deps: WorkflowRunLoopDeps,
+  gate: { ok: true } | { ok: false; reason: string },
+): WorkflowAbortResult | undefined {
+  if (!gate.ok) {
+    return abortWorkflow(deps, 'provisional_findings', gate.reason);
+  }
+  deps.state.status = 'completed';
+  return undefined;
 }
 
 function validateUserInputRuntime(
@@ -497,7 +577,15 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       : '';
     deps.setActiveStep(step, activeIteration);
     const providerInfo = deps.resolveStepProviderModel(step, stepRuntime);
-    deps.emit('step:start', step, activeIteration, stepInstruction, providerInfo, deps.getWorkflowName());
+    deps.emit(
+      'step:start',
+      step,
+      activeIteration,
+      stepInstruction,
+      providerInfo,
+      deps.getWorkflowName(),
+      step.name,
+    );
 
     try {
       const startedAt = Date.now();
@@ -529,7 +617,12 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       if (stepRuntime?.fallback) {
         deps.state.pendingFallback = undefined;
       }
-      deps.emit('step:complete', step, response, instruction);
+      deps.emit('step:complete', step, response, instruction, step.name);
+
+      if (result.terminalAbort !== undefined) {
+        abort = abortWorkflow(deps, result.terminalAbort.kind, result.terminalAbort.reason);
+        break;
+      }
 
       if (response.status === 'rate_limited') {
         const currentProvider = completedProviderInfo;
@@ -618,8 +711,16 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
 
       if (transition.returnValue !== undefined) {
+        // returnValue 終端も review-integrity gate を必ず通す（review-integrity requirement:
+        // かつてここは gate を呼ばず直接 completed にしており、未昇格 anomaly を
+        // 残したまま完了できる迂回路だった）。provisional は returnValue で呼び出し元へ
+        // ハンドバックされ得るため product gate ではなく review-integrity gate を使う。
+        const gateAbort = finalizeCompletionOrAbort(deps, deps.checkReviewIntegrityGate());
+        if (gateAbort) {
+          abort = gateAbort;
+          break;
+        }
         returnValue = transition.returnValue;
-        deps.state.status = 'completed';
         deps.emit('workflow:complete', deps.state);
         break;
       }
@@ -644,8 +745,20 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
 
       if (nextStep === COMPLETE_STEP) {
-        deps.state.status = 'completed';
+        const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
+        if (gateAbort) {
+          abort = gateAbort;
+          break;
+        }
         deps.emit('workflow:complete', deps.state);
+        break;
+      }
+      if (nextStep === NEEDS_ADJUDICATION_STEP) {
+        abort = abortWorkflow(
+          deps,
+          'needs_adjudication',
+          deps.recordNeedsAdjudication(matchedNeedsAdjudicationCondition(step, response, transition)),
+        );
         break;
       }
       if (nextStep === ABORT_STEP) {
@@ -708,6 +821,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
 
   deps.state.iteration++;
   const activeIteration = deps.state.iteration;
+  deps.setActiveStep(step, activeIteration);
   const isDelegated = isDelegatedWorkflowStep(step);
   const baseStepRuntime = deps.resolveRuntimeForStep(step);
   let stepIteration: number | undefined;
@@ -732,7 +846,6 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   if (workflowInterruptRequested(deps)) {
     return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
   }
-  deps.setActiveStep(step, activeIteration);
   const providerInfo = deps.resolveStepProviderModel(step, stepRuntime);
   const startedAt = Date.now();
   const result = await runWithStepSpan({
@@ -764,6 +877,11 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   );
   if (stepRuntime?.fallback) {
     deps.state.pendingFallback = undefined;
+  }
+
+  if (result.terminalAbort !== undefined) {
+    const abort = abortWorkflow(deps, result.terminalAbort.kind, result.terminalAbort.reason);
+    return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
   }
 
   if (response.status === 'blocked') {
@@ -859,7 +977,11 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
 
   if (transition.returnValue !== undefined) {
-    deps.state.status = 'completed';
+    // returnValue 終端も review-integrity gate を必ず通す（review-integrity requirement）。
+    const gateAbort = finalizeCompletionOrAbort(deps, deps.checkReviewIntegrityGate());
+    if (gateAbort) {
+      return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort: gateAbort };
+    }
     return {
       response,
       nextStep: COMPLETE_STEP,
@@ -870,12 +992,22 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
 
   const nextStep = requireNextStep(step, transition);
-  const isComplete = nextStep === COMPLETE_STEP || nextStep === ABORT_STEP;
+  const isComplete = nextStep === COMPLETE_STEP || nextStep === ABORT_STEP || nextStep === NEEDS_ADJUDICATION_STEP;
 
   if (!isComplete) {
     advanceActiveStep(deps, nextStep, deps.state.iteration);
   } else if (nextStep === COMPLETE_STEP) {
-    deps.state.status = 'completed';
+    const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
+    if (gateAbort) {
+      return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort: gateAbort };
+    }
+  } else if (nextStep === NEEDS_ADJUDICATION_STEP) {
+    const abort = abortWorkflow(
+      deps,
+      'needs_adjudication',
+      deps.recordNeedsAdjudication(matchedNeedsAdjudicationCondition(step, response, transition)),
+    );
+    return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
   }
 
   if (nextStep === ABORT_STEP) {

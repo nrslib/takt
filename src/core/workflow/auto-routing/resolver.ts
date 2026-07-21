@@ -11,6 +11,21 @@ export interface AutoRoutingStepMetadata {
   instruction?: string;
 }
 
+/** WorkflowStep からルーティング判定に使うメタデータへの共通変換。 */
+export function toAutoRoutingStepMetadata(step: {
+  name: string;
+  tags?: string[];
+  providerRoutingPersonaKey?: string;
+  instruction?: string;
+}): AutoRoutingStepMetadata {
+  return {
+    name: step.name,
+    tags: step.tags,
+    personaKey: step.providerRoutingPersonaKey,
+    instruction: step.instruction,
+  };
+}
+
 export interface AutoRoutingLogger {
   warn: (message: string) => void;
 }
@@ -222,6 +237,31 @@ export function resolveRuleBasedAutoRoutingProviderInfo(
   return candidate === undefined
     ? undefined
     : resolveAutoRoutingCandidateProviderInfo(candidate, 'auto.rules', input.autoRouting, input.currentProviderInfo);
+}
+
+/**
+ * AI ルーターを使わない決定的解決。rules に一致すればその候補、しなければ
+ * strategy デフォルト候補へ確定する。実行ループ（resolveStepAutoRoutingRuntime）
+ * を通らず合成されるステップ（findings-manager 等）は AI ルーターを持たない
+ * 文脈で解決されるため、この同期版が無いと auto_routing 有効時に provider が
+ * undefined のまま残り、structured_output ガードで実行前に落ちる。
+ */
+export function resolveDeterministicAutoRoutingProviderInfo(
+  input: Pick<ResolveAutoRoutingRuntimeInput, 'autoRouting' | 'step' | 'currentProviderInfo'>,
+): StepProviderInfo | undefined {
+  if (input.currentProviderInfo.provider !== undefined) {
+    return undefined;
+  }
+  const ruleProviderInfo = resolveRuleBasedAutoRoutingProviderInfo(input);
+  if (ruleProviderInfo !== undefined) {
+    return ruleProviderInfo;
+  }
+  return resolveAutoRoutingCandidateProviderInfo(
+    selectStrategyDefaultCandidate(input.autoRouting),
+    'auto.default',
+    input.autoRouting,
+    input.currentProviderInfo,
+  );
 }
 
 export async function resolveAutoRoutingRuntime(

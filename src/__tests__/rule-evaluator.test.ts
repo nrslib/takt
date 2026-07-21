@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { RuleEvaluator, type RuleEvaluatorContext } from '../core/workflow/evaluation/RuleEvaluator.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import type { WorkflowState } from '../core/models/types.js';
 import { makeStep } from './test-helpers.js';
 
@@ -398,9 +399,20 @@ describe('RuleEvaluator', () => {
       const ctx = makeContext();
       const evaluator = new RuleEvaluator(step, ctx);
 
+      await expect(evaluator.evaluate('', '')).rejects.toBeInstanceOf(RuleDetectionExhaustedError);
       await expect(evaluator.evaluate('', '')).rejects.toThrow(
         'Status not found for step "test-step": no rule matched after all detection phases',
       );
+    });
+
+    it('does not label non-terminal rule evaluation errors as detection exhaustion', async () => {
+      const step = makeStep({
+        rules: [{ condition: 'when(findings.open_count > 0)', next: 'fix' }],
+      });
+      const evaluator = new RuleEvaluator(step, makeContext());
+
+      await expect(evaluator.evaluate('', '')).rejects.not.toBeInstanceOf(RuleDetectionExhaustedError);
+      await expect(evaluator.evaluate('', '')).rejects.toThrow('Missing workflow findings state');
     });
 
     it('should reject out-of-bounds tag detection index', async () => {

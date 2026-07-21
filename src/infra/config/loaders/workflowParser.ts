@@ -12,6 +12,11 @@ import type {
   WorkflowSubworkflowConfig,
 } from '../../../core/models/index.js';
 import { hasUnquotedFindingsReference, isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
+import {
+  FINDING_CONFLICT_ADJUDICATION_PERSONA,
+  workflowWiresFindingConflictAdjudication,
+} from '../../../core/workflow/findings/adjudication-step.js';
+import { FINDING_CONFLICT_ADJUDICATION_STEP } from '../../../core/workflow/constants.js';
 import { normalizeAutoRoutingConfig, normalizeRateLimitFallback, normalizeRuntime } from '../configNormalizers.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import {
@@ -114,7 +119,73 @@ function normalizeFindingContractConfig(
       ...(raw.manager.provider ? { provider: raw.manager.provider } : {}),
       ...(raw.manager.model ? { model: raw.manager.model } : {}),
     },
+    // 有限停止予算（Finding Contract・対策バッチ B1 の拡張）: ここでは YAML に
+    // 書かれた値だけをそのまま写す（未指定フィールドの穴埋めはしない）。
+    // max_rounds の既定値適用は stop-budget.ts の resolveStopBudgetLimits が唯一の
+    // 場所。max_minutes に既定値は無く、未設定なら時間上限なし。
+    ...(raw.stop_budget
+      ? {
+        stopBudget: {
+          ...(raw.stop_budget.max_rounds !== undefined ? { maxRounds: raw.stop_budget.max_rounds } : {}),
+          ...(raw.stop_budget.max_minutes !== undefined ? { maxMinutes: raw.stop_budget.max_minutes } : {}),
+        },
+      }
+      : {}),
+    // review-integrity 予算（review-integrity requirement）: 未指定分は
+    // review-integrity.ts の DEFAULT_REVIEW_INTEGRITY_BUDGET が補う。
+    ...(raw.review_budget
+      ? {
+        reviewBudget: {
+          ...(raw.review_budget.max_review_rounds !== undefined ? { maxReviewRounds: raw.review_budget.max_review_rounds } : {}),
+        },
+      }
+      : {}),
   };
+}
+
+/**
+ * Resolves the fixed "supervisor" persona for the engine-synthesized
+ * finding-conflict-adjudication step (contract invariant). Without personaPath the
+ * runner would use the bare persona NAME as the system prompt and the facet
+ * body would never reach the model. Resolution is attempted whenever a
+ * finding contract exists (so workflow_call children that wire the step can
+ * inherit an adjudicator from the parent contract); it is a configuration
+ * error only when this workflow actually wires the step and the persona
+ * cannot be found.
+ */
+function resolveFindingConflictAdjudicator(
+  findingContract: FindingContractConfig | undefined,
+  steps: readonly WorkflowStep[],
+  loopMonitors: readonly LoopMonitorConfig[] | undefined,
+  workflowDir: string,
+  sections: WorkflowSections,
+  context?: FacetResolutionContext,
+): void {
+  if (!findingContract) {
+    return;
+  }
+  const wires = workflowWiresFindingConflictAdjudication(steps, loopMonitors);
+  const { personaSpec, personaPath } = resolvePersona(
+    FINDING_CONFLICT_ADJUDICATION_PERSONA,
+    sections,
+    workflowDir,
+    context,
+  );
+  if (personaSpec && personaPath) {
+    findingContract.adjudicator = {
+      persona: personaSpec,
+      personaPath,
+      personaDisplayName: extractPersonaDisplayName(personaPath),
+      providerRoutingPersonaKey: FINDING_CONFLICT_ADJUDICATION_PERSONA,
+    };
+    return;
+  }
+  if (wires) {
+    throw new Error(
+      `Configuration error: persona "${FINDING_CONFLICT_ADJUDICATION_PERSONA}" is required for `
+      + `next: ${FINDING_CONFLICT_ADJUDICATION_STEP} but could not be resolved`,
+    );
+  }
 }
 
 function validateFindingsRulesRequireContract(
@@ -233,6 +304,7 @@ export function normalizeWorkflowConfig(
   const loopMonitors = normalizeLoopMonitors(parsed.loop_monitors, workflowDir, sections, context);
   const findingContract = normalizeFindingContractConfig(parsed.finding_contract, workflowDir, sections, context);
   validateFindingsRulesRequireContract(steps, loopMonitors, findingContract);
+  resolveFindingConflictAdjudicator(findingContract, steps, loopMonitors, workflowDir, sections, context);
 
   return {
     name: parsed.name,

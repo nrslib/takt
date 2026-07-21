@@ -1,0 +1,40 @@
+[
+  {
+    "persona": "agents/test-team-leader-batch-barrier",
+    "status": "done",
+    "content": "decompose",
+    "structured_output": {
+      "parts": [
+        { "id": "bb-1", "title": "Create bb-1.txt", "instruction": "Create bb-1.txt with content bb-1.txt" },
+        { "id": "bb-2", "title": "Create bb-2.txt", "instruction": "Create bb-2.txt with content bb-2.txt" }
+      ]
+    }
+  },
+  {
+    "persona": "agents/test-team-leader-batch-barrier",
+    "status": "done",
+    "content": "add-second-batch",
+    "structured_output": {
+      "done": false,
+      "reasoning": "The initial batch is complete; schedule the second batch.",
+      "parts": [
+        { "id": "bb-3", "title": "Create bb-3.txt", "instruction": "Create bb-3.txt with content bb-3.txt" },
+        { "id": "bb-4", "title": "Create bb-4.txt", "instruction": "Create bb-4.txt with content bb-4.txt" }
+      ]
+    }
+  },
+  {
+    "persona": "agents/test-team-leader-batch-barrier",
+    "status": "done",
+    "content": "done",
+    "structured_output": {
+      "done": true,
+      "reasoning": "All tasks planned",
+      "parts": []
+    }
+  },
+  { "persona": "agents/test-coder", "status": "done", "content": "completed bb-1", "delay_ms": 100 },
+  { "persona": "agents/test-coder", "status": "done", "content": "completed bb-2", "delay_ms": 100 },
+  { "persona": "agents/test-coder", "status": "done", "content": "completed bb-3" },
+  { "persona": "agents/test-coder", "status": "done", "content": "completed bb-4" }
+]

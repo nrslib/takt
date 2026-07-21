@@ -50,6 +50,8 @@ const { createOpencodeMock } = vi.hoisted(() => ({
   createOpencodeMock: vi.fn(),
 }));
 
+const ASYNC_START_TIMEOUT_MS = 5_000;
+
 vi.mock('node:net', () => ({
   createServer: () => {
     const handlers = new Map<string, (...args: unknown[]) => void>();
@@ -117,7 +119,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     expect(sessionCreate).toHaveBeenCalledTimes(2);
     expect(createOpencodeMock).toHaveBeenCalledTimes(1);
@@ -140,15 +142,14 @@ describe('OpenCodeClient session queue', () => {
       return promptCallCount === 1 ? firstPrompt.promise : secondPrompt.promise;
     });
     const sessionCreate = vi.fn();
-    let subCount = 0;
-    const subscribe = vi.fn().mockImplementation(() => {
-      subCount += 1;
-      return Promise.resolve({
-        stream: new MockEventStream([
-          { type: 'session.idle', properties: { sessionID: `session-diff-${subCount}` } },
-        ]),
-      });
-    });
+    const subscribe = vi.fn().mockImplementation(() => Promise.resolve({
+      // event.subscribe は共有サーバのバスを返す。各呼び出しは自分の
+      // sessionID のイベントだけを採用するため、両方を同じ順序で流す。
+      stream: new MockEventStream([
+        { type: 'session.idle', properties: { sessionID: 'session-diff-a' } },
+        { type: 'session.idle', properties: { sessionID: 'session-diff-b' } },
+      ]),
+    }));
 
     createOpencodeMock.mockResolvedValue({
       client: {
@@ -166,7 +167,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     expect(sessionCreate).not.toHaveBeenCalled();
     expect(createOpencodeMock).toHaveBeenCalledTimes(1);
@@ -212,7 +213,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     expect(sessionCreate).not.toHaveBeenCalled();
 
@@ -221,7 +222,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     secondPrompt.resolve();
     await call2;
@@ -304,7 +305,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     secondPrompt.resolve();
     const result2 = await call2;
@@ -349,7 +350,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     abortController.abort();
     const result1 = await call1;
@@ -357,7 +358,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     secondPrompt.resolve();
     const result2 = await call2;
@@ -424,11 +425,11 @@ describe('OpenCodeClient session queue', () => {
       promptCallCount++;
       return promptCallCount === 1 ? firstPrompt.promise : secondPrompt.promise;
     });
-    const subscribe = vi.fn().mockResolvedValue({
+    const subscribe = vi.fn().mockImplementation(() => Promise.resolve({
       stream: new MockEventStream([
         { type: 'session.idle', properties: { sessionID: SID } },
       ]),
-    });
+    }));
 
     createOpencodeMock.mockResolvedValue({
       client: {
@@ -464,7 +465,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     expect(sessionCreate).toHaveBeenCalledTimes(1);
     expect(promptCallCount).toBe(1);
@@ -472,7 +473,7 @@ describe('OpenCodeClient session queue', () => {
     await vi.waitFor(() => {
       expect(call2Promise).toBeDefined();
       expect(registerAbortSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     expect(registerAbortSpy.mock.calls[1]).toEqual([
       'abort',
@@ -486,7 +487,7 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(promptAsync).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
 
     expect(promptAsync.mock.calls[0][0].sessionID).toBe(SID);
     expect(promptAsync.mock.calls[1][0].sessionID).toBe(SID);
@@ -496,5 +497,112 @@ describe('OpenCodeClient session queue', () => {
     const [r1, r2] = await Promise.all([call1, call2Promise!]);
     expect(r1.status).toBe('done');
     expect(r2.status).toBe('done');
+  });
+
+  it('should queue a fresh-session follow-up started from stale-resume recovery init', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+
+    const recoveredPrompt = deferred<void>();
+    const followUpPrompt = deferred<void>();
+    const resumedSessionId = 'session-stale-resume';
+    const recoveredSessionId = 'session-recovered-from-resume';
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: recoveredSessionId } });
+    const promptAsync = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(() => recoveredPrompt.promise)
+      .mockImplementationOnce(() => followUpPrompt.promise);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'stale-tool-1',
+                sessionID: resumedSessionId,
+                type: 'tool',
+                callID: 'stale-call-1',
+                tool: 'StructuredOutput',
+                state: {
+                  status: 'error',
+                  input: {},
+                  error: "Model tried to call unavailable tool 'StructuredOutput'. Available tools: bash, read.",
+                },
+              },
+            },
+          },
+          {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'stale-tool-2',
+                sessionID: resumedSessionId,
+                type: 'tool',
+                callID: 'stale-call-2',
+                tool: 'StructuredOutput',
+                state: {
+                  status: 'error',
+                  input: {},
+                  error: "Model tried to call unavailable tool 'StructuredOutput'. Available tools: bash, read.",
+                },
+              },
+            },
+          },
+        ]),
+      })
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          { type: 'session.idle', properties: { sessionID: recoveredSessionId } },
+        ]),
+      })
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          { type: 'session.idle', properties: { sessionID: recoveredSessionId } },
+        ]),
+      });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync, abort: vi.fn().mockResolvedValue({ data: true }) },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    let followUpCall: Promise<AgentResponse> | undefined;
+    const recoveredCall = client.call('reviewer', 'recover stale resume', {
+      cwd: '/tmp',
+      model: 'opencode/test-model',
+      sessionId: resumedSessionId,
+      onStream: (event) => {
+        if (event.type === 'init' && event.data.sessionId === recoveredSessionId) {
+          followUpCall = client.call('reviewer', 'follow up', {
+            cwd: '/tmp',
+            model: 'opencode/test-model',
+            sessionId: recoveredSessionId,
+          });
+        }
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(sessionCreate).toHaveBeenCalledTimes(1);
+      expect(followUpCall).toBeDefined();
+      expect(promptAsync).toHaveBeenCalledTimes(2);
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
+
+    recoveredPrompt.resolve();
+
+    await vi.waitFor(() => {
+      expect(promptAsync).toHaveBeenCalledTimes(3);
+    }, { timeout: ASYNC_START_TIMEOUT_MS });
+
+    followUpPrompt.resolve();
+    const [recoveredResult, followUpResult] = await Promise.all([recoveredCall, followUpCall!]);
+    expect(recoveredResult).toMatchObject({ status: 'done', sessionId: recoveredSessionId });
+    expect(followUpResult).toMatchObject({ status: 'done', sessionId: recoveredSessionId });
   });
 });

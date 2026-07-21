@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { formatCommandGateFailure } from '../core/workflow/quality-gates/commandGateMessage.js';
@@ -66,6 +66,8 @@ describe('command quality gates', () => {
       });
       expect(result.failure.outputLogPath).toBeDefined();
       expect(existsSync(result.failure.outputLogPath!)).toBe(true);
+      expect(statSync(result.failure.outputLogPath!).mode & 0o777).toBe(0o600);
+      expect(statSync(join(projectRoot, '.takt', 'quality-gates', 'logs')).mode & 0o777).toBe(0o700);
       expect(readFileSync(result.failure.outputLogPath!, 'utf-8')).toContain('out\n');
     }
   });
@@ -263,6 +265,28 @@ describe('command quality gates', () => {
       expect(result.failure.stdout).toContain('[OUTPUT TRUNCATED: exceeded 65536 bytes]');
       expect(result.failure.outputLogPath).toBeDefined();
       expect(existsSync(result.failure.outputLogPath!)).toBe(true);
+    }
+  });
+
+  it('should truncate command output only at a complete UTF-8 character boundary', async () => {
+    const projectRoot = createTempDir();
+
+    const result = await runCommandQualityGate({
+      gate: {
+        type: 'command',
+        name: 'multibyte-noisy-check',
+        command: 'node -e "process.stdout.write(\'x\'.repeat(65535) + \'界\' + \'x\'.repeat(1024)); setInterval(()=>{},1000)"',
+        timeoutMs: 1000,
+      },
+      projectRoot,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.outputLimitExceeded).toBe(true);
+      expect(result.failure.stdout).not.toContain('\uFFFD');
+      const retained = result.failure.stdout.split('\n[OUTPUT TRUNCATED:')[0] ?? '';
+      expect(Buffer.byteLength(retained, 'utf8')).toBeLessThanOrEqual(65536);
     }
   });
 
@@ -623,7 +647,7 @@ describe('command quality gates', () => {
     });
   });
 
-  it('should format sanitized command output for AI feedback', () => {
+  it('should expose only command metadata and a private log path to AI feedback', () => {
     const projectRoot = createTempDir();
     const outputLogPath = join(projectRoot, '.takt', 'quality-gates', 'logs', 'quality-check.log');
     const message = formatCommandGateFailure({
@@ -645,8 +669,10 @@ describe('command quality gates', () => {
     expect(message).toContain('Cwd: .');
     expect(message).toContain('Exit code: 1');
     expect(message).toContain('Output log: .takt/quality-gates/logs/quality-check.log');
-    expect(message).toContain('Stdout:\nunit failed');
-    expect(message).toContain('Stderr:\nlint failed');
+    expect(message).not.toContain('unit failed');
+    expect(message).not.toContain('lint failed');
+    expect(message).not.toContain('Stdout:');
+    expect(message).not.toContain('Stderr:');
   });
 
   it('should redact command gate metadata before it is sent to the agent', () => {
@@ -654,6 +680,8 @@ describe('command quality gates', () => {
     const secretOutput = [
       `cwd=${projectRoot}`,
       'Authorization: Bearer sk-abcdef12345678',
+      'Cookie: session=browser-secret',
+      'endpoint=https://operator:password@internal.example.test/path',
       'api_key=top-secret',
       'x'.repeat(4_100),
     ].join('\n');
@@ -672,14 +700,15 @@ describe('command quality gates', () => {
 
     expect(message).toContain('<project-root>');
     expect(message).toContain('token=[REDACTED]');
-    expect(message).toContain('Authorization: Bearer [REDACTED]');
-    expect(message).toContain('api_key=[REDACTED]');
-    expect(message).toContain('password=[REDACTED]');
-    expect(message).toContain('[TRUNCATED ');
+    expect(message).not.toContain('Authorization:');
+    expect(message).not.toContain('api_key=');
+    expect(message).not.toContain('password=');
     expect(message).not.toContain(projectRoot);
     expect(message).not.toContain('top-secret');
     expect(message).not.toContain('hunter2');
     expect(message).not.toContain('sk-abcdef12345678');
+    expect(message).not.toContain('browser-secret');
+    expect(message).not.toContain('operator:password');
   });
 
   it('should redact space-separated secret CLI arguments before AI feedback', () => {

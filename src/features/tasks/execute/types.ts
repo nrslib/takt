@@ -121,6 +121,7 @@ export type WorkflowExecutionEventSink = (event: WorkflowExecutionEvent) => void
 export interface WorkflowExecutionResult {
   success: boolean;
   reason?: string;
+  retryable?: boolean;
   lastStep?: string;
   lastMessage?: string;
   runDirectory?: string;

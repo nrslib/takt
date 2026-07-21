@@ -198,7 +198,6 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     expect((anyRule!.aggregateConditionText as string[])).toEqual([
       'needs_fix',
       'AI-specific issues found',
-      'needs_fix',
     ]);
     expect(anyRule!.next).toBe('fix');
   });

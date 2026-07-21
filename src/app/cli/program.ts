@@ -6,33 +6,18 @@
  */
 
 import { Command, InvalidArgumentError, Option } from 'commander';
-import { resolve } from 'node:path';
-import {
-  initGlobalDirs,
-  initProjectDirs,
-  resolveConfigValues,
-  isVerboseMode,
-} from '../../infra/config/index.js';
-import { initGitProvider } from '../../infra/git/index.js';
-import { setQuietMode } from '../../shared/context.js';
 import { packageVersion } from '../../shared/package-info.js';
-import { setLogLevel } from '../../shared/ui/index.js';
 import { PROVIDER_TYPES, type ProviderType } from '../../shared/types/provider.js';
-import { initDebugLogger, createLogger, setVerboseConsole } from '../../shared/utils/index.js';
+import { runUpdateCheck } from './updateCheck.js';
 
 const cliVersion = packageVersion;
-
-const log = createLogger('cli');
-
-/** Resolved cwd shared across commands via preAction hook */
-export let resolvedCwd = '';
-
-/** Whether pipeline mode is active (--task specified, set in preAction) */
-export let pipelineMode = false;
 
 export { cliVersion };
 
 export const program = new Command();
+program.exitOverride();
+
+let updateCheckStarted = false;
 
 function parseProviderOption(value: string): ProviderType {
   const provider = PROVIDER_TYPES.find((candidate) => candidate === value);
@@ -74,35 +59,27 @@ program
   .option('-q, --quiet', 'Minimal output mode: suppress AI output (for CI)')
   .option('-c, --continue', 'Continue from the last assistant session');
 
+program
+  .argument('[task]', 'Task to execute (or issue reference like "#6")')
+  .action(async (task?: string) => {
+    const { executeDefaultAction } = await import('./routing.js');
+    await executeDefaultAction(task);
+  });
+
 /**
  * Run pre-action hook: common initialization for all commands.
  * Exported for use in slash-command fallback logic.
  */
 export async function runPreActionHook(): Promise<void> {
-  resolvedCwd = resolve(process.cwd());
+  await scheduleUpdateCheck();
+  const { initializeCliExecutionContext } = await import('./initialization.js');
+  await initializeCliExecutionContext(program, cliVersion);
+}
 
-  const rootOpts = program.opts();
-  pipelineMode = rootOpts.pipeline === true;
-
-  await initGlobalDirs({ nonInteractive: pipelineMode });
-  initProjectDirs(resolvedCwd);
-  initGitProvider(resolvedCwd);
-
-  const verbose = isVerboseMode(resolvedCwd);
-  const config = resolveConfigValues(resolvedCwd, ['logging', 'minimalOutput']);
-  initDebugLogger(verbose ? { enabled: true, trace: config.logging?.trace } : undefined, resolvedCwd);
-
-  if (verbose) {
-    setVerboseConsole(true);
-    setLogLevel('debug');
-  } else {
-    setLogLevel(config.logging?.level ?? 'info');
-  }
-
-  const quietMode = rootOpts.quiet === true || config.minimalOutput === true;
-  setQuietMode(quietMode);
-
-  log.info('TAKT CLI starting', { version: cliVersion, cwd: resolvedCwd, verbose, pipelineMode, quietMode });
+export async function scheduleUpdateCheck(): Promise<void> {
+  if (updateCheckStarted) return;
+  updateCheckStarted = true;
+  await runUpdateCheck(cliVersion);
 }
 
 // Common initialization for all commands

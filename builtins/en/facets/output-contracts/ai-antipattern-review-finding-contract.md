@@ -1,31 +1,27 @@
 ```markdown
 # AI-Generated Code Review
-
 ## Result: APPROVE / REJECT
-
 ## Summary
-{Summarize the result in one sentence}
-
-## Verified Items
-| Aspect | Result | Notes |
-|--------|--------|-------|
-| Validity of assumptions | ✅ | - |
-| API/library existence | ✅ | - |
-| Context fit | ✅ | - |
-| Scope | ✅ | - |
-
-Expected `family_tag` values: `hallucination`, `unvalidated-assumption`, `off-by-one`, `api-mismatch`, `missing-edge-case`, `logic-error`, `scope-creep`.
-When structured raw findings are requested, copy this table's `family_tag` value into the structured `familyTag` field.
-
+{1-2 sentence conclusion}
+## Verification Evidence
+| Assumption / Existing Contract | Checked Route | Result |
+|-------------------------------|---------------|--------|
+| {assumption or wiring} | {code, existing use, and test} | {verified result or unverified} |
+## Re-scan Evidence
+| Checked Chapters | Unverified Chapters (only when any) | Checked Route | Current Evidence | Result |
+|------------------|------------------------------------|---------------|------------------|--------|
+| Checked Chapters N/N | {unverified chapters; otherwise "none"} | {cumulative diff, code, and test} | {current file:line or execution evidence} | {verified result or unverified} |
 ## Observed Findings
-| # | family_tag | Category | Severity | Location | Issue | Fix Suggestion |
-|---|------------|----------|----------|----------|-------|----------------|
-| 1 | hallucination | Hallucinated API | high / medium / low | `src/file.ts:23` | Non-existent method | Replace with existing API |
-
-## Rejection Gate
-- REJECT is valid only when at least one blocking finding is observed
+| # | family_tag | Severity | Location | Issue | Impact or Failure Condition | Fix Direction |
+|---|------------|----------|----------|-------|-----------------------------|---------------|
+| 1 | hallucination | high / medium / low | `file:line` | {current observed defect} | {impact or condition} | {fix direction} |
+## Resolution Confirmations
+| Ledger Reference | Original Acceptance Criteria | Confirmation Evidence |
+|------------------|------------------------------|-----------------------|
+| {existing finding} | {expected result} | `file:line` |
+## Output Consistency
+- Markdown Observed Findings and structured issues, and Markdown Resolution Confirmations and structured confirmations, must each be the same set.
+- APPROVE means zero issues; REJECT means one or more issues. Do not make approvals or summaries issues.
 ```
 
-**Cognitive load reduction rules:**
-- No issues → Summary sentence + checklist + empty finding sections (10 lines or fewer)
-- Issues found → include table rows only for impacted sections (30 lines or fewer)
+**Cognitive-load rule:** Even for APPROVE, include the one aggregated re-scan row; group like targets and stay within 30 lines. For REJECT, include only relevant rows.

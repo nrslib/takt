@@ -3,6 +3,10 @@ import { CapabilityAwareStructuredCaller } from '../../../agents/structured-call
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type { ResolvedObservabilityConfig } from '../../../core/models/config-types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
+import {
+  inheritResumeReportSnapshot,
+  RESUME_ARTIFACTS_FILE_NAME,
+} from '../../../core/workflow/run/resume-report-snapshot.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import {
   loadPersonaSessions,
@@ -34,7 +38,7 @@ import {
   resolveEffectiveAutoRouting,
 } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import { initAnalyticsWriter } from '../../analytics/index.js';
-import { ensureWorktreeTaktGitignore } from '../../../infra/task/projectLocalTaktSync.js';
+import { ensureWorktreeTaktRuntimeProtection } from '../../../infra/task/projectLocalTaktSync.js';
 import { AnalyticsEmitter } from './analyticsEmitter.js';
 import { createOutputFns, createPrefixedStreamHandler } from './outputFns.js';
 import { RunMetaManager } from './runMeta.js';
@@ -147,10 +151,30 @@ export async function createWorkflowExecutionBootstrap(
     throw new Error(`Invalid reportDirName: ${runSlug}`);
   }
   if (isWorktree) {
-    ensureWorktreeTaktGitignore(cwd);
+    ensureWorktreeTaktRuntimeProtection(cwd);
   }
 
   const runPaths = buildRunPaths(cwd, runSlug);
+  // resume（requeue / retry / instruct、attachment 有無を問わず）は新しい run
+  // slug を作るため、旧 run の reports/ を継承しないと {report:X} 参照が必ず
+  // 壊れる（v3-r4 の resume 境界バグ）。継承は resume feature 側ではなく
+  // bootstrap を一元境界にして配線漏れを防ぐ。順序: run slug 決定 → source
+  // 検証 → snapshot 作成 → manifest 保存 → RunMetaManager 作成 → logs/engine
+  // 初期化。
+  const resumeArtifactsManifest = options.resumeSource?.sourceRunSlug
+    ? inheritResumeReportSnapshot({
+        cwd,
+        sourceRunSlug: options.resumeSource.sourceRunSlug,
+        targetRunSlug: runSlug,
+      })
+    : undefined;
+  if (resumeArtifactsManifest) {
+    log.debug('Inherited resume report snapshot', {
+      sourceRunSlug: resumeArtifactsManifest.sourceRunSlug,
+      targetRunSlug: resumeArtifactsManifest.targetRunSlug,
+      files: resumeArtifactsManifest.files.length,
+    });
+  }
   const sessionLog = createSessionLog(task, projectCwd, workflowConfig.name);
   const globalConfig = resolveWorkflowConfigValues(projectCwd, [
     'notificationSound',
@@ -183,7 +207,15 @@ export async function createWorkflowExecutionBootstrap(
     task,
     workflowConfig.name,
     options.resumeSource,
-    traceDiscovery ? { traceDiscovery } : undefined,
+    {
+      ...(traceDiscovery ? { traceDiscovery } : {}),
+      // manifest（ファイル一覧と hash の SSOT）への参照のみを meta.json に残す。
+      // manifest は reports スナップショットの内側の予約名（公開を単一 rename に
+      // 集約するため）。
+      ...(resumeArtifactsManifest
+        ? { resumeArtifactsRel: `${runPaths.reportsRel}/${RESUME_ARTIFACTS_FILE_NAME}` }
+        : {}),
+    },
   );
   const workflowSessionId = generateSessionId();
   const ndjsonLogPath = initNdjsonLog(

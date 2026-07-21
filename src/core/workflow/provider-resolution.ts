@@ -53,6 +53,7 @@ export interface WorkflowCallProviderModelOutput {
 
 export interface LoopMonitorJudgeProviderModelInput {
   judge: Pick<LoopMonitorJudge, 'provider' | 'model' | 'modelSpecified'>;
+  judgeProviderInfo?: StepProviderModelOutput;
   triggeringProviderInfo: StepProviderModelOutput;
 }
 
@@ -340,15 +341,39 @@ export function resolveWorkflowCallProviderModel(
 export function resolveLoopMonitorJudgeProviderModel(
   input: LoopMonitorJudgeProviderModelInput,
 ): LoopMonitorJudgeProviderModelOutput {
-  const judgeProviderIsDirect = input.judge.provider !== undefined;
-  const judgeModelIsDirect = input.judge.modelSpecified === true
-    || (input.judge.model !== undefined && input.judge.modelSpecified !== false);
-
-  return applyProviderModelOverride(input.triggeringProviderInfo, {
+  const judgeInfo = input.judgeProviderInfo ?? {
     provider: input.judge.provider,
-    providerSpecified: judgeProviderIsDirect,
     model: input.judge.model,
-    modelSpecified: judgeModelIsDirect,
-    source: 'step',
-  });
+    providerSource: input.judge.provider !== undefined ? 'step' as const : undefined,
+    modelSource: (input.judge.modelSpecified === true
+      || (input.judge.model !== undefined && input.judge.modelSpecified !== false))
+      ? 'step' as const
+      : undefined,
+  };
+  const explicitSources: ReadonlySet<ProviderResolutionSource> = new Set([
+    'cli',
+    'env',
+    'step',
+    'provider_routing.steps',
+    'provider_routing.tags',
+    'provider_routing.personas',
+    'persona_providers',
+  ]);
+  const providerIsExplicit = judgeInfo.providerSource !== undefined
+    && explicitSources.has(judgeInfo.providerSource);
+  const modelIsExplicit = judgeInfo.modelSource !== undefined
+    && explicitSources.has(judgeInfo.modelSource);
+
+  return {
+    provider: providerIsExplicit ? judgeInfo.provider : input.triggeringProviderInfo.provider,
+    providerSource: providerIsExplicit
+      ? judgeInfo.providerSource
+      : input.triggeringProviderInfo.providerSource,
+    model: modelIsExplicit
+      ? judgeInfo.model
+      : (providerIsExplicit ? undefined : input.triggeringProviderInfo.model),
+    modelSource: modelIsExplicit
+      ? judgeInfo.modelSource
+      : (providerIsExplicit ? judgeInfo.providerSource : input.triggeringProviderInfo.modelSource),
+  };
 }

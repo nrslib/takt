@@ -17,20 +17,21 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It r
 | `npm run lint` | ESLint on `src/`. `no-explicit-any` is error; unused vars must be prefixed `_`. |
 | `npm test` | Fast unit gate. Excludes integration/regression/performance tests. |
 | `npm run test:unit:parallel` | Parallel unit slice (`vitest.config.unit.parallel.ts`). |
-| `npm run test:it` | Integration/regression/performance gate. Runs the parallel IT slice, then the audited serial Git and workflow-loader groups in parallel. |
+| `npm run test:it` | Integration/regression/performance gate. Runs the parallel IT slice, then the audited serial Git and workflow-loader groups sequentially. |
 | `npm run test:it:parallel` | Parallel IT slice (`vitest.config.it.parallel.ts`). Excludes the audited serial groups. |
-| `npm run test:it:serial` | Runs serial Git and workflow-loader groups concurrently. Use `test:it:serial:git` or `test:it:serial:workflow` for one group. |
-| `npx vitest run src/__tests__/<file>.test.ts` | Run a single file. |
-| `npx vitest run -t "<pattern>"` | Run tests whose name matches `<pattern>`. |
-| `npm run test:e2e:smoke` | Fast mock-provider E2E smoke check for targeted local iteration. Not a TAKT quality gate. |
+| `npm run test:it:serial` | Runs serial Git and workflow-loader groups sequentially, attempts both groups, and returns the first failing child exit code. Use `test:it:serial:git` or `test:it:serial:workflow` for one group. |
+| `npm run test:prompt-evals` | Deterministic OpenCode prompt-eval smoke gate. Included in `check:release`. |
+| `npm test -- src/__tests__/<file>.test.ts` | Route a single file to exactly one unit, parallel-IT, serial-Git, or serial-workflow runner. Multiple routed runners execute sequentially and return the first failing child exit code. |
+| `npm test -- -t "<pattern>"` | Run unit tests whose name matches `<pattern>`. |
+| `npm run test:e2e:smoke` | Fast mock-provider E2E smoke check for targeted local iteration. |
 | `npm run test:e2e:mock` | Full mock-provider E2E suite split into parallel shards. This is the TAKT quality gate. Use `test:e2e:mock:serial` for the legacy single-process run. |
 | `npm run test:e2e` | Wrapper around `test:e2e:mock` that also fails on `error connecting to api.github.com` in the output and emits a macOS notification. |
 | `npm run test:e2e:provider:{claude,claude-sdk,codex,opencode,cursor}` | E2E against a real provider (slow, costs API credits). |
-| `npm run check:release` | Full pre-release gate: `build` + `lint` + `test` + `test:it` + `test:e2e:all`. |
+| `npm run check:release` | Full pre-release gate: `build` + `lint` + `test` + `test:it` + `test:prompt-evals` + `test:e2e:all`. |
 
 ### Local quality gates
 
-`.takt/config.yaml` overrides the `implement`, `fix`, and `ai_fix` step gates to require `npm run build`, `npm run lint`, `npm test`, `npm run test:it`, and `npm run test:e2e:mock` to pass before a TAKT step can complete. Run `npm run check:release` when validating the full release path.
+`.takt/config.yaml` gives implementation and fix steps explicit build, lint, test, integration, and mock-E2E verification instructions. The builtin merge-readiness final gate evaluates the reported verification results and routes failures through `needs_fix`; it does not execute command gates itself. Run `npm run check:release` when validating the full release path.
 
 ## CLI Surface
 
@@ -193,6 +194,20 @@ builtins/               Bundled defaults (read from dist/ at runtime)
 - `TAKT_VERBOSE=true` or `verbose: true` for verbose console output.
 - Session logs at `.takt/logs/{sessionId}.jsonl`.
 - Use `--provider mock` to exercise the engine without calling a real API.
+
+### Observing what OpenCode actually sends
+
+OpenCode's default system prompt is not readable from the binary, and neither `session.messages()` nor `opencode debug agent <name>` exposes the prompt that reaches the model. The only reliable way is to point OpenCode at a local OpenAI-compatible endpoint and record the request body. `prompt-evals/sdk-prompt-capture.mjs` does this: it defines a `probe` provider via `config.provider.<id>.options.baseURL`, sends one prompt, and writes every captured request to JSON.
+
+Facts established with it (re-verify before relying on them — OpenCode changes):
+
+- The composed system prompt is `agent.prompt` (or OpenCode's default when `prompt` is omitted) **plus** the user's `~/.claude/CLAUDE.md`, **plus** the skills section, **plus** `config.instructions` files. All four are concatenated into a single `system` message.
+- `~/.claude/CLAUDE.md` is injected whether or not `agent.prompt` is set. For benchmarks this means the operator's personal config is part of the measured conditions.
+- `config.instructions: string[]` (typed on `Config` in `@opencode-ai/sdk/v2`) appends file contents near the end, after the CLAUDE.md block. It is a supported way to add guidance without replacing OpenCode's default prompt.
+- Each prompt triggers **two** provider requests: a thread-title generation call using `small_model`, then the real one. Capture tooling that grabs the first request measures the title generator.
+- TAKT's `opencode_agent_prompt.md` (~8.5k chars) is OpenCode's default (~9k chars, excluding injections) with two removals: the `ls`-tool few-shot examples become `{{listFilesMethod}}`, and the line recommending the `Task` tool is dropped. #892 originally deleted the whole `# Proactiveness` and `# Tool usage policy` sections to eliminate those references, which starved weak models of OpenCode's own tool guidance; both sections are restored. The prompt is English-only — `client.ts` always loads `'en'`, so there is no `ja` copy.
+
+Do not use `opencode run` (the CLI) as a measurement instrument. It intermittently hangs before session creation with no log output. TAKT uses `createOpencode` from the SDK, so the CLI's behavior says nothing about production.
 
 ## House conventions (from AGENTS.md / CONTRIBUTING.md)
 

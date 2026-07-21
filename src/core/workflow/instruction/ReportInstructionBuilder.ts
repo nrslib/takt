@@ -15,7 +15,7 @@ import {
   renderReportContext,
   renderReportOutputInstruction,
 } from './InstructionBuilder.js';
-import { renderFencedJsonBlock } from './fenced-json.js';
+import { renderFencedJsonBlock } from './fenced-block.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 
 /**
@@ -78,6 +78,10 @@ export class ReportInstructionBuilder {
       reportDir: this.context.reportDir,
       language,
       findingContract: this.context.findingContract,
+      // phase 2 は「これから書く」フェーズ。契約テンプレート内の {report:X} が
+      // 自分自身（未作成）を指す構成を存在検証で落とさない。consumer 保護
+      // （実行前の欠落検出）は phase 1 のインストラクション側で行われる。
+      validateReportReferences: false,
     };
 
     const targetContract = this.context.targetFile

@@ -4,9 +4,14 @@
  * When verbose console is enabled, also outputs to stderr.
  */
 
-import { existsSync, appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { PromptLogRecord } from './types.js';
+import {
+  appendPrivateFile,
+  ensurePrivateDirectory,
+  repairPrivateDirectory,
+  writePrivateFile,
+} from './private-file.js';
 import { normalizeLogMetadata, normalizeLogValue, truncateLogText } from './logMetadata.js';
 import { sanitizeSensitiveText } from './sensitiveText.js';
 
@@ -22,6 +27,7 @@ function serializeDebugData(data: unknown): string {
   }
   return truncateLogText(sanitizeSensitiveText(serialized), MAX_DEBUG_DATA_LENGTH);
 }
+
 /** Debug configuration (duplicated from core/models to avoid shared → core dependency) */
 interface DebugConfig {
   enabled: boolean;
@@ -89,8 +95,9 @@ export class DebugLogger {
 
       if (this.debugLogFile) {
         const logDir = dirname(this.debugLogFile);
-        if (!existsSync(logDir)) {
-          mkdirSync(logDir, { recursive: true });
+        ensurePrivateDirectory(logDir);
+        if (!config?.logFile) {
+          repairPrivateDirectory(logDir);
         }
 
         const header = [
@@ -102,15 +109,16 @@ export class DebugLogger {
           '',
         ].join('\n');
 
-        writeFileSync(this.debugLogFile, header, 'utf-8');
+        writePrivateFile(this.debugLogFile, header);
       }
 
       if (this.debugPromptsLogFile) {
         const promptsLogDir = dirname(this.debugPromptsLogFile);
-        if (!existsSync(promptsLogDir)) {
-          mkdirSync(promptsLogDir, { recursive: true });
+        ensurePrivateDirectory(promptsLogDir);
+        if (!config?.logFile) {
+          repairPrivateDirectory(promptsLogDir);
         }
-        writeFileSync(this.debugPromptsLogFile, '', 'utf-8');
+        writePrivateFile(this.debugPromptsLogFile, '');
       }
     }
 
@@ -189,7 +197,7 @@ export class DebugLogger {
     const logLine = DebugLogger.formatLogMessage(level, component, message, data);
 
     try {
-      appendFileSync(this.debugLogFile, logLine + '\n', 'utf-8');
+      appendPrivateFile(this.debugLogFile, logLine + '\n');
     } catch {
       // Silently fail - logging errors should not interrupt main flow
     }
@@ -202,7 +210,7 @@ export class DebugLogger {
     }
 
     try {
-      appendFileSync(this.debugPromptsLogFile, JSON.stringify(record) + '\n', 'utf-8');
+      appendPrivateFile(this.debugPromptsLogFile, JSON.stringify(record) + '\n');
     } catch {
       // Silently fail - logging errors should not interrupt main flow
     }

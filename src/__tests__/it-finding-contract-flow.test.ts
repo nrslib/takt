@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { RuleEvaluator, type RuleEvaluatorContext } from '../core/workflow/evaluation/RuleEvaluator.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
-import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
+import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import type { WorkflowState } from '../core/models/types.js';
+
+function buildFindingsRuleContext(ledger: FindingLedger) {
+  return buildFindingsRuleContextWithCwd(ledger, process.cwd());
+}
 
 function makeEmptyLedger(): FindingLedger {
   return {
@@ -105,6 +109,8 @@ describe('Finding Contract integration flow', () => {
         resolvedConflicts: [],
         waivedFindings: [],
         disputeNotes: [],
+        invalidatedFindings: [],
+        duplicateFindings: [],
       },
       context: {
         workflowName: 'peer-review',

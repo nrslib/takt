@@ -10,11 +10,24 @@ function isUnavailableToolErrorMessage(message: string): boolean {
   return UNAVAILABLE_TOOL_ERROR_PATTERNS.some((pattern) => lower.includes(pattern));
 }
 
+/**
+ * UnavailableToolLoopDetector の発火結果。
+ *
+ * エラー文字列だけを返すと、受け側（client.ts の recovery 判定）が
+ * 「どのツールで発火したか」を文字列の再パースで推測する羽目になる。
+ * ツール名を型で運び、recovery の対象判定（StructuredOutput か一般ツールか）を
+ * 正規表現なしで行えるようにする。
+ */
+export interface UnavailableToolLoopDetection {
+  readonly tool: string;
+  readonly message: string;
+}
+
 export class UnavailableToolLoopDetector {
   private consecutiveUnavailableToolErrors = 0;
   private lastUnavailableToolCallId: string | undefined;
 
-  observe(toolCallId: string, tool: string, message: string): string | undefined {
+  observe(toolCallId: string, tool: string, message: string): UnavailableToolLoopDetection | undefined {
     if (!isUnavailableToolErrorMessage(message)) {
       this.reset();
       return undefined;
@@ -31,7 +44,10 @@ export class UnavailableToolLoopDetector {
       return undefined;
     }
 
-    return `OpenCode unavailable tool loop detected for tool "${tool}": ${message}`;
+    return {
+      tool,
+      message: `OpenCode unavailable tool loop detected for tool "${tool}": ${message}`,
+    };
   }
 
   reset(): void {
@@ -43,6 +59,9 @@ export class UnavailableToolLoopDetector {
 const INVALID_ARGUMENT_ERROR_PATTERNS = [
   'invalid arguments',
   'schemaerror',
+  // OpenCode は必須引数の欠落をスキーマ検証の手前で弾き、SchemaError ではなく
+  // この文言で返す（実測: qwen が read を filePath 無しで 219 回連続で呼んだ）。
+  'is missing or invalid',
 ];
 
 // 引数エラーは正常な試行錯誤でも起きるため、unavailable より閾値を緩くする。
@@ -96,34 +115,6 @@ export class InvalidToolArgumentLoopDetector {
   }
 }
 
-/** 呼び出し時に評価する（テストで env から上書きできるようにする） */
-function resolveToolErrorBudget(): number {
-  const fromEnv = Number(process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET);
-  return fromEnv > 0 ? fromEnv : 25;
-}
-
-/**
- * 1回の呼び出し内のツールエラー総量の予算。
- * 連続性ベースの検出器（unavailable / invalid-argument）はツール名を変えながら
- * 壊れた呼び出しを繰り返す劣化ループを検出できない（切り替えでリセットされる）。
- * 実測: 夜間のプロバイダ劣化で、1ステップが559ループ・26分の空転を続けた。
- * 正常な試行錯誤がこの予算に届くことはない（実測の健全走行は1桁）。
- */
-export class ToolErrorBudgetDetector {
-  private totalToolErrors = 0;
-  private lastCallId: string | undefined;
-
-  observe(toolCallId: string, tool: string, message: string): string | undefined {
-    if (toolCallId === this.lastCallId) {
-      return undefined;
-    }
-    this.lastCallId = toolCallId;
-    this.totalToolErrors += 1;
-
-    const budget = resolveToolErrorBudget();
-    if (this.totalToolErrors < budget) {
-      return undefined;
-    }
-    return `OpenCode tool error budget exceeded (${this.totalToolErrors} tool errors in one call; last tool "${tool}"): ${message}`;
-  }
-}
+// 旧 ToolErrorBudgetDetector（1コール内エラー総数の単純累積、既定25）は
+// tool-guard.ts の進捗感知型 burst 検出 + 絶対コスト上限に置き換えられた
+// （v3-r4 実測: 成功を挟む生産的走行を空転と誤分類して run を殺していた）。

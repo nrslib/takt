@@ -32,11 +32,13 @@ export interface StreamToolUseEventData {
 }
 
 export interface StreamToolResultEventData {
+  id?: string;
   content: string;
   isError: boolean;
 }
 
 export interface StreamToolOutputEventData {
+  id?: string;
   tool: string;
   output: string;
 }

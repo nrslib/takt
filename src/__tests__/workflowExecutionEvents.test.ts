@@ -159,10 +159,10 @@ describe('bindWorkflowExecutionEvents', () => {
       matchedRuleIndex: 0,
     };
 
-    engine.emit('step:start', step, 2, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    engine.emit('step:start', step, 2, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
     engine.emit('phase:start', step, 1, 'main', 'instruction', [], 'phase-1', 2);
     engine.emit('phase:complete', step, 1, 'main', 'approved', 'done', undefined, 'phase-1', 2);
-    engine.emit('step:complete', step, response, 'instruction');
+    engine.emit('step:complete', step, response, 'instruction', step.name);
     engine.emit('workflow:complete', { iteration: 2 });
 
     expect(runMetaManager.updateStep).toHaveBeenCalledWith('review', 2, resumePoint);
@@ -174,6 +174,65 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(bridge.state.lastStepName).toBe('review');
     expect(bridge.state.lastStepContent).toBe('approved');
     expect(bridge.state.sessionLog.iterations).toBe(1);
+  });
+
+  it('内部 step は観測名を維持しつつ再開可能な実 step を run meta に保存する', () => {
+    const { bridge, engine, runMetaManager, resumePoint } = createBridgeHarness();
+    const judgeStep = {
+      name: '_loop_judge_review_fix',
+      personaDisplayName: 'loop-judge',
+      instruction: '',
+      rules: [{ condition: 'done', next: 'review' }],
+    } as WorkflowStep;
+    const response = {
+      persona: 'loop-judge',
+      status: 'done',
+      content: 'continue',
+      timestamp: new Date(),
+      matchedRuleIndex: 0,
+    };
+
+    engine.emit(
+      'step:start',
+      judgeStep,
+      8,
+      'judge',
+      { provider: 'mock', model: 'gpt-test' },
+      'parent',
+      'review',
+    );
+    engine.emit('phase:start', judgeStep, 3, 'judge', 'judge', [], 'judge-phase', 8);
+    engine.emit(
+      'phase:complete',
+      judgeStep,
+      3,
+      'judge',
+      'continue',
+      'done',
+      undefined,
+      'judge-phase',
+      8,
+    );
+    engine.emit('step:complete', judgeStep, response, 'judge', 'review');
+
+    expect(runMetaManager.updateStep).toHaveBeenCalledWith('review', 8, resumePoint);
+    expect(runMetaManager.updatePhase).toHaveBeenCalledTimes(2);
+    expect(runMetaManager.updatePhase.mock.calls.map((call) => call[0])).toEqual(['review', 'review']);
+    expect(bridge.state.currentStepName).toBe('review');
+    expect(bridge.state.lastStepName).toBe('review');
+  });
+
+  it('workflow abort kind を実行状態に保持する', () => {
+    const { bridge, engine } = createBridgeHarness();
+
+    engine.emit(
+      'workflow:abort',
+      { iteration: 3 },
+      'Finding adjudication is required',
+      'needs_adjudication',
+    );
+
+    expect(bridge.state.abortKind).toBe('needs_adjudication');
   });
 
   it('findings ledger event を analytics emitter に渡す', () => {
@@ -326,7 +385,7 @@ describe('bindWorkflowExecutionEvents', () => {
       provider: 'cursor',
       model: undefined,
       modelSource: 'step',
-    });
+    }, 'parent', step.name);
 
     expect(out.info).toHaveBeenCalledWith('Model: (default)');
     expect(analyticsEmitter.updateProviderInfo).toHaveBeenCalledWith(1, 'cursor', '(default)', 'parent');
@@ -353,25 +412,25 @@ describe('bindWorkflowExecutionEvents', () => {
     engine.emit('step:start', parentStep, 1, 'call child', {
       provider: 'codex',
       model: 'parent-model',
-    });
+    }, 'parent', parentStep.name);
     engine.emit('step:start', childStep, 1, 'implement', {
       provider: 'claude',
       model: 'child-model',
-    });
+    }, 'parent', childStep.name);
     engine.emit('step:complete', childStep, {
       persona: 'child-implement',
       status: 'done',
       content: 'child done',
       timestamp: new Date(),
       providerUsage: usage,
-    }, 'implement');
+    }, 'implement', childStep.name);
     engine.emit('step:complete', parentStep, {
       persona: 'call-child',
       status: 'done',
       content: 'parent done',
       timestamp: new Date(),
       providerUsage: usage,
-    }, 'call child');
+    }, 'call child', parentStep.name);
 
     expect(usageEventLogger.logUsageFor.mock.calls).toEqual([
       [
@@ -413,7 +472,7 @@ describe('bindWorkflowExecutionEvents', () => {
       timestamp: new Date(),
     } as const;
 
-    engine.emit('step:complete', step, response, 'instruction');
+    engine.emit('step:complete', step, response, 'instruction', step.name);
 
     expect(usageEventLogger.logUsageFor).not.toHaveBeenCalled();
   });
@@ -433,7 +492,7 @@ describe('bindWorkflowExecutionEvents', () => {
       provider: 'codex',
       model: undefined,
       modelSource: 'step',
-    });
+    }, 'parent', step.name);
 
     expect(out.info).toHaveBeenCalledWith('Model: (default)');
     expect(analyticsEmitter.updateProviderInfo).toHaveBeenCalledWith(1, 'codex', '(default)', 'parent');
@@ -454,7 +513,7 @@ describe('bindWorkflowExecutionEvents', () => {
       provider: 'opencode',
       model: 'gpt-5',
       providerOptions: { opencode: { variant: 'high' } },
-    });
+    }, 'parent', step.name);
 
     expect(out.info).toHaveBeenCalledWith('Variant: high');
   });
@@ -474,7 +533,7 @@ describe('bindWorkflowExecutionEvents', () => {
       provider: 'codex',
       model: 'gpt-5.2',
       providerOptions: { codex: { reasoningEffort: 'high' } },
-    });
+    }, 'parent', step.name);
 
     expect(out.info).toHaveBeenCalledWith('Reasoning effort: high');
   });
@@ -494,7 +553,7 @@ describe('bindWorkflowExecutionEvents', () => {
       provider: 'codex',
       model: 'gpt-5.2',
       providerOptions: { codex: { baseUrl: 'http://127.0.0.1:8787/v1' } },
-    });
+    }, 'parent', step.name);
 
     expect(out.info).toHaveBeenCalledWith('Base URL: [configured]');
   });
@@ -518,7 +577,7 @@ describe('bindWorkflowExecutionEvents', () => {
         model: 'claude-sonnet-4-5',
         providerOptions: { claude: { baseUrl: 'http://127.0.0.1:8787' } },
         providerOptionsSources: { 'claude.baseUrl': 'project' },
-      });
+      }, 'parent', step.name);
 
       expect(out.info).toHaveBeenCalledWith('Base URL: [configured] (source: project)');
     } finally {
@@ -541,7 +600,7 @@ describe('bindWorkflowExecutionEvents', () => {
       provider: 'kiro',
       model: 'kiro-default',
       providerOptions: { kiro: { agent: 'reviewer-agent' } },
-    });
+    }, 'parent', step.name);
 
     expect(out.info).toHaveBeenCalledWith('Agent: reviewer-agent');
   });
@@ -561,7 +620,7 @@ describe('bindWorkflowExecutionEvents', () => {
       provider: 'kiro',
       model: 'kiro-default',
       providerOptions: { opencode: { variant: 'high' } },
-    });
+    }, 'parent', step.name);
 
     const agentLines = out.info.mock.calls.filter(
       (call) => typeof call[0] === 'string' && call[0].startsWith('Agent:'),
@@ -588,7 +647,7 @@ describe('bindWorkflowExecutionEvents', () => {
         model: 'kiro-default',
         providerOptions: { kiro: { agent: 'reviewer-agent' } },
         providerOptionsSources: { 'kiro.agent': 'step' },
-      });
+      }, 'parent', step.name);
 
       expect(out.info).toHaveBeenCalledWith('Agent: reviewer-agent (source: step)');
     } finally {
@@ -615,7 +674,7 @@ describe('bindWorkflowExecutionEvents', () => {
         model: 'gpt-5',
         providerOptions: { opencode: { variant: 'high' } },
         providerOptionsSources: { 'opencode.variant': 'persona' },
-      });
+      }, 'parent', step.name);
 
       expect(out.info).toHaveBeenCalledWith('Variant: high (source: persona)');
     } finally {
@@ -632,7 +691,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
     bridge.emitProviderOutput({ type: 'text', data: { text: 'streamed answer' } });
     engine.emit('step:blocked', step, {
       content: '質問: Which file should be updated?',
@@ -680,13 +739,13 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
     engine.emit('step:complete', step, {
       persona: 'reviewer',
       status: 'done',
       content: 'approved',
       timestamp: new Date(),
-    }, 'instruction');
+    }, 'instruction', step.name);
     await bridge.flushEventSink();
 
     expect(eventSink).toHaveBeenCalledWith({
@@ -771,7 +830,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
     bridge.emitProviderOutput({
       type: 'tool_result',
       data: { content: 'tool failed', isError: true },
@@ -858,7 +917,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
     engine.emit('step:blocked', step, {
       content: '質問: First question?',
       status: 'blocked',
@@ -887,7 +946,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
     bridge.emitProviderOutput({
       type: 'tool_use',
       data: { id: 'tool-1', tool: 'Read', input: { file_path: 'src/index.ts' } },
@@ -923,7 +982,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
     bridge.emitProviderOutput({
       type: 'tool_use',
       data: { id: 'tool-a', tool: 'Read', input: { file_path: 'src/a.ts' } },
@@ -987,7 +1046,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
     bridge.emitProviderOutput({
       type: 'tool_use',
       data: { id: 'tool-a', tool: 'Read', input: { file_path: 'src/a.ts' } },
@@ -1037,7 +1096,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emit('step:start', step, 1, 'instruction', { provider: 'opencode', model: 'gpt-test' });
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'opencode', model: 'gpt-test' }, 'parent', step.name);
     bridge.emitProviderOutput({
       type: 'permission_asked',
       data: {
@@ -1127,7 +1186,7 @@ describe('bindWorkflowExecutionEvents', () => {
       name: 'review',
       personaDisplayName: 'Reviewer',
       instruction: '',
-    } as WorkflowStep, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    } as WorkflowStep, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', 'review');
 
     await expect(bridge.flushEventSink()).rejects.toThrow('session/update failed');
     expect(engine.abort).toHaveBeenCalled();

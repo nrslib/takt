@@ -19,3 +19,8 @@ normally with fixes complete. That is not a dead end - choose the normal transit
 
 Choose to abort only when the loop is unproductive. Aborting means handing off to a human, so include
 a summary of the remaining blocker and the approaches already attempted in your output.
+
+**When the engine-injected "Findings state" section is present, always consult it:**
+- It lists the open provisional findings blocking the completion gate (findings.open.count == 0), each with its stalled manager-round count and settlement path (later clean evidence / the manager's dismissDecisions).
+- When dismissable provisionals keep stalling across multiple rounds, do not treat the loop as converging even if resolved counts grow. Provisionals the manager could adjudicate but does not are a de-facto deadlock — route to adjudication (NEEDS_ADJUDICATION).
+- Likewise, when provisionals whose only settlement path is later clean evidence (process-failure records) keep stalling, fix iterations cannot settle them — prefer adjudication over continuing.

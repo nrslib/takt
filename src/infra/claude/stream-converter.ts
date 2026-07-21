@@ -85,6 +85,26 @@ function extractToolResultContent(toolResult: unknown): { content: string; isErr
   };
 }
 
+function extractToolResultId(message: SDKUserMessage): string | undefined {
+  if (message.tool_use_result !== null && typeof message.tool_use_result === 'object') {
+    const result = message.tool_use_result as Record<string, unknown>;
+    const id = result['tool_use_id'] ?? result['toolUseId'];
+    if (typeof id === 'string' && id.length > 0) {
+      return id;
+    }
+  }
+  const content = message.message.content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  for (const block of content) {
+    if (block.type === 'tool_result' && block.tool_use_id.length > 0) {
+      return block.tool_use_id;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Convert SDK message to stream event.
  *
@@ -154,9 +174,10 @@ export function sdkMessageToStreamEvent(
       const userMsg = message as SDKUserMessage;
       if (userMsg.tool_use_result !== undefined) {
         const { content, isError } = extractToolResultContent(userMsg.tool_use_result);
+        const id = extractToolResultId(userMsg);
         callback({
           type: 'tool_result',
-          data: { content, isError },
+          data: { ...(id === undefined ? {} : { id }), content, isError },
         });
       }
       break;

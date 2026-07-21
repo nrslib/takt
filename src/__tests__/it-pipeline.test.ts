@@ -22,7 +22,8 @@ const { mockWorkflowWarn } = vi.hoisted(() => ({
 // --- Mocks ---
 
 // Git operations (even with --skip-git, some imports need to be available)
-vi.mock('node:child_process', () => ({
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
   execFileSync: vi.fn(),
 }));
 
@@ -94,6 +95,7 @@ vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
       provider: 'mock',
       enableBuiltinWorkflows: true,
       disabledBuiltins: [],
+      workflowCommandGates: { customScripts: true },
     }),
     getLanguage: vi.fn().mockReturnValue('en'),
   };
@@ -120,6 +122,10 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+}));
+
+vi.mock('../core/workflow/quality-gates/commandGateRunner.js', () => ({
+  runCommandQualityGate: vi.fn().mockResolvedValue({ ok: true, stdout: '', stderr: '' }),
 }));
 
 // --- Imports (after mocks) ---

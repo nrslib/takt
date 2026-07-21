@@ -26,7 +26,7 @@ describe('builtin workflow categories', () => {
     ['en', join('builtins', 'en', 'workflow-categories.yaml')],
     ['ja', join('builtins', 'ja', 'workflow-categories.yaml')],
   ] as const) {
-    it(`${locale} locale should include auto-improvement-loop in workflow categories`, () => {
+    it(`${locale} locale should include TAKT development workflows in workflow categories`, () => {
       const filePath = join(process.cwd(), relativePath);
       const parsed = parseYaml(readFileSync(filePath, 'utf-8')) as {
         workflow_categories?: Record<string, CategoryNode>;
@@ -34,6 +34,9 @@ describe('builtin workflow categories', () => {
       const workflows = Object.values(parsed.workflow_categories ?? {}).flatMap((node) => collectWorkflows(node));
 
       expect(workflows).toContain('auto-improvement-loop');
+      expect(workflows).toContain('takt-default-high');
+      expect(workflows).toContain('takt-default-team-high');
+      expect(workflows).toContain('review-fix-takt-default-high');
     });
   }
 });

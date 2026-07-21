@@ -1,12 +1,14 @@
 import { resolveEffectiveProviderOptions } from '../../../infra/config/providerOptions.js';
 import type {
   AgentResponse,
+  FindingContractConfig,
   WorkflowConfig,
   WorkflowCallStep,
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
   WorkflowState,
 } from '../../models/types.js';
+import type { FindingLedgerStore } from '../findings/store.js';
 import type { RunPaths } from '../run/run-paths.js';
 import {
   applyProviderModelOverride,
@@ -23,6 +25,7 @@ import type {
   StepRunResult,
   WorkflowCallChildEngine,
   WorkflowCallResolver,
+  WorkflowAbortResult,
   WorkflowEngineOptions,
   WorkflowSharedRuntimeState,
 } from '../types.js';
@@ -56,6 +59,11 @@ interface WorkflowCallRunnerDeps {
     task: string,
     options: WorkflowEngineOptions,
   ) => WorkflowCallChildEngine;
+  /** 自前 or 継承済みの、この engine で有効な Finding Contract。子へ引き継ぐ。 */
+  findingContract?: FindingContractConfig;
+  findingLedgerStore?: FindingLedgerStore;
+  /** workflow_call 完了後、子が書き込んだ台帳を親の state.findings へ反映する。 */
+  refreshFindingsState: () => void;
 }
 
 export class WorkflowCallRunner {
@@ -191,6 +199,24 @@ export class WorkflowCallRunner {
     };
   }
 
+  private buildTerminalAbort(
+    step: WorkflowCallStep,
+    childResult: WorkflowCallExecutionResult,
+  ): WorkflowAbortResult | undefined {
+    if (childResult.abortKind !== 'needs_adjudication' || childResult.abortReason === undefined) {
+      return undefined;
+    }
+    return {
+      kind: childResult.abortKind,
+      reason: childResult.abortReason,
+      failure: {
+        kind: childResult.abortKind,
+        step: step.name,
+        reason: childResult.abortReason,
+      },
+    };
+  }
+
   private requireIsolatedSessionUpdates(
     step: WorkflowCallStep,
     childResult: WorkflowCallExecutionResult,
@@ -287,7 +313,12 @@ export class WorkflowCallRunner {
     this.deps.state.stepOutputs.set(step.name, response);
     this.deps.state.lastOutput = response;
     this.deps.state.previousResponseSourcePath = undefined;
-    return { response, instruction: '', providerInfo };
+    return {
+      response,
+      instruction: '',
+      providerInfo,
+      terminalAbort: this.buildTerminalAbort(step, childResult),
+    };
   }
 
   async runIsolated(
@@ -307,7 +338,12 @@ export class WorkflowCallRunner {
       childResult.returnValue,
     );
     return {
-      result: { response, instruction: '', providerInfo },
+      result: {
+        response,
+        instruction: '',
+        providerInfo,
+        terminalAbort: this.buildTerminalAbort(step, childResult),
+      },
       sessionUpdates: this.requireIsolatedSessionUpdates(step, childResult),
       stateSync: this.requireIsolatedStateSync(step, childResult),
     };

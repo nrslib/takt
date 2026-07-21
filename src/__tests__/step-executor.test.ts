@@ -7,6 +7,7 @@ import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engin
 import type { WorkflowState } from '../core/models/types.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import { makeStep } from './test-helpers.js';
+import { createTeamLeaderPlanningStep } from '../core/workflow/engine/team-leader-common.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -210,6 +211,82 @@ describe('StepExecutor', () => {
       step,
       undefined,
     )).toThrow(/structured_output.*provider is not resolved/i);
+  });
+
+  it('非native structured_output fallback は解決済みワークフロー言語を使う', () => {
+    const executor = new StepExecutor({
+      optionsBuilder: {
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
+      },
+      getLanguage: () => 'ja',
+    } as unknown as StepExecutorDeps);
+    const step = makeStep({
+      structuredOutput: { schema: { type: 'object', properties: {}, required: [] } },
+    });
+
+    expect(executor.buildPhase1Instruction('指示', step)).toContain(
+      '次の JSON schema に一致する fenced JSON block をちょうど1つ返してください',
+    );
+  });
+
+  it('Team Leader親には完全な前回出力と Finding Contract ledger summary を同じ実 instruction 経路で渡す', () => {
+    const previousTail = 'TAIL_FINDING: keep this review finding';
+    const step = createTeamLeaderPlanningStep(makeStep({
+      name: 'implement',
+      persona: 'coder',
+      instruction: 'Plan from {previous_response}',
+      passPreviousResponse: true,
+      teamLeader: {
+        maxConcurrency: 2,
+        maxTotalParts: 4,
+        timeoutMs: 1000,
+      },
+    }));
+    const state = makeState();
+    state.lastOutput = {
+      persona: 'review',
+      status: 'done',
+      content: `${'x'.repeat(2500)}\n${previousTail}`,
+      timestamp: new Date(),
+    };
+    const deps: StepExecutorDeps = {
+      optionsBuilder: {
+        buildFindingContractInstructionContext: vi.fn().mockReturnValue({
+          ledgerCopyPath: '.takt/findings/review.json',
+          ledgerSummary: { openFinding: 'LEDGER_SUMMARY: preserve this' },
+          reportLedgerSummary: {},
+          hasOpenFindings: true,
+          hasWaivedFindings: false,
+          hasDismissedFindings: false,
+        }),
+      } as unknown as StepExecutorDeps['optionsBuilder'],
+      getCwd: () => cwd,
+      getProjectCwd: () => cwd,
+      getReportDir: () => '.takt/reports',
+      getRunPaths: () => runPaths,
+      getLanguage: () => 'en',
+      getInteractive: () => false,
+      getWorkflowSteps: () => [{ name: 'implement' }],
+      getWorkflowDefinitionSteps: () => [step],
+      getWorkflowName: () => 'test-workflow',
+      getWorkflowDescription: () => undefined,
+      getRetryNote: () => undefined,
+      detectRuleIndex: vi.fn().mockReturnValue(-1),
+      structuredCaller: {
+        evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
+      },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+      refreshFindingsState: vi.fn(),
+      emitEvent: vi.fn(),
+      getRunId: () => 'run',
+      getFindingCallNamespace: () => '',
+    };
+
+    const instruction = new StepExecutor(deps).buildInstruction(step, 1, state, 'implement feature', 5);
+
+    expect(instruction).toContain(previousTail);
+    expect(instruction).toContain('x'.repeat(2500));
+    expect(instruction).toContain('LEDGER_SUMMARY: preserve this');
   });
 
   it('非対応 provider の structured_output fallback で required 欠落を失敗にする', async () => {

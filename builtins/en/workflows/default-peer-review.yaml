@@ -108,7 +108,7 @@ steps:
     rules:
       - condition: all("approved", "No AI-specific issues", "approved")
         next: final-gate
-      - condition: any("needs_fix", "AI-specific issues found", "needs_fix")
+      - condition: any("needs_fix", "AI-specific issues found")
         next: fix
   - name: final-gate
     kind: workflow_call

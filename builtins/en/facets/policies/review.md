@@ -2,6 +2,10 @@
 
 Define the shared judgment criteria and behavioral principles for all reviewers.
 
+## Premise
+
+This review is a defensive quality and security audit performed, on request, against a codebase provided as the review target. All reproduction and verification of vulnerabilities or defects is performed as self-tests within the target repository; applying techniques against third-party systems or developing attack tooling is not part of the purpose.
+
 ## Principles
 
 | Principle | Criteria |
@@ -18,9 +22,21 @@ Define the shared judgment criteria and behavioral principles for all reviewers.
 | Specification completeness | When changing a user-facing contract, verify that implementation, tests, and documentation describe the same lookup order, override rules, special syntax, and failure conditions |
 | Requirement anchoring | Do not reinterpret required task items as optional, out of scope, or different requirements for implementation convenience |
 | Resolution judgment | Judge `resolved` against the original finding acceptance criteria and original task requirements, not merely against the presence of a fix |
+| Defect-class re-scan | Before recognizing a defect as resolved, re-scan every path in the same defect class for the original acceptance criteria |
 | Concern handling | Any concern recognized in the prose must either become a finding or be explicitly classified with evidence as non-finding |
 | Behavior evidence | Verify what behavior the tests or logs prove, not merely that they exist |
 | Boy Scout | Have problems fixed within the task scope when they are in changed code or in areas directly affecting correctness, contracts, or wiring of the change |
+
+## Finding Decision Invariants
+
+| Situation | Treatment |
+|-----------|-----------|
+| A current defect is verified in code or evidence and requires correction | Report it as an issue |
+| Evidence is insufficient, the search scope is incomplete, or the result cannot be verified | Record it as unverified scope, not as an issue |
+| Claiming absence or missing wiring | Report a locationless issue only when the original requirement or existing public contract makes existence or wiring necessary and every required route was searched |
+| Questioning whether quality gates were run or their evidence was reported | Not an issue. Evaluating verification results is the final gate's jurisdiction |
+
+- APPROVE means zero issues and REJECT means one or more issues. Never pad issues with approvals, summaries, or normal confirmations.
 
 ## Scope Determination
 
@@ -100,6 +116,23 @@ Checks that only inspect configuration values, logs, snapshots, or the last obse
 | Only external-environment E2E exists, with no reproducible verification of the main boundary | Warning or REJECT |
 | Behavior is approved from configuration values, logs, or snapshots only | REJECT |
 
+### Division of Verification Responsibility
+
+Verifying that the full test suite passes is not the reviewer's responsibility. The fixing step's quality gates cover verification of the changed scope (whatever gates are imposed on it, such as the build, static checks, and changed-scope tests); the final gate immediately before merge covers the full suite. Reviewers do not re-run the full suite and instead spend that time reproducing findings and running risk-based targeted checks.
+
+| Evidence | Judgment |
+|----------|----------|
+| Reproduced your own behavioral finding by operating on or executing the target code | OK (required for behavioral findings) |
+| Verified a statically determinable finding (types, contracts, specs, non-executable assets) by reading and cross-checking the relevant sources | OK |
+| Verified the main changed behaviors with targeted execution or tests | OK (recommended) |
+| Referenced the execution records of all quality gates imposed on the fixing step | OK (no re-run needed) |
+| Closing an individual finding based solely on full-suite passage | REJECT |
+| A behavioral claim not reproduced or verified by execution | REJECT |
+
+Even when the fixing step's execution records lack evidence for one of its imposed quality gates, do not file that as an issue — evaluating verification results is the final gate's jurisdiction, and a missing-evidence claim would only sit on the completion gate as a mechanically unverifiable provisional. Record the missing evidence as unverified scope, and treat behavioral claims in that scope as not reproduced by execution. Full-suite evidence is the final gate's responsibility, so do not demand it from the fixing step.
+
+Exception: when suite execution is imposed on your own step as a quality gate (the final-gate role), follow the gate's instructions and run it. This section governs reviewers without such gates not spending time on the full suite; it does not exempt an imposed gate.
+
 ## Fact-Checking
 
 Always verify facts before raising an issue.
@@ -161,10 +194,11 @@ table in the output contract is supporting evidence inside an already configured
 Finding Contract workflow; none of these artifacts enables Finding Contract by itself.
 
 When Finding Contract is in use, reviewers must not allocate new final `finding_id`
-values and must not classify lifecycle as `new`, `persists`, `resolved`, or
-`reopened`. Report observed problems as raw findings in the `Observed Findings`
-table. Refer to existing IDs only when they are present in the ledger. ID assignment
-and lifecycle matching belong to the findings-manager and engine.
+values or decide final lifecycle state. Report observed problems as evidence-backed
+raw findings in the `Observed Findings` table. Use only the raw relations `new`,
+`persists`, `resolution_confirmation`, and `reopened`; refer to existing IDs only
+when they are present in the ledger. Final lifecycle decisions and finding-ID matching
+belong to the findings-manager and engine.
 
 When a workflow is configured with Finding Contract and a parseable ledger is available,
 the ledger is the authoritative source for tracked findings. Individual reports and raw
@@ -179,6 +213,10 @@ reconciliation.
 ### Legacy Finding ID Rules (for workflows without Finding Contract)
 
 When a workflow does not use `finding_contract` configuration, follow these legacy rules.
+This section and the following reopen and immutable-meaning rules do not apply to Finding
+Contract workflows. When a recurrence is a different problem under Finding Contract, the
+reviewer reports raw relation `new` and does not issue a final `finding_id`; the
+findings-manager and engine decide the final ID and lifecycle.
 
 - Every issue raised in a REJECT must include a `finding_id`
 - If the same issue is raised again, reuse the same `finding_id`
@@ -189,7 +227,7 @@ When a workflow does not use `finding_contract` configuration, follow these lega
 - REJECT is allowed only when there is at least one `new` or `persists` issue
 - Before treating a prior finding as resolved, verify that the fix did not introduce a different structural or contract problem
 
-## Reopen Conditions (`resolved` -> open)
+### Reopen Conditions (`resolved` -> open)
 
 Reopening a resolved finding requires reproducible evidence.
 
@@ -200,7 +238,7 @@ Reopening a resolved finding requires reproducible evidence.
 - If any of the three is missing, the reopen attempt is invalid (cannot be used as REJECT grounds)
 - If reproduction conditions changed, treat it as a different problem and issue a new `finding_id`
 
-## Immutable Meaning of `finding_id`
+### Immutable Meaning of `finding_id`
 
 Do not mix different problems under the same ID.
 

@@ -275,7 +275,7 @@ To let TAKT choose provider/model per workflow step, keep a concrete top-level p
 
 ```yaml
 provider: codex          # used outside workflow steps and when auto_routing is absent
-model: gpt-5.6-luna
+model: gpt-5.6-sol
 takt_providers:
   assistant:             # optional override; interactive / instruct / retry are not auto-routed
     provider: codex

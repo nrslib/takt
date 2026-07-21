@@ -25,12 +25,14 @@ import {
 import { resolvePersonaSessionId } from '../../infra/config/project/sessionStore.js';
 import { resolveAssistantProviderModelFromConfig } from '../../core/config/provider-resolution.js';
 import { resolveAssistantConfigLayers } from '../../features/interactive/assistantConfig.js';
-import { program, resolvedCwd, pipelineMode } from './program.js';
+import { program } from './program.js';
+import { getCliExecutionContext } from './initialization.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
 import { loadTaskHistory } from './taskHistory.js';
 import { resolveIssueInput, resolvePrInput } from './routing-inputs.js';
 
 export async function executeDefaultAction(task?: string): Promise<void> {
+  const { cwd: resolvedCwd, pipelineMode } = getCliExecutionContext();
   const opts = program.opts();
   if (!pipelineMode && (opts.autoPr === true || opts.draft === true)) {
     logError('--auto-pr/--draft are supported only in --pipeline mode');
@@ -291,7 +293,3 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     cleanupInteractiveResultAttachments(result);
   }
 }
-
-program
-  .argument('[task]', 'Task to execute (or issue reference like "#6")')
-  .action(executeDefaultAction);

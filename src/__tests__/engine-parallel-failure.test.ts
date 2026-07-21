@@ -24,7 +24,9 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import { needsStatusJudgmentPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { StructuredOutputSchemaError } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/index.js';
 import {
   makeResponse,
@@ -205,6 +207,86 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
       { step: 'arch-review', provider: 'mock', providerModel: 'retry-model' },
       { step: 'arch-review', provider: 'mock', providerModel: 'retry-model' },
     ]);
+  });
+
+  it('should invalidate only the exhausted parallel sub-step session', async () => {
+    const config = buildParallelOnlyConfig();
+    const onSessionUpdate = vi.fn();
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      onSessionUpdate,
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: String(persona),
+        userInstruction: instruction,
+      });
+      if (String(persona).includes('arch-review')) {
+        return makeResponse({ persona: String(persona), content: 'unclear', sessionId: 'arch-session' });
+      }
+      return makeResponse({ persona: String(persona), content: 'approved', sessionId: 'security-session' });
+    });
+    vi.mocked(detectMatchedRule).mockImplementation(async (step) => {
+      if (step.name === 'arch-review') {
+        throw new RuleDetectionExhaustedError('arch-review');
+      }
+      return { index: 0, method: 'phase1_tag' };
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(state.personaSessions.has('../personas/arch-review.md:mock')).toBe(false);
+    expect(state.personaSessions.get('../personas/security-review.md:mock')).toBe('security-session');
+    expect(onSessionUpdate).toHaveBeenCalledWith('../personas/arch-review.md:mock', undefined);
+  });
+
+  it('should keep a newer sibling session when a shared session key later exhausts rule detection', async () => {
+    const config = buildParallelOnlyConfig();
+    const reviewers = config.steps[0]!;
+    reviewers.parallel = [
+      makeStep('stale-review', {
+        persona: 'coder',
+        rules: [makeRule('approved', 'COMPLETE')],
+      }),
+      makeStep('fresh-review', {
+        persona: 'coder',
+        rules: [makeRule('approved', 'COMPLETE')],
+      }),
+    ];
+    reviewers.rules = [makeRule('all("approved")', 'COMPLETE', {
+      isAggregateCondition: true,
+      aggregateType: 'all',
+      aggregateConditionText: 'approved',
+    })];
+    const onSessionUpdate = vi.fn();
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      initialSessions: { 'coder:mock': 'session-old' },
+      onSessionUpdate,
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      if (instruction.includes('stale-review')) {
+        return makeResponse({ persona: String(persona), content: 'unclear', sessionId: 'session-old' });
+      }
+      return makeResponse({ persona: String(persona), content: 'approved', sessionId: 'session-newer' });
+    });
+    vi.mocked(detectMatchedRule).mockImplementation(async (step) => {
+      if (step.name === 'stale-review') {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        throw new RuleDetectionExhaustedError('stale-review');
+      }
+      return { index: 0, method: 'phase1_tag' };
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(state.personaSessions.get('coder:mock')).toBe('session-newer');
+    expect(onSessionUpdate).not.toHaveBeenCalledWith('coder:mock', undefined);
   });
 
   it('should abort with parent error when one sub-step rejects and another approves', async () => {
@@ -493,5 +575,33 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
         return step.name === 'arch-review' && content === '[STEP:1] done' && tagContent === '';
       }),
     ).toBe(true);
+  });
+
+  it('should fail the parallel boundary on a sub-step Phase 3 schema error instead of using a matching Phase 1 tag', async () => {
+    const config = buildParallelOnlyConfig();
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    vi.mocked(needsStatusJudgmentPhase).mockImplementation((step) => step.name === 'arch-review');
+    vi.mocked(runStatusJudgmentPhase).mockImplementation(async (step) => {
+      if (step.name === 'arch-review') {
+        throw new StructuredOutputSchemaError('Structured output schema is invalid');
+      }
+      return { tag: '', ruleIndex: 0, method: 'auto_select' };
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: instruction,
+      });
+      return makeResponse({ persona: String(persona), content: '[ARCH-REVIEW:1] approved' });
+    });
+    vi.mocked(detectMatchedRule).mockResolvedValue({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(runStatusJudgmentPhase).toHaveBeenCalled();
+    expect(
+      vi.mocked(detectMatchedRule).mock.calls.some(([step]) => step.name === 'arch-review'),
+    ).toBe(false);
   });
 });

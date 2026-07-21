@@ -8,37 +8,208 @@ import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 const TAKT_MANAGED_LABEL = 'takt-managed';
+const NATIVE_STRUCTURED_OUTPUT_SUPPORTED_KEYWORDS = new Set([
+  '$defs',
+  '$ref',
+  'type',
+  'description',
+  'properties',
+  'required',
+  'additionalProperties',
+  'enum',
+  'anyOf',
+  'items',
+  'minItems',
+  'maxItems',
+]);
+const NATIVE_STRUCTURED_OUTPUT_REJECTED_KEYWORDS = [
+  'allOf',
+  'if',
+  'then',
+  'else',
+  'not',
+  'dependentRequired',
+  'dependentSchemas',
+  'oneOf',
+  'uniqueItems',
+  'contains',
+  'propertyNames',
+  'unevaluatedItems',
+  'unevaluatedProperties',
+] as const;
 
-function expectNativeStructuredOutputCompatibleSchema(schema: unknown): void {
-  if (schema == null || typeof schema !== 'object' || Array.isArray(schema)) {
+type JsonSchemaObject = Record<string, unknown>;
+
+function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
+  return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function expectNativeStructuredOutputCompatibleSchema(
+  schema: unknown,
+  isRoot = true,
+): void {
+  if (!isJsonSchemaObject(schema)) {
     return;
   }
 
-  const objectSchema = schema as {
-    type?: unknown;
-    properties?: unknown;
-    required?: unknown;
-    items?: unknown;
-  };
+  if (isRoot) {
+    expect(schema.type).toBe('object');
+  }
 
-  if (objectSchema.type === 'object' && objectSchema.properties !== undefined) {
-    expect(Array.isArray(objectSchema.required)).toBe(true);
-    const propertyNames = Object.keys(objectSchema.properties as Record<string, unknown>).sort();
-    const requiredNames = objectSchema.required as string[];
-    const allowedOptionalNames = propertyNames.filter((name) => name === 'labels' && !requiredNames.includes(name));
-    expect([...requiredNames, ...allowedOptionalNames].sort()).toEqual(propertyNames);
+  for (const keyword of Object.keys(schema)) {
+    expect(NATIVE_STRUCTURED_OUTPUT_SUPPORTED_KEYWORDS.has(keyword)).toBe(true);
+  }
 
-    for (const propertySchema of Object.values(objectSchema.properties as Record<string, unknown>)) {
-      expectNativeStructuredOutputCompatibleSchema(propertySchema);
+  const schemaTypes = Array.isArray(schema.type) ? schema.type : [schema.type];
+  if (schemaTypes.includes('object')) {
+    expect(schema.additionalProperties).toBe(false);
+    if (schema.properties !== undefined) {
+      expect(isJsonSchemaObject(schema.properties)).toBe(true);
+      expect(Array.isArray(schema.required)).toBe(true);
+      const propertyNames = Object.keys(schema.properties as JsonSchemaObject).sort();
+      const requiredNames = schema.required as string[];
+      expect([...requiredNames].sort()).toEqual(propertyNames);
+      for (const propertySchema of Object.values(schema.properties as JsonSchemaObject)) {
+        expectNativeStructuredOutputCompatibleSchema(propertySchema, false);
+      }
     }
   }
 
-  if (objectSchema.type === 'array') {
-    expectNativeStructuredOutputCompatibleSchema(objectSchema.items);
+  if (schema.items !== undefined) {
+    expectNativeStructuredOutputCompatibleSchema(schema.items, false);
+  }
+
+  if (schema.anyOf !== undefined) {
+    expect(Array.isArray(schema.anyOf)).toBe(true);
+    for (const alternative of schema.anyOf as unknown[]) {
+      expectNativeStructuredOutputCompatibleSchema(alternative, false);
+    }
+  }
+
+  if (schema.$defs !== undefined) {
+    expect(isJsonSchemaObject(schema.$defs)).toBe(true);
+    for (const definition of Object.values(schema.$defs as JsonSchemaObject)) {
+      expectNativeStructuredOutputCompatibleSchema(definition, false);
+    }
   }
 }
 
 describe('system workflow schema', () => {
+  it.each(NATIVE_STRUCTURED_OUTPUT_REJECTED_KEYWORDS)(
+    'native structured output 互換性検査は非対応キーワード %s を拒否する',
+    (keyword) => {
+      expect(() => expectNativeStructuredOutputCompatibleSchema({
+        type: 'object',
+        properties: {
+          value: {
+            type: 'string',
+            [keyword]: true,
+          },
+        },
+        required: ['value'],
+        additionalProperties: false,
+      })).toThrow();
+    },
+  );
+
+  it('native structured output 互換性検査は gpt-5.5 が受理する schema を受け付ける', () => {
+    expect(() => expectNativeStructuredOutputCompatibleSchema({
+      $defs: {
+        entry: {
+          type: 'object',
+          description: 'A named entry',
+          properties: {
+            name: {
+              type: 'string',
+              description: 'Entry name',
+            },
+          },
+          required: ['name'],
+          additionalProperties: false,
+        },
+      },
+      type: 'object',
+      description: 'Supported keyword probe',
+      properties: {
+        payload: {
+          description: 'An entry or a short list',
+          anyOf: [
+            {
+              $ref: '#/$defs/entry',
+            },
+            {
+              type: 'array',
+              items: {
+                type: 'string',
+                enum: ['value'],
+              },
+              minItems: 1,
+              maxItems: 2,
+            },
+          ],
+        },
+      },
+      required: ['payload'],
+      additionalProperties: false,
+    })).not.toThrow();
+  });
+
+  it.each([
+    {
+      name: 'ルートが array',
+      schema: {
+        type: 'array',
+        items: { type: 'string' },
+      },
+    },
+    {
+      name: 'ルート object に additionalProperties: false がない',
+      schema: {
+        type: 'object',
+        properties: {
+          value: { type: 'string' },
+        },
+        required: ['value'],
+      },
+    },
+    {
+      name: 'ネストした object の全 properties が required ではない',
+      schema: {
+        type: 'object',
+        properties: {
+          nested: {
+            type: 'object',
+            properties: {
+              required_value: { type: 'string' },
+              optional_value: { type: 'string' },
+            },
+            required: ['required_value'],
+            additionalProperties: false,
+          },
+        },
+        required: ['nested'],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: 'ネストした object に additionalProperties: false がない',
+      schema: {
+        type: 'object',
+        properties: {
+          nested: {
+            type: 'object',
+            properties: {},
+            required: [],
+          },
+        },
+        required: ['nested'],
+        additionalProperties: false,
+      },
+    },
+  ])('native structured output 互換性検査は $name を拒否する', ({ schema }) => {
+    expect(() => expectNativeStructuredOutputCompatibleSchema(schema)).toThrow();
+  });
+
   it('system step で mode/system_inputs/effects/when を保持できる', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'route_context',
@@ -715,6 +886,34 @@ describe('system workflow schema', () => {
     );
   });
 
+  it('enqueue_task は issue_number と issue.create: true の併用を拒否する', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'enqueue_from_issue',
+      mode: 'system',
+      effects: [
+        {
+          type: 'enqueue_task',
+          mode: 'new',
+          workflow: 'takt-default',
+          task: '{structured:plan.task_markdown}',
+          issue_number: 12,
+          issue: { create: true },
+        },
+      ],
+      rules: [{ when: 'true', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ['effects', 0, 'issue_number'],
+          message: 'enqueue_task does not allow "issue_number" when "issue.create" is true',
+        }),
+      ]),
+    );
+  });
+
   it('system_inputs または effects を持つ step では kind: system を必須にする', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'route_context',
@@ -925,6 +1124,46 @@ describe('system workflow schema', () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it('enqueue_task mode new で対象 issue_number を受け付ける', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'enqueue_from_issue',
+      mode: 'system',
+      effects: [
+        {
+          type: 'enqueue_task',
+          mode: 'new',
+          workflow: 'takt-default',
+          task: '{structured:plan.dummy_field}',
+          issue_number: '{context:route_context.selected_issue.number}',
+          issue: { create: false },
+        },
+      ],
+      rules: [{ when: 'true', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('enqueue_task mode from_pr では issue_number を reject する', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'enqueue_from_pr',
+      mode: 'system',
+      effects: [
+        {
+          type: 'enqueue_task',
+          mode: 'from_pr',
+          workflow: 'takt-default',
+          task: '{structured:plan.dummy_field}',
+          pr: 2,
+          issue_number: 42,
+        },
+      ],
+      rules: [{ when: 'true', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(false);
   });
 
   it('enqueue_task base_branch の opt-in 作成設定を受け付ける', () => {
@@ -1355,6 +1594,7 @@ describe('system workflow schema', () => {
           'summary',
           'goals',
           'acceptance_criteria',
+          'labels',
           'issue',
         ],
         additionalProperties: false,
@@ -1399,30 +1639,9 @@ describe('system workflow schema', () => {
             additionalProperties: false,
           },
         }),
-        allOf: [
-          {
-            if: {
-              properties: {
-                action: {
-                  const: 'enqueue_new_task',
-                },
-              },
-              required: ['action'],
-            },
-            then: {
-              properties: {
-                goals: {
-                  minItems: 1,
-                },
-                acceptance_criteria: {
-                  minItems: 2,
-                },
-              },
-            },
-          },
-        ],
       }));
       expectNativeStructuredOutputCompatibleSchema(structuredOutput.schema);
+      expect(structuredOutput.schema).not.toHaveProperty('allOf');
       expect((structuredOutput.schema.properties as Record<string, unknown>).pr_comment_markdown).toBeUndefined();
     } finally {
       rmSync(workflowDir, { recursive: true, force: true });
@@ -1478,7 +1697,7 @@ describe('system workflow schema', () => {
     }
   });
 
-  it('builtin followup-task schema は enqueue_new_task の空 goals を拒否する', () => {
+  it('builtin followup-task schema は enqueue_new_task の配列件数を制約しない', () => {
     const workflowDir = mkdtempSync(join(tmpdir(), 'takt-system-schema-followup-min-items-'));
 
     try {
@@ -1515,12 +1734,12 @@ describe('system workflow schema', () => {
         scope: 'workflow',
         summary: 'Implement a task',
         goals: [],
-        acceptance_criteria: ['One', 'Two'],
+        acceptance_criteria: [],
         labels: [],
         issue: {
           create: true,
         },
-      }, structuredOutput.schema)).toThrow('must NOT have fewer than 1 items');
+      }, structuredOutput.schema)).not.toThrow();
     } finally {
       rmSync(workflowDir, { recursive: true, force: true });
     }
@@ -1567,6 +1786,53 @@ describe('system workflow schema', () => {
           create: true,
         },
       }, structuredOutput.schema)).toThrow('$.title is required');
+    } finally {
+      rmSync(workflowDir, { recursive: true, force: true });
+    }
+  });
+
+  it('builtin followup-task schema は root labels を必須にする', () => {
+    const workflowDir = mkdtempSync(join(tmpdir(), 'takt-system-schema-followup-labels-required-'));
+
+    try {
+      const raw = WorkflowConfigRawSchema.parse({
+        name: 'auto-improvement-loop',
+        max_steps: 3,
+        initial_step: 'plan_followup',
+        steps: [
+          {
+            name: 'plan_followup',
+            persona: 'supervisor',
+            instruction: 'Plan follow-up task',
+            structured_output: {
+              schema_ref: 'followup-task',
+            },
+            rules: [
+              {
+                when: 'true',
+                next: 'COMPLETE',
+              },
+            ],
+          },
+        ],
+      });
+
+      const normalized = normalizeWorkflowConfig(raw, workflowDir);
+      const step = normalized.steps[0] as Record<string, unknown>;
+      const structuredOutput = step.structuredOutput as { schema: Record<string, unknown> };
+
+      expect(() => validateStructuredOutputAgainstSchema({
+        action: 'enqueue_new_task',
+        title: 'Implement a task',
+        type: 'feature',
+        scope: 'workflow',
+        summary: 'Implement a task',
+        goals: ['Implement the task'],
+        acceptance_criteria: ['One', 'Two'],
+        issue: {
+          create: true,
+        },
+      }, structuredOutput.schema)).toThrow('$.labels is required');
     } finally {
       rmSync(workflowDir, { recursive: true, force: true });
     }
@@ -1662,6 +1928,7 @@ describe('system workflow schema', () => {
               'enqueue_from_pr',
               'prepare_merge',
               'reject_pr',
+              'wait_before_next_scan',
             ],
           },
           task_markdown: {

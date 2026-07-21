@@ -61,7 +61,7 @@ const {
         phase: 3,
         sequence: 1,
       });
-      this.emit('step:start', step, 1, 'step instruction', providerInfo);
+      this.emit('step:start', step, 1, 'step instruction', providerInfo, this.config.name, step.name);
       if (shouldReversePhaseCompletion) {
         this.emit('phase:start', step, 1, 'execute', 'phase prompt first', {
           systemPrompt: '../agents/coder.md',
@@ -90,7 +90,12 @@ const {
       }, judgePhaseId, 1);
       this.emit('phase:complete', step, 3, 'judge', '[IMPLEMENT:1]', 'done', undefined, judgePhaseId, 1);
       if (shouldAbortBeforeComplete) {
-        this.emit('workflow:abort', { status: 'aborted', iteration: 1 }, 'user_interrupted');
+        this.emit(
+          'workflow:abort',
+          { status: 'aborted', iteration: 1 },
+          'user_interrupted',
+          'interrupt',
+        );
         return { status: 'aborted', iteration: 1 };
       }
       if (shouldReversePhaseCompletion) {
@@ -115,10 +120,19 @@ const {
           content: 'step response',
           timestamp,
         },
-        'step instruction'
+        'step instruction',
+        step.name,
       );
       if (shouldRepeatStep) {
-        this.emit('step:start', step, 2, 'step instruction repeat', providerInfo);
+        this.emit(
+          'step:start',
+          step,
+          2,
+          'step instruction repeat',
+          providerInfo,
+          this.config.name,
+          step.name,
+        );
         this.emit(
           'step:complete',
           step,
@@ -128,11 +142,17 @@ const {
             content: 'step response repeat',
             timestamp,
           },
-          'step instruction repeat'
+          'step instruction repeat',
+          step.name,
         );
       }
       if (shouldAbort) {
-        this.emit('workflow:abort', { status: 'aborted', iteration: 1 }, 'user_interrupted');
+        this.emit(
+          'workflow:abort',
+          { status: 'aborted', iteration: 1 },
+          'user_interrupted',
+          'interrupt',
+        );
         return { status: 'aborted', iteration: shouldRepeatStep ? 2 : 1 };
       }
       this.emit('workflow:complete', { status: 'completed', iteration: 1 });

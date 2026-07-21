@@ -12,6 +12,7 @@ import {
   buildTerminalTaskRecord,
   generateTaskName,
 } from './taskRecordMutations.js';
+import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
 
 export class TaskLifecycleService {
   constructor(
@@ -47,6 +48,10 @@ export class TaskLifecycleService {
         owner_pid: null,
         ...options,
       });
+      const conflict = findActiveTaskTargetConflict(current.tasks, record);
+      if (conflict) {
+        throw conflict;
+      }
       return { tasks: [...current.tasks, record] };
     });
 
@@ -157,6 +162,7 @@ export class TaskLifecycleService {
       step: result.failureStep,
       error: result.response,
       last_message: result.failureLastMessage ?? result.executionLog[result.executionLog.length - 1],
+      retryable: result.failureRetryable,
     };
 
     this.store.update((current) => {

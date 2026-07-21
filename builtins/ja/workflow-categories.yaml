@@ -57,6 +57,7 @@ workflow_categories:
       - review-fix-backend-cqrs
       - review-takt-default
       - review-fix-takt-default
+      - review-fix-takt-default-high
       - audit-unit
       - audit-e2e
       - audit-security
@@ -67,12 +68,13 @@ workflow_categories:
   🎵 TAKT開発:
     workflows:
       - takt-default
-      - takt-default-refresh-all
-      - takt-default-refresh-fast
       - auto-improvement-loop
       - review-takt-default
       - review-fix-takt-default
+      - review-fix-takt-default-high
       - takt-default-for-local-llm
+      - takt-default-high
+      - takt-default-team-high
   🖥️ ローカルLLM:
     workflows:
       - takt-default-for-local-llm

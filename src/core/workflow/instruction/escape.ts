@@ -10,6 +10,7 @@
 import type { WorkflowStep } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
+import { REPORT_REFERENCE_PATTERN, resolveReportReference } from './report-reference.js';
 import { escapeTemplateChars } from 'faceted-prompting';
 
 export { escapeTemplateChars } from 'faceted-prompting';
@@ -80,10 +81,19 @@ export function replaceTemplatePlaceholders(
   result = result.replace(/\{report_history\}/g, context.reportHistory ?? '');
   result = result.replace(/\{peer_reports\}/g, context.peerReports ?? '');
 
-  // Replace {report:filename} with reportDir/filename
+  // Replace {report:filename} with the verified report content.
+  // 単純な文字列連結ではなく専用リゾルバを通す: containment / 存在 /
+  // 通常ファイルを検証し、欠落時はエージェント起動前に明確なエラーを投げる
+  // （v3-r4 の resume 境界バグ — 旧 run のレポートを参照する consumer が
+  // 実在しないパスを黙って受け取り詰む — の再発防止）。
   if (context.reportDir) {
-    result = result.replace(/\{report:([^}]+)\}/g, (_match, filename: string) => {
-      return `${context.reportDir}/${filename}`;
+    const reportDir = context.reportDir;
+    result = result.replace(REPORT_REFERENCE_PATTERN, (_match, filename: string) => {
+      return resolveReportReference(reportDir, filename.trim(), {
+        stepName: step.name,
+        reportsRootDir: context.reportsRootDir,
+        validateExistence: context.validateReportReferences !== false,
+      });
     });
   }
 

@@ -1,111 +1,162 @@
-/**
- * Tests for analytics CLI command logic — metrics review and purge.
- *
- * Tests the command action logic by calling the underlying functions
- * with appropriate parameters, verifying the integration between
- * config loading, eventsDir resolution, and the analytics functions.
- */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import {
-  computeReviewMetrics,
-  formatReviewMetrics,
-  parseSinceDuration,
-  purgeOldEvents,
-} from '../features/analytics/index.js';
-import type { ReviewFindingEvent } from '../features/analytics/index.js';
+const {
+  commandActions,
+  mockComputeReviewMetrics,
+  mockFormatReviewMetrics,
+  mockGetGlobalConfigDir,
+  mockInfo,
+  mockParseSinceDuration,
+  mockPurgeOldEvents,
+  mockRepertoireAddCommand,
+  mockResetConfigToDefault,
+  mockResolveConfigValue,
+  mockSuccess,
+  rootCommand,
+} = vi.hoisted(() => {
+  const commandActions = new Map<string, (...args: unknown[]) => Promise<void>>();
 
-describe('metrics review command logic', () => {
-  let eventsDir: string;
+  function createCommandMock(actionKey: string): Record<string, unknown> {
+    const command: Record<string, unknown> = {
+      description: vi.fn().mockReturnThis(),
+      argument: vi.fn().mockReturnThis(),
+      option: vi.fn().mockReturnThis(),
+      opts: vi.fn(() => ({})),
+      optsWithGlobals: vi.fn(() => ({})),
+    };
+    command.command = vi.fn((subName: string) => createCommandMock(`${actionKey}.${subName}`));
+    command.action = vi.fn((action: (...args: unknown[]) => Promise<void>) => {
+      commandActions.set(actionKey, action);
+      return command;
+    });
+    return command;
+  }
 
-  beforeEach(() => {
-    eventsDir = join(tmpdir(), `takt-test-cli-metrics-${Date.now()}`);
-    mkdirSync(eventsDir, { recursive: true });
-  });
-
-  afterEach(() => {
-    rmSync(eventsDir, { recursive: true, force: true });
-  });
-
-  it('should compute and format metrics from resolved eventsDir', () => {
-    const events: ReviewFindingEvent[] = [
-      {
-        type: 'review_finding', findingId: 'f-001', status: 'new', ruleId: 'r-1',
-        severity: 'error', decision: 'reject', file: 'a.ts', line: 1, iteration: 1,
-        runId: 'r', timestamp: '2026-02-18T10:00:00.000Z',
-      },
-    ];
-    writeFileSync(
-      join(eventsDir, '2026-02-18.jsonl'),
-      events.map((e) => JSON.stringify(e)).join('\n') + '\n',
-      'utf-8',
-    );
-
-    const durationMs = parseSinceDuration('30d');
-    const sinceMs = new Date('2026-02-18T00:00:00Z').getTime();
-    const result = computeReviewMetrics(eventsDir, sinceMs);
-    const output = formatReviewMetrics(result);
-
-    expect(output).toContain('Review Metrics');
-    expect(result.rejectCountsByRule.get('r-1')).toBe(1);
-  });
-
-  it('should parse since duration and compute correct time window', () => {
-    const durationMs = parseSinceDuration('7d');
-    const now = new Date('2026-02-18T12:00:00Z').getTime();
-    const sinceMs = now - durationMs;
-
-    expect(sinceMs).toBe(new Date('2026-02-11T12:00:00Z').getTime());
-  });
+  return {
+    commandActions,
+    mockComputeReviewMetrics: vi.fn(),
+    mockFormatReviewMetrics: vi.fn(),
+    mockGetGlobalConfigDir: vi.fn(() => '/global-config'),
+    mockInfo: vi.fn(),
+    mockParseSinceDuration: vi.fn(),
+    mockPurgeOldEvents: vi.fn(),
+    mockRepertoireAddCommand: vi.fn(),
+    mockResetConfigToDefault: vi.fn(),
+    mockResolveConfigValue: vi.fn(),
+    mockSuccess: vi.fn(),
+    rootCommand: createCommandMock('root'),
+  };
 });
 
-describe('purge command logic', () => {
-  let eventsDir: string;
+vi.mock('../app/cli/program.js', () => ({
+  program: rootCommand,
+}));
 
+vi.mock('../app/cli/initialization.js', () => ({
+  getCliExecutionContext: vi.fn(() => ({ cwd: '/project' })),
+}));
+
+vi.mock('../infra/config/paths.js', () => ({
+  getGlobalConfigDir: () => mockGetGlobalConfigDir(),
+}));
+
+vi.mock('../infra/config/resolveConfigValue.js', () => ({
+  resolveConfigValue: (...args: unknown[]) => mockResolveConfigValue(...args),
+}));
+
+vi.mock('../features/analytics/metrics.js', () => ({
+  computeReviewMetrics: (...args: unknown[]) => mockComputeReviewMetrics(...args),
+  formatReviewMetrics: (...args: unknown[]) => mockFormatReviewMetrics(...args),
+  parseSinceDuration: (...args: unknown[]) => mockParseSinceDuration(...args),
+}));
+
+vi.mock('../features/analytics/purge.js', () => ({
+  purgeOldEvents: (...args: unknown[]) => mockPurgeOldEvents(...args),
+}));
+
+vi.mock('../features/config/resetConfig.js', () => ({
+  resetConfigToDefault: () => mockResetConfigToDefault(),
+}));
+
+vi.mock('../commands/repertoire/add.js', () => ({
+  repertoireAddCommand: (...args: unknown[]) => mockRepertoireAddCommand(...args),
+}));
+
+vi.mock('../shared/ui/index.js', () => ({
+  info: (...args: unknown[]) => mockInfo(...args),
+  success: (...args: unknown[]) => mockSuccess(...args),
+}));
+
+import '../app/cli/commands.js';
+
+function requireAction(commandPath: string): (...args: unknown[]) => Promise<void> {
+  const action = commandActions.get(commandPath);
+  if (action === undefined) {
+    throw new Error(`Command action was not registered: ${commandPath}`);
+  }
+  return action;
+}
+
+describe('lazy CLI action wiring', () => {
   beforeEach(() => {
-    eventsDir = join(tmpdir(), `takt-test-cli-purge-${Date.now()}`);
-    mkdirSync(eventsDir, { recursive: true });
+    vi.clearAllMocks();
+    mockResolveConfigValue.mockReturnValue(undefined);
   });
 
   afterEach(() => {
-    rmSync(eventsDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
-  it('should purge files using eventsDir from config and retentionDays from config', () => {
-    writeFileSync(join(eventsDir, '2025-12-01.jsonl'), '{}', 'utf-8');
-    writeFileSync(join(eventsDir, '2026-02-18.jsonl'), '{}', 'utf-8');
+  it('should execute the registered metrics review action with resolved config', async () => {
+    const metrics = { totalReviews: 3 };
+    mockResolveConfigValue.mockReturnValue({ eventsPath: '/configured/events' });
+    mockParseSinceDuration.mockReturnValue(604_800_000);
+    mockComputeReviewMetrics.mockReturnValue(metrics);
+    mockFormatReviewMetrics.mockReturnValue('formatted metrics');
+    vi.spyOn(Date, 'now').mockReturnValue(2_000_000_000);
 
-    const retentionDays = 30;
-    const deleted = purgeOldEvents(eventsDir, retentionDays, new Date('2026-02-18T12:00:00Z'));
+    await requireAction('root.metrics.review')({ since: '7d' });
 
-    expect(deleted).toContain('2025-12-01.jsonl');
-    expect(deleted).not.toContain('2026-02-18.jsonl');
+    expect(mockResolveConfigValue).toHaveBeenCalledWith('/project', 'analytics');
+    expect(mockParseSinceDuration).toHaveBeenCalledWith('7d');
+    expect(mockComputeReviewMetrics).toHaveBeenCalledWith('/configured/events', 1_395_200_000);
+    expect(mockFormatReviewMetrics).toHaveBeenCalledWith(metrics);
+    expect(mockInfo).toHaveBeenCalledWith('formatted metrics');
   });
 
-  it('should fallback to CLI retentionDays when config has no retentionDays', () => {
-    writeFileSync(join(eventsDir, '2025-01-01.jsonl'), '{}', 'utf-8');
+  it('should execute the registered purge action with config overrides', async () => {
+    mockResolveConfigValue.mockReturnValue({
+      eventsPath: '/configured/events',
+      retentionDays: 5,
+    });
+    mockPurgeOldEvents.mockReturnValue(['old.jsonl']);
 
-    const cliRetentionDays = parseInt('30', 10);
-    const configRetentionDays = undefined;
-    const retentionDays = configRetentionDays ?? cliRetentionDays;
-    const deleted = purgeOldEvents(eventsDir, retentionDays, new Date('2026-02-18T12:00:00Z'));
+    await requireAction('root.purge')({ retentionDays: '30' });
 
-    expect(deleted).toContain('2025-01-01.jsonl');
+    expect(mockPurgeOldEvents).toHaveBeenCalledWith('/configured/events', 5, expect.any(Date));
+    expect(mockSuccess).toHaveBeenCalledWith('Purged 1 file(s): old.jsonl');
   });
 
-  it('should use config retentionDays when specified', () => {
-    writeFileSync(join(eventsDir, '2026-02-10.jsonl'), '{}', 'utf-8');
-    writeFileSync(join(eventsDir, '2026-02-18.jsonl'), '{}', 'utf-8');
+  it('should execute the registered purge action with CLI defaults when config is unset', async () => {
+    mockPurgeOldEvents.mockReturnValue([]);
 
-    const cliRetentionDays = parseInt('30', 10);
-    const configRetentionDays = 5;
-    const retentionDays = configRetentionDays ?? cliRetentionDays;
-    const deleted = purgeOldEvents(eventsDir, retentionDays, new Date('2026-02-18T12:00:00Z'));
+    await requireAction('root.purge')({ retentionDays: '30' });
 
-    expect(deleted).toContain('2026-02-10.jsonl');
-    expect(deleted).not.toContain('2026-02-18.jsonl');
+    expect(mockPurgeOldEvents).toHaveBeenCalledWith('/global-config/analytics/events', 30, expect.any(Date));
+    expect(mockInfo).toHaveBeenCalledWith('No files to purge.');
+  });
+
+  it('should execute the registered reset config action', async () => {
+    await requireAction('root.reset.config')();
+
+    expect(mockResetConfigToDefault).toHaveBeenCalledTimes(1);
+  });
+
+  it('should execute the registered repertoire add action', async () => {
+    const spec = 'github:owner/repository@main';
+
+    await requireAction('root.repertoire.add')(spec);
+
+    expect(mockRepertoireAddCommand).toHaveBeenCalledWith(spec);
   });
 });

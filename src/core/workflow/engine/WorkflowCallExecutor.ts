@@ -1,5 +1,6 @@
 import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
 import type {
+  FindingContractConfig,
   WorkflowConfig,
   WorkflowCallStep,
   WorkflowMaxSteps,
@@ -11,6 +12,7 @@ import type {
   ProviderRoutingConfig,
   ProviderRoutingEntry,
 } from '../../models/config-types.js';
+import type { FindingLedgerStore } from '../findings/store.js';
 import type { RunPaths } from '../run/run-paths.js';
 import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
 import { resolveEffectiveAutoRouting } from '../auto-routing/effective-auto-routing.js';
@@ -24,8 +26,14 @@ import type {
   WorkflowEngineOptions,
   WorkflowSharedRuntimeState,
 } from '../types.js';
+import { validateFindingContractManagerProviderModel } from './WorkflowValidator.js';
 
-export type WorkflowCallSessionUpdates = ReadonlyMap<string, string | undefined>;
+export interface WorkflowCallSessionUpdate {
+  expectedSessionId: string | undefined;
+  sessionId: string | undefined;
+}
+
+export type WorkflowCallSessionUpdates = ReadonlyMap<string, WorkflowCallSessionUpdate>;
 export interface WorkflowCallIsolatedStateSync {
   iteration: number;
   maxSteps?: WorkflowMaxSteps;
@@ -116,6 +124,11 @@ interface WorkflowCallExecutorDeps {
     personaSessions: Map<string, string>;
   };
   setActiveResumePoint: (step: WorkflowCallStep, iteration: number) => void;
+  /** 自前 or 継承済みの、この engine で有効な Finding Contract。子へ引き継ぐ。 */
+  findingContract?: FindingContractConfig;
+  findingLedgerStore?: FindingLedgerStore;
+  /** workflow_call 完了後、子が書き込んだ台帳を親の state.findings へ反映する。 */
+  refreshFindingsState: () => void;
 }
 
 interface ExecuteWorkflowCallRequest {
@@ -141,6 +154,35 @@ export type WorkflowCallExecutionResult = WorkflowState & {
 
 export class WorkflowCallExecutor {
   constructor(private readonly deps: WorkflowCallExecutorDeps) {}
+
+  /**
+   * raw finding id 用の呼び出し名前空間を組み立てる。子エンジンは
+   * reportDirName（= runId）を親からそのまま継承するため、親の parallel から
+   * 同じ子ワークフローを複数同時に呼ぶと2子の runId が一致し、findings
+   * manager-runner.ts の normalizeRawFindingId が生成する raw finding id が
+   * 完全に衝突する（実測: parentStepName / stepIteration / subStepName /
+   * rawFindingId のいずれも子ワークフロー内では同一になるため）。
+   * 呼び出し元ステップ名（parallel の子ステップ間で一意）を積み上げることで
+   * 衝突を避ける。親が既に名前空間を持つ場合（さらに深い入れ子）は連結する。
+   * トップレベルの走行では親の名前空間が undefined のため、この関数は常に
+   * 呼ばれるが、その戻り値は options.findingCallNamespace としてのみ子へ渡り、
+   * 親自身が undefined のままなら raw finding id の形は変わらない。
+   *
+   * ステップ名だけでは、同じ workflow_call ステップがループで再実行された
+   * ケースを区別できない。子エンジンはループのたびに新規生成され
+   * stepIterations が空から始まるため、子の最初のレビューは常に
+   * stepIteration=1 になる。ステップ名・parentStepName・stepIteration・
+   * subStepName が全て一致すれば、ローカルの raw finding id が同じ場合に
+   * 正規化後の id も完全に一致し、後勝ちで前回の raw finding が台帳から
+   * 消える。buildWorkflowCallNamespace() と同じ「親のこの呼び出し時点の
+   * イテレーション」（this.deps.state.iteration）をステップ名に組み合わせ、
+   * ループの各回を区別する。
+   */
+  private buildFindingCallNamespace(step: WorkflowCallStep): string {
+    const parentNamespace = this.deps.getOptions().findingCallNamespace;
+    const segment = `${step.name}#${this.deps.state.iteration}`;
+    return parentNamespace ? `${parentNamespace}/${segment}` : segment;
+  }
 
   private buildWorkflowCallNamespace(step: WorkflowCallStep, childWorkflow: WorkflowConfig): string[] {
     const baseNamespace = this.deps.getOptions().runPathNamespace ?? [];
@@ -195,10 +237,24 @@ export class WorkflowCallExecutor {
     });
   }
 
-  private relayChildEvents(childEngine: WorkflowCallChildEngine): void {
+  private relayChildEvents(childEngine: WorkflowCallChildEngine, resumeStepName: string): void {
+    childEngine.on('step:start', (...args) => {
+      const [step, iteration, instruction, providerInfo, workflowName] = args;
+      this.deps.emit(
+        'step:start',
+        step,
+        iteration,
+        instruction,
+        providerInfo,
+        workflowName,
+        resumeStepName,
+      );
+    });
+    childEngine.on('step:complete', (...args) => {
+      const [step, response, instruction] = args;
+      this.deps.emit('step:complete', step, response, instruction, resumeStepName);
+    });
     for (const eventName of [
-      'step:start',
-      'step:complete',
       'routing:decision',
       'step:report',
       'findings:ledger',
@@ -221,10 +277,22 @@ export class WorkflowCallExecutor {
       this.deps.updateMaxSteps(this.deps.sharedRuntime.maxSteps);
     }
     this.deps.state.iteration = childState.iteration;
-    for (const [sessionKey, sessionId] of childState.personaSessions.entries()) {
+    // direct 子は親の session 全体を initialSessions として継承する。したがって
+    // 子の最終 map は、この workflow_call 後の親 session の正しい状態である。
+    // 子実行中に onSessionUpdate が外部永続化を済ませているため、ここでは親 state
+    // だけを置換し、同じ更新を callback へ重複通知しない。
+    this.deps.state.personaSessions.clear();
+    for (const [sessionKey, sessionId] of childState.personaSessions) {
       this.deps.state.personaSessions.set(sessionKey, sessionId);
     }
     this.deps.setActiveResumePoint(step, this.deps.state.iteration);
+    // 子が Finding Contract の台帳（親と共有）へ書き込んでいても、iteration /
+    // session の同期だけでは親の state.findings は古いまま。親の
+    // when(findings.*) ルールが子の取り込み結果を見られるよう、ここで
+    // ParallelRunner の manager 実行後と同じ再読込を行う。
+    if (this.deps.findingLedgerStore !== undefined) {
+      this.deps.refreshFindingsState();
+    }
   }
 
   async execute(
@@ -234,9 +302,10 @@ export class WorkflowCallExecutor {
     const options = this.deps.getOptions();
     const parentConfig = this.deps.getConfig();
     const childResumePoint = this.resolveChildResumePoint(request.step, request.childWorkflow);
-    const sessionUpdates = new Map<string, string | undefined>();
+    const inheritedSessions = new Map(this.deps.state.personaSessions);
+    const sessionUpdates = new Map<string, WorkflowCallSessionUpdate>();
     const childAutoRouting = resolveEffectiveAutoRouting(request.childWorkflow, options.autoRouting);
-    const childEngine = this.deps.createEngine(request.childWorkflow, this.deps.getCwd(), this.deps.task, {
+    const childOptions: WorkflowEngineOptions = {
       ...options,
       maxStepsOverride: this.deps.sharedRuntime.maxSteps ?? this.deps.getMaxSteps(),
       initialSessions: Object.fromEntries(this.deps.state.personaSessions),
@@ -255,7 +324,13 @@ export class WorkflowCallExecutor {
       onSessionUpdate: executeOptions.syncParentState
         ? options.onSessionUpdate
         : (persona, sessionId) => {
-            sessionUpdates.set(persona, sessionId);
+            const priorUpdate = sessionUpdates.get(persona);
+            sessionUpdates.set(persona, {
+              expectedSessionId: priorUpdate
+                ? priorUpdate.expectedSessionId
+                : inheritedSessions.get(persona),
+              sessionId,
+            });
           },
       personaProviders: request.personaProviders,
       providerRouting: request.providerRouting,
@@ -264,14 +339,37 @@ export class WorkflowCallExecutor {
       initialIteration: this.deps.state.iteration,
       reportDirName: this.deps.runPaths.slug,
       runPathNamespace: this.buildWorkflowCallNamespace(request.step, request.childWorkflow),
+      findingCallNamespace: this.buildFindingCallNamespace(request.step),
       sharedRuntime: this.deps.sharedRuntime,
       resumeStackPrefix: [
         ...this.deps.resumeStackPrefix,
         buildWorkflowResumePointEntry(parentConfig, request.step.name, 'workflow_call'),
       ],
-    });
+      // 親の Finding Contract を子エンジンへ継承する。継承しないと子の
+      // parallel レビューが出す raw findings が台帳に入らず、fix に届かないまま
+      // reviewers ↔ fix が回り続ける（実測: 56周・9時間）。子が自前の
+      // finding_contract も持つ場合は WorkflowValidator が設定エラーで落とす
+      // ため、ここでは無条件に継承値を渡してよい。
+      ...(this.deps.findingContract !== undefined && this.deps.findingLedgerStore !== undefined
+        ? {
+            inheritedFindingContract: {
+              contract: this.deps.findingContract,
+              ledgerStore: this.deps.findingLedgerStore,
+            },
+          }
+        : {}),
+    };
+    // 子が継承する Finding Contract の manager provider/model を、子を実際に
+    // 構築する前に検証する。子ワークフローの workflow provider/model は親と
+    // 異なりうるため、WorkflowValidator の同じチェックを子の config + 継承
+    // 契約入り options に対してもう一度行わないと、不正な組み合わせが素通り
+    // したまま manager 起動時に初めて失敗する（WorkflowValidator.ts はここで
+    // 検証済みの childOptions を再利用する）。
+    validateFindingContractManagerProviderModel(request.childWorkflow, childOptions);
 
-    this.relayChildEvents(childEngine);
+    const childEngine = this.deps.createEngine(request.childWorkflow, this.deps.getCwd(), this.deps.task, childOptions);
+
+    this.relayChildEvents(childEngine, request.step.name);
     const childResult = await childEngine.runWithResult();
     const childState = childResult.state;
     if (executeOptions.syncParentState) {

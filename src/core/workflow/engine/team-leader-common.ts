@@ -59,6 +59,9 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
     allowGitCommit: step.allowGitCommit,
     instruction: part.instruction,
     passPreviousResponse: false,
+    policyContents: step.policyContents,
+    knowledgeContents: step.knowledgeContents,
+    qualityGates: step.qualityGates,
   };
 }
 
@@ -69,6 +72,7 @@ export function createTeamLeaderPlanningStep(step: WorkflowStep): WorkflowStep {
 
   return {
     ...step,
+    preserveFullPreviousResponse: true,
     persona: step.teamLeader.persona ?? step.persona,
     personaPath: step.teamLeader.personaPath ?? step.personaPath,
     personaDisplayName: step.teamLeader.personaDisplayName ?? step.personaDisplayName,

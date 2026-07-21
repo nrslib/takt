@@ -295,7 +295,8 @@ describe('cwd propagation: addTask wiring', () => {
       displayTaskCreationResult: vi.fn(),
       promptWorktreeSettings: vi.fn(),
     }));
-    vi.mock('node:fs', () => ({
+    vi.mock('node:fs', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('node:fs')>()),
       existsSync: vi.fn(() => false),
       mkdirSync: vi.fn(),
       mkdtempSync: vi.fn(() => '/tmp/takt-traced-config-test'),

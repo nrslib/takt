@@ -11,6 +11,7 @@ export const TaskFailureSchema = z.object({
   step: z.string().optional(),
   error: z.string().min(1),
   last_message: z.string().optional(),
+  retryable: z.boolean().optional(),
 }).strict();
 export type TaskFailure = z.infer<typeof TaskFailureSchema>;
 

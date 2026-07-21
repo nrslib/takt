@@ -15,7 +15,17 @@ export interface FindingContractInstructionContext {
   hasOpenFindings: boolean;
   /** Whether the ledger currently has waived findings. */
   hasWaivedFindings: boolean;
+  hasDismissedFindings: boolean;
   rawFindingsJsonSchema?: Record<string, unknown>;
+  /**
+   * review-integrity protocol: reviewer が typed evidence protocol の source_quote 主張に
+   * echo する review scope snapshot id（snapshot.ts の
+   * computeReviewScopeSnapshotId）。reviewer step（includeRawFindingsSchema が
+   * true）のときだけ設定される — manager-runner.ts の runFindingManagerForStep が
+   * 同じ cwd に対して同じ関数を呼び直し、検証時点の値と比較する
+   * （admission-validation.ts の verifySourceQuoteEvidence 参照）。
+   */
+  reviewScopeSnapshotId?: string;
 }
 
 /**
@@ -46,6 +56,16 @@ export interface InstructionContext {
   previousResponseText?: string;
   /** Report directory path */
   reportDir?: string;
+  /**
+   * run の reports ルート（namespace なし）。workflow_call の子の {report:X} が
+   * 親成果物へ read-only フォールバックするために engine から明示的に渡す。
+   */
+  reportsRootDir?: string;
+  /**
+   * {report:X} の存在検証を無効化する（`takt prompt` プレビューなど実 run が
+   * 存在しない文脈のみ）。既定は検証あり。
+   */
+  validateReportReferences?: boolean;
   /** Latest report paths for the current step */
   currentReport?: string;
   /** Most recent versioned report paths for the current step */

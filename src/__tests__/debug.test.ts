@@ -16,9 +16,11 @@ import {
   errorLog,
   writePromptLog,
 } from '../shared/utils/index.js';
-import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+const TEST_TMPDIR = realpathSync(tmpdir());
 
 function resolvePromptsLogFilePath(): string {
   const debugLogFile = getDebugLogFile();
@@ -72,7 +74,7 @@ describe('debug logging', () => {
     });
 
     it('should enable debug when enabled is true', () => {
-      const projectDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-enable-'));
+      const projectDir = mkdtempSync(join(TEST_TMPDIR, 'takt-test-debug-enable-'));
 
       try {
         initDebugLogger({ enabled: true }, projectDir);
@@ -84,7 +86,7 @@ describe('debug logging', () => {
     });
 
     it('should write debug log to project .takt/runs/*/logs/ directory', () => {
-      const projectDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-project-'));
+      const projectDir = mkdtempSync(join(TEST_TMPDIR, 'takt-test-debug-project-'));
 
       try {
         initDebugLogger({ enabled: true }, projectDir);
@@ -101,7 +103,7 @@ describe('debug logging', () => {
     });
 
     it('should create prompts log file with -prompts suffix', () => {
-      const projectDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-prompts-'));
+      const projectDir = mkdtempSync(join(TEST_TMPDIR, 'takt-test-debug-prompts-'));
 
       try {
         initDebugLogger({ enabled: true }, projectDir);
@@ -122,7 +124,7 @@ describe('debug logging', () => {
     });
 
     it('should use custom log file when provided', () => {
-      const logDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-'));
+      const logDir = mkdtempSync(join(TEST_TMPDIR, 'takt-test-debug-'));
       const logFile = join(logDir, 'test.log');
 
       try {
@@ -140,7 +142,7 @@ describe('debug logging', () => {
     });
 
     it('should only initialize once', () => {
-      const projectDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-once-'));
+      const projectDir = mkdtempSync(join(TEST_TMPDIR, 'takt-test-debug-once-'));
 
       try {
         initDebugLogger({ enabled: true }, projectDir);
@@ -170,7 +172,7 @@ describe('debug logging', () => {
 
   describe('writePromptLog', () => {
     it('should append prompt log record when debug is enabled', () => {
-      const projectDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-write-prompts-'));
+      const projectDir = mkdtempSync(join(TEST_TMPDIR, 'takt-test-debug-write-prompts-'));
 
       try {
         initDebugLogger({ enabled: true }, projectDir);
@@ -330,7 +332,7 @@ describe('debug logging', () => {
 
   describe('file logging with verbose console', () => {
     it('should write to both file and stderr when both are enabled', () => {
-      const logDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-both-'));
+      const logDir = mkdtempSync(join(TEST_TMPDIR, 'takt-test-debug-both-'));
       const logFile = join(logDir, 'test.log');
 
       const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
@@ -372,7 +374,7 @@ describe('debug logging', () => {
     });
 
     it('should redact and bound string metadata before writing debug data', () => {
-      const logDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-sensitive-'));
+      const logDir = mkdtempSync(join(TEST_TMPDIR, 'takt-test-debug-sensitive-'));
       const logFile = join(logDir, 'test.log');
       const secret = 'UNIQUE_DEBUG_LEAK_VALUE';
       const credentialUrl = `https://${'a'.repeat(980)}:${secret}@example.com`;
@@ -396,7 +398,7 @@ describe('debug logging', () => {
     });
 
     it('should redact sensitive messages and nested credential fields from file and console logs', () => {
-      const logDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-nested-sensitive-'));
+      const logDir = mkdtempSync(join(TEST_TMPDIR, 'takt-test-debug-nested-sensitive-'));
       const logFile = join(logDir, 'test.log');
       const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
@@ -438,7 +440,7 @@ describe('debug logging', () => {
       { inputLength: 1_000, truncated: false },
       { inputLength: 1_001, truncated: true },
     ])('should enforce the $inputLength character metadata boundary through debugLog', ({ inputLength, truncated }) => {
-      const logDir = mkdtempSync(join(tmpdir(), `takt-test-debug-metadata-${inputLength}-`));
+      const logDir = mkdtempSync(join(TEST_TMPDIR, `takt-test-debug-metadata-${inputLength}-`));
       const logFile = join(logDir, 'test.log');
       const message = `metadata boundary ${inputLength}`;
 
@@ -458,7 +460,7 @@ describe('debug logging', () => {
       { serializedLength: 50_000, truncated: false },
       { serializedLength: 50_001, truncated: true },
     ])('should enforce the $serializedLength character serialized data boundary through debugLog', ({ serializedLength, truncated }) => {
-      const logDir = mkdtempSync(join(tmpdir(), `takt-test-debug-data-${serializedLength}-`));
+      const logDir = mkdtempSync(join(TEST_TMPDIR, `takt-test-debug-data-${serializedLength}-`));
       const logFile = join(logDir, 'test.log');
       const message = `serialized data boundary ${serializedLength}`;
       const data = createDebugDataWithSerializedLength(serializedLength);

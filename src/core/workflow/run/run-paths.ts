@@ -4,6 +4,8 @@ export interface RunPaths {
   readonly slug: string;
   readonly runRootRel: string;
   readonly reportsRel: string;
+  /** namespace（workflow_call の子）を除いた run の reports ルート。 */
+  readonly reportsRootRel: string;
   readonly contextRel: string;
   readonly contextTaskRel: string;
   readonly contextTaskOrderRel: string;
@@ -14,6 +16,7 @@ export interface RunPaths {
   readonly metaRel: string;
   readonly runRootAbs: string;
   readonly reportsAbs: string;
+  readonly reportsRootAbs: string;
   readonly contextAbs: string;
   readonly contextTaskAbs: string;
   readonly contextTaskOrderAbs: string;
@@ -32,7 +35,8 @@ function joinRel(base: string, namespace: string[] | undefined): string {
 
 export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): RunPaths {
   const runRootRel = `.takt/runs/${slug}`;
-  const reportsRel = joinRel(`${runRootRel}/reports`, namespace);
+  const reportsRootRel = `${runRootRel}/reports`;
+  const reportsRel = joinRel(reportsRootRel, namespace);
   const contextRel = joinRel(`${runRootRel}/context`, namespace);
   const contextTaskRel = join(contextRel, 'task');
   const contextTaskOrderRel = join(contextTaskRel, 'order.md');
@@ -46,6 +50,7 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     slug,
     runRootRel,
     reportsRel,
+    reportsRootRel,
     contextRel,
     contextTaskRel,
     contextTaskOrderRel,
@@ -56,6 +61,7 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     metaRel,
     runRootAbs: join(cwd, runRootRel),
     reportsAbs: join(cwd, reportsRel),
+    reportsRootAbs: join(cwd, reportsRootRel),
     contextAbs: join(cwd, contextRel),
     contextTaskAbs: join(cwd, contextTaskRel),
     contextTaskOrderAbs: join(cwd, contextTaskOrderRel),

@@ -26,7 +26,8 @@ function makeRecord(overrides: Record<string, unknown> = {}): Record<string, unk
 }
 
 function runTokenUsage(records: Array<Record<string, unknown>>, args: string[]): string {
-  const dir = mkdtempSync(join(tmpdir(), 'takt-token-usage-csv-'));
+  const neutralTempRoot = process.platform === 'win32' ? tmpdir() : '/tmp';
+  const dir = mkdtempSync(join(neutralTempRoot, 'takt-token-usage-csv-'));
   tempDirs.add(dir);
   writeFileSync(
     join(dir, 'session-usage-events.phase.jsonl'),

@@ -6,9 +6,14 @@ import {
 } from '../../../core/workflow/provider-resolution.js';
 import type { StepProviderInfo } from '../../../core/workflow/types.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
-import { resolveRuleBasedAutoRoutingProviderInfo } from '../../../core/workflow/auto-routing/resolver.js';
+import {
+  resolveDeterministicAutoRoutingProviderInfo,
+  resolveRuleBasedAutoRoutingProviderInfo,
+  toAutoRoutingStepMetadata,
+} from '../../../core/workflow/auto-routing/resolver.js';
 import { resolveEffectiveAutoRouting } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import { buildFindingManagerStep } from '../../../core/workflow/findings/manager-step.js';
+import { resolveFindingContractIntakeStep } from '../../../core/workflow/findings/contract-intake.js';
 import {
   assertProviderResolvedForCapabilitySensitiveOptions,
   resolveAllowedToolsForProvider,
@@ -132,7 +137,18 @@ function buildFindingManagerPreview(
     workflowProvider: workflow.provider,
     workflowModel: workflow.model,
   });
-  const providerInfo = resolvePreviewProviderInfo(managerStep, resolution);
+  // findings-manager は AI ルーターを通らないため、rules 不一致でも実行時
+  // （OptionsBuilder）と同じ strategy デフォルトまで確定して表示する。
+  // 通常ステップの resolvePreviewProviderInfo（rules のみ、AI 判定分は未確定
+  // 表示）とはここが異なる。
+  const ruleProviderInfo = resolvePreviewProviderInfo(managerStep, resolution);
+  const providerInfo = resolution.autoRouting === undefined
+    ? ruleProviderInfo
+    : resolveDeterministicAutoRoutingProviderInfo({
+        autoRouting: resolution.autoRouting,
+        step: toAutoRoutingStepMetadata(managerStep),
+        currentProviderInfo: ruleProviderInfo,
+      }) ?? ruleProviderInfo;
 
   return {
     name: managerStep.name,
@@ -151,13 +167,30 @@ function buildStepPreview(
   step: WorkflowStep,
   projectCwd: string,
   resolution: PreviewProviderResolution,
+  context: { isParallelSubstep: boolean } = { isParallelSubstep: false },
 ): StepPreview {
   const previewStep = resolvePreviewStep(step);
   const parallelSubsteps = previewStep.parallel?.map((substep) =>
-    buildStepPreview(workflow, substep, projectCwd, resolution),
+    buildStepPreview(workflow, substep, projectCwd, resolution, { isParallelSubstep: true }),
   );
   const isParallelParent = parallelSubsteps !== undefined && parallelSubsteps.length > 0;
-  const managerPreview = isParallelParent
+  // 並列親だけでなく、FC の取り込み対象になるトップレベルの単独ステップの
+  // 後にも findings-manager を追加する。実行時に StepExecutor.runNormalStep が
+  // findings-manager を起動する条件（resolveFindingContractIntakeStep）と
+  // 同じ述語を使い、実行時と preview の判定を一致させる
+  // （以前は並列親の場合しか manager を preview に足しておらず、単独
+  // ステップの manager が実行時には起動するのに preview から欠落していた）。
+  //
+  // 並列サブステップには追加しない。実行時は WorkflowEngineStepCoordinator →
+  // ParallelRunner の経路で、並列ブロック全体につき manager は親レベルで
+  // 1回だけ起動する（各サブステップの raw findings は親がまとめて取り込む）。
+  // ここで isParallelSubstep を見ないと、*-finding-contract を持つ各
+  // サブステップと並列親の両方に manager が付き、実行時に存在しない重複が
+  // preview に現れる。
+  const isFindingContractIntakeStep = !isParallelParent
+    && !context.isParallelSubstep
+    && resolveFindingContractIntakeStep(previewStep, workflow.findingContract) !== undefined;
+  const managerPreview = isParallelParent || isFindingContractIntakeStep
     ? buildFindingManagerPreview(workflow, projectCwd, resolution)
     : undefined;
   const substeps = managerPreview ? [...(parallelSubsteps ?? []), managerPreview] : parallelSubsteps;
@@ -174,7 +207,7 @@ function buildStepPreview(
     ...(providerInfo?.model !== undefined ? { model: providerInfo.model } : {}),
     sessionKey: previewStep.sessionKey,
     requiresUserInput: previewStep.requiresUserInput,
-    ...(isParallelParent ? { substeps } : {}),
+    ...(substeps ? { substeps } : {}),
   };
 }
 

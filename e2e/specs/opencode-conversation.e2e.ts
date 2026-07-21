@@ -2,7 +2,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { getOpenCodeSessionMessages, getOpenCodeSessionSnapshot, resetSharedServer } from '../../src/infra/opencode/client.js';
 import { OpenCodeProvider } from '../../src/infra/providers/opencode.js';
 
-const MODEL = process.env.TAKT_E2E_MODEL ?? process.env.OPENCODE_E2E_MODEL ?? 'ollama-cloud/qwen3-coder-next';
+const MODEL = process.env.TAKT_E2E_MODEL ?? process.env.OPENCODE_E2E_MODEL ?? 'ollama-cloud/qwen3.5:397b';
 describe('OpenCode real E2E conversation', () => {
   afterAll(() => {
     resetSharedServer();

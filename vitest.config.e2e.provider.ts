@@ -14,7 +14,6 @@ const commonTests = [
   'e2e/specs/github-issue.e2e.ts',
   'e2e/specs/structured-output.e2e.ts',
   'e2e/specs/team-leader.e2e.ts',
-  'e2e/specs/team-leader-refill-threshold.e2e.ts',
 ];
 
 const providerSpecificTests: Record<string, string[]> = {

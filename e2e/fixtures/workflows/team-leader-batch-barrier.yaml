@@ -1,0 +1,34 @@
+name: e2e-team-leader-batch-barrier
+description: E2E test for team_leader batch barrier behavior
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+personas:
+  test-team-leader-batch-barrier: |
+    You are the E2E team leader batch-barrier coordinator.
+  test-coder: |
+    You are the E2E test coder.
+max_steps: 5
+steps:
+  - name: execute
+    edit: true
+    persona: ./agents/test-team-leader-batch-barrier.md
+    required_permission_mode: edit
+    team_leader:
+      max_concurrency: 2
+      initial_max_parts: 2
+      max_total_parts: 4
+      part_persona: ./agents/test-coder.md
+      part_edit: true
+      part_allowed_tools:
+        - Read
+        - Write
+        - Edit
+    instruction: |
+      {task}
+    rules:
+      - condition: Task completed
+        next: COMPLETE

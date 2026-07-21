@@ -29,8 +29,9 @@ import type { AutoRoutingAiRouter } from '../../agents/auto-routing-usecase.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
 import type { StructuredOutputNormalizerRegistry } from './engine/structured-output-normalizer.js';
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
-import type { FindingLedger } from '../models/finding-types.js';
+import type { FindingContractConfig, FindingLedger } from '../models/finding-types.js';
 import type { RunResumeSource } from './run/run-meta.js';
+import type { FindingLedgerStore } from './findings/store.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 export type {
@@ -114,7 +115,8 @@ export interface ProviderStreamContext {
 }
 
 export interface DelegatedAgentUsageContext extends ProviderStreamContext {
-  readonly stepType: 'parallel' | 'team_leader';
+  /** 'normal' は実行ループ外の合成ステップ（findings-manager 等）の直接呼び出し。 */
+  readonly stepType: 'parallel' | 'team_leader' | 'normal';
 }
 
 export interface DelegatedAgentUsageResult {
@@ -125,6 +127,7 @@ export interface DelegatedAgentUsageResult {
 export interface StepRunResult {
   response: AgentResponse;
   instruction: string;
+  terminalAbort?: WorkflowAbortResult;
   providerInfo?: StepProviderInfo;
   consumedStepIterations?: readonly string[];
   qualityGateFailure?: {
@@ -160,7 +163,23 @@ export type WorkflowAbortKind =
   | 'user_input_required'
   | 'user_input_cancelled'
   | 'step_transition'
-  | 'runtime_error';
+  | 'runtime_error'
+  /**
+   * COMPLETE への遷移時に open な provisional finding（意味を確定できなかった
+   * 観測）が残っていた。エンジン最終不変条件のバックストップ発火 = workflow の
+   * rules が findings.provisional.count を処理する記述を欠いている設定不備で、
+   * 「ルールはあるが何もマッチしない」と同じクラスの fail-fast。
+   */
+  | 'provisional_findings'
+  /**
+   * `next: NEEDS_ADJUDICATION` への遷移: provisional findings
+   * が直前ラウンドから意味的な変化の無い fixpoint に達し、plan への差し戻しでは
+   * もう解消し得ないと機械判定された。provisional_findings（設定不備の
+   * fail-fast）とは異なり、これは workflow が意図的にルーティングした正規の
+   * 終端状態 — resume 可能で、人手が台帳を編集するか新しいレビュー観測を
+   * 与えれば fixpoint が破れて再び plan へ進める。
+   */
+  | 'needs_adjudication';
 
 export interface WorkflowStepFailureSummary {
   kind: WorkflowAbortKind;
@@ -196,8 +215,8 @@ export type WorkflowCallResolver = (request: WorkflowCallResolutionRequest) => W
 
 /** Events emitted by workflow engine */
 export interface WorkflowEvents {
-  'step:start': (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo, workflowName: string) => void;
-  'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string) => void;
+  'step:start': (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo, workflowName: string, resumeStepName: string) => void;
+  'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string, resumeStepName: string) => void;
   'routing:decision': (
     step: WorkflowStep,
     response: AgentResponse,
@@ -241,7 +260,7 @@ export interface WorkflowEvents {
     iteration?: number,
   ) => void;
   'workflow:complete': (state: WorkflowState) => void;
-  'workflow:abort': (state: WorkflowState, reason: string) => void;
+  'workflow:abort': (state: WorkflowState, reason: string, kind: WorkflowAbortKind) => void;
   'iteration:limit': (iteration: number, maxSteps: number) => void;
   'step:loop_detected': (step: WorkflowStep, consecutiveCount: number) => void;
   'step:cycle_detected': (monitor: LoopMonitorConfig, cycleCount: number) => void;
@@ -384,6 +403,27 @@ export interface WorkflowEngineOptions {
   sharedRuntime?: WorkflowSharedRuntimeState;
   resumeStackPrefix?: WorkflowResumePointEntry[];
   workflowCallResolver?: WorkflowCallResolver;
+  /**
+   * workflow_call の親から継承する Finding Contract。
+   * 継承しないと子の parallel レビューが出す raw findings が親の台帳に届かず、
+   * fix ステップへ渡らないまま reviewers ↔ fix が回り続ける（実測: 56周・9時間）。
+   * ledgerStore は親と同一インスタンスを渡す。ledger_path / raw_findings_path は
+   * ワークフロー名に紐づくため、子が自前で store を作り直すと親の
+   * when(findings.*) と別の台帳を見てしまう。
+   */
+  inheritedFindingContract?: {
+    contract: FindingContractConfig;
+    ledgerStore: FindingLedgerStore;
+  };
+  /**
+   * workflow_call の呼び出しスタックを表す名前空間。raw finding id にこの値を
+   * 混ぜることで、親の parallel から同じ子ワークフローを複数同時に呼んだ場合の
+   * id 衝突を防ぐ。子エンジンは同じ親の runPaths.slug（= runId）を継承するため、
+   * 呼び出し元ステップ名で区別しないと2子の raw finding id が完全に一致し、
+   * 片方が他方の台帳エントリを上書きしてしまう。トップレベルの走行では
+   * undefined のままにし、既存の raw finding id の形を変えない。
+   */
+  findingCallNamespace?: string;
 }
 
 export interface WorkflowTraceTaskMetadata {

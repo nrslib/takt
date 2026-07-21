@@ -37,7 +37,9 @@ import type {
 } from '../types.js';
 import type { ProviderResolutionSource } from '../provider-options-trace.js';
 import { buildSessionKey } from '../session-key.js';
+import { getWorkflowStepKind } from '../step-kind.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
+import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../auto-routing/resolver.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 
@@ -82,7 +84,41 @@ export class OptionsBuilder {
     ) => FindingContractInstructionContext | undefined,
   ) {}
 
+  /**
+   * 実行に使う provider/model の解決。構成レイヤー（step / persona / routing /
+   * config）で provider が決まらない agent ステップは、auto_routing の
+   * rules → strategy デフォルトへ決定的に補完する。実行ループの AI ルーターを
+   * 通るステップは runtime.providerInfo が優先されるため補完は発動せず、
+   * ルーターを通らない合成ステップ（findings-manager 等）もこの共通経路で
+   * デフォルトまで落ちる。
+   */
   resolveStepProviderModel(step: WorkflowStep, runtime?: RuntimeStepResolution): StepProviderInfo {
+    const resolved = this.resolveStepProviderModelBeforeAutoRouting(step, runtime);
+    const autoRouting = this.engineOptions.autoRouting;
+    if (
+      autoRouting === undefined
+      || runtime?.providerInfo !== undefined
+      || getWorkflowStepKind(step) !== 'agent'
+    ) {
+      return resolved;
+    }
+    const providerInfo = resolveDeterministicAutoRoutingProviderInfo({
+      autoRouting,
+      step: toAutoRoutingStepMetadata(step),
+      currentProviderInfo: resolved,
+    });
+    return providerInfo === undefined
+      ? resolved
+      : this.resolveStepProviderModelBeforeAutoRouting(step, { ...runtime, providerInfo });
+  }
+
+  /**
+   * auto-routing ルーターへの入力専用の解決。auto_routing 有効時、構成レイヤーで
+   * 決まらない provider は undefined のまま返す（= ルーターが決める余地を残す）。
+   * 実行に使う値が欲しい場合は resolveStepProviderModel を使うこと — こちらを
+   * 実行経路で使うと auto_routing 有効時に provider 未解決のまま進んでしまう。
+   */
+  resolveStepProviderModelBeforeAutoRouting(step: WorkflowStep, runtime?: RuntimeStepResolution): StepProviderInfo {
     if (runtime?.providerInfo) {
       const providerOptions = this.resolveMergedProviderOptions(step, runtime.providerInfo.provider, runtime);
       const providerOptionsSources = this.resolveProviderOptionsSourcesForRuntime(step, runtime)

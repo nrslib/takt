@@ -8,8 +8,6 @@ import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { ParallelLogger } from './parallel-logger.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
 import { createPartStep } from './team-leader-common.js';
-import { buildGitRules } from '../instruction/instruction-context.js';
-import { renderFallbackNotice } from '../instruction/fallback-notice.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
 import { classifyAbortSignalReason } from '../../../shared/types/agent-failure.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
@@ -23,10 +21,6 @@ export interface TeamLeaderPartObservability {
   readonly sanitizeText?: (text: string) => string;
 }
 
-function hasReportPhase(step: WorkflowStep): boolean {
-  return step.outputContracts !== undefined && step.outputContracts.length > 0;
-}
-
 function buildPartScopedSessionKey(partStep: WorkflowStep, provider: ProviderType | undefined): string {
   const sessionKeyStep: AgentWorkflowStep = {
     kind: 'agent',
@@ -36,36 +30,6 @@ function buildPartScopedSessionKey(partStep: WorkflowStep, provider: ProviderTyp
     instruction: partStep.instruction,
   };
   return buildSessionKey(sessionKeyStep, provider);
-}
-
-function buildTeamLeaderPartSessionKey(
-  step: WorkflowStep,
-  partStep: WorkflowStep,
-  provider: ProviderType | undefined,
-): string {
-  const partSessionKey = buildSessionKey(partStep, provider);
-  const parentSessionKey = buildSessionKey(step, provider);
-
-  if (hasReportPhase(step) && partSessionKey === parentSessionKey) {
-    return buildPartScopedSessionKey(partStep, provider);
-  }
-
-  return partSessionKey;
-}
-
-function buildTeamLeaderPartInstruction(
-  partStep: WorkflowStep,
-  part: PartDefinition,
-  language: NonNullable<RunAgentOptions['language']>,
-  runtime?: RuntimeStepResolution,
-): string {
-  const gitRules = buildGitRules(partStep.allowGitCommit, language, 'phase1');
-  const fallbackNotice = runtime?.fallback
-    ? renderFallbackNotice(runtime.fallback, language)
-    : '';
-  return [gitRules, fallbackNotice, part.instruction]
-    .filter((item): item is string => typeof item === 'string' && item.length > 0)
-    .join('\n\n');
 }
 
 export async function runTeamLeaderPart(
@@ -78,6 +42,7 @@ export async function runTeamLeaderPart(
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
   parallelLogger: ParallelLogger | undefined,
   observability: TeamLeaderPartObservability,
+  buildInstruction: (partStep: WorkflowStep) => string,
   runtime?: RuntimeStepResolution,
 ): Promise<PartResult> {
   const partStep = createPartStep(step, part);
@@ -110,12 +75,7 @@ export async function runTeamLeaderPart(
     };
 
   try {
-    const partInstruction = buildTeamLeaderPartInstruction(
-      partStep,
-      part,
-      options.language ?? 'en',
-      runtime,
-    );
+    const partInstruction = buildInstruction(partStep);
     const response = await runWithPhaseSpan({
       enabled: observability.enabled,
       runId: observability.runId,
@@ -135,7 +95,7 @@ export async function runTeamLeaderPart(
       providerUsage: result.providerUsage,
     }));
     if (response.sessionId !== undefined) {
-      updatePersonaSession(buildTeamLeaderPartSessionKey(step, partStep, partProviderInfo.provider), response.sessionId);
+      updatePersonaSession(buildPartScopedSessionKey(partStep, partProviderInfo.provider), response.sessionId);
     }
     return {
       part,

@@ -60,14 +60,15 @@ vi.mock('../shared/ui/TaskPrefixWriter.js', () => ({
   })),
 }));
 
-vi.mock('../core/logging/providerEventLogger.js', () => ({
+vi.mock('../shared/utils/providerEventLogger.js', () => ({
   createProviderEventLogger: vi.fn(() => ({
-    logEvent: vi.fn(),
+    wrapCallback: (handler: unknown) => handler,
+    flush: vi.fn(),
   })),
   isProviderEventsEnabled: vi.fn(() => false),
 }));
 
-vi.mock('../core/logging/usageEventLogger.js', () => ({
+vi.mock('../shared/utils/usageEventLogger.js', () => ({
   createUsageEventLogger: vi.fn(() => ({})),
   isUsageEventsEnabled: vi.fn(() => false),
 }));

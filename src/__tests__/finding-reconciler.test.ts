@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { parseFindingManagerOutput } from '../core/workflow/findings/schemas.js';
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
+import { formatConflictId } from '../core/workflow/findings/conflict-identity.js';
+import { computeLineageKey, computeRawEvidenceHash } from '../core/workflow/findings/raw-canonicalization.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
@@ -31,6 +33,7 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
     location: 'src/core/workflow/evaluation/RuleEvaluator.ts:48',
     description: 'The workflow cannot route on open findings.',
     suggestion: 'Read the consolidated finding ledger in deterministic rules.',
+    relation: 'new',
     ...overrides,
   };
 }
@@ -45,6 +48,8 @@ function makeManagerOutput(overrides: Partial<FindingManagerOutput> = {}): Findi
     resolvedConflicts: [],
     waivedFindings: [],
     disputeNotes: [],
+    invalidatedFindings: [],
+    duplicateFindings: [],
     ...overrides,
   };
 }
@@ -274,7 +279,7 @@ describe('reconcileFindingLedger', () => {
 
     expect(ledger.conflicts).toEqual([
       {
-        id: 'C-1CA24A220BC7',
+        id: 'C-FA2947446963',
         status: 'active',
         findingIds: ['F-0001'],
         rawFindingIds: ['raw-conflict'],
@@ -326,7 +331,7 @@ describe('reconcileFindingLedger', () => {
 
     expect(ledger.conflicts).toEqual([
       {
-        id: 'C-AB6BC1389C77',
+        id: 'C-548C1D35CEAA',
         status: 'active',
         findingIds: [],
         rawFindingIds: ['raw-security', 'raw-architecture'],
@@ -418,7 +423,9 @@ describe('reconcileFindingLedger', () => {
     ]);
   });
 
-  it('should keep an unmentioned raw finding open when the manager drops it', () => {
+  it('should keep an unmentioned raw finding open as a gate-blocking provisional when the manager drops it', () => {
+    // v2 梯子設計: 未言及 raw は new finding へ昇格させず（根拠不成立の再報告が
+    // 洗浄される経路だった）、gate-blocking provisional として台帳に残す。
     const rawFinding = makeRawFinding({
       rawFindingId: 'raw-unmentioned',
       stepName: 'ai-antipattern-review',
@@ -447,11 +454,11 @@ describe('reconcileFindingLedger', () => {
         severity: 'critical',
         title: 'Dropped raw finding',
         rawFindingIds: ['raw-unmentioned'],
-        firstSeen: {
-          runId: 'run-2',
-          stepName: 'ai-antipattern-review',
-          timestamp: '2026-06-13T01:00:00.000Z',
-        },
+        provisional: expect.objectContaining({
+          kind: 'raw-adjudication-unresolved',
+          sourceRawFindingIds: ['raw-unmentioned'],
+          gateEffect: 'block',
+        }),
       }),
     );
   });
@@ -506,110 +513,111 @@ describe('reconcileFindingLedger', () => {
     ]);
   });
 
-  it('should fail fast when a new finding groups raw findings with different familyTag values', () => {
-    expect(() =>
-      reconcileFindingLedger({
-        previousLedger: makeLedger({ nextId: 1 }),
-        rawFindings: [
-          makeRawFinding({ rawFindingId: 'raw-logic', familyTag: 'logic-error' }),
-          makeRawFinding({ rawFindingId: 'raw-scope', familyTag: 'scope-creep' }),
+  // familyTag は分類・検索ヒントに過ぎず、同一性の根拠にしない設計
+  // （Finding Contract 収束性改善 Phase A item 2）。以下3件は旧仕様の
+  // familyTag 不一致を fail-fast させるテストを、新仕様（許可）へ更新したもの。
+  it('should allow a new finding to group raw findings with different familyTag values', () => {
+    const ledger = reconcileFindingLedger({
+      previousLedger: makeLedger({ nextId: 1 }),
+      rawFindings: [
+        makeRawFinding({ rawFindingId: 'raw-logic', familyTag: 'logic-error' }),
+        makeRawFinding({ rawFindingId: 'raw-scope', familyTag: 'scope-creep' }),
+      ],
+      managerOutput: makeManagerOutput({
+        newFindings: [
+          {
+            rawFindingIds: ['raw-logic', 'raw-scope'],
+            title: 'Mixed family tags',
+            severity: 'high',
+          },
         ],
-        managerOutput: makeManagerOutput({
-          newFindings: [
-            {
-              rawFindingIds: ['raw-logic', 'raw-scope'],
-              title: 'Mixed family tags',
-              severity: 'high',
-            },
-          ],
-        }),
-        context: {
-          workflowName: 'peer-review',
-          stepName: 'peer-review',
-          runId: 'run-2',
-          timestamp: '2026-06-13T01:00:00.000Z',
-        },
       }),
-    ).toThrow('Cannot create a new finding from raw findings with different familyTag values: "logic-error" and "scope-creep"');
+      context: {
+        workflowName: 'peer-review',
+        stepName: 'peer-review',
+        runId: 'run-2',
+        timestamp: '2026-06-13T01:00:00.000Z',
+      },
+    });
+    expect(ledger.findings).toHaveLength(1);
+    expect(ledger.findings[0]?.rawFindingIds).toEqual(['raw-logic', 'raw-scope']);
   });
 
-  it('should fail fast when a matched finding changes familyTag from previous evidence', () => {
+  it('should allow a matched finding to gain evidence with a different familyTag from previous evidence', () => {
     const previousRawFinding = makeRawFinding({
       rawFindingId: 'raw-old',
       familyTag: 'logic-error',
     });
 
-    expect(() =>
-      reconcileFindingLedger({
-        previousLedger: makeLedger({
-          nextId: 2,
-          rawFindings: [previousRawFinding],
-          findings: [
-            {
-              id: 'F-0001',
-              status: 'open',
-              lifecycle: 'new',
-              severity: 'high',
-              title: 'Existing issue',
-              reviewers: ['coding-reviewer'],
-              rawFindingIds: ['raw-old'],
-              firstSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
-              lastSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
-            },
-          ],
-        }),
-        rawFindings: [makeRawFinding({ rawFindingId: 'raw-current', familyTag: 'scope-creep' })],
-        managerOutput: makeManagerOutput({
-          matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'] }],
-        }),
-        context: {
-          workflowName: 'peer-review',
-          stepName: 'peer-review',
-          runId: 'run-2',
-          timestamp: '2026-06-13T01:00:00.000Z',
-        },
+    const ledger = reconcileFindingLedger({
+      previousLedger: makeLedger({
+        nextId: 2,
+        rawFindings: [previousRawFinding],
+        findings: [
+          {
+            id: 'F-0001',
+            status: 'open',
+            lifecycle: 'new',
+            severity: 'high',
+            title: 'Existing issue',
+            reviewers: ['coding-reviewer'],
+            rawFindingIds: ['raw-old'],
+            firstSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+            lastSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+          },
+        ],
       }),
-    ).toThrow('Cannot match raw findings with different familyTag values: "logic-error" and "scope-creep"');
+      rawFindings: [makeRawFinding({ rawFindingId: 'raw-current', familyTag: 'scope-creep' })],
+      managerOutput: makeManagerOutput({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'] }],
+      }),
+      context: {
+        workflowName: 'peer-review',
+        stepName: 'peer-review',
+        runId: 'run-2',
+        timestamp: '2026-06-13T01:00:00.000Z',
+      },
+    });
+    expect(ledger.findings.find((f) => f.id === 'F-0001')?.rawFindingIds).toEqual(['raw-old', 'raw-current']);
   });
 
-  it('should fail fast when a reopened finding changes familyTag from previous evidence', () => {
+  it('should allow a reopened finding to gain evidence with a different familyTag from previous evidence', () => {
     const previousRawFinding = makeRawFinding({
       rawFindingId: 'raw-old',
       familyTag: 'logic-error',
     });
 
-    expect(() =>
-      reconcileFindingLedger({
-        previousLedger: makeLedger({
-          nextId: 2,
-          rawFindings: [previousRawFinding],
-          findings: [
-            {
-              id: 'F-0001',
-              status: 'resolved',
-              lifecycle: 'resolved',
-              severity: 'high',
-              title: 'Recurring issue',
-              reviewers: ['coding-reviewer'],
-              rawFindingIds: ['raw-old'],
-              firstSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
-              lastSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
-              resolvedAt: '2026-06-13T00:30:00.000Z',
-            },
-          ],
-        }),
-        rawFindings: [makeRawFinding({ rawFindingId: 'raw-reopened', familyTag: 'scope-creep' })],
-        managerOutput: makeManagerOutput({
-          reopenedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-reopened'], evidence: 'Still present.' }],
-        }),
-        context: {
-          workflowName: 'peer-review',
-          stepName: 'peer-review',
-          runId: 'run-3',
-          timestamp: '2026-06-13T02:00:00.000Z',
-        },
+    const ledger = reconcileFindingLedger({
+      previousLedger: makeLedger({
+        nextId: 2,
+        rawFindings: [previousRawFinding],
+        findings: [
+          {
+            id: 'F-0001',
+            status: 'resolved',
+            lifecycle: 'resolved',
+            severity: 'high',
+            title: 'Recurring issue',
+            reviewers: ['coding-reviewer'],
+            rawFindingIds: ['raw-old'],
+            firstSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+            lastSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+            resolvedAt: '2026-06-13T00:30:00.000Z',
+          },
+        ],
       }),
-    ).toThrow('Cannot reopen raw findings with different familyTag values: "logic-error" and "scope-creep"');
+      rawFindings: [makeRawFinding({ rawFindingId: 'raw-reopened', familyTag: 'scope-creep' })],
+      managerOutput: makeManagerOutput({
+        reopenedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-reopened'], evidence: 'Still present.' }],
+      }),
+      context: {
+        workflowName: 'peer-review',
+        stepName: 'peer-review',
+        runId: 'run-3',
+        timestamp: '2026-06-13T02:00:00.000Z',
+      },
+    });
+    expect(ledger.findings.find((f) => f.id === 'F-0001')?.status).toBe('open');
   });
 
   it('should fail fast when manager output references an unknown finding id', () => {
@@ -735,7 +743,10 @@ describe('reconcileFindingLedger', () => {
           timestamp: '2026-06-13T01:00:00.000Z',
         },
       }),
-    ).toThrow('Finding id "F-0001" appears in multiple manager decisions: matches[0] and resolvedFindings[0]');
+    // decision-rules.ts の判定は finding ごとの決定カテゴリ集合で行うため、
+    // 発生源（何番目の決定か）ではなくカテゴリ名（matches/resolvedFindings）で
+    // メッセージが決まる。
+    ).toThrow('Finding id "F-0001" appears in multiple manager decisions: matches and resolvedFindings');
   });
 
   it('should mark an existing open finding as resolved via a current resolution confirmation', () => {
@@ -772,7 +783,7 @@ describe('reconcileFindingLedger', () => {
       rawFindings: [
         makeRawFinding({
           rawFindingId: 'raw-confirm',
-          kind: 'resolution_confirmation',
+          relation: 'resolution_confirmation',
           targetFindingId: 'F-0001',
           title: 'Confirmed fixed',
           description: 'Verified at src/index.ts:42.',
@@ -831,7 +842,7 @@ describe('reconcileFindingLedger', () => {
         }),
         makeRawFinding({
           rawFindingId: 'raw-confirm',
-          kind: 'resolution_confirmation',
+          relation: 'resolution_confirmation',
           targetFindingId: 'F-0001',
           title: 'Confirmed fixed',
           description: 'Verified at src/index.ts:42.',
@@ -1038,7 +1049,7 @@ describe('reconcileFindingLedger', () => {
       rawFindings: [
         makeRawFinding({
           rawFindingId: 'raw-confirm-stray',
-          kind: 'resolution_confirmation',
+          relation: 'resolution_confirmation',
           targetFindingId: 'F-9999',
           title: 'Confirmed fixed',
           description: 'Verified but the manager did not cite it.',
@@ -1091,6 +1102,211 @@ describe('reconcileFindingLedger', () => {
         },
       }),
     ).toThrow('Resolved finding "F-0001" requires at least one current resolution_confirmation raw finding targeting it');
+  });
+
+  it('should reuse a legacy finding conflict when it is reobserved with different raw evidence', () => {
+    const rawFinding = makeRawFinding({ rawFindingId: 'raw-current-conflict' });
+    const legacyRawFinding = makeRawFinding({ rawFindingId: 'raw-legacy-conflict' });
+    const ledgerWithOpenFinding = makeLedgerWithOpenFinding();
+    const previousLedger = makeLedger({
+      nextId: 2,
+      findings: ledgerWithOpenFinding.findings,
+      rawFindings: [...ledgerWithOpenFinding.rawFindings, legacyRawFinding],
+      conflicts: [{
+        id: 'C-1CA24A220BC7',
+        status: 'active',
+        findingIds: ['F-0001'],
+        rawFindingIds: ['raw-legacy-conflict'],
+        description: 'Previous encoding.',
+        firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+      }],
+    });
+
+    const ledger = reconcileFindingLedger({
+      previousLedger,
+      rawFindings: [rawFinding],
+      managerOutput: makeManagerOutput({
+        conflicts: [{
+          findingIds: ['F-0001'],
+          rawFindingIds: ['raw-current-conflict'],
+          description: 'Same conflict after encoding update.',
+        }],
+      }),
+      context: makeContext(),
+    });
+
+    expect(ledger.conflicts).toHaveLength(1);
+    expect(ledger.conflicts[0]).toMatchObject({
+      id: 'C-1CA24A220BC7',
+      description: 'Same conflict after encoding update.',
+      rawFindingIds: ['raw-legacy-conflict', 'raw-current-conflict'],
+    });
+  });
+
+  it('should coalesce active legacy and generated conflicts with time-ordered adjudication histories', () => {
+    const rawFinding = makeRawFinding({ rawFindingId: 'raw-current-conflict' });
+    const ledgerWithOpenFinding = makeLedgerWithOpenFinding();
+    const legacyObservation = { runId: 'run-0', stepName: 'reviewers', timestamp: '2016-12-31T23:59:60.500Z' };
+    const generatedObservation = { runId: 'run-1', stepName: 'reviewers', timestamp: '2017-01-01T00:00:00.000Z' };
+    const generatedConflictId = formatConflictId({ findingIds: ['F-0001'], rawFindingIds: ['raw-current-conflict'] });
+    const previousLedger = makeLedger({
+      nextId: 2,
+      findings: ledgerWithOpenFinding.findings,
+      rawFindings: [
+        ...ledgerWithOpenFinding.rawFindings,
+        makeRawFinding({ rawFindingId: 'raw-legacy-conflict' }),
+        makeRawFinding({ rawFindingId: 'raw-generated-conflict' }),
+      ],
+      conflicts: [
+        {
+          id: generatedConflictId,
+          status: 'active',
+          findingIds: ['F-0001'],
+          rawFindingIds: ['raw-generated-conflict'],
+          description: 'Generated conflict.',
+          firstSeen: generatedObservation,
+          lastSeen: generatedObservation,
+          adjudications: [{
+            evidenceHash: 'z-generated-adjudication',
+            outcome: 'undetermined',
+            findingTransition: 'keep_open',
+            evidence: ['Conflicting evidence.'],
+            actionableFix: '',
+            decidedAt: generatedObservation,
+          }],
+          adjudicationAttempts: [{
+            evidenceHash: 'z-generated-attempt',
+            reservationToken: 'generated-reservation',
+            startedAt: generatedObservation,
+            originStep: 'final-gate',
+          }],
+        },
+        {
+          id: 'C-1CA24A220BC7',
+          status: 'active',
+          findingIds: ['F-0001'],
+          rawFindingIds: ['raw-legacy-conflict'],
+          description: 'Legacy conflict.',
+          firstSeen: legacyObservation,
+          lastSeen: legacyObservation,
+          adjudicationAttempts: [{
+            evidenceHash: 'legacy-attempt',
+            reservationToken: 'legacy-reservation',
+            startedAt: legacyObservation,
+            originStep: 'reviewers',
+          }, {
+            evidenceHash: 'a-legacy-attempt',
+            reservationToken: 'legacy-tie-reservation',
+            startedAt: generatedObservation,
+            originStep: 'reviewers',
+          }],
+          adjudications: [{
+            evidenceHash: 'legacy-adjudication',
+            outcome: 'undetermined',
+            findingTransition: 'keep_open',
+            evidence: ['Previous conflicting evidence.'],
+            actionableFix: '',
+            decidedAt: legacyObservation,
+          }, {
+            evidenceHash: 'a-legacy-adjudication',
+            outcome: 'undetermined',
+            findingTransition: 'keep_open',
+            evidence: ['Same-timestamp conflicting evidence.'],
+            actionableFix: '',
+            decidedAt: generatedObservation,
+          }],
+        },
+      ],
+    });
+
+    const ledger = reconcileFindingLedger({
+      previousLedger,
+      rawFindings: [rawFinding],
+      managerOutput: makeManagerOutput({
+        conflicts: [{
+          findingIds: ['F-0001'],
+          rawFindingIds: ['raw-current-conflict'],
+          description: 'Reobserved conflict.',
+        }],
+      }),
+      context: makeContext(),
+    });
+
+    expect(ledger.conflicts).toHaveLength(1);
+    expect(ledger.conflicts[0]).toMatchObject({
+      id: 'C-1CA24A220BC7',
+      rawFindingIds: ['raw-legacy-conflict', 'raw-generated-conflict', 'raw-current-conflict'],
+      firstSeen: legacyObservation,
+    });
+    expect(ledger.conflicts[0]!.adjudications?.map((record) => record.evidenceHash)).toEqual([
+      'legacy-adjudication',
+      'a-legacy-adjudication',
+      'z-generated-adjudication',
+    ]);
+    expect(ledger.conflicts[0]!.adjudicationAttempts).toEqual([
+      expect.objectContaining({ evidenceHash: 'legacy-attempt', originStep: 'reviewers' }),
+      expect.objectContaining({ evidenceHash: 'a-legacy-attempt', originStep: 'reviewers' }),
+      expect.objectContaining({ evidenceHash: 'z-generated-attempt', originStep: 'final-gate' }),
+    ]);
+  });
+
+  it('should coalesce active raw-only conflicts with the same signature', () => {
+    const rawFinding = makeRawFinding({ rawFindingId: 'raw-only-conflict' });
+    const observation = { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' };
+    const generatedConflictId = formatConflictId({ findingIds: [], rawFindingIds: ['raw-only-conflict'] });
+    const previousLedger = makeLedger({
+      rawFindings: [rawFinding],
+      conflicts: [
+        {
+          id: 'C-AB6BC1389C77',
+          status: 'active',
+          findingIds: [],
+          rawFindingIds: ['raw-only-conflict'],
+          description: 'Legacy raw-only conflict.',
+          firstSeen: observation,
+          lastSeen: observation,
+        },
+        {
+          id: generatedConflictId,
+          status: 'active',
+          findingIds: [],
+          rawFindingIds: ['raw-only-conflict'],
+          description: 'Generated raw-only conflict.',
+          firstSeen: observation,
+          lastSeen: observation,
+        },
+      ],
+    });
+
+    const ledger = reconcileFindingLedger({
+      previousLedger,
+      rawFindings: [rawFinding],
+      managerOutput: makeManagerOutput({
+        conflicts: [{
+          findingIds: [],
+          rawFindingIds: ['raw-only-conflict'],
+          description: 'Reobserved raw-only conflict.',
+        }],
+      }),
+      context: makeContext(),
+    });
+
+    expect(ledger.conflicts).toHaveLength(1);
+    expect(ledger.conflicts[0]).toMatchObject({
+      id: 'C-AB6BC1389C77',
+      rawFindingIds: ['raw-only-conflict'],
+      description: 'Reobserved raw-only conflict.',
+    });
+  });
+
+  it('should keep NUL-delimited conflict and raw identity inputs distinct', () => {
+    expect(formatConflictId({ findingIds: [], rawFindingIds: ['a\0b'] }))
+      .not.toBe(formatConflictId({ findingIds: [], rawFindingIds: ['a', 'b'] }));
+    expect(computeLineageKey({ targetFindingId: 't\0x', location: 'p:1', title: 'same' }))
+      .not.toBe(computeLineageKey({ targetFindingId: 't', location: 'x\0p:1', title: 'same' }));
+    expect(computeRawEvidenceHash({ targetFindingId: 't\0x', location: 'p:1', title: 'same' }))
+      .not.toBe(computeRawEvidenceHash({ targetFindingId: 't', location: 'x\0p:1', title: 'same' }));
   });
 
 });

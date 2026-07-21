@@ -6,6 +6,11 @@ import { detectJudgeIndex, buildJudgePrompt, isValidRuleIndex, buildJudgeConditi
 import { loadJudgmentSchema, loadEvaluationSchema } from '../infra/resources/schema-loader.js';
 import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 import { buildMaxTurnsOption } from './provider-call-options.js';
+import {
+  assertStructuredOutputSchema,
+  StructuredOutputValueValidationError,
+  validateStructuredOutputAgainstSchema,
+} from '../core/workflow/engine/structured-output-schema-validator.js';
 import { getErrorMessage } from '../shared/utils/index.js';
 
 export interface JudgeStatusOptions {
@@ -116,32 +121,43 @@ export interface EvaluateConditionOptions {
   }) => void;
 }
 
+function isValidJudgeStructuredOutput(
+  structuredOutput: Record<string, unknown> | undefined,
+  schema: Record<string, unknown>,
+): structuredOutput is Record<string, unknown> {
+  if (structuredOutput === undefined) {
+    return false;
+  }
+
+  try {
+    validateStructuredOutputAgainstSchema(structuredOutput, schema);
+    return true;
+  } catch (error) {
+    if (error instanceof StructuredOutputValueValidationError) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 export async function evaluateCondition(
   agentOutput: string,
   conditions: Array<{ index: number; text: string }>,
   options: EvaluateConditionOptions,
 ): Promise<number> {
   const prompt = buildJudgePrompt(agentOutput, conditions);
-  let response: AgentResponse;
-  try {
-    response = await runAgent(undefined, prompt, {
-      cwd: options.cwd,
-      provider: options.provider,
-      resolvedProvider: options.resolvedProvider,
-      resolvedModel: options.resolvedModel,
-      ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 1),
-      permissionMode: 'readonly',
-      outputSchema: loadEvaluationSchema(),
-      childProcessEnv: options.childProcessEnv,
-    });
-  } catch (error) {
-    options.onJudgeResponse?.({
-      instruction: prompt,
-      status: 'error',
-      response: getErrorMessage(error),
-    });
-    throw error;
-  }
+  const evaluationSchema = loadEvaluationSchema();
+  assertStructuredOutputSchema(evaluationSchema);
+  const response = await runAgent(undefined, prompt, {
+    cwd: options.cwd,
+    provider: options.provider,
+    resolvedProvider: options.resolvedProvider,
+    resolvedModel: options.resolvedModel,
+    ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 1),
+    permissionMode: 'readonly',
+    outputSchema: evaluationSchema,
+    childProcessEnv: options.childProcessEnv,
+  });
 
   options.onJudgeResponse?.({
     instruction: prompt,
@@ -154,7 +170,9 @@ export async function evaluateCondition(
     return -1;
   }
 
-  const matchedIndex = response.structuredOutput?.matched_index;
+  const matchedIndex = isValidJudgeStructuredOutput(response.structuredOutput, evaluationSchema)
+    ? response.structuredOutput.matched_index
+    : undefined;
   if (typeof matchedIndex === 'number' && Number.isInteger(matchedIndex)) {
     const zeroBased = matchedIndex - 1;
     if (zeroBased >= 0 && zeroBased < conditions.length) {
@@ -202,6 +220,8 @@ export async function judgeStatus(
   }
 
   const interactiveEnabled = options.interactive === true;
+  const judgmentSchema = loadJudgmentSchema();
+  assertStructuredOutputSchema(judgmentSchema);
 
   const agentOptions = {
     cwd: options.cwd,
@@ -212,26 +232,14 @@ export async function judgeStatus(
     childProcessEnv: options.childProcessEnv,
   };
 
-  let structuredResponse: AgentResponse;
-  try {
-    structuredResponse = await runAgent('conductor', structuredInstruction, {
-      ...agentOptions,
-      provider: options.provider,
-      resolvedProvider: options.resolvedProvider,
-      resolvedModel: options.resolvedModel,
-      outputSchema: loadJudgmentSchema(),
-      onPromptResolved: options.onStructuredPromptResolved,
-    });
-  } catch (error) {
-    options.onJudgeStage?.({
-      stage: 1,
-      method: 'structured_output',
-      status: 'error',
-      instruction: structuredInstruction,
-      response: getErrorMessage(error),
-    });
-    throw error;
-  }
+  const structuredResponse = await runAgent('conductor', structuredInstruction, {
+    ...agentOptions,
+    provider: options.provider,
+    resolvedProvider: options.resolvedProvider,
+    resolvedModel: options.resolvedModel,
+    outputSchema: judgmentSchema,
+    onPromptResolved: options.onStructuredPromptResolved,
+  });
 
   options.onJudgeStage?.({
     stage: 1,
@@ -242,8 +250,8 @@ export async function judgeStatus(
     providerUsage: structuredResponse.providerUsage,
   });
 
-  if (structuredResponse.status === 'done') {
-    const stepNumber = structuredResponse.structuredOutput?.step;
+  if (structuredResponse.status === 'done' && isValidJudgeStructuredOutput(structuredResponse.structuredOutput, judgmentSchema)) {
+    const stepNumber = structuredResponse.structuredOutput.step;
     if (typeof stepNumber === 'number' && Number.isInteger(stepNumber)) {
       const ruleIndex = stepNumber - 1;
       if (isValidRuleIndex(ruleIndex, rules, interactiveEnabled)) {
@@ -288,10 +296,13 @@ export async function judgeStatus(
         onJudgeResponse: stage3.capture,
       });
     } catch (error) {
-      options.onJudgeStage?.(stage3.stage({
+      options.onJudgeStage?.({
         stage: 3,
         method: 'ai_judge',
-      }));
+        status: 'error',
+        instruction: structuredInstruction,
+        response: getErrorMessage(error),
+      });
       throw error;
     }
 

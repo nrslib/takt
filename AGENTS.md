@@ -14,9 +14,9 @@
 - `npm run build`: compile TypeScript and copy runtime prompts, i18n files, and presets into `dist/`.
 - `npm run watch`: run the TypeScript compiler in incremental watch mode.
 - `npm run lint`: run ESLint on `src/`.
-- `npm test`: run the main Vitest suite.
+- `npm test`: run the unit gate; targeted source tests are routed to their unit or integration runner.
 - `npm run test:e2e:mock`: run E2E tests against the mock provider.
-- `npm run check:release`: run the full release verification path: build, lint, unit tests, and all E2E suites.
+- `npm run check:release`: run the full release verification path: build, lint, unit, integration, prompt-eval, and all E2E suites.
 
 ## Coding Style & Naming Conventions
 

@@ -41,6 +41,7 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
     severity: 'high',
     title: 'Current issue',
     description: 'The issue is present in the current review.',
+    relation: 'new',
     ...overrides,
   };
 }
@@ -55,6 +56,8 @@ function makeManagerOutput(overrides: Partial<FindingManagerOutput> = {}): Findi
     resolvedConflicts: [],
     waivedFindings: [],
     disputeNotes: [],
+    invalidatedFindings: [],
+    duplicateFindings: [],
     ...overrides,
   };
 }
@@ -133,6 +136,22 @@ describe('validateFindingManagerOutput', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors.join(' ')).toContain('Duplicate dispute note');
+    }
+  });
+
+  // スキーマ（.min(1)）を経ない内部組み立ての出力に対する最終防衛線。
+  it('should reject a duplicateFindings entry with no duplicate finding ids', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        duplicateFindings: [{ canonicalFindingId: 'F-0001', duplicateFindingIds: [], evidence: 'dup' }],
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('lists no duplicate finding ids');
     }
   });
 
@@ -301,12 +320,20 @@ describe('validateFindingManagerOutput', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('should reject a waive combined with another decision for the same finding', () => {
+  // waive は「修正せずにブロッキング対象から外す」決定なので、finding を閉じる
+  // 他の決定（resolve / reopen）とは併存できない。match との併存は別扱い
+  // （修正不能な指摘は再観測され続けるため。ALLOWED_DECISION_PAIRS 参照）。
+  it('should reject a waive combined with a resolution for the same finding', () => {
+    const confirmation = makeRawFinding({
+      rawFindingId: 'raw-confirmation',
+      relation: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+    });
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),
-      rawFindings: [makeRawFinding()],
+      rawFindings: [makeRawFinding(), confirmation],
       managerOutput: makeManagerOutput({
-        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'] }],
+        resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-confirmation'], evidence: 'Fixed.' }],
         waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
       }),
       priorStepResponseText: CLAIM,
@@ -443,7 +470,35 @@ describe('validateFindingManagerOutput', () => {
     });
   });
 
-  it('should reject a findingId referenced by multiple decision categories', () => {
+  it('should reject a findingId referenced by multiple state-changing decisions', () => {
+    const confirmation = makeRawFinding({
+      rawFindingId: 'raw-confirmation',
+      relation: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+    });
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [makeRawFinding(), confirmation],
+      managerOutput: makeManagerOutput({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'] }],
+        resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-confirmation'], evidence: 'Fixed.' }],
+      }),
+    });
+
+    // decision-rules.ts の判定は finding ごとの決定カテゴリ集合で行うため、
+    // 発生源（何番目の決定か）ではなくカテゴリ名でメッセージが決まる。
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        'Finding id "F-0001" appears in multiple manager decisions: matches and resolvedFindings',
+      ],
+    });
+  });
+
+  // conflicts は他の決定「について」述べるメタ決定。match と併存できないと、
+  // 「match と resolve が衝突している」ことを記録する行為自体が違反になり、
+  // 矛盾した観測を台帳へ書けなくなる（実測: 台帳が凍り reviewers ↔ fix が回り続けた）。
+  it('should accept a findingId referenced by both a match and a conflict', () => {
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),
       rawFindings: [makeRawFinding()],
@@ -453,12 +508,126 @@ describe('validateFindingManagerOutput', () => {
       }),
     });
 
-    expect(result).toEqual({
-      ok: false,
-      errors: [
-        'Finding id "F-0001" appears in multiple manager decisions: matches[0] and conflicts[0]',
-      ],
+    expect(result).toEqual({ ok: true });
+  });
+
+  // closed だった finding の再発報告と、それと矛盾する修正確認が同じラウンドで
+  // 届く場合。reopen して conflict を active に戻すのは安全（open と conflict の
+  // 両方がゲートを塞ぐため、ゲート開放の危険もない）。
+  it('should accept a conflict on a finding that is also reopened in the same output', () => {
+    const ledger = makeLedger();
+    ledger.findings[0]!.status = 'resolved';
+    const result = validateFindingManagerOutput({
+      previousLedger: ledger,
+      rawFindings: [makeRawFinding()],
+      managerOutput: makeManagerOutput({
+        reopenedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'], evidence: 'Reappeared.' }],
+        conflicts: [{ findingIds: ['F-0001'], rawFindingIds: [], description: 'Conflicting decision.' }],
+      }),
     });
+
+    expect(result).toEqual({ ok: true });
+  });
+
+  // conflicts だけを付けて finding を closed のまま残すと、`findings.open.count == 0`
+  // しか見ないワークフローではゲートが開く。同じ出力で reopen していない限り拒否する。
+  it('should reject a conflict referencing a finding that is closed before this round without reopening it', () => {
+    const ledger = makeLedger();
+    ledger.findings[0]!.status = 'waived';
+    const result = validateFindingManagerOutput({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        conflicts: [{ findingIds: ['F-0001'], rawFindingIds: [], description: 'Reviewer still reports this waived finding.' }],
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.errors).toContain(
+      'conflicts[0] references finding "F-0001" with status "waived"; the same output must reopen it',
+    );
+  });
+
+  // finding を閉じた上で conflict を active のまま残すと、conflict の裁定結果が
+  // finding の状態へ反映されないままゲートが開く。match との併存だけを許す。
+  it('should reject a conflict on a finding that is also resolved', () => {
+    const confirmation = makeRawFinding({
+      rawFindingId: 'raw-confirmation',
+      relation: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+    });
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [makeRawFinding(), confirmation],
+      managerOutput: makeManagerOutput({
+        resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-confirmation'], evidence: 'Fixed.' }],
+        conflicts: [{ findingIds: ['F-0001'], rawFindingIds: ['raw-current'], description: 'Conflicting decision.' }],
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.errors).toContain(
+      'Finding id "F-0001" appears in multiple manager decisions: resolvedFindings and conflicts',
+    );
+  });
+
+  it('should reject a conflict on a finding that is also waived', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [makeRawFinding()],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'Frozen contract', evidence: 'src/types.ts:94' }],
+        conflicts: [{ findingIds: ['F-0001'], rawFindingIds: ['raw-current'], description: 'Conflicting decision.' }],
+      }),
+      priorStepResponseText: '## Disputed Findings\n- findingId: F-0001\n  evidence: src/types.ts:94',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.errors).toContain(
+      'Finding id "F-0001" appears in multiple manager decisions: waivedFindings and conflicts',
+    );
+  });
+
+  // reconciler の conflict ID は finding ID 由来で1つに潰れ、後の description が
+  // 前の description を上書きする。同じ finding を指す conflict は1件だけにする。
+  it('should reject two conflicts referencing the same finding', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [makeRawFinding()],
+      managerOutput: makeManagerOutput({
+        conflicts: [
+          { findingIds: ['F-0001'], rawFindingIds: ['raw-current'], description: 'First.' },
+          { findingIds: ['F-0001'], rawFindingIds: [], description: 'Second.' },
+        ],
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.errors).toContain(
+      'Finding id "F-0001" appears in multiple manager decisions: conflicts and conflicts',
+    );
+  });
+
+  // match + waive はもう有効な組み合わせではない: decision-assembly.ts の
+  // assembleManagerOutput が、レビュアーが再観測している（match された）finding
+  // への waive を conflict + disputeNote へ変換するため、正しく組み立てられた
+  // 出力に match と waive が同時に現れることはない。ここ（最終防衛線）に両方が
+  // 残っている場合は不変条件違反として拒否する。
+  it('should reject a findingId referenced by both a match and a waiver', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [makeRawFinding()],
+      managerOutput: makeManagerOutput({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'] }],
+        waivedFindings: [{ findingId: 'F-0001', reason: 'Frozen contract', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: '## Disputed Findings\n- findingId: F-0001\n  evidence: src/types.ts:94',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.errors).toContain(
+      'Finding id "F-0001" appears in multiple manager decisions: matches and waivedFindings',
+    );
   });
 
   it('should reject unknown rawFindingId references in current raw-finding decisions', () => {
@@ -547,7 +716,7 @@ describe('validateFindingManagerOutput', () => {
       rawFindings: [
         makeRawFinding({
           rawFindingId: 'raw-confirm',
-          kind: 'resolution_confirmation',
+          relation: 'resolution_confirmation',
           targetFindingId: 'F-0001',
           title: 'Confirmed fixed',
           description: 'Verified at src/index.ts:42 that the issue is resolved.',
@@ -567,7 +736,7 @@ describe('validateFindingManagerOutput', () => {
       rawFindings: [
         makeRawFinding({
           rawFindingId: 'raw-confirm',
-          kind: 'resolution_confirmation',
+          relation: 'resolution_confirmation',
           targetFindingId: 'F-0099',
           title: 'Confirmed fixed',
           description: 'Verified elsewhere.',
@@ -593,7 +762,7 @@ describe('validateFindingManagerOutput', () => {
       rawFindings: [
         makeRawFinding({
           rawFindingId: 'raw-confirm',
-          kind: 'resolution_confirmation',
+          relation: 'resolution_confirmation',
           targetFindingId: 'F-0001',
           title: 'Confirmed fixed',
           description: 'Verified at src/index.ts:42.',
@@ -659,7 +828,10 @@ describe('validateFindingManagerOutput', () => {
     });
   });
 
-  it('should reject raw findings with different familyTag values before reconciliation', () => {
+  // familyTag は分類・検索ヒントに過ぎず、同一性の根拠にしない設計
+  // （Finding Contract 収束性改善 Phase A item 2）。新規 finding を familyTag が
+  // 異なる raw findings から作ることは禁止しない。
+  it('should accept new findings grouping raw findings with different familyTag values', () => {
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),
       rawFindings: [
@@ -675,31 +847,23 @@ describe('validateFindingManagerOutput', () => {
       }),
     });
 
-    expect(result).toEqual({
-      ok: false,
-      errors: [
-        'Cannot create a new finding from raw findings with different familyTag values: "bug" and "security" (newFindings[0])',
-      ],
-    });
+    expect(result).toEqual({ ok: true });
   });
 });
 
-describe('finding-schemas backward compatibility', () => {
-  it('should parse pre-existing raw findings without kind or targetFindingId', () => {
-    const parsed = parseRawFindings([
+describe('finding raw schemas', () => {
+  it('should require relation', () => {
+    expect(() => parseRawFindings([
       {
-        rawFindingId: 'raw-old',
+        rawFindingId: 'raw-invalid',
         stepName: 'arch-review',
         reviewer: 'arch-review',
         familyTag: 'bug',
         severity: 'high',
-        title: 'Old entry',
-        description: 'Stored before the kind field existed.',
+        title: 'Missing relation',
+        description: 'The current contract requires relation.',
       },
-    ]);
-
-    expect(parsed[0]?.kind).toBeUndefined();
-    expect(parsed[0]?.targetFindingId).toBeUndefined();
+    ])).toThrow();
   });
 
   it('should treat empty location and suggestion from structured output as unset', () => {
@@ -710,7 +874,7 @@ describe('finding-schemas backward compatibility', () => {
         severity: 'low',
         title: 'Confirmed fixed',
         description: 'Verified at src/index.ts:42.',
-        kind: 'resolution_confirmation',
+        relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
         location: '',
         suggestion: '',
@@ -729,12 +893,12 @@ describe('finding-schemas backward compatibility', () => {
         severity: 'low',
         title: 'Issue entry',
         description: 'Strict structured output fills every field.',
-        kind: 'issue',
+        relation: 'new',
         targetFindingId: '',
       },
     ]);
 
-    expect(parsed[0]?.kind).toBe('issue');
+    expect(parsed[0]?.relation).toBe('new');
     expect(parsed[0]?.targetFindingId).toBeUndefined();
   });
 });

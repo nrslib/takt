@@ -9,18 +9,23 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
+  AgentWorkflowStep,
   WorkflowStep,
   WorkflowState,
   AgentResponse,
+  FindingContractConfig,
   Language,
   FallbackContext,
+  WorkflowConfig,
   WorkflowResumePointEntry,
 } from '../../models/types.js';
-import type { PhaseName, PhasePromptParts, JudgeStageEntry, RuntimeStepResolution, StepRunResult } from '../types.js';
+import type { PhaseName, PhasePromptParts, JudgeStageEntry, RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
+import type { ProviderUsageSnapshot } from '../../models/response.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
+import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
 import { resolvePhase3Adoption } from '../evaluation/rule-utils.js';
 import type { BasePhaseRunnerContext, StatusJudgmentPhaseResult } from '../phase-runner.js';
@@ -35,12 +40,15 @@ import { parseLastJsonBlock } from '../../../agents/structured-caller/shared.js'
 import {
   assertProviderResolvedForCapabilitySensitiveOptions,
 } from './engine-provider-options.js';
-import { validateStructuredOutputAgainstSchema } from './structured-output-schema-validator.js';
+import {
+  StructuredOutputSchemaError,
+  validateStructuredOutputAgainstSchema,
+} from './structured-output-schema-validator.js';
 import { providerSupportsStructuredOutput } from '../../../infra/providers/provider-capabilities.js';
 import { resolveReportHandles } from '../instruction/report-handles.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
-import { loadTemplate } from '../../../shared/prompts/index.js';
+import { buildStructuredJsonSchemaInstruction } from '../../../shared/prompts/index.js';
 import type {
   StructuredOutputFailureReason,
   StructuredOutputNormalizerRegistry,
@@ -48,6 +56,16 @@ import type {
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
+import type { FindingLedgerStore } from '../findings/store.js';
+import type { FindingManagerRunResult } from '../findings/manager-runner.js';
+import {
+  ingestFindingContractResults,
+  resolveFindingContractIntakeStep,
+  withFindingContractStructuredOutput,
+} from '../findings/contract-intake.js';
+import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
+import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
+import type { InstructionBuildTransaction } from './instruction-build-transaction.js';
 
 const log = createLogger('step-executor');
 
@@ -72,6 +90,24 @@ export interface StepExecutorDeps {
   readonly detectRuleIndex: (content: string, stepName: string) => number;
   readonly structuredCaller: StructuredCaller;
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
+  /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
+  readonly findingContract?: FindingContractConfig;
+  /** findings-manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
+  readonly workflowProvider?: WorkflowConfig['provider'];
+  readonly workflowModel?: WorkflowConfig['model'];
+  readonly findingLedgerStore?: FindingLedgerStore;
+  readonly refreshFindingsState: () => void;
+  readonly emitEvent: (event: string, ...args: unknown[]) => void;
+  /** 合成ステップ（findings-manager 等）の LLM 呼び出しを usage-events へ記録する。 */
+  readonly recordSynthesizedAgentUsage: (
+    stepName: string,
+    providerInfo: StepProviderInfo,
+    success: boolean,
+    usage: ProviderUsageSnapshot | undefined,
+  ) => void;
+  readonly getRunId: () => string;
+  /** raw finding id 衝突対策の呼び出し名前空間。トップレベルでは空文字列。 */
+  readonly getFindingCallNamespace: () => string;
   readonly onPhaseStart?: (
     step: WorkflowStep,
     phase: 1 | 2 | 3,
@@ -136,12 +172,66 @@ export class StepExecutor {
     );
   }
 
+  /**
+   * 単独ステップの Finding Contract 取り込み対象かどうかを判定する。
+   * 述語の実体は contract-intake.ts の resolveFindingContractIntakeStep
+   * （workflowPreview.ts と共有）。
+   */
+  private resolveFindingContractIntakeStep(step: WorkflowStep): AgentWorkflowStep | undefined {
+    return resolveFindingContractIntakeStep(step, this.deps.findingContract);
+  }
+
+  private async ingestFindingContractForNormalStep(input: {
+    step: AgentWorkflowStep;
+    stepIteration: number;
+    response: AgentResponse;
+    ledgerCopyPath: string;
+    priorStepResponseText: string | undefined;
+    relationClarification?: ReviewerRelationClarification;
+  }): Promise<FindingManagerRunResult> {
+    if (!this.deps.findingLedgerStore) {
+      throw new Error('Finding contract is configured but finding ledger store is not available');
+    }
+    return ingestFindingContractResults({
+      contract: this.deps.findingContract!,
+      workflowProvider: this.deps.workflowProvider,
+      workflowModel: this.deps.workflowModel,
+      ledgerStore: this.deps.findingLedgerStore,
+      optionsBuilder: this.deps.optionsBuilder,
+      stepExecutor: this,
+      cwd: this.deps.getCwd(),
+      parentStep: input.step,
+      stepIteration: input.stepIteration,
+      // 単独ステップでは「レビュアー1件」を自分自身として渡す
+      // （manager-runner.ts の subResults は並列・単独どちらも同じ形で扱う）。
+      subResults: [{
+        subStep: input.step,
+        response: input.response,
+        ...(input.relationClarification !== undefined ? { relationClarification: input.relationClarification } : {}),
+      }],
+      // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
+      // workflow_call の子が親の台帳を継承した場合、この engine 自身の
+      // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の
+      // ledger.workflowName が親の台帳と食い違う（ParallelRunner と同じ理由）。
+      workflowName: this.deps.findingLedgerStore.workflowName,
+      runId: this.deps.getRunId(),
+      callNamespace: this.deps.getFindingCallNamespace(),
+      timestamp: new Date().toISOString(),
+      ledgerCopyPath: input.ledgerCopyPath,
+      priorStepResponseText: input.priorStepResponseText,
+      refreshFindingsState: this.deps.refreshFindingsState,
+      emitEvent: this.deps.emitEvent,
+    });
+  }
+
   private writeSnapshot(
     content: string,
     directoryRel: string,
     filename: string,
+    transaction?: InstructionBuildTransaction,
   ): string {
     const absPath = join(this.deps.getCwd(), directoryRel, filename);
+    transaction?.recordSnapshotWrite(absPath);
     writeFileSync(absPath, content, 'utf-8');
     return `${directoryRel}/${filename}`;
   }
@@ -151,6 +241,7 @@ export class StepExecutor {
     stepName: string,
     stepIteration: number,
     contents: string[] | undefined,
+    transaction?: InstructionBuildTransaction,
   ): { content: string[]; sourcePath: string } | undefined {
     if (!contents || contents.length === 0) return undefined;
     const merged = contents.join('\n\n---\n\n');
@@ -163,6 +254,7 @@ export class StepExecutor {
       merged,
       directoryRel,
       StepExecutor.buildSnapshotFileName(stepName, stepIteration, timestamp),
+      transaction,
     );
     return { content: [merged], sourcePath };
   }
@@ -171,6 +263,7 @@ export class StepExecutor {
     state: WorkflowState,
     stepName: string,
     stepIteration: number,
+    transaction?: InstructionBuildTransaction,
   ): void {
     if (!state.lastOutput || state.previousResponseSourcePath) return;
     const timestamp = StepExecutor.buildTimestamp();
@@ -180,11 +273,13 @@ export class StepExecutor {
       state.lastOutput.content,
       runPaths.contextPreviousResponsesRel,
       fileName,
+      transaction,
     );
     this.writeSnapshot(
       state.lastOutput.content,
       runPaths.contextPreviousResponsesRel,
       'latest.md',
+      transaction,
     );
     state.previousResponseSourcePath = sourcePath;
   }
@@ -218,10 +313,27 @@ export class StepExecutor {
       return instruction;
     }
 
-    return loadTemplate('parts/structured_json_schema_instruction', 'en', {
+    return buildStructuredJsonSchemaInstruction(
       instruction,
-      schemaJson: JSON.stringify(step.structuredOutput.schema, null, 2),
-    });
+      step.structuredOutput.schema,
+      this.deps.getLanguage() ?? 'en',
+    );
+  }
+
+  /**
+   * 実行ループを通らない合成ステップ（findings-manager / findings-interpreter）
+   * の LLM 呼び出しを usage-events へ記録する。通常ステップは step:complete
+   * イベント経由、parallel / team_leader は recordDelegatedAgentUsage 経由で
+   * 記録されるが、合成ステップの executeAgent 直呼びはどちらの経路にも
+   * 乗らず、トークン集計の死角になっていた。
+   */
+  recordSynthesizedAgentUsage(step: WorkflowStep, success: boolean, usage: ProviderUsageSnapshot | undefined): void {
+    this.deps.recordSynthesizedAgentUsage(
+      step.name,
+      this.deps.optionsBuilder.resolveStepProviderModel(step),
+      success,
+      usage,
+    );
   }
 
   normalizeStructuredOutput(
@@ -292,7 +404,13 @@ export class StepExecutor {
         structuredOutput = parsed as Record<string, unknown>;
       }
 
-      validateStructuredOutputAgainstSchema(structuredOutput, step.structuredOutput.schema);
+      // post-hoc 検証は寛容版（validationSchema）を優先する。provider へ渡る
+      // 生成拘束用 schema（strict 様式）とは役割が異なる — 詳細は
+      // WorkflowStructuredOutput の doc コメント参照。
+      validateStructuredOutputAgainstSchema(
+        structuredOutput,
+        step.structuredOutput.validationSchema ?? step.structuredOutput.schema,
+      );
       structuredOutput = this.structuredOutputNormalizers.normalize(structuredOutput, {
         step,
         language: this.deps.getLanguage(),
@@ -344,7 +462,10 @@ export class StepExecutor {
       failureReason,
       detail,
       language: this.deps.getLanguage(),
-      validate: (value) => validateStructuredOutputAgainstSchema(value, structuredOutputConfig.schema),
+      validate: (value) => validateStructuredOutputAgainstSchema(
+        value,
+        structuredOutputConfig.validationSchema ?? structuredOutputConfig.schema,
+      ),
     });
   }
 
@@ -383,23 +504,30 @@ export class StepExecutor {
     maxSteps: number | 'infinite',
     fallbackContext?: FallbackContext,
     findingContract?: FindingContractInstructionContext,
+    transaction?: InstructionBuildTransaction,
   ): string {
-    this.ensurePreviousResponseSnapshot(state, step.name, stepIteration);
+    this.ensurePreviousResponseSnapshot(state, step.name, stepIteration, transaction);
     const policySnapshot = this.writeFacetSnapshot(
       'policy',
       step.name,
       stepIteration,
       step.policyContents,
+      transaction,
     );
     const knowledgeSnapshot = this.writeFacetSnapshot(
       'knowledge',
       step.name,
       stepIteration,
       step.knowledgeContents,
+      transaction,
     );
     const workflowSteps = this.deps.getWorkflowSteps();
     const workflowDefinitionSteps = this.deps.getWorkflowDefinitionSteps();
     const reportDir = join(this.deps.getCwd(), this.deps.getReportDir());
+    // workflow_call の子（subworkflows 名前空間）の {report:X} が親成果物へ
+    // read-only フォールバックするための reports ルート。engine の runPaths から
+    // 明示的に渡す（リゾルバ側でパス文字列から推測しない）。
+    const reportsRootDir = this.deps.getRunPaths().reportsRootAbs;
     const reportHandles = resolveReportHandles({
       step,
       reportDir,
@@ -416,6 +544,7 @@ export class StepExecutor {
       userInputs: state.userInputs,
       previousOutput: getPreviousOutput(state),
       reportDir,
+      reportsRootDir,
       currentReport: reportHandles.currentReport,
       previousReport: reportHandles.previousReport,
       reportHistory: reportHandles.reportHistory,
@@ -514,6 +643,9 @@ export class StepExecutor {
         ? await runStatusJudgmentPhase(step, phaseCtx)
         : undefined;
     } catch (error) {
+      if (error instanceof StructuredOutputSchemaError) {
+        throw error;
+      }
       log.info('Phase 3 status judgment failed, falling back to phase1 rule evaluation', {
         step: step.name,
         error: getErrorMessage(error),
@@ -592,10 +724,34 @@ export class StepExecutor {
     const stepIteration = prebuiltInstruction
       ? state.stepIterations.get(step.name) ?? 1
       : incrementStepIteration(state, step.name);
-    const instruction = prebuiltInstruction ?? this.buildInstruction(step, stepIteration, state, task, maxSteps);
-    const phase1Instruction = this.buildPhase1Instruction(instruction, step, runtime);
-    const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime);
-    const sessionKey = buildSessionKey(step, providerInfo.provider);
+
+    // Finding Contract の単独ステップ取り込み。対象なら raw findings の構造化
+    // 出力を強制し、Phase 1 の結果をルール評価の前に台帳へ反映する
+    // （ParallelRunner の findingLedgerCopyPath 準備と同じタイミング）。
+    const findingContractIntakeStep = this.resolveFindingContractIntakeStep(step);
+    const findingContractContext = findingContractIntakeStep
+      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(findingContractIntakeStep, true)
+      : undefined;
+    const executableStep = findingContractIntakeStep && findingContractContext
+      ? withFindingContractStructuredOutput(findingContractIntakeStep, findingContractContext.ledgerCopyPath)
+      : step;
+    // 直前ステップ（通常は coder の fix）の応答。異議申告の裁定材料として
+    // manager に渡すため、Phase 1 実行で lastOutput が上書きされる前に捕捉する
+    // （ParallelRunner の priorStepResponseText 捕捉と同じタイミング）。
+    const priorStepResponseText = state.lastOutput?.content;
+
+    const instruction = prebuiltInstruction ?? this.buildInstruction(
+      executableStep,
+      stepIteration,
+      state,
+      task,
+      maxSteps,
+      undefined,
+      findingContractContext,
+    );
+    const phase1Instruction = this.buildPhase1Instruction(instruction, executableStep, runtime);
+    const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(executableStep, runtime);
+    const sessionKey = buildSessionKey(executableStep, providerInfo.provider);
     log.debug('Running step', {
       step: step.name,
       persona: step.persona ?? '(none)',
@@ -613,10 +769,19 @@ export class StepExecutor {
       phase: 1,
       sequence: 1,
     });
-    const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(step, runtime);
-    await compactSessionBeforePhase1(step, baseAgentOptions);
+    const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(executableStep, runtime);
+    const compactionOutcome = await compactSessionBeforePhase1(executableStep, baseAgentOptions);
+    if (compactionOutcome === 'fresh') {
+      invalidatePersonaSessionIfExpected(
+        state,
+        sessionKey,
+        baseAgentOptions.sessionId,
+        updatePersonaSession,
+      );
+    }
     const agentOptions = {
       ...baseAgentOptions,
+      ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
       onPromptResolved: (promptParts: PhasePromptParts) => {
         resolvedPromptParts = promptParts;
         this.deps.onPhaseStart?.(step, 1, 'execute', phase1Instruction, promptParts, phaseExecutionId, state.iteration);
@@ -627,7 +792,7 @@ export class StepExecutor {
       enabled: this.deps.observabilityEnabled?.() === true,
       runId: this.deps.getObservabilityRunId?.(),
       workflowName: this.deps.getWorkflowName(),
-      step,
+      step: executableStep,
       iteration: state.iteration,
       phase: 1,
       phaseName: 'execute',
@@ -637,13 +802,13 @@ export class StepExecutor {
       sanitizeText: this.deps.sanitizeObservabilityText,
       providerInfo,
       getPromptParts: () => resolvedPromptParts,
-    }, () => executeAgent(step.persona, phase1Instruction, agentOptions), (result) => ({
+    }, () => executeAgent(executableStep.persona, phase1Instruction, agentOptions), (result) => ({
       status: result.status,
       content: result.content,
       error: result.error,
       providerUsage: result.providerUsage,
     }));
-    response = this.normalizeStructuredOutput(step, response, runtime);
+    response = this.normalizeStructuredOutput(executableStep, response, runtime);
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
     }
@@ -679,14 +844,64 @@ export class StepExecutor {
       return { response, instruction: phase1Instruction, providerInfo };
     }
 
-    response = await this.applyPostExecutionPhases(
-      step,
-      state,
-      stepIteration,
-      response,
-      updatePersonaSession,
-      runtime,
-    );
+    // レビュア1回突き返し: relation/target/kind の意味矛盾が
+    // ある raw について同一セッションで1回だけ明確化を求める（ParallelRunner の
+    // 同名処理と同じ一般経路）。clarification は engine 発行の taint 根拠として
+    // 取り込み（manager-runner の canonicalization）へ渡す。
+    let relationClarification: ReviewerRelationClarification | undefined;
+    if (findingContractIntakeStep && findingContractContext && this.deps.findingLedgerStore && response.status === 'done') {
+      const clarified = await clarifyAmbiguousRawRelationsOnce({
+        stepName: step.name,
+        persona: executableStep.persona,
+        response,
+        ledger: this.deps.findingLedgerStore.loadLedger(),
+        agentOptions,
+        normalize: (candidate: AgentResponse) => this.normalizeStructuredOutputWithDiagnostics(executableStep, candidate, runtime),
+      });
+      response = clarified.response;
+      relationClarification = clarified.clarification;
+      if (response.sessionId !== undefined) {
+        updatePersonaSession(sessionKey, response.sessionId);
+      }
+    }
+
+    // Finding Contract の取り込みはルール評価の前に行う。when(findings.*) の
+    // ガードがこの回の取り込み結果を見る必要があるため
+    // （ParallelRunner が manager 実行後にルール評価する構成と同じ）。
+    if (findingContractIntakeStep && findingContractContext) {
+      // v2 梯子設計: 取り込みは常に 'updated' で完了する（manager の壊れた応答・
+      // 予算超過は provisional として台帳へ着地し、run-level の失敗経路は無い）。
+      await this.ingestFindingContractForNormalStep({
+        step: findingContractIntakeStep,
+        stepIteration,
+        response,
+        ledgerCopyPath: findingContractContext.ledgerCopyPath,
+        priorStepResponseText,
+        relationClarification,
+      });
+    }
+
+    try {
+      response = await this.applyPostExecutionPhases(
+        step,
+        state,
+        stepIteration,
+        response,
+        updatePersonaSession,
+        runtime,
+      );
+    } catch (error) {
+      if (error instanceof RuleDetectionExhaustedError) {
+        invalidateExpectedPersonaSession(
+          state,
+          sessionKey,
+          response,
+          baseAgentOptions.sessionId,
+          updatePersonaSession,
+        );
+      }
+      throw error;
+    }
 
     state.stepOutputs.set(step.name, response);
     state.lastOutput = response;

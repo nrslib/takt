@@ -12,6 +12,7 @@ import { unwrapWhenCondition,
   getAutoSelectedTag,
   getReportFiles,
   hasUnquotedFindingsReference,
+  hasUnquotedIdentifierReference,
   isDeterministicCondition,
 } from '../core/workflow/evaluation/rule-utils.js';
 import type { WorkflowRule, OutputContractEntry } from '../core/models/types.js';
@@ -103,6 +104,32 @@ describe('hasUnquotedFindingsReference', () => {
 
   it('detects findings references after a closed quoted string', () => {
     expect(hasUnquotedFindingsReference(String.raw`structured.message == "path \\" && findings.open.count == 0`)).toBe(true);
+  });
+});
+
+describe('hasUnquotedIdentifierReference', () => {
+  it('detects a real, unquoted, complete identifier reference', () => {
+    expect(hasUnquotedIdentifierReference('findings.rounds.budgetExhausted == true', 'findings.rounds.budgetExhausted')).toBe(true);
+    expect(hasUnquotedIdentifierReference('findings.provisional.fixpoint == true && findings.conflicts.count == 0', 'findings.provisional.fixpoint')).toBe(true);
+  });
+
+  it('ignores an identifier that only appears inside a quoted string literal (codex 3rd-pass counter-example)', () => {
+    const condition = 'findings.rounds.budgetExhausted == true && structured.meta.label != "findings.provisional.fixpoint"';
+    // The quoted occurrence is a string literal, not a reference — must not be detected.
+    expect(hasUnquotedIdentifierReference(condition, 'findings.provisional.fixpoint')).toBe(false);
+    // The real, unquoted reference IS detected.
+    expect(hasUnquotedIdentifierReference(condition, 'findings.rounds.budgetExhausted')).toBe(true);
+  });
+
+  it('does not match an identifier that is only a substring of a longer identifier', () => {
+    // trailing boundary: "findings.provisional.fixpointish" must not count as the fixpoint signal
+    expect(hasUnquotedIdentifierReference('findings.provisional.fixpointish == true', 'findings.provisional.fixpoint')).toBe(false);
+    // leading boundary: a different dotted path that ends with the same tail
+    expect(hasUnquotedIdentifierReference('other.findings.rounds.budgetExhausted == true', 'findings.rounds.budgetExhausted')).toBe(false);
+  });
+
+  it('ignores an identifier hidden inside an escaped-quote string literal', () => {
+    expect(hasUnquotedIdentifierReference(String.raw`structured.message == "ignore \"findings.provisional.fixpoint\" here"`, 'findings.provisional.fixpoint')).toBe(false);
   });
 });
 

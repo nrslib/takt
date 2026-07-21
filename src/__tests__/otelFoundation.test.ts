@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -529,6 +529,7 @@ describe('otel foundation', () => {
     const phaseUsageLogPath = join(tempDir, 'session-usage-events.phase.jsonl');
 
     try {
+      chmodSync(tempDir, 0o777);
       const handle = await foundation.initializeOtelFoundation(
         enabledUsageEventsPhaseObservability,
         {
@@ -556,6 +557,8 @@ describe('otel foundation', () => {
           phase: 'phase1_execute',
         }),
       ]);
+      expect(statSync(tempDir).mode & 0o777).toBe(0o700);
+      expect(statSync(phaseUsageLogPath).mode & 0o777).toBe(0o600);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

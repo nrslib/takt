@@ -1,16 +1,28 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { DEFAULT_COMMAND_GATE_TIMEOUT_MS } from '../../models/quality-gate-defaults.js';
 import { isRealPathInside } from '../../../shared/utils/index.js';
 import { pickCommandGateNestedObservabilityEnv } from '../../../shared/telemetry/index.js';
+import { truncateUtf8 } from '../../../shared/utils/utf8.js';
 import { sanitizeSensitiveText } from './commandGateMessage.js';
-import type { CommandQualityGateResult, RunCommandQualityGateOptions } from './types.js';
+import {
+  ensurePrivateDirectory,
+  writePrivateFile,
+} from '../../../shared/utils/private-file.js';
+import type {
+  CommandOutputLimitFailureDetails,
+  CommandQualityGateResult,
+  RunCommandQualityGateOptions,
+} from './types.js';
 
 const FORCE_KILL_GRACE_MS = 100;
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const OUTPUT_LIMIT_MARKER = `[OUTPUT TRUNCATED: exceeded ${MAX_OUTPUT_BYTES} bytes]`;
+const OUTPUT_LIMIT_FAILURE_DETAILS: CommandOutputLimitFailureDetails = {
+  outputLimitExceeded: true,
+  outputLimitBytes: MAX_OUTPUT_BYTES,
+};
 const COMMAND_GATE_ENV_ALLOWLIST = new Set([
   'PATH',
   'Path',
@@ -66,11 +78,10 @@ function appendOutputWithinLimit(current: string, outputBytes: number, chunk: st
     };
   }
 
-  const remainingBytes = Math.max(0, MAX_OUTPUT_BYTES - outputBytes);
-  const boundedChunk = Buffer.from(chunk, 'utf8').subarray(0, remainingBytes).toString('utf8');
+  const boundedChunk = truncateUtf8(chunk, MAX_OUTPUT_BYTES - outputBytes);
   return {
-    output: `${current}${boundedChunk}\n${OUTPUT_LIMIT_MARKER}`,
-    bytes: MAX_OUTPUT_BYTES,
+    output: `${current}${boundedChunk.value}\n${OUTPUT_LIMIT_MARKER}`,
+    bytes: outputBytes + boundedChunk.bytes,
     exceeded: true,
   };
 }
@@ -93,7 +104,7 @@ function writeOutputLog(
 
   try {
     const logDir = path.join(projectRoot, '.takt', 'quality-gates', 'logs');
-    mkdirSync(logDir, { recursive: true });
+    ensurePrivateDirectory(logDir);
     const logPath = path.join(logDir, `${Date.now()}-command-gate-${randomUUID()}.log`);
     const content = [
       `Command: ${sanitizeCommandForOutputLog(command)}`,
@@ -105,7 +116,7 @@ function writeOutputLog(
       'Stderr:',
       sanitizeSensitiveText(stderr),
     ].join('\n');
-    writeFileSync(logPath, content, 'utf8');
+    writePrivateFile(logPath, content);
     return { outputLogPath: logPath };
   } catch (error: unknown) {
     return { outputLogError: formatUnknownError(error) };
@@ -138,26 +149,29 @@ function buildFailure(
   stderr: string,
   timedOut: boolean,
   timeoutMs: number | undefined,
-  outputLimitExceeded: boolean,
+  outputLimitFailure: CommandOutputLimitFailureDetails | undefined,
   exitCode?: number,
 ): CommandQualityGateResult {
   const outputLog = writeOutputLog(projectRoot, gateCommand, cwd, stdout, stderr);
+  const failure = {
+    gateName,
+    type: 'command' as const,
+    command: gateCommand,
+    cwd,
+    projectRoot,
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    stdout,
+    stderr,
+    timedOut,
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...outputLog,
+  };
+  if (outputLimitFailure === undefined) {
+    return { ok: false, failure };
+  }
   return {
     ok: false,
-    failure: {
-      gateName,
-      type: 'command',
-      command: gateCommand,
-      cwd,
-      projectRoot,
-      ...(exitCode !== undefined ? { exitCode } : {}),
-      stdout,
-      stderr,
-      timedOut,
-      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      ...(outputLimitExceeded ? { outputLimitExceeded, outputLimitBytes: MAX_OUTPUT_BYTES } : {}),
-      ...outputLog,
-    },
+    failure: { ...failure, ...outputLimitFailure },
   };
 }
 
@@ -195,7 +209,7 @@ export function runCommandQualityGate({
       `Command quality gate cwd must stay inside the project root: ${cwd}`,
       false,
       gate.timeoutMs,
-      false,
+      undefined,
     ));
   }
 
@@ -212,7 +226,7 @@ export function runCommandQualityGate({
     let stderr = '';
     let outputBytes = 0;
     let timedOut = false;
-    let outputLimitExceeded = false;
+    let outputLimitFailure: CommandOutputLimitFailureDetails | undefined;
     let settled = false;
     let terminationScheduled = false;
     let forceKillTimer: NodeJS.Timeout | undefined;
@@ -220,26 +234,26 @@ export function runCommandQualityGate({
     child.stdout?.setEncoding('utf-8');
     child.stderr?.setEncoding('utf-8');
     child.stdout?.on('data', (chunk: string) => {
-      if (outputLimitExceeded) {
+      if (outputLimitFailure !== undefined) {
         return;
       }
       const appended = appendOutputWithinLimit(stdout, outputBytes, chunk);
       stdout = appended.output;
       outputBytes = appended.bytes;
       if (appended.exceeded) {
-        outputLimitExceeded = true;
+        outputLimitFailure = OUTPUT_LIMIT_FAILURE_DETAILS;
         terminateProcess();
       }
     });
     child.stderr?.on('data', (chunk: string) => {
-      if (outputLimitExceeded) {
+      if (outputLimitFailure !== undefined) {
         return;
       }
       const appended = appendOutputWithinLimit(stderr, outputBytes, chunk);
       stderr = appended.output;
       outputBytes = appended.bytes;
       if (appended.exceeded) {
-        outputLimitExceeded = true;
+        outputLimitFailure = OUTPUT_LIMIT_FAILURE_DETAILS;
         terminateProcess();
       }
     });
@@ -265,6 +279,21 @@ export function runCommandQualityGate({
       resolve(result);
     }
 
+    function buildCurrentFailure(exitCode?: number): CommandQualityGateResult {
+      return buildFailure(
+        gateName,
+        gate.command,
+        cwd,
+        projectRoot,
+        stdout,
+        stderr,
+        timedOut,
+        timedOut ? effectiveTimeoutMs : undefined,
+        outputLimitFailure,
+        exitCode,
+      );
+    }
+
     function terminateProcess(): void {
       if (terminationScheduled) {
         return;
@@ -273,17 +302,7 @@ export function runCommandQualityGate({
       clearTimeout(timeout);
 
       if (child.pid === undefined) {
-        settle(buildFailure(
-          gateName,
-          gate.command,
-          cwd,
-          projectRoot,
-          stdout,
-          stderr,
-          timedOut,
-          timedOut ? effectiveTimeoutMs : undefined,
-          outputLimitExceeded,
-        ));
+        settle(buildCurrentFailure());
         return;
       }
 
@@ -297,56 +316,28 @@ export function runCommandQualityGate({
           const forceKillError = killProcess(child.pid, 'SIGKILL');
           if (forceKillError !== undefined) {
             stderr = appendStderr(stderr, forceKillError);
+            settle(buildCurrentFailure());
           }
         }
-        settle(buildFailure(
-          gateName,
-          gate.command,
-          cwd,
-          projectRoot,
-          stdout,
-          stderr,
-          timedOut,
-          timedOut ? effectiveTimeoutMs : undefined,
-          outputLimitExceeded,
-        ));
       }, FORCE_KILL_GRACE_MS);
       forceKillTimer.unref?.();
     }
 
     child.on('error', (error) => {
-      settle(buildFailure(
-        gateName,
-        gate.command,
-        cwd,
-        projectRoot,
-        stdout,
-        stderr || error.message,
-        timedOut,
-        timedOut ? effectiveTimeoutMs : undefined,
-        outputLimitExceeded,
-      ));
+      stderr ||= error.message;
+      settle(buildCurrentFailure());
     });
 
     child.on('close', (code) => {
       clearTimers();
 
-      if (code === 0 && !timedOut && !outputLimitExceeded) {
+      if (code === 0 && !timedOut && outputLimitFailure === undefined) {
         settle({ ok: true, stdout, stderr });
         return;
       }
 
-      settle(buildFailure(
-        gateName,
-        gate.command,
-        cwd,
-        projectRoot,
-        stdout,
-        stderr,
-        timedOut,
-        timedOut ? effectiveTimeoutMs : undefined,
-        outputLimitExceeded,
-        timedOut || outputLimitExceeded ? undefined : code ?? undefined,
+      settle(buildCurrentFailure(
+        timedOut || outputLimitFailure !== undefined ? undefined : code ?? undefined,
       ));
     });
   });

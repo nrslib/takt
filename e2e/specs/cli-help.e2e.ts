@@ -2,6 +2,53 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { runTakt } from '../helpers/takt-runner';
 import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
+import { packageVersion } from '../../src/shared/package-info';
+
+const EXPECTED_ROOT_HELP = `Usage: takt [options] [command] [task]
+
+TAKT: TAKT Agent Koordination Topology
+
+Arguments:
+  task                                      Task to execute (or issue reference like "#6")
+
+Options:
+  -V, --version                             output the version number
+  -i, --issue <number>                      Issue number (equivalent to #N)
+  --pr <number>                             PR number to fetch review comments and fix
+  -w, --workflow <name>                     Workflow name or path to workflow file
+  -b, --branch <name>                       Branch name (auto-generated if omitted)
+  --auto-pr                                 Create PR after successful execution
+  --draft                                   Create PR as draft (requires --auto-pr or auto_pr config)
+  --repo <owner/repo>                       Repository (defaults to current)
+  --provider <name>                         Override agent provider (claude|claude-sdk|claude-terminal|codex|opencode|cursor|copilot|kiro|mock) (choices: "claude", "claude-sdk", "claude-terminal", "codex", "opencode", "cursor", "copilot", "kiro", "mock")
+  --auto-strategy <strategy>                Auto routing strategy (cost|balanced|performance) (choices: "cost", "balanced", "performance")
+  --model <name>                            Override agent model
+  -t, --task <string>                       Task content (as alternative to issue reference)
+  --pipeline                                Pipeline mode: non-interactive, no worktree, direct branch creation
+  --skip-git                                Skip branch creation, commit, and push (pipeline mode)
+  -q, --quiet                               Minimal output mode: suppress AI output (for CI)
+  -c, --continue                            Continue from the last assistant session
+  -h, --help                                display help for command
+
+Commands:
+  run [options]                             Run all pending tasks from .takt/tasks.yaml
+  watch [options]                           Watch for tasks and auto-execute
+  add [task]                                Add a new task
+  list [options]                            List task branches (merge/delete)
+  resume                                    Resume the latest failed or aborted direct run
+  exec [options] [preset]                   Start instant multi-agent exec mode
+  clear                                     Clear agent conversation sessions
+  eject [options] [typeOrName] [facetName]  Copy builtin workflow or facet for customization (default: project .takt/)
+  reset                                     Reset settings to defaults
+  prompt [workflow]                         Preview assembled prompts for each step and phase
+  export-cc                                 Export takt workflows/agents as Claude Code Skill (~/.claude/)
+  export-codex                              Export takt workflows/agents as Codex Skill (~/.agents/)
+  catalog [type]                            List available facets (personas, policies, knowledge, instructions, output-contracts)
+  workflow                                  Workflow authoring utilities
+  metrics                                   Show analytics metrics
+  purge [options]                           Purge old analytics event files
+  telemetry                                 Manage TAKT local routing event recording
+  repertoire                                Manage repertoire packages`;
 
 // E2E更新時は docs/testing/e2e.md も更新すること
 describe('E2E: Help command (takt --help)', () => {
@@ -41,7 +88,7 @@ describe('E2E: Help command (takt --help)', () => {
     cleanupResources();
   });
 
-  it('should display subcommand list with --help', () => {
+  it('should preserve the complete root help contract', () => {
     // Given: a local repo with isolated env
 
     // When: running takt --help
@@ -51,12 +98,19 @@ describe('E2E: Help command (takt --help)', () => {
       env: isolatedEnv.env,
     });
 
-    // Then: output lists subcommands
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/run/);
-    expect(result.stdout).toMatch(/add/);
-    expect(result.stdout).toMatch(/list/);
-    expect(result.stdout).toMatch(/eject/);
+    expect(result.stdout.trimEnd()).toBe(EXPECTED_ROOT_HELP);
+  });
+
+  it('should display the package version with --version', () => {
+    const result = runTakt({
+      args: ['--version'],
+      cwd: repo.path,
+      env: isolatedEnv.env,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe(packageVersion);
   });
 
   it('should display run subcommand help with takt run --help', () => {

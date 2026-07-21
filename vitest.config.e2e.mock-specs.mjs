@@ -7,6 +7,7 @@ export const mockE2eSpecs = [
   'e2e/specs/observability.e2e.ts',
   'e2e/specs/report-file-output.e2e.ts',
   'e2e/specs/team-leader-worker-pool.e2e.ts',
+  'e2e/specs/team-leader-batch-barrier.e2e.ts',
   'e2e/specs/add.e2e.ts',
   'e2e/specs/watch.e2e.ts',
   'e2e/specs/list-non-interactive.e2e.ts',
@@ -39,6 +40,7 @@ export const mockE2eSpecs = [
   'e2e/specs/repertoire-real.e2e.ts',
   'e2e/specs/workflow-selection-branches.e2e.ts',
   'e2e/specs/clone-branch-resolution.e2e.ts',
+  'e2e/specs/resume-report-inheritance.e2e.ts',
 ];
 
 export const mockE2eShards = [
@@ -63,6 +65,7 @@ export const mockE2eShards = [
     'e2e/specs/session-log.e2e.ts',
     'e2e/specs/cycle-detection.e2e.ts',
     'e2e/specs/workflow-error-handling.e2e.ts',
+    'e2e/specs/resume-report-inheritance.e2e.ts',
   ],
   [
     'e2e/specs/cli-catalog.e2e.ts',
@@ -81,6 +84,7 @@ export const mockE2eShards = [
     'e2e/specs/observability.e2e.ts',
     'e2e/specs/report-file-output.e2e.ts',
     'e2e/specs/team-leader-worker-pool.e2e.ts',
+    'e2e/specs/team-leader-batch-barrier.e2e.ts',
     'e2e/specs/multi-step-parallel.e2e.ts',
     'e2e/specs/multi-step-sequential.e2e.ts',
     'e2e/specs/model-override.e2e.ts',

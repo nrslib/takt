@@ -3,7 +3,7 @@
  */
 
 import type { AskUserQuestionHandler } from '../../core/workflow/types.js';
-import type { PermissionMode } from '../../core/models/index.js';
+import type { Language, PermissionMode } from '../../core/models/index.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
 
@@ -243,12 +243,24 @@ export function buildOpenCodeSessionPermission(
  * `task` is intentionally absent: TAKT disables subagent spawning at the
  * agent level and never re-enables it per prompt. `skill` loads skill files
  * (read-shaped), so it follows the read permission.
+ *
+ * バージョン差への頑健性（opencode 1.17.18 実測）: 'list' / 'patch' /
+ * 'todoread' は 1.17.18 の tool registry に存在しない（'ls' への改名でもなく
+ * 削除。プローブで tools 配列を実測: 既定有効集合は bash, edit, glob, grep,
+ * question, read, skill, todowrite, webfetch, write）。未知 ID を per-prompt
+ * tools マップで送ってもサーバは黙って無視する（実測で無害）一方、マップは
+ * 全ツールを明示制御する full-coverage 契約なので、これらの ID が実在する
+ * 旧バージョンでのフェーズ制限リークを防ぐため**送信は継続**する。ただし
+ * モデルへ提示する「有効ツール一覧」（unavailable-tool recovery の前置文）には
+ * 載せない — OPEN_CODE_WIRE_ONLY_TOOL_IDS を参照。
  */
 const OPEN_CODE_TOOL_IDS_BY_PERMISSION: Record<Exclude<OpenCodePermissionKey, 'task'>, readonly string[]> = {
   read: ['read', 'list', 'skill'],
   glob: ['glob'],
   grep: ['grep'],
-  edit: ['edit', 'write', 'patch'],
+  // 'apply_patch' は 1.17.18 の registry に実在する（tool.ids で実測）。
+  // edit 権限で明示制御し、report フェーズ等での漏れを防ぐ。
+  edit: ['edit', 'write', 'patch', 'apply_patch'],
   write: ['write'],
   bash: ['bash'],
   todowrite: ['todowrite', 'todoread'],
@@ -256,6 +268,24 @@ const OPEN_CODE_TOOL_IDS_BY_PERMISSION: Record<Exclude<OpenCodePermissionKey, 't
   webfetch: ['webfetch'],
   question: ['question'],
 };
+
+/**
+ * ワイヤ（per-prompt tools マップ）でのみ送る ID。現行 opencode（1.17.18 の
+ * `/experimental/tool/ids` で実測: invalid, question, bash, read, glob, grep,
+ * edit, write, task, webfetch, todowrite, websearch, skill, apply_patch）の
+ * registry に存在せず、モデルからは呼べない。旧バージョン互換の制御のため
+ * だけに送り続けるが、モデル向けの有効ツール一覧には決して載せない
+ * （v3-r4: recovery 前置文が 'list' を「利用可能」と誤誘導し、fresh session
+ * 後も同名再発 → 確定失敗した死因の再発防止）。
+ *
+ * 'list' の扱い: TAKT の list 互換シム（plugins/list-tool.ts）が登録された
+ * サーバでは 'list' は実ツールになり、写像 read → list:true がそのまま可視性
+ * 制御として機能する（read 無効フェーズでは非表示）。シムの登録は起動時の
+ * registry プローブで upstream 衝突を排除した場合のみ（client.ts の
+ * shouldRegisterListToolShim）。シム無効時もワイヤ送信は継続する（無害・
+ * 旧バージョン互換）。
+ */
+export const OPEN_CODE_WIRE_ONLY_TOOL_IDS: readonly string[] = Object.freeze(['list', 'patch', 'todoread']);
 
 /** 全プロンプトで明示するツール ID の完全集合（固着リーク防止の契約） */
 export const OPEN_CODE_MANAGED_TOOL_IDS = Object.freeze([
@@ -410,6 +440,7 @@ export interface OpenCodeCallOptions {
   childProcessEnv?: Readonly<Record<string, string>>;
   /** JSON schema for native structured output (OpenCode format: json_schema). */
   outputSchema?: Record<string, unknown>;
+  language?: Language;
 }
 
 export interface OpenCodeCompactSessionOptions {

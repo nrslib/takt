@@ -2,15 +2,6 @@ import type { Language, PartDefinition } from '../core/models/types.js';
 import { ensureUniquePartIds, parsePartDefinitionEntry } from '../core/workflow/part-definition-validator.js';
 import type { MorePartsResponse } from './decompose-task-usecase.js';
 
-function summarizePartContent(content: string): string {
-  const maxLength = 2000;
-  if (content.length <= maxLength) {
-    return content;
-  }
-
-  return `${content.slice(0, maxLength)}\n...[truncated]`;
-}
-
 export function toPartDefinitions(raw: unknown, maxTotalParts: number): PartDefinition[] {
   if (!Array.isArray(raw)) {
     throw new Error('Structured output "parts" must be an array');
@@ -110,15 +101,13 @@ function buildDecomposeBasePrompt(
       ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: true }),
       `- 返してよい総 parts 数は 1 以上 ${maxTotalParts} 以下`,
       '- この上限は同時実行数ではない',
-      '- 上限遵守を、検証分離や責務分解より優先する',
-      '- パートは互いに独立させる',
+      '- 上限内で、同じバッチ内の part は互いに独立させる',
       '- まず並行可能な責務境界を探す',
       '- 「実装と検証」のような巨大な単一 part を避ける',
-      '- 実装 part と検証 part を分ける',
-      '- 重い Quality Gates は最終の検証 part に寄せる',
+      '- 検証が必要なら、実装結果がそろった後の後続 batch で追加する',
       '- npm test / npm run test:e2e:mock を各実装 part に重複して持たせない',
-      '- 共有契約が必要なら、基盤 part から消費 part へ段階化する',
-      '- parts.length === 1 になる場合も、検証分離や段階分けができないか先に検討する',
+      '- 共有契約が必要な作業は、依存 part に分けず1つの part にまとめる',
+      '- parts.length === 1 になる場合も、独立に実行できる責務境界がないか先に検討する',
       '',
       '## 元タスク',
       instruction,
@@ -130,15 +119,15 @@ function buildDecomposeBasePrompt(
     ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: true }),
     `- Produce a total number of parts between 1 and ${maxTotalParts}`,
     '- This limit is not a concurrency limit',
-    '- Respecting this limit takes precedence over verification separation or responsibility boundaries',
+    '- Within this limit, keep parts in the same batch independently executable',
     '- Keep each part self-contained',
     '- First look for parallelizable responsibility boundaries',
     '- Avoid oversized single parts such as "implementation and verification"',
-    '- Separate implementation parts from verification parts',
-    '- Put heavy Quality Gates in a final verification part',
+    '- Every part in the same batch must be independently executable',
+    '- Add verification only in a later batch after the implementation results are complete',
     '- Do not duplicate npm test / npm run test:e2e:mock in each implementation part',
-    '- When shared contracts are needed, stage foundation parts before consuming parts',
-    '- When parts.length === 1, first consider whether verification separation or staged work is possible',
+    '- Keep work with shared contracts in one part instead of creating dependent parts',
+    '- When parts.length === 1, first consider whether independent responsibility boundaries are available',
     '',
     '## Original Task',
     instruction,
@@ -154,7 +143,7 @@ function buildMorePartsBasePrompt(
 ): string {
   const resultBlock = allResults.map((result) => [
     `### ${result.id}: ${result.title} (${result.status})`,
-    summarizePartContent(result.content),
+    result.content,
   ].join('\n')).join('\n\n');
 
   if (language === 'ja') {
@@ -174,7 +163,8 @@ function buildMorePartsBasePrompt(
       '- 不足が複数ある場合は、可能な限り一括で複数パートを返す',
       '- 既存差分を破壊しない',
       '- 未完了作業だけを追加 part に切り出す',
-      '- 実装継続と検証 part を分け、重い検証を実装 part に重複して持たせない',
+      '- 同じバッチ内の part は互いに依存させない',
+      '- 実装結果がそろった後にのみ、後続 batch で検証 part を追加する',
       `- 既存IDは再利用しない: ${existingIds.join(', ') || '(なし)'}`,
       `- 追加できる最大数: ${maxAdditionalParts}`,
     ].join('\n');
@@ -196,8 +186,8 @@ function buildMorePartsBasePrompt(
     '- If multiple missing tasks are known, return multiple new parts in one batch when possible',
     '- Preserve existing changes',
     '- Put only unfinished work into additional parts',
-    '- Separate implementation continuations from a verification part',
-    '- Do not duplicate heavy verification in implementation continuations',
+    '- Do not create parts that depend on another unfinished part',
+    '- Add a verification part only after its implementation results are complete',
     `- Do not reuse existing IDs: ${existingIds.join(', ') || '(none)'}`,
     `- Maximum additional parts: ${maxAdditionalParts}`,
   ].join('\n');

@@ -59,7 +59,8 @@ export function sanitizeTerminalText(text: string): string {
 
   for (const char of stripped) {
     const code = char.codePointAt(0) ?? 0;
-    if ((code >= 0x00 && code <= 0x1f) || code === 0x7f) {
+    // C0 controls, DEL, and C1 controls (0x80-0x9f: 8-bit CSI/OSC introducers)
+    if ((code >= 0x00 && code <= 0x1f) || (code >= 0x7f && code <= 0x9f)) {
       switch (char) {
         case '\n':
           sanitized += '\\n';

@@ -28,6 +28,10 @@ function isReferenceBoundary(char: string | undefined): boolean {
   return char === undefined || !/[A-Za-z0-9_.]/.test(char);
 }
 
+function isIdentifierEndBoundary(char: string | undefined): boolean {
+  return char === '.' || isReferenceBoundary(char);
+}
+
 export function hasUnquotedFindingsReference(condition: string): boolean {
   let inString = false;
 
@@ -49,18 +53,44 @@ export function hasUnquotedFindingsReference(condition: string): boolean {
   return false;
 }
 
+/**
+ * Whether `identifier` appears in `condition` as a real, unquoted, COMPLETE
+ * reference — not inside a quoted string literal and not as a substring of a
+ * longer path segment. A following dot is accepted because it qualifies the
+ * referenced state object. Shares the same quote-skipping and identifier-boundary
+ * handling as hasUnquotedFindingsReference (and thus the when-evaluator's
+ * tokenizer), so callers classifying a condition by which references it names
+ * cannot be fooled by `... != "some.identifier"` (a valid string literal) or by
+ * an accidental substring match. `identifier` is a dotted path such as
+ * `findings.provisional.fixpoint`.
+ */
+export function hasUnquotedIdentifierReference(condition: string, identifier: string): boolean {
+  let inString = false;
+
+  for (let index = 0; index < condition.length; index++) {
+    if (condition[index] === '"') {
+      if (!isEscapedQuote(condition, index)) {
+        inString = !inString;
+      }
+      continue;
+    }
+    if (inString || !condition.startsWith(identifier, index)) {
+      continue;
+    }
+    if (isReferenceBoundary(condition[index - 1]) && isIdentifierEndBoundary(condition[index + identifier.length])) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function isFindingsCondition(condition: string): boolean {
   return isDeterministicCondition(condition) && hasUnquotedFindingsReference(unwrapWhenCondition(condition));
 }
 
 export function isNonAiReturnValueRule(rule: WorkflowRule, returnValue: string): boolean {
   return rule.isAiCondition !== true && rule.returnValue === returnValue;
-}
-
-export function isInvalidManagerOutputRule(rule: WorkflowRule): boolean {
-  return isNonAiReturnValueRule(rule, 'need_replan')
-    || isNonAiReturnValueRule(rule, 'needs_fix')
-    || (rule.isAiCondition !== true && rule.next === 'fix');
 }
 
 /**

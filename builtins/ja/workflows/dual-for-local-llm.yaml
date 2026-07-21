@@ -18,6 +18,30 @@ workflow_config:
 
 loop_monitors:
   - cycle:
+      - ai-antipattern-review-1st
+      - ai-antipattern-fix
+    threshold: 5
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-ai-antipattern-fix-1st
+      rules:
+        - condition: 健全（進捗あり）
+          next: ai-antipattern-review-1st
+        - condition: 非生産的（改善なし）
+          next: reviewers
+  - cycle:
+      - ai-antipattern-fix
+      - ai-antipattern-no-fix
+    threshold: 5
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-ai-antipattern-fix-1st
+      rules:
+        - condition: 健全（進捗あり）
+          next: ai-antipattern-review-1st
+        - condition: 非生産的（改善なし）
+          next: reviewers
+  - cycle:
       - plan
       - write_tests
       - implement
@@ -146,9 +170,75 @@ steps:
     instruction: implement
     rules:
       - condition: 実装完了
-        next: reviewers
+        next: ai-antipattern-review-1st
       - condition: 実装を進められない（環境問題・情報不足）
         next: plan
+
+  # 本流の dual.yaml と同じ工程。観点別の並列レビューへ渡す前に、
+  # 実装直後の AI 特有の問題を自分で潰す。弱いモデルほどここで拾える。
+  - name: ai-antipattern-review-1st
+    session_key: ai-antipattern-review-1st
+    tags:
+      - review
+    edit: false
+    persona: ai-antipattern-reviewer
+    policy:
+      - review
+      - ai-antipattern
+    provider_options:
+      extends: review-readonly
+    instruction: ai-antipattern-review-for-local-llm
+    rules:
+      - condition: AI特有の問題なし
+        next: reviewers
+      - condition: AI特有の問題あり
+        next: ai-antipattern-fix
+    output_contracts:
+      report:
+        - name: ai-antipattern-review-1st.md
+          format: ai-antipattern-review-finding-contract
+
+  - name: ai-antipattern-fix
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - frontend
+      - react
+      - backend
+      - architecture
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    pass_previous_response: false
+    instruction: ai-antipattern-fix
+    rules:
+      - condition: AI問題の修正完了
+        next: ai-antipattern-review-1st
+      - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
+        next: ai-antipattern-no-fix
+      - condition: 判断できない、情報不足
+        next: ai-antipattern-no-fix
+
+  - name: ai-antipattern-no-fix
+    tags:
+      - review
+    edit: false
+    persona: architecture-reviewer-for-local-llm
+    policy: review
+    provider_options:
+      extends: review-files
+    instruction: arbitrate-review-1st
+    rules:
+      - condition: ai-antipattern-review-1stの指摘が妥当（修正すべき）
+        next: ai-antipattern-fix
+      - condition: ai-antipattern-fixの判断が妥当（修正不要）
+        next: reviewers
 
   - name: reviewers
     tags:
@@ -158,12 +248,12 @@ steps:
         tags:
           - review
         edit: false
-        persona: architecture-reviewer
+        persona: architecture-reviewer-for-local-llm
         policy:
           - review
         knowledge:
           - architecture
-        instruction: review-arch
+        instruction: review-arch-for-local-llm
         rules:
           - condition: approved
           - condition: needs_fix
@@ -193,6 +283,7 @@ steps:
               format: frontend-review-finding-contract
 
       - name: ai-antipattern-review
+        session_key: ai-antipattern-review-finding-contract
         tags:
           - review
         edit: false
@@ -201,7 +292,7 @@ steps:
           - review
           - ai-antipattern
         pass_previous_response: false
-        instruction: ai-antipattern-review
+        instruction: ai-antipattern-review-for-local-llm
         rules:
           - condition: AI特有の問題なし
           - condition: AI特有の問題あり
@@ -219,7 +310,7 @@ steps:
           - review
           - coding
         pass_previous_response: false
-        instruction: review-coding
+        instruction: review-coding-for-local-llm
         rules:
           - condition: approved
           - condition: needs_fix
@@ -238,7 +329,7 @@ steps:
         knowledge:
           - implementation-semantics
         pass_previous_response: false
-        instruction: review-implementation-semantics
+        instruction: review-implementation-semantics-for-local-llm
         rules:
           - condition: approved
           - condition: needs_fix
@@ -249,37 +340,133 @@ steps:
     rules:
       - condition: all("approved", "approved", "AI特有の問題なし", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: final-gate
-      - condition: any("needs_fix", "needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)
+      # provisional が直前ラウンドから意味的な変化の無い fixpoint に達した場合、
+      # 再計画では解消し得ない（対策バッチ B1: raw finding 梯子設計 v2 の収束性対策）。
+      # plan への差し戻しの前に、要人手裁定の終端状態へルーティングする。
+      # review-integrity ゲート（codex 対策#4 / 検証ブロッカー#1）: product gate が
+      # 空（open finding 無し）でも未昇格の reviewer anomaly が残るなら、下の fix
+      # ルールへ落とさず final-gate へ渡す（final-gate が review-integrity 予算の
+      # 範囲で再レビューし、尽きたら裁定する）。直すものは無い（観測は検証不能として
+      # 隔離済み）ので、anomaly は fix ではなく再レビューへ送る。
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        next: final-gate
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      # 累積ラウンド数（または設定されていれば経過時間）が finding_contract.stop_budget
+      # を超過した場合、provisional 集合が churn し続けて fixpoint に到達しなくても、
+      # plan への差し戻しの前に同じ要人手裁定の終端状態へルーティングする
+      # （有限停止予算 — codex 裁定による対策バッチ B1 の拡張）。
+      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      # provisional（意味を確定できなかった観測）は fixer が直接直せない system finding。
+      # fix ループへ入れず再計画へ返す（raw finding 梯子設計 v2）。
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: plan
+      - condition: any("needs_fix", "AI特有の問題あり") && when(findings.conflicts.count == 0)
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix
-      - condition: ai("未調停の findings.conflicts がある。coder の修正で解決可能な具体的コード変更が必要な場合のみ fix を選ぶ。レビュワー間の判断矛盾や人間判断が必要な場合は選ばない。")
-        next: fix
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
 
+  # takt-default（merge-readiness-final-gate サブワークフロー）と同じく並列にする。
+  # supervise が新規・継続・解消を突き合わせないと、merge-readiness が毎周同じ指摘を
+  # 新規として出し直し、reviewers → final-gate → fix が閉じない（実測: 56 周・9 時間）。
   - name: final-gate
     tags:
       - review
       - final-gate
-    edit: false
-    persona: merge-readiness-reviewer
-    policy: review
-    pass_previous_response: false
-    instruction: review-merge-readiness
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review-finding-contract
+    parallel:
+      - name: merge-readiness-review
+        tags:
+          - review
+          - final-gate
+          - merge-readiness
+        edit: false
+        persona: merge-readiness-reviewer
+        policy: review
+        provider_options:
+          extends: review-readonly
+        pass_previous_response: false
+        instruction: review-merge-readiness
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: merge-readiness-review.md
+              format: merge-readiness-review-finding-contract
+
+      - name: supervise
+        tags:
+          - review
+          - final-gate
+          - supervise
+        edit: false
+        persona: supervisor
+        policy: review
+        knowledge:
+          - frontend
+          - react
+          - backend
+          - architecture
+        provider_options:
+          extends: review-readonly
+        pass_previous_response: false
+        instruction: supervise-finding-contract
+        rules:
+          - condition: approved
+          - condition: needs_fix
+          - condition: need_replan
+        output_contracts:
+          report:
+            - name: supervisor-validation.md
+              format: supervisor-validation-finding-contract
+            - name: supervisor-gate-summary.md
+              format: supervisor-gate-summary-finding-contract
+              use_judge: false
     rules:
-      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
+      # review-integrity ゲート（codex 対策#4 / 検証ブロッカー#1）: 未昇格の
+      # reviewer anomaly は、少なくとも1人のレビュアーが機械照合を通らない主張
+      # （引用不一致 / stale-snapshot）を出したことを意味する。anomaly は product
+      # finding ではないため product gate（open/conflicts）は塞がないが、レビュー
+      # 全体が anomaly に隔離された run はそのままだと product gate が空になり実質
+      # レビューされずに COMPLETE してしまう。よって未昇格 anomaly が残る限り
+      # COMPLETE せず、正しい引用による promote まで再レビュー（reviewers）へ送り、
+      # review-integrity 予算が尽きたら人手裁定（NEEDS_ADJUDICATION）へ回す
+      # （provisional の fixpoint / 停止予算の終端と同じ思想）。この配線を欠く
+      # custom workflow でも、エンジンの completion gate が fail-closed で拒否する。
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        next: reviewers
+      - condition: all("approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE
-      - condition: needs_fix && when(findings.conflicts.count == 0)
+      # provisional が直前ラウンドから意味的な変化の無い fixpoint に達した場合、
+      # 再計画では解消し得ない（対策バッチ B1: raw finding 梯子設計 v2 の収束性対策）。
+      # plan への差し戻しの前に、要人手裁定の終端状態へルーティングする。
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      # 累積ラウンド数（または設定されていれば経過時間）が finding_contract.stop_budget
+      # を超過した場合、provisional 集合が churn し続けて fixpoint に到達しなくても、
+      # plan への差し戻しの前に同じ要人手裁定の終端状態へルーティングする
+      # （有限停止予算 — codex 裁定による対策バッチ B1 の拡張）。
+      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      # provisional（意味を確定できなかった観測）は fixer が直接直せない system finding。
+      # fix ループへ入れず再計画へ返す（raw finding 梯子設計 v2）。
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: plan
+      - condition: any("need_replan") && when(findings.conflicts.count == 0)
+        next: plan
+      - condition: any("needs_fix") && when(findings.conflicts.count == 0)
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix
-      - condition: ai("未調停の findings.conflicts がある。coder の修正で解決可能な具体的コード変更が必要な場合のみ fix を選ぶ。レビュワー間の判断矛盾や人間判断が必要な場合は選ばない。")
-        next: fix
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
 

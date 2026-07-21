@@ -46,6 +46,16 @@ Task tool:
 5. 各サブステップの出力に対して、そのサブステップの `rules` で条件マッチを判定
 6. 親 step の `rules` で aggregate 評価（all()/any()）を行う
 
+## Team Leader step の実行
+
+1. 親 Team Leader はタスクを最大 `initial_max_parts` 個の独立 part に分解する
+2. member は `session: refresh` と part 固有 session key で、最大 `max_concurrency` 個ずつ実行する
+3. 現在 batch の全 part が完了するまで次の分解を要求しない
+4. 次 batch は完了結果だけを基に計画する。依存する検証はこの段階でのみ追加できる
+5. `fail_on_part_error: true` では回復 part の実行後も親 step を error で終了する
+
+`refill_threshold` は互換キーであり、省略または `0` のみ有効である。逐次 refill は存在しない。親の `pass_previous_response: true` は state 上の前回出力を親の分解 prompt に渡す。member には前回出力を渡さない。
+
 ### サブステップの条件マッチ判定
 
 各サブステップの出力テキストに対して、そのサブステップの `rules` の中からマッチする condition を特定する。

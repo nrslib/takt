@@ -5,6 +5,8 @@ import { runTeamLeaderPart } from '../core/workflow/engine/team-leader-part-runn
 import type { AgentResponse, WorkflowStep, WorkflowState } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
+import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
+import { makeInstructionContext } from './test-helpers.js';
 
 function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
   return {
@@ -33,6 +35,10 @@ vi.mock('../core/workflow/observability/workflowSpans.js', async () => {
     runWithPhaseSpan: mockRunWithPhaseSpan,
   };
 });
+
+function buildLeaderOrMemberInstruction(step: WorkflowStep): string {
+  return step.name.includes('.') ? step.instruction : 'leader instruction';
+}
 
 describe('TeamLeaderRunner with structuredCaller', () => {
   beforeEach(() => {
@@ -70,6 +76,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         parts: [],
       }),
     };
+    const buildInstruction = vi.fn(buildLeaderOrMemberInstruction);
 
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
@@ -80,7 +87,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction,
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -106,6 +113,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       personaDisplayName: 'coder',
       instruction: 'Task: {task}',
       passPreviousResponse: true,
+      policyContents: ['member policy'],
+      knowledgeContents: ['member knowledge'],
+      qualityGates: ['member quality gate'],
       providerOptions: {
         opencode: {
           networkAccess: true,
@@ -121,7 +131,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         maxConcurrency: 2,
         maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 1000,
         partPersona: 'coder',
         partAllowedTools: ['Read', 'Edit'],
@@ -197,6 +206,24 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       }),
       undefined,
     );
+    expect(buildInstruction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'implement.part-1',
+        instruction: 'Implement API',
+        passPreviousResponse: false,
+        policyContents: ['member policy'],
+        knowledgeContents: ['member knowledge'],
+        qualityGates: ['member quality gate'],
+        session: 'refresh',
+      }),
+      expect.any(Number),
+      state,
+      'implement feature',
+      5,
+      undefined,
+      undefined,
+      expect.any(Object),
+    );
     expect(mockRunWithPhaseSpan).toHaveBeenCalledWith(
       expect.objectContaining({
         enabled: true,
@@ -211,6 +238,173 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       expect.any(Function),
       expect.any(Function),
     );
+  });
+
+  it('passes the complete previous state output, including a trailing finding, to structured decomposition', async () => {
+    const trailingFinding = 'TAIL_FINDING: unresolved review issue';
+    const previousOutput: AgentResponse = {
+      persona: 'review',
+      status: 'done',
+      content: `${'x'.repeat(2500)}\n${trailingFinding}`,
+      timestamp: new Date(),
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map([['review', previousOutput]]),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: previousOutput,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'running',
+    };
+    const decomposeTask = vi.fn().mockImplementation(async (instruction, _maxParts, options) => {
+      options.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement the change' }] };
+    });
+    const structuredCaller = {
+      decomposeTask,
+      requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'complete', parts: [] }),
+    };
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'model' }),
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn((candidate: WorkflowStep, _iteration, currentState: WorkflowState, task: string) =>
+          new InstructionBuilder(candidate, makeInstructionContext({
+            task,
+            previousOutput: currentState.lastOutput,
+          })).build()),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: { projectCwd: '/tmp/project', structuredCaller },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+    } as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder', status: 'done', content: 'done', timestamp: new Date(),
+    });
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Use the prior result: {previous_response}',
+      passPreviousResponse: true,
+      teamLeader: {
+        maxConcurrency: 1,
+        maxTotalParts: 2,
+        timeoutMs: 1000,
+      },
+    };
+
+    await runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
+
+    expect(decomposeTask).toHaveBeenCalledWith(
+      expect.stringContaining(trailingFinding),
+      2,
+      expect.any(Object),
+    );
+    expect(state.iteration).toBe(1);
+    expect(state.lastOutput?.persona).toBe('implement');
+    expect(state.stepIterations).toEqual(new Map([
+      ['implement', 1],
+      ['implement.part-1', 1],
+    ]));
+  });
+
+  it.each([
+    { failOnPartError: true, expectedStatus: 'error', postExecutionCalls: 0 },
+    { failOnPartError: false, expectedStatus: 'done', postExecutionCalls: 1 },
+  ])('handles a failed member followed by a successful recovery part when failOnPartError=$failOnPartError', async ({
+    failOnPartError,
+    expectedStatus,
+    postExecutionCalls,
+  }) => {
+    mockExecuteAgent.mockImplementation(async (_persona, instruction: string) => ({
+      persona: 'coder',
+      status: instruction.includes('part-1') ? 'error' : 'done',
+      content: instruction.includes('part-1') ? '' : 'recovery complete',
+      error: instruction.includes('part-1') ? 'member failed' : undefined,
+      timestamp: new Date(),
+    }));
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _limit, options) => {
+        options.onPromptResolved?.({ systemPrompt: 'leader', userInstruction: 'leader instruction' });
+        return { parts: [
+          { id: 'part-1', title: 'first', instruction: 'part-1' },
+        ] };
+      }),
+      requestMoreParts: vi.fn()
+        .mockResolvedValueOnce({
+          done: false,
+          reasoning: 'run a recovery part',
+          parts: [{ id: 'part-2', title: 'recovery', instruction: 'part-2' }],
+        })
+        .mockResolvedValue({ done: true, reasoning: 'recovery completed', parts: [] }),
+    };
+    const applyPostExecutionPhases = vi.fn().mockImplementation(
+      async (_step: WorkflowStep, _state: WorkflowState, _iteration: number, response: AgentResponse) => response,
+    );
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'local' }),
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        applyPostExecutionPhases,
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: { projectCwd: '/tmp/project', structuredCaller, language: 'ja' },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      observabilityEnabled: false,
+    } as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    const state: WorkflowState = {
+      workflowName: 'workflow', currentStep: 'implement', iteration: 1,
+      stepOutputs: new Map(), structuredOutputs: new Map(), systemContexts: new Map(), effectResults: new Map(),
+      lastOutput: undefined, previousResponseSourcePath: undefined, userInputs: [], personaSessions: new Map(),
+      stepIterations: new Map(), status: 'running',
+    };
+    const result = await runner.runTeamLeaderStep({
+      name: 'implement', persona: 'coder', personaDisplayName: 'coder', instruction: 'leader instruction',
+      passPreviousResponse: false,
+      teamLeader: {
+        maxConcurrency: 1, initialMaxParts: 1, maxTotalParts: 6, failOnPartError,
+        timeoutMs: 1000,
+      },
+    }, state, 'fix issue', 5, vi.fn());
+
+    expect(structuredCaller.decomposeTask).toHaveBeenCalledWith('leader instruction', 1, expect.any(Object));
+    expect(structuredCaller.requestMoreParts).toHaveBeenCalledWith(
+      'leader instruction', expect.any(Array), expect.any(Array), 5, expect.any(Object),
+    );
+    expect(mockExecuteAgent).toHaveBeenCalledWith('coder', 'part-2', expect.any(Object));
+    expect(result.response.status).toBe(expectedStatus);
+    if (failOnPartError) {
+      expect(result.response.error).toBe('Team leader part failed: part-1: member failed');
+    } else {
+      expect(result.response.content).toContain('recovery complete');
+    }
+    expect(applyPostExecutionPhases).toHaveBeenCalledTimes(postExecutionCalls);
   });
 
   it('passes resolved session and step mcpServers to team leader structured planning calls', async () => {
@@ -259,7 +453,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const runner = new TeamLeaderRunner({
       optionsBuilder,
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -291,7 +485,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         maxConcurrency: 2,
         maxTotalParts: 2,
-        refillThreshold: 0,
         timeoutMs: 1000,
         partPersona: 'coder',
       },
@@ -353,7 +546,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const runner = new TeamLeaderRunner({
       optionsBuilder,
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -381,7 +574,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         maxConcurrency: 1,
         maxTotalParts: 1,
-        refillThreshold: 0,
         timeoutMs: 1000,
       },
       rules: [{ condition: 'done', next: 'COMPLETE' }],
@@ -438,7 +630,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       teamLeader: {
         maxConcurrency: 1,
         maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 1000,
         partPersona: 'coder',
       },
@@ -458,6 +649,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         workflowName: 'workflow',
         iteration: 1,
       },
+      () => 'member instruction',
     );
 
     expect(updatePersonaSession).not.toHaveBeenCalled();
@@ -518,7 +710,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -546,7 +738,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         maxConcurrency: 2,
         maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 1000,
         partPersona: 'coder',
         partTags: ['coding', 'edit'],
@@ -654,7 +845,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -681,7 +872,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         maxConcurrency: 2,
         maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 1000,
         partPersona: 'coder',
       },
@@ -773,7 +963,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const runner = new TeamLeaderRunner({
       optionsBuilder,
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -804,7 +994,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         maxConcurrency: 2,
         maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 1000,
         partPersona: 'coder',
       },
@@ -890,7 +1079,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -927,7 +1116,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         maxConcurrency: 2,
         maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 1000,
         partPersona: 'coder',
         partAllowedTools: ['Read', 'Edit'],
@@ -1036,7 +1224,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -1063,7 +1251,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         maxConcurrency: 2,
         maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 1000,
         inspectTools: ['read', 'glob', 'grep'],
         partPersona: 'coder',
@@ -1150,7 +1337,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -1177,7 +1364,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         maxConcurrency: 2,
         maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 1000,
         inspectTools: ['read', 'glob', 'grep'],
         partPersona: 'coder',
@@ -1263,7 +1449,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -1289,7 +1475,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         maxConcurrency: 2,
         maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 1000,
         inspectTools: ['read', 'glob', 'grep'],
         partPersona: 'coder',
@@ -1330,18 +1515,19 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     expect(partOptions.allowedTools).toBeUndefined();
   });
 
-  it('resolved provider を含む session key で part session を保存する', async () => {
-    mockExecuteAgent.mockResolvedValue({
+  it('refresh member session を通常 coder session と分離して保存する', async () => {
+    mockExecuteAgent.mockImplementation(async (_persona, instruction: string) => ({
       persona: 'coder',
       status: 'done',
-      content: 'API done',
+      content: `${instruction} done`,
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
-      sessionId: 'session-opencode-1',
-    });
-    const resolveStepProviderModel = vi
-      .fn()
-      .mockReturnValueOnce({ provider: 'claude', model: 'sonnet' })
-      .mockReturnValueOnce({ provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' });
+      sessionId: instruction.includes('API') ? 'session-opencode-1' : 'session-opencode-2',
+    }));
+    const resolveStepProviderModel = vi.fn((step: WorkflowStep) => (
+      step.name === 'implement'
+        ? { provider: 'claude', model: 'sonnet' }
+        : { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' }
+    ));
 
     const structuredCaller = {
       decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxTotalParts, options) => {
@@ -1351,6 +1537,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         });
         return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          { id: 'part-2', title: 'UI', instruction: 'Implement UI' },
         ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
@@ -1360,7 +1547,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       }),
     };
 
-    const updatePersonaSession = vi.fn();
+    const sessions = new Map<string, string>();
+    const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
+      if (sessionId !== undefined) {
+        sessions.set(key, sessionId);
+      }
+    });
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
@@ -1370,7 +1562,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -1396,7 +1588,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         maxConcurrency: 2,
         maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 1000,
         partPersona: 'coder',
       },
@@ -1427,10 +1618,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       updatePersonaSession,
     );
 
-    expect(updatePersonaSession).toHaveBeenCalledWith('coder:opencode', 'session-opencode-1');
+    expect(updatePersonaSession).toHaveBeenCalledWith('implement.part-1:opencode', 'session-opencode-1');
+    expect(updatePersonaSession).toHaveBeenCalledWith('implement.part-2:opencode', 'session-opencode-2');
+    expect(sessions.has('coder:opencode')).toBe(false);
   });
 
-  it('report phase を持つ team_leader で parent と part の key が衝突する場合は part-scoped session key で保存する', async () => {
+  it('report phase の有無にかかわらず member session を part-scoped に保存する', async () => {
     mockExecuteAgent.mockResolvedValue({
       persona: 'coder',
       status: 'done',
@@ -1470,7 +1663,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -1499,7 +1692,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         maxConcurrency: 2,
         maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 1000,
         partPersona: 'coder',
       },
@@ -1578,7 +1770,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolveStepProviderModel,
       },
       stepExecutor: {
-        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
@@ -1604,7 +1796,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         maxConcurrency: 2,
         maxTotalParts: 20,
-        refillThreshold: 0,
         timeoutMs: 1000,
         partPersona: 'coder',
         partAllowedTools: ['Read', 'Edit'],
@@ -1671,7 +1862,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           }),
         },
         stepExecutor: {
-          buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+          buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
           applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
           persistPreviousResponseSnapshot: vi.fn(),
           emitStepReports: vi.fn(),
@@ -1700,7 +1891,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           persona: 'team-leader',
           maxConcurrency: 1,
           maxTotalParts: 20,
-          refillThreshold: 0,
           timeoutMs: 1000,
           partPersona: 'coder',
         },
@@ -1801,7 +1991,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           persona: 'team-leader',
           maxConcurrency,
           maxTotalParts,
-          refillThreshold: 0,
           timeoutMs: 1000,
           partPersona: 'coder',
         },
@@ -1840,7 +2029,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'model' }),
         },
         stepExecutor: {
-          buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+          buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
           applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
           persistPreviousResponseSnapshot: vi.fn(),
           emitStepReports: vi.fn(),
@@ -2067,7 +2256,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       expect(continuationInstruction).toContain('Timed-out part: part-1');
     });
 
-    it('Given two parallel parts time out after the first fallback, When feedback fails, Then each timed-out part gets a continuation', async () => {
+    it('Given two parallel parts time out after the batch barrier, When feedback fails, Then each timed-out part gets a continuation in one later batch', async () => {
       mockExecuteAgent
         .mockResolvedValueOnce({
           persona: 'coder',
@@ -2121,49 +2310,23 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
       expect(result.response.status).toBe('done');
       expect(result.response.content).toContain('## timeout-continuation: Timeout continuation');
-      expect(result.response.content).toContain('## timeout-continuation-2: Timeout continuation');
       expect(result.response.content).toContain('Continuation 1 completed');
-      expect(result.response.content).toContain('Continuation 2 completed');
-      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(4);
-      expect(mockExecuteAgent).toHaveBeenCalledTimes(4);
-      const [, firstContinuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
-      const [, secondContinuationInstruction] = mockExecuteAgent.mock.calls[3] ?? [];
-      expect(firstContinuationInstruction).toContain('Timed-out part: part-1');
-      expect(secondContinuationInstruction).toContain('Timed-out part: part-2');
+      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
+      const [, continuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
+      expect(continuationInstruction).toContain('Timed-out part: part-1, part-2');
     });
 
-    it('Given two timeout continuations and one continuation times out, When feedback fails, Then the step returns error', async () => {
-      mockExecuteAgent
-        .mockResolvedValueOnce({
-          persona: 'coder',
-          status: 'error',
-          content: '',
-          error: 'Part timeout after 1000ms',
-          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
-          timestamp: new Date('2026-04-01T00:00:00.000Z'),
-        })
-        .mockResolvedValueOnce({
-          persona: 'coder',
-          status: 'error',
-          content: '',
-          error: 'Part timeout after 1000ms',
-          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
-          timestamp: new Date('2026-04-01T00:00:30.000Z'),
-        })
-        .mockResolvedValueOnce({
-          persona: 'coder',
-          status: 'done',
-          content: 'Continuation 1 completed',
-          timestamp: new Date('2026-04-01T00:01:00.000Z'),
-        })
-        .mockResolvedValueOnce({
-          persona: 'coder',
-          status: 'error',
-          content: '',
-          error: 'Part timeout after 1000ms',
-          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
-          timestamp: new Date('2026-04-01T00:01:30.000Z'),
-        });
+    it('Given two timed-out parts and a failed combined continuation batch, When feedback fails, Then the step fails loud', async () => {
+      mockExecuteAgent.mockImplementation(async (_persona, executedInstruction: string) => ({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'Part timeout after 1000ms',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+        timestamp: new Date(),
+        ...(executedInstruction.includes('Timed-out part:') ? { error: 'Continuation timeout after 1000ms' } : {}),
+      }));
       const structuredCaller = {
         decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxTotalParts, options) => {
           options.onPromptResolved?.({
@@ -2188,41 +2351,30 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
       expect(result.response.status).toBe('error');
       expect(result.response.error).toContain('Team leader timeout continuation failed');
-      expect(result.response.error).toContain('part-1: part timeout: Part timeout after 1000ms');
       expect(result.response.error).toContain('part-2: part timeout: Part timeout after 1000ms');
-      expect(result.response.error).toContain('timeout-continuation-2: part timeout: Part timeout after 1000ms');
-      expect(result.response.error).not.toContain('timeout-continuation-3');
-      expect(mockExecuteAgent).toHaveBeenCalledTimes(4);
-      const [, firstContinuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
-      const [, secondContinuationInstruction] = mockExecuteAgent.mock.calls[3] ?? [];
-      expect(firstContinuationInstruction).toContain('Timed-out part: part-1');
-      expect(secondContinuationInstruction).toContain('Timed-out part: part-2');
+      expect(result.response.error).toContain('timeout-continuation: part timeout: Continuation timeout after 1000ms');
+      expect(result.response.error).not.toContain('timeout-continuation-2');
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
+      const [, continuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
+      expect(continuationInstruction).toContain('Timed-out part: part-2');
     });
 
-    it('Given a timeout continuation returns provider_error with a successful part, When feedback fails, Then the step returns error', async () => {
-      mockExecuteAgent
-        .mockResolvedValueOnce({
-          persona: 'coder',
-          status: 'error',
-          content: '',
-          error: 'Part timeout after 1000ms',
-          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
-          timestamp: new Date('2026-04-01T00:00:00.000Z'),
-        })
-        .mockResolvedValueOnce({
-          persona: 'coder',
-          status: 'done',
-          content: 'Independent part completed',
-          timestamp: new Date('2026-04-01T00:00:30.000Z'),
-        })
-        .mockResolvedValueOnce({
-          persona: 'coder',
-          status: 'error',
-          content: '',
-          error: 'Upstream model returned 500',
-          failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
-          timestamp: new Date('2026-04-01T00:01:00.000Z'),
-        });
+    it('Given a successful part and a timeout continuation provider_error, When feedback fails, Then the step fails loud', async () => {
+      mockExecuteAgent.mockImplementation(async (_persona, executedInstruction: string) => {
+        if (executedInstruction.includes('Timed-out part:')) {
+          return {
+            persona: 'coder', status: 'error', content: '', error: 'Upstream model returned 500',
+            failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR, timestamp: new Date(),
+          };
+        }
+        if (executedInstruction.includes('Implement second area')) {
+          return { persona: 'coder', status: 'done', content: 'Independent part completed', timestamp: new Date() };
+        }
+        return {
+          persona: 'coder', status: 'error', content: '', error: 'Part timeout after 1000ms',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT, timestamp: new Date(),
+        };
+      });
       const structuredCaller = {
         decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxTotalParts, options) => {
           options.onPromptResolved?.({
@@ -2247,7 +2399,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
       expect(result.response.status).toBe('error');
       expect(result.response.error).toContain('Team leader timeout continuation failed');
-      expect(result.response.error).toContain('part-1: part timeout: Part timeout after 1000ms');
       expect(result.response.error).toContain('timeout-continuation: provider error: Upstream model returned 500');
       expect(result.response.error).not.toContain('timeout-continuation-2');
       expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
@@ -2255,16 +2406,14 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       expect(continuationInstruction).toContain('Timed-out part: part-1');
     });
 
-    it('Given a timeout continuation finishes before another running part times out, When feedback fails, Then planning waits for the later timeout', async () => {
+    it('Given a later timeout in the same batch, When another continuation completes first, Then the barrier waits before planning', async () => {
       const part1Timeout = createDeferredResponse();
       const part2Timeout = createDeferredResponse();
       const continuation1 = createDeferredResponse();
-      const continuation2 = createDeferredResponse();
       mockExecuteAgent.mockImplementation((_persona, executedInstruction: string) => {
         if (executedInstruction.includes('Implement first area')) return part1Timeout.promise;
         if (executedInstruction.includes('Implement second area')) return part2Timeout.promise;
         if (executedInstruction.includes('Timed-out part: part-1')) return continuation1.promise;
-        if (executedInstruction.includes('Timed-out part: part-2')) return continuation2.promise;
         throw new Error(`Unexpected instruction: ${executedInstruction}`);
       });
       const structuredCaller = {
@@ -2301,19 +2450,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         timestamp: new Date('2026-04-01T00:00:00.000Z'),
       });
 
-      await vi.waitFor(() => {
-        expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
-      });
-      continuation1.resolve({
-        persona: 'coder',
-        status: 'done',
-        content: 'Continuation 1 completed before part 2 timed out',
-        timestamp: new Date('2026-04-01T00:01:00.000Z'),
-      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
+      expect(structuredCaller.requestMoreParts).not.toHaveBeenCalled();
 
-      await vi.waitFor(() => {
-        expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
-      });
       part2Timeout.resolve({
         persona: 'coder',
         status: 'error',
@@ -2324,36 +2464,32 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       });
 
       await vi.waitFor(() => {
-        expect(mockExecuteAgent).toHaveBeenCalledTimes(4);
+        expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
       });
-      continuation2.resolve({
+      continuation1.resolve({
         persona: 'coder',
         status: 'done',
-        content: 'Continuation 2 completed',
+        content: 'Combined continuation completed after both timeouts',
         timestamp: new Date('2026-04-01T00:03:00.000Z'),
       });
 
       const result = await runnerPromise;
 
       expect(result.response.status).toBe('done');
-      expect(result.response.content).toContain('Continuation 1 completed before part 2 timed out');
-      expect(result.response.content).toContain('Continuation 2 completed');
-      expect(result.response.content).toContain('## timeout-continuation-2: Timeout continuation');
-      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(4);
-      const [, secondContinuationInstruction] = mockExecuteAgent.mock.calls[3] ?? [];
-      expect(secondContinuationInstruction).toContain('Timed-out part: part-2');
+      expect(result.response.content).toContain('Combined continuation completed after both timeouts');
+      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
+      const [, continuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
+      expect(continuationInstruction).toContain('Timed-out part: part-1, part-2');
     });
 
-    it('Given structured feedback returns done while another part is still running, When that part later times out, Then continuation planning stays open', async () => {
+    it('Given an initial batch with a late timeout, When no continuation may start early, Then the barrier waits for the complete batch', async () => {
       const part1Timeout = createDeferredResponse();
       const part2Timeout = createDeferredResponse();
       const continuation1 = createDeferredResponse();
-      const continuation2 = createDeferredResponse();
       mockExecuteAgent.mockImplementation((_persona, executedInstruction: string) => {
         if (executedInstruction.includes('Implement first area')) return part1Timeout.promise;
         if (executedInstruction.includes('Implement second area')) return part2Timeout.promise;
         if (executedInstruction.includes('Timed-out part: part-1')) return continuation1.promise;
-        if (executedInstruction.includes('Timed-out part: part-2')) return continuation2.promise;
         throw new Error(`Unexpected instruction: ${executedInstruction}`);
       });
       const structuredCaller = {
@@ -2367,10 +2503,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
           ] };
         }),
-        requestMoreParts: vi.fn()
-          .mockRejectedValueOnce(new Error('feedback failed'))
-          .mockResolvedValueOnce({ done: true, reasoning: 'leader says complete', parts: [] })
-          .mockRejectedValue(new Error('feedback failed')),
+        requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };
 
       const runnerPromise = buildRunner(structuredCaller).runTeamLeaderStep(
@@ -2393,19 +2526,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         timestamp: new Date('2026-04-01T00:00:00.000Z'),
       });
 
-      await vi.waitFor(() => {
-        expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
-      });
-      continuation1.resolve({
-        persona: 'coder',
-        status: 'done',
-        content: 'Continuation 1 completed before part 2 timed out',
-        timestamp: new Date('2026-04-01T00:01:00.000Z'),
-      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
+      expect(structuredCaller.requestMoreParts).not.toHaveBeenCalled();
 
-      await vi.waitFor(() => {
-        expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
-      });
       part2Timeout.resolve({
         persona: 'coder',
         status: 'error',
@@ -2416,23 +2540,22 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       });
 
       await vi.waitFor(() => {
-        expect(mockExecuteAgent).toHaveBeenCalledTimes(4);
+        expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
       });
-      continuation2.resolve({
+      continuation1.resolve({
         persona: 'coder',
         status: 'done',
-        content: 'Continuation 2 completed after structured done',
+        content: 'Combined continuation completed after the barrier',
         timestamp: new Date('2026-04-01T00:03:00.000Z'),
       });
 
       const result = await runnerPromise;
 
       expect(result.response.status).toBe('done');
-      expect(result.response.content).toContain('Continuation 1 completed before part 2 timed out');
-      expect(result.response.content).toContain('Continuation 2 completed after structured done');
-      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(4);
-      const [, secondContinuationInstruction] = mockExecuteAgent.mock.calls[3] ?? [];
-      expect(secondContinuationInstruction).toContain('Timed-out part: part-2');
+      expect(result.response.content).toContain('Combined continuation completed after the barrier');
+      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
+      const [, continuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
+      expect(continuationInstruction).toContain('Timed-out part: part-1, part-2');
     });
 
     it('Given provider_error and feedback failure, When running team leader step, Then no timeout continuation is created', async () => {

@@ -25,6 +25,7 @@ export interface TaskResult {
   executionLog: string[];
   failureStep?: string;
   failureLastMessage?: string;
+  failureRetryable?: boolean;
   startedAt: string;
   completedAt: string;
   branch?: string;

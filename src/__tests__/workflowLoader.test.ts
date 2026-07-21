@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -669,10 +670,13 @@ steps:
   });
 
   it('should classify privileged worktree-local workflow paths from the default external worktree root as worktree trust', () => {
-    const worktreeDir = join(tempDir, '..', 'takt-worktrees', 'feature-branch');
-    const worktreeWorkflowsDir = join(worktreeDir, '.takt', 'workflows');
-    mkdirSync(worktreeWorkflowsDir, { recursive: true });
-    writeFileSync(join(worktreeWorkflowsDir, 'auto-improvement-loop.yaml'), `name: auto-improvement-loop
+    // 共有 tmp 直下の takt-worktrees を他テストファイルと共有するため一意化し、
+    // tempDir の外に作る branch dir は自分で削除する（afterEach は tempDir のみ）。
+    const worktreeDir = join(tempDir, '..', 'takt-worktrees', `feature-branch-${randomUUID()}`);
+    try {
+      const worktreeWorkflowsDir = join(worktreeDir, '.takt', 'workflows');
+      mkdirSync(worktreeWorkflowsDir, { recursive: true });
+      writeFileSync(join(worktreeWorkflowsDir, 'auto-improvement-loop.yaml'), `name: auto-improvement-loop
 description: worktree system workflow
 initial_step: route_context
 max_steps: 2
@@ -688,14 +692,17 @@ steps:
         next: COMPLETE
 `);
 
-    const workflow = loadWorkflowByIdentifier('./.takt/workflows/auto-improvement-loop.yaml', tempDir, { lookupCwd: worktreeDir });
+      const workflow = loadWorkflowByIdentifier('./.takt/workflows/auto-improvement-loop.yaml', tempDir, { lookupCwd: worktreeDir });
 
-    expect(workflow).not.toBeNull();
-    expect(getWorkflowTrustInfo(workflow!, tempDir)).toMatchObject({
-      source: 'worktree',
-      isProjectTrustRoot: false,
-      isProjectWorkflowRoot: false,
-    });
+      expect(workflow).not.toBeNull();
+      expect(getWorkflowTrustInfo(workflow!, tempDir)).toMatchObject({
+        source: 'worktree',
+        isProjectTrustRoot: false,
+        isProjectWorkflowRoot: false,
+      });
+    } finally {
+      rmSync(worktreeDir, { recursive: true, force: true });
+    }
   });
 
   it('should load privileged project-local workflows by name', () => {

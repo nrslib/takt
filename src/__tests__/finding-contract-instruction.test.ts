@@ -13,6 +13,7 @@ function makeContract(overrides: Partial<FindingContractInstructionContext> = {}
     ledgerSummary: { findings: [] },
     hasOpenFindings: false,
     hasWaivedFindings: false,
+    hasDismissedFindings: false,
     ...overrides,
   };
 }
@@ -29,6 +30,11 @@ function build(overrides: {
 }
 
 const REVIEWER_SCHEMA = { type: 'object' };
+// codex 対策#4: 本物の reviewer context では WorkflowEngineSetup が
+// rawFindingsJsonSchema と同時に必ず設定する（snapshot.ts の
+// computeReviewScopeSnapshotId）。ここでは実際のハッシュ形状は問わないため
+// 固定文字列を使う。
+const REVIEWER_SNAPSHOT_ID = 'snap-test-0000000000000000000000000000000000000000000000000000000000000000';
 
 describe('buildFindingContractInstruction', () => {
   it('never emits blank-line runs left behind by unused conditional blocks', () => {
@@ -36,8 +42,14 @@ describe('buildFindingContractInstruction', () => {
       for (const contract of [
         {},
         { hasOpenFindings: true },
-        { rawFindingsJsonSchema: REVIEWER_SCHEMA },
-        { rawFindingsJsonSchema: REVIEWER_SCHEMA, hasOpenFindings: true, hasWaivedFindings: true },
+        { rawFindingsJsonSchema: REVIEWER_SCHEMA, reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID },
+        {
+          rawFindingsJsonSchema: REVIEWER_SCHEMA,
+          reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+          hasOpenFindings: true,
+          hasWaivedFindings: true,
+          hasDismissedFindings: true,
+        },
       ]) {
         const rendered = build({ contract, language });
         expect(rendered, `${language} ${JSON.stringify(contract)}`).not.toMatch(/\n{3}/);
@@ -48,28 +60,103 @@ describe('buildFindingContractInstruction', () => {
 
   describe('reviewer instruction', () => {
     it('localizes the reviewer prose for ja', () => {
-      const rendered = build({ contract: { rawFindingsJsonSchema: REVIEWER_SCHEMA }, language: 'ja' });
+      const rendered = build({
+        contract: { rawFindingsJsonSchema: REVIEWER_SCHEMA, reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID },
+        language: 'ja',
+      });
       expect(rendered).toContain('統合台帳のコピー');
       expect(rendered).toContain('構造化 raw finding として報告してください');
     });
 
     it('does not inject the dispute guide into reviewers', () => {
-      const rendered = build({ contract: { rawFindingsJsonSchema: REVIEWER_SCHEMA, hasOpenFindings: true } });
+      const rendered = build({
+        contract: { rawFindingsJsonSchema: REVIEWER_SCHEMA, reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID, hasOpenFindings: true },
+      });
       expect(rendered).not.toContain('Disputed Findings');
     });
 
-    // rawFindingId / familyTag / kind / targetFindingId は manager-runner /
+    // provisional は fixer が直接直せない system finding であることを明示する
+    // （v2 梯子設計 実装単位9）。
+    it('explains provisional findings as unfixable system findings in both languages', () => {
+      const en = build({ contract: { hasOpenFindings: true }, language: 'en' });
+      expect(en).toContain('provisional');
+      expect(en).toContain('system findings');
+
+      const ja = build({ contract: { hasOpenFindings: true }, language: 'ja' });
+      expect(ja).toContain('provisional');
+      expect(ja).toContain('system finding');
+    });
+
+    // rawFindingId / familyTag / relation / targetFindingId は manager-runner /
     // manager-output-validation が英語リテラルで照合する raw finding のフィールド名。
     // ja テンプレートでも英語のまま出ることを確認する。
     it('keeps raw finding protocol field names in English for ja', () => {
       const rendered = build({
-        contract: { rawFindingsJsonSchema: REVIEWER_SCHEMA, hasOpenFindings: true, hasWaivedFindings: true },
+        contract: {
+          rawFindingsJsonSchema: REVIEWER_SCHEMA,
+          reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+          hasOpenFindings: true,
+          hasWaivedFindings: true,
+        },
         language: 'ja',
       });
       expect(rendered).toContain('rawFindingId');
       expect(rendered).toContain('familyTag');
-      expect(rendered).toContain('kind');
+      expect(rendered).toContain('relation');
       expect(rendered).toContain('targetFindingId');
+    });
+
+    it('instructs reviewers to reopen dismissed findings in both languages', () => {
+      const en = build({
+        contract: {
+          rawFindingsJsonSchema: REVIEWER_SCHEMA,
+          reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+          hasDismissedFindings: true,
+        },
+      });
+      const ja = build({
+        contract: {
+          rawFindingsJsonSchema: REVIEWER_SCHEMA,
+          reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+          hasDismissedFindings: true,
+        },
+        language: 'ja',
+      });
+
+      expect(en).toContain('listed as dismissed');
+      expect(en).toContain('relation "reopened"');
+      expect(ja).toContain('dismissed になっている指摘');
+      expect(ja).toContain('relation を "reopened"');
+    });
+  });
+
+  // codex 対策#4 の配線バグ回帰: rawFindingsJsonSchema（reviewer step の目印）が
+  // 立っているのに reviewScopeSnapshotId が欠落したまま `?? ''` でサイレントに
+  // 空文字へ落ちると、reviewer は空の snapshotId を source_quote evidence に
+  // echo し、manager 側の決定的検証（verifySourceQuoteEvidence）が必ず
+  // stale-snapshot で弾く。ParallelRunner が instruction context を inline で
+  // 複製していたために実際に発生した配線バグであり、このガードはその再発を防ぐ。
+  describe('reviewScopeSnapshotId wiring guard', () => {
+    it('throws when a reviewer contract is missing reviewScopeSnapshotId entirely', () => {
+      expect(() => build({ contract: { rawFindingsJsonSchema: REVIEWER_SCHEMA } }))
+        .toThrow(/reviewScopeSnapshotId/);
+    });
+
+    it("throws when a reviewer contract has an empty-string reviewScopeSnapshotId (the pre-fix `?? ''` fallback shape)", () => {
+      expect(() => build({
+        contract: { rawFindingsJsonSchema: REVIEWER_SCHEMA, reviewScopeSnapshotId: '' },
+      })).toThrow(/reviewScopeSnapshotId/);
+    });
+
+    it('does not throw for non-reviewer contracts even without reviewScopeSnapshotId', () => {
+      expect(() => build({ contract: {} })).not.toThrow();
+      expect(() => build({ contract: { hasOpenFindings: true } })).not.toThrow();
+    });
+
+    it('does not throw for a correctly wired reviewer contract', () => {
+      expect(() => build({
+        contract: { rawFindingsJsonSchema: REVIEWER_SCHEMA, reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID },
+      })).not.toThrow();
     });
   });
 

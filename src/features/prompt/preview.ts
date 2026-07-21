@@ -19,7 +19,7 @@ import {
   resolveStepProviderModel,
   type ProviderModelResolutionContext,
 } from '../../core/workflow/provider-resolution.js';
-import { resolveRuleBasedAutoRoutingProviderInfo } from '../../core/workflow/auto-routing/resolver.js';
+import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../../core/workflow/auto-routing/resolver.js';
 import { resolveEffectiveAutoRouting } from '../../core/workflow/auto-routing/effective-auto-routing.js';
 import { buildFindingManagerStep } from '../../core/workflow/findings/manager-step.js';
 import type { InstructionContext } from '../../core/workflow/instruction/instruction-context.js';
@@ -96,14 +96,11 @@ function resolveFindingManagerProviderModel(
   if (resolution.autoRouting === undefined) {
     return currentProviderInfo;
   }
-  return resolveRuleBasedAutoRoutingProviderInfo({
+  // findings-manager は AI ルーターを通らないため、実行時（OptionsBuilder）と
+  // 同じ rules → strategy デフォルトの決定的解決で表示する。
+  return resolveDeterministicAutoRoutingProviderInfo({
     autoRouting: resolution.autoRouting,
-    step: {
-      name: step.name,
-      tags: step.tags,
-      personaKey: step.providerRoutingPersonaKey,
-      instruction: step.instruction,
-    },
+    step: toAutoRoutingStepMetadata(step),
     currentProviderInfo,
   }) ?? currentProviderInfo;
 }
@@ -141,6 +138,9 @@ function buildInstructionContext(
     workflowSteps: config.steps,
     currentStepIndex: stepIndex,
     reportDir: step.outputContracts && step.outputContracts.length > 0 ? '.takt/runs/preview/reports' : undefined,
+    // プレビューは実 run を持たないため {report:X} の存在検証を無効化する
+    // （containment 検証は維持される）。
+    validateReportReferences: false,
     language,
   };
 }

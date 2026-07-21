@@ -172,6 +172,42 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
     expect(content.length).toBeGreaterThan(0);
   });
 
+  it.each([
+    'toString',
+    'constructor',
+    '__proto__',
+  ])('should reject prototype-derived facet type %s at the CLI boundary', (facetType) => {
+    const result = runTakt({
+      args: ['eject', facetType, 'coder'],
+      cwd: repo.path,
+      env: isolatedEnv.env,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(`Invalid facet type: ${facetType}`);
+    expect(result.stdout).not.toContain('Invalid facet type:');
+  });
+
+  it.each([
+    ['newline', 'bad\nname', 'bad\\nname'],
+    ['C1 CSI', 'bad\u009B31mname', 'bad\\x9b31mname'],
+  ])('should sanitize invalid facet type containing %s on stderr', (_label, facetType, safeFacetType) => {
+    const result = runTakt({
+      args: ['eject', facetType, 'coder'],
+      cwd: repo.path,
+      env: isolatedEnv.env,
+    });
+
+    expect(result.exitCode).toBe(1);
+    const errorLine = result.stderr
+      .split('\n')
+      .find((line) => line.includes('Invalid facet type:'));
+    expect(errorLine).toContain(`Invalid facet type: ${safeFacetType}`);
+    // The observed error line must not leak raw control characters (C0/DEL/C1)
+    // eslint-disable-next-line no-control-regex
+    expect(errorLine).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+  });
+
   it('should eject individual facet to global ~/.takt/ with --global', () => {
     const result = runTakt({
       args: ['eject', 'persona', 'coder', '--global'],

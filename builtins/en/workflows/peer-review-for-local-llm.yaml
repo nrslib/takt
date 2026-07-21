@@ -50,7 +50,7 @@ steps:
         tags:
           - review
         edit: false
-        persona: architecture-reviewer
+        persona: architecture-reviewer-for-local-llm
         policy: review
         knowledge:
           $param: arch_knowledge
@@ -59,7 +59,7 @@ steps:
         rules:
           - condition: approved
           - condition: needs_fix
-        instruction: review-arch
+        instruction: review-arch-for-local-llm
         output_contracts:
           report:
             - name: architect-review.md
@@ -131,7 +131,7 @@ steps:
         pass_previous_response: false
         provider_options:
           extends: review-readonly
-        instruction: review-coding
+        instruction: review-coding-for-local-llm
         rules:
           - condition: approved
           - condition: needs_fix
@@ -149,7 +149,7 @@ steps:
         pass_previous_response: false
         provider_options:
           extends: review-readonly
-        instruction: review-implementation-semantics
+        instruction: review-implementation-semantics-for-local-llm
         rules:
           - condition: approved
           - condition: needs_fix
@@ -167,7 +167,7 @@ steps:
           - ai-antipattern
         provider_options:
           extends: review-readonly
-        instruction: ai-antipattern-review
+        instruction: ai-antipattern-review-for-local-llm
         rules:
           - condition: approved
           - condition: needs_fix

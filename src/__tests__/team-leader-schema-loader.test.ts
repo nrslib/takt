@@ -43,6 +43,35 @@ describe('team_leader schema', () => {
     expect(teamLeader.max_total_parts).toBe(5);
   });
 
+  it('initial_max_parts と fail_on_part_error の設定を受け付ける', () => {
+    const raw = {
+      name: 'implement',
+      team_leader: {
+        initial_max_parts: 2,
+        max_total_parts: 4,
+        fail_on_part_error: true,
+      },
+      instruction: 'decompose',
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('initial_max_parts が max_total_parts を超える設定は拒否する', () => {
+    const raw = {
+      name: 'implement',
+      team_leader: {
+        initial_max_parts: 3,
+        max_total_parts: 2,
+      },
+      instruction: 'decompose',
+    };
+
+    expect(WorkflowStepRawSchema.safeParse(raw).success).toBe(false);
+  });
+
   it('max_parts > 3 は拒否する', () => {
     const raw = {
       name: 'implement',
@@ -96,12 +125,12 @@ describe('team_leader schema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('refill_threshold > max_parts は拒否する', () => {
+  it('refill_threshold の非0値は batch 障壁と両立しないため拒否する', () => {
     const raw = {
       name: 'implement',
       team_leader: {
         max_parts: 2,
-        refill_threshold: 3,
+        refill_threshold: 1,
       },
       instruction: 'decompose',
     };
@@ -110,18 +139,18 @@ describe('team_leader schema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('refill_threshold > max_concurrency は拒否する', () => {
+  it('refill_threshold: 0 は互換キーとして受け付ける', () => {
     const raw = {
       name: 'implement',
       team_leader: {
         max_concurrency: 2,
-        refill_threshold: 3,
+        refill_threshold: 0,
       },
       instruction: 'decompose',
     };
 
     const result = WorkflowStepRawSchema.safeParse(raw);
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
   it('parallel と team_leader の同時指定は拒否する', () => {
@@ -249,7 +278,9 @@ describe('normalizeWorkflowConfig team_leader', () => {
           team_leader: {
             persona: 'team-leader',
             max_concurrency: 2,
+            initial_max_parts: 2,
             max_total_parts: 5,
+            fail_on_part_error: true,
             timeout_ms: 90000,
             inspect_tools: [' Read ', 'Glob', 'grep'],
             part_tags: [' coding ', 'review'],
@@ -273,8 +304,9 @@ describe('normalizeWorkflowConfig team_leader', () => {
       personaDisplayName: 'team-leader',
       providerRoutingPersonaKey: 'team-leader',
       maxConcurrency: 2,
+      initialMaxParts: 2,
       maxTotalParts: 5,
-      refillThreshold: 0,
+      failOnPartError: true,
       timeoutMs: 90000,
       inspectTools: ['read', 'glob', 'grep'],
       partTags: ['coding', 'review'],
@@ -362,7 +394,6 @@ describe('normalizeWorkflowConfig team_leader', () => {
       providerRoutingPersonaKey: undefined,
       maxConcurrency: 2,
       maxTotalParts: 20,
-      refillThreshold: 0,
       timeoutMs: 900000,
       inspectTools: undefined,
       partPersona: undefined,

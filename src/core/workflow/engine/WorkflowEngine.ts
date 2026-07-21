@@ -4,6 +4,7 @@ import { createAutoRoutingAiRouter } from '../../../agents/auto-routing-usecase.
 import { createLogger, generateReportDir, getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
 import type {
   AgentResponse,
+  FindingContractConfig,
   WorkflowConfig,
   WorkflowMaxSteps,
   WorkflowResumePoint,
@@ -44,7 +45,13 @@ import {
 } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import { buildFindingsRuleContext } from '../findings/context.js';
-import { createFindingLedgerStore, type FindingLedgerStore } from '../findings/store.js';
+import { hasUnquotedIdentifierReference } from '../evaluation/rule-utils.js';
+import { createFindingLedgerStore, type FindingLedgerStore, type NeedsAdjudicationStopReason } from '../findings/store.js';
+import { stopBudgetRoundsCompleted } from '../findings/stop-budget.js';
+import { reviewIntegrityRoundsCompleted } from '../findings/review-integrity.js';
+import type { FindingLedger, FindingLedgerEntry, ReviewerAnomalyEntry } from '../findings/types.js';
+import { injectFindingConflictAdjudicationStep } from '../findings/adjudication-step.js';
+import { createFindingConflictAdjudicationRunner } from '../findings/adjudication-runner.js';
 import { ERROR_MESSAGES } from '../constants.js';
 import { inheritReviewReports, writeReviewReportInheritanceDiagnostic } from '../report-inheritance.js';
 import {
@@ -92,6 +99,7 @@ export class WorkflowEngine extends EventEmitter {
   private readonly sharedRuntime: WorkflowSharedRuntimeState;
   private readonly resumeStackPrefix: WorkflowResumePointEntry[];
   private readonly findingLedgerStore?: FindingLedgerStore;
+  private readonly findingContract?: FindingContractConfig;
 
   private readonly optionsBuilder: WorkflowEngineServices['optionsBuilder'];
   private readonly stepExecutor: WorkflowEngineServices['stepExecutor'];
@@ -139,7 +147,16 @@ export class WorkflowEngine extends EventEmitter {
       inheritedAutoRouting,
       options.autoStrategyOverride,
     );
-    this.config = config;
+    // The adjudication target must participate in normal step validation and execution,
+    // so it is injected into config.steps whenever the workflow (or a
+    // loop monitor judge) wires a rule to it and a finding contract is in
+    // effect. Injection happens before validateWorkflowConfig so the injected
+    // step is validated exactly like an authored step (session, provider,
+    // model), and before any service captures config.steps.
+    this.config = injectFindingConflictAdjudicationStep(
+      config,
+      options.inheritedFindingContract?.contract ?? config.findingContract,
+    );
     this.options = {
       ...options,
       rateLimitFallback: config.rateLimitFallback ?? options.rateLimitFallback,
@@ -167,13 +184,22 @@ export class WorkflowEngine extends EventEmitter {
 
     this.state = createInitialState(this.config, this.options);
     this.inheritPreviousReviewReports();
-    if (this.config.findingContract) {
-      this.findingLedgerStore = createFindingLedgerStore({
+    // workflow_call の親から継承した Finding Contract があればそれを優先する。
+    // 継承しないと子の parallel レビューが出す raw findings が親の台帳に届かず、
+    // fix ステップへ渡らないまま reviewers ↔ fix が回り続ける（実測: 56周・9時間）。
+    // 自前 finding_contract と継承の同時指定は WorkflowValidator で設定エラーに
+    // しているため、ここでは「継承 or 自前」のどちらか一方だけが来る前提で良い。
+    this.findingContract = this.options.inheritedFindingContract?.contract ?? this.config.findingContract;
+    if (this.findingContract) {
+      // 継承時は親と同一の FindingLedgerStore インスタンスをそのまま使う。
+      // ledger_path / raw_findings_path はワークフロー名に紐づくため、子が
+      // 自前で store を作り直すと親の when(findings.*) と別の台帳を見てしまう。
+      this.findingLedgerStore = this.options.inheritedFindingContract?.ledgerStore ?? createFindingLedgerStore({
         projectCwd: this.projectCwd,
         reportDir: this.runPaths.reportsAbs,
         workflowName: this.config.name,
-        ledgerPath: this.config.findingContract.ledgerPath,
-        rawFindingsPath: this.config.findingContract.rawFindingsPath,
+        ledgerPath: this.findingContract.ledgerPath,
+        rawFindingsPath: this.findingContract.rawFindingsPath,
       });
       this.refreshFindingsState();
       this.findingLedgerStore.createRunCopy();
@@ -202,6 +228,7 @@ export class WorkflowEngine extends EventEmitter {
       },
       setActiveResumePoint: this.setActiveResumePoint.bind(this),
       refreshFindingsState: this.refreshFindingsState.bind(this),
+      findingContract: this.findingContract,
       findingLedgerStore: this.findingLedgerStore,
       updatePersonaSession: this.updatePersonaSession.bind(this),
       resolveNextStepFromDone: this.resolveNextStepFromDone.bind(this),
@@ -239,6 +266,22 @@ export class WorkflowEngine extends EventEmitter {
       workflowCallRunner: this.workflowCallRunner,
       updatePersonaSession: this.updatePersonaSession.bind(this),
       emitReport: (step, filePath, fileName) => this.emit('step:report', step, filePath, fileName),
+      findingConflictAdjudicationRunner: this.findingContract && this.findingLedgerStore
+        ? createFindingConflictAdjudicationRunner({
+          ledgerStore: this.findingLedgerStore,
+          optionsBuilder: this.optionsBuilder,
+          stepExecutor: this.stepExecutor,
+          getCwd: () => this.cwd,
+          // 台帳へ書く文脈の workflowName は store が束縛する正準名を使う。
+          // workflow_call の子が親の台帳を継承した場合、this.config.name
+          // （子の名前）を使うと reconcile 文脈が親の台帳の workflowName と
+          // 食い違う（StepExecutor / ParallelRunner の manager 経路と同じ理由）。
+          workflowName: this.findingLedgerStore.workflowName,
+          runId: this.runPaths.slug,
+          refreshFindingsState: this.refreshFindingsState.bind(this),
+          emitEvent: (event, ...args) => this.emit(event as never, ...args as []),
+        })
+        : undefined,
     });
     workflowRunExecutors.set(this, () => this.runWithSystemCleanup(
       () => runWithWorkflowSpan(
@@ -272,6 +315,7 @@ export class WorkflowEngine extends EventEmitter {
           buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
           buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
           resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
+          resolveStepProviderModelBeforeAutoRouting: (step, runtime) => this.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           setActiveStep: this.setActiveResumePoint.bind(this),
           addUserInput: this.addUserInput.bind(this),
@@ -280,6 +324,9 @@ export class WorkflowEngine extends EventEmitter {
             this.maxSteps = maxSteps;
             this.sharedRuntime.maxSteps = maxSteps;
           },
+          checkCompletionGate: this.checkCompletionGate.bind(this),
+          checkReviewIntegrityGate: this.checkReviewIntegrityGate.bind(this),
+          recordNeedsAdjudication: this.recordNeedsAdjudication.bind(this),
         }),
         (result) => ({
           status: result.state.status,
@@ -310,7 +357,250 @@ export class WorkflowEngine extends EventEmitter {
     if (!this.findingLedgerStore) {
       return;
     }
-    this.state.findings = buildFindingsRuleContext(this.findingLedgerStore.loadLedger());
+    this.state.findings = buildFindingsRuleContext(this.findingLedgerStore.loadLedger(), this.cwd);
+  }
+
+  /** Open findings still carrying provisional metadata (shared by checkCompletionGate and recordNeedsAdjudication). */
+  private loadOpenProvisionalFindings(ledger: FindingLedger): FindingLedgerEntry[] {
+    return ledger.findings.filter(
+      (finding) => finding.status === 'open' && finding.provisional !== undefined,
+    );
+  }
+
+  /** Human-readable bullet lines for open provisional findings (shared by checkCompletionGate and recordNeedsAdjudication). */
+  private formatProvisionalFindingItems(provisionals: readonly FindingLedgerEntry[]): string[] {
+    return provisionals.map(
+      (finding) => `- ${finding.id} [${finding.provisional!.kind}]: ${finding.provisional!.reason}`,
+    );
+  }
+
+  /**
+   * 二系統台帳（review-integrity protocol）の review-integrity 側の未昇格 anomaly
+   * （recordNeedsAdjudication 専用）。product gate（checkCompletionGate）は
+   * この配列を一切参照しない — anomaly 単体で COMPLETE を拒否することはない
+   * （安全不変条件: anomaly は product gate を塞がない）。NEEDS_ADJUDICATION に
+   * 到達したときだけ、監査情報として同梱する。
+   */
+  private loadOutstandingReviewerAnomalies(ledger: FindingLedger): ReviewerAnomalyEntry[] {
+    return (ledger.reviewerAnomalies ?? []).filter((anomaly) => anomaly.promotedFindingId === undefined);
+  }
+
+  /**
+   * COMPLETE 遷移直前のエンジン最終不変条件。2つの独立したゲートを見る:
+   *
+   * 1. product gate: open な provisional finding（意味を確定
+   *    できなかった観測）が1件でも残っていれば COMPLETE を拒否する。
+   *
+   * 2. review-integrity gate（review-integrity requirement）: 未昇格（promotedFindingId
+   *    無し）の reviewer anomaly が1件でも残っていれば COMPLETE を拒否する。
+   *    二系統台帳（review-integrity protocol）で全指摘が anomaly に隔離された run は product
+   *    gate が空になり「即 COMPLETE」で実質レビューされずに通り得たため、product
+   *    gate とは別にここで fail-closed にする。anomaly は product finding では
+   *    ないので product gate（open/provisional の count）は塞がない — この
+   *    review-integrity gate だけが COMPLETE を止め、builtin は未昇格 anomaly を
+   *    見て再レビュー（有限回で NEEDS_ADJUDICATION）へルーティングする。custom
+   *    workflow がその配線を欠いても、このエンジンゲートが COMPLETE を拒否する。
+   *
+   * builtin workflow は先に findings.provisional.count / findings.reviewerAnomalies を
+   * 見てルーティングするため、ここが発火するのは custom workflow の設定不備 —
+   * 「ルールはあるが何もマッチしない」と同じクラスとして fail-fast する。判定は
+   * state.findings のキャッシュではなく保存直前の台帳を再読込して行う（並列子の
+   * 更新を見逃さない）。
+   */
+  private checkCompletionGate(): { ok: true } | { ok: false; reason: string } {
+    if (!this.findingLedgerStore) {
+      return { ok: true };
+    }
+    const ledger = this.findingLedgerStore.loadLedger();
+    const provisionals = this.loadOpenProvisionalFindings(ledger);
+    const anomalies = this.loadOutstandingReviewerAnomalies(ledger);
+    if (provisionals.length === 0 && anomalies.length === 0) {
+      return { ok: true };
+    }
+    const reasonLines: string[] = ['Cannot COMPLETE:'];
+    if (provisionals.length > 0) {
+      reasonLines.push(
+        `- ${provisionals.length} provisional finding(s) remain open (observations whose meaning could not be determined):`,
+        ...this.formatProvisionalFindingItems(provisionals),
+        '  Workflow rules must route on findings.provisional.count (e.g. to a replan step) before COMPLETE; a provisional finding is a system finding that blocks the final gate until later clean review evidence settles it.',
+      );
+    }
+    if (anomalies.length > 0) {
+      reasonLines.push(...this.formatReviewIntegrityGateReason(anomalies));
+    }
+    return { ok: false, reason: reasonLines.join('\n') };
+  }
+
+  private formatReviewIntegrityGateReason(anomalies: readonly ReviewerAnomalyEntry[]): string[] {
+    return [
+      `- ${anomalies.length} unpromoted reviewer anomaly(ies) remain (reviewer claims whose evidence did not mechanically verify — the reviewed scope was not soundly reviewed):`,
+      ...anomalies.map((anomaly) => `  - ${anomaly.id} [${anomaly.kind}]: ${anomaly.mismatchReason}`),
+      '  This is the review-integrity gate: an unpromoted anomaly is NOT a product finding, so it does not block the product gate — but the workflow must route on findings.reviewerAnomalies.count to re-review (reviewers) until a correctly-quoted finding promotes it or, once findings.reviewerAnomalies.budgetExhausted is true, to NEEDS_ADJUDICATION. Completion is never allowed while an unverified reviewer anomaly stands.',
+    ];
+  }
+
+  /**
+   * review-integrity gate 単独。checkCompletionGate は product
+   * gate（provisional）+ review-integrity gate（未昇格 anomaly）の両方を見るが、
+   * こちらは未昇格 anomaly だけを見る。returnValue 終端（`return: X`）に適用する
+   * ためのもの: `return: need_replan` のような「未解決の provisional を親/呼び出し元へ
+   * ハンドバックするシグナル」は provisional gate で塞ぐべきではない（provisional は
+   * そのシグナルで扱われる）が、未昇格 anomaly が残ったまま 'completed' になるのは
+   * どの完了経路でも許さない（review integrity は engine 側のハード不変条件）。
+   */
+  private checkReviewIntegrityGate(): { ok: true } | { ok: false; reason: string } {
+    if (!this.findingLedgerStore) {
+      return { ok: true };
+    }
+    const anomalies = this.loadOutstandingReviewerAnomalies(this.findingLedgerStore.loadLedger());
+    if (anomalies.length === 0) {
+      return { ok: true };
+    }
+    return { ok: false, reason: ['Cannot complete:', ...this.formatReviewIntegrityGateReason(anomalies)].join('\n') };
+  }
+
+  /**
+   * NEEDS_ADJUDICATION の停止理由（Finding Contract の有限停止予算
+   * 拡張）を、実際にマッチしたルールの condition（= 事実）から分類する。台帳
+   * 状態からの推定ではない — WorkflowRunLoop が遷移を起こしたルールの condition
+   * 文字列を渡してくる（recordNeedsAdjudication の引数）。builtin では fixpoint と
+   * budget は別ルールなので matchedCondition はどちらか一方だけを参照し、ルール順を
+   * 入れ替えても「先にマッチしたルールの condition」が渡るため常に正しい理由になる
+   * （first-match-wins）。
+   *
+   * ただし first-match-wins が確定させるのは「どのルール」であって、複合式
+   * （when-evaluator は `||` / `&&` を正式サポート）の中で「どのサブ式が成立
+   * 要因か」ではない。単一 condition が両シグナルを参照する場合
+   * （例: `fixpoint == true || budgetExhausted == true`）は、どちらが成立して
+   * マッチしたか condition テキストからは判別できないため、決めつけず
+   * 'unclassified' にする（verbatim の matchedCondition は監査レポートに残る）。
+   * loop-monitor judge override 等で condition が取れない場合
+   * （matchedCondition === undefined）や、両シグナルとも参照しない場合も
+   * 'unclassified'。
+   *
+   * シグナル検出は hasUnquotedIdentifierReference（rule-utils / when-evaluator と
+   * 同じ引用除去・識別子境界処理）で行う。単純な includes() は引用文字列内の
+   * 一致（例: `... != "findings.provisional.fixpoint"` は budget のみの有効条件）や
+   * 部分文字列の偶然一致を拾うため使わない。
+   */
+  private classifyNeedsAdjudicationStopReason(matchedCondition: string | undefined): NeedsAdjudicationStopReason {
+    if (matchedCondition === undefined) {
+      return 'unclassified';
+    }
+    const referencesFixpoint = hasUnquotedIdentifierReference(matchedCondition, 'findings.provisional.fixpoint');
+    const referencesBudget = hasUnquotedIdentifierReference(matchedCondition, 'findings.rounds.budgetExhausted');
+    // review-integrity requirement: review-integrity 予算切れ（未昇格 anomaly が有限回の
+    // 再レビューでも補完できず NEEDS_ADJUDICATION へ）。findings.rounds.budgetExhausted
+    // とは別の識別子なので取り違えない。
+    const referencesReviewIntegrity = hasUnquotedIdentifierReference(matchedCondition, 'findings.reviewerAnomalies.budgetExhausted');
+    const signalCount = [referencesFixpoint, referencesBudget, referencesReviewIntegrity].filter(Boolean).length;
+    if (signalCount !== 1) {
+      // 複数シグナルを1条件が参照する場合はどれが成立要因か判別できない。
+      return 'unclassified';
+    }
+    if (referencesFixpoint) {
+      return 'fixpoint';
+    }
+    if (referencesBudget) {
+      return 'budget-exhausted';
+    }
+    if (referencesReviewIntegrity) {
+      return 'review-integrity-exhausted';
+    }
+    return 'unclassified';
+  }
+
+  /**
+   * `next: NEEDS_ADJUDICATION` 到達時に、open provisional findings と発生元
+   * （sourceRawFindingIds / reason / reviewers）、実際にマッチした condition
+   * （matchedCondition）と、そこから分類した停止理由（fixpoint /
+   * budget-exhausted）を監査レポート（findings-ledger store 経由）へ永続化し、
+   * CLI に表示する人間可読な abort reason を返す。matchedCondition は
+   * WorkflowRunLoop が「NEEDS_ADJUDICATION へ遷移させたルールの condition」を
+   * 渡してくる事実であり、台帳状態からの推定ではない。findingLedgerStore は
+   * 必ず定義済み — この遷移は findings.* を参照する rule からしか到達できず、
+   * WorkflowValidator が finding_contract 無しでのその rule 記述自体を拒否する
+   * （validateNeedsAdjudicationRuleContract）。
+   */
+  private recordNeedsAdjudication(matchedCondition?: string): string {
+    const ledger = this.findingLedgerStore!.loadLedger();
+    const provisionals = this.loadOpenProvisionalFindings(ledger);
+    const reviewerAnomalies = this.loadOutstandingReviewerAnomalies(ledger);
+    const stopReason = this.classifyNeedsAdjudicationStopReason(matchedCondition);
+    const roundsCompleted = stopBudgetRoundsCompleted(ledger);
+    // headline のラウンド数は停止理由に合わせる: review-integrity 予算切れなら
+    // review-integrity の完了ラウンド数、それ以外は stop budget のラウンド数。
+    const headlineRounds = stopReason === 'review-integrity-exhausted'
+      ? reviewIntegrityRoundsCompleted(ledger)
+      : roundsCompleted;
+    const stopBudget = ledger.stopBudget !== undefined
+      ? { roundsCompleted, firstRoundAt: ledger.stopBudget.firstRoundAt }
+      : undefined;
+    this.findingLedgerStore!.saveNeedsAdjudicationReport({
+      version: 1,
+      runId: this.runPaths.slug,
+      stepName: this.state.currentStep,
+      reachedAt: new Date().toISOString(),
+      stopReason,
+      ...(matchedCondition !== undefined ? { matchedCondition } : {}),
+      ...(stopBudget !== undefined ? { stopBudget } : {}),
+      provisionalFindings: provisionals.map((finding) => ({
+        findingId: finding.id,
+        kind: finding.provisional!.kind,
+        stableKey: finding.provisional!.stableKey,
+        reason: finding.provisional!.reason,
+        reviewers: finding.reviewers,
+        sourceRawFindingIds: finding.provisional!.sourceRawFindingIds,
+      })),
+      ...(reviewerAnomalies.length > 0
+        ? {
+          reviewerAnomalies: reviewerAnomalies.map((anomaly) => ({
+            id: anomaly.id,
+            kind: anomaly.kind,
+            stableKey: anomaly.stableKey,
+            reason: anomaly.mismatchReason,
+            reviewers: anomaly.reviewers,
+            sourceRawFindingIds: anomaly.sourceRawFindingIds,
+            occurrences: anomaly.occurrences,
+          })),
+        }
+        : {}),
+    });
+    // review-integrity 側で止まったときは anomaly を、それ以外は provisional を
+    // 明細として出す（両方あれば両方）。
+    const items = [
+      ...this.formatProvisionalFindingItems(provisionals),
+      ...reviewerAnomalies.map((anomaly) => `- ${anomaly.id} [${anomaly.kind}]: ${anomaly.mismatchReason}`),
+    ];
+    const headline = this.buildNeedsAdjudicationHeadline(
+      stopReason,
+      provisionals.length,
+      reviewerAnomalies.length,
+      headlineRounds,
+    );
+    return [
+      headline,
+      ...items,
+      'A human must adjudicate: edit the finding ledger to drop/resolve the stuck provisional finding(s) or reviewer anomaly(ies), or provide new review evidence (a correctly-quoted finding that promotes the anomaly), then continue with `takt resume`.',
+    ].join('\n');
+  }
+
+  private buildNeedsAdjudicationHeadline(
+    stopReason: NeedsAdjudicationStopReason,
+    provisionalCount: number,
+    anomalyCount: number,
+    roundsCompleted: number,
+  ): string {
+    switch (stopReason) {
+      case 'budget-exhausted':
+        return `NEEDS_ADJUDICATION: the findings-manager stop budget was exhausted (${roundsCompleted} round(s) completed) while ${provisionalCount} provisional finding(s) remained open and unresolved:`;
+      case 'fixpoint':
+        return `NEEDS_ADJUDICATION: ${provisionalCount} provisional finding(s) reached a fixpoint (no meaningful change across consecutive review rounds) and cannot be resolved automatically:`;
+      case 'review-integrity-exhausted':
+        return `NEEDS_ADJUDICATION: the review-integrity budget was exhausted (${roundsCompleted} round(s) completed) while ${anomalyCount} unpromoted reviewer anomaly(ies) — reviewer claims whose evidence never mechanically verified — could not be substantiated by re-review:`;
+      case 'unclassified':
+        return `NEEDS_ADJUDICATION: the workflow routed to a human-adjudication stop with ${provisionalCount} provisional finding(s) and ${anomalyCount} unpromoted reviewer anomaly(ies) still open:`;
+    }
   }
 
   private inheritPreviousReviewReports(): void {
@@ -597,11 +887,15 @@ export class WorkflowEngine extends EventEmitter {
           buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
           buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
           resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
+          resolveStepProviderModelBeforeAutoRouting: (step, runtime) => this.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           setActiveStep: this.setActiveResumePoint.bind(this),
           addUserInput: this.addUserInput.bind(this),
           emit: (event, ...args) => this.emit(event as never, ...args as []),
           updateMaxSteps: () => {},
+          checkCompletionGate: this.checkCompletionGate.bind(this),
+          checkReviewIntegrityGate: this.checkReviewIntegrityGate.bind(this),
+          recordNeedsAdjudication: this.recordNeedsAdjudication.bind(this),
         }),
         (result) => ({
           status: result.isComplete ? this.state.status : 'running',

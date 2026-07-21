@@ -14,6 +14,7 @@ npm run build
 npm run lint
 npm test
 npm run test:it
+npm run test:prompt-evals
 npm run test:e2e:mock
 ```
 
@@ -41,8 +42,11 @@ npm run build
 npm run lint
 npm test
 npm run test:it
+npm run test:prompt-evals
 npm run test:e2e:mock
 ```
+
+`npm test` は unit gate です。integration・regression・performance テストは `npm run test:it`、決定的な OpenCode prompt smoke suite は `npm run test:prompt-evals` で実行します。`npm test -- <test-file>` は、指定した各 source test を unit、parallel integration、serial Git、serial workflow のいずれか1つへ振り分けます。選択された runner は順番にすべて実行され、最初に失敗した子プロセスの終了コードを返します。リリース担当者は、全 provider の E2E suite を含む完全な release path を `npm run check:release` で検証できます。
 
 E2E テストの実行方法と前提条件は [E2E テスト概要](./testing/e2e.md) を参照してください。
 

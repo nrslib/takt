@@ -2,15 +2,19 @@
  * Session management utilities
  */
 
-import { existsSync, readFileSync, appendFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { ensureDir } from '../config/index.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { generateReportDir as buildReportDir } from '../../shared/utils/index.js';
 import type {
   SessionLog,
   NdjsonRecord,
   NdjsonWorkflowStart,
 } from '../../shared/utils/index.js';
+import {
+  appendPrivateFile,
+  ensurePrivateDirectory,
+  repairPrivateDirectory,
+} from '../../shared/utils/private-file.js';
 
 export type {
   SessionLog,
@@ -48,7 +52,26 @@ export interface FailureInfo {
 export class SessionManager {
   /** Append a single NDJSON line to a log file */
   appendNdjsonLine(filepath: string, record: NdjsonRecord): void {
-    appendFileSync(filepath, JSON.stringify(record) + '\n', 'utf-8');
+    const line = JSON.stringify(record) + '\n';
+    try {
+      appendPrivateFile(filepath, line);
+      if (existsSync(filepath)) {
+        return;
+      }
+    } catch (error: unknown) {
+      const logsDir = dirname(filepath);
+      if (existsSync(logsDir)) {
+        throw error;
+      }
+    }
+
+    const logsDir = dirname(filepath);
+    ensurePrivateDirectory(logsDir);
+    repairPrivateDirectory(logsDir);
+    process.stderr.write(
+      `[takt] Log directory disappeared during execution and was recreated: ${logsDir}. Previous log entries may have been lost.\n`,
+    );
+    appendPrivateFile(filepath, line);
   }
 
 
@@ -60,7 +83,8 @@ export class SessionManager {
     options: { logsDir: string },
   ): string {
     const { logsDir } = options;
-    ensureDir(logsDir);
+    ensurePrivateDirectory(logsDir);
+    repairPrivateDirectory(logsDir);
 
     const filepath = join(logsDir, `${sessionId}.jsonl`);
     const record: NdjsonWorkflowStart = {

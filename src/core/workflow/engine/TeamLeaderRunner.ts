@@ -30,7 +30,8 @@ import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js
 import { isPlanningBudgetError } from './team-leader-budget-errors.js';
 import { resolveInspectToolsForProvider } from './engine-provider-options.js';
 import { resolveAutoRoutingBatch, resolveAutoRoutingRuntime } from '../auto-routing/resolver.js';
-import { recordDelegatedAgentUsage } from './delegated-agent-usage.js';
+import { InstructionBuildTransaction } from './instruction-build-transaction.js';
+import { recordAgentUsageEvent } from './agent-usage-event.js';
 
 const log = createLogger('team-leader-runner');
 
@@ -95,6 +96,8 @@ export class TeamLeaderRunner {
     }
     const teamLeaderConfig = step.teamLeader;
     const parentIteration = state.iteration;
+    const attemptState = captureTeamLeaderAttemptState(state);
+    const instructionTransaction = new InstructionBuildTransaction();
 
     const stepIteration = incrementStepIteration(state, step.name);
     const leaderStep = createTeamLeaderPlanningStep(step);
@@ -104,6 +107,9 @@ export class TeamLeaderRunner {
       state,
       task,
       maxSteps,
+      undefined,
+      undefined,
+      instructionTransaction,
     );
     const leaderRuntime = await this.resolveLeaderAutoRouting(leaderStep, runtime);
     const leaderProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, leaderRuntime);
@@ -129,27 +135,26 @@ export class TeamLeaderRunner {
       throw new Error('structuredCaller is required for team leader execution');
     }
     const leaderStartedAt = Date.now();
-    let parts: PartDefinition[];
-    let leaderProviderUsage: AgentResponse['providerUsage'];
-    let didRecordLeaderUsage = false;
-    try {
-      const decomposition = await runWithPhaseSpan(
+    const decomposition = await runWithPhaseSpan(
+      {
+        enabled: this.deps.observabilityEnabled,
+        runId: this.deps.observabilityRunId,
+        workflowName: this.deps.getWorkflowName(),
+        step: leaderStep,
+        iteration: parentIteration,
+        phase: 1,
+        phaseName: 'execute',
+        instruction,
+        phaseExecutionId,
+        workflowStack: this.deps.getCurrentWorkflowStack?.(),
+        sanitizeText: this.deps.sanitizeObservabilityText,
+        providerInfo: leaderProviderInfo,
+        getPromptParts: () => resolvedPromptParts,
+      },
+      () => structuredCaller.decomposeTask(
+        instruction,
+        teamLeaderConfig.initialMaxParts ?? teamLeaderConfig.maxTotalParts,
         {
-          enabled: this.deps.observabilityEnabled,
-          runId: this.deps.observabilityRunId,
-          workflowName: this.deps.getWorkflowName(),
-          step: leaderStep,
-          iteration: parentIteration,
-          phase: 1,
-          phaseName: 'execute',
-          instruction,
-          phaseExecutionId,
-          workflowStack: this.deps.getCurrentWorkflowStack?.(),
-          sanitizeText: this.deps.sanitizeObservabilityText,
-          providerInfo: leaderProviderInfo,
-          getPromptParts: () => resolvedPromptParts,
-        },
-        () => structuredCaller.decomposeTask(instruction, teamLeaderConfig.maxTotalParts, {
           cwd: this.deps.getCwd(),
           persona: leaderStep.persona,
           personaPath: leaderStep.personaPath,
@@ -165,7 +170,6 @@ export class TeamLeaderRunner {
           abortSignal: leaderBaseOptions.abortSignal,
           onStream: leaderBaseOptions.onStream,
           onAgentResponse: (response) => {
-            didRecordLeaderUsage = true;
             this.recordUsage(
               leaderStep.name,
               leaderProviderInfo,
@@ -174,7 +178,6 @@ export class TeamLeaderRunner {
             );
           },
           onAgentError: () => {
-            didRecordLeaderUsage = true;
             this.recordUsage(leaderStep.name, leaderProviderInfo, false);
           },
           onPromptResolved: (promptParts) => {
@@ -183,23 +186,13 @@ export class TeamLeaderRunner {
             this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, phaseExecutionId, parentIteration);
             didEmitPhaseStart = true;
           },
-        }), (result) => ({
-          status: 'done',
-          content: JSON.stringify({ parts: result.parts }, null, 2),
-        }),
-      );
-      parts = decomposition.parts;
-      leaderProviderUsage = decomposition.providerUsage;
-      if (!didRecordLeaderUsage) {
-        didRecordLeaderUsage = true;
-        this.recordUsage(leaderStep.name, leaderProviderInfo, true, leaderProviderUsage);
-      }
-    } catch (error) {
-      if (!didRecordLeaderUsage) {
-        this.recordUsage(leaderStep.name, leaderProviderInfo, false);
-      }
-      throw error;
-    }
+        },
+      ), (result) => ({
+        status: 'done',
+        content: JSON.stringify({ parts: result.parts }, null, 2),
+      }),
+    );
+    const parts = decomposition.parts;
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${leaderStep.name}:1`);
     }
@@ -208,7 +201,6 @@ export class TeamLeaderRunner {
       status: 'done',
       content: JSON.stringify({ parts }, null, 2),
       timestamp: new Date(),
-      ...(leaderProviderUsage !== undefined ? { providerUsage: leaderProviderUsage } : {}),
     };
     this.deps.onPhaseComplete?.(leaderStep, 1, 'execute', leaderResponse.content, leaderResponse.status, leaderResponse.error, phaseExecutionId, parentIteration);
     this.emitLeaderRoutingDecisionEvent(
@@ -246,9 +238,7 @@ export class TeamLeaderRunner {
     const { plannedParts, partResults } = await runTeamLeaderExecution({
       initialParts: parts,
       maxConcurrency: teamLeaderConfig.maxConcurrency,
-      refillThreshold: teamLeaderConfig.refillThreshold,
       maxTotalParts: teamLeaderConfig.maxTotalParts,
-      abortSignal: leaderBaseOptions.abortSignal,
       onPartQueued: (part) => {
         parallelLogger?.addSubStep(part.id);
       },
@@ -290,10 +280,8 @@ export class TeamLeaderRunner {
         partResults: currentResults,
         scheduledIds,
         remainingPartBudget,
-        unfinishedScheduledPartCount,
       }) => {
         emitTeamLeaderProgressHint(this.deps.engineOptions, 'feedback');
-        let didRecordFeedbackUsage = false;
         try {
           const moreParts = await structuredCaller.requestMoreParts(
             instruction,
@@ -322,7 +310,6 @@ export class TeamLeaderRunner {
               abortSignal: leaderBaseOptions.abortSignal,
               onStream: leaderBaseOptions.onStream,
               onAgentResponse: (response) => {
-                didRecordFeedbackUsage = true;
                 this.recordUsage(
                   leaderStep.name,
                   leaderProviderInfo,
@@ -331,24 +318,13 @@ export class TeamLeaderRunner {
                 );
               },
               onAgentError: () => {
-                didRecordFeedbackUsage = true;
                 this.recordUsage(leaderStep.name, leaderProviderInfo, false);
               },
             },
           );
-          if (!didRecordFeedbackUsage) {
-            didRecordFeedbackUsage = true;
-            this.recordUsage(leaderStep.name, leaderProviderInfo, true, moreParts.providerUsage);
-          }
           await this.addPartAutoRouting(routedProviderInfoByPart, step, moreParts.parts, runtime);
           return moreParts;
         } catch (error) {
-          if (!didRecordFeedbackUsage) {
-            this.recordUsage(leaderStep.name, leaderProviderInfo, false);
-          }
-          if (leaderBaseOptions.abortSignal?.aborted) {
-            throw error;
-          }
           if (isPlanningBudgetError(error)) {
             throw error;
           }
@@ -358,7 +334,6 @@ export class TeamLeaderRunner {
             scheduledIds,
             remainingPartBudget,
             coveredTimedOutPartIds,
-            unfinishedScheduledPartCount,
             language: this.deps.engineOptions.language,
           });
           if (timeoutFallback) {
@@ -384,10 +359,14 @@ export class TeamLeaderRunner {
         part,
         partIndex,
         parentIteration,
+        state,
+        task,
+        maxSteps,
         teamLeaderConfig.timeoutMs,
         updatePersonaSession,
         parallelLogger,
         this.buildPartRuntime(runtime, routedProviderInfoByPart.get(part.id)),
+        instructionTransaction,
       ).catch((error) => buildTeamLeaderErrorPartResult(step, part, error)),
     });
     this.emitPartRoutingDecisionEvents(step, partResults, routedProviderInfoByPart, parentIteration);
@@ -398,24 +377,26 @@ export class TeamLeaderRunner {
         ...rateLimitedResult.response,
         persona: step.name,
       };
-      state.stepOutputs.set(step.name, rateLimitedResponse);
-      state.lastOutput = rateLimitedResponse;
+      rollbackTeamLeaderAttempt(instructionTransaction, state, attemptState, updatePersonaSession);
       return {
         response: rateLimitedResponse,
         instruction,
         providerInfo: rateLimitedResult.providerInfo,
-        consumedStepIterations: [step.name],
+        consumedStepIterations: [],
       };
     }
 
-    const allFailed = partResults.every((result) => result.response.status === 'error');
+    const failedResults = partResults.filter((result) => result.response.status === 'error');
+    const allFailed = failedResults.length === partResults.length;
     const timeoutContinuationFailed = hasFailedTimeoutContinuationResult(partResults);
-    if (allFailed || timeoutContinuationFailed) {
-      const failedResults = partResults.filter((result) => result.response.status === 'error');
+    const failClosedPartError = teamLeaderConfig.failOnPartError === true && failedResults.length > 0;
+    if (allFailed || timeoutContinuationFailed || failClosedPartError) {
       const errors = failedResults.map((result) => `${result.part.id}: ${resolvePartErrorDetail(result)}`).join('; ');
       const errorMessage = allFailed
         ? `All team leader parts failed: ${errors}`
-        : `Team leader timeout continuation failed: ${errors}`;
+        : timeoutContinuationFailed
+          ? `Team leader timeout continuation failed: ${errors}`
+          : `Team leader part failed: ${errors}`;
       const errorResponse: AgentResponse = {
         persona: step.name,
         status: 'error',
@@ -462,7 +443,13 @@ export class TeamLeaderRunner {
     state.stepOutputs.set(step.name, aggregatedResponse);
     state.lastOutput = aggregatedResponse;
     if (aggregatedResponse.status === 'rate_limited') {
-      return { response: aggregatedResponse, instruction, providerInfo: leaderProviderInfo };
+      rollbackTeamLeaderAttempt(instructionTransaction, state, attemptState, updatePersonaSession);
+      return {
+        response: aggregatedResponse,
+        instruction,
+        providerInfo: leaderProviderInfo,
+        consumedStepIterations: [],
+      };
     }
     this.deps.stepExecutor.persistPreviousResponseSnapshot(
       state,
@@ -483,7 +470,7 @@ export class TeamLeaderRunner {
       return runtime;
     }
 
-    const currentProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, runtime);
+    const currentProviderInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(leaderStep, runtime);
     const autoRuntime = await resolveAutoRoutingRuntime({
       autoRouting: this.deps.engineOptions.autoRouting,
       step: {
@@ -495,7 +482,6 @@ export class TeamLeaderRunner {
       currentProviderInfo,
       routeWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeStep,
       logger: log,
-      abortSignal: this.deps.engineOptions.abortSignal,
     });
     if (!autoRuntime) {
       return runtime;
@@ -512,10 +498,14 @@ export class TeamLeaderRunner {
     part: PartDefinition,
     partIndex: number,
     parentIteration: number,
+    state: WorkflowState,
+    task: string,
+    maxSteps: WorkflowMaxSteps,
     defaultTimeoutMs: number,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     parallelLogger: ParallelLogger | undefined,
     runtime?: RuntimeStepResolution,
+    instructionTransaction?: InstructionBuildTransaction,
   ): Promise<PartResult> {
     const startedAt = Date.now();
     const result = await runTeamLeaderPart(
@@ -534,6 +524,19 @@ export class TeamLeaderRunner {
         iteration: parentIteration,
         workflowStack: this.deps.getCurrentWorkflowStack?.(),
         sanitizeText: this.deps.sanitizeObservabilityText,
+      },
+      (partStep) => {
+        const partIteration = incrementStepIteration(state, partStep.name);
+        return this.deps.stepExecutor.buildInstruction(
+          partStep,
+          partIteration,
+          state,
+          task,
+          maxSteps,
+          runtime?.fallback,
+          undefined,
+          instructionTransaction,
+        );
       },
       runtime,
     );
@@ -557,7 +560,7 @@ export class TeamLeaderRunner {
     success: boolean,
     usage?: AgentResponse['providerUsage'],
   ): void {
-    recordDelegatedAgentUsage(
+    recordAgentUsageEvent(
       this.deps.engineOptions,
       step,
       'team_leader',
@@ -662,12 +665,11 @@ export class TeamLeaderRunner {
             tags: partStep.tags,
             personaKey: partStep.providerRoutingPersonaKey,
           },
-          currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModel(partStep, partResolutionRuntime),
+          currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(partStep, partResolutionRuntime),
         };
       }),
       routeBatchWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeBatch,
       logger: log,
-      abortSignal: this.deps.engineOptions.abortSignal,
     });
 
     for (const [partId, providerInfo] of routed.entries()) {
@@ -682,5 +684,103 @@ export class TeamLeaderRunner {
       return runtime;
     }
     return undefined;
+  }
+}
+
+interface TeamLeaderAttemptState {
+  readonly lastOutput: WorkflowState['lastOutput'];
+  readonly previousResponseSourcePath: WorkflowState['previousResponseSourcePath'];
+  readonly pendingFallback: WorkflowState['pendingFallback'];
+  readonly stepOutputs: Map<string, AgentResponse>;
+  readonly personaSessions: Map<string, string>;
+  readonly stepIterations: Map<string, number>;
+}
+
+function captureTeamLeaderAttemptState(state: WorkflowState): TeamLeaderAttemptState {
+  return {
+    lastOutput: state.lastOutput,
+    previousResponseSourcePath: state.previousResponseSourcePath,
+    pendingFallback: state.pendingFallback,
+    stepOutputs: new Map(state.stepOutputs),
+    personaSessions: new Map(state.personaSessions),
+    stepIterations: new Map(state.stepIterations),
+  };
+}
+
+function rollbackTeamLeaderAttempt(
+  instructionTransaction: InstructionBuildTransaction,
+  state: WorkflowState,
+  snapshot: TeamLeaderAttemptState,
+  updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
+): void {
+  const errors: Error[] = [];
+
+  collectRollbackError(errors, 'instruction snapshot rollback', () => instructionTransaction.rollback());
+  restorePersonaSessions(state, snapshot.personaSessions, updatePersonaSession, errors);
+  collectRollbackError(errors, 'non-session attempt state rollback', () => {
+    restoreNonSessionAttemptState(state, snapshot);
+  });
+  verifyPersonaSessions(state, snapshot.personaSessions, errors);
+
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'Team leader attempt rollback failed');
+  }
+}
+
+function restoreNonSessionAttemptState(
+  state: WorkflowState,
+  snapshot: TeamLeaderAttemptState,
+): void {
+  state.lastOutput = snapshot.lastOutput;
+  state.previousResponseSourcePath = snapshot.previousResponseSourcePath;
+  state.pendingFallback = snapshot.pendingFallback;
+  state.stepOutputs.clear();
+  for (const [name, response] of snapshot.stepOutputs) {
+    state.stepOutputs.set(name, response);
+  }
+  state.stepIterations.clear();
+  for (const [name, iteration] of snapshot.stepIterations) {
+    state.stepIterations.set(name, iteration);
+  }
+}
+
+function restorePersonaSessions(
+  state: WorkflowState,
+  originalSessions: ReadonlyMap<string, string>,
+  updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
+  errors: Error[],
+): void {
+  const sessionKeys = new Set([...state.personaSessions.keys(), ...originalSessions.keys()]);
+  for (const sessionKey of sessionKeys) {
+    const currentSessionId = state.personaSessions.get(sessionKey);
+    const originalSessionId = originalSessions.get(sessionKey);
+    if (currentSessionId !== originalSessionId) {
+      collectRollbackError(errors, `session "${sessionKey}" rollback`, () => {
+        updatePersonaSession(sessionKey, originalSessionId);
+      });
+    }
+  }
+}
+
+function verifyPersonaSessions(
+  state: WorkflowState,
+  originalSessions: ReadonlyMap<string, string>,
+  errors: Error[],
+): void {
+  if (state.personaSessions.size !== originalSessions.size) {
+    errors.push(new Error('Team leader session rollback did not restore the captured session keys'));
+  }
+  for (const [sessionKey, originalSessionId] of originalSessions) {
+    if (state.personaSessions.get(sessionKey) !== originalSessionId) {
+      errors.push(new Error(`Team leader session rollback did not restore session "${sessionKey}"`));
+    }
+  }
+}
+
+function collectRollbackError(errors: Error[], stage: string, operation: () => void): void {
+  try {
+    operation();
+  } catch (error) {
+    errors.push(new Error(`Team leader attempt rollback failed during ${stage}`, { cause: error }));
   }
 }

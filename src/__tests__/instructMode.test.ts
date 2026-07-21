@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { setupRawStdin, restoreStdin, toRawInputs, createMockProvider } from './helpers/stdinSimulator.js';
 
@@ -86,6 +87,8 @@ const mockSelectOption = vi.mocked(selectOption);
 const mockInfo = vi.mocked(info);
 const mockLoadTemplate = vi.mocked(loadTemplate);
 const attachmentSessionDirs = new Set<string>();
+const originalTmpDir = process.env.TMPDIR;
+const TEST_TMPDIR = fs.realpathSync(os.tmpdir());
 
 function setupMockProvider(responses: string[]): void {
   const { provider } = createMockProvider(responses);
@@ -94,6 +97,7 @@ function setupMockProvider(responses: string[]): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  process.env.TMPDIR = TEST_TMPDIR;
   mockSelectOption.mockResolvedValue('execute');
 });
 
@@ -103,6 +107,11 @@ afterEach(() => {
     fs.rmSync(sessionDir, { recursive: true, force: true });
   }
   attachmentSessionDirs.clear();
+  if (originalTmpDir === undefined) {
+    delete process.env.TMPDIR;
+  } else {
+    process.env.TMPDIR = originalTmpDir;
+  }
 });
 
 function createOscImagePaste(): string {

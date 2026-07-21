@@ -1,8 +1,24 @@
 import type { AgentWorkflowStep, FindingContractConfig, WorkflowConfig } from '../../models/types.js';
-import { FindingManagerOutputJsonSchema } from './schemas.js';
+import { AmbiguousInterpretationsOutputJsonSchema, FindingManagerDecisionsJsonSchema } from './schemas.js';
 
-export const FINDING_MANAGER_SCHEMA_REF = 'takt.findings.manager.v1';
+export const FINDING_MANAGER_SCHEMA_REF = 'takt.findings.manager.v3';
 
+/** ambiguous raw 解釈フェーズの structured output。提案のみ。 */
+export const FINDING_INTERPRETATION_SCHEMA_REF = 'takt.findings.interpretation.v1';
+
+/**
+ * findings-manager の合成ステップを組み立てる。実行（manager-runner.ts）と
+ * 検証（WorkflowValidator.ts）とプレビュー（preview / workflowPreview）が
+ * 同じ形のステップを見ないと、検証やプレビューでは通る provider/model が
+ * 実行時に別の値へ解決される食い違いが生まれるため、ここへ一本化する。
+ *
+ * provider/model の優先順位: finding_contract.manager の直接指定が最優先
+ * （providerSpecified/modelSpecified を立てて persona_providers 等の後段解決を
+ * 抑止する）。未指定時はワークフローの provider/model を fallback として載せる。
+ * provider だけが直接指定された場合、workflow model を引き継ぐと provider と
+ * model の組み合わせが食い違うため model は載せない（modelSpecified は立てて
+ * 後段の model 解決も抑止する）。
+ */
 export function buildFindingManagerStep(input: {
   contract: FindingContractConfig;
   workflowProvider?: WorkflowConfig['provider'];
@@ -28,7 +44,29 @@ export function buildFindingManagerStep(input: {
     edit: false,
     structuredOutput: {
       schemaRef: FINDING_MANAGER_SCHEMA_REF,
-      schema: FindingManagerOutputJsonSchema,
+      schema: FindingManagerDecisionsJsonSchema,
+    },
+  };
+}
+
+/**
+ * ambiguous raw の解釈フェーズ用の合成ステップ。decisions manager と同じ
+ * persona / provider / model 解決を共有する（別の解決をすると preview と実行が
+ * 食い違う）。structured output は「提案」（AmbiguousInterpretation）のみ —
+ * 台帳操作の8配列は返させない。
+ */
+export function buildFindingInterpretationStep(input: {
+  contract: FindingContractConfig;
+  workflowProvider?: WorkflowConfig['provider'];
+  workflowModel?: WorkflowConfig['model'];
+}): AgentWorkflowStep {
+  const base = buildFindingManagerStep(input);
+  return {
+    ...base,
+    name: 'findings-interpreter',
+    structuredOutput: {
+      schemaRef: FINDING_INTERPRETATION_SCHEMA_REF,
+      schema: AmbiguousInterpretationsOutputJsonSchema,
     },
   };
 }

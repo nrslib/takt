@@ -88,12 +88,31 @@ export type WorkflowMaxSteps = number | 'infinite';
 
 export interface WorkflowStructuredOutput {
   schemaRef: string;
+  /**
+   * provider-facing schema（native structured output の生成拘束に使う）。
+   * OpenAI/Codex 系の strict 様式（全 properties が required、optional
+   * プロパティ禁止）を満たす形を保つこと。provider へはこちらだけを渡す。
+   */
   schema: Record<string, unknown>;
+  /**
+   * post-hoc 検証専用の寛容版 schema（任意）。schema が生成を拘束しない
+   * formless/劣化経路（providerSupportsStructuredOutput === false の provider や
+   * プロンプト埋め込み fallback）の出力検証にはこちらを使う。未指定なら
+   * `schema` で検証する。provider へ渡してはならない（strict 様式に違反し、
+   * native 経路では生成前に schema 自体が拒否される）。
+   */
+  validationSchema?: Record<string, unknown>;
 }
 
 export interface OutputContractItem {
   name: string;
   format: string;
+  /**
+   * 解決前の format 参照名（facet ref）。`format` は facet 本文へ解決済みの
+   * テキストになるため、"*-finding-contract" 命名規約を検証したい呼び出し元
+   * （WorkflowValidator の fail-fast チェックなど）はこちらを見る。
+   */
+  formatRef?: string;
   useJudge?: boolean;
   order?: string;
 }
@@ -161,6 +180,17 @@ interface WorkflowStepBase {
   delayBeforeMs?: number;
   rules?: WorkflowRule[];
   passPreviousResponse?: boolean;
+  /** Internal-only marker for Team Leader planning steps that need lossless state output. */
+  preserveFullPreviousResponse?: true;
+  /**
+   * Set only by the engine when it synthesizes a step (e.g. the
+   * finding-conflict-adjudication step injected into config.steps). Never
+   * settable from workflow YAML (the raw schema has no such field), which is
+   * how WorkflowValidator distinguishes a user-authored step that squats on a
+   * reserved synthetic name (configuration error) from the engine's own
+   * injection (allowed).
+   */
+  engineSynthesized?: true;
 }
 
 interface AgentWorkflowStepBase extends WorkflowStepBase {
@@ -398,6 +428,14 @@ export interface FallbackContext {
 export interface WorkflowState {
   workflowName: string;
   currentStep: string;
+  /**
+   * Name of the step the state machine advanced FROM into currentStep
+   * (updated in WorkflowRunLoop's advanceActiveStep). Used by the
+   * finding-conflict-adjudication synthetic step to resolve its dynamic
+   * return-to-origin transition; undefined at workflow start and after a
+   * resume that begins directly at a step.
+   */
+  previousStep?: string;
   iteration: number;
   findings?: FindingsRuleContext;
   stepOutputs: Map<string, AgentResponse>;

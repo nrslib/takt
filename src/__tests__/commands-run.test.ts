@@ -52,74 +52,14 @@ const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
 
 vi.mock('../app/cli/program.js', () => ({
   program: rootCommand,
-  resolvedCwd: '/test/cwd',
-  pipelineMode: false,
 }));
 
-vi.mock('../infra/config/index.js', () => ({
-  clearPersonaSessions: vi.fn(),
-  resolveConfigValue: vi.fn(),
+vi.mock('../app/cli/initialization.js', () => ({
+  getCliExecutionContext: vi.fn(() => ({ cwd: '/test/cwd', pipelineMode: false })),
 }));
 
-vi.mock('../infra/config/paths.js', () => ({
-  getGlobalConfigDir: vi.fn(() => '/tmp/takt'),
-}));
-
-vi.mock('../shared/ui/index.js', () => ({
-  success: vi.fn(),
-  info: vi.fn(),
-  error: vi.fn(),
-}));
-
-vi.mock('../features/tasks/index.js', () => ({
+vi.mock('../features/tasks/execute/runAllTasks.js', () => ({
   runAllTasks: (...args: unknown[]) => mockRunAllTasks(...args),
-  addTask: vi.fn(),
-  watchTasks: vi.fn(),
-  listTasks: vi.fn(),
-  resumeDirectRun: vi.fn(),
-}));
-
-vi.mock('../features/config/index.js', () => ({
-  ejectBuiltin: vi.fn(),
-  ejectFacet: vi.fn(),
-  parseFacetType: vi.fn(),
-  VALID_FACET_TYPES: ['personas', 'policies', 'knowledge', 'instructions', 'output-contracts'],
-  resetCategoriesToDefault: vi.fn(),
-  resetConfigToDefault: vi.fn(),
-  deploySkill: vi.fn(),
-  deploySkillCodex: vi.fn(),
-}));
-
-vi.mock('../features/prompt/index.js', () => ({
-  previewPrompts: vi.fn(),
-}));
-
-vi.mock('../features/catalog/index.js', () => ({
-  showCatalog: vi.fn(),
-}));
-
-vi.mock('../features/workflowAuthoring/index.js', () => ({
-  initWorkflowCommand: vi.fn(),
-  doctorWorkflowCommand: vi.fn(),
-}));
-
-vi.mock('../features/analytics/index.js', () => ({
-  computeReviewMetrics: vi.fn(),
-  formatReviewMetrics: vi.fn(),
-  parseSinceDuration: vi.fn(),
-  purgeOldEvents: vi.fn(),
-}));
-
-vi.mock('../commands/repertoire/add.js', () => ({
-  repertoireAddCommand: vi.fn(),
-}));
-
-vi.mock('../commands/repertoire/remove.js', () => ({
-  repertoireRemoveCommand: vi.fn(),
-}));
-
-vi.mock('../commands/repertoire/list.js', () => ({
-  repertoireListCommand: vi.fn(),
 }));
 
 import '../app/cli/commands.js';
@@ -176,5 +116,16 @@ describe('CLI run command', () => {
       provider: 'openai',
       providerSource: 'cli',
     });
+  });
+
+  it('should propagate a run implementation error to the CLI error boundary', async () => {
+    const implementationError = new Error('run implementation failed');
+    mockRunAllTasks.mockRejectedValueOnce(implementationError);
+    const runAction = commandActions.get('root.run');
+    const runCommand = commandMocks.get('root.run');
+
+    const execution = runAction?.(undefined, runCommand as never);
+
+    await expect(execution).rejects.toBe(implementationError);
   });
 });
