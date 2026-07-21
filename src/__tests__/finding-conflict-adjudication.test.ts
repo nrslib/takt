@@ -335,7 +335,7 @@ describe('applyFindingConflictAdjudication', () => {
     });
     expect(() => applyFindingConflictAdjudication({
       ledger, output, evidenceHash: 'hash-1', cwd, context,
-    })).toThrow(/verifiable/);
+    })).toThrow(/no path:line or path:start-end citation was found/);
   });
 
   it('finding_stale -> resolved does not accept a citation embedded inside a larger token', () => {
@@ -348,7 +348,7 @@ describe('applyFindingConflictAdjudication', () => {
 
     expect(() => applyFindingConflictAdjudication({
       ledger, output, evidenceHash: 'hash-non-boundary', cwd, context,
-    })).toThrow(/verifiable/);
+    })).toThrow(/no path:line or path:start-end citation was found/);
   });
 
   it('finding_stale -> resolved is rejected when the end of an embedded line range is outside the cited file', () => {
@@ -361,7 +361,7 @@ describe('applyFindingConflictAdjudication', () => {
 
     expect(() => applyFindingConflictAdjudication({
       ledger, output, evidenceHash: 'hash-out-of-range', cwd, context,
-    })).toThrow(/verifiable/);
+    })).toThrow(/location line 21 is out of range for "src\/a\.ts" \(file has 20 lines\)/);
   });
 
   it('finding_stale -> resolved is rejected when an embedded line range is reversed', () => {
@@ -374,7 +374,7 @@ describe('applyFindingConflictAdjudication', () => {
 
     expect(() => applyFindingConflictAdjudication({
       ledger, output, evidenceHash: 'hash-reversed-range', cwd, context,
-    })).toThrow(/verifiable/);
+    })).toThrow(/location range "src\/a\.ts:6-4" is invalid/);
   });
 
   it('finding_stale -> resolved does not accept an embedded citation outside the reviewed project', () => {
@@ -387,7 +387,7 @@ describe('applyFindingConflictAdjudication', () => {
 
     expect(() => applyFindingConflictAdjudication({
       ledger, output, evidenceHash: 'hash-outside-project', cwd, context,
-    })).toThrow(/verifiable/);
+    })).toThrow(/location path "\/etc\/hosts" resolves outside the project/);
   });
 
   it('evidence_invalid -> invalidated: machine-verifies when the finding location does not exist', () => {

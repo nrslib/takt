@@ -80,7 +80,7 @@ function observationFromContext(context: FindingReconcileContext): FindingLedger
 
 type ResolvedEvidenceVerification =
   | { outcome: 'verified'; evidence: string }
-  | { outcome: 'invalid' }
+  | { outcome: 'invalid'; reason: string }
   | { outcome: 'unverifiable'; reason: string };
 
 function isLocationCitation(value: string): boolean {
@@ -119,6 +119,7 @@ function validateResolvedEvidenceCitation(citation: string, cwd: string): Locati
 
 function verifyResolvedEvidence(evidence: readonly string[], cwd: string): ResolvedEvidenceVerification {
   let unverifiableReason: string | undefined;
+  let invalidReason: string | undefined;
   for (const entry of evidence) {
     for (const citation of extractLocationCitations(entry)) {
       const validation = validateResolvedEvidenceCitation(citation, cwd);
@@ -128,11 +129,18 @@ function verifyResolvedEvidence(evidence: readonly string[], cwd: string): Resol
       if (validation.outcome === 'unverifiable' && unverifiableReason === undefined) {
         unverifiableReason = validation.reason;
       }
+      if (validation.outcome === 'invalid' && invalidReason === undefined) {
+        invalidReason = validation.reason;
+      }
     }
   }
-  return unverifiableReason === undefined
-    ? { outcome: 'invalid' }
-    : { outcome: 'unverifiable', reason: unverifiableReason };
+  if (unverifiableReason !== undefined) {
+    return { outcome: 'unverifiable', reason: unverifiableReason };
+  }
+  if (invalidReason !== undefined) {
+    return { outcome: 'invalid', reason: invalidReason };
+  }
+  return { outcome: 'invalid', reason: 'no path:line or path:start-end citation was found' };
 }
 
 function assertKnownConflict(
@@ -202,7 +210,7 @@ export function applyFindingConflictAdjudication(
     if (verification.outcome === 'invalid') {
       throw new Error(
         `Cannot resolve the finding(s) for conflict "${conflict.id}": adjudication evidence must include at least `
-        + 'one verifiable "path:line" or "path:start-end" citation',
+        + `one verifiable "path:line" or "path:start-end" citation: ${verification.reason}`,
       );
     }
     updatedFindings = ledger.findings.map((finding) => {
