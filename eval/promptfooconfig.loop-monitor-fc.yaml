@@ -1,0 +1,85 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+
+description: 'TAKT facet eval: Finding Contract reviewers/fix loop monitor decisions'
+
+prompts:
+  - file://prompts/loop-monitor-reviewers-fix-fc.phase3.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/sample-project
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'post-fix review pending with an addressed open finding is healthy'
+    vars:
+      scenario: |
+        The consolidated ledger still lists F-001 as open.
+        The latest review predates the fix. The completed fix report says F-001 was addressed.
+        No review evidence exists after that fix. There are no stalled provisionals.
+    assert:
+      - type: javascript
+        metric: post-fix-pending/healthy
+        value: |
+          return output.trim() === '[_LOOP_JUDGE_REVIEWERS_FIX:1]';
+
+  - description: 'an open finding without an addressing fix is not automatically healthy'
+    vars:
+      scenario: |
+        The consolidated ledger lists F-001 as open.
+        The latest fix report does not mention or address F-001.
+        There is no evidence that F-001 was fixed.
+    assert:
+      - type: javascript
+        metric: open-without-fix/not-healthy
+        value: |
+          return ['[_LOOP_JUDGE_REVIEWERS_FIX:2]', '[_LOOP_JUDGE_REVIEWERS_FIX:3]'].includes(output.trim());
+
+  - description: 'a post-fix review reconfirming the same finding is unproductive but replannable'
+    vars:
+      scenario: |
+        A fix report says F-001 was addressed. A later review reconfirms F-001 with current-code evidence.
+        A broader implementation approach is available and can resolve the finding.
+    assert:
+      - type: javascript
+        metric: post-fix-reconfirmed/replan
+        value: |
+          return output.trim() === '[_LOOP_JUDGE_REVIEWERS_FIX:2]';
+
+  - description: 'the first new branch in a recently resolved family is partial-fix recurrence'
+    vars:
+      scenario: |
+        F-010 was recently resolved. The next review reports new F-011 with the same family_tag.
+        A replan can address every branch of that family together.
+    assert:
+      - type: javascript
+        metric: family-recurrence/replan
+        value: |
+          return output.trim() === '[_LOOP_JUDGE_REVIEWERS_FIX:2]';
+
+  - description: 'stalled provisionals must not continue as healthy'
+    vars:
+      scenario: |
+        Findings state shows a dismissable open provisional stalled for four manager rounds.
+        Resolved counts increased, but the provisional still blocks completion and fix iterations cannot settle it.
+    assert:
+      - type: javascript
+        metric: provisional-stall/adjudicate
+        value: |
+          return output.trim() === '[_LOOP_JUDGE_REVIEWERS_FIX:3]';
+
+  - description: 'a post-fix review that conflicts with current code remains replannable through dispute'
+    vars:
+      scenario: |
+        A review after the fix repeats F-020, but its claim conflicts with the cited current code.
+        The dispute, manager adjudication, and waive path is available.
+    assert:
+      - type: javascript
+        metric: stale-review/dispute
+        value: |
+          return output.trim() === '[_LOOP_JUDGE_REVIEWERS_FIX:2]';
