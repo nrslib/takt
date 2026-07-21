@@ -4231,27 +4231,6 @@ steps:
 
     expect(result.response.content).toBe('child abort output');
     expect(result.response.matchedRuleIndex).toBe(1);
-    expect(result.terminalAbort).toBeUndefined();
-
-    runWithResult.mockResolvedValue({
-      state: childState,
-      abort: {
-        kind: 'needs_adjudication',
-        reason: 'Finding adjudication is required',
-      },
-    });
-
-    const adjudicationResult = await runner.run(parentConfig.steps[0] as never);
-
-    expect(adjudicationResult.terminalAbort).toEqual({
-      kind: 'needs_adjudication',
-      reason: 'Finding adjudication is required',
-      failure: {
-        kind: 'needs_adjudication',
-        step: 'delegate',
-        reason: 'Finding adjudication is required',
-      },
-    });
   });
 
   it('WorkflowCallRunner は non-step_transition abort で reason と lastOutput がなくても ABORT を優先する', async () => {

@@ -1,6 +1,6 @@
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import type { AgentResponse, FallbackContext, LoopMonitorConfig, RateLimitFallbackProvider, WorkflowMaxSteps, WorkflowState, WorkflowStep } from '../../models/types.js';
-import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES, NEEDS_ADJUDICATION_STEP } from '../constants.js';
+import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type {
   RuntimeStepResolution,
   StepProviderInfo,
@@ -42,7 +42,7 @@ interface WorkflowRunLoopDeps {
   getStep: (name: string) => WorkflowStep;
   applyRuntimeEnvironment: (stage: 'step') => void;
   loopDetectorCheck: (stepName: string) => { shouldWarn?: boolean; shouldAbort?: boolean; count: number; isLoop: boolean };
-  cycleDetectorRecordAndCheck: (stepName: string) => { triggered: boolean; monitor?: LoopMonitorConfig; cycleCount: number };
+  cycleDetectorRecordAndCheck: (stepName: string, nextStep: string) => { triggered: boolean; monitor?: LoopMonitorConfig; cycleCount: number };
   resolveDoneTransition: (step: WorkflowStep, response: AgentResponse) => WorkflowRuleTransition;
   runLoopMonitorJudge: (
     monitor: LoopMonitorConfig,
@@ -94,39 +94,6 @@ interface WorkflowRunLoopDeps {
    * 最終的な COMPLETE は親の completion gate が検証する。
    */
   checkReturnValueGate: () => { ok: true } | { ok: false; reason: string };
-  /**
-   * `next: NEEDS_ADJUDICATION` 到達時に
-   * 呼ぶ。現在 open な provisional finding とその発生元を監査レポートへ永続化し
-   * （FindingLedgerStore.saveNeedsAdjudicationReport）、人間可読な abort reason
-   * 文字列を返す副作用込みの操作 — 純粋な "build" ではないため checkCompletionGate
-   * と違う名前にしている。matchedCondition には「NEEDS_ADJUDICATION へ遷移させた
-   * ルールの condition（事実）」を渡す（停止理由を台帳状態から推定させず、実際に
-   * マッチした条件から分類させるため）。
-   */
-  recordNeedsAdjudication: (matchedCondition?: string) => string;
-}
-
-/**
- * NEEDS_ADJUDICATION へ遷移させたルールの condition を返す。step 自身のルールが
- * 直接 NEEDS_ADJUDICATION を指した場合（transition.nextStep）だけ、その matched
- * rule の condition を信頼する — loop-monitor judge override は nextStep を
- * NEEDS_ADJUDICATION に変え得るが response.matchedRuleIndex は step の元ルール
- * （非終端）を指したままなので、judge のルール condition は表に出ない。その場合は
- * undefined を返し、停止理由は 'unclassified' として記録される。
- */
-function matchedNeedsAdjudicationCondition(
-  step: WorkflowStep,
-  response: AgentResponse,
-  transition: WorkflowRuleTransition,
-): string | undefined {
-  if (transition.nextStep !== NEEDS_ADJUDICATION_STEP) {
-    return undefined;
-  }
-  const index = response.matchedRuleIndex;
-  if (index == null) {
-    return undefined;
-  }
-  return step.rules?.[index]?.condition;
 }
 
 async function resolveStepPromotionRuntime(
@@ -403,6 +370,31 @@ function finalizeCompletionOrAbort(
   return undefined;
 }
 
+type TerminalTransitionResult =
+  | { handled: false }
+  | { handled: true; abort?: WorkflowAbortResult };
+
+function handleTerminalTransition(
+  deps: WorkflowRunLoopDeps,
+  nextStep: string,
+): TerminalTransitionResult {
+  if (nextStep === COMPLETE_STEP) {
+    const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
+    if (gateAbort) {
+      return { handled: true, abort: gateAbort };
+    }
+    deps.emit('workflow:complete', deps.state);
+    return { handled: true };
+  }
+  if (nextStep === ABORT_STEP) {
+    return {
+      handled: true,
+      abort: abortWorkflow(deps, 'step_transition', 'Workflow aborted by step transition'),
+    };
+  }
+  return { handled: false };
+}
+
 function validateUserInputRuntime(
   deps: WorkflowRunLoopDeps,
   step: WorkflowStep,
@@ -618,11 +610,6 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
       deps.emit('step:complete', step, response, instruction, step.name);
 
-      if (result.terminalAbort !== undefined) {
-        abort = abortWorkflow(deps, result.terminalAbort.kind, result.terminalAbort.reason);
-        break;
-      }
-
       if (response.status === 'rate_limited') {
         const currentProvider = completedProviderInfo;
         const consumedStepIterations = result.consumedStepIterations ?? [step.name];
@@ -728,7 +715,13 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         nextStep,
       });
 
-      const cycleCheck = deps.cycleDetectorRecordAndCheck(step.name);
+      const naturalTerminal = handleTerminalTransition(deps, nextStep);
+      if (naturalTerminal.handled) {
+        abort = naturalTerminal.abort;
+        break;
+      }
+
+      const cycleCheck = deps.cycleDetectorRecordAndCheck(step.name, nextStep);
       if (cycleCheck.triggered && cycleCheck.monitor) {
         log.info('Loop monitor cycle threshold reached', {
           cycle: cycleCheck.monitor.cycle,
@@ -739,25 +732,9 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         nextStep = await deps.runLoopMonitorJudge(cycleCheck.monitor, cycleCheck.cycleCount, step, stepRuntime, nextStep);
       }
 
-      if (nextStep === COMPLETE_STEP) {
-        const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
-        if (gateAbort) {
-          abort = gateAbort;
-          break;
-        }
-        deps.emit('workflow:complete', deps.state);
-        break;
-      }
-      if (nextStep === NEEDS_ADJUDICATION_STEP) {
-        abort = abortWorkflow(
-          deps,
-          'needs_adjudication',
-          deps.recordNeedsAdjudication(matchedNeedsAdjudicationCondition(step, response, transition)),
-        );
-        break;
-      }
-      if (nextStep === ABORT_STEP) {
-        abort = abortWorkflow(deps, 'step_transition', 'Workflow aborted by step transition');
+      const monitoredTerminal = handleTerminalTransition(deps, nextStep);
+      if (monitoredTerminal.handled) {
+        abort = monitoredTerminal.abort;
         break;
       }
       advanceActiveStep(deps, nextStep, deps.state.iteration);
@@ -874,11 +851,6 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     deps.state.pendingFallback = undefined;
   }
 
-  if (result.terminalAbort !== undefined) {
-    const abort = abortWorkflow(deps, result.terminalAbort.kind, result.terminalAbort.reason);
-    return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
-  }
-
   if (response.status === 'blocked') {
     const abort = abortWorkflow(deps, 'blocked', 'Workflow blocked and no user input provided');
     return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
@@ -986,7 +958,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
 
   const nextStep = requireNextStep(step, transition);
-  const isComplete = nextStep === COMPLETE_STEP || nextStep === ABORT_STEP || nextStep === NEEDS_ADJUDICATION_STEP;
+  const isComplete = nextStep === COMPLETE_STEP || nextStep === ABORT_STEP;
 
   if (!isComplete) {
     advanceActiveStep(deps, nextStep, deps.state.iteration);
@@ -995,13 +967,6 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     if (gateAbort) {
       return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort: gateAbort };
     }
-  } else if (nextStep === NEEDS_ADJUDICATION_STEP) {
-    const abort = abortWorkflow(
-      deps,
-      'needs_adjudication',
-      deps.recordNeedsAdjudication(matchedNeedsAdjudicationCondition(step, response, transition)),
-    );
-    return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
   }
 
   if (nextStep === ABORT_STEP) {

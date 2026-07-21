@@ -178,7 +178,6 @@ function makeHarness(initialLedger: FindingLedger): {
     saveRawFindings: () => '/tmp/raw-findings.json',
     saveManagerValidationReport: () => '/tmp/manager-report.json',
     saveConflictAdjudicationReport: () => '/tmp/adjudication-report.json',
-    saveNeedsAdjudicationReport: () => '/tmp/needs-adjudication.json',
   };
   const optionsBuilder = {
     buildAgentOptions: () => ({}),

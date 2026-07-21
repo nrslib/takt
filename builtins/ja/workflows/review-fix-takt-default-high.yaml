@@ -11,42 +11,70 @@ max_steps: 50
 initial_step: gather
 
 loop_monitors:
-  - cycle: [plan, write_tests, implement, reviewers, fix]
+  - cycle: [replan, implement]
     threshold: 2
     judge:
       persona: supervisor
       instruction: loop-monitor-fix-replan
       rules:
-        - condition: 直近の修正は行き詰まりではなく完了している
-          next: reviewers
+        - condition: 要件と受入条件を変えずに実装方針を再定義できる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 要件と受入条件を変えずに実装方針を再定義できる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, final-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 要件と受入条件を変えずに実装方針を再定義できる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
         - condition: 再計画により blocker の解消が進んでいる
-          next: plan
-        - condition: 同じ blocker が有効な再計画なしに繰り返されている
-          next: NEEDS_ADJUDICATION
-  - cycle: [reviewers, fix]
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [fix, reviewers]
     threshold: 3
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix-fc
       rules:
-        - condition: 指摘数が減少し修正が反映されている
-          next: reviewers
+        - condition: 修正後レビューで進捗が確認され、次の修正が実行可能である
+          next: fix
         - condition: 同じ指摘が繰り返されるが再計画で解消できる見込みがある
-          next: plan
-        - condition: 同じ指摘が有効な再計画なしに繰り返されている
-          next: NEEDS_ADJUDICATION
-  - cycle: [reviewers, final-gate, fix]
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [fix, reviewers, final-gate]
     threshold: 3
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix-fc
       rules:
-        - condition: 指摘数が減少し修正が反映されている
-          next: reviewers
+        - condition: 修正後レビューで進捗が確認され、次の修正が実行可能である
+          next: fix
         - condition: 同じ指摘が繰り返されるが再計画で解消できる見込みがある
-          next: plan
-        - condition: 同じ指摘が有効な再計画なしに繰り返されている
-          next: NEEDS_ADJUDICATION
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
 steps:
   - name: gather
     tags:
@@ -95,6 +123,22 @@ steps:
         - name: plan.md
           format: plan
 
+  - name: replan
+    tags: [plan]
+    edit: false
+    persona: planner
+    knowledge: architecture
+    instruction: replan-implementation
+    rules:
+      - condition: 実装方針の再定義が完了した
+        next: implement
+      - condition: 要件を満たす実現可能な方針がない
+        next: ABORT
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+
   - name: write_tests
     tags: [coding, test-planning]
     edit: true
@@ -132,7 +176,7 @@ steps:
       - condition: 実装完了
         next: reviewers
       - condition: 実装を進められない
-        next: plan
+        next: replan
 
   - name: reviewers
     tags: [review]
@@ -231,11 +275,11 @@ steps:
       - condition: any("approved", "needs_fix", "AI特有の問題なし", "AI特有の問題あり") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
         next: final-gate
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
+        next: replan
+      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: replan
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
-        next: plan
+        next: replan
       - condition: any("needs_fix", "AI特有の問題あり") && when(findings.conflicts.count == 0)
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
@@ -258,7 +302,7 @@ steps:
       - condition: needs_review
         next: reviewers
       - condition: need_replan
-        next: plan
+        next: replan
       - condition: needs_fix
         next: fix
       - condition: needs_conflict_adjudication
@@ -278,5 +322,5 @@ steps:
     rules:
       - condition: 修正完了
         next: reviewers
-      - condition: 修正を進められない、または人手判断が必要
-        next: plan
+      - condition: 修正を進められない、または実装方針の再定義が必要
+        next: replan

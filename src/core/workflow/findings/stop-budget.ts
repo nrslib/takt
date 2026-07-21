@@ -9,7 +9,7 @@
  * 湧き続けて iteration 上限まで終端に達しない）。
  *
  * ここでは「findings-manager の完了ラウンド数（と任意で経過時間）が設定上限を
- * 超えたら、provisional が churn し続けていても NEEDS_ADJUDICATION へ収束させる」
+ * 超えたら、provisional が churn し続けていても有限停止させる」
  * というモデル挙動に依存しない停止条件を追加する。fixpoint と同じく、ラウンド
  * 跨ぎの累積状態は FindingLedger.stopBudget フィールドへ永続化する（run/resume を
  * 跨いだ累積が無料で成立する）。

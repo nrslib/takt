@@ -22,7 +22,7 @@ import type { FindingLedgerEntry, FindingProvisionalMetadata } from './types.js'
  * - terminal-adjudication: recovery を使い切った / 最初から機械処理の余地が無い。
  *   dismiss 候補（内容の管轄裁定）。
  * - process-failure: engine/reviewer 処理の失敗証跡。dismiss では消さず、
- *   fixpoint / stop budget から NEEDS_ADJUDICATION へ送る。
+ *   fixpoint / stop budget から有限停止させる。
  */
 export type ProvisionalRecoveryClass =
   | 'raw-adjudication'
@@ -37,7 +37,7 @@ export function adjudicationAttemptsExhausted(provisional: FindingProvisionalMet
     >= RAW_ADJUDICATION_RECOVERY_LIMITS.maxReplayAttempts;
 }
 
-// process failure は dismiss で消さず、既存 stop-budget/fixpoint/loop-monitor が NEEDS_ADJUDICATION へ運ぶ。
+// process failure は dismiss で消さず、既存 stop-budget/fixpoint/loop-monitor が有限停止へ運ぶ。
 
 function envelopeRecoveryExhausted(
   provisional: FindingProvisionalMetadata,

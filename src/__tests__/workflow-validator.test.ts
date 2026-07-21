@@ -375,10 +375,7 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
   });
 
-  // 対策バッチ B1: `next: NEEDS_ADJUDICATION` は provisional fixpoint 判定に
-  // findings ledger を要するため、finding-conflict-adjudication と同じ規則で
-  // finding_contract を要求する（validateNeedsAdjudicationRuleContract）。
-  it('fails fast when a rule routes to NEEDS_ADJUDICATION without findingContract', () => {
+  it('treats removed terminal aliases as unknown step targets', () => {
     const workflow = createWorkflow({
       steps: [
         {
@@ -388,93 +385,14 @@ describe('validateWorkflowConfig', () => {
           edit: false,
           instruction: '{task}',
           passPreviousResponse: true,
-          rules: [{ condition: 'fixpoint', next: 'NEEDS_ADJUDICATION' }],
+          rules: [{ condition: 'stalled', next: 'REMOVED_TERMINAL' }],
         },
       ],
     });
 
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
-      'Invalid rule in step "plan": next: NEEDS_ADJUDICATION requires finding_contract',
+      'Invalid rule in step "plan": target step "REMOVED_TERMINAL" does not exist',
     );
-  });
-
-  it('fails fast when a parallel sub-step rule routes to NEEDS_ADJUDICATION without findingContract', () => {
-    const workflow = createWorkflow({
-      steps: [
-        {
-          name: 'plan',
-          persona: 'planner',
-          personaDisplayName: 'planner',
-          edit: false,
-          instruction: '{task}',
-          passPreviousResponse: true,
-          parallel: [
-            {
-              name: 'review',
-              persona: 'reviewer',
-              personaDisplayName: 'reviewer',
-              edit: false,
-              instruction: 'review',
-              passPreviousResponse: true,
-              rules: [{ condition: 'fixpoint', next: 'NEEDS_ADJUDICATION' }],
-            },
-          ],
-          rules: [{ condition: 'done', next: 'COMPLETE' }],
-        },
-      ],
-    });
-
-    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
-      'Invalid rule in parallel sub-step "review" of step "plan": next: NEEDS_ADJUDICATION requires finding_contract',
-    );
-  });
-
-  it('fails fast when a loop_monitor judge rule routes to NEEDS_ADJUDICATION without findingContract', () => {
-    const workflow = createWorkflow({
-      loopMonitors: [
-        {
-          cycle: ['plan', 'plan'],
-          threshold: 2,
-          judge: {
-            rules: [{ condition: 'fixpoint', next: 'NEEDS_ADJUDICATION' }],
-          },
-        },
-      ],
-    });
-
-    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
-      'Invalid loop_monitor judge rule: next: NEEDS_ADJUDICATION requires finding_contract',
-    );
-  });
-
-  it('accepts a rule routing to NEEDS_ADJUDICATION when findingContract is configured', () => {
-    const workflow = createWorkflow({
-      findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-      },
-      steps: [
-        {
-          name: 'plan',
-          persona: 'planner',
-          personaDisplayName: 'planner',
-          edit: false,
-          instruction: '{task}',
-          passPreviousResponse: true,
-          rules: [
-            { condition: 'when(findings.provisional.fixpoint == true)', next: 'NEEDS_ADJUDICATION' },
-            { condition: 'when(findings.open.count == 0)', next: 'COMPLETE' },
-          ],
-        },
-      ],
-    });
-
-    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
   });
 
   it('fails fast when a rule routes to finding-conflict-adjudication without findingContract', () => {

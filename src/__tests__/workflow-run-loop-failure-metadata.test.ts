@@ -57,6 +57,8 @@ function makeDeps(
     emit: vi.fn(),
     updateMaxSteps: vi.fn(),
     persistPreviousResponseSnapshot: vi.fn(),
+    checkCompletionGate: vi.fn(() => ({ ok: true as const })),
+    checkReturnValueGate: vi.fn(() => ({ ok: true as const })),
   };
 }
 
@@ -121,38 +123,6 @@ describe('WorkflowRunLoop failure metadata', () => {
     );
   });
 
-  it('workflow_call の non-retryable abort kind を親 workflow の終端まで保持する', async () => {
-    const step = makeStep('delegate', {
-      rules: [makeRule('ABORT', 'ABORT')],
-    });
-    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
-    const response = makeResponse({
-      persona: 'delegate',
-      status: 'done',
-      content: 'Finding adjudication is required',
-    });
-    const deps = makeDeps(state, step, response);
-    vi.mocked(deps.runStep).mockResolvedValue({
-      response,
-      instruction: '',
-      terminalAbort: {
-        kind: 'needs_adjudication',
-        reason: 'Finding adjudication is required',
-      },
-    });
-
-    const result = await runWorkflowToCompletion(deps);
-
-    expect(result.abort?.kind).toBe('needs_adjudication');
-    expect(deps.resolveDoneTransition).not.toHaveBeenCalled();
-    expect(deps.emit).toHaveBeenCalledWith(
-      'workflow:abort',
-      state,
-      'Finding adjudication is required',
-      'needs_adjudication',
-    );
-  });
-
   it('Given a step error in single iteration, When the workflow aborts, Then the result includes step-level failure summary', async () => {
     const step = makeStep('implement', {
       rules: [makeRule('Implementation complete', 'COMPLETE')],
@@ -181,34 +151,6 @@ describe('WorkflowRunLoop failure metadata', () => {
       'Step "implement" failed: provider exploded',
       'step_error',
     );
-  });
-
-  it('single iteration でも workflow_call の non-retryable abort kind を保持する', async () => {
-    const step = makeStep('delegate', {
-      rules: [makeRule('ABORT', 'ABORT')],
-    });
-    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
-    const response = makeResponse({
-      persona: 'delegate',
-      status: 'done',
-      content: 'Finding adjudication is required',
-    });
-    const deps = makeDeps(state, step, response);
-    vi.mocked(deps.runStep).mockResolvedValue({
-      response,
-      instruction: '',
-      terminalAbort: {
-        kind: 'needs_adjudication',
-        reason: 'Finding adjudication is required',
-      },
-    });
-
-    const result = await runSingleWorkflowIteration(deps);
-
-    expect(result.abort?.kind).toBe('needs_adjudication');
-    expect(result.nextStep).toBe('ABORT');
-    expect(result.isComplete).toBe(true);
-    expect(deps.resolveDoneTransition).not.toHaveBeenCalled();
   });
 
   it('Given a runtime error in single iteration, When the step throws, Then it preserves the thrown error contract', async () => {

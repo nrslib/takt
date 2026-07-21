@@ -16,17 +16,17 @@ providers:
       model_reasoning_effort: low
 
 tests:
-  - description: 'post-fix review pending with an addressed open finding is healthy'
+  - description: 'post-fix review confirms progress and provides an actionable next fix'
     vars:
       scenario: |
-        The consolidated ledger still lists F-001 as open.
-        The latest review predates the fix. The completed fix report says F-001 was addressed.
-        No review evidence exists after that fix. There are no stalled provisionals.
+        A completed fix report says F-001 was addressed.
+        A later review confirms F-001 is resolved and reports a new F-002 with current-code evidence.
+        The review describes a concrete, requirements-compliant fix for F-002. There are no stalled provisionals.
     assert:
       - type: javascript
-        metric: post-fix-pending/healthy
+        metric: post-fix-progress/healthy
         value: |
-          return output.trim() === '[_LOOP_JUDGE_REVIEWERS_FIX:1]';
+          return output.trim() === '[_LOOP_JUDGE_FIX_REVIEWERS:1]';
 
   - description: 'an open finding without an addressing fix is not automatically healthy'
     vars:
@@ -38,7 +38,7 @@ tests:
       - type: javascript
         metric: open-without-fix/not-healthy
         value: |
-          return ['[_LOOP_JUDGE_REVIEWERS_FIX:2]', '[_LOOP_JUDGE_REVIEWERS_FIX:3]'].includes(output.trim());
+          return ['[_LOOP_JUDGE_FIX_REVIEWERS:2]', '[_LOOP_JUDGE_FIX_REVIEWERS:3]'].includes(output.trim());
 
   - description: 'a post-fix review reconfirming the same finding is unproductive but replannable'
     vars:
@@ -49,7 +49,7 @@ tests:
       - type: javascript
         metric: post-fix-reconfirmed/replan
         value: |
-          return output.trim() === '[_LOOP_JUDGE_REVIEWERS_FIX:2]';
+          return output.trim() === '[_LOOP_JUDGE_FIX_REVIEWERS:2]';
 
   - description: 'the first new branch in a recently resolved family is partial-fix recurrence'
     vars:
@@ -60,18 +60,30 @@ tests:
       - type: javascript
         metric: family-recurrence/replan
         value: |
-          return output.trim() === '[_LOOP_JUDGE_REVIEWERS_FIX:2]';
+          return output.trim() === '[_LOOP_JUDGE_FIX_REVIEWERS:2]';
 
-  - description: 'stalled provisionals must not continue as healthy'
+  - description: 'stalled provisionals with an available alternative must replan'
     vars:
       scenario: |
-        Findings state shows a dismissable open provisional stalled for four manager rounds.
-        Resolved counts increased, but the provisional still blocks completion and fix iterations cannot settle it.
+        Findings state shows an open provisional stalled for four manager rounds.
+        Fix iterations cannot settle it, but a requirements-preserving implementation approach remains available.
     assert:
       - type: javascript
-        metric: provisional-stall/adjudicate
+        metric: provisional-stall/replan
         value: |
-          return output.trim() === '[_LOOP_JUDGE_REVIEWERS_FIX:3]';
+          return output.trim() === '[_LOOP_JUDGE_FIX_REVIEWERS:2]';
+
+  - description: 'abort only when attempted replans leave no feasible requirements-compliant approach'
+    vars:
+      scenario: |
+        The same blocker remains after two materially different replans and implementations.
+        The reports establish that every remaining approach violates a fixed acceptance criterion.
+        No requirements-compliant implementation approach remains.
+    assert:
+      - type: javascript
+        metric: requirements-impossible/abort
+        value: |
+          return output.trim() === '[_LOOP_JUDGE_FIX_REVIEWERS:3]';
 
   - description: 'a post-fix review that conflicts with current code remains replannable through dispute'
     vars:
@@ -82,4 +94,4 @@ tests:
       - type: javascript
         metric: stale-review/dispute
         value: |
-          return output.trim() === '[_LOOP_JUDGE_REVIEWERS_FIX:2]';
+          return output.trim() === '[_LOOP_JUDGE_FIX_REVIEWERS:2]';

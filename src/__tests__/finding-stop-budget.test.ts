@@ -5,7 +5,7 @@
  * B1 の fixpoint 判定だけでは、レビュアーが毎ラウンド別の架空 provisional を
  * 1件でも生成し続けると provisional 集合が毎回変わり fixpoint が永久に成立
  * しない（v3-r4 実測）。ここでは「累積ラウンド数（と任意で経過時間）が上限を
- * 超えたら、fixpoint が成立していなくても NEEDS_ADJUDICATION へ収束させる」
+ * 超えたら、fixpoint が成立していなくても有限停止を判断できるようにする」
  * モデル挙動に依存しない停止条件が正しく機能することを検証する。
  *
  * - 単体: resolveStopBudgetLimits / attachStopBudgetState の純粋なロジック
@@ -319,7 +319,6 @@ function makeRoundHarness(
     saveRawFindings: () => '/tmp/raw-findings.json',
     saveManagerValidationReport: () => '/tmp/manager-report.json',
     saveConflictAdjudicationReport: () => '/tmp/adjudication-report.json',
-    saveNeedsAdjudicationReport: () => '/tmp/needs-adjudication.json',
   };
   const optionsBuilder = {
     buildAgentOptions: () => ({}),
@@ -565,7 +564,6 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
       saveRawFindings: () => '/tmp/raw-findings.json',
       saveManagerValidationReport: () => '/tmp/manager-report.json',
       saveConflictAdjudicationReport: () => '/tmp/adjudication-report.json',
-      saveNeedsAdjudicationReport: () => '/tmp/needs-adjudication.json',
     };
     const contract = {
       ledgerPath: '.takt/findings/ledger.json',

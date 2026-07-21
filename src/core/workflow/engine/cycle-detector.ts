@@ -41,19 +41,21 @@ export class CycleDetector {
    *
    * The detection logic works as follows:
    * 1. The step name is appended to the history
-   * 2. For each monitor, we check if the cycle pattern has been completed
-   *    by looking at the tail of the history
+   * 2. For each monitor whose first step is the proposed next step, we check
+   *    if the cycle pattern has been completed by looking at the tail of the
+   *    history
    * 3. A cycle is "completed" when the last N entries in history match
    *    the cycle pattern repeated `threshold` times
    *
    * @param stepName The name of the step that just completed
+   * @param nextStep The natural transition proposed after the completed step
    * @returns CycleCheckResult indicating if any monitor was triggered
    */
-  recordAndCheck(stepName: string): CycleCheckResult {
+  recordAndCheck(stepName: string, nextStep: string): CycleCheckResult {
     this.history.push(stepName);
 
     for (const monitor of this.monitors) {
-      const result = this.checkMonitor(monitor);
+      const result = this.checkMonitor(monitor, nextStep);
       if (result.triggered) {
         return result;
       }
@@ -69,9 +71,16 @@ export class CycleDetector {
    * last element of the cycle, and looking backwards we can find exactly
    * `threshold` complete cycles.
    */
-  private checkMonitor(monitor: LoopMonitorConfig): CycleCheckResult {
+  private checkMonitor(monitor: LoopMonitorConfig, nextStep: string): CycleCheckResult {
     const { cycle, threshold } = monitor;
     const cycleLen = cycle.length;
+
+    // A completed cycle is only a loop when the natural transition is about
+    // to enter the same cycle again. If the workflow is already leaving the
+    // cycle, the monitor must not override that progress.
+    if (nextStep !== cycle[0]) {
+      return { triggered: false, cycleCount: 0 };
+    }
 
     // The cycle's last step must match the most recent step
     const lastStep = cycle[cycleLen - 1];
