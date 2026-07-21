@@ -24,7 +24,7 @@ import type {
   ProviderOptionsSource,
   ProviderResolutionSource,
 } from '../../../core/workflow/provider-options-trace.js';
-import type { DirectResumeMetadata } from './runMeta.js';
+import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
 import type { TaskAttachment } from '../attachments.js';
 import type { TraceTaskContext } from './traceTaskMetadata.js';
 
@@ -193,8 +193,7 @@ export interface WorkflowExecutionOptions {
   retryNote?: string;
   /** Resume point for workflow_call-aware retries */
   resumePoint?: WorkflowResumePoint;
-  /** Source direct run metadata for resumed direct executions */
-  directResume?: DirectResumeMetadata;
+  resumeSource?: RunResumeSource;
   /** Resolver used to inspect workflow_call targets before engine construction. */
   workflowCallResolver?: WorkflowCallResolver;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
@@ -275,8 +274,7 @@ export interface ExecuteTaskOptions {
   retryNote?: string;
   /** Resume point for workflow_call-aware retries */
   resumePoint?: WorkflowResumePoint;
-  /** Source direct run metadata for resumed direct executions */
-  directResume?: DirectResumeMetadata;
+  resumeSource?: RunResumeSource;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
   /** Provider permission profile overrides supplied by a trusted runtime boundary. */

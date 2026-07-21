@@ -27,7 +27,7 @@ import { validateWorkflowConfig } from './WorkflowValidator.js';
 import { getWorkflowStepKind } from '../step-kind.js';
 import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
 import { resolveEffectiveAutoRouting } from '../auto-routing/effective-auto-routing.js';
-import { buildWorkflowResumePointEntry } from '../workflow-reference.js';
+import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
 import { runWithWorkflowSpan, type WorkflowSpanOutcome, type WorkflowSpanParams } from '../observability/workflowSpans.js';
 import { WorkflowEngineStepCoordinator } from './WorkflowEngineStepCoordinator.js';
 import {
@@ -46,6 +46,14 @@ import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import { buildFindingsRuleContext } from '../findings/context.js';
 import { createFindingLedgerStore, type FindingLedgerStore } from '../findings/store.js';
 import { ERROR_MESSAGES } from '../constants.js';
+import { inheritReviewReports, writeReviewReportInheritanceDiagnostic } from '../report-inheritance.js';
+import {
+  resolveCurrentReviewReportPathsWithDiagnostics,
+} from '../instruction/report-handles.js';
+import {
+  resolveInheritedReviewReportNamesWithDiagnostics,
+  type InheritedReviewReportNamesResult,
+} from '../review-report-discovery.js';
 const log = createLogger('workflow-engine');
 export type {
   WorkflowEvents,
@@ -96,6 +104,8 @@ export class WorkflowEngine extends EventEmitter {
   private readonly stepCoordinator: WorkflowEngineStepCoordinator;
   private readonly detectRuleIndex: (content: string, stepName: string) => number;
   private readonly structuredCaller: StructuredCaller;
+  private readonly inheritedReviewReports: Array<{ reportName: string; path: string }> = [];
+  private resolvedReviewReportNames: InheritedReviewReportNamesResult | undefined;
 
   constructor(config: WorkflowConfig, cwd: string, task: string, options: WorkflowEngineOptions) {
     super();
@@ -156,6 +166,7 @@ export class WorkflowEngine extends EventEmitter {
     validateWorkflowConfig(this.config, this.options);
 
     this.state = createInitialState(this.config, this.options);
+    this.inheritPreviousReviewReports();
     if (this.config.findingContract) {
       this.findingLedgerStore = createFindingLedgerStore({
         projectCwd: this.projectCwd,
@@ -195,6 +206,7 @@ export class WorkflowEngine extends EventEmitter {
       updatePersonaSession: this.updatePersonaSession.bind(this),
       resolveNextStepFromDone: this.resolveNextStepFromDone.bind(this),
       resetCycleDetector: () => this.cycleDetector.reset(),
+      getInheritedPeerReportPaths: (step) => this.getReviewReportPaths(step),
       emitEvent: (event, ...args) => this.emit(event as never, ...args as []),
       createEngine: (nestedConfig, nestedCwd, nestedTask, nestedOptions): WorkflowCallChildEngine => {
         const nestedEngine = new WorkflowEngine(nestedConfig, nestedCwd, nestedTask, nestedOptions);
@@ -299,6 +311,129 @@ export class WorkflowEngine extends EventEmitter {
       return;
     }
     this.state.findings = buildFindingsRuleContext(this.findingLedgerStore.loadLedger());
+  }
+
+  private inheritPreviousReviewReports(): void {
+    const resumeSource = this.options.resumeSource;
+    const currentStep = this.config.steps.find((step) => step.name === this.state.currentStep);
+    if (!resumeSource || !currentStep || currentStep.name !== 'fix' || !this.isResumeTarget(currentStep)) {
+      return;
+    }
+    try {
+      const reportNameResult = this.resolveReviewReportNames(currentStep);
+      const result = inheritReviewReports({
+        cwd: this.cwd,
+        sourceRunSlug: resumeSource.sourceRunSlug,
+        currentRunSlug: this.runPaths.slug,
+        targetReportDirectory: this.runPaths.reportsAbs,
+        reviewReportNames: reportNameResult.reportNames,
+        discoveryFailures: reportNameResult.failures,
+      });
+      this.inheritedReviewReports.push(...result.copied.map((entry) => ({
+        reportName: entry.reportName,
+        path: entry.targetPath,
+      })));
+      try {
+        writeReviewReportInheritanceDiagnostic({
+          cwd: this.cwd,
+          sourceRunSlug: resumeSource.sourceRunSlug,
+          currentRunSlug: this.runPaths.slug,
+          targetReportDirectory: this.runPaths.reportsAbs,
+          reviewReportNames: reportNameResult.reportNames,
+        }, result);
+      } catch (error) {
+        log.warn('Failed to write review report inheritance diagnostic', { error: getErrorMessage(error), result });
+      }
+      if (result.fallbackUsed) {
+        log.warn('Review report inheritance completed with fallback', result);
+      } else {
+        log.info('Review report inheritance completed', result);
+      }
+    } catch (error) {
+      const diagnosticOptions = {
+        cwd: this.cwd,
+        sourceRunSlug: resumeSource.sourceRunSlug,
+        currentRunSlug: this.runPaths.slug,
+        targetReportDirectory: this.runPaths.reportsAbs,
+        reviewReportNames: [],
+      };
+      const result = {
+        ...(resumeSource.sourceRunSlug ? { sourceRunSlug: resumeSource.sourceRunSlug } : {}),
+        targetReportDirectory: this.runPaths.reportsAbs,
+        status: 'unavailable' as const,
+        fallbackUsed: true,
+        copied: [],
+        skipped: [{ reportName: '*', reason: `resolution_failed:${getErrorMessage(error)}` }],
+      };
+      try {
+        writeReviewReportInheritanceDiagnostic(diagnosticOptions, result);
+      } catch (diagnosticError) {
+        log.warn('Failed to write review report inheritance diagnostic', {
+          error: getErrorMessage(diagnosticError),
+          result,
+        });
+      }
+      log.warn('Review report inheritance completed with fallback', result);
+    }
+  }
+
+  private isResumeTarget(step: WorkflowStep): boolean {
+    if (this.options.startStep === step.name) {
+      return true;
+    }
+    const resumePoint = this.options.resumePoint;
+    const entry = resumePoint?.stack[this.resumeStackPrefix.length];
+    return entry !== undefined
+      && entry.step === step.name
+      && workflowEntryMatchesWorkflow(entry, this.config);
+  }
+
+  private getReviewReportPaths(step: WorkflowStep): readonly string[] {
+    if (step.name !== 'fix') {
+      return [];
+    }
+    try {
+      const reportNameResult = this.resolveReviewReportNames(step);
+      const inheritedReportPaths = new Set(this.inheritedReviewReports.map((entry) => entry.path));
+      const scanResult = resolveCurrentReviewReportPathsWithDiagnostics(
+        this.runPaths.reportsAbs,
+        reportNameResult.reportNames,
+        inheritedReportPaths,
+      );
+      if (scanResult.scanFailure) {
+        log.warn('Current review report scan completed with fallback', { error: scanResult.scanFailure });
+      }
+      if (reportNameResult.failures.length > 0) {
+        log.warn('Current review report discovery completed with fallback', {
+          failures: reportNameResult.failures,
+        });
+      }
+      const currentReports = scanResult.paths;
+      const currentReportNames = new Set(currentReports.map((entry) => entry.reportName));
+      return [
+        ...currentReports.map((entry) => entry.path),
+        ...this.inheritedReviewReports
+          .filter((entry) => !currentReportNames.has(entry.reportName))
+          .map((entry) => entry.path),
+      ];
+    } catch (error) {
+      log.warn('Failed to resolve current review report paths', { error: getErrorMessage(error) });
+      return this.inheritedReviewReports.map((entry) => entry.path);
+    }
+  }
+
+  private resolveReviewReportNames(step: WorkflowStep): InheritedReviewReportNamesResult {
+    if (!this.resolvedReviewReportNames) {
+      this.resolvedReviewReportNames = resolveInheritedReviewReportNamesWithDiagnostics({
+        step,
+        workflow: this.config,
+        workflowCallResolver: this.options.workflowCallResolver,
+        projectCwd: this.projectCwd,
+        lookupCwd: this.cwd,
+        resumeStackPrefix: this.resumeStackPrefix,
+      });
+    }
+    return this.resolvedReviewReportNames;
   }
 
   private buildResumePoint(step: WorkflowStep, iteration: number): WorkflowResumePoint {

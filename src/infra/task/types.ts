@@ -1,11 +1,14 @@
 import type { TaskFileData } from './schema.js';
 import type { TaskFailure, TaskStatus } from './schema.js';
+import type { RunResumeMode } from '../../core/workflow/run/run-meta.js';
 
 export interface TaskInfo {
   filePath: string;
   name: string;
   slug?: string;
   runSlug?: string;
+  sourceRunSlug?: string;
+  resumeMode?: RunResumeMode;
   summary?: string;
   content: string;
   taskDir?: string;

@@ -62,6 +62,8 @@ export class TaskExceedService {
         completed_at: null,
         owner_pid: null,
         failure: undefined,
+        ...(target.run_slug ? { source_run_slug: target.run_slug } : {}),
+        resume_mode: 'requeue',
       };
 
       const tasks = [...current.tasks];

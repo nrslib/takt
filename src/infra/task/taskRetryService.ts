@@ -1,4 +1,5 @@
 import type { WorkflowResumePoint } from '../../core/models/index.js';
+import type { RunResumeSource } from '../../core/workflow/run/run-meta.js';
 import type { TaskStatus } from './schema.js';
 import type { TaskInfo } from './types.js';
 import type { TaskRecord } from './schema.js';
@@ -90,6 +91,18 @@ function getAutoRequeueSkipResult(
   return undefined;
 }
 
+function resolveResumeSource(
+  explicitSourceRunSlug: string | undefined,
+  task: TaskRecord,
+  resumeMode: RunResumeSource['resumeMode'],
+): RunResumeSource {
+  const sourceRunSlug = explicitSourceRunSlug ?? task.run_slug ?? task.source_run_slug;
+  return {
+    ...(sourceRunSlug ? { sourceRunSlug } : {}),
+    resumeMode,
+  };
+}
+
 export class TaskRetryService {
   constructor(
     private readonly projectDir: string,
@@ -148,6 +161,7 @@ export class TaskRetryService {
           target.resume_point,
           target.workflow,
           target.task_dir,
+          resolveResumeSource(undefined, target, 'requeue'),
         ),
         auto_requeue_count: nextAttempt,
       };
@@ -170,11 +184,13 @@ export class TaskRetryService {
   startReExecution(
     taskRef: string,
     allowedStatuses: readonly TaskStatus[],
+    resumeMode: RunResumeSource['resumeMode'],
     startStep?: string,
     retryNote?: string,
     resumePoint?: WorkflowResumePoint,
     workflow?: string,
     taskDir?: string,
+    sourceRunSlug?: string,
   ): TaskInfo {
     const taskName = normalizeTaskRef(taskRef);
     let found: TaskRecord | undefined;
@@ -190,7 +206,16 @@ export class TaskRetryService {
       }
 
       const target = current.tasks[index]!;
-      const updated = buildRetryTaskRecord(target, 'running', startStep, retryNote, resumePoint, workflow, taskDir);
+      const updated = buildRetryTaskRecord(
+        target,
+        'running',
+        startStep,
+        retryNote,
+        resumePoint,
+        workflow,
+        taskDir,
+        resolveResumeSource(sourceRunSlug, target, resumeMode),
+      );
 
       found = updated;
       return { tasks: replaceTaskAtIndex(current.tasks, index, updated) };
@@ -207,6 +232,7 @@ export class TaskRetryService {
     resumePoint?: WorkflowResumePoint,
     workflow?: string,
     taskDir?: string,
+    sourceRunSlug?: string,
   ): string {
     const taskName = normalizeTaskRef(taskRef);
 
@@ -221,7 +247,16 @@ export class TaskRetryService {
       }
 
       const target = current.tasks[index]!;
-      const updated = buildRetryTaskRecord(target, 'pending', startStep, retryNote, resumePoint, workflow, taskDir);
+      const updated = buildRetryTaskRecord(
+        target,
+        'pending',
+        startStep,
+        retryNote,
+        resumePoint,
+        workflow,
+        taskDir,
+        resolveResumeSource(sourceRunSlug, target, 'requeue'),
+      );
 
       return { tasks: replaceTaskAtIndex(current.tasks, index, updated) };
     });

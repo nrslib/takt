@@ -226,13 +226,43 @@ describe('instructBranch direct execution flow', () => {
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'done-task',
       ['completed', 'failed'],
+      'instruct',
       undefined,
       '既存ノート\n\n追加指示A',
       undefined,
       undefined,
       undefined,
+      undefined,
     );
     expect(mockExecuteAndCompleteTask).toHaveBeenCalled();
+  });
+
+  it('should pass the discovered source run to instructed direct execution', async () => {
+    mockFindRunForTask.mockReturnValue('20260717-source-run');
+
+    const result = await instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'done',
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'done' },
+    });
+
+    expect(result).toBe(true);
+    expect(mockStartReExecution).toHaveBeenCalledWith(
+      'done-task',
+      ['completed', 'failed'],
+      'instruct',
+      undefined,
+      '追加指示A',
+      undefined,
+      undefined,
+      undefined,
+      '20260717-source-run',
+    );
   });
 
   it('should promote image attachments for instructed direct execution', async () => {
@@ -264,11 +294,13 @@ describe('instructBranch direct execution flow', () => {
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'done-task',
       ['completed', 'failed'],
+      'instruct',
       undefined,
       'Use [Image #1].',
       undefined,
       undefined,
       '.takt/tasks/done-task',
+      undefined,
     );
     expect(cleanupAttachments).toHaveBeenCalledTimes(1);
   });
@@ -324,6 +356,7 @@ describe('instructBranch direct execution flow', () => {
       undefined,
       'default',
       '.takt/tasks/done-task',
+      undefined,
     );
     expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
       '/project',
@@ -399,6 +432,7 @@ describe('instructBranch direct execution flow', () => {
       undefined,
       'default',
       '.takt/tasks/done-task',
+      undefined,
     );
     expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
       '/project',
@@ -453,11 +487,13 @@ describe('instructBranch direct execution flow', () => {
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'done-task',
       ['completed', 'failed'],
+      'instruct',
       undefined,
       'Use [Image #2].',
       undefined,
       undefined,
       '.takt/tasks/done-task',
+      undefined,
     );
   });
 
@@ -650,8 +686,10 @@ describe('instructBranch direct execution flow', () => {
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'done-task',
       ['completed', 'failed'],
+      'instruct',
       undefined,
       '追加指示A',
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -848,6 +886,7 @@ describe('instructBranch direct execution flow', () => {
       undefined,
       'default',
       undefined,
+      undefined,
     );
     expect(mockStartReExecution).not.toHaveBeenCalled();
     expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
@@ -879,6 +918,7 @@ describe('instructBranch direct execution flow', () => {
       undefined,
       'selected-workflow',
       undefined,
+      undefined,
     );
   });
 
@@ -908,6 +948,7 @@ describe('instructBranch direct execution flow', () => {
       undefined,
       undefined,
       undefined,
+      undefined,
     );
   });
 
@@ -933,6 +974,7 @@ describe('instructBranch direct execution flow', () => {
       '既存ノート\n\n追加指示A',
       undefined,
       'default',
+      undefined,
       undefined,
     );
   });

@@ -98,6 +98,7 @@ function makeStepExecutor(): StepExecutor {
     getWorkflowDefinitionSteps: () => [makeStep({ name: 'review' })],
     getWorkflowName: () => 'test-workflow',
     getWorkflowDescription: () => undefined,
+    getInheritedPeerReportPaths: () => [],
     getRetryNote: () => undefined,
     detectRuleIndex: vi.fn().mockReturnValue(-1),
     structuredCaller: {

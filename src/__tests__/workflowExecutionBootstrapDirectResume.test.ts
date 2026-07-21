@@ -805,12 +805,12 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(options ?? {}).not.toHaveProperty('routingEventsDir');
   });
 
-  it('Given directResume is passed, When bootstrap creates run meta, Then source metadata is persisted in meta.json', async () => {
+  it('Given resumeSource is passed, When bootstrap creates run meta, Then source metadata is persisted in meta.json', async () => {
     await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', '/project', {
       projectCwd: '/project',
       provider: 'mock',
       reportDirName: 'direct-resume',
-      directResume: {
+      resumeSource: {
         sourceRunSlug: '20260524-source-run',
         resumeMode: 'retry',
       },
@@ -835,7 +835,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       projectCwd: projectDir,
       provider: 'mock',
       reportDirName: 'direct-resume',
-      directResume: {
+      resumeSource: {
         sourceRunSlug: '20260524-source-run',
         resumeMode: 'requeue',
       },
@@ -857,7 +857,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       projectCwd: projectDir,
       provider: 'mock',
       reportDirName: 'direct-resume',
-      directResume: {
+      resumeSource: {
         sourceRunSlug: '20260524-source-run',
         resumeMode: 'instruct',
       },

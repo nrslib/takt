@@ -392,6 +392,19 @@ describe('TaskRunner - requeueExceededTask', () => {
     expect(file.tasks[0]?.resume_point).toEqual(resumePoint);
   });
 
+  it('should preserve the source run provenance when requeueing an exceeded task', () => {
+    writeExceededRecord(testDir, {
+      name: 'task-a',
+      run_slug: '20260717-source-run',
+    });
+
+    runner.requeueExceededTask('task-a');
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.source_run_slug).toBe('20260717-source-run');
+    expect(file.tasks[0]?.resume_mode).toBe('requeue');
+  });
+
   it('should preserve worktree_path and branch through requeue when present on exceeded record', () => {
     writeExceededRecord(testDir, {
       name: 'task-a',

@@ -16,6 +16,7 @@ import {
   getResumePointWorkflowReference,
   getWorkflowReference,
 } from '../workflow-reference.js';
+import { MAX_WORKFLOW_CALL_DEPTH } from '../workflow-call-depth.js';
 import type {
   RuntimeStepResolution,
   StepProviderInfo,
@@ -243,8 +244,8 @@ export class WorkflowCallRunner {
 
     const currentDepth = this.deps.resumeStackPrefix.length + 1;
     const nextDepth = currentDepth + 1;
-    if (nextDepth > 5) {
-      throw new Error(`workflow_call depth exceeds limit (5): ${childWorkflow.name}`);
+    if (nextDepth > MAX_WORKFLOW_CALL_DEPTH) {
+      throw new Error(`workflow_call depth exceeds limit (${MAX_WORKFLOW_CALL_DEPTH}): ${childWorkflow.name}`);
     }
 
     const runtimeProviderInfo = runtime.providerInfo ?? this.resolveRuntime(step).providerInfo;

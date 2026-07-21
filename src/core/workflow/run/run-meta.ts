@@ -10,6 +10,14 @@ export interface RunMetaObservability {
   traceDiscovery: WorkflowTraceDiscovery;
 }
 
+export const RUN_RESUME_MODES = ['requeue', 'retry', 'instruct'] as const;
+export type RunResumeMode = (typeof RUN_RESUME_MODES)[number];
+
+export interface RunResumeSource {
+  readonly sourceRunSlug?: string;
+  readonly resumeMode: RunResumeMode;
+}
+
 export interface RunMeta {
   task: string;
   workflow: string;
@@ -29,13 +37,13 @@ export interface RunMeta {
   observability?: RunMetaObservability;
   resumePoint?: WorkflowResumePoint;
   sourceRunSlug?: string;
-  resumeMode?: 'requeue' | 'retry' | 'instruct';
+  resumeMode?: RunResumeSource['resumeMode'];
 }
 
 interface RawRunMeta extends RunMeta {
   resume_point?: WorkflowResumePoint;
   source_run_slug?: string;
-  resume_mode?: 'requeue' | 'retry' | 'instruct';
+  resume_mode?: RunResumeMode;
 }
 
 export type RunMetaWarningHandler = (warning: string) => void;

@@ -256,7 +256,7 @@ describe('resumeDirectRun', () => {
       agentOverrides: { provider: 'mock', model: 'gpt-test' },
       resumePoint,
       startStep: 'review',
-      directResume: {
+      resumeSource: {
         sourceRunSlug: '20260524-direct-failed',
         resumeMode: 'requeue',
       },
@@ -355,7 +355,7 @@ describe('resumeDirectRun', () => {
     );
     expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
       retryNote: 'Retry with failing spec fixed',
-      directResume: {
+      resumeSource: {
         sourceRunSlug: '20260524-direct-failed',
         resumeMode: 'retry',
       },
@@ -387,7 +387,7 @@ describe('resumeDirectRun', () => {
     expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
       retryNote: 'Retry with [Image #2]',
       reportDirName: expect.any(String),
-      directResume: {
+      resumeSource: {
         sourceRunSlug: '20260524-direct-failed',
         resumeMode: 'retry',
       },
@@ -430,7 +430,7 @@ describe('resumeDirectRun', () => {
     }));
     expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
       retryNote: 'Also update regression coverage',
-      directResume: {
+      resumeSource: {
         sourceRunSlug: '20260524-direct-failed',
         resumeMode: 'instruct',
       },
@@ -462,7 +462,7 @@ describe('resumeDirectRun', () => {
     expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
       retryNote: 'Also inspect [Image #2]',
       reportDirName: expect.any(String),
-      directResume: {
+      resumeSource: {
         sourceRunSlug: '20260524-direct-failed',
         resumeMode: 'instruct',
       },

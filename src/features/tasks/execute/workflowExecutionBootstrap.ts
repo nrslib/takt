@@ -182,7 +182,7 @@ export async function createWorkflowExecutionBootstrap(
     runPaths,
     task,
     workflowConfig.name,
-    options.directResume,
+    options.resumeSource,
     traceDiscovery ? { traceDiscovery } : undefined,
   );
   const workflowSessionId = generateSessionId();

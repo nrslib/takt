@@ -54,6 +54,7 @@ interface WorkflowEngineSetupParams {
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;
   resetCycleDetector: () => void;
+  getInheritedPeerReportPaths: (step: WorkflowStep) => readonly string[];
   emitEvent: (event: string, ...args: unknown[]) => void;
   createEngine: (
     config: WorkflowConfig,
@@ -185,6 +186,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getWorkflowDefinitionSteps: () => params.config.steps,
     getWorkflowName: () => params.config.name,
     getWorkflowDescription: () => params.config.description,
+    getInheritedPeerReportPaths: params.getInheritedPeerReportPaths,
     getRetryNote: () => params.options.retryNote,
     getObservabilityRunId: () => params.options.observabilityRunId,
     observabilityEnabled: () => params.options.observability?.enabled === true,

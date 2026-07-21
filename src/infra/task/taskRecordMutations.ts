@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import type { WorkflowResumePoint } from '../../core/models/index.js';
+import type { RunResumeSource } from '../../core/workflow/run/run-meta.js';
 import { nowIso } from './naming.js';
 import type { TaskRecord, TaskStatus } from './schema.js';
 
@@ -57,13 +58,16 @@ export function buildRetryTaskRecord(
   resumePoint: WorkflowResumePoint | undefined,
   workflow: string | undefined,
   taskDir: string | undefined,
+  resumeSource: RunResumeSource,
 ): TaskRecord {
+  const taskWithoutSourceRunSlug = { ...task };
+  delete taskWithoutSourceRunSlug.source_run_slug;
   const taskSpecSource = taskDir
     ? { content: undefined, content_file: undefined, task_dir: taskDir }
     : {};
 
   return {
-    ...task,
+    ...taskWithoutSourceRunSlug,
     ...(workflow ? { workflow } : {}),
     ...taskSpecSource,
     status,
@@ -71,6 +75,8 @@ export function buildRetryTaskRecord(
     completed_at: null,
     owner_pid: status === 'running' ? process.pid : null,
     run_slug: undefined,
+    ...(resumeSource.sourceRunSlug ? { source_run_slug: resumeSource.sourceRunSlug } : {}),
+    resume_mode: resumeSource.resumeMode,
     failure: undefined,
     start_step: startStep,
     retry_note: retryNote,

@@ -149,11 +149,13 @@ export async function instructBranch(
       taskInfo = runner.startReExecution(
         target.name,
         ['completed', 'failed'],
+        'instruct',
         undefined,
         executionRetryNote,
         undefined,
         undefined,
         taskDir,
+        matchedSlug ?? undefined,
       );
     } catch (error) {
       cleanupPreparedRetryTaskSpec(preparedSpec);
@@ -193,6 +195,7 @@ export async function instructBranch(
             undefined,
             resolveSelectedWorkflowOverride(target.data?.workflow, selectedWorkflow),
             taskDir,
+            matchedSlug ?? undefined,
           );
         } catch (error) {
           cleanupPreparedRetryTaskSpec(preparedSpec);

@@ -203,6 +203,24 @@ describe('TaskRecordSchema — source and pr_number', () => {
     }
   });
 
+  it('rejects source_run_slug without resume_mode', () => {
+    const result = TaskRecordSchema.safeParse(makePendingRecord({
+      source_run_slug: '20260717-source-run',
+    }));
+
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts resume_mode with or without source_run_slug', () => {
+    expect(TaskRecordSchema.safeParse(makePendingRecord({
+      source_run_slug: '20260717-source-run',
+      resume_mode: 'retry',
+    })).success).toBe(true);
+    expect(TaskRecordSchema.safeParse(makePendingRecord({
+      resume_mode: 'requeue',
+    })).success).toBe(true);
+  });
+
   it('accepts positive safe integer issue, pr_number, and context_pr_number values', () => {
     const raw = makePendingRecord({
       issue: Number.MAX_SAFE_INTEGER,

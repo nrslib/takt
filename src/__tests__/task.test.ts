@@ -932,6 +932,136 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(file.tasks[0]?.retry_note).toBe('manual retry note');
   });
 
+  it('should persist source run provenance for manual requeue', () => {
+    writeTasksFile(testDir, [createFailedRecord({ run_slug: '20260717-source-run' })]);
+
+    runner.requeueTask('task-a', ['failed'], 'fix', 'manual retry note');
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.source_run_slug).toBe('20260717-source-run');
+    expect(file.tasks[0]?.resume_mode).toBe('requeue');
+  });
+
+  it.each([
+    {
+      name: 'manual requeue with an explicit source',
+      record: { run_slug: '20260717-current-run', source_run_slug: '20260717-original-run', resume_mode: 'instruct' },
+      expectedSourceRunSlug: '20260717-explicit-run',
+      expectedMode: 'requeue',
+      execute: (service: TaskRetryService) => service.requeueTask(
+        'task-a',
+        ['failed'],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        '20260717-explicit-run',
+      ),
+    },
+    {
+      name: 'direct re-execution with an explicit source',
+      record: { run_slug: '20260717-current-run', source_run_slug: '20260717-original-run', resume_mode: 'instruct' },
+      expectedSourceRunSlug: '20260717-explicit-run',
+      expectedMode: 'retry',
+      execute: (service: TaskRetryService) => service.startReExecution(
+        'task-a',
+        ['failed'],
+        'retry',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        '20260717-explicit-run',
+      ),
+    },
+    {
+      name: 'auto requeue with a current run',
+      record: { run_slug: '20260717-current-run', source_run_slug: '20260717-original-run', resume_mode: 'instruct' },
+      expectedSourceRunSlug: '20260717-current-run',
+      expectedMode: 'requeue',
+      execute: (service: TaskRetryService) => service.autoRequeueFailedTask('task-a', { maxAttempts: 1 }),
+    },
+    {
+      name: 'auto requeue with only an existing source run',
+      record: { source_run_slug: '20260717-original-run', resume_mode: 'instruct' },
+      expectedSourceRunSlug: '20260717-original-run',
+      expectedMode: 'requeue',
+      execute: (service: TaskRetryService) => service.autoRequeueFailedTask('task-a', { maxAttempts: 1 }),
+    },
+    {
+      name: 'manual requeue without a source run',
+      record: {},
+      expectedSourceRunSlug: undefined,
+      expectedMode: 'requeue',
+      execute: (service: TaskRetryService) => service.requeueTask('task-a', ['failed']),
+    },
+  ])('should preserve resume-source precedence and mode for $name', ({
+    record,
+    expectedSourceRunSlug,
+    expectedMode,
+    execute,
+  }) => {
+    // Given
+    const { service, store } = createRetryServiceWithState({
+      tasks: [createFailedRecord(record) as unknown as TaskRecord],
+    });
+
+    // When
+    execute(service);
+
+    // Then
+    const updated = store.read().tasks[0];
+    expect(updated?.source_run_slug).toBe(expectedSourceRunSlug);
+    expect(updated?.resume_mode).toBe(expectedMode);
+  });
+
+  it('should persist source run provenance for auto requeue', () => {
+    writeTasksFile(testDir, [createFailedRecord({
+      run_slug: '20260717-source-run',
+      failure: { step: 'fix', error: 'review findings remain' },
+    })]);
+
+    const result = (runner as AutoRequeueCapableRunner).autoRequeueFailedTask('task-a', {
+      maxAttempts: 1,
+    });
+
+    const file = loadTasksFile(testDir);
+    expect(result.requeued).toBe(true);
+    expect(file.tasks[0]?.source_run_slug).toBe('20260717-source-run');
+    expect(file.tasks[0]?.resume_mode).toBe('requeue');
+  });
+
+  it('should retain an existing source run when a re-execution has not created its own run', () => {
+    writeTasksFile(testDir, [createFailedRecord({
+      source_run_slug: '20260717-original-run',
+      resume_mode: 'requeue',
+      failure: { step: 'fix', error: 'review findings remain' },
+    })]);
+
+    const autoResult = (runner as AutoRequeueCapableRunner).autoRequeueFailedTask('task-a', { maxAttempts: 1 });
+    let file = loadTasksFile(testDir);
+    expect(autoResult.requeued).toBe(true);
+    expect(file.tasks[0]?.source_run_slug).toBe('20260717-original-run');
+
+    const restarted = runner.startReExecution('task-a', ['pending'], 'retry');
+    expect(restarted.sourceRunSlug).toBe('20260717-original-run');
+    runner.failTask({
+      task: restarted,
+      success: false,
+      response: 'second failure',
+      executionLog: [],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+    runner.requeueTask('task-a', ['failed']);
+
+    file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.source_run_slug).toBe('20260717-original-run');
+    expect(file.tasks[0]?.resume_mode).toBe('requeue');
+  });
+
   it('should persist selected workflow when requeueing task', () => {
     runner.addTask('Task A', { workflow: 'default' });
     const task = runner.claimNextTasks(1)[0]!;
@@ -983,7 +1113,7 @@ describe('TaskRunner (tasks.yaml)', () => {
       completedAt: new Date().toISOString(),
     });
 
-    const restarted = runner.startReExecution(task.name, ['failed'], 'implement', 'retry note');
+    const restarted = runner.startReExecution(task.name, ['failed'], 'retry', 'implement', 'retry note');
 
     expect(restarted.status).toBe('running');
     expect(restarted.data?.workflow).toBe('default');
@@ -1015,6 +1145,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const restarted = runner.startReExecution(
       task.name,
       ['failed'],
+      'retry',
       undefined,
       'retry note',
       undefined,
@@ -1045,10 +1176,12 @@ describe('TaskRunner (tasks.yaml)', () => {
     const restarted = runner.startReExecution(
       task.name,
       ['failed'],
+      'retry',
       undefined,
       'retry note',
       undefined,
       'selected-workflow',
+      undefined,
     );
 
     expect(restarted.status).toBe('running');
@@ -1086,7 +1219,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     let file = loadTasksFile(testDir);
     expect(file.tasks[0]?.resume_point).toEqual(resumePoint);
 
-    const restarted = runner.startReExecution(task.name, ['pending'], 'implement', 'retry note', resumePoint);
+    const restarted = runner.startReExecution(task.name, ['pending'], 'retry', 'implement', 'retry note', resumePoint);
     expect(restarted.data?.resume_point).toEqual(resumePoint);
 
     file = loadTasksFile(testDir);

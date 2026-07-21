@@ -23,7 +23,7 @@ import { cleanupInteractiveResultAttachments } from '../../interactive/imageAtta
 import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
 import { executeTaskWithResult } from '../execute/taskExecution.js';
 import { stageTaskSpecForExecution } from '../execute/taskSpecContext.js';
-import type { DirectResumeMetadata } from '../execute/runMeta.js';
+import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { buildTraceTaskMetadata } from '../execute/traceTaskMetadata.js';
 import type { TaskAttachment } from '../attachments.js';
@@ -183,10 +183,10 @@ function buildExecutionContext(projectDir: string, run: ResumableDirectRun): Dir
   };
 }
 
-function buildDirectResumeMetadata(
+function buildResumeSource(
   run: ResumableDirectRun,
-  resumeMode: DirectResumeMetadata['resumeMode'],
-): DirectResumeMetadata {
+  resumeMode: RunResumeSource['resumeMode'],
+): RunResumeSource {
   return {
     sourceRunSlug: run.slug,
     resumeMode,
@@ -227,7 +227,7 @@ function prepareDirectResumeExecutionWithAttachments(
 async function executeDirectResume(
   projectDir: string,
   context: DirectRunResumeExecutionContext,
-  resumeMode: DirectResumeMetadata['resumeMode'],
+  resumeMode: RunResumeSource['resumeMode'],
   agentOverrides: TaskExecutionOptions | undefined,
   retryNote?: string,
   attachments?: readonly TaskAttachment[],
@@ -252,7 +252,7 @@ async function executeDirectResume(
       startStep: context.startStep,
       retryNote: executionRetryNote,
       resumePoint: context.resumePoint,
-      directResume: buildDirectResumeMetadata(context.run, resumeMode),
+      resumeSource: buildResumeSource(context.run, resumeMode),
       ...(preparedExecution ? { reportDirName: preparedExecution.reportDirName } : {}),
       traceTaskMetadata: buildTraceTaskMetadata({
         taskContent: executionTask,

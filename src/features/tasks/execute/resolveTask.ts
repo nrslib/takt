@@ -14,6 +14,7 @@ import {
   TaskExecutionConfigSchema,
 } from '../../../infra/task/index.js';
 import type { WorkflowResumePoint } from '../../../core/models/index.js';
+import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
 import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resume-point.js';
 import { getGitProvider, type GitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
@@ -77,6 +78,7 @@ export interface ResolvedTaskExecution {
   startStep?: string;
   retryNote?: string;
   resumePoint?: WorkflowResumePoint;
+  resumeSource?: RunResumeSource;
   autoPr: boolean;
   draftPr: boolean;
   managedPr: boolean;
@@ -293,6 +295,9 @@ export async function resolveTaskExecution(
     resumePoint,
   );
   const resolvedRetryNote = data.retry_note;
+  const resumeSource = task.resumeMode
+    ? { ...(task.sourceRunSlug ? { sourceRunSlug: task.sourceRunSlug } : {}), resumeMode: task.resumeMode }
+    : undefined;
   const maxStepsOverride = data.exceeded_max_steps;
   const initialIterationOverride = data.exceeded_current_iteration ?? retryResume.resumePoint?.iteration;
 
@@ -319,6 +324,7 @@ export async function resolveTaskExecution(
     ...(retryResume.startStep ? { startStep: retryResume.startStep } : {}),
     ...(resolvedRetryNote ? { retryNote: resolvedRetryNote } : {}),
     ...(retryResume.resumePoint ? { resumePoint: retryResume.resumePoint } : {}),
+    ...(resumeSource ? { resumeSource } : {}),
     ...(data.issue !== undefined ? { issueNumber: data.issue } : {}),
     ...(contextOverride?.prNumber !== undefined
       ? { prNumber: contextOverride.prNumber }

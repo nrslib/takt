@@ -63,6 +63,7 @@ export interface StepExecutorDeps {
   readonly getWorkflowDefinitionSteps: () => ReadonlyArray<WorkflowStep>;
   readonly getWorkflowName: () => string;
   readonly getWorkflowDescription: () => string | undefined;
+  readonly getInheritedPeerReportPaths: (step: WorkflowStep) => readonly string[];
   readonly getRetryNote: () => string | undefined;
   readonly getObservabilityRunId?: () => string | undefined;
   readonly observabilityEnabled?: () => boolean;
@@ -403,6 +404,7 @@ export class StepExecutor {
       step,
       reportDir,
       workflowSteps: workflowDefinitionSteps,
+      inheritedPeerReportPaths: this.deps.getInheritedPeerReportPaths(step),
     });
     const instruction = new InstructionBuilder(step, {
       task,

@@ -328,6 +328,8 @@ export async function requeueFailedTask(
     retryNote,
     selection.selectedResumePoint,
     selection.selectedWorkflowOverride,
+    undefined,
+    selection.matchedSlug ?? undefined,
   );
 
   info(`Task "${sanitizeTerminalText(task.name)}" has been requeued.`);
@@ -396,6 +398,7 @@ export async function retryFailedTask(
           selection.selectedResumePoint,
           selection.selectedWorkflowOverride,
           taskDir,
+          selection.matchedSlug ?? undefined,
         );
       } catch (error) {
         cleanupPreparedRetryTaskSpec(preparedSpec);
@@ -410,11 +413,13 @@ export async function retryFailedTask(
       taskInfo = runner.startReExecution(
         task.name,
         ['failed'],
+        'retry',
         selection.startStep,
         executionRetryNote,
         selection.selectedResumePoint,
         selection.selectedWorkflowOverride,
         taskDir,
+        selection.matchedSlug ?? undefined,
       );
     } catch (error) {
       cleanupPreparedRetryTaskSpec(preparedSpec);

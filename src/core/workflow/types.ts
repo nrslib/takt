@@ -30,6 +30,7 @@ import type { SystemStepServicesFactory } from './system/system-step-services.js
 import type { StructuredOutputNormalizerRegistry } from './engine/structured-output-normalizer.js';
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
 import type { FindingLedger } from '../models/finding-types.js';
+import type { RunResumeSource } from './run/run-meta.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 export type {
@@ -358,6 +359,7 @@ export interface WorkflowEngineOptions {
   retryNote?: string;
   /** Resume point for workflow_call-aware retries */
   resumePoint?: WorkflowResumePoint;
+  resumeSource?: RunResumeSource;
   /** Override report directory name (without parent path). */
   reportDirName?: string;
   /** Namespace appended under the shared run directories for nested workflow execution. */

@@ -259,6 +259,8 @@ describe('requeueFailedTask', () => {
       autoRequeueNote,
       undefined,
       undefined,
+      undefined,
+      undefined,
     );
   });
 
@@ -303,6 +305,8 @@ describe('requeueFailedTask', () => {
       autoRequeueNote,
       undefined,
       undefined,
+      undefined,
+      undefined,
     );
   });
 
@@ -337,6 +341,8 @@ describe('requeueFailedTask', () => {
       ].join('\n'),
       undefined,
       undefined,
+      undefined,
+      'run-1',
     );
   });
 
@@ -383,6 +389,8 @@ describe('requeueFailedTask', () => {
       ].join('\n'),
       undefined,
       'selected-workflow',
+      undefined,
+      'run-1',
     );
   });
 
@@ -418,6 +426,8 @@ describe('requeueFailedTask', () => {
       ].join('\n'),
       resumePoint,
       undefined,
+      undefined,
+      undefined,
     );
   });
 
@@ -446,6 +456,8 @@ describe('requeueFailedTask', () => {
       `既存ノート\n\n${autoRequeueNote}`,
       undefined,
       undefined,
+      undefined,
+      undefined,
     );
   });
 
@@ -460,6 +472,8 @@ describe('requeueFailedTask', () => {
       ['failed'],
       'implement',
       autoRequeueNote,
+      undefined,
+      undefined,
       undefined,
       undefined,
     );
@@ -484,6 +498,8 @@ describe('requeueFailedTask', () => {
       autoRequeueNote,
       undefined,
       'selected-workflow',
+      undefined,
+      undefined,
     );
   });
 
@@ -522,6 +538,8 @@ describe('requeueFailedTask', () => {
       undefined,
       autoRequeueNote,
       resumePoint,
+      undefined,
+      undefined,
       undefined,
     );
   });
@@ -578,8 +596,10 @@ describe('retryFailedTask', () => {
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'my-task',
       ['failed'],
+      'retry',
       undefined,
       '追加指示A',
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -606,11 +626,13 @@ describe('retryFailedTask', () => {
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'my-task',
       ['failed'],
+      'retry',
       undefined,
       'Use [Image #1].',
       undefined,
       undefined,
       '.takt/tasks/my-task',
+      undefined,
     );
     expect(cleanupAttachments).toHaveBeenCalledTimes(1);
   });
@@ -685,6 +707,7 @@ describe('retryFailedTask', () => {
       undefined,
       undefined,
       '.takt/tasks/my-task',
+      undefined,
     );
     expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
       '/project',
@@ -732,11 +755,13 @@ describe('retryFailedTask', () => {
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'my-task',
       ['failed'],
+      'retry',
       undefined,
       'Use [Image #2].',
       undefined,
       undefined,
       '.takt/tasks/my-task',
+      undefined,
     );
   });
 
@@ -756,10 +781,12 @@ describe('retryFailedTask', () => {
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'my-task',
       ['failed'],
+      'retry',
       undefined,
       '追加指示A',
       undefined,
       'selected-workflow',
+      undefined,
       undefined,
     );
     const executeArg = mockExecuteAndCompleteTask.mock.calls[0]?.[0];
@@ -968,11 +995,13 @@ describe('retryFailedTask', () => {
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'my-task',
       ['failed'],
+      'retry',
       'implement',
       '追加指示A',
       undefined,
       undefined,
       undefined,
+      'run-1',
     );
   });
 
@@ -1007,11 +1036,13 @@ describe('retryFailedTask', () => {
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'my-task',
       ['failed'],
+      'retry',
       'implement',
       '追加指示A',
       resumePoint,
       undefined,
       undefined,
+      'run-1',
     );
   });
 
@@ -1046,11 +1077,13 @@ describe('retryFailedTask', () => {
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'my-task',
       ['failed'],
+      'retry',
       'review',
       '追加指示A',
       undefined,
       undefined,
       undefined,
+      'run-1',
     );
   });
 
@@ -1062,11 +1095,13 @@ describe('retryFailedTask', () => {
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'my-task',
       ['failed'],
+      'retry',
       undefined,
       '追加指示A',
       undefined,
       undefined,
       undefined,
+      'run-1',
     );
   });
 
@@ -1078,11 +1113,13 @@ describe('retryFailedTask', () => {
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'my-task',
       ['failed'],
+      'retry',
       undefined,
       '既存ノート\n\n追加指示A',
       undefined,
       undefined,
       undefined,
+      'run-1',
     );
   });
 
@@ -1313,6 +1350,7 @@ describe('retryFailedTask', () => {
       undefined,
       undefined,
       undefined,
+      'run-1',
     );
     expect(mockStartReExecution).not.toHaveBeenCalled();
     expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
@@ -1336,6 +1374,7 @@ describe('retryFailedTask', () => {
       undefined,
       undefined,
       '.takt/tasks/my-task',
+      'run-1',
     );
     expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
       '/project',
@@ -1360,6 +1399,7 @@ describe('retryFailedTask', () => {
       undefined,
       'selected-workflow',
       undefined,
+      'run-1',
     );
   });
 
@@ -1404,6 +1444,7 @@ describe('retryFailedTask', () => {
       resumePoint,
       undefined,
       undefined,
+      'run-1',
     );
     expect(mockStartReExecution).not.toHaveBeenCalled();
   });
@@ -1431,6 +1472,7 @@ describe('retryFailedTask', () => {
       undefined,
       undefined,
       undefined,
+      'run-1',
     );
   });
 

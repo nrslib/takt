@@ -1,9 +1,23 @@
-import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, lstatSync, readdirSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import type { WorkflowStep } from '../../models/types.js';
 import { getReportFiles } from '../evaluation/rule-utils.js';
+import { scanReportEntries } from '../report-file-index.js';
+import { resolveReviewReportSourceSteps } from '../review-report-discovery.js';
+import { workflowCallNamespacePathsMatch } from '../workflow-call-namespace.js';
 
 const REPORT_HISTORY_PATTERN = /^(?<base>.+)\.(?<timestamp>\d{8}T\d{6}Z)(?:\.(?<sequence>\d+))?$/;
+const REPORT_PATH_SEPARATOR = '/';
+
+interface ResolvedReportPath {
+  readonly reportName: string;
+  readonly path: string;
+}
+
+interface CurrentReviewReportPathsResult {
+  readonly paths: readonly ResolvedReportPath[];
+  readonly scanFailure?: string;
+}
 
 interface ReportHistoryEntry {
   readonly path: string;
@@ -22,14 +36,35 @@ interface ReportHandleResolverContext {
   readonly step: WorkflowStep;
   readonly reportDir: string;
   readonly workflowSteps: ReadonlyArray<WorkflowStep>;
+  readonly inheritedPeerReportPaths?: readonly string[];
+}
+
+export function resolveCurrentReviewReportPathsWithDiagnostics(
+  reportDir: string,
+  reportNames: readonly string[],
+  excludedPaths: ReadonlySet<string>,
+): CurrentReviewReportPathsResult {
+  const scan = existsSync(reportDir) ? scanReportEntries(reportDir) : { entries: [] };
+  const paths = reportNames.flatMap((reportName) => {
+    const matchingPaths = scan.entries
+      .filter((path) => !excludedPaths.has(path) && lstatSync(path).isFile() && reportPathMatches(path, reportDir, reportName))
+      .sort((left, right) => lstatSync(right).mtimeMs - lstatSync(left).mtimeMs || left.localeCompare(right));
+    const path = matchingPaths[0];
+    return path ? [{ reportName, path }] : [];
+  });
+  return scan.failure ? { paths, scanFailure: scan.failure } : { paths };
 }
 
 export function resolveReportHandles(context: ReportHandleResolverContext): ResolvedReportHandles {
   const currentReportPaths = resolveCurrentReportPaths(context.reportDir, context.step);
   const stepReportFiles = getReportFiles(context.step.outputContracts);
   const historyByFile = stepReportFiles.map((fileName) => resolveReportHistory(context.reportDir, fileName));
-  const peerReportPaths = resolvePeerSteps(context.step, context.workflowSteps)
+  const peerReportPaths = resolveReviewReportSourceSteps(context.step, context.workflowSteps)
     .flatMap((peerStep) => resolveCurrentReportPaths(context.reportDir, peerStep));
+  const allPeerReportPaths = [...new Set([
+    ...peerReportPaths,
+    ...(context.inheritedPeerReportPaths ?? []),
+  ])];
 
   return {
     currentReport: currentReportPaths.join('\n'),
@@ -40,49 +75,24 @@ export function resolveReportHandles(context: ReportHandleResolverContext): Reso
     reportHistory: historyByFile
       .flatMap((entries) => entries.map((entry) => entry.path))
       .join('\n'),
-    peerReports: peerReportPaths.join('\n'),
+    peerReports: allPeerReportPaths.join('\n'),
   };
+}
+
+function reportPathMatches(path: string, reportDir: string, reportName: string): boolean {
+  const pathSegments = relativePathSegments(reportDir, path);
+  const reportSegments = reportName.replace(/\\/g, REPORT_PATH_SEPARATOR).split(REPORT_PATH_SEPARATOR);
+  return workflowCallNamespacePathsMatch(pathSegments, reportSegments);
+}
+
+function relativePathSegments(root: string, path: string): string[] {
+  return relative(root, path).split(/[/\\\\]/);
 }
 
 function resolveCurrentReportPaths(reportDir: string, step: WorkflowStep): string[] {
   return getReportFiles(step.outputContracts)
     .map((fileName) => join(reportDir, fileName))
     .filter((filePath) => existsSync(filePath));
-}
-
-function resolvePeerSteps(step: WorkflowStep, workflowSteps: ReadonlyArray<WorkflowStep>): WorkflowStep[] {
-  const parallelParent = findParallelParentStep(step.name, workflowSteps);
-  if (parallelParent?.parallel) {
-    return parallelParent.parallel.filter((peerStep) => peerStep.name !== step.name);
-  }
-
-  const currentIndex = workflowSteps.findIndex((candidate) => candidate.name === step.name);
-  if (currentIndex === -1) {
-    return [];
-  }
-
-  for (let index = currentIndex - 1; index >= 0; index -= 1) {
-    const candidate = workflowSteps[index]!;
-    const peerSteps = candidate.parallel?.filter(hasReportOutputs);
-    if (peerSteps && peerSteps.length > 0) {
-      return peerSteps;
-    }
-  }
-
-  return [];
-}
-
-function findParallelParentStep(
-  stepName: string,
-  workflowSteps: ReadonlyArray<WorkflowStep>,
-): WorkflowStep | undefined {
-  return workflowSteps.find((candidate) =>
-    candidate.parallel?.some((parallelStep) => parallelStep.name === stepName),
-  );
-}
-
-function hasReportOutputs(step: WorkflowStep): boolean {
-  return getReportFiles(step.outputContracts).length > 0;
 }
 
 function resolveReportHistory(reportDir: string, fileName: string): ReportHistoryEntry[] {

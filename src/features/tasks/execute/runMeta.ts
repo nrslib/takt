@@ -6,15 +6,10 @@
  */
 
 import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
-import type { RunMeta } from '../../../core/workflow/run/run-meta.js';
+import type { RunMeta, RunResumeSource } from '../../../core/workflow/run/run-meta.js';
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
 import type { WorkflowResumePoint } from '../../../core/models/index.js';
 import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
-
-export interface DirectResumeMetadata {
-  readonly sourceRunSlug: string;
-  readonly resumeMode: 'requeue' | 'retry' | 'instruct';
-}
 
 export interface RunMetaManagerOptions {
   readonly traceDiscovery?: WorkflowTraceDiscovery;
@@ -23,7 +18,7 @@ export interface RunMetaManagerOptions {
 type PersistedRunMeta = Omit<RunMeta, 'resumePoint' | 'sourceRunSlug' | 'resumeMode'> & {
   resume_point?: WorkflowResumePoint;
   source_run_slug?: string;
-  resume_mode?: DirectResumeMetadata['resumeMode'];
+  resume_mode?: RunResumeSource['resumeMode'];
 };
 
 export class RunMetaManager {
@@ -35,7 +30,7 @@ export class RunMetaManager {
     runPaths: RunPaths,
     task: string,
     workflowName: string,
-    directResume?: DirectResumeMetadata,
+    resumeSource?: RunResumeSource,
     options?: RunMetaManagerOptions,
   ) {
     this.metaAbs = runPaths.metaAbs;
@@ -49,9 +44,9 @@ export class RunMetaManager {
       logsDirectory: runPaths.logsRel,
       status: 'running',
       startTime: new Date().toISOString(),
-      ...(directResume ? {
-        sourceRunSlug: directResume.sourceRunSlug,
-        resumeMode: directResume.resumeMode,
+      ...(resumeSource ? {
+        resumeMode: resumeSource.resumeMode,
+        ...(resumeSource.sourceRunSlug ? { sourceRunSlug: resumeSource.sourceRunSlug } : {}),
       } : {}),
       ...(options?.traceDiscovery ? {
         observability: {

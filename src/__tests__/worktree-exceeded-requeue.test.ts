@@ -316,6 +316,51 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
     expect(capturedOptions.startStep).toBe('implement');
   });
 
+  it('scenario 7: worktree requeue forwards source run provenance to workflow execution', async () => {
+    // Given
+    writeExceededRecord(testDir, {
+      worktree: true,
+      worktree_path: cloneDir,
+      run_slug: '20260717-source-run',
+      start_step: 'implement',
+    });
+    runner.requeueExceededTask('task-a');
+    const [task] = runner.claimNextTasks(1);
+    if (!task) throw new Error('No task claimed');
+    vi.mocked(executeWorkflow).mockResolvedValueOnce({ success: true });
+
+    // When
+    await executeAndCompleteTask(task, runner, testDir);
+
+    // Then
+    const capturedOptions = vi.mocked(executeWorkflow).mock.calls[0]![3] as WorkflowExecutionOptions;
+    expect(capturedOptions.resumeSource).toEqual({
+      sourceRunSlug: '20260717-source-run',
+      resumeMode: 'requeue',
+    });
+    expect(vi.mocked(executeWorkflow).mock.calls[0]![2]).toBe(cloneDir);
+  });
+
+  it('scenario 8: worktree requeue preserves requeue mode when the source run is unavailable', async () => {
+    // Given
+    writeExceededRecord(testDir, {
+      worktree: true,
+      worktree_path: cloneDir,
+      start_step: 'implement',
+    });
+    runner.requeueExceededTask('task-a');
+    const [task] = runner.claimNextTasks(1);
+    if (!task) throw new Error('No task claimed');
+    vi.mocked(executeWorkflow).mockResolvedValueOnce({ success: true });
+
+    // When
+    await executeAndCompleteTask(task, runner, testDir);
+
+    // Then
+    const capturedOptions = vi.mocked(executeWorkflow).mock.calls[0]![3] as WorkflowExecutionOptions;
+    expect(capturedOptions.resumeSource).toEqual({ resumeMode: 'requeue' });
+  });
+
   it('scenario 6: re-execution trims workflow_call resume_point to the root step when the child no longer resolves', async () => {
     vi.mocked(loadWorkflowByIdentifier).mockReturnValue({
       name: 'test-workflow',
