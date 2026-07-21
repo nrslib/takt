@@ -1,5 +1,5 @@
 import { readInteractiveInput } from '../interactive/interactiveInput.js';
-import { selectOption, type SelectOptionItem } from '../../shared/prompt/index.js';
+import { selectMultipleOptions, selectOption, type SelectOptionItem } from '../../shared/prompt/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
 import type { SessionContext } from '../interactive/aiCaller.js';
 import { EXEC_TEXT_INPUT_COMMAND_AVAILABILITY } from './commandAvailability.js';
@@ -11,6 +11,18 @@ export async function selectExecOption<T extends string>(
   options: SelectOptionItem<T>[],
 ): Promise<T | null> {
   return await selectOption<T>(message, options, { cancelLabel: execLabel(lang, 'common.cancel') });
+}
+
+export async function selectMultipleExecOptions<T extends string>(
+  lang: ExecLanguage,
+  message: string,
+  options: SelectOptionItem<T>[],
+  initialValues: T[],
+): Promise<T[] | null> {
+  return await selectMultipleOptions(message, options, initialValues, {
+    cancelLabel: execLabel(lang, 'common.cancel'),
+    instructions: execLabel(lang, 'facets.multiSelectInstructions'),
+  });
 }
 
 export async function promptTextOrCancel(prompt: string, current: string, lang: SessionContext['lang']): Promise<string | null> {

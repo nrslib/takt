@@ -14,7 +14,7 @@ import { runExecCommand } from '../features/exec/index.js';
 import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
 import { saveExecPreset, saveLastUsedExecConfig } from '../features/exec/presetStore.js';
 import type { ExecConfig } from '../features/exec/types.js';
-import { selectOption, type SelectOptionItem } from '../shared/prompt/index.js';
+import { selectMultipleOptions, selectOption, type SelectOptionItem } from '../shared/prompt/index.js';
 import { stripAnsi } from '../shared/utils/text.js';
 
 vi.mock('../infra/providers/index.js', () => ({
@@ -60,10 +60,12 @@ vi.mock('../features/tasks/index.js', () => ({
 
 vi.mock('../shared/prompt/index.js', () => ({
   selectOption: vi.fn(),
+  selectMultipleOptions: vi.fn(),
 }));
 
 const mockReadInteractiveInput = vi.mocked(readInteractiveInput);
 const mockSelectOption = vi.mocked(selectOption);
+const mockSelectMultipleOptions = vi.mocked(selectMultipleOptions);
 const mockResolveWorkflowConfigValues = vi.mocked(resolveWorkflowConfigValues);
 const mockGetProvider = vi.mocked(getProvider);
 const mockCallAIWithRetry = vi.mocked(callAIWithRetry);
@@ -104,6 +106,32 @@ function mockSelectOptionQueue(...values: Array<string | null>): void {
   });
 }
 
+function mockSelectMultipleOptionsQueue(...values: Array<string[] | null>): void {
+  const queue = [...values];
+  mockSelectMultipleOptions.mockImplementation(<T extends string>(
+    message: string,
+    options: SelectOptionItem<T>[],
+  ): Promise<T[] | null> => {
+    const value = queue.shift();
+    if (value === undefined) {
+      throw new Error(`No queued selectMultipleOptions value for "${message}"`);
+    }
+    if (options.length === 0 && value !== null) {
+      throw new Error(`Queued selectMultipleOptions must be null when "${message}" has no options`);
+    }
+    if (value === null) {
+      return Promise.resolve(null);
+    }
+    const optionValues = options.map((option) => option.value);
+    for (const selected of value) {
+      if (!optionValues.includes(selected as T)) {
+        throw new Error(`Queued selectMultipleOptions value "${selected}" is not available for "${message}"`);
+      }
+    }
+    return Promise.resolve(value as T[]);
+  });
+}
+
 describe('exec command setup', () => {
   let projectDir: string;
   let globalConfigDir: string;
@@ -124,6 +152,7 @@ describe('exec command setup', () => {
     process.env.TAKT_CONFIG_DIR = globalConfigDir;
     mockReadInteractiveInput.mockReset();
     mockSelectOption.mockReset();
+    mockSelectMultipleOptions.mockReset();
     mockResolveWorkflowConfigValues.mockReset();
     mockGetProvider.mockReset();
     mockCallAIWithRetry.mockReset();
@@ -1079,19 +1108,19 @@ describe('exec command setup', () => {
       'edit:0',
       'knowledge',
       'toggle',
-      null,
       'back',
       'back',
       'back',
     );
+    mockSelectMultipleOptionsQueue(null);
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
-    const unsafeFacetOption = mockSelectOption.mock.calls
+    const unsafeFacetOption = mockSelectMultipleOptions.mock.calls
       .map((call) => call[1])
       .flat()
       .find((option) => option.value === 'unsafe');
-    expect(unsafeFacetOption?.label).toBe('[ ] unsafe');
+    expect(unsafeFacetOption?.label).toBe('unsafe');
     expect(unsafeFacetOption?.description).toBe('Project · Unsafe Knowledge');
     expect(unsafeFacetOption?.description).not.toContain('\x1b');
     expect(unsafeFacetOption?.description).not.toContain('secret');
@@ -2422,11 +2451,11 @@ describe('exec command setup', () => {
       'edit:0',
       'knowledge',
       'toggle',
-      'backend',
       'back',
       'back',
       'back',
     );
+    mockSelectMultipleOptionsQueue(['architecture', 'security']);
     mockCallAIWithRetry
       .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
       .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
@@ -2450,26 +2479,28 @@ describe('exec command setup', () => {
       'edit:0',
       'policy',
       'toggle',
-      'testing',
       'back',
       'back',
       'reviews',
       'edit:0',
       'policy',
       'toggle',
-      'qa',
       'back',
       'back',
       'replan',
       'policy',
       'toggle',
-      'review',
       'back',
       'replan',
       'policy',
       'clear',
       'back',
       'back',
+    );
+    mockSelectMultipleOptionsQueue(
+      ['coding'],
+      ['review', 'qa'],
+      ['review'],
     );
     mockCallAIWithRetry
       .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
@@ -2484,6 +2515,103 @@ describe('exec command setup', () => {
     expect(execute.parallel[0].policy).toEqual(['coding']);
     expect(judge.parallel[0].policy).toEqual(['review', 'qa']);
     expect(replan).not.toHaveProperty('policy');
+  });
+
+  it('should apply multiple knowledge and policy selections to separate worker workflow fields', async () => {
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'workers',
+      'edit:0',
+      'knowledge',
+      'toggle',
+      'policy',
+      'toggle',
+      'back',
+      'back',
+      'back',
+    );
+    mockSelectMultipleOptionsQueue(
+      ['architecture', 'security', 'backend'],
+      ['coding', 'testing'],
+    );
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+    const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
+    expect(execute.parallel[0].knowledge).toEqual(['architecture', 'security', 'backend']);
+    expect(execute.parallel[0].policy).toEqual(['coding', 'testing']);
+  });
+
+  it('should retain resolvable facet refs and exclude missing resource refs from selection', async () => {
+    const knowledgeRef = '@example/facets/shared-knowledge';
+    const policyRef = '@example/facets/shared-policy';
+    const knowledgeResourcePath = join(projectDir, 'README.md');
+    const policyResourcePath = join(projectDir, 'CONTRIBUTING.md');
+    const missingKnowledgeResourcePath = join(projectDir, 'missing-knowledge.md');
+    const missingPolicyResourcePath = join(projectDir, 'missing-policy.md');
+    const repertoireFacetDir = join(globalConfigDir, 'repertoire', '@example', 'facets', 'facets');
+    mkdirSync(join(repertoireFacetDir, 'knowledge'), { recursive: true });
+    mkdirSync(join(repertoireFacetDir, 'policies'), { recursive: true });
+    writeFileSync(join(repertoireFacetDir, 'knowledge', 'shared-knowledge.md'), '# Shared knowledge\n');
+    writeFileSync(join(repertoireFacetDir, 'policies', 'shared-policy.md'), '# Shared policy\n');
+    writeFileSync(knowledgeResourcePath, '# Resource knowledge\n');
+    writeFileSync(policyResourcePath, '# Resource policy\n');
+    saveExecPreset('repertoire-team', 'Repertoire team', {
+      ...DEFAULT_EXEC_CONFIG,
+      workers: [{ ...DEFAULT_EXEC_CONFIG.workers[0]!, knowledge: [knowledgeRef, knowledgeResourcePath, missingKnowledgeResourcePath], policy: [policyRef, policyResourcePath, missingPolicyResourcePath] }],
+      reviews: [{ ...DEFAULT_EXEC_CONFIG.reviews[0]!, knowledge: [knowledgeRef, knowledgeResourcePath, missingKnowledgeResourcePath], policy: [policyRef, policyResourcePath, missingPolicyResourcePath] }],
+      replan: { ...DEFAULT_EXEC_CONFIG.replan, knowledge: [knowledgeRef, knowledgeResourcePath, missingKnowledgeResourcePath], policy: [policyRef, policyResourcePath, missingPolicyResourcePath] },
+    }, { projectDir, scope: 'project' });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'workers', 'edit:0', 'knowledge', 'toggle', 'policy', 'toggle', 'back', 'back',
+      'reviews', 'edit:0', 'knowledge', 'toggle', 'policy', 'toggle', 'back', 'back',
+      'replan', 'knowledge', 'toggle', 'policy', 'toggle', 'back', 'back',
+    );
+    mockSelectMultipleOptionsQueue(
+      [knowledgeRef, knowledgeResourcePath, 'architecture'], [policyRef, policyResourcePath],
+      [knowledgeRef, knowledgeResourcePath], [policyRef, policyResourcePath],
+      [knowledgeRef, knowledgeResourcePath], [policyRef, policyResourcePath],
+    );
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, { preset: 'repertoire-team' })).resolves.toBeUndefined();
+
+    for (const call of mockSelectMultipleOptions.mock.calls) {
+      expect(call[1]?.map((option) => option.value)).toContain(call[2]?.[0]);
+      const options = call[1] ?? [];
+      const resourcePath = call[2]?.find((value) => value.endsWith('.md'));
+      if (resourcePath) {
+        expect(options.find((option) => option.value === resourcePath)?.description).toBeUndefined();
+      }
+      const missingResourcePath = call[2]?.find((value) => value.includes('missing-'));
+      if (missingResourcePath) {
+        expect(options.find((option) => option.value === missingResourcePath)).toBeUndefined();
+      }
+    }
+    const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
+    expect(saved.workers[0]).toMatchObject({ knowledge: [knowledgeRef, knowledgeResourcePath, 'architecture'], policy: [policyRef, policyResourcePath] });
+    expect(saved.reviews[0]).toMatchObject({ knowledge: [knowledgeRef, knowledgeResourcePath], policy: [policyRef, policyResourcePath] });
+    expect(saved.replan).toMatchObject({ knowledge: [knowledgeRef, knowledgeResourcePath], policy: [policyRef, policyResourcePath] });
+    const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+    const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
+    const review = workflow.steps.find((step: { name: string }) => step.name === 'review');
+    const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
+    expect(execute.parallel[0]).toMatchObject({ knowledge: [knowledgeRef, knowledgeResourcePath, 'architecture'], policy: [policyRef, policyResourcePath] });
+    expect(review.parallel[0]).toMatchObject({ knowledge: [knowledgeRef, knowledgeResourcePath], policy: [policyRef, policyResourcePath] });
+    expect(replan).toMatchObject({ knowledge: [knowledgeRef, knowledgeResourcePath], policy: [policyRef, policyResourcePath] });
   });
 
   it('should load presets from setup before generating workflow', async () => {
@@ -2767,18 +2895,52 @@ describe('exec command setup', () => {
       'edit:0',
       'knowledge',
       'toggle',
-      'project-knowledge',
       'back',
       'back',
       'back',
     );
+    mockSelectMultipleOptionsQueue(['project-knowledge']);
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
-    const toggleOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'Toggle knowledge facet')?.[1] ?? [];
+    const toggleCall = mockSelectMultipleOptions.mock.calls.find((call) => call[0] === 'Select knowledge facets');
+    const toggleOptions = toggleCall?.[1] ?? [];
     expect(toggleOptions.map((option) => option.value).sort()).toEqual(['project-knowledge', 'user-knowledge']);
     expect(toggleOptions.some((option) => ['architecture', 'backend', 'security'].includes(option.value))).toBe(false);
     expect(toggleOptions.some((option) => option.description?.startsWith('builtin'))).toBe(false);
+    expect(toggleCall?.[2]).toEqual(['architecture', 'backend', 'security']);
+  });
+
+  it('should preserve current knowledge when no facets can be selected', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      enableBuiltinWorkflows: false,
+      language: 'en',
+      provider: 'claude',
+      model: 'opus',
+    });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'workers',
+      'edit:0',
+      'knowledge',
+      'toggle',
+      'back',
+      'back',
+      'back',
+    );
+    mockSelectMultipleOptionsQueue(null);
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+    const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
+    expect(execute.parallel[0].knowledge).toEqual(['architecture', 'backend', 'security']);
   });
 
   it('should not read builtin facet content from setup when builtin facets are disabled', async () => {

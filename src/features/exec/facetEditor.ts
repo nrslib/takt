@@ -2,7 +2,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { getGlobalFacetDir, getProjectFacetDir } from '../../infra/config/paths.js';
+import { getGlobalFacetDir, getProjectFacetDir, getRepertoireDir } from '../../infra/config/paths.js';
+import {
+  isResourcePath,
+  resolveFacetPath,
+  resolveResourceContentWithSource,
+} from '../../infra/config/loaders/resource-resolver.js';
+import { isScopeRef } from 'faceted-prompting';
 import { getFacetDirs, scanFacets, type FacetLookupConfig, type FacetType } from '../catalog/catalogFacets.js';
 import { readInteractiveInput } from '../interactive/interactiveInput.js';
 import { info } from '../../shared/ui/index.js';
@@ -11,7 +17,7 @@ import { loadTemplate } from '../../shared/prompts/index.js';
 import { askExecAssistant, type ExecSessionContext } from './assistantSession.js';
 import { EXEC_TEXT_INPUT_COMMAND_AVAILABILITY } from './commandAvailability.js';
 import { execFacetKindLabel, execLabel, execScopeLabel, execSourceLabel, type ExecLanguage } from './labels.js';
-import { promptText, selectExecOption } from './promptUtils.js';
+import { promptText, selectExecOption, selectMultipleExecOptions } from './promptUtils.js';
 import {
   projectLocalFileExists,
   readProjectLocalTextFile,
@@ -319,19 +325,60 @@ export async function editInstructionFacetRef(
   return current;
 }
 
-async function selectFacetToToggle(
+async function selectFacetRefs(
   kind: FacetType,
   cwd: string,
   current: string[],
   lookupConfig: FacetLookupConfig,
   lang: ExecLanguage,
-): Promise<string | null> {
+): Promise<string[] | null> {
   const entries = normalizeFacetEntries(kind, cwd, lookupConfig);
-  return await selectExecOption<string>(lang, execLabel(lang, 'facets.togglePrompt', { kind: execFacetKindLabel(lang, kind) }), entries.map((entry) => ({
-    label: `${current.includes(entry.name) ? '[x]' : '[ ]'} ${sanitizeTerminalText(entry.name)}`,
+  const options: Array<{ label: string; value: string; description?: string }> = entries.map((entry) => ({
+    label: sanitizeTerminalText(entry.name),
     value: entry.name,
     description: `${sanitizeTerminalText(execSourceLabel(lang, entry.source))} · ${sanitizeTerminalText(entry.description)}`,
-  })));
+  }));
+  const availableValues = new Set(options.map((option) => option.value));
+
+  for (const ref of current) {
+    if (availableValues.has(ref)) {
+      continue;
+    }
+    const resolutionContext = {
+      projectDir: cwd,
+      lang: lookupConfig.language,
+      repertoireDir: getRepertoireDir(),
+    };
+    const isResolvableScopeRef = isScopeRef(ref)
+      && resolveFacetPath(ref, kind, resolutionContext) !== undefined;
+    const resolvedResource = isResourcePath(ref)
+      ? resolveResourceContentWithSource(ref, cwd, kind, ref, resolutionContext)
+      : undefined;
+    const isResolvableResourcePath = resolvedResource?.sourcePath !== undefined;
+    if (isResolvableScopeRef) {
+      options.push({
+        label: sanitizeTerminalText(ref),
+        value: ref,
+        description: sanitizeTerminalText(execSourceLabel(lang, 'repertoire')),
+      });
+      availableValues.add(ref);
+      continue;
+    }
+    if (isResolvableResourcePath) {
+      options.push({
+        label: sanitizeTerminalText(ref),
+        value: ref,
+      });
+      availableValues.add(ref);
+    }
+  }
+
+  return await selectMultipleExecOptions<string>(
+    lang,
+    execLabel(lang, 'facets.multiSelectPrompt', { kind: execFacetKindLabel(lang, kind) }),
+    options,
+    current,
+  );
 }
 
 export async function editFacetRefList(
@@ -353,13 +400,11 @@ export async function editFacetRefList(
     { label: execLabel(ctx.lang, 'common.back'), value: 'back' },
   ]);
   if (action === 'toggle') {
-    const selected = await selectFacetToToggle(kind, cwd, current, ctx.facetLookupConfig, ctx.lang);
-    if (selected === null) {
+    const selectedFacetRefs = await selectFacetRefs(kind, cwd, current, ctx.facetLookupConfig, ctx.lang);
+    if (selectedFacetRefs === null) {
       return current;
     }
-    return current.includes(selected)
-      ? current.filter((name) => name !== selected)
-      : [...current, selected];
+    return selectedFacetRefs;
   }
   if (action === 'create_editor' || action === 'create_ai') {
     const created = await createFacetRef(cwd, kind, ctx, action === 'create_ai');

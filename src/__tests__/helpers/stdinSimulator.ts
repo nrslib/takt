@@ -18,6 +18,14 @@ interface SavedStdinState {
   stdinPause: typeof process.stdin.pause;
 }
 
+interface RawStdinOptions {
+  continuous?: boolean;
+}
+
+interface RawStdinController {
+  send(input: string): void;
+}
+
 let saved: SavedStdinState | null = null;
 
 /**
@@ -26,7 +34,7 @@ let saved: SavedStdinState | null = null;
  * Each string in rawInputs is delivered as a Buffer via 'data' event
  * when the conversation loop registers a listener.
  */
-export function setupRawStdin(rawInputs: string[]): void {
+export function setupRawStdin(rawInputs: string[], options: RawStdinOptions = {}): RawStdinController {
   saved = {
     isTTY: process.stdin.isTTY,
     isRaw: process.stdin.isRaw,
@@ -54,15 +62,26 @@ export function setupRawStdin(rawInputs: string[]): void {
   process.stdin.on = vi.fn(((event: string, handler: (...args: unknown[]) => void) => {
     if (event === 'data') {
       currentHandler = handler as (data: Buffer) => void;
-      if (inputIndex < rawInputs.length) {
+      if (!options.continuous) {
+        if (inputIndex < rawInputs.length) {
+          const data = rawInputs[inputIndex]!;
+          inputIndex++;
+          queueMicrotask(() => {
+            if (currentHandler) {
+              currentHandler(Buffer.from(data, 'utf-8'));
+            }
+          });
+        }
+        return process.stdin;
+      }
+      const deliverNextInput = (): void => {
+        if (!currentHandler || inputIndex >= rawInputs.length) return;
         const data = rawInputs[inputIndex]!;
         inputIndex++;
-        queueMicrotask(() => {
-          if (currentHandler) {
-            currentHandler(Buffer.from(data, 'utf-8'));
-          }
-        });
-      }
+        currentHandler(Buffer.from(data, 'utf-8'));
+        queueMicrotask(deliverNextInput);
+      };
+      queueMicrotask(deliverNextInput);
     }
     return process.stdin;
   }) as typeof process.stdin.on);
@@ -73,6 +92,15 @@ export function setupRawStdin(rawInputs: string[]): void {
     }
     return process.stdin;
   }) as typeof process.stdin.removeListener);
+
+  return {
+    send(input: string): void {
+      if (!currentHandler) {
+        throw new Error('Raw stdin data listener is not registered.');
+      }
+      currentHandler(Buffer.from(input, 'utf-8'));
+    },
+  };
 }
 
 /**
