@@ -144,6 +144,7 @@ steps:
         rules:
           - condition: すべて問題なし
           - condition: 要求未達成、テスト失敗、ビルドエラー
+          - condition: BLOCKED
         output_contracts:
           report:
             - name: supervisor-validation.md
@@ -152,6 +153,8 @@ steps:
               format: summary
               use_judge: false
     rules:
+      - condition: any("BLOCKED")
+        next: ABORT
       - condition: all("AI特有の問題なし", "すべて問題なし")
         next: COMPLETE
       - condition: all("AI特有の問題あり", "要求未達成、テスト失敗、ビルドエラー")

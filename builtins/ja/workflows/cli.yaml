@@ -110,6 +110,8 @@ steps:
     rules:
       - condition: すべて問題なし
         next: COMPLETE
+      - condition: BLOCKED
+        next: ABORT
       - condition: 要求未達成、テスト失敗、ビルドエラー
         next: plan
     instruction: supervise

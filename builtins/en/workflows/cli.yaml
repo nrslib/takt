@@ -110,6 +110,8 @@ steps:
     rules:
       - condition: All clear
         next: COMPLETE
+      - condition: BLOCKED
+        next: ABORT
       - condition: Requirements unmet, tests failing, build errors
         next: plan
     instruction: supervise

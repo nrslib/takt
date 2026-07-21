@@ -451,6 +451,10 @@ workflow_config:
     prepare: [node, gradle, ./custom-script.sh]
 ```
 
+The `node` / `gradle` presets isolate caches and temporary directories but do not install runtimes or select their versions. A custom script can pass environment variables, including `PATH`, to subsequent provider executions by writing `KEY=value` or `export KEY=value` to stdout.
+
+If required verification remains impossible because of an environmental constraint that task-scope code changes cannot resolve, builtin supervise workflows abort with `BLOCKED` instead of treating the missing verification as an implementation defect and returning to a fix loop.
+
 ### `loop_monitors`
 
 Detect cyclic patterns between steps (e.g. `review` → `fix` → `review` repeating indefinitely) and let an AI judge whether progress is being made:
