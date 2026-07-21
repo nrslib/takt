@@ -101,9 +101,9 @@ steps:
     knowledge: architecture
     instruction: replan-implementation
     rules:
-      - condition: 実装方針の再定義が完了した
+      - condition: プロジェクト内で実行可能な未試行の変更または原因調査と、その検証手順を具体化した
         next: implement
-      - condition: 要件を満たす実現可能な方針がない
+      - condition: 確認済みの根拠により、プロジェクト内の変更や調査では解消できず、外部操作だけが残るか要件が両立不能である
         next: ABORT
     output_contracts:
       report:
