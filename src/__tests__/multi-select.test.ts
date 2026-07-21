@@ -287,14 +287,14 @@ describe('selectMultipleOptions', () => {
     )).rejects.toThrow('Multiple-select options must have unique values: architecture');
   });
 
-  it('should return normalized empty selections when no options are available', async () => {
+  it('should return null when no options are available', async () => {
     const result = await selectMultipleOptions(
       'Select facets',
       [],
       ['architecture'],
     );
 
-    expect(result).toEqual([]);
+    expect(result).toBeNull();
   });
 
   it('should display the multiple-select instructions when settings are omitted', async () => {

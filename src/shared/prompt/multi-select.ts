@@ -80,7 +80,7 @@ export async function selectMultipleOptions<T extends string>(
     },
   };
 
-  if (options.length === 0) return selectedValues;
+  if (options.length === 0) return null;
 
   const confirmed = await selectOption(message, decorateOptions(options, selectedValues), callbacks);
   return confirmed === null ? null : selectedValues;

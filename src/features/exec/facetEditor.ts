@@ -351,8 +351,10 @@ async function selectFacetRefs(
     };
     const isResolvableScopeRef = isScopeRef(ref)
       && resolveFacetPath(ref, kind, resolutionContext) !== undefined;
-    const isResolvableResourcePath = isResourcePath(ref)
-      && resolveResourceContentWithSource(ref, cwd, kind, ref, resolutionContext) !== undefined;
+    const resolvedResource = isResourcePath(ref)
+      ? resolveResourceContentWithSource(ref, cwd, kind, ref, resolutionContext)
+      : undefined;
+    const isResolvableResourcePath = resolvedResource?.sourcePath !== undefined;
     if (isResolvableScopeRef) {
       options.push({
         label: sanitizeTerminalText(ref),

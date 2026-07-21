@@ -4,6 +4,9 @@ import { handleKeyInput, selectOption } from '../shared/prompt/select.js';
 import { restoreStdin, setupRawStdin } from './helpers/stdinSimulator.js';
 
 describe('select raw mode safety', () => {
+  const originalNoTty = process.env.TAKT_NO_TTY;
+  const originalTouchTty = process.env.TAKT_TEST_FLG_TOUCH_TTY;
+
   beforeEach(() => {
     delete process.env.TAKT_NO_TTY;
     process.env.TAKT_TEST_FLG_TOUCH_TTY = '1';
@@ -11,7 +14,16 @@ describe('select raw mode safety', () => {
 
   afterEach(() => {
     restoreStdin();
-    delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
+    if (originalNoTty === undefined) {
+      delete process.env.TAKT_NO_TTY;
+    } else {
+      process.env.TAKT_NO_TTY = originalNoTty;
+    }
+    if (originalTouchTty === undefined) {
+      delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
+    } else {
+      process.env.TAKT_TEST_FLG_TOUCH_TTY = originalTouchTty;
+    }
   });
 
   describe('handleKeyInput Ctrl+C handling', () => {
@@ -261,7 +273,6 @@ describe('select raw mode safety', () => {
     });
 
     it('should handle edge case inputs without throwing', () => {
-      // Test with boundary conditions
       expect(() => handleKeyInput('\x03', 0, 0, false, 0)).not.toThrow();
       expect(() => handleKeyInput('\x1B[A', 0, 1, false, 1)).not.toThrow();
       expect(() => handleKeyInput('\r', 0, 1, true, 0)).not.toThrow();

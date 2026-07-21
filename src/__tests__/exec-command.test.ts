@@ -116,6 +116,9 @@ function mockSelectMultipleOptionsQueue(...values: Array<string[] | null>): void
     if (value === undefined) {
       throw new Error(`No queued selectMultipleOptions value for "${message}"`);
     }
+    if (options.length === 0 && value !== null) {
+      throw new Error(`Queued selectMultipleOptions must be null when "${message}" has no options`);
+    }
     if (value === null) {
       return Promise.resolve(null);
     }
@@ -2546,11 +2549,13 @@ describe('exec command setup', () => {
     expect(execute.parallel[0].policy).toEqual(['coding', 'testing']);
   });
 
-  it('should retain resolvable repertoire and resource knowledge and policy refs through worker, review, and replan selection', async () => {
+  it('should retain resolvable facet refs and exclude missing resource refs from selection', async () => {
     const knowledgeRef = '@example/facets/shared-knowledge';
     const policyRef = '@example/facets/shared-policy';
     const knowledgeResourcePath = join(projectDir, 'README.md');
     const policyResourcePath = join(projectDir, 'CONTRIBUTING.md');
+    const missingKnowledgeResourcePath = join(projectDir, 'missing-knowledge.md');
+    const missingPolicyResourcePath = join(projectDir, 'missing-policy.md');
     const repertoireFacetDir = join(globalConfigDir, 'repertoire', '@example', 'facets', 'facets');
     mkdirSync(join(repertoireFacetDir, 'knowledge'), { recursive: true });
     mkdirSync(join(repertoireFacetDir, 'policies'), { recursive: true });
@@ -2560,9 +2565,9 @@ describe('exec command setup', () => {
     writeFileSync(policyResourcePath, '# Resource policy\n');
     saveExecPreset('repertoire-team', 'Repertoire team', {
       ...DEFAULT_EXEC_CONFIG,
-      workers: [{ ...DEFAULT_EXEC_CONFIG.workers[0]!, knowledge: [knowledgeRef, knowledgeResourcePath], policy: [policyRef, policyResourcePath] }],
-      reviews: [{ ...DEFAULT_EXEC_CONFIG.reviews[0]!, knowledge: [knowledgeRef, knowledgeResourcePath], policy: [policyRef, policyResourcePath] }],
-      replan: { ...DEFAULT_EXEC_CONFIG.replan, knowledge: [knowledgeRef, knowledgeResourcePath], policy: [policyRef, policyResourcePath] },
+      workers: [{ ...DEFAULT_EXEC_CONFIG.workers[0]!, knowledge: [knowledgeRef, knowledgeResourcePath, missingKnowledgeResourcePath], policy: [policyRef, policyResourcePath, missingPolicyResourcePath] }],
+      reviews: [{ ...DEFAULT_EXEC_CONFIG.reviews[0]!, knowledge: [knowledgeRef, knowledgeResourcePath, missingKnowledgeResourcePath], policy: [policyRef, policyResourcePath, missingPolicyResourcePath] }],
+      replan: { ...DEFAULT_EXEC_CONFIG.replan, knowledge: [knowledgeRef, knowledgeResourcePath, missingKnowledgeResourcePath], policy: [policyRef, policyResourcePath, missingPolicyResourcePath] },
     }, { projectDir, scope: 'project' });
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
@@ -2590,6 +2595,10 @@ describe('exec command setup', () => {
       const resourcePath = call[2]?.find((value) => value.endsWith('.md'));
       if (resourcePath) {
         expect(options.find((option) => option.value === resourcePath)?.description).toBeUndefined();
+      }
+      const missingResourcePath = call[2]?.find((value) => value.includes('missing-'));
+      if (missingResourcePath) {
+        expect(options.find((option) => option.value === missingResourcePath)).toBeUndefined();
       }
     }
     const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
@@ -2902,7 +2911,7 @@ describe('exec command setup', () => {
     expect(toggleCall?.[2]).toEqual(['architecture', 'backend', 'security']);
   });
 
-  it('should remove unavailable builtin knowledge when no facets can be selected', async () => {
+  it('should preserve current knowledge when no facets can be selected', async () => {
     mockResolveWorkflowConfigValues.mockReturnValue({
       enableBuiltinWorkflows: false,
       language: 'en',
@@ -2911,6 +2920,7 @@ describe('exec command setup', () => {
     });
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
       'workers',
@@ -2921,12 +2931,16 @@ describe('exec command setup', () => {
       'back',
       'back',
     );
-    mockSelectMultipleOptionsQueue([]);
+    mockSelectMultipleOptionsQueue(null);
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
-    const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
-    expect(saved.workers[0].knowledge).toEqual([]);
+    const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+    const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
+    expect(execute.parallel[0].knowledge).toEqual(['architecture', 'backend', 'security']);
   });
 
   it('should not read builtin facet content from setup when builtin facets are disabled', async () => {
