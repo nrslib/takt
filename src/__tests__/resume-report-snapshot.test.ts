@@ -115,6 +115,7 @@ import {
   inheritResumeReportSnapshot,
   readResumeReportSnapshotManifest,
   RESUME_ARTIFACTS_FILE_NAME,
+  ResumeReportSnapshotSourceError,
 } from '../core/workflow/run/resume-report-snapshot.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { writeReportFile } from '../core/workflow/report-writer.js';
@@ -162,6 +163,16 @@ describe('inheritResumeReportSnapshot', () => {
     const leftovers = readdirSync(targetPaths.runRootAbs)
       .filter((name) => name.startsWith('.reports-inherit-tmp-') || name.includes(`${RESUME_ARTIFACTS_FILE_NAME}.tmp-`));
     expect(leftovers).toEqual([]);
+  }
+
+  function captureError(operation: () => void): Error {
+    try {
+      operation();
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      return error as Error;
+    }
+    throw new Error('Expected operation to throw');
   }
 
   function seedSourceRun(slug: string, files: Record<string, string>): void {
@@ -253,11 +264,13 @@ describe('inheritResumeReportSnapshot', () => {
     mkdirSync(targetPaths.reportsAbs, { recursive: true });
     writeFileSync(join(targetPaths.reportsAbs, 'existing.md'), 'do not clobber');
 
-    expect(() => inheritResumeReportSnapshot({
+    const error = captureError(() => inheritResumeReportSnapshot({
       cwd,
       sourceRunSlug: 'source-run',
       targetRunSlug: 'target-run',
-    })).toThrow(/already has a non-empty reports directory/);
+    }));
+    expect(error).not.toBeInstanceOf(ResumeReportSnapshotSourceError);
+    expect(error.message).toMatch(/already has a non-empty reports directory/);
     expect(readFileSync(join(targetPaths.reportsAbs, 'existing.md'), 'utf-8')).toBe('do not clobber');
   });
 
@@ -268,11 +281,13 @@ describe('inheritResumeReportSnapshot', () => {
     const sourceReports = buildRunPaths(cwd, 'source-run').reportsAbs;
     symlinkSync(outside, join(sourceReports, 'link.md'));
 
-    expect(() => inheritResumeReportSnapshot({
+    const error = captureError(() => inheritResumeReportSnapshot({
       cwd,
       sourceRunSlug: 'source-run',
       targetRunSlug: 'target-run',
-    })).toThrow(/refusing to copy symlink/);
+    }));
+    expect(error).toBeInstanceOf(ResumeReportSnapshotSourceError);
+    expect(error.message).toMatch(/refusing to copy symlink/);
 
     const targetPaths = buildRunPaths(cwd, 'target-run');
     expect(existsSync(targetPaths.reportsAbs)).toBe(false);
@@ -390,11 +405,13 @@ describe('inheritResumeReportSnapshot', () => {
   });
 
   it('fails when the source run does not exist (no ancestor fallback)', () => {
-    expect(() => inheritResumeReportSnapshot({
+    const error = captureError(() => inheritResumeReportSnapshot({
       cwd,
       sourceRunSlug: 'missing-run',
       targetRunSlug: 'target-run',
-    })).toThrow(/source run "missing-run" does not exist/);
+    }));
+    expect(error).toBeInstanceOf(ResumeReportSnapshotSourceError);
+    expect(error.message).toMatch(/source run "missing-run" does not exist/);
   });
 
   it('propagates source reports access failures without publishing an empty snapshot', () => {
@@ -402,11 +419,13 @@ describe('inheritResumeReportSnapshot', () => {
     const sourceReports = buildRunPaths(cwd, 'source-run').reportsAbs;
     fsControl.failLstatForPath = sourceReports;
 
-    expect(() => inheritResumeReportSnapshot({
+    const error = captureError(() => inheritResumeReportSnapshot({
       cwd,
       sourceRunSlug: 'source-run',
       targetRunSlug: 'target-run',
-    })).toThrow(/permission denied/);
+    }));
+    expect(error).toBeInstanceOf(ResumeReportSnapshotSourceError);
+    expect(error.message).toMatch(/permission denied/);
 
     expect(existsSync(buildRunPaths(cwd, 'target-run').reportsAbs)).toBe(false);
   });

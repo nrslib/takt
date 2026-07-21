@@ -6,6 +6,7 @@ import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import {
   inheritResumeReportSnapshot,
   RESUME_ARTIFACTS_FILE_NAME,
+  ResumeReportSnapshotSourceError,
 } from '../../../core/workflow/run/resume-report-snapshot.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import {
@@ -28,6 +29,7 @@ import { createSessionLog, generateSessionId, initNdjsonLog, type SessionLog } f
 import { isQuietMode } from '../../../shared/context.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
+import { getErrorMessage } from '../../../shared/utils/error.js';
 import { createLogger, generateReportDir, getDebugPromptsLogFile, isValidReportDirName, preventSleep } from '../../../shared/utils/index.js';
 import { createProviderEventLogger, isProviderEventsEnabled } from '../../../core/logging/providerEventLogger.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
@@ -160,16 +162,31 @@ export async function createWorkflowExecutionBootstrap(
   // 壊れる（v3-r4 の resume 境界バグ）。同一秒の auto requeue などで slug
   // を再利用する場合は既存 reports/ をそのまま使う。継承は resume feature
   // 側ではなく bootstrap を一元境界にして配線漏れを防ぐ。順序: run slug
-  // 決定 → source 検証 → snapshot 作成 → manifest 保存 → RunMetaManager 作成
-  // → logs/engine 初期化。
+  // 決定 → target 安全検証 → source 検証 → snapshot 作成 → manifest 保存
+  // → RunMetaManager 作成 → logs/engine 初期化。source が取得不能な場合だけは
+  // fix 側の選択的な best-effort 継承へ委ね、target の不整合や公開競合は
+  // ここで失敗させる。
   const sourceRunSlug = options.resumeSource?.sourceRunSlug;
-  const resumeArtifactsManifest = sourceRunSlug && sourceRunSlug !== runSlug
-    ? inheritResumeReportSnapshot({
+  let resumeArtifactsManifest: ReturnType<typeof inheritResumeReportSnapshot> | undefined;
+  if (sourceRunSlug && sourceRunSlug !== runSlug) {
+    try {
+      resumeArtifactsManifest = inheritResumeReportSnapshot({
         cwd,
         sourceRunSlug,
         targetRunSlug: runSlug,
-      })
-    : undefined;
+      });
+    } catch (error) {
+      if (!(error instanceof ResumeReportSnapshotSourceError)) {
+        throw error;
+      }
+      log.warn('Resume report snapshot source unavailable; continuing without inherited snapshot', {
+        sourceRunSlug,
+        targetRunSlug: runSlug,
+        reason: getErrorMessage(error),
+        fallbackUsed: true,
+      });
+    }
+  }
   if (resumeArtifactsManifest) {
     log.debug('Inherited resume report snapshot', {
       sourceRunSlug: resumeArtifactsManifest.sourceRunSlug,

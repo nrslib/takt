@@ -280,3 +280,81 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
     }
   });
 });
+
+describe('IT: missing report source fallback through task resume', () => {
+  let environment: TestEnvironment;
+  let originalConfigDir: string | undefined;
+
+  beforeEach(() => {
+    originalConfigDir = process.env.TAKT_CONFIG_DIR;
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    if (originalConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalConfigDir;
+    }
+    invalidateGlobalConfigCache();
+    if (environment && existsSync(environment.root)) {
+      rmSync(environment.root, { recursive: true, force: true });
+    }
+  });
+
+  it('continues the requeued fix and records unavailable diagnostics when the source run was deleted', async () => {
+    environment = createEnvironment(false);
+    process.env.TAKT_CONFIG_DIR = environment.globalDir;
+    invalidateGlobalConfigCache();
+
+    const instructions: string[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: instruction,
+      });
+      instructions.push(instruction);
+      return {
+        persona: 'fixer',
+        status: 'done',
+        content: '[FIX:1]\nfix complete',
+        timestamp: new Date(),
+        sessionId: 'fix-session',
+      };
+    });
+
+    const runner = new TaskRunner(environment.projectDir);
+    const resumedTask = prepareResumedTask(runner, 'requeue');
+
+    const success = await executeAndCompleteTask(resumedTask, runner, environment.projectDir);
+
+    const resumedRunSlug = findResumedRunSlug(environment.projectDir);
+    const diagnosticPath = join(
+      environment.projectDir,
+      '.takt',
+      'runs',
+      resumedRunSlug,
+      'reports',
+      'subworkflows',
+      'iteration-2--step-delegate--workflow-child-fix',
+      'review-report-inheritance.json',
+    );
+    const diagnostic = JSON.parse(readFileSync(diagnosticPath, 'utf-8')) as {
+      sourceRunSlug?: string;
+      status?: string;
+      fallbackUsed?: boolean;
+      skipped?: Array<{ reason?: string }>;
+    };
+
+    expect(success).toBe(true);
+    expect(instructions).toHaveLength(1);
+    expect(diagnostic).toEqual(expect.objectContaining({
+      sourceRunSlug,
+      status: 'unavailable',
+      fallbackUsed: true,
+    }));
+    expect(diagnostic.skipped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: expect.stringContaining('source_resolution_failed') }),
+    ]));
+  });
+});

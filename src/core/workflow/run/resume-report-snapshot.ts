@@ -30,7 +30,7 @@ import {
   type Stats,
 } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { isValidReportDirName } from '../../../shared/utils/index.js';
+import { getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
 import {
   assertPrivateDirectoryReadSnapshot,
   capturePrivateDirectoryReadSnapshot,
@@ -71,6 +71,13 @@ export interface InheritResumeReportSnapshotOptions {
   readonly cwd: string;
   readonly sourceRunSlug: string;
   readonly targetRunSlug: string;
+}
+
+export class ResumeReportSnapshotSourceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ResumeReportSnapshotSourceError';
+  }
 }
 
 const MANIFEST_KEYS = new Set(['version', 'sourceRunSlug', 'targetRunSlug', 'createdAt', 'files']);
@@ -213,6 +220,19 @@ interface CopyResult {
 
 const PRIVATE_FILE_MODE = 0o600;
 
+function inspectSnapshotSource<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    if (error instanceof ResumeReportSnapshotSourceError) {
+      throw error;
+    }
+    throw new ResumeReportSnapshotSourceError(
+      `Resume report snapshot: source unavailable: ${getErrorMessage(error)}`,
+    );
+  }
+}
+
 /**
  * source reports/ を stagingDir へ再帰コピーしつつ manifest エントリを作る。
  * symlink・非通常ファイル（fifo 等）は拒否して即座に throw する。
@@ -227,10 +247,10 @@ function copyReportsTree(
   const sourceDirAbs = relativeDir === '' ? sourceRootAbs : join(sourceRootAbs, relativeDir);
   const directorySnapshot = relativeDir === ''
     ? sourceRootSnapshot
-    : capturePrivateDirectoryReadSnapshot(sourceDirAbs);
-  assertPrivateDirectoryReadSnapshot(directorySnapshot);
-  const entryNames = readdirSync(sourceDirAbs);
-  assertPrivateDirectoryReadSnapshot(directorySnapshot);
+    : inspectSnapshotSource(() => capturePrivateDirectoryReadSnapshot(sourceDirAbs));
+  inspectSnapshotSource(() => assertPrivateDirectoryReadSnapshot(directorySnapshot));
+  const entryNames = inspectSnapshotSource(() => readdirSync(sourceDirAbs));
+  inspectSnapshotSource(() => assertPrivateDirectoryReadSnapshot(directorySnapshot));
   for (const entryName of entryNames) {
     // 予約名（前回 resume の継承 manifest）はコピーしない — この継承で
     // 生成する新しい manifest が同名で staged reports に入る。
@@ -240,9 +260,9 @@ function copyReportsTree(
     const entryRel = relativeDir === '' ? entryName : join(relativeDir, entryName);
     const entryAbs = resolve(sourceRootAbs, entryRel);
     assertInside(sourceRootAbs, entryAbs, `source entry "${toPosixRelative(entryRel)}"`);
-    const stat = lstatSync(entryAbs);
+    const stat = inspectSnapshotSource(() => lstatSync(entryAbs));
     if (stat.isSymbolicLink()) {
-      throw new Error(
+      throw new ResumeReportSnapshotSourceError(
         `Resume report snapshot: refusing to copy symlink "${toPosixRelative(entryRel)}" from source run reports`,
       );
     }
@@ -253,11 +273,11 @@ function copyReportsTree(
       continue;
     }
     if (!stat.isFile()) {
-      throw new Error(
+      throw new ResumeReportSnapshotSourceError(
         `Resume report snapshot: refusing to copy non-regular file "${toPosixRelative(entryRel)}" from source run reports`,
       );
     }
-    const content = readRegularFileNoFollow(entryAbs, stat);
+    const content = inspectSnapshotSource(() => readRegularFileNoFollow(entryAbs, stat));
     const stagingAbs = resolve(stagingRootAbs, entryRel);
     assertInside(stagingRootAbs, stagingAbs, `staged entry "${toPosixRelative(entryRel)}"`);
     const stagingDirectory = dirname(stagingAbs);
@@ -314,28 +334,12 @@ export function inheritResumeReportSnapshot(
   options: InheritResumeReportSnapshotOptions,
 ): ResumeReportSnapshotManifest {
   const { cwd, sourceRunSlug, targetRunSlug } = options;
-  if (!isValidReportDirName(sourceRunSlug)) {
-    throw new Error(`Resume report snapshot: invalid source run slug: ${sourceRunSlug}`);
-  }
   if (!isValidReportDirName(targetRunSlug)) {
     throw new Error(`Resume report snapshot: invalid target run slug: ${targetRunSlug}`);
   }
-  if (sourceRunSlug === targetRunSlug) {
-    throw new Error(`Resume report snapshot: source and target run slugs are identical: ${sourceRunSlug}`);
-  }
 
-  const sourcePaths = buildRunPaths(cwd, sourceRunSlug);
   const targetPaths = buildRunPaths(cwd, targetRunSlug);
   assertDirectoryChain(cwd, targetPaths.runRootAbs, 'target run path');
-  const sourceRunStat = lstatOrUndefined(sourcePaths.runRootAbs);
-  if (sourceRunStat === undefined) {
-    throw new Error(
-      `Resume report snapshot: source run "${sourceRunSlug}" does not exist at ${sourcePaths.runRootAbs}`,
-    );
-  }
-  if (!sourceRunStat.isDirectory()) {
-    throw new Error(`Resume report snapshot: source run "${sourceRunSlug}" is not a directory`);
-  }
   const targetReportsStat = lstatOrUndefined(targetPaths.reportsAbs);
   if (targetReportsStat !== undefined && !targetReportsStat.isDirectory()) {
     throw new Error(`Resume report snapshot: target run "${targetRunSlug}" reports path is not a directory`);
@@ -346,23 +350,41 @@ export function inheritResumeReportSnapshot(
       + 'refusing to overwrite it with the inherited snapshot',
     );
   }
+  if (!isValidReportDirName(sourceRunSlug)) {
+    throw new ResumeReportSnapshotSourceError(`Resume report snapshot: invalid source run slug: ${sourceRunSlug}`);
+  }
+  if (sourceRunSlug === targetRunSlug) {
+    throw new Error(`Resume report snapshot: source and target run slugs are identical: ${sourceRunSlug}`);
+  }
 
+  const sourcePaths = buildRunPaths(cwd, sourceRunSlug);
+  const sourceRunStat = inspectSnapshotSource(() => lstatOrUndefined(sourcePaths.runRootAbs));
+  if (sourceRunStat === undefined) {
+    throw new ResumeReportSnapshotSourceError(
+      `Resume report snapshot: source run "${sourceRunSlug}" does not exist at ${sourcePaths.runRootAbs}`,
+    );
+  }
+  if (!sourceRunStat.isDirectory()) {
+    throw new ResumeReportSnapshotSourceError(
+      `Resume report snapshot: source run "${sourceRunSlug}" is not a directory`,
+    );
+  }
   // source の reports/ パス自体が symlink の場合、外部ディレクトリを丸ごと
   // コピーしてしまう（boundary requirement）。中身の走査前にパス自体を lstat で拒否する。
-  const sourceReportsStat = lstatOrUndefined(sourcePaths.reportsAbs);
+  const sourceReportsStat = inspectSnapshotSource(() => lstatOrUndefined(sourcePaths.reportsAbs));
   if (sourceReportsStat?.isSymbolicLink()) {
-    throw new Error(
+    throw new ResumeReportSnapshotSourceError(
       `Resume report snapshot: source run "${sourceRunSlug}" reports path is a symlink; refusing to copy it`,
     );
   }
   if (sourceReportsStat !== undefined && !sourceReportsStat.isDirectory()) {
-    throw new Error(
+    throw new ResumeReportSnapshotSourceError(
       `Resume report snapshot: source run "${sourceRunSlug}" reports path is not a directory`,
     );
   }
   const sourceReportsSnapshot = sourceReportsStat === undefined
     ? undefined
-    : capturePrivateDirectoryReadSnapshot(sourcePaths.reportsAbs);
+    : inspectSnapshotSource(() => capturePrivateDirectoryReadSnapshot(sourcePaths.reportsAbs));
 
   createDirectoryChain(cwd, targetPaths.runRootAbs, 'target run path');
   assertDirectoryChain(cwd, targetPaths.runRootAbs, 'target run path');

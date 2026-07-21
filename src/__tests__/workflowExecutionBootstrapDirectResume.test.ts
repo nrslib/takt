@@ -14,6 +14,7 @@ const {
   mockCreateOutputFns,
   mockInitializeOtelFoundation,
   mockEnsureWorktreeTaktRuntimeProtection,
+  mockIsValidReportDirName,
   mockLogWarn,
 } = vi.hoisted(() => ({
   mockWriteFileAtomic: vi.fn(),
@@ -22,6 +23,7 @@ const {
   mockCreateOutputFns: vi.fn(),
   mockInitializeOtelFoundation: vi.fn(),
   mockEnsureWorktreeTaktRuntimeProtection: vi.fn(),
+  mockIsValidReportDirName: vi.fn((_slug: string) => true),
   mockLogWarn: vi.fn(),
 }));
 
@@ -80,7 +82,7 @@ vi.mock('../shared/utils/index.js', () => ({
   })),
   generateReportDir: vi.fn(() => 'generated-run'),
   getDebugPromptsLogFile: vi.fn(() => undefined),
-  isValidReportDirName: vi.fn(() => true),
+  isValidReportDirName: mockIsValidReportDirName,
   preventSleep: vi.fn(),
 }));
 
@@ -208,6 +210,8 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       result: vi.fn(),
     });
     mockInitializeOtelFoundation.mockResolvedValue({ shutdown: vi.fn() });
+    mockIsValidReportDirName.mockReset();
+    mockIsValidReportDirName.mockReturnValue(true);
     mockLogWarn.mockReset();
     mockResolveConfigValueWithSource.mockReset();
     mockResolveConfigValueWithSource.mockImplementation((
@@ -865,6 +869,56 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     };
     expect(meta.source_run_slug).toBe(sharedRunSlug);
     expect(meta).not.toHaveProperty('resume_artifacts');
+  });
+
+  it('Given the source run is unavailable, When bootstrap resumes, Then it records fallback and continues', async () => {
+    const projectDir = createTempProject();
+
+    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Resume missing run', projectDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: 'fallback-resume',
+      resumeSource: {
+        sourceRunSlug: '20260524-missing-run',
+        resumeMode: 'requeue',
+      },
+    })).resolves.toBeDefined();
+
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Resume report snapshot source unavailable; continuing without inherited snapshot',
+      expect.objectContaining({
+        sourceRunSlug: '20260524-missing-run',
+        targetRunSlug: 'fallback-resume',
+        reason: expect.stringContaining('does not exist'),
+        fallbackUsed: true,
+      }),
+    );
+    const metaWrite = mockWriteFileAtomic.mock.calls.find((call) =>
+      call[0] === join(projectDir, '.takt', 'runs', 'fallback-resume', 'meta.json')
+    );
+    const meta = JSON.parse(String(metaWrite![1])) as { resume_artifacts?: unknown };
+    expect(meta).not.toHaveProperty('resume_artifacts');
+  });
+
+  it('Given the source slug is invalid and target reports are non-empty, When bootstrap resumes, Then target safety still fails fast', async () => {
+    const projectDir = createTempProject();
+    mockIsValidReportDirName.mockImplementation((slug: string) => slug !== '../invalid-source');
+    const targetReports = join(projectDir, '.takt', 'runs', 'conflicting-resume', 'reports');
+    mkdirSync(targetReports, { recursive: true });
+    writeFileSync(join(targetReports, 'existing.md'), 'existing report', 'utf-8');
+
+    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Resume conflicting run', projectDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: 'conflicting-resume',
+      resumeSource: {
+        sourceRunSlug: '../invalid-source',
+        resumeMode: 'retry',
+      },
+    })).rejects.toThrow(/already has a non-empty reports directory/);
+
+    expect(mockLogWarn).not.toHaveBeenCalled();
+    expect(readFileSync(join(targetReports, 'existing.md'), 'utf-8')).toBe('existing report');
   });
 
   it('Given no tasks.yaml exists, When direct resume bootstrap runs, Then tasks.yaml is not created', async () => {
