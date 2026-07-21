@@ -155,16 +155,18 @@ export async function createWorkflowExecutionBootstrap(
   }
 
   const runPaths = buildRunPaths(cwd, runSlug);
-  // resume（requeue / retry / instruct、attachment 有無を問わず）は新しい run
-  // slug を作るため、旧 run の reports/ を継承しないと {report:X} 参照が必ず
-  // 壊れる（v3-r4 の resume 境界バグ）。継承は resume feature 側ではなく
-  // bootstrap を一元境界にして配線漏れを防ぐ。順序: run slug 決定 → source
-  // 検証 → snapshot 作成 → manifest 保存 → RunMetaManager 作成 → logs/engine
-  // 初期化。
-  const resumeArtifactsManifest = options.resumeSource?.sourceRunSlug
+  // resume（requeue / retry / instruct、attachment 有無を問わず）が新しい run
+  // slug を作る場合、旧 run の reports/ を継承しないと {report:X} 参照が
+  // 壊れる（v3-r4 の resume 境界バグ）。同一秒の auto requeue などで slug
+  // を再利用する場合は既存 reports/ をそのまま使う。継承は resume feature
+  // 側ではなく bootstrap を一元境界にして配線漏れを防ぐ。順序: run slug
+  // 決定 → source 検証 → snapshot 作成 → manifest 保存 → RunMetaManager 作成
+  // → logs/engine 初期化。
+  const sourceRunSlug = options.resumeSource?.sourceRunSlug;
+  const resumeArtifactsManifest = sourceRunSlug && sourceRunSlug !== runSlug
     ? inheritResumeReportSnapshot({
         cwd,
-        sourceRunSlug: options.resumeSource.sourceRunSlug,
+        sourceRunSlug,
         targetRunSlug: runSlug,
       })
     : undefined;

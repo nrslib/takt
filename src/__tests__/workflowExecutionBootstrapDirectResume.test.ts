@@ -840,6 +840,33 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(meta.resume_mode).toBe('retry');
   });
 
+  it('Given auto requeue reuses the source run slug, When bootstrap resumes, Then it skips snapshot inheritance', async () => {
+    const projectDir = createTempProject();
+    const sharedRunSlug = '20260524-shared-run';
+    mkdirSync(join(projectDir, '.takt', 'runs', sharedRunSlug, 'reports'), { recursive: true });
+
+    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Resume same run', projectDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: sharedRunSlug,
+      resumeSource: {
+        sourceRunSlug: sharedRunSlug,
+        resumeMode: 'requeue',
+      },
+    })).resolves.toBeDefined();
+
+    const metaWrite = mockWriteFileAtomic.mock.calls.find((call) =>
+      call[0] === join(projectDir, '.takt', 'runs', sharedRunSlug, 'meta.json')
+    );
+    expect(metaWrite).toBeDefined();
+    const meta = JSON.parse(String(metaWrite![1])) as {
+      source_run_slug?: string;
+      resume_artifacts?: unknown;
+    };
+    expect(meta.source_run_slug).toBe(sharedRunSlug);
+    expect(meta).not.toHaveProperty('resume_artifacts');
+  });
+
   it('Given no tasks.yaml exists, When direct resume bootstrap runs, Then tasks.yaml is not created', async () => {
     const projectDir = createTempProject();
     seedResumeSourceRun(projectDir);
