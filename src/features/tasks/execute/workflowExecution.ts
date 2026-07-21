@@ -302,7 +302,6 @@ async function executeWorkflowInternal(
     return {
       success: finalState.status === 'completed',
       reason: eventBridge.state.abortReason,
-      retryable: eventBridge.state.abortKind === 'needs_adjudication' ? false : undefined,
       lastStep: eventBridge.state.lastStepName,
       lastMessage: eventBridge.state.lastStepContent,
       runDirectory: bootstrap.runPaths.runRootAbs,

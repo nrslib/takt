@@ -12,8 +12,7 @@
  * と同じ round-marker 方式（適用済みマーカー集合。crash/replay 冪等）で、「未昇格
  * anomaly が残ったまま完了した findings-manager ラウンド」を数える。上限に達したら
  * exhausted=true になり、builtin は再レビュー（reviewers）ではなく
- * NEEDS_ADJUDICATION へルーティングする（fixpoint/停止予算と同じ「有限で人手裁定へ」
- * の最終防波堤）。
+ * 要件を維持した再計画へルーティングする。反復の有限停止は loop monitor が担う。
  *
  * ラウンド跨ぎの累積状態は FindingLedger.reviewIntegrity へ永続化する（run/resume を
  * 跨いだ累積が無料で成立する）。マーカーの一意性・冪等性は round-marker.ts の

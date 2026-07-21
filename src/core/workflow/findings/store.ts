@@ -66,8 +66,6 @@ export interface FindingArtifactWriter {
   saveManagerValidationReport: (report: FindingManagerValidationReport) => string;
   /** Audit trail for the finding-conflict-adjudication synthetic step: discarded decisions (evidence changed between prompt and apply) and other non-applied outcomes. */
   saveConflictAdjudicationReport: (report: FindingConflictAdjudicationAuditReport) => string;
-  /** Audit trail for a NEEDS_ADJUDICATION stop: the open provisional findings that reached a cross-round fixpoint and their origin. */
-  saveNeedsAdjudicationReport: (report: NeedsAdjudicationReport) => string;
 }
 
 export interface FindingLedgerStore
@@ -90,69 +88,6 @@ export interface FindingLedgerMutation<Result> {
 export interface FindingLedgerPublicationDecision<Result> {
   mutation: FindingLedgerMutation<Result>;
   publish: boolean;
-}
-
-/**
- * Which condition forced the NEEDS_ADJUDICATION transition. 'fixpoint' is the
- * provisional fixpoint mechanism (the provisional set stopped changing
- * across rounds); 'budget-exhausted' is the bounded stop
- * budget extension (the cumulative round count, or elapsed time, exceeded its
- * configured limit even though the provisional set kept churning). This is
- * classified from the actual matched rule condition (see NeedsAdjudicationReport.matchedCondition),
- * NOT inferred from ledger state — so a workflow that places the budget rule
- * before the fixpoint rule correctly records 'budget-exhausted' when the budget
- * rule matched first. 'unclassified' covers a custom route to NEEDS_ADJUDICATION
- * whose condition references neither signal.
- */
-export type NeedsAdjudicationStopReason = 'fixpoint' | 'budget-exhausted' | 'review-integrity-exhausted' | 'unclassified';
-
-/**
- * Written when the workflow stops at NEEDS_ADJUDICATION (a
- * cross-round provisional fixpoint, or its bounded-stop-budget extension).
- * Durable, machine-readable record of "why it stopped" alongside the
- * human-readable abort reason string — see WorkflowEngine's
- * recordNeedsAdjudication.
- */
-export interface NeedsAdjudicationReport {
-  version: 1;
-  runId: string;
-  /** Step whose rule transition matched NEEDS_ADJUDICATION (e.g. "reviewers", "final-gate"). */
-  stepName: string;
-  reachedAt: string;
-  /** Classified from `matchedCondition` (fact), not ledger-state inference. */
-  stopReason: NeedsAdjudicationStopReason;
-  /** The exact condition of the rule that routed to NEEDS_ADJUDICATION — the ground-truth fact `stopReason` is derived from. Absent only when the transition came from a loop-monitor judge override (which surfaces no condition string). */
-  matchedCondition?: string;
-  /** Present whenever the ledger carries stop-budget state, regardless of stopReason — audit context for how many rounds it took to reach either terminal condition. */
-  stopBudget?: {
-    roundsCompleted: number;
-    firstRoundAt: string;
-  };
-  provisionalFindings: Array<{
-    findingId: string;
-    kind: string;
-    stableKey: string;
-    reason: string;
-    reviewers: string[];
-    sourceRawFindingIds: string[];
-  }>;
-  /**
-   * 二系統台帳（review-integrity protocol）の review-integrity 側の未昇格 anomaly。
-   * NEEDS_ADJUDICATION 自体は（従来どおり）provisional のみが引き起こすが、
-   * 到達したときにこの監査情報も同梱することで、人手裁定が「product gate を
-   * 塞いでいる provisional」と「引用不成立で監査だけされている anomaly」の
-   * 両方を1箇所で見られるようにする。anomaly 単体で NEEDS_ADJUDICATION を
-   * 引き起こすことはない（product gate を塞がないという安全不変条件どおり）。
-   */
-  reviewerAnomalies?: Array<{
-    id: string;
-    kind: string;
-    stableKey: string;
-    reason: string;
-    reviewers: string[];
-    sourceRawFindingIds: string[];
-    occurrences: number;
-  }>;
 }
 
 /**
@@ -575,12 +510,6 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
     saveConflictAdjudicationReport: (report) => {
       const fileName = `findings-adjudication.${sanitizeFileSegment(report.conflictId)}.json`;
       return writeReportFile(options.reportDir, fileName, JSON.stringify(report, null, 2));
-    },
-    saveNeedsAdjudicationReport: (report) => {
-      // NEEDS_ADJUDICATION is terminal — a run reaches it at most once, so a
-      // fixed name (already scoped by the run's own report directory) is
-      // enough; no per-conflict/per-step disambiguation is needed.
-      return writeReportFile(options.reportDir, 'needs-adjudication.json', JSON.stringify(report, null, 2));
     },
   };
 }

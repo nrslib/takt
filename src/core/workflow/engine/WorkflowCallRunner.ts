@@ -25,7 +25,6 @@ import type {
   StepRunResult,
   WorkflowCallChildEngine,
   WorkflowCallResolver,
-  WorkflowAbortResult,
   WorkflowEngineOptions,
   WorkflowSharedRuntimeState,
 } from '../types.js';
@@ -199,24 +198,6 @@ export class WorkflowCallRunner {
     };
   }
 
-  private buildTerminalAbort(
-    step: WorkflowCallStep,
-    childResult: WorkflowCallExecutionResult,
-  ): WorkflowAbortResult | undefined {
-    if (childResult.abortKind !== 'needs_adjudication' || childResult.abortReason === undefined) {
-      return undefined;
-    }
-    return {
-      kind: childResult.abortKind,
-      reason: childResult.abortReason,
-      failure: {
-        kind: childResult.abortKind,
-        step: step.name,
-        reason: childResult.abortReason,
-      },
-    };
-  }
-
   private requireIsolatedSessionUpdates(
     step: WorkflowCallStep,
     childResult: WorkflowCallExecutionResult,
@@ -317,7 +298,6 @@ export class WorkflowCallRunner {
       response,
       instruction: '',
       providerInfo,
-      terminalAbort: this.buildTerminalAbort(step, childResult),
     };
   }
 
@@ -342,7 +322,6 @@ export class WorkflowCallRunner {
         response,
         instruction: '',
         providerInfo,
-        terminalAbort: this.buildTerminalAbort(step, childResult),
       },
       sessionUpdates: this.requireIsolatedSessionUpdates(step, childResult),
       stateSync: this.requireIsolatedStateSync(step, childResult),

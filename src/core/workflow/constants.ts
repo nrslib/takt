@@ -10,19 +10,6 @@ export const COMPLETE_STEP = 'COMPLETE';
 export const ABORT_STEP = 'ABORT';
 
 /**
- * Terminal target for a provisional fixpoint stop. Like
- * COMPLETE_STEP/ABORT_STEP this is a pure
- * routing marker — no step object is synthesized for it (unlike
- * FINDING_CONFLICT_ADJUDICATION_STEP, which is a real synthesized step). A
- * workflow routes here via `next: NEEDS_ADJUDICATION` once
- * findings.provisional.fixpoint is true; the engine turns that into a
- * non-success, resumable abort ('needs_adjudication') carrying the open
- * provisional findings and their origin, instead of running the step it
- * transitioned from again.
- */
-export const NEEDS_ADJUDICATION_STEP = 'NEEDS_ADJUDICATION';
-
-/**
  * Reserved name of the engine-synthesized conflict-adjudication step.
  * Workflow rules (and loop
  * monitor judge rules) may point `next:` at this name like any other step, but

@@ -9,9 +9,8 @@
  *   1. fail-closed: 未昇格 anomaly が残るのに COMPLETE を指す custom workflow は、
  *      エンジンの completion gate が COMPLETE を拒否して abort する（配線漏れでも
  *      安全側）。
- *   2. bounded 再レビュー → NEEDS_ADJUDICATION: builtin 相当の配線
- *      （anomaly > 0 && !budgetExhausted → 再レビュー / budgetExhausted →
- *      NEEDS_ADJUDICATION）が、有限回だけ再レビューしてから人手裁定へ収束する。
+ *   2. bounded 再レビュー → replan: anomaly 予算を使い切ったら要件を維持した
+ *      再計画へ進み、再計画後も解消不能な反復だけ loop monitor が停止する。
  * を検証する。
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -28,7 +27,10 @@ vi.mock('../agents/runner.js', () => ({
 }));
 
 vi.mock('../infra/providers/index.js', () => ({
-  getProvider: vi.fn((provider: string) => ({ supportsStructuredOutput: provider !== 'cursor' })),
+  getProvider: vi.fn((provider: string) => ({
+    supportsStructuredOutput: provider !== 'cursor',
+    keepsAllowedToolWithoutEdit: () => false,
+  })),
 }));
 
 vi.mock('../core/workflow/findings/snapshot.js', () => ({
@@ -219,7 +221,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(abortReason).toContain('reviewer anomaly');
   });
 
-  it('allows an inherited-contract child to return an anomaly routing signal while the parent remains responsible for final completion', async () => {
+  it('merge-readiness child の need_replan は親の replan → implement → reviewers へ進み write_tests を通らない', async () => {
     mockReviewerEmitsHallucination();
 
     const childConfig: WorkflowConfig = {
@@ -227,7 +229,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       subworkflow: {
         callable: true,
         requiresFindingContract: true,
-        returns: ['needs_review'],
+        returns: ['need_replan'],
       },
       maxSteps: 3,
       initialStep: 'reviewers',
@@ -235,7 +237,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       steps: [
         reviewerStep([{
           condition: 'when(findings.reviewerAnomalies.count > 0)',
-          returnValue: 'needs_review',
+          returnValue: 'need_replan',
         }]),
       ],
     };
@@ -257,13 +259,26 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
           personaDisplayName: 'final-gate',
           instruction: '',
           passPreviousResponse: true,
-          rules: [{ condition: 'needs_review', next: 'handle-review-signal' }],
+          rules: [{ condition: 'need_replan', next: 'replan' }],
         },
         makeStep({
-          name: 'handle-review-signal',
-          persona: 'handler',
-          instruction: 'Handle the child routing signal.',
-          rules: [makeRule('when(true)', 'NEEDS_ADJUDICATION')],
+          name: 'replan',
+          tags: ['plan'],
+          persona: 'planner',
+          instruction: 'Redefine the implementation approach without changing requirements.',
+          rules: [makeRule('when(true)', 'implement')],
+        }),
+        makeStep({
+          name: 'implement',
+          persona: 'coder',
+          instruction: 'Implement the revised approach.',
+          rules: [makeRule('when(true)', 'reviewers')],
+        }),
+        makeStep({
+          name: 'reviewers',
+          persona: 'reviewer-after-replan',
+          instruction: 'Review the revised implementation.',
+          rules: [makeRule('when(true)', 'ABORT')],
         }),
       ],
     };
@@ -281,21 +296,34 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     const result = await engine.run();
 
     expect(result.status).toBe('aborted');
-    expect(abortReason).toContain('NEEDS_ADJUDICATION');
-    expect(vi.mocked(runAgent).mock.calls.some(([persona]) => persona === 'handler')).toBe(true);
+    expect(abortReason).toContain('Workflow aborted by step transition');
+    const personas = vi.mocked(runAgent).mock.calls.map(([persona]) => persona);
+    expect(personas).toEqual(expect.arrayContaining(['planner', 'coder', 'reviewer-after-replan']));
+    expect(personas).not.toContain('test-writer');
   });
 
-  it('bounded 再レビュー → NEEDS_ADJUDICATION: anomaly が残る限り再レビューへ送り、review_budget を使い切ったら人手裁定へ収束する（有限で止まる）', async () => {
+  it('review_budget 枯渇後は replan → implement → reviewers へ進み、write_tests を再実行せず loop monitor で有限停止する', async () => {
     mockReviewerEmitsHallucination();
 
-    // builtin 相当の配線を最小化: reviewers は常に gate へ、gate が
-    // review-integrity を評価する。review_budget=2 で「初回 + 1回の再レビュー」の
-    // 2ラウンドで exhausted になる。
+    // builtin 相当の配線を最小化: gate は review_budget 枯渇までは再レビューし、
+    // 枯渇後は replan へ戻す。sticky な枯渇状態による反復は loop monitor が止める。
     const config: WorkflowConfig = {
       name: 'review-integrity-bounded',
-      maxSteps: 12,
+      maxSteps: 20,
       initialStep: 'reviewers',
       provider: 'claude',
+      loopMonitors: [{
+        cycle: ['replan', 'implement', 'reviewers', 'gate'],
+        threshold: 2,
+        judge: {
+          persona: 'supervisor',
+          instruction: 'Abort only when no feasible requirements-compliant approach remains.',
+          rules: [
+            { condition: 'A requirements-compliant alternative remains', next: 'replan' },
+            { condition: 'No feasible requirements-compliant approach remains', next: 'ABORT' },
+          ],
+        },
+      }],
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
@@ -309,10 +337,23 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
           persona: 'gatekeeper',
           instruction: 'Gate.',
           rules: [
-            makeRule('when(findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true && findings.conflicts.count == 0)', 'NEEDS_ADJUDICATION'),
+            makeRule('when(findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true && findings.conflicts.count == 0)', 'replan'),
             makeRule('when(findings.reviewerAnomalies.count > 0 && findings.conflicts.count == 0)', 'reviewers'),
             makeRule('when(findings.open.count == 0 && findings.conflicts.count == 0)', 'COMPLETE'),
           ],
+        }),
+        makeStep({
+          name: 'replan',
+          tags: ['plan'],
+          persona: 'planner',
+          instruction: 'Redefine the implementation approach without changing requirements.',
+          rules: [makeRule('when(true)', 'implement')],
+        }),
+        makeStep({
+          name: 'implement',
+          persona: 'coder',
+          instruction: 'Implement the revised approach.',
+          rules: [makeRule('when(true)', 'reviewers')],
         }),
       ],
     };
@@ -321,25 +362,26 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
+      detectRuleIndex: (_content, stepName) => (stepName.startsWith('_loop_judge_') ? 1 : -1),
     });
     let abortReason = '';
     engine.on('workflow:abort', (_state, reason: string) => { abortReason = reason; });
     const result = await engine.run();
 
-    // COMPLETE には決して至らず、有限回の再レビューの後 NEEDS_ADJUDICATION へ。
+    // COMPLETE には至らず、再計画を試した後に loop monitor が有限停止する。
     expect(result.status).toBe('aborted');
-    expect(abortReason).toContain('NEEDS_ADJUDICATION');
-    // 停止理由が review-integrity 予算切れとして分類され、明細に anomaly が出る。
-    expect(abortReason).toContain('review-integrity budget was exhausted');
-    expect(abortReason).toContain('reviewer anomaly');
+    expect(abortReason).toContain('Workflow aborted by step transition');
 
-    // reviewers（rawFindings を出す呼び出し）が2回走った = 1回の再レビューが
-    // 実際に起きた（初回だけで諦めていない）。
+    const stepNames = vi.mocked(runAgent).mock.calls.map(([persona]) => persona);
+    expect(stepNames).toContain('planner');
+    expect(stepNames).toContain('coder');
+    expect(stepNames).not.toContain('test-writer');
+
+    // 初回だけで諦めず再レビューし、その後も再計画した実装をレビューしている。
     const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
       options?.outputSchema && JSON.stringify(options.outputSchema).includes('"rawFindings"')
     ));
-    expect(reviewerCalls).toHaveLength(2);
+    expect(reviewerCalls.length).toBeGreaterThan(2);
 
     // 台帳: 予算を使い切り、anomaly は監査に残る（消えない）。
     const ledgerPath = join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'peer-review.json');
@@ -350,7 +392,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     };
     expect(ledger.findings).toHaveLength(0);
     expect(ledger.reviewIntegrity?.exhausted).toBe(true);
-    expect(ledger.reviewIntegrity?.roundMarkers).toHaveLength(2);
+    expect(ledger.reviewIntegrity?.roundMarkers.length).toBeGreaterThanOrEqual(2);
     // 再レビューを跨いでも anomaly は消えず、単一の監査レコードとして残る
     // （観測消去の禁止 — 複数レコードへ増殖もしない）。
     expect(ledger.reviewerAnomalies).toHaveLength(1);

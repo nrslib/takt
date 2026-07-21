@@ -158,7 +158,7 @@ export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): Fi
       count: openItems.filter((finding) => finding.provisional !== undefined).length,
       // 直前の findings-manager ラウンドが fixpoint に達したか
       // （台帳側で計算・永続化済み。ここは読むだけ）。builtin workflow はこれを
-      // 見て NEEDS_ADJUDICATION へルーティングする。
+      // 見て要件を維持した再計画へルーティングする。
       fixpoint: ledger.fixpoint?.reached ?? false,
       items: openItems
         .filter((finding) => finding.provisional !== undefined)
@@ -199,7 +199,7 @@ export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): Fi
       // review-integrity requirement: review-integrity 予算が尽きたか（台帳側で計算・
       // 永続化済み。ここは読むだけ）。未昇格 anomaly が残る限り COMPLETE は許さず
       // 再レビューへ送るが、有限回で補完できなければ builtin はこれを見て
-      // NEEDS_ADJUDICATION へルーティングする。
+      // 要件を維持した再計画へルーティングする。
       budgetExhausted: ledger.reviewIntegrity?.exhausted ?? false,
     },
     conflicts: {

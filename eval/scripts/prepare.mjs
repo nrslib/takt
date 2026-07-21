@@ -49,7 +49,7 @@ const TARGETS = [
   { id: 'rescan-semantics', workflow: 'peer-review-for-local-llm', step: 'implementation-semantics-review', fixture: 'eval/fixtures/inventory-es' },
   // 精度（偽陽性）測定: hasOwn 防御済み Record を指摘しないこと
   { id: 'rescan-precision', workflow: 'peer-review-for-local-llm', step: 'implementation-semantics-review', fixture: 'eval/fixtures/inventory-es-guarded' },
-  { id: 'loop-monitor-reviewers-fix-fc', workflow: 'takt-default-high', monitorCycle: ['reviewers', 'fix'], fixture: 'eval/fixtures/sample-project' },
+  { id: 'loop-monitor-reviewers-fix-fc', workflow: 'takt-default-high', monitorCycle: ['fix', 'reviewers'], fixture: 'eval/fixtures/sample-project' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
 ];

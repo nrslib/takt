@@ -1,5 +1,5 @@
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
-import { FINDING_CONFLICT_ADJUDICATION_STEP, NEEDS_ADJUDICATION_STEP } from '../../../core/workflow/constants.js';
+import { FINDING_CONFLICT_ADJUDICATION_STEP } from '../../../core/workflow/constants.js';
 import type { WorkflowDiagnostic } from './workflowDoctorTypes.js';
 
 type RawWorkflow = ReturnType<typeof WorkflowConfigRawSchema.parse>;
@@ -27,10 +27,7 @@ type DoctorGraph = {
   steps: DoctorGraphStep[];
 };
 
-// NEEDS_ADJUDICATION (対策バッチ B1) is a pure routing marker like COMPLETE/ABORT
-// — no step object is synthesized for it — so it belongs in TERMINAL_NEXT, not
-// SYNTHESIZED_NEXT below.
-const TERMINAL_NEXT = new Set(['COMPLETE', 'ABORT', NEEDS_ADJUDICATION_STEP]);
+const TERMINAL_NEXT = new Set(['COMPLETE', 'ABORT']);
 
 // The engine synthesizes this step at construction time (injectFindingConflictAdjudicationStep)
 // rather than authoring it in config.steps, so it never appears in the raw
@@ -42,11 +39,10 @@ const SYNTHESIZED_NEXT = new Set([FINDING_CONFLICT_ADJUDICATION_STEP]);
 const SPECIAL_NEXT = new Set([...TERMINAL_NEXT, ...SYNTHESIZED_NEXT]);
 
 // Targets that only make sense when a finding ledger exists to evaluate
-// against — routing to either without finding_contract configured is a
+// against — routing to it without finding_contract configured is a
 // configuration mistake. Mirrors WorkflowValidator's
-// validateFindingConflictAdjudicationRuleContract /
-// validateNeedsAdjudicationRuleContract.
-const CONTRACT_REQUIRED_NEXT = new Set([FINDING_CONFLICT_ADJUDICATION_STEP, NEEDS_ADJUDICATION_STEP]);
+// validateFindingConflictAdjudicationRuleContract.
+const CONTRACT_REQUIRED_NEXT = new Set([FINDING_CONFLICT_ADJUDICATION_STEP]);
 
 function collectStepEdges(config: DoctorGraph): Map<string, Set<string>> {
   const edges = new Map<string, Set<string>>();
@@ -121,10 +117,9 @@ function createDoctorGraph(raw: RawWorkflow): DoctorGraph {
 }
 
 /**
- * Mirrors WorkflowValidator's validateFindingConflictAdjudicationRuleContract /
- * validateNeedsAdjudicationRuleContract: `next: finding-conflict-adjudication`
- * and `next: NEEDS_ADJUDICATION` only make sense when a finding ledger exists
- * to evaluate against. Doctor runs on the raw (pre-load) config, so the check
+ * Mirrors WorkflowValidator's validateFindingConflictAdjudicationRuleContract:
+ * `next: finding-conflict-adjudication` only makes sense when a finding ledger
+ * exists to evaluate against. Doctor runs on the raw (pre-load) config, so the check
  * accepts either a local `finding_contract` or an explicit callable
  * `subworkflow.requires_finding_contract` declaration. Cross-workflow
  * validation separately verifies that the caller actually provides the

@@ -17,6 +17,16 @@ workflow_config:
       network_access: true
 
 loop_monitors:
+  - cycle: [replan, implement]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
   - cycle:
       - ai-antipattern-review-1st
       - ai-antipattern-fix
@@ -41,10 +51,30 @@ loop_monitors:
           next: ai-antipattern-review-1st
         - condition: Unproductive (no improvement)
           next: reviewers
+  - cycle: [replan, implement, ai-antipattern-review-1st, reviewers]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, ai-antipattern-review-1st, reviewers, final-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
   - cycle:
-      - plan
-      - write_tests
+      - replan
       - implement
+      - ai-antipattern-review-1st
       - reviewers
       - fix
     threshold: 2
@@ -52,37 +82,35 @@ loop_monitors:
       persona: supervisor
       instruction: loop-monitor-fix-replan
       rules:
-        - condition: The latest fix ended with fixes complete (not a dead end)
-          next: reviewers
         - condition: Healthy (each replan moves the blocker toward resolution)
-          next: plan
-        - condition: Unproductive (the same dead end repeats)
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
           next: ABORT
   - cycle:
-      - reviewers
       - fix
+      - reviewers
     threshold: 3
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix-fc
       rules:
-        - condition: converging (findings decreasing, fixes applied)
-          next: reviewers
+        - condition: The post-fix review confirms progress and the next fix is actionable
+          next: fix
         - condition: unproductive (the same findings repeat), but replanning could break the deadlock
-          next: plan
-        - condition: unproductive (the same findings repeat), and replanning is unlikely to help
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
           next: ABORT
-  - cycle: [reviewers, final-gate, fix]
+  - cycle: [fix, reviewers, final-gate]
     threshold: 3
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix-fc
       rules:
-        - condition: converging (findings decreasing, fixes applied)
-          next: reviewers
+        - condition: The post-fix review confirms progress and the next fix is actionable
+          next: fix
         - condition: unproductive (the same findings repeat), but replanning could break the deadlock
-          next: plan
-        - condition: unproductive (the same findings repeat), and replanning is unlikely to help
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
           next: ABORT
 steps:
   - name: plan
@@ -104,6 +132,26 @@ steps:
       - condition: The user is asking a question (not an implementation task)
         next: COMPLETE
       - condition: Requirements are unclear and planning cannot proceed
+        next: ABORT
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan-frontend
+
+  - name: replan
+    tags:
+      - plan
+    edit: false
+    persona: planner
+    knowledge:
+      - architecture
+    provider_options:
+      extends: review-readonly
+    instruction: replan-implementation
+    rules:
+      - condition: The implementation approach was successfully redefined
+        next: implement
+      - condition: No feasible approach can satisfy the requirements
         next: ABORT
     output_contracts:
       report:
@@ -168,7 +216,7 @@ steps:
       - condition: Implementation is complete
         next: ai-antipattern-review-1st
       - condition: Cannot proceed with implementation (environment issue or missing information)
-        next: plan
+        next: replan
 
   # Same step as dual.yaml. Clears AI-specific issues right after
   # implementation, before the perspective reviewers run. Weak models need this.
@@ -338,30 +386,28 @@ steps:
         next: final-gate
       # If provisional findings reached a semantic fixpoint since the previous
       # round (no meaningful change), replanning cannot resolve them either
-      # (convergence batch B1). Route to the human-adjudication terminal state
-      # before falling back to the replan rule below.
+      # (convergence batch B1). Abort instead of repeating the exhausted replan.
       # Review-integrity gate (codex 対策#4 / verification blocker #1): if the product
       # gate is clear (no open findings) but unpromoted reviewer anomalies remain, hand
       # to final-gate — which re-reviews up to the review-integrity budget, then
-      # adjudicates — instead of falling through to the fix rules below. There is
+      # aborts — instead of falling through to the fix rules below. There is
       # nothing to fix (the observations were isolated as unverifiable), and an anomaly
       # must be sent to re-review, never to fix.
       - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
         next: final-gate
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
+        next: replan
       # If the cumulative findings-manager round count (or elapsed time, when
       # configured) exceeds finding_contract.stop_budget, the provisional set
-      # may still be churning (never reaching a fixpoint) — route to the same
-      # human-adjudication terminal state instead of replanning forever
-      # (bounded stop budget, codex-adjudicated extension of convergence batch B1).
-      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
+      # may still be churning (never reaching a fixpoint). Route it through a
+      # requirements-preserving replan and bound repetition with the loop monitor.
+      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: replan
       # Provisional findings (observations whose meaning could not be determined)
       # are system findings the fixer cannot address directly; replan instead of
       # looping the fixer (raw-finding ladder design v2).
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
-        next: plan
+        next: replan
       - condition: any("needs_fix", "AI-specific issues found") && when(findings.conflicts.count == 0)
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
@@ -388,7 +434,7 @@ steps:
       - condition: needs_review
         next: reviewers
       - condition: need_replan
-        next: plan
+        next: replan
       - condition: needs_fix
         next: fix
       - condition: needs_conflict_adjudication
@@ -416,10 +462,10 @@ steps:
     rules:
       - condition: Fixes are complete
         next: reviewers
-      - condition: Cannot proceed with fixes, or human judgment is required
-        next: plan
+      - condition: Cannot proceed with fixes, or the implementation approach must be redefined
+        next: replan
         appendix: |
           The fix attempt is stuck. Read the rejection details and the stated
           blocker, decompose the work again, and replan. Declare planning
-          impossible only if human judgment is genuinely required, with the
-          reasons stated explicitly.
+          impossible only when no feasible approach can satisfy the requirements,
+          with the blocking constraints stated explicitly.

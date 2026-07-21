@@ -64,7 +64,6 @@ type ParallelSubStepResult = {
   providerInfo?: StepRunResult['providerInfo'];
   durationMs?: number;
   qualityGateFailure?: boolean;
-  terminalAbort?: StepRunResult['terminalAbort'];
   workflowCallSessionUpdates?: WorkflowCallSessionUpdates;
   workflowCallStateSync?: WorkflowCallIsolatedStateSync;
   workflowCallExecutionRejected?: boolean;
@@ -764,28 +763,6 @@ export class ParallelRunner {
     this.mergeWorkflowCallSubStepEffects(step, subResults, state, updatePersonaSession);
     this.emitSubStepRoutingDecisionEvents(subResults, state.iteration);
 
-    const terminalAbortResult = subResults.find((result) => result.terminalAbort !== undefined);
-    if (terminalAbortResult?.terminalAbort !== undefined) {
-      const response: AgentResponse = {
-        persona: step.name,
-        status: 'done',
-        content: terminalAbortResult.terminalAbort.reason,
-        timestamp: new Date(),
-      };
-      state.stepOutputs.set(step.name, response);
-      state.lastOutput = response;
-      return {
-        response,
-        instruction: subResults.map((result) => result.instruction).join('\n\n'),
-        providerInfo: terminalAbortResult.providerInfo ?? parentPm,
-        terminalAbort: terminalAbortResult.terminalAbort,
-        consumedStepIterations: [
-          step.name,
-          ...subResults.map((result) => result.subStep.name),
-        ],
-      };
-    }
-
     const terminalResults = this.collectTerminalResults(subResults);
     const rateLimitedResult = terminalResults.find((r) => r.response.status === 'rate_limited');
     if (rateLimitedResult) {
@@ -924,7 +901,6 @@ export class ParallelRunner {
       response: result.result.response,
       instruction: result.result.instruction,
       providerInfo: result.result.providerInfo,
-      terminalAbort: result.result.terminalAbort,
       durationMs: Math.max(0, result.result.response.timestamp.getTime() - startedAt),
       workflowCallSessionUpdates: result.sessionUpdates,
       workflowCallStateSync: result.stateSync,

@@ -36,15 +36,15 @@ steps:
     instruction: review-merge-readiness
     rules:
       - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
-        next: NEEDS_ADJUDICATION
+        return: need_replan
       - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
         return: needs_review
       - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: supervise
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
+        return: need_replan
+      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
+        return: need_replan
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
         return: need_replan
       - condition: needs_fix && when(findings.conflicts.count == 0)
@@ -73,15 +73,15 @@ steps:
     instruction: supervise-finding-contract
     rules:
       - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
-        next: NEEDS_ADJUDICATION
+        return: need_replan
       - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
         return: needs_review
       - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
+        return: need_replan
+      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
+        return: need_replan
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
         return: need_replan
       - condition: need_replan && when(findings.conflicts.count == 0)

@@ -1,7 +1,7 @@
 import { error, success, warn } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
-import { COMPLETE_STEP, ABORT_STEP, NEEDS_ADJUDICATION_STEP } from '../../core/workflow/constants.js';
+import { COMPLETE_STEP, ABORT_STEP } from '../../core/workflow/constants.js';
 // 実行時（escape.ts の {report:X} リゾルバ）と同じ parser を共用し、
 // 静的解析と実行時の構文解釈を揃える。
 import { extractReportReferences } from '../../core/workflow/instruction/report-reference.js';
@@ -76,8 +76,7 @@ function validateWorkflowRuntimeContract(
       workflowCallResolver: () => null,
     });
     warnOnMissingProvisionalRouting(report, workflow);
-    warnOnMissingFixpointRouting(report, workflow);
-    warnOnMissingStopBudgetRouting(report, workflow);
+    warnOnUnsafeFindingBudgetRouting(report, workflow);
     warnOnMissingReviewerAnomalyRouting(report, workflow);
     warnOnUnproducibleReportReferences(report, workflow);
   } catch (validationError) {
@@ -86,6 +85,58 @@ function validateWorkflowRuntimeContract(
       message: getErrorMessage(validationError),
     });
   }
+}
+
+function warnOnUnsafeFindingBudgetRouting(
+  report: WorkflowDoctorReport,
+  workflow: ReturnType<typeof loadWorkflowForRuntimeValidation>,
+): void {
+  if (workflow.findingContract === undefined) {
+    return;
+  }
+
+  for (const step of workflow.steps) {
+    for (const rule of step.rules ?? []) {
+      if (!isFindingBudgetCondition(rule)) {
+        continue;
+      }
+      if (rule.next === ABORT_STEP) {
+        report.diagnostics.push({
+          level: 'warning',
+          message: `step "${step.name}" routes a finding fixpoint or exhausted budget directly to ABORT. `
+            + 'Route it to a requirements-preserving replan first, and let replan or a bounded loop monitor ABORT only when no feasible approach can satisfy the requirements.',
+        });
+        continue;
+      }
+      if (rule.next !== undefined && !hasBoundedReplanMonitor(workflow, step.name, rule.next)) {
+        report.diagnostics.push({
+          level: 'warning',
+          message: `step "${step.name}" routes a finding fixpoint or exhausted budget to "${rule.next}" without a bounded replan monitor. `
+            + 'Add a loop monitor that observes the replan cycle and can ABORT only when no feasible requirements-compliant approach remains.',
+        });
+      }
+    }
+  }
+}
+
+function isFindingBudgetCondition(rule: WorkflowRule): boolean {
+  const condition = getRuleGuardCondition(rule) ?? rule.condition;
+  return condition.includes('findings.provisional.fixpoint')
+    || condition.includes('findings.rounds.budgetExhausted')
+    || condition.includes('findings.reviewerAnomalies.budgetExhausted');
+}
+
+function hasBoundedReplanMonitor(workflow: WorkflowConfig, sourceStep: string, replanStep: string): boolean {
+  const target = workflow.steps.find((step) => step.name === replanStep);
+  if (target?.tags?.includes('plan') !== true) {
+    return false;
+  }
+  return (workflow.loopMonitors ?? []).some((monitor) => (
+    monitor.threshold > 0
+    && monitor.cycle[0] === replanStep
+    && monitor.cycle[monitor.cycle.length - 1] === sourceStep
+    && monitor.judge.rules.some((rule) => rule.next === ABORT_STEP)
+  ));
 }
 
 /**
@@ -120,82 +171,9 @@ function warnOnMissingProvisionalRouting(
 }
 
 /**
- * 対策バッチ B1（provisional fixpoint → NEEDS_ADJUDICATION）への移行警告:
- * findings.provisional.count で replan ルーティングしている workflow が
- * findings.provisional.fixpoint を一切参照していない場合、意味を確定できない
- * provisional（例: 実在しないファイルへの幻覚指摘）が解消され得ないまま
- * plan への差し戻しを無限に繰り返す（安全だが有限時間で停止しない）。
- * fixpoint ルーティングの追加を促す。
- */
-function warnOnMissingFixpointRouting(
-  report: WorkflowDoctorReport,
-  workflow: ReturnType<typeof loadWorkflowForRuntimeValidation>,
-): void {
-  if (workflow.findingContract === undefined) {
-    return;
-  }
-  const referencesProvisionalCount = workflow.steps.some((step) => (
-    (step.rules ?? []).some((rule) => rule.condition.includes('findings.provisional.count'))
-  ));
-  if (!referencesProvisionalCount) {
-    return;
-  }
-  const referencesFixpoint = workflow.steps.some((step) => (
-    (step.rules ?? []).some((rule) => rule.condition.includes('findings.provisional.fixpoint'))
-  ));
-  if (referencesFixpoint) {
-    return;
-  }
-  report.diagnostics.push({
-    level: 'warning',
-    message: 'finding_contract workflow routes on findings.provisional.count but never references findings.provisional.fixpoint. '
-      + 'A provisional finding that never settles (e.g. a hallucinated finding against a nonexistent file) is replanned forever '
-      + 'instead of stopping at a resumable checkpoint. '
-      + 'Add a rule such as `when(findings.provisional.fixpoint == true && findings.conflicts.count == 0) -> NEEDS_ADJUDICATION` '
-      + 'before your findings.provisional.count replan rule.',
-  });
-}
-
-/**
- * 有限停止予算（bounded stop budget; Finding Contract・対策バッチ B1 の拡張）への
- * 移行警告: fixpoint ルーティングだけでは、レビュアーが毎ラウンド別の架空
- * provisional を生成し続けると provisional 集合が毎回変わり fixpoint が
- * 永久に成立しない（v3-r4 実測）。findings.rounds.budgetExhausted を一切
- * 参照していない workflow は、そのような churn を有限時間で打ち切れない。
- */
-function warnOnMissingStopBudgetRouting(
-  report: WorkflowDoctorReport,
-  workflow: ReturnType<typeof loadWorkflowForRuntimeValidation>,
-): void {
-  if (workflow.findingContract === undefined) {
-    return;
-  }
-  const referencesProvisionalCount = workflow.steps.some((step) => (
-    (step.rules ?? []).some((rule) => rule.condition.includes('findings.provisional.count'))
-  ));
-  if (!referencesProvisionalCount) {
-    return;
-  }
-  const referencesStopBudget = workflow.steps.some((step) => (
-    (step.rules ?? []).some((rule) => rule.condition.includes('findings.rounds.budgetExhausted'))
-  ));
-  if (referencesStopBudget) {
-    return;
-  }
-  report.diagnostics.push({
-    level: 'warning',
-    message: 'finding_contract workflow routes on findings.provisional.count but never references findings.rounds.budgetExhausted. '
-      + 'If reviewers keep producing a different unresolvable provisional finding every round, the provisional set never reaches '
-      + 'a fixpoint either, and the workflow replans forever instead of stopping at a resumable checkpoint. '
-      + 'Add a rule such as `when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0) -> NEEDS_ADJUDICATION` '
-      + 'after your findings.provisional.fixpoint rule and before your findings.provisional.count replan rule.',
-  });
-}
-
-/**
  * review-integrity の配線漏れ警告: reviewer anomaly は product finding ではないため、
  * open/conflicts だけを COMPLETE 条件にした workflow では、再レビューまたは予算切れ時の
- * 人手裁定へ送らなければ、検証不能な観測を残したまま完了できてしまう。完了ゲートを持つ
+ * 有限停止へ送らなければ、検証不能な観測を残したまま完了できてしまう。完了ゲートを持つ
  * Finding Contract workflow に限定して、各 COMPLETE gate より先に実際に選ばれる
  * anomaly 経路を検査する。
  */
@@ -220,8 +198,8 @@ function warnOnMissingReviewerAnomalyRouting(
     level: 'warning',
     message: 'finding_contract workflow has a COMPLETE gate without an effective reviewer-anomaly route. '
       + 'Reviewer anomalies are not product findings, so an empty product gate can otherwise COMPLETE without a mechanically verified review. '
-      + 'Route findings.reviewerAnomalies.count directly to NEEDS_ADJUDICATION or ABORT, or to a review-tagged re-review step '
-      + 'with a preceding findings.reviewerAnomalies.budgetExhausted route to NEEDS_ADJUDICATION or ABORT. A '
+      + 'Route findings.reviewerAnomalies.count to a review-tagged re-review step, with a preceding '
+      + 'findings.reviewerAnomalies.budgetExhausted route to a bounded requirements-preserving replan. A '
       + 'findings.reviewerAnomalies.count route to COMPLETE or an arbitrary fix step is not safe.',
   });
 }
@@ -264,7 +242,7 @@ function hasEffectiveReviewerAnomalyRouting(
   const reReviewRoute = rules[completeRuleIndex - 1];
   return terminalRoute !== undefined
     && reReviewRoute !== undefined
-    && isSafeReviewerAnomalyBudgetTerminalRoute(terminalRoute)
+    && isSafeReviewerAnomalyBudgetRoute(workflow, step.name, terminalRoute)
     && isReReviewRoute(workflow, reReviewRoute)
     && hasExpectedReviewerAnomalyGuard(terminalRoute, completeRule, true)
     && hasExpectedReviewerAnomalyGuard(reReviewRoute, completeRule, false)
@@ -394,8 +372,15 @@ function getAggregateTargets(rule: WorkflowRule): Set<string> {
   return new Set(Array.isArray(targets) ? targets : [targets]);
 }
 
-function isSafeReviewerAnomalyBudgetTerminalRoute(rule: WorkflowRule): boolean {
-  return rule.next === NEEDS_ADJUDICATION_STEP || rule.next === ABORT_STEP;
+function isSafeReviewerAnomalyBudgetRoute(
+  workflow: WorkflowConfig,
+  sourceStep: string,
+  rule: WorkflowRule,
+): boolean {
+  if (rule.returnValue === 'need_replan') {
+    return true;
+  }
+  return rule.next !== undefined && hasBoundedReplanMonitor(workflow, sourceStep, rule.next);
 }
 
 function isReReviewRoute(workflow: WorkflowConfig, rule: WorkflowRule): boolean {

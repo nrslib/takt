@@ -106,7 +106,6 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
       saveRawFindings: () => '/tmp/raw-findings.json',
       saveManagerValidationReport: () => '/tmp/manager-report.json',
       saveConflictAdjudicationReport: () => '/tmp/adjudication-report.json',
-      saveNeedsAdjudicationReport: () => '/tmp/needs-adjudication.json',
     };
     return { store, current: () => ledger };
   }

@@ -11,42 +11,70 @@ max_steps: 50
 initial_step: gather
 
 loop_monitors:
-  - cycle: [plan, write_tests, implement, reviewers, fix]
+  - cycle: [replan, implement]
     threshold: 2
     judge:
       persona: supervisor
       instruction: loop-monitor-fix-replan
       rules:
-        - condition: The latest fix completed rather than stalled
-          next: reviewers
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, final-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
         - condition: Replanning is making progress on blockers
-          next: plan
-        - condition: The same blocker repeats without a viable replan
-          next: NEEDS_ADJUDICATION
-  - cycle: [reviewers, fix]
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [fix, reviewers]
     threshold: 3
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix-fc
       rules:
-        - condition: Findings decrease and fixes are reflected
-          next: reviewers
+        - condition: The post-fix review confirms progress and the next fix is actionable
+          next: fix
         - condition: The same finding repeats but replanning may resolve it
-          next: plan
-        - condition: The same finding repeats without a viable replan
-          next: NEEDS_ADJUDICATION
-  - cycle: [reviewers, final-gate, fix]
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [fix, reviewers, final-gate]
     threshold: 3
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix-fc
       rules:
-        - condition: Findings decrease and fixes are reflected
-          next: reviewers
+        - condition: The post-fix review confirms progress and the next fix is actionable
+          next: fix
         - condition: The same finding repeats but replanning may resolve it
-          next: plan
-        - condition: The same finding repeats without a viable replan
-          next: NEEDS_ADJUDICATION
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
 steps:
   - name: gather
     tags:
@@ -95,6 +123,22 @@ steps:
         - name: plan.md
           format: plan
 
+  - name: replan
+    tags: [plan]
+    edit: false
+    persona: planner
+    knowledge: architecture
+    instruction: replan-implementation
+    rules:
+      - condition: The implementation approach was successfully redefined
+        next: implement
+      - condition: No feasible approach can satisfy the requirements
+        next: ABORT
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+
   - name: write_tests
     tags: [coding, test-planning]
     edit: true
@@ -132,7 +176,7 @@ steps:
       - condition: Implementation complete
         next: reviewers
       - condition: Cannot proceed with implementation
-        next: plan
+        next: replan
 
   - name: reviewers
     tags: [review]
@@ -231,11 +275,11 @@ steps:
       - condition: any("approved", "needs_fix", "No AI-specific issues", "AI-specific issues found") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
         next: final-gate
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
-      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
-        next: NEEDS_ADJUDICATION
+        next: replan
+      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: replan
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
-        next: plan
+        next: replan
       - condition: any("needs_fix", "AI-specific issues found") && when(findings.conflicts.count == 0)
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
@@ -258,7 +302,7 @@ steps:
       - condition: needs_review
         next: reviewers
       - condition: need_replan
-        next: plan
+        next: replan
       - condition: needs_fix
         next: fix
       - condition: needs_conflict_adjudication
@@ -278,5 +322,5 @@ steps:
     rules:
       - condition: Fixes are complete
         next: reviewers
-      - condition: Cannot proceed with fixes, or human judgment is required
-        next: plan
+      - condition: Cannot proceed with fixes, or the implementation approach must be redefined
+        next: replan

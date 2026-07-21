@@ -228,11 +228,11 @@ describe('bindWorkflowExecutionEvents', () => {
     engine.emit(
       'workflow:abort',
       { iteration: 3 },
-      'Finding adjudication is required',
-      'needs_adjudication',
+      'Workflow aborted by step transition',
+      'step_transition',
     );
 
-    expect(bridge.state.abortKind).toBe('needs_adjudication');
+    expect(bridge.state.abortKind).toBe('step_transition');
   });
 
   it('findings ledger event を analytics emitter に渡す', () => {

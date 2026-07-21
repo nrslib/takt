@@ -51,7 +51,7 @@ export interface FindingContractAdjudicatorConfig {
  * 別の架空 provisional を1件でも生成し続けると provisional 集合が毎回変わり
  * fixpoint が永久に成立しない。ここは「モデル挙動に依存しない」
  * 停止条件を追加する — 累積ラウンド数（と任意で経過時間）が上限を超えたら、
- * fixpoint 未成立でも NEEDS_ADJUDICATION へ収束させる。
+ * fixpoint 未成立でもワークフローが有限停止を判断できるようにする。
  *
  * 両フィールドとも YAML では省略可能。maxRounds の省略には stop-budget.ts の
  * DEFAULT_STOP_BUDGET（resolveStopBudgetLimits）が既定値を補うため、
@@ -70,7 +70,7 @@ export interface FindingContractStopBudgetConfig {
  * が空になり「即 COMPLETE」で実質レビューされずに通り得た。これを防ぐため、
  * 未昇格 anomaly が残る限り COMPLETE を許さず再レビューへ送る。その再レビューの
  * 回数上限がこれ — 有限回で正しい引用による promote も anomaly 解消もできなければ
- * NEEDS_ADJUDICATION へ収束させる（fixpoint/停止予算と同じ思想）。省略時は
+ * ワークフローが有限停止を判断できるようにする。省略時は
  * review-integrity.ts の DEFAULT_REVIEW_INTEGRITY_BUDGET が補う。
  */
 export interface FindingContractReviewBudgetConfig {
@@ -130,7 +130,7 @@ export const FINDING_PROVISIONAL_KINDS = [
    * manager 出力全体が最終不変条件検証で破棄されたラウンドの残余 raw。
    * 主張が曖昧だったわけではない（raw-meaning-ambiguous とは別物）ため
    * interpretation ladder の対象にならない。出口は engine 主導の再裁定
-   * （RawAdjudicationRecovery）と、その枯渇後の NEEDS_ADJUDICATION 停止。
+   * （RawAdjudicationRecovery）と、その枯渇後の fail-fast 停止。
    */
   'manager-output-discarded',
   /**
@@ -307,7 +307,7 @@ export interface FindingLedgerFixpointState {
  * ラウンド跨ぎ累積状態。fixpoint が「変化が無いこと」を判定するのに対し、
  * こちらは「消費した量」を追跡する — provisional 集合が毎ラウンド変化し
  * 続けて fixpoint が決して成立しない場合でも、有限ラウンド（または経過時間）で
- * NEEDS_ADJUDICATION へ収束させるための最終防波堤。
+ * ワークフローを有限停止させるための最終防波堤。
  */
 export interface FindingLedgerStopBudgetState {
   /**
@@ -353,7 +353,7 @@ export interface FindingLedgerStopBudgetState {
  * roundMarkers は「未昇格 anomaly が残ったまま完了した findings-manager
  * ラウンド」の一意マーカー集合で、上限（DEFAULT_REVIEW_INTEGRITY_BUDGET または
  * finding_contract.review_budget）に達したら exhausted=true になり、builtin は
- * 再レビューではなく NEEDS_ADJUDICATION へルーティングする。
+ * 再レビューではなく要件を維持した再計画へルーティングする。
  */
 export interface FindingLedgerReviewIntegrityState {
   roundMarkers: string[];
@@ -375,7 +375,7 @@ export interface FindingLedger {
    */
   interpretations?: FindingInterpretationRecord[];
   /**
-   * provisional fixpoint → NEEDS_ADJUDICATION の判定に使う直近の
+   * provisional fixpoint に対する再計画または有限停止の判定に使う直近の
    * findings-manager ラウンド終了時点の比較スナップショットと fixpoint 到達
    * 判定。ledger 自体が run を跨いで永続化されるため、resume や再走行を
    * またいだラウンド比較もここだけで完結する（engine 内メモリの
@@ -1075,7 +1075,7 @@ export interface FindingsRuleContext {
      * 直前の findings-manager ラウンドが、その前のラウンドから
      * 意味的な変化（provisional 集合・substantive finding の status・未裁定
      * conflict のいずれも）が無い fixpoint に達したかどうか。builtin workflow は
-     * これを見て NEEDS_ADJUDICATION（要人手裁定の終端状態）へルーティングする
+     * これを見て再計画または ABORT へルーティングする
      * （raw finding 梯子設計 v2 の収束性対策）。
      */
     fixpoint: boolean;
@@ -1088,8 +1088,8 @@ export interface FindingsRuleContext {
    * （と任意の経過時間）そのものを見る — provisional が churn し続けて
    * fixpoint に到達しない場合でも、有限ラウンドで停止することをモデル挙動に
    * 依存せず保証する最終防波堤。builtin workflow は fixpoint ルールの直後・
-   * plan フォールバックの直前でこれを見て NEEDS_ADJUDICATION へルーティングする
-   * （優先順位: COMPLETE > fixpoint > budgetExhausted > plan）。
+   * replan フォールバックの直前でこれを見て再計画へルーティングする
+   * （優先順位: COMPLETE > fixpoint > budgetExhausted > replan）。
    */
   rounds: {
     budgetExhausted: boolean;
@@ -1117,8 +1117,8 @@ export interface FindingsRuleContext {
      * review-integrity 予算（review-integrity requirement）が尽きたか。未昇格 anomaly が
      * 残る限り product gate とは別に COMPLETE を拒否し再レビューへ送るが、有限回で
      * 補完（正しい引用による promote / anomaly 解消）できなければ true になり、
-     * builtin は再レビューではなく NEEDS_ADJUDICATION へルーティングする
-     * （fixpoint/budgetExhausted と同じ「有限で人手裁定へ」の最終防波堤）。
+     * builtin は再レビューではなく要件を維持した再計画へルーティングする。
+     * その反復の有限停止は loop monitor が担う。
      */
     budgetExhausted: boolean;
   };

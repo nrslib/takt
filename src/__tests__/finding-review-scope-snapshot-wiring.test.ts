@@ -191,7 +191,6 @@ function makeRunner(options: { withFindingContract?: boolean } = {}): {
       saveRawFindings: vi.fn(),
       saveManagerValidationReport: vi.fn(),
       saveConflictAdjudicationReport: vi.fn(),
-      saveNeedsAdjudicationReport: vi.fn(),
     } as unknown as ParallelRunnerDeps['findingLedgerStore'],
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
     updateMaxSteps: vi.fn(),
