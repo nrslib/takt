@@ -20,6 +20,11 @@ const PRESET_SCRIPT_DIR = join(__dirname, 'presets');
 const RUNTIME_TEMP_DIRECTORY_PREFIX = 'takt';
 const RUNTIME_TEMP_DIRECTORY_HASH_LENGTH = 32;
 const PROTECTED_RUNTIME_ENV_KEYS = new Set(['TMPDIR', 'TAKT_RUNTIME_TMP']);
+const WINDOWS_PROTECTED_RUNTIME_ENV_KEYS = new Set([
+  ...PROTECTED_RUNTIME_ENV_KEYS,
+  'TEMP',
+  'TMP',
+]);
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const PRESET_SCRIPT_MAP: Record<RuntimePreparePreset, string> = {
   gradle: join(PRESET_SCRIPT_DIR, 'prepare-gradle.sh'),
@@ -27,9 +32,10 @@ const PRESET_SCRIPT_MAP: Record<RuntimePreparePreset, string> = {
 };
 
 function isProtectedRuntimeEnvironmentKey(key: string): boolean {
-  return process.platform === 'win32'
-    ? PROTECTED_RUNTIME_ENV_KEYS.has(key.toUpperCase())
-    : PROTECTED_RUNTIME_ENV_KEYS.has(key);
+  if (process.platform === 'win32') {
+    return WINDOWS_PROTECTED_RUNTIME_ENV_KEYS.has(key.toUpperCase());
+  }
+  return PROTECTED_RUNTIME_ENV_KEYS.has(key);
 }
 
 function shellQuote(value: string): string {
@@ -79,7 +85,7 @@ function createBaseEnvironment(runtimeRoot: string, runtimeTmp: string): Record<
   const ghConfigDir = preserveToolConfigDir('GH_CONFIG_DIR', 'gh');
   const glabConfigDir = resolveGlabConfigDir();
   const cursorConfigDir = resolveCursorConfigDir();
-  return {
+  const env: Record<string, string> = {
     TMPDIR: runtimeTmp,
     TAKT_RUNTIME_TMP: runtimeTmp,
     XDG_CACHE_HOME: join(runtimeRoot, 'cache'),
@@ -90,6 +96,11 @@ function createBaseEnvironment(runtimeRoot: string, runtimeTmp: string): Record<
     GLAB_CONFIG_DIR: glabConfigDir,
     CURSOR_CONFIG_DIR: cursorConfigDir,
   };
+  if (process.platform === 'win32') {
+    env.TEMP = runtimeTmp;
+    env.TMP = runtimeTmp;
+  }
+  return env;
 }
 
 function splitJavaToolOptions(value: string): string[] {

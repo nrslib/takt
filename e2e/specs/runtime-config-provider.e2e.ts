@@ -15,6 +15,19 @@ const __dirname = dirname(__filename);
 const provider = process.env.TAKT_E2E_PROVIDER;
 const providerEnabled = provider != null && provider !== 'mock';
 const providerIt = providerEnabled ? it : it.skip;
+const mockScenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
+
+interface MockCallRecord {
+  event: 'start' | 'complete';
+  runtimeEnvironment: Record<string, string>;
+}
+
+function readMockCallRecords(path: string): MockCallRecord[] {
+  return readFileSync(path, 'utf-8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as MockCallRecord);
+}
 
 // E2E更新時は docs/testing/e2e.md も更新すること
 describe('E2E: runtime.prepare with provider', () => {
@@ -30,7 +43,7 @@ describe('E2E: runtime.prepare with provider', () => {
 
   function getExpectedRuntimeTemporaryDirectory(repoPath: string, tempRoot: string): string {
     const worktreeHash = createHash('sha256')
-      .update(resolve(repoPath, '.takt', '.runtime'))
+      .update(resolve(realpathSync(repoPath), '.takt', '.runtime'))
       .digest('hex')
       .slice(0, 32);
     return join(resolve(tempRoot), worktreeHash);
@@ -363,7 +376,81 @@ describe('E2E: runtime.prepare with provider', () => {
     expect(readFileSync(markerPath, 'utf-8')).toBe('TMPDIR is required\n');
   });
 
-  providerIt('should apply runtime.prepare from config.yaml during provider execution', () => {
+  it('should apply runtime.prepare before invoking the mock provider', () => {
+    updateIsolatedConfig(isolatedEnv.taktDir, {
+      runtime: {
+        prepare: ['gradle', 'node'],
+      },
+    });
+
+    const workflowPath = join(repo.path, 'runtime-e2e-workflow.yaml');
+    const runtimeRoot = join(realpathSync(repo.path), '.takt', '.runtime');
+    const envFile = join(runtimeRoot, 'env.sh');
+    const mockCallLogPath = join(repo.path, '.takt-mock-call-log.ndjson');
+    const expectedRuntimeTmpDir = getExpectedRuntimeTemporaryDirectory(repo.path, runtimeTempRoot);
+    runtimeTmpDirs.add(expectedRuntimeTmpDir);
+    const result = runTakt({
+      args: [
+        '--provider', 'mock',
+        '--task', 'Confirm the prepared runtime environment.',
+        '--workflow', workflowPath,
+      ],
+      cwd: repo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: mockScenarioPath,
+        TAKT_MOCK_CALL_LOG: mockCallLogPath,
+      },
+    });
+
+    registerRuntimeTmpDirectory(repo.path, envFile, runtimeTempRoot);
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(envFile)).toBe(true);
+    expect(existsSync(join(runtimeRoot, 'gradle'))).toBe(true);
+    expect(existsSync(join(runtimeRoot, 'npm'))).toBe(true);
+
+    const providerStart = readMockCallRecords(mockCallLogPath)
+      .find((record) => record.event === 'start');
+    expect(providerStart?.runtimeEnvironment).toMatchObject({
+      TMPDIR: expectedRuntimeTmpDir,
+      TAKT_RUNTIME_TMP: expectedRuntimeTmpDir,
+      GRADLE_USER_HOME: join(runtimeRoot, 'gradle'),
+      npm_config_cache: join(runtimeRoot, 'npm'),
+    });
+  });
+
+  it('should not inject runtime variables before invoking the mock provider when runtime.prepare is unset', () => {
+    const workflowPath = join(repo.path, 'runtime-e2e-workflow.yaml');
+    const mockCallLogPath = join(repo.path, '.takt-mock-call-log.ndjson');
+    const result = runTakt({
+      args: [
+        '--provider', 'mock',
+        '--task', 'Confirm the unprepared runtime environment.',
+        '--workflow', workflowPath,
+      ],
+      cwd: repo.path,
+      env: {
+        ...isolatedEnv.env,
+        TMPDIR: undefined,
+        TAKT_RUNTIME_TMP: undefined,
+        GRADLE_USER_HOME: undefined,
+        npm_config_cache: undefined,
+        TAKT_MOCK_SCENARIO: mockScenarioPath,
+        TAKT_MOCK_CALL_LOG: mockCallLogPath,
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(join(repo.path, '.takt', '.runtime', 'env.sh'))).toBe(false);
+    const providerStart = readMockCallRecords(mockCallLogPath)
+      .find((record) => record.event === 'start');
+    expect(providerStart?.runtimeEnvironment).not.toHaveProperty('TMPDIR');
+    expect(providerStart?.runtimeEnvironment).not.toHaveProperty('TAKT_RUNTIME_TMP');
+    expect(providerStart?.runtimeEnvironment).not.toHaveProperty('GRADLE_USER_HOME');
+    expect(providerStart?.runtimeEnvironment).not.toHaveProperty('npm_config_cache');
+  });
+
+  providerIt('should propagate runtime.prepare into commands executed by a real provider', () => {
     updateIsolatedConfig(isolatedEnv.taktDir, {
       runtime: {
         prepare: ['gradle', 'node'],
@@ -420,7 +507,7 @@ describe('E2E: runtime.prepare with provider', () => {
     expect(envContent).toContain('export npm_config_cache=');
   }, 240_000);
 
-  providerIt('should not prepare the runtime environment when runtime.prepare is unset', () => {
+  providerIt('should leave commands executed by a real provider unprepared when runtime.prepare is unset', () => {
     const workflowPath = join(repo.path, 'runtime-e2e-workflow.yaml');
     const unpreparedEnv = {
       ...isolatedEnv.env,

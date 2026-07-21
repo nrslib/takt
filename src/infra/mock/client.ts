@@ -14,6 +14,15 @@ import type { MockCallOptions } from './types.js';
 
 export type { MockCallOptions };
 
+const RUNTIME_ENV_KEYS = [
+  'TMPDIR',
+  'TEMP',
+  'TMP',
+  'TAKT_RUNTIME_TMP',
+  'GRADLE_USER_HOME',
+  'npm_config_cache',
+] as const;
+
 /**
  * Generate a mock session ID
  */
@@ -26,7 +35,13 @@ function recordMockCall(event: 'start' | 'complete', personaName: string): void 
   if (!logPath) {
     return;
   }
-  appendFileSync(logPath, `${JSON.stringify({ event, personaName })}\n`);
+  const runtimeEnvironment = Object.fromEntries(
+    RUNTIME_ENV_KEYS.flatMap((key) => {
+      const value = process.env[key];
+      return value === undefined ? [] : [[key, value]];
+    }),
+  );
+  appendFileSync(logPath, `${JSON.stringify({ event, personaName, runtimeEnvironment })}\n`);
 }
 
 async function delayWithAbort(ms: number, signal: AbortSignal | undefined): Promise<void> {

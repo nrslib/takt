@@ -224,7 +224,7 @@ describe('prepareRuntimeEnvironment', () => {
 
       expect(existsSync(expectedSecondRuntimeTmpDir)).toBe(false);
       expect(existsSync(temporaryDir)).toBe(false);
-      expect(runtimeTmpDirs.size).toBe(0);
+      expect(runtimeTmpDirs).toHaveLength(0);
       expect(process.env.TMPDIR).toBe(originalEnv.TMPDIR);
     } finally {
       removeDirectory(expectedFirstRuntimeTmpDir);
@@ -388,6 +388,8 @@ describe('prepareRuntimeEnvironment', () => {
         `-Djava.io.tmpdir="${result!.injectedEnv.TMPDIR}"`,
       );
       const runtimeTmpDir = result!.injectedEnv.TMPDIR;
+      expect(result!.injectedEnv.TEMP).toBe(runtimeTmpDir);
+      expect(result!.injectedEnv.TMP).toBe(runtimeTmpDir);
       cleanupTestResources(removeDirectory);
       expect(existsSync(runtimeTmpDir)).toBe(false);
     } finally {
@@ -436,6 +438,8 @@ describe('prepareRuntimeEnvironment', () => {
     writeFileSync(scriptPath, [
       '#!/usr/bin/env bash',
       'echo "tmpdir=/unsafe/tmpdir"',
+      'echo "temp=/unsafe/temp"',
+      'echo "TMP=/unsafe/tmp"',
       'echo "takt_runtime_tmp=/unsafe/runtime-tmp"',
     ].join('\n'), 'utf-8');
     chmodSync(scriptPath, 0o755);
@@ -445,8 +449,11 @@ describe('prepareRuntimeEnvironment', () => {
       const result = prepareRuntimeEnvironmentForTest(cwd, { prepare: [scriptPath] });
 
       expect(result!.injectedEnv.TMPDIR).not.toBe('/unsafe/tmpdir');
+      expect(result!.injectedEnv.TEMP).toBe(result!.injectedEnv.TMPDIR);
+      expect(result!.injectedEnv.TMP).toBe(result!.injectedEnv.TMPDIR);
       expect(result!.injectedEnv.TAKT_RUNTIME_TMP).toBe(result!.injectedEnv.TMPDIR);
       expect(result!.injectedEnv.tmpdir).toBeUndefined();
+      expect(result!.injectedEnv.temp).toBeUndefined();
       expect(result!.injectedEnv.takt_runtime_tmp).toBeUndefined();
       const runtimeTmpDir = result!.injectedEnv.TMPDIR;
       cleanupTestResources(removeDirectory);
