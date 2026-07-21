@@ -1,5 +1,5 @@
-import { validateLocationAdmission } from './admission-validation.js';
-import { parseFindingLocation } from './location.js';
+import { validateLocationAdmission, type LocationAdmissionResult } from './admission-validation.js';
+import { parseFindingLocation, parseFindingLocationRange } from './location.js';
 import type {
   FindingConflictAdjudicationOutcome,
   FindingConflictAdjudicationOutput,
@@ -80,27 +80,67 @@ function observationFromContext(context: FindingReconcileContext): FindingLedger
 
 type ResolvedEvidenceVerification =
   | { outcome: 'verified'; evidence: string }
-  | { outcome: 'invalid' }
+  | { outcome: 'invalid'; reason: string }
   | { outcome: 'unverifiable'; reason: string };
+
+function isLocationCitation(value: string): boolean {
+  return parseFindingLocationRange(value) !== undefined
+    || parseFindingLocation(value)?.line !== undefined;
+}
+
+function extractLocationCitations(evidence: string): string[] {
+  const trimmed = evidence.trim();
+  const candidates = [trimmed];
+  const citationPattern = /(?:^|[\s`"'“‘「『（［｛(\x5b{])([^\s`"'“”‘’「」『』（）［］｛｝()\x5b\x5d{}<>]+:\d+(?:-\d+)?)(?=$|[\s`"',.;:!?、。，；：！？“”‘’」』）］｝)}\x5d])/gu;
+  for (const match of trimmed.matchAll(citationPattern)) {
+    if (match[1] !== undefined) {
+      candidates.push(match[1]);
+    }
+  }
+  return [...new Set(candidates.filter(isLocationCitation))];
+}
+
+function validateResolvedEvidenceCitation(citation: string, cwd: string): LocationAdmissionResult {
+  const range = parseFindingLocationRange(citation);
+  if (range === undefined) {
+    return validateLocationAdmission(cwd, citation);
+  }
+  if (range.startLine < 1 || range.endLine < range.startLine) {
+    return { ok: false, outcome: 'invalid', reason: `location range "${citation}" is invalid` };
+  }
+  for (const line of [range.startLine, range.endLine]) {
+    const validation = validateLocationAdmission(cwd, `${range.path}:${line}`);
+    if (!validation.ok) {
+      return validation;
+    }
+  }
+  return { ok: true };
+}
 
 function verifyResolvedEvidence(evidence: readonly string[], cwd: string): ResolvedEvidenceVerification {
   let unverifiableReason: string | undefined;
+  let invalidReason: string | undefined;
   for (const entry of evidence) {
-    const parsed = parseFindingLocation(entry.trim());
-    if (parsed === undefined || parsed.line === undefined) {
-      continue;
-    }
-    const validation = validateLocationAdmission(cwd, entry.trim());
-    if (validation.ok) {
-      return { outcome: 'verified', evidence: entry };
-    }
-    if (validation.outcome === 'unverifiable' && unverifiableReason === undefined) {
-      unverifiableReason = validation.reason;
+    for (const citation of extractLocationCitations(entry)) {
+      const validation = validateResolvedEvidenceCitation(citation, cwd);
+      if (validation.ok) {
+        return { outcome: 'verified', evidence: citation };
+      }
+      if (validation.outcome === 'unverifiable' && unverifiableReason === undefined) {
+        unverifiableReason = validation.reason;
+      }
+      if (validation.outcome === 'invalid' && invalidReason === undefined) {
+        invalidReason = validation.reason;
+      }
     }
   }
-  return unverifiableReason === undefined
-    ? { outcome: 'invalid' }
-    : { outcome: 'unverifiable', reason: unverifiableReason };
+  if (unverifiableReason !== undefined) {
+    return { outcome: 'unverifiable', reason: unverifiableReason };
+  }
+  if (invalidReason !== undefined) {
+    return { outcome: 'invalid', reason: invalidReason };
+  }
+  return { outcome: 'invalid', reason: 'no path:line or path:start-end citation was found' };
 }
 
 function assertKnownConflict(
@@ -170,7 +210,7 @@ export function applyFindingConflictAdjudication(
     if (verification.outcome === 'invalid') {
       throw new Error(
         `Cannot resolve the finding(s) for conflict "${conflict.id}": adjudication evidence must include at least `
-        + 'one verifiable "path:line" citation',
+        + `one verifiable "path:line" or "path:start-end" citation: ${verification.reason}`,
       );
     }
     updatedFindings = ledger.findings.map((finding) => {

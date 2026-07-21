@@ -272,6 +272,60 @@ describe('applyFindingConflictAdjudication', () => {
     expect(conflict.adjudications![0]!.evidenceHash).toBe('hash-1');
   });
 
+  it('finding_stale -> resolved: accepts a verifiable file:line citation embedded in explanatory evidence', () => {
+    const ledger = makeLedger();
+    const evidence = 'The current implementation at src/a.ts:5 shows that the stale path is gone.';
+    const output = makeOutput({
+      outcome: 'finding_stale',
+      findingTransition: 'resolved',
+      evidence: [evidence],
+    });
+
+    const result = applyFindingConflictAdjudication({
+      ledger, output, evidenceHash: 'hash-embedded-line', cwd, context,
+    });
+
+    expect(result.transition).toBe('resolved');
+    expect(result.ledger.findings[0]?.resolvedEvidence).toBe('src/a.ts:5');
+  });
+
+  it('finding_stale -> resolved: accepts a verifiable file:start-end citation embedded in explanatory evidence', () => {
+    const ledger = makeLedger();
+    const evidence = 'src/a.ts:4-6 shows the current implementation that resolves the finding.';
+    const output = makeOutput({
+      outcome: 'finding_stale',
+      findingTransition: 'resolved',
+      evidence: [evidence],
+    });
+
+    const result = applyFindingConflictAdjudication({
+      ledger, output, evidenceHash: 'hash-embedded-range', cwd, context,
+    });
+
+    expect(result.transition).toBe('resolved');
+    expect(result.ledger.findings[0]?.resolvedEvidence).toBe('src/a.ts:4-6');
+  });
+
+  it.each([
+    ['smart quotes', 'The evidence is “src/a.ts:5”.', 'src/a.ts:5'],
+    ['Japanese corner brackets', '証拠は「src/a.ts:4-6」です。', 'src/a.ts:4-6'],
+    ['fullwidth parentheses', '証拠は（src/a.ts:5）です。', 'src/a.ts:5'],
+  ])('finding_stale -> resolved: accepts a citation delimited by %s', (_delimiter, evidence, citation) => {
+    const ledger = makeLedger();
+    const output = makeOutput({
+      outcome: 'finding_stale',
+      findingTransition: 'resolved',
+      evidence: [evidence],
+    });
+
+    const result = applyFindingConflictAdjudication({
+      ledger, output, evidenceHash: 'hash-unicode-delimiter', cwd, context,
+    });
+
+    expect(result.transition).toBe('resolved');
+    expect(result.ledger.findings[0]?.resolvedEvidence).toBe(citation);
+  });
+
   it('finding_stale -> resolved is rejected when no evidence entry is a verifiable file:line citation', () => {
     const ledger = makeLedger();
     const output = makeOutput({
@@ -281,7 +335,59 @@ describe('applyFindingConflictAdjudication', () => {
     });
     expect(() => applyFindingConflictAdjudication({
       ledger, output, evidenceHash: 'hash-1', cwd, context,
-    })).toThrow(/verifiable/);
+    })).toThrow(/no path:line or path:start-end citation was found/);
+  });
+
+  it('finding_stale -> resolved does not accept a citation embedded inside a larger token', () => {
+    const ledger = makeLedger();
+    const output = makeOutput({
+      outcome: 'finding_stale',
+      findingTransition: 'resolved',
+      evidence: ['prefixsrc/a.ts:5suffix'],
+    });
+
+    expect(() => applyFindingConflictAdjudication({
+      ledger, output, evidenceHash: 'hash-non-boundary', cwd, context,
+    })).toThrow(/no path:line or path:start-end citation was found/);
+  });
+
+  it('finding_stale -> resolved is rejected when the end of an embedded line range is outside the cited file', () => {
+    const ledger = makeLedger();
+    const output = makeOutput({
+      outcome: 'finding_stale',
+      findingTransition: 'resolved',
+      evidence: ['src/a.ts:19-21 supposedly proves the finding is stale.'],
+    });
+
+    expect(() => applyFindingConflictAdjudication({
+      ledger, output, evidenceHash: 'hash-out-of-range', cwd, context,
+    })).toThrow(/location line 21 is out of range for "src\/a\.ts" \(file has 20 lines\)/);
+  });
+
+  it('finding_stale -> resolved is rejected when an embedded line range is reversed', () => {
+    const ledger = makeLedger();
+    const output = makeOutput({
+      outcome: 'finding_stale',
+      findingTransition: 'resolved',
+      evidence: ['src/a.ts:6-4 supposedly proves the finding is stale.'],
+    });
+
+    expect(() => applyFindingConflictAdjudication({
+      ledger, output, evidenceHash: 'hash-reversed-range', cwd, context,
+    })).toThrow(/location range "src\/a\.ts:6-4" is invalid/);
+  });
+
+  it('finding_stale -> resolved does not accept an embedded citation outside the reviewed project', () => {
+    const ledger = makeLedger();
+    const output = makeOutput({
+      outcome: 'finding_stale',
+      findingTransition: 'resolved',
+      evidence: ['/etc/hosts:1 supposedly proves the finding is stale.'],
+    });
+
+    expect(() => applyFindingConflictAdjudication({
+      ledger, output, evidenceHash: 'hash-outside-project', cwd, context,
+    })).toThrow(/location path "\/etc\/hosts" resolves outside the project/);
   });
 
   it('evidence_invalid -> invalidated: machine-verifies when the finding location does not exist', () => {
