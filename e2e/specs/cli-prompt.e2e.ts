@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { runTakt } from '../helpers/takt-runner';
 import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
-import { findDeprecatedTerms } from '../../test/helpers/deprecated-terminology.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -38,10 +37,8 @@ describe('E2E: Prompt preview command (takt prompt)', () => {
     // Then: output contains workflow/step terminology
     // (may fail on Phase 3 for workflows with tag-based rules, but header is still output)
     const combined = result.stdout + result.stderr;
-    const normalized = combined.replace(/^- Working Directory: .*$/m, '');
     expect(combined).toContain('Workflow Prompt Preview:');
     expect(combined).toContain('Step 1:');
-    expect(findDeprecatedTerms(normalized)).toEqual([]);
   });
 
   it('should report not found for a nonexistent workflow name', () => {

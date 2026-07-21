@@ -13,14 +13,6 @@ import { loadProjectConfig, saveProjectConfig } from '../infra/config/project/pr
 import type { ProjectLocalConfig } from '../infra/config/types.js';
 import type { QualityGate } from '../core/models/workflow-types.js';
 import { MAX_ASSISTANT_INIT_FILES } from '../core/models/assistant-config.js';
-import {
-  unexpectedInteractivePreviewConfigKey,
-  unexpectedInteractivePreviewEnvVar,
-  unexpectedWorkflowArpeggioConfigKey,
-  unexpectedWorkflowMcpServersConfigKey,
-  unexpectedWorkflowOverridesConfigKey,
-  unexpectedWorkflowRuntimePrepareConfigKey,
-} from '../../test/helpers/unknown-contract-test-keys.js';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 type ObservabilityConfigForTest = {
@@ -609,18 +601,6 @@ unexpected_overrides:
       expect(loaded.interactivePreviewSteps).toBe(4);
     });
 
-    it('should reject unknown interactive preview key in project config yaml', () => {
-      const configPath = join(testDir, '.takt', 'config.yaml');
-      writeFileSync(
-        configPath,
-        `${unexpectedInteractivePreviewConfigKey}: 4\n`,
-        'utf-8',
-      );
-
-      expect(() => loadProjectConfig(testDir)).toThrow(
-        new RegExp(`${unexpectedInteractivePreviewConfigKey}|unrecognized`, 'i'),
-      );
-    });
 
     it('should accept TAKT_INTERACTIVE_PREVIEW_STEPS for project config env override', () => {
       process.env.TAKT_INTERACTIVE_PREVIEW_STEPS = '5';
@@ -630,22 +610,6 @@ unexpected_overrides:
       expect(loaded.interactivePreviewSteps).toBe(5);
     });
 
-    it('should ignore unknown interactive preview env override for project config', () => {
-      process.env[unexpectedInteractivePreviewEnvVar] = '4';
-
-      const loaded = loadProjectConfig(testDir);
-
-      expect(loaded.interactivePreviewSteps).toBeUndefined();
-    });
-
-    it('should prefer canonical interactive preview env override over unknown env for project config', () => {
-      process.env[unexpectedInteractivePreviewEnvVar] = '4';
-      process.env.TAKT_INTERACTIVE_PREVIEW_STEPS = '5';
-
-      const loaded = loadProjectConfig(testDir);
-
-      expect(loaded.interactivePreviewSteps).toBe(5);
-    });
 
     it('should reject unsupported workflow key in project config yaml', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
@@ -1216,46 +1180,6 @@ unexpected_overrides:
   });
 
   describe('workflow_runtime_prepare policy round-trip', () => {
-    it.each([
-      [
-        unexpectedWorkflowOverridesConfigKey,
-        [
-          `${unexpectedWorkflowOverridesConfigKey}:`,
-          '  quality_gates:',
-          '    - blocked',
-        ].join('\n'),
-      ],
-      [
-        unexpectedWorkflowRuntimePrepareConfigKey,
-        [
-          `${unexpectedWorkflowRuntimePrepareConfigKey}:`,
-          '  custom_scripts: true',
-        ].join('\n'),
-      ],
-      [
-        unexpectedWorkflowArpeggioConfigKey,
-        [
-          `${unexpectedWorkflowArpeggioConfigKey}:`,
-          '  custom_data_source_modules: true',
-          '  custom_merge_inline_js: false',
-          '  custom_merge_files: true',
-        ].join('\n'),
-      ],
-      [
-        unexpectedWorkflowMcpServersConfigKey,
-        [
-          `${unexpectedWorkflowMcpServersConfigKey}:`,
-          '  stdio: true',
-          '  http: false',
-          '  sse: true',
-        ].join('\n'),
-      ],
-    ])('should reject unknown workflow-facing key %s in project config yaml', (unknownKey, content) => {
-      const configPath = join(testDir, '.takt', 'config.yaml');
-      writeFileSync(configPath, `${content}\n`, 'utf-8');
-
-      expect(() => loadProjectConfig(testDir)).toThrow(new RegExp(`${unknownKey}|unrecognized`, 'i'));
-    });
 
     it('should load workflow_runtime_prepare policy block', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');

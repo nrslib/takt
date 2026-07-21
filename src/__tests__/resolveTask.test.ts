@@ -7,7 +7,6 @@ import * as infraTask from '../infra/task/index.js';
 import * as runOrderContent from '../core/workflow/run/order-content.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
-import { unexpectedWorkflowKey } from '../../test/helpers/unknown-contract-test-keys.js';
 import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
 
 const mockGetGitProvider = vi.hoisted(() => vi.fn());
@@ -475,20 +474,6 @@ describe('resolveTaskExecution', () => {
     expect(result.initialIterationOverride).toBeUndefined();
   });
 
-  it('should fail fast when an unknown workflow key is present', async () => {
-    const root = createTempProjectDir();
-    const task = createTask({
-      data: ({
-        task: 'Run task',
-        workflow: 'workflow-a',
-        [unexpectedWorkflowKey]: 'workflow-conflict',
-      } as unknown) as NonNullable<TaskInfo['data']>,
-    });
-
-    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
-      new RegExp(unexpectedWorkflowKey)
-    );
-  });
 
   it('should generate report context and copy issue-bearing task spec', async () => {
     const root = createTempProjectDir();

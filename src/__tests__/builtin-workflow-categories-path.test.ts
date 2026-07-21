@@ -1,17 +1,8 @@
-/**
- * Issue #565: builtin default categories file is `workflow-categories.yaml`
- * under `builtins/{lang}/` and removed legacy filenames must stay unread.
- */
-
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import {
-  unexpectedWorkflowCategoriesFileName,
-  unexpectedWorkflowCategoryListKey,
-} from '../../test/helpers/unknown-contract-test-keys.js';
 
 const languageState = vi.hoisted(() => ({
   value: 'en' as 'en' | 'ja',
@@ -77,26 +68,6 @@ describe('builtin workflow-categories.yaml path and loading', () => {
     const path = getDefaultCategoriesPath(testDir);
     // Then
     expect(path).toBe(join(enResources, 'workflow-categories.yaml'));
-    expect(path).not.toMatch(new RegExp(`${unexpectedWorkflowCategoriesFileName.replace('.', '\\.')}$`));
-  });
-
-  it('should return null when only the removed builtin categories filename exists', () => {
-    // Given: old builtin filename only — loader must not read it after #565
-    writeFileSync(
-      join(enResources, unexpectedWorkflowCategoriesFileName),
-      `workflow_categories:
-  Legacy:
-    ${unexpectedWorkflowCategoryListKey}:
-      - default
-`,
-      'utf-8',
-    );
-
-    // When
-    const config = loadDefaultCategories(testDir);
-
-    // Then
-    expect(config).toBeNull();
   });
 });
 

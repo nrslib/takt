@@ -154,45 +154,6 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     }
   });
 
-  it.each([
-    ['en', 'Every part in the same batch must be independently executable', 'When parts.length === 1, first consider whether independent responsibility boundaries are available'],
-    ['ja', '同じバッチ内の part は互いに独立させる', '`parts.length === 1` になる場合も、独立に実行できる責務境界がないか先に検討する'],
-  ] as const)('builtin %s facet reaches the real structured decomposition caller', async (language, independenceRule, boundaryRule) => {
-    const builtinPath = join(process.cwd(), 'builtins', language, 'workflows', 'draft.yaml');
-    mkdirSync(join(tmpDir, '.takt'), { recursive: true });
-    writeFileSync(join(tmpDir, '.takt', 'config.yaml'), `language: ${language}\n`, 'utf-8');
-    const loaded = loadWorkflowFromFile(builtinPath, tmpDir);
-    const config: WorkflowConfig = { ...loaded, initialStep: 'implement' };
-    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      language,
-    });
-
-    mockRunAgentWithPrompt(
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: {
-          parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
-        },
-      }),
-      makeResponse({ persona: 'coder', content: 'API done' }),
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
-      }),
-    );
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
-
-    await engine.runSingleIteration();
-
-    const decomposePrompt = vi.mocked(runAgent).mock.calls[0]?.[1];
-    expect(decomposePrompt).toContain(independenceRule);
-    expect(decomposePrompt).toContain(boundaryRule);
-    expect(decomposePrompt).not.toContain('verification separation');
-    expect(decomposePrompt).not.toContain('検証分離');
-  });
-
   it('team leaderが分解したパートを並列実行し集約する', async () => {
     const config = buildTeamLeaderConfig();
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });

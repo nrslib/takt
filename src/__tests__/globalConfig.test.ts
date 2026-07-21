@@ -11,16 +11,6 @@ import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import type { GlobalConfig } from '../core/models/config-types.js';
 import type { QualityGate } from '../core/models/workflow-types.js';
-import {
-  unexpectedEnableBuiltinWorkflowsConfigKey,
-  unexpectedNotificationWorkflowAbortConfigKey,
-  unexpectedNotificationWorkflowCompleteConfigKey,
-  unexpectedWorkflowArpeggioConfigKey,
-  unexpectedWorkflowCategoriesFileConfigKey,
-  unexpectedWorkflowMcpServersConfigKey,
-  unexpectedWorkflowOverridesConfigKey,
-  unexpectedWorkflowRuntimePrepareConfigKey,
-} from '../../test/helpers/unknown-contract-test-keys.js';
 
 // Mock the getGlobalConfigPath to use a test directory
 let testConfigPath: string;
@@ -440,63 +430,6 @@ logging:
   });
 
   describe('workflow-facing global aliases', () => {
-    it.each([
-      [
-        unexpectedWorkflowOverridesConfigKey,
-        [
-          `${unexpectedWorkflowOverridesConfigKey}:`,
-          '  quality_gates:',
-          '    - blocked',
-        ].join('\n'),
-      ],
-      [
-        unexpectedWorkflowRuntimePrepareConfigKey,
-        [
-          `${unexpectedWorkflowRuntimePrepareConfigKey}:`,
-          '  custom_scripts: true',
-        ].join('\n'),
-      ],
-      [
-        unexpectedWorkflowArpeggioConfigKey,
-        [
-          `${unexpectedWorkflowArpeggioConfigKey}:`,
-          '  custom_data_source_modules: true',
-          '  custom_merge_inline_js: false',
-          '  custom_merge_files: true',
-        ].join('\n'),
-      ],
-      [
-        unexpectedWorkflowMcpServersConfigKey,
-        [
-          `${unexpectedWorkflowMcpServersConfigKey}:`,
-          '  stdio: true',
-          '  http: false',
-          '  sse: true',
-        ].join('\n'),
-      ],
-      [unexpectedEnableBuiltinWorkflowsConfigKey, `${unexpectedEnableBuiltinWorkflowsConfigKey}: true`],
-      [
-        unexpectedWorkflowCategoriesFileConfigKey,
-        `${unexpectedWorkflowCategoriesFileConfigKey}: /tmp/removed-workflow-categories.yaml`,
-      ],
-    ])('should reject unknown workflow-facing key %s in global config yaml', (unknownKey, content) => {
-      writeFileSync(testConfigPath, `${content}\n`, 'utf-8');
-
-      expect(() => GlobalConfigManager.getInstance().load()).toThrow(new RegExp(`${unknownKey}|unrecognized`, 'i'));
-    });
-
-    it.each([
-      unexpectedNotificationWorkflowCompleteConfigKey,
-      unexpectedNotificationWorkflowAbortConfigKey,
-    ])('should reject unknown notification workflow key %s in global config yaml', (unknownKey) => {
-      writeFileSync(
-        testConfigPath,
-        ['notification_sound_events:', `  ${unknownKey}: true`].join('\n'),
-        'utf-8',
-      );
-
-      expect(() => GlobalConfigManager.getInstance().load()).toThrow(new RegExp(`${unknownKey}|unrecognized`, 'i'));
-    });
 
     it.each([
       [

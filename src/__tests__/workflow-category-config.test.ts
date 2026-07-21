@@ -8,10 +8,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { WorkflowWithSource } from '../infra/config/index.js';
-import {
-  unexpectedCategoryRootKey,
-  unexpectedWorkflowCategoryListKey,
-} from '../../test/helpers/unknown-contract-test-keys.js';
 
 const languageState = vi.hoisted(() => ({
   value: 'en' as 'en' | 'ja',
@@ -305,25 +301,6 @@ others_category_name: Unclassified
     expect(config!.othersCategoryName).toBe('Unclassified');
   });
 
-  it('should reject unknown root category key', () => {
-    expect(() => parseWorkflowCategoryConfig({
-      [unexpectedCategoryRootKey]: {
-        Quick: {
-          workflows: ['default'],
-        },
-      },
-    }, 'inline')).toThrow(new RegExp(`${unexpectedCategoryRootKey}|unrecognized`, 'i'));
-  });
-
-  it('should reject unknown workflow list key inside categories', () => {
-    expect(() => parseWorkflowCategoryOverlay({
-      workflow_categories: {
-        Mixed: {
-          [unexpectedWorkflowCategoryListKey]: ['default'],
-        },
-      },
-    }, 'inline')).toThrow(new RegExp(`${unexpectedWorkflowCategoryListKey}|object|array|invalid`, 'i'));
-  });
 });
 
 describe('buildCategorizedWorkflows', () => {

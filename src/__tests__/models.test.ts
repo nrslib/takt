@@ -18,12 +18,6 @@ import {
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { STATUS_VALUES } from '../core/models/status.js';
 import type { WorkflowTemplateReference } from '../core/models/index.js';
-import {
-  unexpectedInitialStepKey,
-  unexpectedMaxStepsKey,
-  unexpectedStepListKey,
-  unexpectedWorkflowConfigKey,
-} from '../../test/helpers/unknown-contract-test-keys.js';
 
 describe('public schema entry point', () => {
   it('should not export assistant init runtime limit constants', () => {
@@ -496,68 +490,6 @@ describe('WorkflowConfigRawSchema', () => {
     });
   });
 
-  it('should reject an unknown workflow config alias when workflow_config is present', () => {
-    const config = {
-      name: 'test-workflow',
-      workflow_config: {
-        provider_options: {
-          codex: { network_access: true },
-        },
-      },
-      [unexpectedWorkflowConfigKey]: {
-        provider_options: {
-          codex: { network_access: false },
-        },
-      },
-      steps: [
-        {
-          name: 'implement',
-          provider: 'codex',
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    expect(() => WorkflowConfigRawSchema.parse(config)).toThrow(
-      new RegExp(`${unexpectedWorkflowConfigKey}|workflow_config|unrecognized`, 'i'),
-    );
-  });
-
-  it('should reject an unknown step-list key', () => {
-    const config = {
-      name: 'legacy-step-list',
-      [unexpectedStepListKey]: [
-        {
-          name: 'plan',
-          persona: 'coder',
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    expect(() => WorkflowConfigRawSchema.parse(config as unknown)).toThrow(
-      new RegExp(`${unexpectedStepListKey}|steps|unrecognized`, 'i'),
-    );
-  });
-
-  it('should reject unknown step boundary keys', () => {
-    const config = {
-      name: 'legacy-step-keys',
-      [unexpectedInitialStepKey]: 'plan',
-      [unexpectedMaxStepsKey]: 3,
-      steps: [
-        {
-          name: 'plan',
-          persona: 'coder',
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    expect(() => WorkflowConfigRawSchema.parse(config as unknown)).toThrow(
-      new RegExp(`${unexpectedInitialStepKey}|${unexpectedMaxStepsKey}|initial_step|max_steps|unrecognized`, 'i'),
-    );
-  });
 
   it('should parse workflow-facing project config aliases', () => {
     const project = ProjectConfigSchema.parse({

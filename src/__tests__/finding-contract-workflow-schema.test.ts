@@ -311,7 +311,7 @@ describe('workflow finding_contract schema', () => {
 
   it('should leave workflows without finding_contract unchanged', () => {
     const workflow = normalizeWorkflowConfig({
-      name: 'legacy-workflow',
+      name: 'workflow-without-finding-contract',
       initial_step: 'review',
       max_steps: 2,
       steps: [
