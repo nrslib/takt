@@ -763,6 +763,20 @@ describe('private file artifacts', () => {
     expect(existsSync(join(outsideRuns, 'run-1'))).toBe(false);
   });
 
+  it('should accept a private directory created concurrently after the absent-path check', () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-directory-concurrent-'));
+    roots.push(root);
+    const directory = join(root, 'logs');
+    injectedFileFailure.beforeArtifactCreation = () => {
+      mkdirSync(directory, { mode: 0o700 });
+    };
+
+    ensurePrivateDirectory(directory);
+
+    expect(statSync(directory).isDirectory()).toBe(true);
+    expectPosixMode(statSync(directory).mode, 0o700);
+  });
+
   itPosix('should create and repair private directory and file modes under a permissive umask', () => {
     const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-file-'));
     roots.push(root);
