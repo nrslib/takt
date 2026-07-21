@@ -1,5 +1,5 @@
 name: takt-default
-description: TAKT development workflow (plan -> write_tests -> draft (implement + AI self-review) -> peer-review (specialist reviewers + fix + parallel final gate) -> COMPLETE).
+description: TAKT development workflow (plan -> write_tests -> draft (implement + AI self-review) -> peer-review (specialist reviewers + fix + sequential final gate) -> COMPLETE).
 workflow_config:
   provider_options:
     codex:

@@ -288,14 +288,13 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     expect(archReview.persona).toContain('architecture-reviewer');
 
     const finalGateWorkflow = getBuiltinWorkflow('merge-readiness-final-gate', process.cwd())!;
-    const finalGate = finalGateWorkflow.steps.find((s) => s.name === 'final_gate')!;
-    const mergeReadinessReview = finalGate.parallel!.find((s) => s.name === 'merge-readiness-review')!;
+    const mergeReadinessReview = finalGateWorkflow.steps.find((s) => s.name === 'merge-readiness-review')!;
     expect(mergeReadinessReview.persona).toContain('merge-readiness-reviewer');
 
     const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
     expect(codingReview.persona).toContain('coding-reviewer');
 
-    const supervise = finalGate.parallel!.find((s) => s.name === 'supervise')!;
+    const supervise = finalGateWorkflow.steps.find((s) => s.name === 'supervise')!;
     expect(supervise.persona).toContain('supervisor');
   });
 
@@ -307,14 +306,13 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     expect(archReview.outputContracts).toBeDefined();
 
     const finalGateWorkflow = getBuiltinWorkflow('merge-readiness-final-gate', process.cwd())!;
-    const finalGate = finalGateWorkflow.steps.find((s) => s.name === 'final_gate')!;
-    const mergeReadinessReview = finalGate.parallel!.find((s) => s.name === 'merge-readiness-review')!;
+    const mergeReadinessReview = finalGateWorkflow.steps.find((s) => s.name === 'merge-readiness-review')!;
     expect(mergeReadinessReview.outputContracts).toBeDefined();
 
     const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
     expect(codingReview.outputContracts).toBeDefined();
 
-    const supervise = finalGate.parallel!.find((s) => s.name === 'supervise')!;
+    const supervise = finalGateWorkflow.steps.find((s) => s.name === 'supervise')!;
     expect(supervise.outputContracts).toBeDefined();
   });
 });

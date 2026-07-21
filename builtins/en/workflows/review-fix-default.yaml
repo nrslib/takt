@@ -1,5 +1,5 @@
 name: review-fix-default
-description: Multi-perspective review + fix loop (architecture, security, QA, testing, and coding in parallel, followed by a parallel merge-readiness/supervise final gate)
+description: Multi-perspective review + fix loop (architecture, security, QA, testing, and coding in parallel, followed by merge-readiness review and then supervision)
 workflow_config:
   provider_options:
     codex:

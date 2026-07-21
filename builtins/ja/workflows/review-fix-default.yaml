@@ -1,5 +1,5 @@
 name: review-fix-default
-description: 多角レビュー＋修正ループ（アーキテクチャ・セキュリティ・QA・テスト・コーディングを並列レビューした後、merge-readiness review と supervise の並列最終ゲートを実行する）
+description: 多角レビュー＋修正ループ（アーキテクチャ・セキュリティ・QA・テスト・コーディングを並列レビューした後、merge-readiness review、supervise の順で最終ゲートを実行する）
 workflow_config:
   provider_options:
     codex:

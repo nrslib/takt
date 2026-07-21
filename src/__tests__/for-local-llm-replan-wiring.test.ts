@@ -132,12 +132,12 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
     const workflow = loadWorkflow(name, process.cwd());
     expect(workflow).toBeDefined();
 
-    for (const stepName of ['reviewers', 'final-gate']) {
+    for (const stepName of ['reviewers', 'merge-readiness-review', 'supervise']) {
       const step = workflow!.steps.find((candidate) => candidate.name === stepName);
       expect(step, `step "${stepName}" should exist`).toBeDefined();
       const rules = step!.rules ?? [];
 
-      // final-gate は codex 対策#4 の review-integrity ルール（reviewerAnomalies の
+      // final gate の各ステップは codex 対策#4 の review-integrity ルール（reviewerAnomalies の
       // budgetExhausted → NEEDS_ADJUDICATION）も持つため、fixpoint ルールは
       // condition で特定する（単なる next==NEEDS_ADJUDICATION では anomaly ルールに
       // 先にヒットしてしまう）。
@@ -167,7 +167,7 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
     const workflow = loadWorkflow(name, process.cwd());
     expect(workflow).toBeDefined();
 
-    for (const stepName of ['reviewers', 'final-gate']) {
+    for (const stepName of ['reviewers', 'merge-readiness-review', 'supervise']) {
       const step = workflow!.steps.find((candidate) => candidate.name === stepName);
       expect(step, `step "${stepName}" should exist`).toBeDefined();
       const rules = step!.rules ?? [];

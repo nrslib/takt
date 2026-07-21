@@ -1,5 +1,5 @@
 name: peer-review-for-local-llm
-description: peer-review with an added implementation-semantics reviewer for deeper coverage. Specialist parallel reviewers ⇄ fix loop, followed by a parallel merge-readiness/supervise final gate.
+description: peer-review with an added implementation-semantics reviewer for deeper coverage. Specialist parallel reviewers ⇄ fix loop, followed by merge-readiness review and then supervision.
 subworkflow:
   callable: true
   visibility: internal

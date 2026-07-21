@@ -1,5 +1,5 @@
 name: default-peer-review
-description: default series Phase 2. Specialist parallel reviewers (arch + ai-antipattern-2nd + coding-review) ⇄ fix loop, followed by a parallel merge-readiness/supervise final gate.
+description: default series Phase 2. Specialist parallel reviewers (arch + ai-antipattern-2nd + coding-review) ⇄ fix loop, followed by merge-readiness review and then supervision.
 subworkflow:
   callable: true
   visibility: internal

@@ -3,7 +3,7 @@
  *
  * Covers:
  * - Workflow YAML files (EN/JA) load and pass schema validation
- * - Step structure: gather -> reviewers (parallel 5) -> final-gate (merge-readiness + synthesis) / supervise -> COMPLETE
+ * - Step structure: gather -> reviewers (parallel 5) -> merge-readiness -> synthesis / supervise -> COMPLETE
  * - All steps have edit: false
  * - All 5 parallel reviewers have Bash in provider_options.claude.allowed_tools
  * - Routing rules for gather and reviewers
@@ -70,9 +70,9 @@ describe('review-default workflow (EN)', () => {
     expect(raw.max_steps).toBe(10);
   });
 
-  it('should have 4 steps: gather, reviewers, final-gate, supervise', () => {
+  it('should have sequential merge-readiness and synthesis steps', () => {
     const stepNames = raw.steps.map((s) => s.name);
-    expect(stepNames).toEqual(['gather', 'reviewers', 'final-gate', 'supervise']);
+    expect(stepNames).toEqual(['gather', 'reviewers', 'merge-readiness-review', 'review-synthesis', 'supervise']);
   });
 
   it('should have all steps with edit: false', () => {
@@ -109,24 +109,21 @@ describe('review-default workflow (EN)', () => {
     const reviewers = raw.steps.find((s) => s.name === 'reviewers');
     expect(reviewers.rules).toHaveLength(2);
     expect(reviewers.rules[0].condition).toBe('all("approved")');
-    expect(reviewers.rules[0].next).toBe('final-gate');
+    expect(reviewers.rules[0].next).toBe('merge-readiness-review');
     expect(reviewers.rules[1].condition).toBe('any("needs_fix")');
     expect(reviewers.rules[1].next).toBe('supervise');
   });
 
-  it('should run merge-readiness-review and synthesis in the final-gate', () => {
-    const finalGate = raw.steps.find((s) => s.name === 'final-gate');
-    expect(finalGate).toBeDefined();
-    if (!finalGate) {
-      throw new Error('final-gate step should exist');
-    }
-    expect(finalGate.parallel?.map((s: { name: string }) => s.name)).toEqual([
-      'merge-readiness-review',
-      'review-synthesis',
+  it('should run synthesis after merge-readiness evidence is recorded', () => {
+    const mergeReadiness = raw.steps.find((s) => s.name === 'merge-readiness-review');
+    const synthesis = raw.steps.find((s) => s.name === 'review-synthesis');
+    expect(mergeReadiness?.parallel).toBeUndefined();
+    expect(mergeReadiness?.rules).toEqual([
+      { condition: 'approved', next: 'review-synthesis' },
+      { condition: 'needs_fix', next: 'review-synthesis' },
     ]);
-    expect(finalGate.rules).toEqual([
-      { condition: 'all("approved")', next: 'COMPLETE' },
-      { condition: 'any("needs_fix")', next: 'COMPLETE' },
+    expect(synthesis?.rules).toEqual([
+      { condition: 'approved', next: 'COMPLETE' },
     ]);
   });
 
@@ -202,7 +199,7 @@ describe('review-default workflow (JA)', () => {
 
   it('should have same step structure as EN version', () => {
     const stepNames = raw.steps.map((s) => s.name);
-    expect(stepNames).toEqual(['gather', 'reviewers', 'final-gate', 'supervise']);
+    expect(stepNames).toEqual(['gather', 'reviewers', 'merge-readiness-review', 'review-synthesis', 'supervise']);
   });
 
   it('should have reviewers step with 5 parallel sub-steps', () => {
@@ -240,7 +237,7 @@ describe('review-default workflow (JA)', () => {
   it('should have same aggregate rules on reviewers', () => {
     const reviewers = raw.steps.find((s) => s.name === 'reviewers');
     expect(reviewers.rules[0].condition).toBe('all("approved")');
-    expect(reviewers.rules[0].next).toBe('final-gate');
+    expect(reviewers.rules[0].next).toBe('merge-readiness-review');
     expect(reviewers.rules[1].condition).toBe('any("needs_fix")');
   });
 
@@ -264,7 +261,7 @@ describe('review-takt-default workflow supervise synthesis', () => {
 describe('review-backend workflow final-gate contract (EN)', () => {
   const raw = loadWorkflowYaml('en', 'review-backend.yaml') as WorkflowYaml;
 
-  it('routes approved reviews through final-gate and findings through supervise', () => {
+  it('routes approved reviews through merge-readiness and findings through supervise', () => {
     const reviewers = raw.steps.find((step) => step.name === 'reviewers');
     expect(reviewers).toBeDefined();
     expect(reviewers?.parallel?.map((step) => step.name)).toEqual([
@@ -274,7 +271,7 @@ describe('review-backend workflow final-gate contract (EN)', () => {
       'coding-review',
     ]);
     expect(reviewers?.rules).toEqual([
-      { condition: 'all("approved")', next: 'final-gate' },
+      { condition: 'all("approved")', next: 'merge-readiness-review' },
       { condition: 'any("needs_fix")', next: 'supervise' },
     ]);
 
@@ -284,26 +281,22 @@ describe('review-backend workflow final-gate contract (EN)', () => {
     ]);
   });
 
-  it('keeps merge-readiness and synthesis output contracts in final-gate', () => {
-    const finalGate = raw.steps.find((step) => step.name === 'final-gate');
-    expect(finalGate).toBeDefined();
-    expect(finalGate?.parallel?.map((step) => step.name)).toEqual([
-      'merge-readiness-review',
-      'review-synthesis',
+  it('keeps merge-readiness and synthesis output contracts in sequential steps', () => {
+    const mergeReadiness = raw.steps.find((step) => step.name === 'merge-readiness-review');
+    const synthesis = raw.steps.find((step) => step.name === 'review-synthesis');
+    expect(mergeReadiness?.rules).toEqual([
+      { condition: 'approved', next: 'review-synthesis' },
+      { condition: 'needs_fix', next: 'review-synthesis' },
     ]);
-    expect(finalGate?.rules).toEqual([
-      { condition: 'all("approved")', next: 'COMPLETE' },
-      { condition: 'any("needs_fix")', next: 'COMPLETE' },
+    expect(synthesis?.rules).toEqual([
+      { condition: 'approved', next: 'COMPLETE' },
     ]);
-
-    const mergeReadiness = finalGate?.parallel?.find((step) => step.name === 'merge-readiness-review');
     expect(mergeReadiness?.output_contracts).toEqual({
       report: [
         { name: 'merge-readiness-review.md', format: 'merge-readiness-review' },
       ],
     });
 
-    const synthesis = finalGate?.parallel?.find((step) => step.name === 'review-synthesis');
     expect(synthesis?.output_contracts).toEqual({
       report: [
         { name: 'supervisor-validation.md', format: 'supervisor-validation' },

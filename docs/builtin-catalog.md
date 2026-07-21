@@ -64,7 +64,7 @@ Organized by category.
 | | `takt-default-team-high` | Team Leader variant of takt-default-high. The leader decomposes implementation and fixes for members, followed by the same six compact specialist reviews, Finding Contract, and final gate. Provider and model remain configurable. |
 | | `takt-default-high` | Enhanced high-cost variant of takt-default: direct implementation and fixes, six compact specialist reviews, Finding Contract, and a merge-readiness/supervisor final gate. |
 | | `review-fix-takt-default` | TAKT development code review + fix loop: gather → plan → tests → draft → peer-review (specialists + merge-readiness + fix) → supervise. |
-| | `peer-review-for-local-llm` | peer-review with an added implementation-semantics reviewer, aligned with the for-local-llm lineage. Specialist parallel reviewers ⇄ fix loop, followed by the parallel merge-readiness/supervise final gate. |
+| | `peer-review-for-local-llm` | peer-review with an added implementation-semantics reviewer, aligned with the for-local-llm lineage. Specialist parallel reviewers ⇄ fix loop, followed by merge-readiness review and then supervision. |
 | 🖥️ Local LLM | `takt-default-for-local-llm` | TAKT development workflow for local LLMs. Six parallel specialist reviewers (architecture / AI anti-pattern / coding / implementation semantics / contract lifecycle / robustness) plus the Finding Contract (ledger, resolution confirmations, dispute adjudication) build discipline for weak models structurally. |
 | | `frontend-for-local-llm` | Frontend development workflow for local LLMs. Four parallel specialist reviewers plus the Finding Contract. |
 | | `backend-for-local-llm` | Backend development workflow for local LLMs. Four parallel specialist reviewers plus the Finding Contract. |

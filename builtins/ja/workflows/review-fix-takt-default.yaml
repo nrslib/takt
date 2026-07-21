@@ -1,5 +1,5 @@
 name: review-fix-takt-default
-description: TAKT開発向けレビュー対象収集付き開発ワークフロー（収集 → 計画 → テスト作成 → draft（実装+AI自己レビュー） → peer-review（専門レビュー+修正+並列最終ゲート） → 完了）
+description: TAKT開発向けレビュー対象収集付き開発ワークフロー（収集 → 計画 → テスト作成 → draft（実装+AI自己レビュー） → peer-review（専門レビュー+修正+逐次最終ゲート） → 完了）
 workflow_config:
   provider_options:
     codex:

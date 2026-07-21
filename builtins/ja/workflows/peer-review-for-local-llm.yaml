@@ -1,5 +1,5 @@
 name: peer-review-for-local-llm
-description: peer-review に実装意味論レビュアーを加えた深いレビュー編成。専門並列レビュー ⇄ 修正ループの後、merge-readiness-review と supervise の並列最終ゲートを実行する。
+description: peer-review に実装意味論レビュアーを加えた深いレビュー編成。専門並列レビュー ⇄ 修正ループの後、merge-readiness-review、supervise の順で最終ゲートを実行する。
 subworkflow:
   callable: true
   visibility: internal

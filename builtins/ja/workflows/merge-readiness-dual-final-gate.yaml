@@ -1,5 +1,5 @@
 name: merge-readiness-dual-final-gate
-description: マージ可能品質と dual supervise を独立に並列確認し、必要な次アクションを返す最終ゲート。
+description: マージ可能品質を確認して証跡を保存した後、dual supervise が最終確認し、必要な次アクションを返す最終ゲート。
 subworkflow:
   callable: true
   visibility: internal
@@ -29,64 +29,58 @@ workflow_config:
     opencode:
       network_access: true
 max_steps: 5
-initial_step: final_gate
+initial_step: merge-readiness-review
 steps:
-  - name: final_gate
+  - name: merge-readiness-review
     tags:
       - review
       - final-gate
-    parallel:
-      - name: merge-readiness-review
-        tags:
-          - review
-          - final-gate
-          - merge-readiness
-        edit: false
-        persona: merge-readiness-reviewer
-        policy:
-          $param: merge_readiness_policy
-        knowledge:
-          $param: merge_readiness_knowledge
-        provider_options:
-          extends: review-readonly
-        pass_previous_response: false
-        instruction: review-merge-readiness
-        output_contracts:
-          report:
-            - name: merge-readiness-review.md
-              format: merge-readiness-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-      - name: supervise
-        tags:
-          - review
-          - final-gate
-          - supervise
-        edit: false
-        persona: dual-supervisor
-        policy: review
-        knowledge:
-          $param: supervise_knowledge
-        provider_options:
-          extends: review-readonly
-        pass_previous_response: false
-        instruction: supervise
-        output_contracts:
-          report:
-            - name: supervisor-validation.md
-              format: supervisor-validation
-            - name: summary.md
-              format: summary
-              use_judge: false
-        rules:
-          - condition: approved
-          - condition: needs_fix
-          - condition: need_replan
+      - merge-readiness
+    edit: false
+    persona: merge-readiness-reviewer
+    policy:
+      $param: merge_readiness_policy
+    knowledge:
+      $param: merge_readiness_knowledge
+    provider_options:
+      extends: review-readonly
+    pass_previous_response: false
+    instruction: review-merge-readiness
+    output_contracts:
+      report:
+        - name: merge-readiness-review.md
+          format: merge-readiness-review
     rules:
-      - condition: all("approved")
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        return: needs_fix
+
+  - name: supervise
+    tags:
+      - review
+      - final-gate
+      - supervise
+    edit: false
+    persona: dual-supervisor
+    policy: review
+    knowledge:
+      $param: supervise_knowledge
+    provider_options:
+      extends: review-readonly
+    pass_previous_response: false
+    instruction: supervise
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: summary
+          use_judge: false
+    rules:
+      - condition: approved
         next: COMPLETE
-      - condition: any("need_replan")
+      - condition: need_replan
         return: need_replan
-      - condition: any("needs_fix")
+      - condition: needs_fix
         return: needs_fix

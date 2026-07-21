@@ -1,5 +1,5 @@
 name: peer-review
-description: Specialist parallel peer reviewers (+ ai-antipattern-review-2nd) ⇄ fix loop, followed by a parallel merge-readiness/supervise final gate.
+description: Specialist parallel peer reviewers (+ ai-antipattern-review-2nd) ⇄ fix loop, followed by merge-readiness review and then supervision.
 subworkflow:
   callable: true
   visibility: internal

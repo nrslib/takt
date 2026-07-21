@@ -156,82 +156,73 @@ steps:
           - condition: needs_fix
     rules:
       - condition: all("Terraform規約に準拠", "AI特有の問題なし", "approved")
-        next: final-gate
+        next: merge-readiness-review
       - condition: any("規約違反あり", "AI特有の問題あり", "needs_fix")
         next: supervise
-  - name: final-gate
+  - name: merge-readiness-review
     tags:
       - review
       - final-gate
-    parallel:
-      - name: merge-readiness-review
-        tags:
-          - review
-          - final-gate
-          - merge-readiness
-        edit: false
-        persona: merge-readiness-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-merge-readiness
-        output_contracts:
-          report:
-            - name: merge-readiness-review.md
-              format: merge-readiness-review
-      - name: final-supervise
-        tags:
-          - review
-        edit: &terraform_supervise_edit false
-        persona: &terraform_supervise_persona supervisor
-        policy: &terraform_supervise_policy review
-        knowledge: &terraform_supervise_knowledge terraform-aws
-        provider_options: &terraform_supervise_provider_options
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        instruction: &terraform_supervise_instruction supervise
-        rules:
-          - condition: レビュアー全員承認かつマージ可能な品質
-          - condition: AI特有の問題のみ要修正
-          - condition: 規約違反または要件未達のみ要修正
-          - condition: 複数種別の問題あり
-          - condition: 要件矛盾で収束不能、ユーザー判断が必要
-        output_contracts: &terraform_supervise_output_contracts
-          report:
-            - name: supervisor-validation.md
-              format: supervisor-validation
-            - name: summary.md
-              format: summary
-              use_judge: false
+      - merge-readiness
+    edit: false
+    persona: merge-readiness-reviewer
+    policy: review
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
     rules:
-      - condition: all("approved", "レビュアー全員承認かつマージ可能な品質")
+      - condition: approved
+        next: final-supervise
+      - condition: needs_fix
+        next: final-supervise
+    instruction: review-merge-readiness
+    output_contracts:
+      report:
+        - name: merge-readiness-review.md
+          format: merge-readiness-review
+
+  - name: final-supervise
+    tags:
+      - review
+    edit: &terraform_supervise_edit false
+    persona: &terraform_supervise_persona supervisor
+    policy: &terraform_supervise_policy review
+    knowledge: &terraform_supervise_knowledge terraform-aws
+    provider_options: &terraform_supervise_provider_options
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    instruction: &terraform_supervise_instruction supervise
+    rules:
+      - condition: レビュアー全員承認かつマージ可能な品質
         next: COMPLETE
-      - condition: all("needs_fix", "AI特有の問題のみ要修正")
-        next: fix_both
-      - condition: any("複数種別の問題あり")
-        next: fix_both
-      - condition: any("要件矛盾で収束不能、ユーザー判断が必要")
-        next: ABORT
-      - condition: any("AI特有の問題のみ要修正")
+      - condition: AI特有の問題のみ要修正
         next: ai-antipattern-fix
-      - condition: any("needs_fix", "規約違反または要件未達のみ要修正")
+      - condition: 規約違反または要件未達のみ要修正
         next: supervise_fix
+      - condition: 複数種別の問題あり
+        next: fix_both
+      - condition: 要件矛盾で収束不能、ユーザー判断が必要
+        next: ABORT
+    output_contracts: &terraform_supervise_output_contracts
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: summary
+          use_judge: false
+
   - name: supervise
     tags:
       - review

@@ -1,5 +1,5 @@
 name: review-fix-takt-default
-description: TAKT-focused development workflow with review-target gathering (gather -> plan -> write_tests -> draft (implement + AI self-review) -> peer-review (specialist review + fix + parallel final gate) -> COMPLETE).
+description: TAKT-focused development workflow with review-target gathering (gather -> plan -> write_tests -> draft (implement + AI self-review) -> peer-review (specialist review + fix + sequential final gate) -> COMPLETE).
 workflow_config:
   provider_options:
     codex:

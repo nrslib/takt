@@ -1,5 +1,5 @@
 name: default-peer-review
-description: default 系の Phase 2。専門並列レビュアー（arch + ai-antipattern-2nd + coding-review） ⇄ 修正ループの後、merge-readiness-review と supervise の並列最終ゲートを実行する。
+description: default 系の Phase 2。専門並列レビュアー（arch + ai-antipattern-2nd + coding-review） ⇄ 修正ループの後、merge-readiness-review、supervise の順で最終ゲートを実行する。
 subworkflow:
   callable: true
   visibility: internal

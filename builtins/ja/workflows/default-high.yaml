@@ -1,5 +1,5 @@
 name: default-high
-description: フルスペック開発ワークフロー（計画 → テスト作成 → draft（チームリーダー実装 + AI 自己レビュー） → peer-review（並列レビュー + AP-2nd + 並列最終ゲート） → COMPLETE）
+description: フルスペック開発ワークフロー（計画 → テスト作成 → draft（チームリーダー実装 + AI 自己レビュー） → peer-review（並列レビュー + AP-2nd + 逐次最終ゲート） → COMPLETE）
 workflow_config:
   provider_options:
     codex:

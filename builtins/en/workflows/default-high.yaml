@@ -1,5 +1,5 @@
 name: default-high
-description: Full-spec development workflow (plan -> write tests -> draft (team-leader implement + AI self-review) -> peer-review (parallel review + AP-2nd + parallel final gate) -> COMPLETE).
+description: Full-spec development workflow (plan -> write tests -> draft (team-leader implement + AI self-review) -> peer-review (parallel review + AP-2nd + sequential final gate) -> COMPLETE).
 workflow_config:
   provider_options:
     codex:

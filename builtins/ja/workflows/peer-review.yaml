@@ -1,5 +1,5 @@
 name: peer-review
-description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）⇄ 修正ループの後、merge-readiness-review と supervise の並列最終ゲートを実行する。
+description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）⇄ 修正ループの後、merge-readiness-review、supervise の順で最終ゲートを実行する。
 subworkflow:
   callable: true
   visibility: internal
