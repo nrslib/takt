@@ -230,6 +230,37 @@ describe('finding-conflict-adjudication runner', () => {
     return { runner, step, ledgerStore };
   }
 
+  it('should resolve a stale finding when adjudication evidence contains an explanatory line-range citation', async () => {
+    const { runner, step, ledgerStore } = makeRunner();
+    const evidence = 'src/a.ts:4-6 shows that the disputed implementation is no longer present.';
+    executeAgentMock.mockResolvedValue({
+      persona: 'supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: {
+        conflictId: 'C-0001',
+        outcome: 'finding_stale',
+        findingTransition: 'resolved',
+        evidence: [evidence],
+        actionableFix: '',
+      },
+      timestamp: new Date('2026-06-13T02:00:00.000Z'),
+    });
+
+    const result = await runner.run(step, makeState());
+    const ledger = ledgerStore.loadLedger();
+
+    expect(result.response.matchedRuleIndex).toBe(FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.FINDING_CLOSED);
+    expect(ledger.findings[0]).toMatchObject({
+      status: 'resolved',
+      resolvedEvidence: 'src/a.ts:4-6',
+    });
+    expect(ledger.conflicts[0]).toMatchObject({
+      status: 'resolved',
+      adjudications: [expect.objectContaining({ evidence: [evidence] })],
+    });
+  });
+
   it('hash 不一致時は裁定を破棄する: 適用されず監査記録が残り、conflict は新 evidence に対して未裁定のまま', async () => {
     const { runner, step } = makeRunner();
 
@@ -810,6 +841,37 @@ describe('finding-conflict-adjudication runner', () => {
     failingRead.suffix = join('src', 'a.ts');
 
     await expect(runner.run(step, makeState())).rejects.toThrow(/injected adjudication read failure/);
+
+    failingRead.suffix = '';
+    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+      findings: Array<{ status: string }>;
+      conflicts: Array<{ status: string; adjudications?: unknown[]; adjudicationAttempts?: unknown[] }>;
+    };
+    expect(ledger.findings[0]?.status).toBe('open');
+    expect(ledger.conflicts[0]?.status).toBe('active');
+    expect(ledger.conflicts[0]?.adjudications ?? []).toHaveLength(0);
+    expect(ledger.conflicts[0]?.adjudicationAttempts).toHaveLength(1);
+  });
+
+  it('説明付き resolved citation の EIO は unverifiable として伝播し裁定結果を保存しない', async () => {
+    const { runner, step } = makeRunner();
+    executeAgentMock.mockResolvedValue({
+      persona: 'supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: {
+        conflictId: 'C-0001',
+        outcome: 'finding_stale',
+        findingTransition: 'resolved',
+        evidence: ['src/a.ts:4-6 shows that the disputed implementation is gone.'],
+        actionableFix: '',
+      },
+      timestamp: new Date('2026-06-13T02:00:00.000Z'),
+    });
+    failingRead.suffix = join('src', 'a.ts');
+
+    await expect(runner.run(step, makeState()))
+      .rejects.toThrow(/could not be verified.*injected adjudication read failure/);
 
     failingRead.suffix = '';
     const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {

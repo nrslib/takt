@@ -911,7 +911,7 @@ export const FindingConflictAdjudicationOutputJsonSchema = {
       type: 'array',
       items: { type: 'string', minLength: 1 },
       minItems: 1,
-      description: 'Concrete evidence for your outcome. For findingTransition "resolved", include at least one file:line citation the engine can verify against the current code.',
+      description: 'Concrete evidence for your outcome. For findingTransition "resolved", include at least one clearly delimited file:line or file:start-end citation token (for example, src/a.ts:5 or src/a.ts:5-9). It may be part of an explanatory sentence; the engine extracts and verifies it against the current code.',
     },
     actionableFix: {
       type: 'string',
