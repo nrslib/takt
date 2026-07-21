@@ -79,26 +79,28 @@ Unit tests should verify that the public contract behaves as expected, not only 
 | Only configuration values or the last internal state are checked | REJECT |
 | Main boundary conditions require an external environment to reproduce | Consider a deterministic test with a fake or stub |
 
-## Verification Layers for Natural-Language Assets
+## Verification Layers for Natural-Language and Declarative Assets
 
-Prompt and instruction strings are input data; prose presence and semantic correctness are different claims. `toContain`, snapshots, and full-string equality prove only that a particular string was stored or generated, not that a model will make the intended classification or judgment.
+Prompt and instruction strings, as well as declarative definitions such as workflows, are input data. Treat stored definitions, parser or loader structure contracts, and runtime behavior as separate verification targets.
 
 | Target | Appropriate Method |
 |--------|--------------------|
-| Facet references, schemas, rules, and transition targets | Structural tests through the parser or loader |
-| Values whose exact string is an external compatibility contract | Exact-equality tests |
+| Parser or loader reference resolution, schemas, and rule interpretation | Structural tests with a dedicated minimal fixture |
+| Shipped declarative assets as a set | Smoke tests that load every asset and check schema conformance |
+| State transitions and side effects | Execution-result tests with a representative minimal scenario |
+| Values whose exact string is an externally published contract | Exact-equality tests |
 | Classification or judgment expressed in natural language | Model evaluations with representative examples and counterexamples |
 | Decisions that can be defined deterministically | Unit tests after extracting the decision from prose into code |
 
 ```typescript
-// Bad - treating prose presence as a semantic guarantee
-expect(instruction).toContain('open findings are not decreasing')
+// Bad - copying a shipped definition into expectations and detecting definition diffs only
+expect(shippedWorkflow.steps.map((step) => step.name)).toEqual(['plan', 'review', 'fix'])
 
-// Good - verifying a machine-processed transition structure
-expect(monitor.rules.map((rule) => rule.next)).toEqual(['reviewers', 'ABORT'])
+// Good - verifying the parser contract with a minimal fixture
+expect(parsedFixture.rules[0]?.next).toBe('fix')
 ```
 
-Before adding a test that pins natural-language prose, ask whether its failure represents a user-visible contract violation. If it detects only wording changes, do not add it.
+Copying step names, rules, transition targets, or configuration values from an individual shipped asset into expectations duplicates the same definition instead of establishing an independent contract. Detect shipped-asset corruption by loading every asset and checking schema conformance, then verify transitions and side effects through execution of minimal scenarios.
 
 ## Test Fixture Design
 

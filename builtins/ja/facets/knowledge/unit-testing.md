@@ -79,26 +79,28 @@ test('validates age at boundaries', () => {
 | 設定値や最後の内部状態だけを確認している | REJECT |
 | 外部環境がないと主要な境界条件を再現できない | Fake や Stub による deterministic test を検討 |
 
-## 自然言語資産の検証レイヤー
+## 自然言語・宣言的資産の検証レイヤー
 
-プロンプトや instruction の文字列は入力データであり、文言の存在と意味上の正しさは別である。`toContain`、snapshot、全文一致が証明するのは、その時点の文字列が保存・生成されたことだけであり、モデルが意図した分類や判断をすることではない。
+プロンプトや instruction の文字列、ワークフローなどの宣言的定義は入力データである。定義の保存状態、parser・loader の構造契約、実行時の振る舞いは、それぞれ別の検証対象として扱う。
 
 | 検証対象 | 適切な方法 |
 |----------|------------|
-| facet の参照名、schema、rule、遷移先 | parser・loader を通した構造テスト |
-| 文字列自体が外部互換性契約である値 | 完全一致テスト |
+| parser・loader の参照解決、schema、rule 解釈 | 必要最小限の専用 fixture を使った構造テスト |
+| 配布される宣言的資産群 | 全件 load と schema 適合の smoke test |
+| 状態遷移や副作用 | 代表的な最小シナリオを使った実行結果のテスト |
+| 文字列自体が外部公開契約である値 | 完全一致テスト |
 | 自然言語による分類・判断 | 代表例と反例を含むモデル評価 |
 | 決定的に定義できる判定 | 自然言語からコードへ分離したユニットテスト |
 
 ```typescript
-// NG - 文言の存在を意味上の判定保証として扱う
-expect(instruction).toContain('open findingが減らない')
+// NG - 配布定義を期待値へ複製し、定義差分だけを検出する
+expect(shippedWorkflow.steps.map((step) => step.name)).toEqual(['plan', 'review', 'fix'])
 
-// OK - 機械処理される遷移構造を検証する
-expect(monitor.rules.map((rule) => rule.next)).toEqual(['reviewers', 'ABORT'])
+// OK - 最小 fixture で parser の構造契約を検証する
+expect(parsedFixture.rules[0]?.next).toBe('fix')
 ```
 
-自然言語本文を固定するテストを追加する前に、その失敗が利用者に見える契約違反を表すか確認する。表現変更しか検出しないなら、そのテストは追加しない。
+個別の配布資産に含まれる step 名、rule、遷移先、設定値を期待値へ丸写しすると、実装とは独立した契約ではなく、同じ定義の複製になる。配布資産は全件 load・schema 適合で破損を検出し、遷移や副作用は最小シナリオの実行結果で検証する。
 
 ## テストフィクスチャ設計
 

@@ -13,6 +13,7 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 | Type safety | Code must pass the build (type check) |
 | Reproducibility | Do not depend on time or randomness. Same result every run |
 | Do not freeze non-executable assets | Do not make prose or section structure that does not define runtime behavior a CI failure condition |
+| Do not duplicate shipped definitions | Do not copy concrete definitions from bundled declarative assets into test expectations |
 | Verify negative contracts at observable units | Do not pass prohibition, rejection, non-inheritance, or unsupported cases by exact-string absence alone |
 | Mock contract fidelity | Keep external SDK/API mocks aligned with real contracts and do not freeze wrong assumptions in tests |
 
@@ -41,8 +42,7 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 
 ## Non-Executable Asset Tests
 
-Tests that freeze prose, headings, or structure in non-executable assets such as explanations, guides, README files, or Markdown documentation are prohibited by default.
-These assets change often during wording improvements and reorganization, so making prose diffs fail CI creates high maintenance cost.
+Tests that freeze prose, headings, or structure in non-executable assets such as explanations, guides, README files, or Markdown documentation are prohibited by default. These assets change often during wording improvements and reorganization, so making prose diffs fail CI creates high maintenance cost.
 
 | Criteria | Verdict |
 |----------|---------|
@@ -54,22 +54,21 @@ These assets change often during wording improvements and reorganization, so mak
 | Contract tests for schemas, configuration, code, generators, or runtime behavior | OK |
 | Not adding tests for docs-only changes that have no executable contract | OK |
 
-Verify non-executable asset changes with review, Markdown lint, link checks, or sample command execution when needed.
+## Natural-Language and Declarative Asset Tests
 
-## Natural-Language and Prompt Contract Tests
-
-Prompts, instructions, and natural-language conditions are runtime inputs, but exact prose presence or full-string equality does not verify the intended judgment or behavior. Do not treat string-pinning tests as regression tests for semantic contracts.
+Prompts, instructions, natural-language conditions, and declarative definitions such as workflows are runtime inputs. Do not treat pinned natural-language strings or duplicated shipped definitions as behavioral regression tests; choose the appropriate verification layer for each target.
 
 | Criteria | Verdict |
 |----------|---------|
 | Claiming that a prompt performs the intended classification or judgment based only on `toContain` or full-string equality | REJECT |
 | Pinning a condition description by exact equality so wording-only changes fail | REJECT |
-| Verifying machine-processed structure such as schemas, reference resolution, rule counts, and transition targets | OK |
+| Verifying parser or loader structure contracts with a dedicated minimal fixture | OK |
+| Loading every shipped declarative asset and checking schema conformance in a smoke test | OK |
+| Copying step names, rules, transition targets, or configuration values from an individual shipped asset into expectations that detect definition diffs only | REJECT |
+| Verifying state transitions or side effects through execution of a representative minimal scenario | OK |
 | Extracting semantic decisions into deterministic code and testing inputs and results at boundaries | OK |
 | Evaluating model judgment with scenarios while keeping it separate from deterministic tests | OK |
-| Using exact equality when the string itself is a compatibility contract, such as CLI output, protocol values, or error codes | OK |
-
-When natural-language semantics must be verified, use scenario evaluations with representative examples and counterexamples, or test deterministic decision logic. Do not inflate test counts or coverage with low-value string-pinning tests.
+| Using exact equality when the string itself is an externally published contract, such as CLI output, protocol values, or error codes | OK |
 
 ## Tests for Replaced Old Specifications
 
