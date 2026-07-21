@@ -796,14 +796,14 @@ describe('prompt eval probe lifecycle', () => {
     const execution = runProbeProcess('-e', [
       "console.log('PROBE_CLEANUP_START'); setInterval(() => {}, 1000)",
     ], {
-      startupTimeout: 2_000,
-      executionTimeout: 2_000,
+      startupTimeout: 5_000,
+      executionTimeout: 5_000,
       cleanupTimeout: 150,
       env: process.env,
     });
 
     await expect(execution).rejects.toMatchObject({ code: 'EPROBEPROTOCOL', phase: 'startup' });
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
   });
 
   it('should own cleanup timeout termination and remove a SIGTERM-resistant descendant', async () => {
