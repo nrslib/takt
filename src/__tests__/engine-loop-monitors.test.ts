@@ -1578,7 +1578,7 @@ describe('Judge failure falls back to the natural transition', () => {
 });
 
 // =====================================================
-// for-local-llm 系譜の再計画 judge（family 形状の実行時検証）
+// bounded replan 系譜の judge（family 形状の実行時検証）
 // =====================================================
 describe('Replan-family judge transitions (runtime)', () => {
   let tmpDir: string;
