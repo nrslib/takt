@@ -13,6 +13,8 @@ describe('prepareRuntimeEnvironment', () => {
   const userId = process.getuid?.();
   const envKeys = [
     'TMPDIR',
+    'TEMP',
+    'TMP',
     'XDG_CACHE_HOME',
     'XDG_CONFIG_HOME',
     'XDG_STATE_HOME',
@@ -222,7 +224,7 @@ describe('prepareRuntimeEnvironment', () => {
 
       expect(existsSync(expectedSecondRuntimeTmpDir)).toBe(false);
       expect(existsSync(temporaryDir)).toBe(false);
-      expect(runtimeTmpDirs).toHaveLength(0);
+      expect(runtimeTmpDirs.size).toBe(0);
       expect(process.env.TMPDIR).toBe(originalEnv.TMPDIR);
     } finally {
       removeDirectory(expectedFirstRuntimeTmpDir);
@@ -376,6 +378,8 @@ describe('prepareRuntimeEnvironment', () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
     process.env['TMPDIR'] = windowsTmpDir;
+    process.env['TEMP'] = windowsTmpDir;
+    process.env['TMP'] = windowsTmpDir;
 
     try {
       const result = prepareRuntimeEnvironmentForTest(cwd, { prepare: ['gradle'] });
