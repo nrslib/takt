@@ -18,7 +18,7 @@ loop_monitors:
       instruction: loop-monitor-reviewers-fix
       rules:
         - condition: converging (findings decreasing, fixes applied)
-          next: fix_both
+          next: reviewers
         - condition: unproductive (same findings repeating)
           next: supervise_fix
 steps:

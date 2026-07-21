@@ -12,6 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import type { WorkflowConfig, WorkflowStep, LoopMonitorConfig } from '../core/models/index.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
@@ -40,6 +41,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
+import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import {
   makeResponse,
   makeStep,
@@ -1721,4 +1723,108 @@ describe('Replan-family judge transitions (runtime)', () => {
     // judge の後に新しいステップは始まらない
     expect(steps[steps.length - 1]).toBe('fix');
   });
+});
+
+// =====================================================
+// builtin mini workflow の post-fix judge 遷移
+// =====================================================
+describe('Builtin mini workflow post-fix judge transitions', () => {
+  const workflowCases = ['ja', 'en'].flatMap((language) => [
+    'backend-mini',
+    'backend-cqrs-mini',
+    'frontend-mini',
+    'dual-mini',
+    'dual-cqrs-mini',
+  ].map((workflowName) => ({ language, workflowName })));
+
+  let tmpDir: string;
+  let engine: WorkflowEngine | null = null;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    applyDefaultMocks();
+    tmpDir = createTestTmpDir();
+  });
+
+  afterEach(() => {
+    if (engine) {
+      cleanupWorkflowEngine(engine);
+      engine = null;
+    }
+    if (existsSync(tmpDir)) {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(workflowCases)(
+    'should execute reviewers after a healthy judge in $language/$workflowName',
+    async ({ language, workflowName }) => {
+      const workflowPath = join(
+        process.cwd(),
+        'builtins',
+        language,
+        'workflows',
+        `${workflowName}.yaml`,
+      );
+      const builtin = loadWorkflowFromFile(workflowPath, tmpDir);
+      const monitor = builtin.loopMonitors?.find(({ cycle }) =>
+        cycle.length === 2 && cycle[0] === 'reviewers' && cycle[1] === 'fix_both',
+      );
+      expect(monitor).toBeDefined();
+
+      const config: WorkflowConfig = {
+        name: `test-${language}-${workflowName}-post-fix-routing`,
+        maxSteps: 20,
+        initialStep: 'reviewers',
+        loopMonitors: [monitor!],
+        steps: [
+          makeStep('reviewers', {
+            rules: [
+              makeRule('Issues found', 'fix_both'),
+              makeRule('All approved', 'COMPLETE'),
+            ],
+          }),
+          makeStep('fix_both', {
+            rules: [makeRule('Fixes complete', 'reviewers')],
+          }),
+          makeStep('supervise_fix', {
+            rules: [makeRule('Supervision complete', 'reviewers')],
+          }),
+        ],
+      };
+      engine = new WorkflowEngine(config, tmpDir, 'task', { projectCwd: tmpDir });
+
+      const cycleResponses = [
+        makeResponse({ persona: 'reviewers', content: 'Issues found' }),
+        makeResponse({ persona: 'fix_both', content: 'Fixes complete' }),
+      ];
+      mockRunAgentSequence([
+        ...cycleResponses,
+        ...cycleResponses,
+        ...cycleResponses,
+        makeResponse({ persona: 'supervisor', content: 'Healthy post-fix progress' }),
+        makeResponse({ persona: 'reviewers', content: 'All approved' }),
+      ]);
+      const cycleMatches: { index: number; method: 'phase1_tag' }[] = [
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+      ];
+      mockDetectMatchedRuleSequence([
+        ...cycleMatches,
+        ...cycleMatches,
+        ...cycleMatches,
+        { index: 0, method: 'ai_judge_fallback' },
+        { index: 1, method: 'phase1_tag' },
+      ]);
+      const startedSteps: string[] = [];
+      engine.on('step:start', (step: WorkflowStep) => startedSteps.push(step.name));
+
+      const state = await engine.run();
+
+      const judgeIndex = startedSteps.findIndex((name) => name.startsWith('_loop_judge'));
+      expect(state.status).toBe('completed');
+      expect(judgeIndex).toBeGreaterThanOrEqual(0);
+      expect(startedSteps[judgeIndex + 1]).toBe('reviewers');
+    },
+  );
 });

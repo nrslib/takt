@@ -5,7 +5,8 @@
  *
  * Usage: node eval/scripts/run-evals.mjs [suite...] [--promptfoo-flags...]
  * Suites: coding, arch, antipattern, frontend, cqrs, rescan, rescan-coding,
- *         rescan-semantics, rescan-precision, frontend-coder, cqrs-coder
+ *         rescan-semantics, rescan-precision, loop-monitor-fc, frontend-coder,
+ *         cqrs-coder
  *         (default: all except rescan suites,
  *         which need opencode auth)
  * Example: npm run eval:prompts -- arch --repeat 3
@@ -24,6 +25,7 @@ const SUITES = {
   'rescan-coding': 'promptfooconfig.rescan-coding.yaml',
   'rescan-semantics': 'promptfooconfig.rescan-semantics.yaml',
   'rescan-precision': 'promptfooconfig.rescan-precision.yaml',
+  'loop-monitor-fc': 'promptfooconfig.loop-monitor-fc.yaml',
   'frontend-coder': 'promptfooconfig.frontend-coder.yaml',
   'cqrs-coder': 'promptfooconfig.cqrs-coder.yaml',
 };

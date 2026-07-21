@@ -32,8 +32,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const TASK_MARKER = '@@PROMPTFOO_TASK@@';
 const PREV_MARKER = '@@PROMPTFOO_PREVIOUS_RESPONSE@@';
+const SCENARIO_MARKER = '@@PROMPTFOO_SCENARIO@@';
 
-// id doubles as the prompt filename (eval/prompts/<id>.phase1.md).
+// id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
   { id: 'coding-review', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/sample-project' },
@@ -48,6 +49,7 @@ const TARGETS = [
   { id: 'rescan-semantics', workflow: 'peer-review-for-local-llm', step: 'implementation-semantics-review', fixture: 'eval/fixtures/inventory-es' },
   // 精度（偽陽性）測定: hasOwn 防御済み Record を指摘しないこと
   { id: 'rescan-precision', workflow: 'peer-review-for-local-llm', step: 'implementation-semantics-review', fixture: 'eval/fixtures/inventory-es-guarded' },
+  { id: 'loop-monitor-reviewers-fix-fc', workflow: 'takt-default-high', monitorCycle: ['reviewers', 'fix'], fixture: 'eval/fixtures/sample-project' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
 ];
@@ -61,6 +63,9 @@ const { loadWorkflowByIdentifier, resolveWorkflowConfigValue, loadPersonaPromptF
 const { InstructionBuilder } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/workflow/instruction/InstructionBuilder.js')).href
 );
+const { StatusJudgmentBuilder } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/workflow/instruction/StatusJudgmentBuilder.js')).href
+);
 
 const requested = process.argv.slice(2);
 for (const id of requested) {
@@ -73,7 +78,7 @@ const targets = requested.length > 0 ? TARGETS.filter((t) => requested.includes(
 const language = resolveWorkflowConfigValue(repoRoot, 'language');
 const preparedDirs = new Set();
 
-for (const { id, workflow: workflowName, step: stepName, fixture, mutable } of targets) {
+for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, mutable } of targets) {
   const fixtureDir = resolve(repoRoot, fixture);
 
   // Mutable (coder) targets work on a disposable copy.
@@ -92,17 +97,37 @@ for (const { id, workflow: workflowName, step: stepName, fixture, mutable } of t
 
   let target = null;
   let stepIndex = -1;
-  for (const [i, step] of config.steps.entries()) {
-    if (step.name === stepName) {
-      target = step;
-      stepIndex = i;
-      break;
+  if (monitorCycle) {
+    const monitor = config.loopMonitors?.find(({ cycle }) =>
+      cycle.length === monitorCycle.length
+      && cycle.every((name, index) => name === monitorCycle[index]),
+    );
+    if (!monitor?.judge.instruction) {
+      throw new Error(`Loop monitor [${monitorCycle.join(', ')}] not found in ${workflowName}`);
     }
-    const substep = (step.parallel ?? []).find((s) => s.name === stepName);
-    if (substep) {
-      target = substep;
-      stepIndex = i;
-      break;
+    target = {
+      name: `_loop_judge_${monitor.cycle.join('_')}`,
+      persona: monitor.judge.persona,
+      personaPath: monitor.judge.personaPath,
+      edit: false,
+      instruction: monitor.judge.instruction.replaceAll('{cycle_count}', String(monitor.threshold)),
+      rules: monitor.judge.rules,
+      passPreviousResponse: true,
+    };
+    stepIndex = config.steps.findIndex(({ name }) => name === monitor.cycle.at(-1));
+  } else {
+    for (const [i, step] of config.steps.entries()) {
+      if (step.name === stepName) {
+        target = step;
+        stepIndex = i;
+        break;
+      }
+      const substep = (step.parallel ?? []).find((s) => s.name === stepName);
+      if (substep) {
+        target = substep;
+        stepIndex = i;
+        break;
+      }
     }
   }
   if (!target) {
@@ -154,7 +179,13 @@ for (const { id, workflow: workflowName, step: stepName, fixture, mutable } of t
     language,
   };
 
-  const instruction = new InstructionBuilder(target, context).build();
+  const instruction = monitorCycle
+    ? new StatusJudgmentBuilder(target, {
+        language,
+        inputSource: 'response',
+        lastResponse: `${target.instruction}\n\n## Scenario evidence\n${SCENARIO_MARKER}`,
+      }).build()
+    : new InstructionBuilder(target, context).build();
 
   // The codex provider concatenates system prompt (persona) and instruction.
   const persona = target.personaPath
@@ -162,14 +193,17 @@ for (const { id, workflow: workflowName, step: stepName, fixture, mutable } of t
     : '';
   const assembled = (persona ? `${persona}\n\n${instruction}` : instruction)
     .replaceAll(TASK_MARKER, '{{task}}')
-    .replaceAll(PREV_MARKER, '{{previous_response}}');
+    .replaceAll(PREV_MARKER, '{{previous_response}}')
+    .replaceAll(SCENARIO_MARKER, '{{scenario}}');
 
   const outDir = join(repoRoot, 'eval', 'prompts');
   mkdirSync(outDir, { recursive: true });
-  const outPath = join(outDir, `${id}.phase1.md`);
+  const phase = monitorCycle ? 'phase3' : 'phase1';
+  const outPath = join(outDir, `${id}.${phase}.md`);
   writeFileSync(outPath, assembled);
 
-  console.log(`[${id}] ${workflowName}/${stepName}${mutable ? ' (mutable copy)' : ''}`);
+  const targetName = monitorCycle ? `[${monitorCycle.join(' -> ')}] monitor` : stepName;
+  console.log(`[${id}] ${workflowName}/${targetName}${mutable ? ' (mutable copy)' : ''}`);
   console.log(`  Prompt:             ${outPath} (${assembled.length} chars, language: ${language})`);
   console.log(`  Run dir:            ${runDir}`);
   console.log(`  Policy snapshot:    ${policySourcePath ?? '(none)'}`);
