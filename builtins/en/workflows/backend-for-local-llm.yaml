@@ -142,6 +142,7 @@ steps:
     edit: false
     persona: planner
     knowledge:
+      - backend
       - architecture
     provider_options:
       extends: review-readonly

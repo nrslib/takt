@@ -143,6 +143,8 @@ steps:
     edit: false
     persona: planner
     knowledge:
+      - backend
+      - cqrs-es
       - architecture
     provider_options:
       extends: review-readonly

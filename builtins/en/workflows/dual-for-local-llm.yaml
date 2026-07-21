@@ -144,6 +144,9 @@ steps:
     edit: false
     persona: planner
     knowledge:
+      - frontend
+      - react
+      - backend
       - architecture
     provider_options:
       extends: review-readonly
