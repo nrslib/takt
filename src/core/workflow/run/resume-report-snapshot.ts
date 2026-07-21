@@ -74,8 +74,8 @@ export interface InheritResumeReportSnapshotOptions {
 }
 
 export class ResumeReportSnapshotSourceError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = 'ResumeReportSnapshotSourceError';
   }
 }
@@ -229,6 +229,7 @@ function inspectSnapshotSource<T>(operation: () => T): T {
     }
     throw new ResumeReportSnapshotSourceError(
       `Resume report snapshot: source unavailable: ${getErrorMessage(error)}`,
+      { cause: error },
     );
   }
 }

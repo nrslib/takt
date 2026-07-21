@@ -426,6 +426,8 @@ describe('inheritResumeReportSnapshot', () => {
     }));
     expect(error).toBeInstanceOf(ResumeReportSnapshotSourceError);
     expect(error.message).toMatch(/permission denied/);
+    expect(error.cause).toBeInstanceOf(Error);
+    expect((error.cause as Error).message).toMatch(/permission denied/);
 
     expect(existsSync(buildRunPaths(cwd, 'target-run').reportsAbs)).toBe(false);
   });

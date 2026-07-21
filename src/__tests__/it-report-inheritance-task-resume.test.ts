@@ -302,7 +302,7 @@ describe('IT: missing report source fallback through task resume', () => {
     }
   });
 
-  it('continues the requeued fix and records unavailable diagnostics when the source run was deleted', async () => {
+  it('should continue the requeued fix and record unavailable diagnostics when the source run was deleted', async () => {
     environment = createEnvironment(false);
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
