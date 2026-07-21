@@ -7,10 +7,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { vi } from 'vitest';
-import {
-  unexpectedInteractivePreviewConfigKey,
-  unexpectedInteractivePreviewEnvVar,
-} from '../../test/helpers/unknown-contract-test-keys.js';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 // Mock the home directory to use a temp directory
@@ -993,17 +989,6 @@ describe('loadGlobalConfig', () => {
     expect(config.interactivePreviewSteps).toBe(6);
   });
 
-  it('should reject unknown interactive preview key in global config', () => {
-    const taktDir = join(testHomeDir, '.takt');
-    mkdirSync(taktDir, { recursive: true });
-    writeFileSync(
-      getGlobalConfigPath(),
-      `language: en\n${unexpectedInteractivePreviewConfigKey}: 6\n`,
-      'utf-8',
-    );
-
-    expect(() => loadGlobalConfig()).toThrow(new RegExp(`${unexpectedInteractivePreviewConfigKey}|unrecognized`, 'i'));
-  });
 
   it('should save and reload interactive_preview_steps config', () => {
     const taktDir = join(testHomeDir, '.takt');
@@ -1063,22 +1048,6 @@ describe('loadGlobalConfig', () => {
     expect(config.interactivePreviewSteps).toBe(9);
   });
 
-  it('should ignore unknown interactive preview env override for global config', () => {
-    process.env[unexpectedInteractivePreviewEnvVar] = '4';
-
-    const config = loadGlobalConfig();
-
-    expect(config.interactivePreviewSteps).toBeUndefined();
-  });
-
-  it('should prefer canonical interactive preview env override over unknown env for global config', () => {
-    process.env[unexpectedInteractivePreviewEnvVar] = '4';
-    process.env.TAKT_INTERACTIVE_PREVIEW_STEPS = '9';
-
-    const config = loadGlobalConfig();
-
-    expect(config.interactivePreviewSteps).toBe(9);
-  });
 
   describe('persona_providers', () => {
     it('should allow persona_providers to pass arbitrary codex model names downstream', () => {

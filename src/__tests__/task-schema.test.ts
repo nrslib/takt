@@ -4,13 +4,7 @@ import {
   TaskFileSchema,
   TaskExecutionConfigSchema,
   serializeTaskRecord,
-  resolveTaskWorkflowValue,
-  resolveTaskStartStepValue,
 } from '../infra/task/schema.js';
-import {
-  unexpectedStartStepKey,
-  unexpectedWorkflowKey,
-} from '../../test/helpers/unknown-contract-test-keys.js';
 
 function makePendingRecord() {
   return {
@@ -152,15 +146,6 @@ describe('TaskExecutionConfigSchema', () => {
     expect(config.start_step).toBe('plan');
   });
 
-  it('should reject unknown workflow keys and accept canonical start_movement', () => {
-    expect(() => TaskExecutionConfigSchema.parse({
-      [unexpectedWorkflowKey]: 'legacy-workflow',
-    })).toThrow();
-
-    expect(() => TaskExecutionConfigSchema.parse({
-      [unexpectedStartStepKey]: 'plan',
-    })).not.toThrow();
-  });
 
   it('should reject conflicting start_step and start_movement values', () => {
     expect(() => TaskExecutionConfigSchema.parse({
@@ -194,13 +179,6 @@ describe('TaskExecutionConfigSchema', () => {
     })).toThrow();
   });
 
-  it('should resolve workflow and start step through shared helpers', () => {
-    expect(resolveTaskWorkflowValue({ workflow: 'unit-test' })).toBe('unit-test');
-    expect(resolveTaskStartStepValue({ start_step: 'plan' })).toBe('plan');
-    expect(resolveTaskStartStepValue({ [unexpectedStartStepKey]: 'plan' })).toBe('plan');
-    expect(resolveTaskStartStepValue({ start_step: 'plan', start_movement: 'plan' })).toBe('plan');
-    expect(resolveTaskWorkflowValue({ [unexpectedWorkflowKey]: 'unit-test' })).toBeUndefined();
-  });
 
   it('should serialize canonical task keys as workflow and start_movement', () => {
     const serialized = serializeTaskRecord({

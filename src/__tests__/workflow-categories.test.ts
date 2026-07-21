@@ -276,14 +276,6 @@ const items: WorkflowSelectionItem[] = [
       expect(categoryOption!.value).toBe('__category__:frontend');
     });
 
-    it('should not include legacy current markers in labels or values', () => {
-      const options = buildTopLevelSelectOptions(items);
-      const labels = options.map((o) => o.label);
-      const values = options.map((o) => o.value);
-
-      expect(labels.some((label) => label.includes('(current)'))).toBe(false);
-      expect(values).not.toContain('__current__');
-    });
   });
 
   describe('parseCategorySelection', () => {

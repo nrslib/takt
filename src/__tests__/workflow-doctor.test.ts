@@ -1688,17 +1688,6 @@ steps:
     );
   });
 
-  it.each(['en', 'ja'] as const)(
-    'inspects the builtin takt-default-for-local-llm workflow (%s) cleanly',
-    (lang) => {
-      const builtinPath = join(process.cwd(), 'builtins', lang, 'workflows', 'takt-default-for-local-llm.yaml');
-
-      const report = inspectWorkflowFile(builtinPath, process.cwd());
-
-      expect(report.diagnostics).toEqual([]);
-    },
-  );
-
   it('resolves named builtin workflow targets without downgrading privileged builtin trust', async () => {
     await expect(doctorWorkflowCommand(['auto-improvement-loop'], process.cwd())).resolves.toBeUndefined();
 

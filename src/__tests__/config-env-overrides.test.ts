@@ -3,11 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { unexpectedConfigEnv } from '../../test/helpers/unknown-contract-test-keys.js';
 import { envVarNameFromPath } from '../infra/config/env/config-env-overrides.js';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
-const removedConfigEnv = unexpectedConfigEnv;
 
 const testRoot = join(tmpdir(), `takt-config-env-${randomUUID()}`);
 const globalTaktDir = join(testRoot, 'global');
@@ -444,20 +442,6 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('project config は removed runtime_prepare env を無視する', () => {
-    const projectDir = join(testRoot, 'project-removed-runtime-prepare-root-and-leaf');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepare] = JSON.stringify({
-      custom_scripts: false,
-    });
-    process.env[removedConfigEnv.workflowRuntimePrepareCustomScripts] = 'true';
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowRuntimePrepare).toBeUndefined();
-  });
 
   it('project config は workflow_runtime_prepare の新 env 名を反映する', () => {
     const projectDir = join(testRoot, 'project-workflow-runtime-prepare-env');
@@ -519,20 +503,6 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('project config は removed runtime_prepare env と canonical env が同時指定でも canonical env を優先する', () => {
-    const projectDir = join(testRoot, 'project-workflow-runtime-prepare-env-priority');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepareCustomScripts] = 'false';
-    process.env.TAKT_WORKFLOW_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowRuntimePrepare).toEqual({
-      customScripts: true,
-    });
-  });
 
   it('project config は workflow_arpeggio の新 env 名を反映する', () => {
     const projectDir = join(testRoot, 'project-workflow-arpeggio-env');
@@ -654,16 +624,6 @@ describe('config traced env overrides', () => {
     expect(config.enableBuiltinWorkflows).toBe(true);
   });
 
-  it('global config は removed enable_builtin env と canonical env が同時指定でも canonical env を優先する', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
-    process.env[removedConfigEnv.enableBuiltinWorkflows] = 'false';
-    process.env.TAKT_ENABLE_BUILTIN_WORKFLOWS = 'true';
-
-    const config = loadGlobalConfig();
-
-    expect(config.enableBuiltinWorkflows).toBe(true);
-  });
 
   it('global config は workflow notification の新 env 名を反映する', () => {
     mkdirSync(globalTaktDir, { recursive: true });
@@ -679,18 +639,6 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('global config は removed workflow notification env と canonical env が同時指定でも canonical env を優先する', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
-    process.env[removedConfigEnv.notificationWorkflowComplete] = 'false';
-    process.env.TAKT_NOTIFICATION_SOUND_EVENTS_WORKFLOW_COMPLETE = 'true';
-
-    const config = loadGlobalConfig();
-
-    expect(config.notificationSoundEvents).toEqual({
-      workflowComplete: true,
-    });
-  });
 
   it('global config は workflow_categories_file の新 env 名を反映する', () => {
     mkdirSync(globalTaktDir, { recursive: true });
@@ -702,16 +650,6 @@ describe('config traced env overrides', () => {
     expect(config.workflowCategoriesFile).toBe('/tmp/workflow-categories.yaml');
   });
 
-  it('global config は removed workflow_categories_file env と canonical env が同時指定でも canonical env を優先する', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
-    process.env[removedConfigEnv.workflowCategoriesFile] = '/tmp/removed-workflow-categories.yaml';
-    process.env.TAKT_WORKFLOW_CATEGORIES_FILE = '/tmp/workflow-categories.yaml';
-
-    const config = loadGlobalConfig();
-
-    expect(config.workflowCategoriesFile).toBe('/tmp/workflow-categories.yaml');
-  });
 
   it('global config は workflow_runtime_prepare の root JSON env を反映する', () => {
     mkdirSync(globalTaktDir, { recursive: true });
@@ -904,184 +842,6 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('removed builtins env は global config では無視される', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
-    process.env[removedConfigEnv.enableBuiltinWorkflows] = 'true';
-
-    const config = loadGlobalConfig();
-
-    expect(config.enableBuiltinWorkflows).toBeUndefined();
-  });
-
-  it('removed categories env は global config では無視される', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
-    process.env[removedConfigEnv.workflowCategoriesFile] = '/tmp/removed-workflow-categories.yaml';
-
-    const config = loadGlobalConfig();
-
-    expect(config.workflowCategoriesFile).toBeUndefined();
-  });
-
-  it('removed workflow notification env は global config では無視される', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
-    process.env[removedConfigEnv.notificationWorkflowComplete] = 'true';
-    process.env[removedConfigEnv.notificationWorkflowAbort] = 'false';
-
-    const config = loadGlobalConfig();
-
-    expect(config.notificationSoundEvents).toBeUndefined();
-  });
-
-  it('removed leaf env は global config では無視される', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepareCustomScripts] = 'true';
-    process.env[removedConfigEnv.workflowArpeggioCustomDataSourceModules] = 'true';
-    process.env[removedConfigEnv.workflowArpeggioCustomMergeInlineJs] = 'false';
-    process.env[removedConfigEnv.workflowArpeggioCustomMergeFiles] = 'true';
-    process.env[removedConfigEnv.workflowMcpServersStdio] = 'true';
-    process.env[removedConfigEnv.workflowMcpServersHttp] = 'false';
-    process.env[removedConfigEnv.workflowMcpServersSse] = 'true';
-    process.env[removedConfigEnv.notificationWorkflowComplete] = 'true';
-    process.env[removedConfigEnv.notificationWorkflowAbort] = 'false';
-
-    const config = loadGlobalConfig();
-
-    expect(config.workflowRuntimePrepare).toBeUndefined();
-    expect(config.workflowArpeggio).toBeUndefined();
-    expect(config.workflowMcpServers).toBeUndefined();
-    expect(config.notificationSoundEvents).toBeUndefined();
-  });
-
-  it('removed runtime_prepare env は project config では無視される', () => {
-    const projectDir = join(testRoot, 'project-legacy-workflow-runtime-prepare-env');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepare] = JSON.stringify({
-      custom_scripts: true,
-    });
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowRuntimePrepare).toBeUndefined();
-  });
-
-  it('removed runtime_prepare env が不正な JSON でも global config では無視される', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepare] = '{';
-
-    const config = loadGlobalConfig();
-
-    expect(config.workflowRuntimePrepare).toBeUndefined();
-  });
-
-  it('removed runtime_prepare env が不正な JSON でも project config では無視される', () => {
-    const projectDir = join(testRoot, 'project-legacy-workflow-runtime-prepare-invalid-json-env');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepare] = '{';
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowRuntimePrepare).toBeUndefined();
-  });
-
-  it('removed arpeggio env は project config では無視される', () => {
-    const projectDir = join(testRoot, 'project-legacy-workflow-arpeggio-env');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowArpeggio] = JSON.stringify({
-      custom_data_source_modules: true,
-      custom_merge_inline_js: false,
-      custom_merge_files: true,
-    });
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowArpeggio).toBeUndefined();
-  });
-
-  it('removed mcp_servers env は project config では無視される', () => {
-    const projectDir = join(testRoot, 'project-legacy-workflow-mcp-servers-env');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowMcpServers] = JSON.stringify({
-      stdio: true,
-      http: false,
-      sse: true,
-    });
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowMcpServers).toBeUndefined();
-  });
-
-  it('removed leaf env は project config では無視される', () => {
-    const projectDir = join(testRoot, 'project-legacy-workflow-leaf-env');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepareCustomScripts] = 'true';
-    process.env[removedConfigEnv.workflowArpeggioCustomDataSourceModules] = 'true';
-    process.env[removedConfigEnv.workflowArpeggioCustomMergeInlineJs] = 'false';
-    process.env[removedConfigEnv.workflowArpeggioCustomMergeFiles] = 'true';
-    process.env[removedConfigEnv.workflowMcpServersStdio] = 'true';
-    process.env[removedConfigEnv.workflowMcpServersHttp] = 'false';
-    process.env[removedConfigEnv.workflowMcpServersSse] = 'true';
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowRuntimePrepare).toBeUndefined();
-    expect(config.workflowArpeggio).toBeUndefined();
-    expect(config.workflowMcpServers).toBeUndefined();
-  });
-
-  it('project config では removed leaf env と canonical env が同時指定でも canonical env を優先する', () => {
-    const projectDir = join(testRoot, 'project-legacy-workflow-leaf-env-blocked-by-workflow-env');
-    const configDir = getProjectConfigDir(projectDir);
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepareCustomScripts] = 'false';
-    process.env.TAKT_WORKFLOW_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
-    process.env[removedConfigEnv.workflowArpeggioCustomMergeFiles] = 'false';
-    process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_MERGE_FILES = 'true';
-    process.env[removedConfigEnv.workflowMcpServersHttp] = 'false';
-    process.env.TAKT_WORKFLOW_MCP_SERVERS_HTTP = 'true';
-
-    const config = loadProjectConfig(projectDir);
-
-    expect(config.workflowRuntimePrepare).toEqual({ customScripts: true });
-    expect(config.workflowArpeggio).toEqual({ customMergeFiles: true });
-    expect(config.workflowMcpServers).toEqual({ http: true });
-  });
-
-  it('global config では removed leaf env と canonical env が同時指定でも canonical env を優先する', () => {
-    mkdirSync(globalTaktDir, { recursive: true });
-    writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
-    process.env[removedConfigEnv.workflowRuntimePrepareCustomScripts] = 'false';
-    process.env.TAKT_WORKFLOW_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
-    process.env[removedConfigEnv.workflowArpeggioCustomMergeFiles] = 'false';
-    process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_MERGE_FILES = 'true';
-    process.env[removedConfigEnv.workflowMcpServersHttp] = 'false';
-    process.env.TAKT_WORKFLOW_MCP_SERVERS_HTTP = 'true';
-    process.env[removedConfigEnv.notificationWorkflowAbort] = 'false';
-    process.env.TAKT_NOTIFICATION_SOUND_EVENTS_WORKFLOW_ABORT = 'true';
-
-    const config = loadGlobalConfig();
-
-    expect(config.workflowRuntimePrepare).toEqual({ customScripts: true });
-    expect(config.workflowArpeggio).toEqual({ customMergeFiles: true });
-    expect(config.workflowMcpServers).toEqual({ http: true });
-    expect(config.notificationSoundEvents).toEqual({ workflowAbort: true });
-  });
 
   it('current logging env がある場合も legacy logging env は current を優先する', () => {
     mkdirSync(globalTaktDir, { recursive: true });

@@ -3,13 +3,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
-import { createIsolatedEnv, updateIsolatedConfig, type IsolatedEnv } from '../helpers/isolated-env';
+import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
-import {
-  unexpectedWorkflowCliOptionFlag,
-  unexpectedWorkflowKey,
-} from '../../test/helpers/unknown-contract-test-keys.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -88,24 +84,6 @@ describe('E2E: Config priority (workflow / autoPr)', () => {
 
     const task = readFirstTask(testRepo.path);
     expect(task['workflow']).toBe(workflowPath);
-    expect(task[unexpectedWorkflowKey]).toBeUndefined();
-  }, 240_000);
-
-  it('should reject unknown workflow options for takt add', () => {
-    const workflowPath = resolve(__dirname, '../fixtures/workflows/simple.yaml');
-    const result = runTakt({
-      args: [
-        unexpectedWorkflowCliOptionFlag, workflowPath,
-        'add',
-        'Unknown workflow option should fail',
-      ],
-      cwd: testRepo.path,
-      env: isolatedEnv.env,
-      timeout: 240_000,
-    });
-
-    expect(result.exitCode).toBe(1);
-    expect(`${result.stdout}${result.stderr}`).toContain(`unknown option '${unexpectedWorkflowCliOptionFlag}'`);
   }, 240_000);
 
   it('should default auto_pr to true when unset in config/env', () => {

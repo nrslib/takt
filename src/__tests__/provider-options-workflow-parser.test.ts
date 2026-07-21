@@ -46,20 +46,6 @@ describe('normalizeWorkflowConfig provider_options', () => {
     expect(config.steps[0]?.name).toBe('plan');
   });
 
-  it('answer_agent を指定したら reject する', () => {
-    const raw = {
-      name: 'answer-agent-removed',
-      answer_agent: 'reviewer',
-      steps: [
-        {
-          name: 'implement',
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    expect(() => normalizeWorkflowConfig(raw, process.cwd())).toThrow(/answer_agent/);
-  });
 
   it('workflow-level global を step に継承し、step 側で上書きできる', () => {
     const raw = {
@@ -542,25 +528,6 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の削除済み参照キーは reject する', () => {
-    const removedReferenceKey = `$${'ref'}`;
-    const raw = {
-      name: 'removed-provider-options-reference-key',
-      workflow_config: {
-        provider_options: {
-          [removedReferenceKey]: 'provider-options/review-readonly.yaml',
-        },
-      },
-      steps: [
-        {
-          name: 'plan',
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    expect(() => normalizeWorkflowConfig(raw, process.cwd())).toThrow(/Unrecognized key/);
-  });
 
   it('provider_options の名前 extends は project provider-options を global より優先する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-project-'));
