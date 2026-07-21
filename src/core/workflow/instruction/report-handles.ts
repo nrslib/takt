@@ -55,7 +55,7 @@ export function resolveCurrentReviewReportPathsWithDiagnostics(
   };
   const paths = reportNames.flatMap((reportName) => {
     const matchingPaths = scan.entries
-      .filter((path) => !excludedPaths.has(path) && statFor(path).isFile() && reportPathMatches(path, reportDir, reportName))
+      .filter((path) => !excludedPaths.has(path) && reportPathMatches(path, reportDir, reportName) && statFor(path).isFile())
       .sort((left, right) => statFor(right).mtimeMs - statFor(left).mtimeMs || left.localeCompare(right));
     const path = matchingPaths[0];
     return path ? [{ reportName, path }] : [];
