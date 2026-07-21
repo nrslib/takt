@@ -120,10 +120,10 @@ export function handleKeyInput(
   hasCancelOption: boolean,
   optionCount: number,
 ): KeyInputResult {
-  if (key === '\x1B[A' || key === 'k') {
+  if (key === '\x1B[A' || key === '\x1BOA' || key === 'k') {
     return { action: 'move', newIndex: (currentIndex - 1 + totalItems) % totalItems };
   }
-  if (key === '\x1B[B' || key === 'j') {
+  if (key === '\x1B[B' || key === '\x1BOB' || key === 'j') {
     return { action: 'move', newIndex: (currentIndex + 1) % totalItems };
   }
   if (key === '\r' || key === '\n') {

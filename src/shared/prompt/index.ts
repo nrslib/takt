@@ -18,6 +18,11 @@ export {
 } from './select.js';
 
 export {
+  selectMultipleOptions,
+  type MultipleSelectOptions,
+} from './multi-select.js';
+
+export {
   promptInput,
   readMultilineFromStream,
   confirm,

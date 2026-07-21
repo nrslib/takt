@@ -19,6 +19,9 @@ import {
   adjustScrollOffset,
   renderMenuWithViewport,
 } from './select-viewport.js';
+import { ESCAPE_SEQUENCE_TIMEOUT_MS, KeyInputDecoder } from './select-key-input.js';
+
+const MAX_STDIN_CHUNK_BYTES = 64 * 1024;
 
 // Re-export public symbols so index.ts imports stay unchanged
 export {
@@ -29,27 +32,83 @@ export {
   handleKeyInput,
 } from './select-menu.js';
 
-function printHeader(message: string, hasCustomKeyHandler: boolean): void {
+function printHeader<T extends string>(message: string, callbacks?: InteractiveSelectCallbacks<T>): void {
   console.log();
   console.log(chalk.cyan(message));
-  const hint = hasCustomKeyHandler
+  const hint = callbacks?.instructions
+    ? `  (${callbacks.instructions})`
+    : callbacks?.onKeyPress
     ? '  (↑↓ to move, Enter to select, b to bookmark, r to remove)'
     : '  (↑↓ to move, Enter to select)';
   console.log(chalk.gray(hint));
   console.log();
 }
 
-function setupRawMode(): { cleanup: (listener: (data: Buffer) => void) => void; wasRaw: boolean } {
-  const wasRaw = process.stdin.isRaw;
+interface RawMode {
+  cleanup(): void;
+}
+
+let pendingRawModeState: boolean | undefined;
+
+function combineErrors(errors: unknown[], message: string): unknown {
+  if (errors.length === 1) return errors[0];
+  return new AggregateError(errors, message);
+}
+
+function appendError(errors: unknown[], error: unknown): void {
+  if (typeof error === 'object' && error !== null && 'errors' in error) {
+    const nestedErrors = (error as { errors: unknown }).errors;
+    if (Array.isArray(nestedErrors)) {
+      errors.push(...nestedErrors);
+      return;
+    }
+  }
+  errors.push(error);
+}
+
+function restoreStdin(wasRaw: boolean): unknown[] {
+  const errors: unknown[] = [];
+
+  try {
+    process.stdin.setRawMode(wasRaw);
+  } catch (error) {
+    errors.push(error);
+  }
+
+  try {
+    process.stdin.pause();
+  } catch (error) {
+    errors.push(error);
+  }
+
+  return errors;
+}
+
+function setupRawMode(): RawMode {
+  const wasRaw = pendingRawModeState ?? Boolean(process.stdin.isRaw);
   process.stdin.setRawMode(true);
-  process.stdin.resume();
+
+  try {
+    process.stdin.resume();
+  } catch (error) {
+    const restoreErrors = restoreStdin(wasRaw);
+    if (restoreErrors.length > 0) {
+      pendingRawModeState = wasRaw;
+      throw combineErrors([error, ...restoreErrors], 'Failed to initialize terminal input');
+    }
+    pendingRawModeState = undefined;
+    throw error;
+  }
 
   return {
-    wasRaw,
-    cleanup(listener: (data: Buffer) => void): void {
-      process.stdin.removeListener('data', listener);
-      process.stdin.setRawMode(wasRaw ?? false);
-      process.stdin.pause();
+    cleanup(): void {
+      const cleanupErrors = restoreStdin(wasRaw);
+      if (cleanupErrors.length === 0) {
+        pendingRawModeState = undefined;
+        return;
+      }
+      pendingRawModeState = wasRaw;
+      throw combineErrors(cleanupErrors, 'Failed to restore terminal input');
     },
   };
 }
@@ -86,6 +145,8 @@ export interface InteractiveSelectCallbacks<T extends string> {
   onKeyPress?: (key: string, value: T, index: number) => SelectOptionItem<T>[] | null;
   /** Custom label for cancel option (default: "Cancel") */
   cancelLabel?: string;
+  instructions?: string;
+  showConfirmation?: boolean;
 }
 
 interface InteractiveSelectResult<T extends string> {
@@ -100,47 +161,77 @@ function interactiveSelect<T extends string>(
   hasCancelOption: boolean,
   callbacks?: InteractiveSelectCallbacks<T>,
 ): Promise<InteractiveSelectResult<T>> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let currentOptions = options;
     let totalItems = hasCancelOption ? currentOptions.length + 1 : currentOptions.length;
     let selectedIndex = initialIndex;
+    let rawMode: RawMode | undefined;
+    let cleanedUp = false;
+    const keyInputDecoder = new KeyInputDecoder();
+    let pendingInputTimer: NodeJS.Timeout | undefined;
     const cancelLabel = callbacks?.cancelLabel ?? 'Cancel';
 
     const terminalRows = process.stdout.rows ?? 24;
     let viewport = createViewportState(terminalRows, currentOptions, hasCancelOption);
+    let totalLines = 0;
 
-    printHeader(message, !!callbacks?.onKeyPress);
+    const cleanup = (): unknown => {
+      if (cleanedUp) return undefined;
+      cleanedUp = true;
 
-    process.stdout.write('\x1B[?7l');
+      if (pendingInputTimer !== undefined) {
+        clearTimeout(pendingInputTimer);
+        pendingInputTimer = undefined;
+      }
+      keyInputDecoder.dispose();
 
-    const initialLines = viewport.active
-      ? renderMenuWithViewport(
-          currentOptions, selectedIndex, hasCancelOption,
-          viewport.scrollOffset, viewport.maxOptionLines, cancelLabel,
-        )
-      : renderMenu(currentOptions, selectedIndex, hasCancelOption, cancelLabel);
-    let totalLines = initialLines.length;
-    process.stdout.write(initialLines.join('\n') + '\n');
+      const cleanupErrors: unknown[] = [];
 
-    const { useTty, forceTouchTty } = resolveTtyPolicy();
-    assertTtyIfForced(forceTouchTty);
-    if (!useTty) {
-      process.stdout.write('\x1B[?7h');
-      resolve({ selectedIndex: initialIndex, finalOptions: currentOptions });
-      return;
-    }
+      try {
+        process.stdin.removeListener('data', onKeypress);
+      } catch (error) {
+        appendError(cleanupErrors, error);
+      }
 
-    const rawMode = setupRawMode();
+      try {
+        rawMode?.cleanup();
+      } catch (error) {
+        appendError(cleanupErrors, error);
+      }
 
-    const cleanup = (listener: (data: Buffer) => void): void => {
-      rawMode.cleanup(listener);
-      process.stdout.write('\x1B[?7h');
+      try {
+        process.stdout.write('\x1B[?7h');
+      } catch (error) {
+        appendError(cleanupErrors, error);
+      }
+
+      return cleanupErrors.length > 0
+        ? combineErrors(cleanupErrors, 'Failed to clean up interactive selection')
+        : undefined;
     };
 
-    const onKeypress = (data: Buffer): void => {
-      try {
-        const key = data.toString();
+    const finish = (result: InteractiveSelectResult<T>): void => {
+      const cleanupError = cleanup();
+      if (cleanupError) {
+        reject(cleanupError);
+        return;
+      }
+      resolve(result);
+    };
 
+    const fail = (error: unknown): void => {
+      const cleanupError = cleanup();
+      if (!cleanupError) {
+        reject(error);
+        return;
+      }
+      const errors = [error];
+      appendError(errors, cleanupError);
+      reject(combineErrors(errors, 'Interactive selection failed during cleanup'));
+    };
+
+    const processKey = (key: string): boolean => {
+      try {
         if (callbacks?.onKeyPress && selectedIndex < currentOptions.length) {
           const item = currentOptions[selectedIndex];
           if (item) {
@@ -159,7 +250,7 @@ function interactiveSelect<T extends string>(
                 ),
               };
               totalLines = redrawMenu(currentOptions, selectedIndex, hasCancelOption, totalLines, cancelLabel, viewport);
-              return;
+              return false;
             }
           }
         }
@@ -182,30 +273,91 @@ function interactiveSelect<T extends string>(
             totalLines = redrawMenu(currentOptions, selectedIndex, hasCancelOption, totalLines, cancelLabel, viewport);
             break;
           case 'confirm':
-            cleanup(onKeypress);
-            resolve({ selectedIndex: result.selectedIndex, finalOptions: currentOptions });
-            break;
+            finish({ selectedIndex: result.selectedIndex, finalOptions: currentOptions });
+            return true;
           case 'cancel':
-            cleanup(onKeypress);
-            resolve({ selectedIndex: result.cancelIndex, finalOptions: currentOptions });
-            break;
+            finish({ selectedIndex: result.cancelIndex, finalOptions: currentOptions });
+            return true;
           case 'bookmark':
           case 'remove_bookmark':
             break;
-          case 'exit':
-            cleanup(onKeypress);
+          case 'exit': {
+            const cleanupError = cleanup();
+            if (cleanupError) {
+              reject(cleanupError);
+              return true;
+            }
             process.exit(130);
-            break;
+            return true;
+          }
           case 'none':
             break;
         }
-      } catch {
-        cleanup(onKeypress);
-        resolve({ selectedIndex: -1, finalOptions: currentOptions });
+      } catch (error) {
+        fail(error);
+        return true;
       }
+      return false;
     };
 
-    process.stdin.on('data', onKeypress);
+    const schedulePendingKeyInput = (): void => {
+      if (!keyInputDecoder.hasPendingInput || pendingInputTimer !== undefined) return;
+
+      pendingInputTimer = setTimeout(() => {
+        pendingInputTimer = undefined;
+        for (const key of keyInputDecoder.expire()) {
+          if (processKey(key)) {
+            return;
+          }
+        }
+      }, ESCAPE_SEQUENCE_TIMEOUT_MS);
+    };
+
+    const onKeypress = (data: Buffer): void => {
+      if (pendingInputTimer !== undefined) {
+        clearTimeout(pendingInputTimer);
+        pendingInputTimer = undefined;
+      }
+
+      if (data.length > MAX_STDIN_CHUNK_BYTES) {
+        fail(new Error(`Interactive selection input exceeds ${MAX_STDIN_CHUNK_BYTES} byte limit`));
+        return;
+      }
+
+      for (const key of keyInputDecoder.push(data.toString())) {
+        if (processKey(key)) {
+          return;
+        }
+      }
+
+      schedulePendingKeyInput();
+    };
+
+    try {
+      printHeader(message, callbacks);
+      process.stdout.write('\x1B[?7l');
+
+      const initialLines = viewport.active
+        ? renderMenuWithViewport(
+            currentOptions, selectedIndex, hasCancelOption,
+            viewport.scrollOffset, viewport.maxOptionLines, cancelLabel,
+          )
+        : renderMenu(currentOptions, selectedIndex, hasCancelOption, cancelLabel);
+      totalLines = initialLines.length;
+      process.stdout.write(initialLines.join('\n') + '\n');
+
+      const { useTty, forceTouchTty } = resolveTtyPolicy();
+      assertTtyIfForced(forceTouchTty);
+      if (!useTty) {
+        finish({ selectedIndex: initialIndex, finalOptions: currentOptions });
+        return;
+      }
+
+      rawMode = setupRawMode();
+      process.stdin.on('data', onKeypress);
+    } catch (error) {
+      fail(error);
+    }
   });
 }
 
@@ -227,10 +379,11 @@ export async function selectOption<T extends string>(
   }
 
   const selected = finalOptions[selectedIndex];
-  if (selected) {
+  if (selected && callbacks?.showConfirmation !== false) {
     console.log(chalk.green(`  ✓ ${selected.label}`));
-    return selected.value;
   }
+
+  if (selected) return selected.value;
 
   return null;
 }
