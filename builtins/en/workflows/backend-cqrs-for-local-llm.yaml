@@ -366,7 +366,7 @@ steps:
       # Review-integrity gate (codex 対策#4 / verification blocker #1): if the product
       # gate is clear (no open findings) but unpromoted reviewer anomalies remain, hand
       # to final-gate — which re-reviews up to the review-integrity budget, then
-      # aborts — instead of falling through to the fix rules below. There is
+      # routes to replan — instead of falling through to the fix rules below. There is
       # nothing to fix (the observations were isolated as unverifiable), and an anomaly
       # must be sent to re-review, never to fix.
       - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
