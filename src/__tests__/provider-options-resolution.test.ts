@@ -27,6 +27,26 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
+  it('Codex Skill inheritance is resolved independently per scope', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'codex.skills.repo' ? 'env' : 'local'),
+      {
+        codex: { skills: { repo: false, user: false } },
+      },
+      {
+        codex: { skills: { repo: true } },
+      },
+      {
+        codex: { skills: { user: true } },
+      },
+    );
+
+    expect(result).toEqual({
+      codex: { skills: { repo: false, user: true } },
+    });
+  });
+
   it('falls back to step precedence for local/global sources', () => {
     const result = resolveEffectiveProviderOptions(
       'global',

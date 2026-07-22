@@ -510,7 +510,12 @@ export async function runSetupMenu(
       assertExecConfig(next);
       const nextRuntimeConfig = resolveExecConfigProviderModel(next, providerModelDefaults);
       const nextSessionId = shouldKeepExecSession(runtimeConfig.session, nextRuntimeConfig.session) ? setupCtx.sessionId : undefined;
-      setupCtx = createExecSessionContext(cwd, nextRuntimeConfig, nextSessionId);
+      setupCtx = createExecSessionContext(
+        cwd,
+        nextRuntimeConfig,
+        nextSessionId,
+        setupCtx.codexSkillInheritance,
+      );
       current = next;
     } catch (error) {
       if (error instanceof ProjectBoundaryError) {
@@ -550,7 +555,13 @@ async function resolveSetupSection(
     return editLoopConfig(config, ctx.lang);
   }
   if (section === 'preset') {
-    return editPresetSetup(cwd, config, ctx.lang, providerModelDefaults);
+    return editPresetSetup(
+      cwd,
+      config,
+      ctx.lang,
+      providerModelDefaults,
+      ctx.codexSkillInheritance,
+    );
   }
   return config;
 }

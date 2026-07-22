@@ -36,6 +36,9 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   resolveConfigValues: vi.fn(() => ({ language: 'en', provider: 'mock', model: undefined })),
+  resolveNonWorkflowProviderOptions: vi.fn(() => ({
+    codex: { skills: { repo: false, user: false } },
+  })),
   loadSessionState: vi.fn(() => null),
   clearSessionState: vi.fn(),
 }));

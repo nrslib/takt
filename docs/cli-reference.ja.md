@@ -219,7 +219,7 @@ takt exec backend  # 名前付きプリセットで開始
 takt exec --list   # 利用可能な exec プリセットを表示
 ```
 
-プリセットの探索順は project `.takt/exec/presets/`、global `$TAKT_CONFIG_DIR/exec/presets/`（未設定時は `~/.takt/exec/presets/`）、builtin `builtins/exec/presets/` です。builtin/default プリセットは、エージェントの役割、facet、ループ検知しきい値だけを定義します。provider と model は exec モード開始時に通常の TAKT 設定から解決され、assistant 対話、`/setup` 表示、workflow 生成で同じ解決結果が使われます。exec config で明示した場合だけ provider/model を上書きします。`effort` は明示設定された場合だけ出力されます。`/setup` で変更した設定は、次回起動用の設定として `$TAKT_CONFIG_DIR/exec.yaml`（未設定時は `~/.takt/exec.yaml`）に保存されます。
+プリセットの探索順は project `.takt/exec/presets/`、global `$TAKT_CONFIG_DIR/exec/presets/`（未設定時は `~/.takt/exec/presets/`）、builtin `builtins/exec/presets/` です。builtin/default プリセットは、エージェントの役割、facet、ループ検知しきい値だけを定義します。provider と model は exec モード開始時に通常の TAKT 設定から解決され、assistant 対話、`/setup` 表示、workflow 生成で同じ解決結果が使われます。exec config で明示した場合だけ provider/model を上書きします。`effort` は明示設定された場合だけ出力されます。Codex の repository Skill と user Skill はscopeごとに設定省略時に継承され、明示した `provider_options.codex.skills` が優先されます。解決結果は生成 workflow に埋め込まれます。`/setup` で変更した設定は、次回起動用の設定として `$TAKT_CONFIG_DIR/exec.yaml`（未設定時は `~/.takt/exec.yaml`）に保存されます。
 
 exec モード内の主なコマンド:
 

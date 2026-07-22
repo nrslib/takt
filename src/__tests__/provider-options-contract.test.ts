@@ -17,6 +17,8 @@ describe('providerOptionsContract', () => {
       'provider_options.codex.base_url',
       'provider_options.codex.network_access',
       'provider_options.codex.reasoning_effort',
+      'provider_options.codex.skills.repo',
+      'provider_options.codex.skills.user',
       'provider_options.opencode.network_access',
       'provider_options.opencode.variant',
       'provider_options.opencode.allowed_tools',
@@ -35,6 +37,8 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.base_url');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.allowed_tools');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.reasoning_effort');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.repo');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.user');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.variant');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.allowed_tools');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.copilot.effort');
@@ -62,6 +66,10 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.claude.allowed_tools');
     expect(toProviderOptionsTracePath('codex.reasoningEffort'))
       .toBe('provider_options.codex.reasoning_effort');
+    expect(toProviderOptionsTracePath('codex.skills.repo'))
+      .toBe('provider_options.codex.skills.repo');
+    expect(toProviderOptionsTracePath('codex.skills.user'))
+      .toBe('provider_options.codex.skills.user');
     expect(toProviderOptionsTracePath('opencode.variant'))
       .toBe('provider_options.opencode.variant');
     expect(toProviderOptionsTracePath('opencode.allowedTools'))
@@ -78,6 +86,7 @@ describe('providerOptionsContract', () => {
         baseUrl: 'http://127.0.0.1:8787/v1',
         networkAccess: true,
         reasoningEffort: 'high',
+        skills: { repo: false, user: true },
       },
       opencode: { variant: 'high', allowedTools: ['read', 'grep'] },
       claude: {
@@ -91,6 +100,8 @@ describe('providerOptionsContract', () => {
       'codex.baseUrl',
       'codex.networkAccess',
       'codex.reasoningEffort',
+      'codex.skills.repo',
+      'codex.skills.user',
       'opencode.variant',
       'opencode.allowedTools',
       'claude.baseUrl',

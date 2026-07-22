@@ -270,6 +270,7 @@ describe('applyExecOverrides', () => {
       const rawWorkflow = parseExecWorkflowYaml(buildExecWorkflowYaml(result, {
         workflowName: 'exec-provider-default-test',
         taskDescription: 'Verify provider defaults',
+        codexSkillInheritance: { repo: true, user: true },
       }));
 
       expect(result.session).toMatchObject({ provider });

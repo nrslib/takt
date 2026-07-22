@@ -1,18 +1,35 @@
-import { resolveWorkflowConfigValues } from '../../infra/config/index.js';
+import {
+  resolveNonWorkflowProviderOptions,
+  resolveWorkflowConfigValues,
+} from '../../infra/config/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { assertResolvedExecConfig } from './configValidation.js';
 import type {
   ExecActorConfig,
+  ExecCodexSkillInheritance,
   ExecConfig,
   ExecSessionConfig,
   ResolvedExecActorConfig,
   ResolvedExecConfig,
   ResolvedExecSessionConfig,
 } from './types.js';
+import { DEFAULT_EXEC_CODEX_SKILL_INHERITANCE } from './types.js';
 
 export interface ExecProviderModelDefaults {
   provider?: ProviderType;
   model?: string;
+}
+
+export function resolveExecCodexSkillInheritance(cwd: string): ExecCodexSkillInheritance {
+  const providerOptions = resolveNonWorkflowProviderOptions(
+    cwd,
+    undefined,
+    DEFAULT_EXEC_CODEX_SKILL_INHERITANCE,
+  );
+  return {
+    repo: providerOptions?.codex?.skills?.repo ?? DEFAULT_EXEC_CODEX_SKILL_INHERITANCE.repo,
+    user: providerOptions?.codex?.skills?.user ?? DEFAULT_EXEC_CODEX_SKILL_INHERITANCE.user,
+  };
 }
 
 export function resolveConfiguredExecProviderModel(cwd: string): ExecProviderModelDefaults {

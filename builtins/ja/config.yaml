@@ -107,6 +107,9 @@ language: ja         # 表示言語: ja | en
 # provider_options:
 #   codex:
 #     network_access: true
+#     skills:
+#       repo: false
+#       user: false
 #   opencode:
 #     variant: high
 #   claude:

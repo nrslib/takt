@@ -8,7 +8,7 @@ import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
 import {
   buildTaskInstructionPrompt,
   buildExecReadonlyProviderProfileOverrides,
-  runGeneratedWorkflow,
+  runGeneratedWorkflow as runGeneratedWorkflowRaw,
 } from '../features/exec/workflowRunner.js';
 import type { TaskAttachment } from '../features/tasks/attachments.js';
 import type { ResolvedExecConfig } from '../features/exec/types.js';
@@ -18,6 +18,24 @@ vi.mock('../features/tasks/index.js', () => ({
 }));
 
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
+const DEFAULT_TEST_SKILL_INHERITANCE = { repo: true, user: true } as const;
+
+function runGeneratedWorkflow(
+  cwd: string,
+  runtimeConfig: ResolvedExecConfig,
+  task: string,
+  agentOverrides: Parameters<typeof runGeneratedWorkflowRaw>[3],
+  attachments?: TaskAttachment[],
+): ReturnType<typeof runGeneratedWorkflowRaw> {
+  return runGeneratedWorkflowRaw(
+    cwd,
+    runtimeConfig,
+    task,
+    agentOverrides,
+    attachments,
+    DEFAULT_TEST_SKILL_INHERITANCE,
+  );
+}
 
 describe('buildTaskInstructionPrompt', () => {
   it('should treat whitespace-only inline task text as empty', () => {

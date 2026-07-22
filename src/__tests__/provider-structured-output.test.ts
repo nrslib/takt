@@ -286,6 +286,31 @@ describe('CodexProvider — structured output', () => {
     expect(opts).toHaveProperty('baseUrl', 'http://127.0.0.1:8787/v1');
   });
 
+  it('provider_options.codex.skills を callCodex に渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+
+    const agent = new CodexProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      providerOptions: {
+        codex: { skills: { repo: true, user: false } },
+      },
+    });
+
+    const opts = mockCallCodex.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('skills', { repo: true, user: false });
+  });
+
+  it('provider_options.codex.skills の未指定値を false として callCodex に渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+
+    const agent = new CodexProvider().setup({ name: 'coder' });
+    await agent.call('prompt', { cwd: '/tmp' });
+
+    const opts = mockCallCodex.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('skills', { repo: false, user: false });
+  });
+
   it('childProcessEnv を callCodex に渡す', async () => {
     mockCallCodex.mockResolvedValue(doneResponse('coder'));
     const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };

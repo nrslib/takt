@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   mockResolveConfigValues,
   mockResolveNonWorkflowProviderModel,
+  mockResolveNonWorkflowProviderOptions,
   mockResolveAssistantConfigLayers,
   mockGetProvider,
 } = vi.hoisted(() => ({
   mockResolveConfigValues: vi.fn(),
   mockResolveNonWorkflowProviderModel: vi.fn(),
+  mockResolveNonWorkflowProviderOptions: vi.fn(),
   mockResolveAssistantConfigLayers: vi.fn(),
   mockGetProvider: vi.fn(),
 }));
@@ -16,6 +18,8 @@ vi.mock('../infra/config/index.js', () => ({
   resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
   resolveNonWorkflowProviderModel: (...args: unknown[]) =>
     mockResolveNonWorkflowProviderModel(...args),
+  resolveNonWorkflowProviderOptions: (...args: unknown[]) =>
+    mockResolveNonWorkflowProviderOptions(...args),
   loadSessionState: vi.fn(() => null),
   clearSessionState: vi.fn(),
 }));
@@ -50,6 +54,9 @@ describe('initializeSession assistant provider resolution', () => {
       provider: 'mock',
       model: 'non-workflow-model',
     });
+    mockResolveNonWorkflowProviderOptions.mockReturnValue({
+      codex: { skills: { repo: true, user: false } },
+    });
   });
 
   it('should prioritize CLI provider/model over takt_providers.assistant and top-level provider/model', () => {
@@ -79,6 +86,9 @@ describe('initializeSession assistant provider resolution', () => {
     expect(ctx.providerType).toBe('opencode');
     expect(ctx.model).toBe('cli-model');
     expect(ctx.lang).toBe('ja');
+    expect(ctx.providerOptions).toEqual({
+      codex: { skills: { repo: true, user: false } },
+    });
     expect(mockResolveNonWorkflowProviderModel).not.toHaveBeenCalled();
   });
 

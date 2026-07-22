@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockResolveNonWorkflowProviderModel,
+  mockResolveNonWorkflowProviderOptions,
   mockLoadTemplate,
   mockResolveConfigValues,
   mockGetProvider,
   mockAgentCall,
 } = vi.hoisted(() => ({
   mockResolveNonWorkflowProviderModel: vi.fn(),
+  mockResolveNonWorkflowProviderOptions: vi.fn(),
   mockLoadTemplate: vi.fn(),
   mockResolveConfigValues: vi.fn(),
   mockGetProvider: vi.fn(),
@@ -23,6 +25,8 @@ vi.mock('../infra/config/index.js', () => ({
   resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
   resolveNonWorkflowProviderModel: (...args: unknown[]) =>
     mockResolveNonWorkflowProviderModel(...args),
+  resolveNonWorkflowProviderOptions: (...args: unknown[]) =>
+    mockResolveNonWorkflowProviderOptions(...args),
 }));
 
 vi.mock('../infra/providers/index.js', () => ({
@@ -35,6 +39,9 @@ describe('runSyncConflictResolver', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolveNonWorkflowProviderModel.mockReturnValue({ provider: 'codex', model: 'gpt-5.4' });
+    mockResolveNonWorkflowProviderOptions.mockReturnValue({
+      codex: { skills: { repo: true, user: false } },
+    });
     mockLoadTemplate.mockImplementation((name: string, _lang: string, vars?: Record<string, string>) => {
       if (name === 'sync_conflict_resolver_system_prompt') {
         return 'system-prompt';
@@ -74,9 +81,11 @@ describe('runSyncConflictResolver', () => {
       cwd: '/repo/worktree',
       model: 'gpt-5.4',
       permissionMode: 'edit',
+      providerOptions: { codex: { skills: { repo: true, user: false } } },
       onPermissionRequest: undefined,
       onStream,
     });
+    expect(mockResolveNonWorkflowProviderOptions).toHaveBeenCalledWith('/repo');
   });
 
   it('passes the shared auto-approve handler only when sync_conflict_resolver enables it', async () => {

@@ -8,7 +8,7 @@ import type { TaskAttachment } from '../tasks/attachments.js';
 import { selectAndExecuteTask, type TaskExecutionOptions } from '../tasks/index.js';
 import { EXEC_PROVIDERS } from './configValidation.js';
 import { writeProjectLocalTextFile } from './projectLocalFiles.js';
-import type { ExecConfig, ResolvedExecConfig } from './types.js';
+import type { ExecCodexSkillInheritance, ExecConfig, ResolvedExecConfig } from './types.js';
 import { buildExecWorkflowYaml, buildReviewReportName } from './workflowTemplate.js';
 
 const READONLY_PERMISSION_MODE: PermissionMode = 'readonly';
@@ -33,12 +33,19 @@ export function buildExecReadonlyProviderProfileOverrides(config: ExecConfig): P
   ])) as ProviderPermissionProfiles;
 }
 
-async function generateWorkflowFile(cwd: string, config: ResolvedExecConfig, task: string, workflowName: string): Promise<string> {
+async function generateWorkflowFile(
+  cwd: string,
+  config: ResolvedExecConfig,
+  task: string,
+  workflowName: string,
+  codexSkillInheritance: ExecCodexSkillInheritance,
+): Promise<string> {
   const workflowDir = join(cwd, '.takt', 'exec');
   const workflowPath = join(workflowDir, 'workflow.yaml');
   const yaml = buildExecWorkflowYaml(config, {
     workflowName,
     taskDescription: task,
+    codexSkillInheritance,
   });
   writeProjectLocalTextFile(cwd, workflowPath, yaml, 'exec workflow');
   return workflowPath;
@@ -103,10 +110,17 @@ export async function runGeneratedWorkflow(
   runtimeConfig: ResolvedExecConfig,
   task: string,
   agentOverrides: TaskExecutionOptions | undefined,
-  attachments?: TaskAttachment[],
+  attachments: TaskAttachment[] | undefined,
+  codexSkillInheritance: ExecCodexSkillInheritance,
 ): Promise<ReturnType<typeof loadRunSessionContext>> {
   const runSlug = generateExecutionReportDir(cwd, task);
-  const workflowPath = await generateWorkflowFile(cwd, runtimeConfig, task, `exec-${runSlug}`);
+  const workflowPath = await generateWorkflowFile(
+    cwd,
+    runtimeConfig,
+    task,
+    `exec-${runSlug}`,
+    codexSkillInheritance,
+  );
   await selectAndExecuteTask(cwd, task, {
     workflow: workflowPath,
     skipTaskList: true,
