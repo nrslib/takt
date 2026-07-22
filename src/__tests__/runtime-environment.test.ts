@@ -155,7 +155,7 @@ describe('prepareRuntimeEnvironment', () => {
     expect(envContent).toContain('export npm_config_cache=');
   });
 
-  it('should use one short temporary directory for Node and Gradle while retaining runtime caches', () => {
+  it('should use one short temporary directory for Node and Gradle when both prepare presets are specified', () => {
     const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
     tempDirs.push(cwd);
 
@@ -175,7 +175,7 @@ describe('prepareRuntimeEnvironment', () => {
     expect(result!.injectedEnv.XDG_STATE_HOME).toBe(join(runtimeRoot, 'state'));
   });
 
-  it('should derive a stable temporary directory per worktree', () => {
+  it('should derive a stable temporary directory per worktree when runtime preparation is repeated', () => {
     const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
     const otherCwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
     tempDirs.push(cwd, otherCwd);
@@ -188,7 +188,7 @@ describe('prepareRuntimeEnvironment', () => {
     expect(other!.injectedEnv.TMPDIR).not.toBe(first!.injectedEnv.TMPDIR);
   });
 
-  it('should use a 128-bit runtime temporary directory identifier', () => {
+  it('should use a 128-bit runtime temporary directory identifier when preparing a Node runtime', () => {
     const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
     tempDirs.push(cwd);
 
@@ -250,7 +250,7 @@ describe('prepareRuntimeEnvironment', () => {
   );
 
   it.skipIf(process.platform === 'win32')(
-    'should support a tsx socket within the macOS Unix socket path limit for a long worktree path',
+    'should support a tsx socket within the macOS Unix socket path limit when the worktree path is long',
     async () => {
       const root = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
       const cwd = join(root, 'worktree-with-a-name-long-enough-to-exceed-the-unix-domain-socket-path-limit-when-runtime-isolation-is-used');
@@ -283,7 +283,7 @@ describe('prepareRuntimeEnvironment', () => {
   );
 
   it.skipIf(process.platform === 'win32')(
-    'should reject a pre-existing temporary directory symlink before running prepare scripts',
+    'should reject a pre-existing temporary directory symlink when prepare scripts are requested',
     () => {
       const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
       tempDirs.push(cwd);
@@ -307,7 +307,7 @@ describe('prepareRuntimeEnvironment', () => {
     },
   );
 
-  it('should reject a regular file at the resolved temporary directory path', () => {
+  it('should reject a regular file when it occupies the resolved temporary directory path', () => {
     const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
     tempDirs.push(cwd);
     const expectedRuntimeTmpDir = getExpectedRuntimeTemporaryDirectory(cwd);

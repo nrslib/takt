@@ -5,28 +5,35 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { prepareRuntimeEnvironment } from '../core/runtime/runtime-environment.js';
 
 describe.runIf(process.platform === 'win32')('prepareRuntimeEnvironment on Windows', () => {
-  const originalEnv = {
-    TMPDIR: process.env.TMPDIR,
-    TEMP: process.env.TEMP,
-    TMP: process.env.TMP,
-  };
+  const originalEnv = { ...process.env };
   const cleanupPaths = new Set<string>();
 
   afterEach(() => {
+    let firstError: unknown;
     for (const path of cleanupPaths) {
-      rmSync(path, { recursive: true, force: true });
+      try {
+        rmSync(path, { recursive: true, force: true });
+      } catch (error) {
+        firstError ??= error;
+      }
     }
     cleanupPaths.clear();
-    for (const [key, value] of Object.entries(originalEnv)) {
-      if (value === undefined) {
+
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
         delete process.env[key];
-      } else {
+      }
+    }
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value !== undefined) {
         process.env[key] = value;
       }
     }
+
+    if (firstError !== undefined) throw firstError;
   });
 
-  it('should use one runtime temporary directory for Node and shell tools', () => {
+  it('should use one runtime temporary directory for Node and shell tools when preparing a Node runtime', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-runtime-windows-'));
     cleanupPaths.add(cwd);
 
