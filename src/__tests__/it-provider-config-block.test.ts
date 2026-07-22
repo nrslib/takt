@@ -25,6 +25,8 @@ import { runAgent } from '../agents/runner.js';
 import { executeTask } from '../features/tasks/execute/taskExecution.js';
 import { invalidateGlobalConfigCache } from '../infra/config/index.js';
 
+const defaultCodexSkills = { repo: false, user: false } as const;
+
 interface TestEnv {
   projectDir: string;
   globalDir: string;
@@ -143,7 +145,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.resolvedProvider).toBe('codex');
     expect(options?.resolvedModel).toBe('gpt-5.3');
     expect(options?.providerOptions).toEqual({
-      codex: { networkAccess: false },
+      codex: { networkAccess: false, skills: defaultCodexSkills },
     });
   });
 
@@ -185,7 +187,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.resolvedProvider).toBe('codex');
     expect(options?.resolvedModel).toBe('workflow-model');
     expect(options?.providerOptions).toEqual({
-      codex: { networkAccess: true },
+      codex: { networkAccess: true, skills: defaultCodexSkills },
     });
   });
 
@@ -228,7 +230,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.resolvedProvider).toBe('codex');
     expect(options?.resolvedModel).toBe('project-model');
     expect(options?.providerOptions).toEqual({
-      codex: { networkAccess: false },
+      codex: { networkAccess: false, skills: defaultCodexSkills },
     });
   });
 
@@ -271,6 +273,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.resolvedProvider).toBe('claude');
     expect(options?.resolvedModel).toBe('sonnet');
     expect(options?.providerOptions).toEqual({
+      codex: { skills: defaultCodexSkills },
       claude: {
         sandbox: {
           allowUnsandboxedCommands: true,
@@ -322,6 +325,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.resolvedProvider).toBe('claude-terminal');
     expect(options?.allowedTools).toEqual(['Read', 'Edit']);
     expect(options?.providerOptions).toEqual({
+      codex: { skills: defaultCodexSkills },
       claude: {
         effort: 'high',
         allowedTools: ['Read', 'Edit'],

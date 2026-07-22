@@ -89,6 +89,62 @@ describe('StateManager', () => {
 
       expect(manager.state.userInputs).toEqual(['input1', 'input2']);
     });
+
+    it('should continue step iterations from the matching resume workflow frame', () => {
+      const manager = new StateManager(
+        makeConfig(),
+        makeOptions({
+          startStep: 'review',
+          resumePoint: {
+            version: 1,
+            stack: [
+              {
+                workflow: 'parent',
+                step: 'delegate',
+                kind: 'workflow_call',
+                step_iterations: { delegate: 3 },
+              },
+              {
+                workflow: 'test-workflow',
+                step: 'review',
+                kind: 'agent',
+                step_iterations: { review: 6, fix: 2 },
+              },
+            ],
+            iteration: 12,
+            elapsed_ms: 100,
+          },
+          resumeStackPrefix: [
+            { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
+          ],
+        }),
+      );
+
+      expect(manager.incrementStepIteration('review')).toBe(7);
+      expect(manager.state.stepIterations.get('fix')).toBe(2);
+    });
+
+    it('should not restore step iterations from a different resume target', () => {
+      const manager = new StateManager(
+        makeConfig(),
+        makeOptions({
+          startStep: 'implement',
+          resumePoint: {
+            version: 1,
+            stack: [{
+              workflow: 'test-workflow',
+              step: 'review',
+              kind: 'agent',
+              step_iterations: { review: 6 },
+            }],
+            iteration: 12,
+            elapsed_ms: 100,
+          },
+        }),
+      );
+
+      expect(manager.state.stepIterations).toEqual(new Map());
+    });
   });
 
   describe('incrementStepIteration', () => {

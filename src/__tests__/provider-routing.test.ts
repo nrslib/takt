@@ -650,7 +650,10 @@ describe('provider_routing config normalization', () => {
           provider: 'codex',
           model: 'gpt-5',
           provider_options: {
-            codex: { reasoning_effort: 'high' },
+            codex: {
+              reasoning_effort: 'high',
+              skills: { repo: false },
+            },
           },
         },
       },
@@ -675,7 +678,10 @@ describe('provider_routing config normalization', () => {
           provider: 'codex',
           model: 'gpt-5',
           providerOptions: {
-            codex: { reasoningEffort: 'high' },
+            codex: {
+              reasoningEffort: 'high',
+              skills: { repo: false },
+            },
           },
         },
       },
@@ -701,7 +707,10 @@ describe('provider_routing config normalization', () => {
         coder: {
           provider: 'codex',
           providerOptions: {
-            codex: { reasoningEffort: 'high' },
+            codex: {
+              reasoningEffort: 'high',
+              skills: { user: true },
+            },
           },
         },
       },
@@ -719,7 +728,10 @@ describe('provider_routing config normalization', () => {
         coder: {
           provider: 'codex',
           provider_options: {
-            codex: { reasoning_effort: 'high' },
+            codex: {
+              reasoning_effort: 'high',
+              skills: { user: true },
+            },
           },
         },
       },

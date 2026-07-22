@@ -70,6 +70,8 @@ const FINDINGS_RULE_CONTEXT_SHAPE = freezeFindingsDescriptor({
               description: { kind: 'string' },
               suggestion: { kind: 'string' },
               reviewers: { kind: 'array', item: { kind: 'string' } },
+              familyTags: { kind: 'array', item: { kind: 'string' } },
+              unknownRawFindingIds: { kind: 'array', item: { kind: 'string' } },
             },
           },
         },

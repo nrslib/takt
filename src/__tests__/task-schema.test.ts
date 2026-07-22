@@ -146,6 +146,53 @@ describe('TaskExecutionConfigSchema', () => {
     expect(config.start_step).toBe('plan');
   });
 
+  it('should accept resume point entries with omitted or positive integer step iterations', () => {
+    const baseResumePoint = {
+      version: 1,
+      iteration: 3,
+      elapsed_ms: 100,
+    };
+
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        ...baseResumePoint,
+        stack: [{ workflow: 'default', step: 'implement', kind: 'agent' }],
+      },
+    })).not.toThrow();
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        ...baseResumePoint,
+        stack: [{
+          workflow: 'default',
+          step: 'implement',
+          kind: 'agent',
+          step_iterations: { implement: 1, review: 4 },
+        }],
+      },
+    })).not.toThrow();
+  });
+
+  it.each([
+    ['an empty key', { '': 1 }],
+    ['zero', { implement: 0 }],
+    ['a negative value', { implement: -1 }],
+    ['a decimal value', { implement: 1.5 }],
+  ])('should reject step iterations containing %s', (_name, stepIterations) => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 1,
+        stack: [{
+          workflow: 'default',
+          step: 'implement',
+          kind: 'agent',
+          step_iterations: stepIterations,
+        }],
+        iteration: 3,
+        elapsed_ms: 100,
+      },
+    })).toThrow();
+  });
+
 
   it('should reject conflicting start_step and start_movement values', () => {
     expect(() => TaskExecutionConfigSchema.parse({

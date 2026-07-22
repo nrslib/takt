@@ -18,6 +18,20 @@ export type WhenOperandExpression =
   | { kind: 'state'; reference: string }
   | { kind: 'item'; reference: string };
 
+type WhenContainsExpression = {
+  kind: 'contains';
+  listExpression: Extract<WhenOperandExpression, { kind: 'state' | 'item' }>;
+  valueExpression: WhenOperandExpression;
+};
+
+type WhenExistsPredicateExpression =
+  | {
+    kind: 'comparison';
+    left: WhenOperandExpression;
+    right: WhenOperandExpression;
+  }
+  | WhenContainsExpression;
+
 export type WhenClauseExpression =
   | { kind: 'boolean'; value: boolean }
   | { kind: 'operand'; operand: Extract<WhenOperandExpression, { kind: 'state' }> }
@@ -30,8 +44,9 @@ export type WhenClauseExpression =
   | {
     kind: 'exists';
     listExpression: Extract<WhenOperandExpression, { kind: 'state' }>;
-    predicate: Array<{ left: WhenOperandExpression; right: WhenOperandExpression }>;
-  };
+    predicate: WhenExistsPredicateExpression[];
+  }
+  | WhenContainsExpression;
 
 export interface WhenConditionExpression {
   alternatives: WhenClauseExpression[][];
@@ -81,13 +96,13 @@ function isStaticallyNonNumericOperand(
 }
 
 function assertOperandRole(
-  operand: Extract<WhenOperandExpression, { kind: 'state' }>,
+  operand: Extract<WhenOperandExpression, { kind: 'state' | 'item' }>,
   subject: string,
   findingsKind: FindingsReferenceValueKind,
+  context: OperandParseContext,
 ): void {
-  const reference = parseWorkflowStateReference(operand.reference);
-  if (reference.root === 'findings') {
-    const descriptor = describeFindingsReferencePath(reference.path);
+  const descriptor = describeOperand(operand, context);
+  if (descriptor !== undefined) {
     if (descriptor?.kind !== findingsKind) {
       throw new Error(
         `${subject} requires a ${findingsKind} findings reference: "${operand.reference}"`,
@@ -95,6 +110,9 @@ function assertOperandRole(
     }
     return;
   }
+  if (operand.kind === 'item') return;
+
+  const reference = parseWorkflowStateReference(operand.reference);
   if (reference.path.length === 0) {
     throw new Error(`${subject} requires a path-bearing workflow state reference: "${operand.reference}"`);
   }
@@ -230,9 +248,10 @@ function parseOperand(
   throw new Error(`Unsupported when operand "${value}"`);
 }
 
-function splitFunctionArgs(argsText: string): [string, string] {
+function splitFunctionArgs(argsText: string, functionName: string): [string, string] {
   let inString = false;
   let depth = 0;
+  let separatorIndex: number | undefined;
 
   for (let index = 0; index < argsText.length; index++) {
     const current = argsText[index];
@@ -247,17 +266,28 @@ function splitFunctionArgs(argsText: string): [string, string] {
     }
     if (current === ')') {
       depth--;
+      if (depth < 0) {
+        throw new Error(`Invalid ${functionName}() expression "${argsText}"`);
+      }
       continue;
     }
     if (current === ',' && depth === 0) {
-      return [
-        argsText.slice(0, index).trim(),
-        argsText.slice(index + 1).trim(),
-      ];
+      if (separatorIndex !== undefined) {
+        throw new Error(`${functionName}() requires exactly two arguments`);
+      }
+      separatorIndex = index;
     }
   }
 
-  throw new Error(`Invalid exists() expression "${argsText}"`);
+  if (inString || depth !== 0 || separatorIndex === undefined) {
+    throw new Error(`Invalid ${functionName}() expression "${argsText}"`);
+  }
+  const first = argsText.slice(0, separatorIndex).trim();
+  const second = argsText.slice(separatorIndex + 1).trim();
+  if (first.length === 0 || second.length === 0) {
+    throw new Error(`${functionName}() requires exactly two arguments`);
+  }
+  return [first, second];
 }
 
 function parseComparison(
@@ -292,12 +322,13 @@ function parseExistsClause(clause: string): Extract<WhenClauseExpression, { kind
   }
   const [listExpression, predicateExpression] = splitFunctionArgs(
     clause.slice('exists('.length, -1),
+    'exists',
   );
   const parsedListExpression = parseOperand(listExpression, { kind: 'workflow' });
   if (parsedListExpression.kind !== 'state') {
     throw new Error(`exists() requires a workflow state reference: "${listExpression}"`);
   }
-  assertOperandRole(parsedListExpression, 'exists()', 'array');
+  assertOperandRole(parsedListExpression, 'exists()', 'array', { kind: 'workflow' });
   const listDescriptor = describeOperand(parsedListExpression, { kind: 'workflow' });
   const itemDescriptor = listDescriptor?.kind === 'array'
     ? listDescriptor.item
@@ -307,11 +338,15 @@ function parseExistsClause(clause: string): Extract<WhenClauseExpression, { kind
     '&&',
     'exists() predicate',
   ).map((predicateClause) => {
+    const normalized = predicateClause.trim();
+    if (normalized.startsWith('contains(')) {
+      return parseContainsClause(normalized, { kind: 'exists', itemDescriptor });
+    }
     const comparison = parseComparison(predicateClause, { kind: 'exists', itemDescriptor });
     if (comparison.operator !== '==') {
-      throw new Error(`exists() only supports "==" and "&&": "${predicateExpression}"`);
+      throw new Error(`exists() only supports "==", "contains()", and "&&": "${predicateExpression}"`);
     }
-    return { left: comparison.left, right: comparison.right };
+    return { kind: 'comparison' as const, left: comparison.left, right: comparison.right };
   });
   return {
     kind: 'exists',
@@ -320,11 +355,38 @@ function parseExistsClause(clause: string): Extract<WhenClauseExpression, { kind
   };
 }
 
+function parseContainsClause(
+  clause: string,
+  context: OperandParseContext,
+): WhenContainsExpression {
+  const closingParen = findClosingParen(clause, 'contains('.length - 1);
+  if (closingParen !== clause.length - 1) {
+    throw new Error(`Invalid contains() clause "${clause}"`);
+  }
+  const [listExpression, valueExpression] = splitFunctionArgs(
+    clause.slice('contains('.length, -1),
+    'contains',
+  );
+  const parsedListExpression = parseOperand(listExpression, context);
+  if (parsedListExpression.kind === 'literal') {
+    throw new Error(`contains() requires a workflow state reference: "${listExpression}"`);
+  }
+  assertOperandRole(parsedListExpression, 'contains()', 'array', context);
+  return {
+    kind: 'contains',
+    listExpression: parsedListExpression,
+    valueExpression: parseOperand(valueExpression, context),
+  };
+}
+
 function parseClause(clause: string): WhenClauseExpression {
   const normalized = clause.trim();
   if (normalized === 'true') return { kind: 'boolean', value: true };
   if (normalized === 'false') return { kind: 'boolean', value: false };
   if (normalized.startsWith('exists(')) return parseExistsClause(normalized);
+  if (normalized.startsWith('contains(')) {
+    return parseContainsClause(normalized, { kind: 'workflow' });
+  }
   if (findComparisonOperator(normalized) !== undefined) {
     return parseComparison(normalized, { kind: 'workflow' });
   }
@@ -332,7 +394,7 @@ function parseClause(clause: string): WhenClauseExpression {
   if (operand.kind !== 'state') {
     throw new Error(`Bare when clause must be boolean or a workflow state reference: "${normalized}"`);
   }
-  assertOperandRole(operand, 'Bare when clause', 'boolean');
+  assertOperandRole(operand, 'Bare when clause', 'boolean', { kind: 'workflow' });
   return { kind: 'operand', operand };
 }
 

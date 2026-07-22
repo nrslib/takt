@@ -328,7 +328,6 @@ export function bindWorkflowExecutionEvents(
     }
     deps.engine.abort();
   };
-  const stepIterations = new Map<string, number>();
   const syncLatestResumePoint = (): void => {
     if (!canReadResumePoint()) {
       return;
@@ -391,7 +390,15 @@ export function bindWorkflowExecutionEvents(
     );
   });
 
-  deps.engine.on('step:start', (step, iteration, instruction, providerInfo, workflowName, resumeStepName) => {
+  deps.engine.on('step:start', (
+    step,
+    iteration,
+    instruction,
+    providerInfo,
+    workflowName,
+    resumeStepName,
+    stepIteration,
+  ) => {
     state.currentIteration = iteration;
     state.currentStepName = resumeStepName;
     state.lastResumePoint = getResumePoint();
@@ -417,9 +424,6 @@ export function bindWorkflowExecutionEvents(
       onEventSinkFailure,
       eventSinkDispatchState,
     );
-
-    const stepIteration = (stepIterations.get(step.name) ?? 0) + 1;
-    stepIterations.set(step.name, stepIteration);
 
     const safeStepName = sanitizeTerminalText(step.name);
     const safePersonaDisplayName = sanitizeTerminalText(step.personaDisplayName);

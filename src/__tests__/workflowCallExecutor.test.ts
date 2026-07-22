@@ -110,6 +110,7 @@ describe('WorkflowCallExecutor', () => {
       instruction: '',
     } as WorkflowCallStep;
     const state = makeState(parentConfig.name, 'running', 2);
+    state.stepIterations.set('delegate', 3);
     const childState = makeState(childConfig.name, 'completed', 4);
     childState.lastOutput = makeResponse({ content: 'child complete' });
     childState.personaSessions.set('coder', 'session-2');
@@ -180,6 +181,12 @@ describe('WorkflowCallExecutor', () => {
     );
     const childOptions = createEngine.mock.calls[0]?.[3];
     expect(childOptions?.traceTaskMetadata).toBe(traceTaskMetadata);
+    expect(childOptions?.resumeStackPrefix).toEqual([{
+      workflow: 'parent',
+      step: 'delegate',
+      kind: 'workflow_call',
+      step_iterations: { delegate: 3 },
+    }]);
     expect(childEngine.on).toHaveBeenCalledWith('step:start', expect.any(Function));
     const childStep = childConfig.steps[0];
     const childProviderInfo = { provider: 'mock', model: 'test-model' };
@@ -190,6 +197,7 @@ describe('WorkflowCallExecutor', () => {
       childProviderInfo,
       childConfig.name,
       childStep?.name,
+      5,
     );
     expect(emit).toHaveBeenCalledWith(
       'step:start',
@@ -199,6 +207,7 @@ describe('WorkflowCallExecutor', () => {
       childProviderInfo,
       childConfig.name,
       step.name,
+      5,
     );
     expect(childEngine.on).toHaveBeenCalledWith('step:complete', expect.any(Function));
     const childResponse = makeResponse({ content: 'relayed response' });

@@ -1,6 +1,6 @@
 import * as globalConfigModule from './global/globalConfig.js';
 import { loadGlobalConfigTraceState } from './global/globalConfigCore.js';
-import { mergeProviderOptions } from './providerOptions.js';
+import { mergeProviderOptions, resolveEffectiveProviderOptions } from './providerOptions.js';
 import { loadProjectConfig, loadProjectConfigTraceState } from './project/projectConfig.js';
 import { expandOptionalHomePath } from './pathExpansion.js';
 import { resolveObservabilityConfig } from './observabilityConfig.js';
@@ -43,6 +43,26 @@ export type ConfigValueSource = 'env' | 'project' | 'workflow' | 'global' | 'def
 export interface ResolvedConfigValue<K extends ConfigParameterKey> {
   value: LoadedConfig[K];
   source: ConfigValueSource;
+}
+
+export interface CodexSkillDefaults {
+  readonly repo: boolean;
+  readonly user: boolean;
+}
+
+const DEFAULT_CODEX_SKILLS: CodexSkillDefaults = {
+  repo: false,
+  user: false,
+};
+
+function createDefaultProviderOptions(
+  codexSkills: CodexSkillDefaults = DEFAULT_CODEX_SKILLS,
+): StepProviderOptions {
+  return {
+    codex: {
+      skills: codexSkills,
+    },
+  };
 }
 
 type ResolutionLayer = 'local' | 'workflow' | 'global';
@@ -479,6 +499,7 @@ function getProviderOptionsSource(trace: TracedConfigState): ConfigValueSource {
 
 export function resolveProviderOptionsWithTrace(
   projectDir: string,
+  codexSkillDefaults: CodexSkillDefaults = DEFAULT_CODEX_SKILLS,
 ): {
   value: LoadedConfig['providerOptions'];
   source: ProviderOptionsSource;
@@ -487,9 +508,10 @@ export function resolveProviderOptionsWithTrace(
   const project = loadProjectConfigCached(projectDir);
   const global = globalConfigModule.loadGlobalConfig();
   const preliminaryProviderOptions = mergeProviderOptions(global.providerOptions, project.providerOptions);
+  const defaultProviderOptions = createDefaultProviderOptions(codexSkillDefaults);
   if (preliminaryProviderOptions === undefined) {
     return {
-      value: undefined,
+      value: defaultProviderOptions,
       source: 'default',
       originResolver: () => 'default',
     };
@@ -520,6 +542,9 @@ export function resolveProviderOptionsWithTrace(
     if (hasProviderOptionsPath(global.providerOptions, path)) {
       return globalTrace.getOrigin(toProviderOptionsTracePath(path));
     }
+    if (path === 'codex.skills' || path.startsWith('codex.skills.')) {
+      return 'default';
+    }
     if (project.providerOptions !== undefined) {
       return projectTrace.getOrigin(toProviderOptionsTracePath(path));
     }
@@ -529,8 +554,22 @@ export function resolveProviderOptionsWithTrace(
     return 'default';
   };
   return {
-    value: mergedProviderOptions,
+    value: mergeProviderOptions(defaultProviderOptions, mergedProviderOptions),
     source: resolveProviderOptionsSourceFromValues(mergedProviderOptions, originResolver),
     originResolver,
   };
+}
+
+export function resolveNonWorkflowProviderOptions(
+  projectDir: string,
+  callOptions?: StepProviderOptions,
+  codexSkillDefaults?: CodexSkillDefaults,
+): StepProviderOptions | undefined {
+  const resolved = resolveProviderOptionsWithTrace(projectDir, codexSkillDefaults);
+  return resolveEffectiveProviderOptions(
+    resolved.source,
+    resolved.originResolver,
+    resolved.value,
+    callOptions,
+  );
 }

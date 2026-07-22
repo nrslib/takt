@@ -12,6 +12,7 @@ const commonTests = [
   'e2e/specs/pipeline.e2e.ts',
   'e2e/specs/task-auto-pr.e2e.ts',
   'e2e/specs/github-issue.e2e.ts',
+  'e2e/specs/runtime-config-provider.e2e.ts',
   'e2e/specs/structured-output.e2e.ts',
   'e2e/specs/team-leader.e2e.ts',
 ];

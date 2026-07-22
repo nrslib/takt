@@ -122,6 +122,7 @@ interface WorkflowCallExecutorDeps {
   state: {
     iteration: number;
     personaSessions: Map<string, string>;
+    stepIterations: Map<string, number>;
   };
   setActiveResumePoint: (step: WorkflowCallStep, iteration: number) => void;
   /** 自前 or 継承済みの、この engine で有効な Finding Contract。子へ引き継ぐ。 */
@@ -169,9 +170,9 @@ export class WorkflowCallExecutor {
    * 親自身が undefined のままなら raw finding id の形は変わらない。
    *
    * ステップ名だけでは、同じ workflow_call ステップがループで再実行された
-   * ケースを区別できない。子エンジンはループのたびに新規生成され
-   * stepIterations が空から始まるため、子の最初のレビューは常に
-   * stepIteration=1 になる。ステップ名・parentStepName・stepIteration・
+   * ケースを区別できない。resume continuation では stepIterations を復元するが、
+   * 同一 run 内の新規 workflow_call は子エンジンを新規生成するため、子の最初の
+   * レビューは stepIteration=1 になる。ステップ名・parentStepName・stepIteration・
    * subStepName が全て一致すれば、ローカルの raw finding id が同じ場合に
    * 正規化後の id も完全に一致し、後勝ちで前回の raw finding が台帳から
    * 消える。buildWorkflowCallNamespace() と同じ「親のこの呼び出し時点の
@@ -226,7 +227,12 @@ export class WorkflowCallExecutor {
       resumePoint: options.resumePoint,
       resumeStackPrefix: [
         ...this.deps.resumeStackPrefix,
-        buildWorkflowResumePointEntry(parentConfig, step.name, 'workflow_call'),
+        buildWorkflowResumePointEntry(
+          parentConfig,
+          step.name,
+          'workflow_call',
+          this.deps.state.stepIterations,
+        ),
       ],
       resolveWorkflowCall: (parentWorkflow, nestedStep) => this.deps.resolveWorkflowCall({
         parentWorkflow,
@@ -239,7 +245,7 @@ export class WorkflowCallExecutor {
 
   private relayChildEvents(childEngine: WorkflowCallChildEngine, resumeStepName: string): void {
     childEngine.on('step:start', (...args) => {
-      const [step, iteration, instruction, providerInfo, workflowName] = args;
+      const [step, iteration, instruction, providerInfo, workflowName, , stepIteration] = args;
       this.deps.emit(
         'step:start',
         step,
@@ -248,6 +254,7 @@ export class WorkflowCallExecutor {
         providerInfo,
         workflowName,
         resumeStepName,
+        stepIteration,
       );
     });
     childEngine.on('step:complete', (...args) => {
@@ -343,7 +350,12 @@ export class WorkflowCallExecutor {
       sharedRuntime: this.deps.sharedRuntime,
       resumeStackPrefix: [
         ...this.deps.resumeStackPrefix,
-        buildWorkflowResumePointEntry(parentConfig, request.step.name, 'workflow_call'),
+        buildWorkflowResumePointEntry(
+          parentConfig,
+          request.step.name,
+          'workflow_call',
+          this.deps.state.stepIterations,
+        ),
       ],
       // 親の Finding Contract を子エンジンへ継承する。継承しないと子の
       // parallel レビューが出す raw findings が台帳に入らず、fix に届かないまま

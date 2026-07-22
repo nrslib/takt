@@ -227,6 +227,15 @@ Provisional findings block the final gate:
 
 Provisional findings are settled only by later clean review evidence: a clean re-observation of the same claim confirms it as a real finding, and a deterministic mapping to an existing finding resolves it. They are never resolved just because a later round did not mention them, and they cannot be waived, invalidated, or superseded.
 
+Open finding items expose `familyTags` to both fixer instructions and `when()` rule state. Use `contains()` inside `exists()` to route by family without depending on array order:
+
+```yaml
+- condition: when(exists(findings.open.items, contains(item.familyTags, "provider-e2e")))
+  next: fix
+```
+
+If a ledger references a raw finding that is no longer present, its id is exposed in `unknownRawFindingIds` instead of being silently discarded or making the ledger unreadable. Both arrays are deduplicated and sorted; `contains(item.unknownRawFindingIds, "raw-id")` uses the same membership syntax.
+
 **Migrating from the pre-v2 invalid-manager-output routing:** older workflows relied on the engine auto-selecting a deterministic detour rule (`return: need_replan`, `return: needs_fix`, or non-AI `next: fix`) when the Finding Manager output stayed semantically invalid. That run-level failure path no longer exists — invalid or missing manager decisions land as provisional findings and the run continues, so those detour rules are never auto-selected anymore. To migrate, add a rule such as `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` routed to your replan step *before* the `COMPLETE` rule (see the builtin `takt-default-high` workflow for the reference wiring). `takt workflow doctor` warns when a `finding_contract` workflow has no rule referencing `findings.provisional`.
 
 ### Arpeggio Step (data-driven batch)
@@ -376,6 +385,8 @@ Promotion is not supported on parallel sub-steps.
 | `provider_options.opencode.variant` | - | OpenCode model variant, passed through as a provider/model-specific string |
 | `provider_options.codex.base_url` | - | OpenAI-compatible base URL for Codex SDK constructor options (see [configuration guide](./configuration.md#provider-base-url-base_url)) |
 | `provider_options.codex.network_access` | - | Allow Codex sandbox to access the network (see [configuration guide](./configuration.md#network-access-network_access)) |
+| `provider_options.codex.skills.repo` | `false` | Inherit Codex Skills from `.agents/skills` between the execution CWD and repository root (see [configuration guide](./configuration.md#codex-skill-inheritance-skills)) |
+| `provider_options.codex.skills.user` | `false` | Inherit Codex Skills from user scope (see [configuration guide](./configuration.md#codex-skill-inheritance-skills)) |
 | `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Run Claude Bash outside the macOS Seatbelt sandbox (see [configuration guide](./configuration.md#claude-code-sandbox-control-allow_unsandboxed_commands)) |
 | `provider_options.kiro.agent` | - | Kiro CLI custom agent name passed as `kiro-cli chat --agent`. Steps without it use the Kiro CLI default agent |
 | `provider` | - | Override provider for this step (`claude`, `claude-sdk`, `claude-terminal`, `codex`, `opencode`, `cursor`, `copilot`, `kiro`, or `mock`) |

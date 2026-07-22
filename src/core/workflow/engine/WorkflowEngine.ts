@@ -578,7 +578,15 @@ export class WorkflowEngine extends EventEmitter {
   private buildResumePoint(step: WorkflowStep, iteration: number): WorkflowResumePoint {
     return {
       version: 1,
-      stack: [...this.resumeStackPrefix, buildWorkflowResumePointEntry(this.config, step.name, getWorkflowStepKind(step))],
+      stack: [
+        ...this.resumeStackPrefix,
+        buildWorkflowResumePointEntry(
+          this.config,
+          step.name,
+          getWorkflowStepKind(step),
+          this.state.stepIterations,
+        ),
+      ],
       iteration,
       elapsed_ms: Date.now() - this.sharedRuntime.startedAtMs,
     };
@@ -589,7 +597,22 @@ export class WorkflowEngine extends EventEmitter {
   }
 
   getResumePoint(): WorkflowResumePoint | undefined {
-    return this.sharedRuntime.activeResumePoint;
+    const activeResumePoint = this.sharedRuntime.activeResumePoint;
+    const activeEntry = activeResumePoint?.stack[this.resumeStackPrefix.length];
+    if (activeResumePoint === undefined || activeEntry === undefined) {
+      return activeResumePoint;
+    }
+
+    const stack = [...activeResumePoint.stack];
+    stack[this.resumeStackPrefix.length] = buildWorkflowResumePointEntry(
+      this.config,
+      activeEntry.step,
+      activeEntry.kind,
+      this.state.stepIterations,
+    );
+    const refreshedResumePoint = { ...activeResumePoint, stack };
+    this.sharedRuntime.activeResumePoint = refreshedResumePoint;
+    return refreshedResumePoint;
   }
 
   buildResumePointForStepName(stepName: string): WorkflowResumePoint | undefined {

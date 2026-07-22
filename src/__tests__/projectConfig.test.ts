@@ -488,6 +488,19 @@ unexpected_overrides:
       expect(() => loadProjectConfig(testDir)).toThrow(/reasoning_effort/);
     });
 
+    it('should fail fast when Codex Skill inheritance is not boolean', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = [
+        'provider_options:',
+        '  codex:',
+        '    skills:',
+        '      repo: disabled',
+      ].join('\n');
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/skills.*repo|boolean/i);
+    });
+
     it('should reject empty persona_providers provider_options during load', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       const configContent = [

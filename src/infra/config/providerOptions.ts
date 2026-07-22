@@ -22,6 +22,10 @@ type RawProviderOptions = {
     base_url?: string;
     network_access?: boolean;
     reasoning_effort?: CodexReasoningEffort;
+    skills?: {
+      repo?: boolean;
+      user?: boolean;
+    };
   };
   opencode?: {
     network_access?: boolean;
@@ -152,6 +156,8 @@ export function normalizeProviderOptions(
     options.codex?.base_url !== undefined
     || options.codex?.network_access !== undefined
     || options.codex?.reasoning_effort !== undefined
+    || options.codex?.skills?.repo !== undefined
+    || options.codex?.skills?.user !== undefined
   ) {
     const codexBaseUrlPath = `${normalizationOptions.pathPrefix ?? 'provider_options'}.codex.base_url`;
     assertAllowedProviderBaseUrl(codexBaseUrlPath, options.codex.base_url, normalizationOptions);
@@ -164,6 +170,14 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.codex.reasoning_effort !== undefined
         ? { reasoningEffort: options.codex.reasoning_effort }
+        : {}),
+      ...(options.codex.skills?.repo !== undefined || options.codex.skills?.user !== undefined
+        ? {
+            skills: {
+              ...(options.codex.skills.repo !== undefined ? { repo: options.codex.skills.repo } : {}),
+              ...(options.codex.skills.user !== undefined ? { user: options.codex.skills.user } : {}),
+            },
+          }
         : {}),
     };
   }
@@ -269,6 +283,15 @@ export function mergeProviderOptions(
         ...(layer.codex.reasoningEffort !== undefined
           ? { reasoningEffort: layer.codex.reasoningEffort }
           : {}),
+        ...(layer.codex.skills !== undefined
+          ? {
+              skills: {
+                ...result.codex?.skills,
+                ...(layer.codex.skills.repo !== undefined ? { repo: layer.codex.skills.repo } : {}),
+                ...(layer.codex.skills.user !== undefined ? { user: layer.codex.skills.user } : {}),
+              },
+            }
+          : {}),
       };
     }
     if (layer.opencode) {
@@ -331,6 +354,10 @@ export function resolveProviderOptionOrigin(
 ): ProviderOptionsTraceOrigin {
   if (!resolver) {
     return resolveFallbackOrigin(fallbackSource);
+  }
+
+  if (path === 'codex.skills.repo' || path === 'codex.skills.user') {
+    return resolver(path);
   }
 
   let current = path;
@@ -471,27 +498,27 @@ export function resolveEffectiveProviderOptions(
   };
 
   const claude = {
-    sandbox: claudeSandbox.allowUnsandboxedCommands !== undefined || claudeSandbox.excludedCommands !== undefined
-      ? claudeSandbox
-      : undefined,
-    allowedTools: selectProviderValue(
-      resolvedConfigOptions.claude?.allowedTools,
-      personaOptions?.claude?.allowedTools,
-      stepOptions?.claude?.allowedTools,
-      resolveProviderOptionOrigin(originResolver, 'claude.allowedTools', source),
-    ),
-    baseUrl: selectProviderValueByScope(
-      resolvedConfigOptions.claude?.baseUrl,
-      personaOptions?.claude?.baseUrl,
-      stepOptions?.claude?.baseUrl,
-    ),
-    effort: selectProviderValue(
-      resolvedConfigOptions.claude?.effort,
-      personaOptions?.claude?.effort,
-      stepOptions?.claude?.effort,
-      resolveProviderOptionOrigin(originResolver, 'claude.effort', source),
-    ),
+    ...(claudeSandbox.allowUnsandboxedCommands !== undefined || claudeSandbox.excludedCommands !== undefined
+      ? { sandbox: claudeSandbox }
+      : {}),
   };
+  const claudeAllowedTools = selectProviderValue(
+    resolvedConfigOptions.claude?.allowedTools,
+    personaOptions?.claude?.allowedTools,
+    stepOptions?.claude?.allowedTools,
+    resolveProviderOptionOrigin(originResolver, 'claude.allowedTools', source),
+  );
+  const claudeBaseUrl = selectProviderValueByScope(
+    resolvedConfigOptions.claude?.baseUrl,
+    personaOptions?.claude?.baseUrl,
+    stepOptions?.claude?.baseUrl,
+  );
+  const claudeEffort = selectProviderValue(
+    resolvedConfigOptions.claude?.effort,
+    personaOptions?.claude?.effort,
+    stepOptions?.claude?.effort,
+    resolveProviderOptionOrigin(originResolver, 'claude.effort', source),
+  );
 
   const codexNetworkAccess = selectProviderValue(
     resolvedConfigOptions.codex?.networkAccess,
@@ -509,6 +536,18 @@ export function resolveEffectiveProviderOptions(
     resolvedConfigOptions.codex?.baseUrl,
     personaOptions?.codex?.baseUrl,
     stepOptions?.codex?.baseUrl,
+  );
+  const codexRepoSkills = selectProviderValue(
+    resolvedConfigOptions.codex?.skills?.repo,
+    personaOptions?.codex?.skills?.repo,
+    stepOptions?.codex?.skills?.repo,
+    resolveProviderOptionOrigin(originResolver, 'codex.skills.repo', source),
+  );
+  const codexUserSkills = selectProviderValue(
+    resolvedConfigOptions.codex?.skills?.user,
+    personaOptions?.codex?.skills?.user,
+    stepOptions?.codex?.skills?.user,
+    resolveProviderOptionOrigin(originResolver, 'codex.skills.user', source),
   );
   const opencodeNetworkAccess = selectProviderValue(
     resolvedConfigOptions.opencode?.networkAccess,
@@ -566,50 +605,71 @@ export function resolveEffectiveProviderOptions(
   );
 
   const result: StepProviderOptions = {
-    codex:
-      codexBaseUrl !== undefined || codexNetworkAccess !== undefined || codexReasoningEffort !== undefined
-        ? {
+    ...(codexBaseUrl !== undefined
+      || codexNetworkAccess !== undefined
+      || codexReasoningEffort !== undefined
+      || codexRepoSkills !== undefined
+      || codexUserSkills !== undefined
+      ? {
+          codex: {
             ...(codexBaseUrl !== undefined ? { baseUrl: codexBaseUrl } : {}),
             ...(codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : {}),
             ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
-          }
-        : undefined,
-    opencode:
-      opencodeNetworkAccess !== undefined || opencodeVariant !== undefined || opencodeAllowedTools !== undefined
-        ? {
+            ...(codexRepoSkills !== undefined || codexUserSkills !== undefined
+              ? {
+                  skills: {
+                    ...(codexRepoSkills !== undefined ? { repo: codexRepoSkills } : {}),
+                    ...(codexUserSkills !== undefined ? { user: codexUserSkills } : {}),
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
+    ...(opencodeNetworkAccess !== undefined
+      || opencodeVariant !== undefined
+      || opencodeAllowedTools !== undefined
+      ? {
+          opencode: {
             ...(opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : {}),
             ...(opencodeVariant !== undefined ? { variant: opencodeVariant } : {}),
             ...(opencodeAllowedTools !== undefined ? { allowedTools: opencodeAllowedTools } : {}),
-          }
-        : undefined,
-    claude:
-      claude.sandbox !== undefined
-      || claude.allowedTools !== undefined
-      || claude.baseUrl !== undefined
-      || claude.effort !== undefined
-        ? claude
-        : undefined,
-    copilot: copilotEffort !== undefined ? { effort: copilotEffort } : undefined,
-    kiro: kiroAgent !== undefined ? { agent: kiroAgent } : undefined,
-    claudeTerminal:
-      claudeTerminalBackend !== undefined
+          },
+        }
+      : {}),
+    ...(claude.sandbox !== undefined
+      || claudeAllowedTools !== undefined
+      || claudeBaseUrl !== undefined
+      || claudeEffort !== undefined
+      ? {
+          claude: {
+            ...claude,
+            ...(claudeAllowedTools !== undefined ? { allowedTools: claudeAllowedTools } : {}),
+            ...(claudeBaseUrl !== undefined ? { baseUrl: claudeBaseUrl } : {}),
+            ...(claudeEffort !== undefined ? { effort: claudeEffort } : {}),
+          },
+        }
+      : {}),
+    ...(copilotEffort !== undefined ? { copilot: { effort: copilotEffort } } : {}),
+    ...(kiroAgent !== undefined ? { kiro: { agent: kiroAgent } } : {}),
+    ...(claudeTerminalBackend !== undefined
       || claudeTerminalTimeoutMs !== undefined
       || claudeTerminalKeepSession !== undefined
       || claudeTerminalTranscriptPollIntervalMs !== undefined
-        ? {
+      ? {
+          claudeTerminal: {
             ...(claudeTerminalBackend !== undefined ? { backend: claudeTerminalBackend } : {}),
             ...(claudeTerminalTimeoutMs !== undefined ? { timeoutMs: claudeTerminalTimeoutMs } : {}),
             ...(claudeTerminalKeepSession !== undefined ? { keepSession: claudeTerminalKeepSession } : {}),
             ...(claudeTerminalTranscriptPollIntervalMs !== undefined
               ? { transcriptPollIntervalMs: claudeTerminalTranscriptPollIntervalMs }
               : {}),
-          }
-        : undefined,
+          },
+        }
+      : {}),
   };
 
-  return result.codex || result.opencode || result.claude || result.copilot || result.kiro || result.claudeTerminal
-    ? result
-    : undefined;
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function stripClaudeAllowedTools(
@@ -697,6 +757,8 @@ export const PROVIDER_OPTION_PATHS = [
   'codex.baseUrl',
   'codex.networkAccess',
   'codex.reasoningEffort',
+  'codex.skills.repo',
+  'codex.skills.user',
   'opencode.networkAccess',
   'opencode.variant',
   'opencode.allowedTools',

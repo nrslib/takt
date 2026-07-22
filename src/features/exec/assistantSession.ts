@@ -1,6 +1,9 @@
 import { getProvider } from '../../infra/providers/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
-import { resolveWorkflowConfigValues } from '../../infra/config/index.js';
+import {
+  resolveNonWorkflowProviderOptions,
+  resolveWorkflowConfigValues,
+} from '../../infra/config/index.js';
 import type { PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
 import type {
@@ -10,7 +13,12 @@ import type {
 } from '../../core/models/workflow-types.js';
 import { callAIWithRetry, type SessionContext } from '../interactive/aiCaller.js';
 import type { FacetLookupConfig } from '../catalog/catalogFacets.js';
-import type { ResolvedExecConfig, ResolvedExecSessionConfig } from './types.js';
+import type {
+  ExecCodexSkillInheritance,
+  ResolvedExecConfig,
+  ResolvedExecSessionConfig,
+} from './types.js';
+import { resolveExecCodexSkillInheritance } from './runtimeConfig.js';
 import { assertExecProviderEffort, CLAUDE_TOOL_PROVIDERS } from './configValidation.js';
 
 interface AskExecAssistantOptions {
@@ -20,6 +28,7 @@ interface AskExecAssistantOptions {
 
 export interface ExecSessionContext extends SessionContext {
   readonly facetLookupConfig: FacetLookupConfig;
+  readonly codexSkillInheritance: ExecCodexSkillInheritance;
 }
 
 function buildSessionProviderOptions(session: ResolvedExecSessionConfig): StepProviderOptions | undefined {
@@ -39,9 +48,30 @@ function buildSessionProviderOptions(session: ResolvedExecSessionConfig): StepPr
   throw new Error(`Unreachable: assertExecProviderEffort should have rejected provider "${session.provider}" with effort "${session.effort}"`);
 }
 
-export function createExecSessionContext(cwd: string, config: ResolvedExecConfig, sessionId?: string): ExecSessionContext {
+function withCodexSkillInheritance(
+  providerOptions: StepProviderOptions | undefined,
+  inheritance: ExecCodexSkillInheritance,
+): StepProviderOptions {
+  return {
+    ...providerOptions,
+    codex: {
+      ...providerOptions?.codex,
+      skills: inheritance,
+    },
+  };
+}
+
+export function createExecSessionContext(
+  cwd: string,
+  config: ResolvedExecConfig,
+  sessionId?: string,
+  codexSkillInheritance: ExecCodexSkillInheritance = resolveExecCodexSkillInheritance(cwd),
+): ExecSessionContext {
   const resolvedConfig = resolveWorkflowConfigValues(cwd, ['enableBuiltinWorkflows', 'language']);
-  const providerOptions = buildSessionProviderOptions(config.session);
+  const providerOptions = resolveNonWorkflowProviderOptions(
+    cwd,
+    withCodexSkillInheritance(buildSessionProviderOptions(config.session), codexSkillInheritance),
+  );
   return {
     provider: getProvider(config.session.provider as ProviderType),
     providerType: config.session.provider,
@@ -49,6 +79,7 @@ export function createExecSessionContext(cwd: string, config: ResolvedExecConfig
     lang: resolvedConfig.language,
     personaName: 'exec-assistant',
     sessionId,
+    codexSkillInheritance,
     facetLookupConfig: {
       enableBuiltinWorkflows: resolvedConfig.enableBuiltinWorkflows,
       language: resolvedConfig.language,

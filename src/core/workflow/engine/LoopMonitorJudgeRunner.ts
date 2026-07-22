@@ -20,7 +20,14 @@ interface LoopMonitorJudgeRunnerDeps {
   language?: string;
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;
-  onStepStart: (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo | undefined, resumeStepName: string) => void;
+  onStepStart: (
+    step: WorkflowStep,
+    iteration: number,
+    instruction: string,
+    providerInfo: StepProviderInfo | undefined,
+    resumeStepName: string,
+    stepIteration: number,
+  ) => void;
   onStepComplete: (step: WorkflowStep, response: AgentResponse, instruction: string, resumeStepName: string) => void;
   emitCollectedReports: () => void;
   resetCycleDetector: () => void;
@@ -73,6 +80,7 @@ export class LoopMonitorJudgeRunner {
       prebuiltInstruction,
       providerInfo,
       triggeringStep.name,
+      stepIteration,
     );
 
     const { response, instruction } = await this.deps.stepExecutor.runNormalStep(

@@ -11,6 +11,7 @@ vi.mock('../infra/providers/index.js', () => ({
 vi.mock('../infra/config/index.js', () => ({
   resolveConfigValues: vi.fn(),
   resolveNonWorkflowProviderModel: vi.fn(),
+  resolveNonWorkflowProviderOptions: vi.fn(),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -26,12 +27,14 @@ import { getProvider } from '../infra/providers/index.js';
 import {
   resolveConfigValues,
   resolveNonWorkflowProviderModel,
+  resolveNonWorkflowProviderOptions,
 } from '../infra/config/index.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockResolveConfigValues = vi.mocked(resolveConfigValues);
 const mockResolveNonWorkflowProviderModel = vi.mocked(resolveNonWorkflowProviderModel);
+const mockResolveNonWorkflowProviderOptions = vi.mocked(resolveNonWorkflowProviderOptions);
 
 const mockProviderCall = vi.fn();
 const mockGetRuntimeInstructions = vi.fn(() => null);
@@ -54,6 +57,9 @@ beforeEach(() => {
   mockResolveNonWorkflowProviderModel.mockReturnValue({
     provider: 'claude',
     model: undefined,
+  });
+  mockResolveNonWorkflowProviderOptions.mockReturnValue({
+    codex: { skills: { repo: true, user: false } },
   });
 });
 
@@ -83,6 +89,7 @@ describe('summarizeTaskName', () => {
       expect.objectContaining({
         cwd: '/project',
         permissionMode: 'readonly',
+        providerOptions: { codex: { skills: { repo: true, user: false } } },
       })
     );
   });

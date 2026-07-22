@@ -56,6 +56,7 @@ interface WorkflowRunLoopDeps {
     step: WorkflowStep,
     prebuiltInstruction?: string,
     runtime?: RuntimeStepResolution,
+    stepIteration?: number,
   ) => Promise<StepRunResult>;
   runQualityGates: (options: {
     qualityGates: WorkflowStep['qualityGates'];
@@ -557,12 +558,15 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     const isDelegated = isDelegatedWorkflowStep(step);
     const activeIteration = deps.state.iteration;
     const baseStepRuntime = deps.resolveRuntimeForStep(step);
-    const stepIteration = isDelegated
-      ? undefined
-      : incrementStepIteration(deps.state, step.name);
-    const promotedRuntime = await resolveStepPromotionRuntime(deps, step, stepIteration, baseStepRuntime);
+    const stepIteration = incrementStepIteration(deps.state, step.name);
+    const promotedRuntime = await resolveStepPromotionRuntime(
+      deps,
+      step,
+      isDelegated ? undefined : stepIteration,
+      baseStepRuntime,
+    );
     const fallbackRuntime = withFallbackRuntime(deps.state, promotedRuntime);
-    const prebuiltInstruction = stepIteration !== undefined
+    const prebuiltInstruction = !isDelegated
       ? deps.buildInstruction(step, stepIteration)
       : undefined;
     let stepRuntime: RuntimeStepResolution | undefined;
@@ -592,6 +596,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       providerInfo,
       deps.getWorkflowName(),
       step.name,
+      stepIteration,
     );
 
     try {
@@ -609,7 +614,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         providerInfo,
         getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
         traceTaskMetadata: deps.options.traceTaskMetadata,
-      }, () => deps.runStep(step, prebuiltInstruction, stepRuntime));
+      }, () => deps.runStep(step, prebuiltInstruction, stepRuntime, stepIteration));
       if (workflowInterruptRequested(deps)) {
         abort = abortInterruptedWorkflow(deps);
         break;
@@ -832,17 +837,19 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
 
   deps.state.iteration++;
   const activeIteration = deps.state.iteration;
-  deps.setActiveStep(step, activeIteration);
   const isDelegated = isDelegatedWorkflowStep(step);
   const baseStepRuntime = deps.resolveRuntimeForStep(step);
-  let stepIteration: number | undefined;
-  if (!isDelegated) {
-    stepIteration = incrementStepIteration(deps.state, step.name);
-  }
-  const promotedRuntime = await resolveStepPromotionRuntime(deps, step, stepIteration, baseStepRuntime);
+  const stepIteration = incrementStepIteration(deps.state, step.name);
+  deps.setActiveStep(step, activeIteration);
+  const promotedRuntime = await resolveStepPromotionRuntime(
+    deps,
+    step,
+    isDelegated ? undefined : stepIteration,
+    baseStepRuntime,
+  );
   const fallbackRuntime = withFallbackRuntime(deps.state, promotedRuntime);
   let prebuiltInstruction: string | undefined;
-  if (!isDelegated && stepIteration !== undefined) {
+  if (!isDelegated) {
     prebuiltInstruction = deps.buildInstruction(step, stepIteration);
   }
   let stepRuntime: RuntimeStepResolution | undefined;
@@ -874,7 +881,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     providerInfo,
     getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
     traceTaskMetadata: deps.options.traceTaskMetadata,
-  }, () => deps.runStep(step, prebuiltInstruction, stepRuntime));
+  }, () => deps.runStep(step, prebuiltInstruction, stepRuntime, stepIteration));
   if (workflowInterruptRequested(deps)) {
     return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
   }

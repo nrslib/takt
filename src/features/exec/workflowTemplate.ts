@@ -6,11 +6,18 @@ import {
   CLAUDE_TOOL_PROVIDERS,
   providerAllowsOmittedExecModel,
 } from './configValidation.js';
-import type { ExecConfig, ExecEffort, ResolvedExecActorConfig, ResolvedExecConfig } from './types.js';
+import type {
+  ExecCodexSkillInheritance,
+  ExecConfig,
+  ExecEffort,
+  ResolvedExecActorConfig,
+  ResolvedExecConfig,
+} from './types.js';
 
 interface BuildExecWorkflowOptions {
   workflowName: string;
   taskDescription: string;
+  codexSkillInheritance: ExecCodexSkillInheritance;
 }
 
 type ProviderOptions = {
@@ -141,6 +148,13 @@ export function buildExecWorkflowYaml(config: ExecConfig, options: BuildExecWork
   const workflow = {
     name: options.workflowName,
     description: options.taskDescription,
+    workflow_config: {
+      provider_options: {
+        codex: {
+          skills: options.codexSkillInheritance,
+        },
+      },
+    },
     max_steps: config.loop.maxSteps,
     initial_step: 'execute',
     loop_monitors: [

@@ -54,7 +54,12 @@ import {
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
 import { findWorkflowCallStep } from './testUtils/workflowCallStepTestHelper.js';
-import type { AutoRoutingConfig, WorkflowConfig, WorkflowState } from '../core/models/index.js';
+import type {
+  AutoRoutingConfig,
+  WorkflowConfig,
+  WorkflowState,
+  WorkflowStep,
+} from '../core/models/index.js';
 import { initAnalyticsWriter } from '../features/analytics/index.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
@@ -3982,6 +3987,7 @@ steps:
       workflow: 'parent',
       step: 'delegate',
       kind: 'workflow_call',
+      step_iterations: { delegate: 1 },
     });
     expect(capturedResumePoint?.stack[1]).toEqual(expect.objectContaining({
       workflow: 'takt/coding',
@@ -4669,19 +4675,34 @@ steps:
       resumePoint: {
         version: 1,
         stack: [
-          { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'takt/coding', step: 'fix', kind: 'agent' },
+          {
+            workflow: 'parent',
+            step: 'delegate',
+            kind: 'workflow_call',
+            step_iterations: { delegate: 3 },
+          },
+          {
+            workflow: 'takt/coding',
+            step: 'fix',
+            kind: 'agent',
+            step_iterations: { review: 4, fix: 6 },
+          },
         ],
         iteration: 7,
         elapsed_ms: 183245,
       },
     }));
+    const startFn = vi.fn();
+    engine.on('step:start', startFn);
 
     const state = await engine.run();
     const calledPersona = vi.mocked(runAgent).mock.calls[0]?.[0];
+    const fixStart = startFn.mock.calls.find((call) => (call[0] as WorkflowStep).name === 'fix');
 
     expect(state.status).toBeDefined();
     expect(calledPersona).toContain('fixer');
+    expect(fixStart?.[2]).toContain('Step Iteration: 7');
+    expect(fixStart?.[6]).toBe(7);
   });
 
   it('resume_point の深い child step が消えていたら直近の workflow_call から再開する', async () => {

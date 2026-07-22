@@ -14,7 +14,7 @@ import { execLabel, execScopeLabel, type ExecLanguage } from './labels.js';
 import { writeProjectLocalTextFile } from './projectLocalFiles.js';
 import { promptTextOrCancel, selectExecOption } from './promptUtils.js';
 import { resolveExecConfigProviderModel, type ExecProviderModelDefaults } from './runtimeConfig.js';
-import type { ExecConfig, ExecPresetScope } from './types.js';
+import type { ExecCodexSkillInheritance, ExecConfig, ExecPresetScope } from './types.js';
 import { buildExecWorkflowYaml } from './workflowTemplate.js';
 
 type PresetSetupAction = 'load' | 'save' | 'delete' | 'export' | 'back';
@@ -99,6 +99,7 @@ export async function exportPresetAsWorkflow(
   cwd: string,
   lang: ExecLanguage,
   providerModelDefaults: ExecProviderModelDefaults,
+  codexSkillInheritance: ExecCodexSkillInheritance,
 ): Promise<void> {
   const config = await selectPresetConfig(cwd, lang);
   if (config === null) {
@@ -110,12 +111,22 @@ export async function exportPresetAsWorkflow(
   }
   validateExecPresetName(name);
   const resolvedConfig = resolveExecConfigProviderModel(config, providerModelDefaults);
-  const yaml = buildExecWorkflowYaml(resolvedConfig, { workflowName: name, taskDescription: name });
+  const yaml = buildExecWorkflowYaml(resolvedConfig, {
+    workflowName: name,
+    taskDescription: name,
+    codexSkillInheritance,
+  });
   writeProjectLocalTextFile(cwd, join(cwd, '.takt', 'workflows', `${name}.yaml`), yaml, 'exec workflow');
   info(execLabel(lang, 'preset.exported', { name: sanitizeTerminalText(name) }));
 }
 
-export async function editPresetSetup(cwd: string, config: ExecConfig, lang: SessionContext['lang'], providerModelDefaults: ExecProviderModelDefaults): Promise<ExecConfig> {
+export async function editPresetSetup(
+  cwd: string,
+  config: ExecConfig,
+  lang: SessionContext['lang'],
+  providerModelDefaults: ExecProviderModelDefaults,
+  codexSkillInheritance: ExecCodexSkillInheritance,
+): Promise<ExecConfig> {
   const action = await selectExecOption<PresetSetupAction>(lang, execLabel(lang, 'preset.menu'), [
     { label: execLabel(lang, 'preset.load'), value: 'load' },
     { label: execLabel(lang, 'preset.saveCurrent'), value: 'save' },
@@ -135,7 +146,7 @@ export async function editPresetSetup(cwd: string, config: ExecConfig, lang: Ses
     return config;
   }
   if (action === 'export') {
-    await exportPresetAsWorkflow(cwd, lang, providerModelDefaults);
+    await exportPresetAsWorkflow(cwd, lang, providerModelDefaults, codexSkillInheritance);
     return config;
   }
   return config;

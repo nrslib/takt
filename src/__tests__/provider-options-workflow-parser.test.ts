@@ -218,6 +218,42 @@ describe('normalizeWorkflowConfig provider_options', () => {
     });
   });
 
+  it('Codex Skill inheritance を workflow-level で設定し step で上書きできる', () => {
+    const raw = {
+      name: 'provider-option-codex-skills',
+      workflow_config: {
+        provider_options: {
+          codex: { skills: { repo: false, user: false } },
+        },
+      },
+      steps: [
+        {
+          name: 'inherit',
+          instruction: '{task}',
+        },
+        {
+          name: 'override',
+          provider_options: {
+            codex: { skills: { repo: true } },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizeWorkflowConfig(raw, process.cwd());
+
+    expect(config.providerOptions).toEqual({
+      codex: { skills: { repo: false, user: false } },
+    });
+    expect(config.steps[0]?.providerOptions).toEqual({
+      codex: { skills: { repo: false, user: false } },
+    });
+    expect(config.steps[1]?.providerOptions).toEqual({
+      codex: { skills: { repo: true, user: false } },
+    });
+  });
+
   it('base_url provider_options を workflow-level で設定し step で上書きできる', () => {
     const raw = {
       name: 'provider-option-base-url',

@@ -44,6 +44,21 @@ function resolveOperand(
   return parseItemReference(operand.reference, itemContext.item);
 }
 
+function evaluateContainsClause(
+  clause: Extract<WhenClauseExpression, { kind: 'contains' }>,
+  state: WorkflowState,
+  itemContext?: { item: unknown },
+): boolean {
+  const list = resolveOperand(clause.listExpression, state, itemContext);
+  if (!Array.isArray(list)) {
+    throw new Error(
+      `contains() requires an array expression: "${formatOperand(clause.listExpression)}"`,
+    );
+  }
+  const value = resolveOperand(clause.valueExpression, state, itemContext);
+  return list.some((candidate) => candidate === value);
+}
+
 function evaluateExistsClause(
   clause: Extract<WhenClauseExpression, { kind: 'exists' }>,
   state: WorkflowState,
@@ -54,10 +69,13 @@ function evaluateExistsClause(
       `exists() requires an array expression: "${formatOperand(clause.listExpression)}"`,
     );
   }
-  return list.some((item) => clause.predicate.every((predicate) =>
-    resolveOperand(predicate.left, state, { item })
-      === resolveOperand(predicate.right, state, { item }),
-  ));
+  return list.some((item) => clause.predicate.every((predicate) => {
+    if (predicate.kind === 'contains') {
+      return evaluateContainsClause(predicate, state, { item });
+    }
+    return resolveOperand(predicate.left, state, { item })
+      === resolveOperand(predicate.right, state, { item });
+  }));
 }
 
 function compareWhenOperands(
@@ -83,6 +101,7 @@ function evaluateClause(clause: WhenClauseExpression, state: WorkflowState): boo
   switch (clause.kind) {
     case 'boolean': return clause.value;
     case 'exists': return evaluateExistsClause(clause, state);
+    case 'contains': return evaluateContainsClause(clause, state);
     case 'operand': {
       const value = resolveOperand(clause.operand, state);
       if (typeof value !== 'boolean') {

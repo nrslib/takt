@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resolveWorkflowConfigValues } from '../infra/config/index.js';
+import {
+  resolveNonWorkflowProviderOptions,
+  resolveWorkflowConfigValues,
+} from '../infra/config/index.js';
 import { getProvider } from '../infra/providers/index.js';
 import { readInteractiveInput } from '../features/interactive/interactiveInput.js';
 import type { ImageAttachmentStore, InteractiveImageAttachment } from '../features/interactive/imageAttachments.js';
@@ -11,6 +14,7 @@ import { callAIWithRetry } from '../features/interactive/aiCaller.js';
 import { formatRunSessionForPrompt, loadRunSessionContext } from '../features/interactive/runSessionReader.js';
 import { selectAndExecuteTask } from '../features/tasks/index.js';
 import { runExecCommand } from '../features/exec/index.js';
+import { createExecSessionContext } from '../features/exec/assistantSession.js';
 import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
 import { saveExecPreset, saveLastUsedExecConfig } from '../features/exec/presetStore.js';
 import type { ExecConfig } from '../features/exec/types.js';
@@ -27,6 +31,7 @@ vi.mock('../infra/config/index.js', () => ({
     enableBuiltinWorkflows: true,
     language: 'en',
   })),
+  resolveNonWorkflowProviderOptions: vi.fn((_cwd: string, options?: unknown) => options),
 }));
 
 vi.mock('../features/interactive/interactiveInput.js', () => ({
@@ -67,12 +72,16 @@ const mockReadInteractiveInput = vi.mocked(readInteractiveInput);
 const mockSelectOption = vi.mocked(selectOption);
 const mockSelectMultipleOptions = vi.mocked(selectMultipleOptions);
 const mockResolveWorkflowConfigValues = vi.mocked(resolveWorkflowConfigValues);
+const mockResolveNonWorkflowProviderOptions = vi.mocked(resolveNonWorkflowProviderOptions);
 const mockGetProvider = vi.mocked(getProvider);
 const mockCallAIWithRetry = vi.mocked(callAIWithRetry);
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
 const mockLoadRunSessionContext = vi.mocked(loadRunSessionContext);
 const mockFormatRunSessionForPrompt = vi.mocked(formatRunSessionForPrompt);
 const execAttachmentTempDirs = new Set<string>();
+const defaultExecSkillProviderOptions = {
+  codex: { skills: { repo: true, user: true } },
+} as const;
 
 function requireImageAttachmentStore(store: ImageAttachmentStore | undefined): ImageAttachmentStore {
   if (store === undefined) {
@@ -154,6 +163,7 @@ describe('exec command setup', () => {
     mockSelectOption.mockReset();
     mockSelectMultipleOptions.mockReset();
     mockResolveWorkflowConfigValues.mockReset();
+    mockResolveNonWorkflowProviderOptions.mockReset();
     mockGetProvider.mockReset();
     mockCallAIWithRetry.mockReset();
     mockSelectAndExecuteTask.mockReset();
@@ -165,6 +175,7 @@ describe('exec command setup', () => {
       provider: 'claude',
       model: 'opus',
     });
+    mockResolveNonWorkflowProviderOptions.mockImplementation((_cwd, options) => options);
     mockGetProvider.mockReturnValue({ setup: vi.fn() });
     mockSelectAndExecuteTask.mockResolvedValue(undefined);
     mockLoadRunSessionContext.mockReturnValue({
@@ -210,6 +221,50 @@ describe('exec command setup', () => {
     execAttachmentTempDirs.clear();
   });
 
+  it('should pass configured Codex Skill inheritance to the exec assistant session', () => {
+    mockResolveNonWorkflowProviderOptions.mockReturnValue({
+      codex: { skills: { repo: true, user: false } },
+    });
+
+    const ctx = createExecSessionContext(projectDir, DEFAULT_EXEC_CONFIG);
+
+    expect(ctx.providerOptions).toEqual({
+      codex: { skills: { repo: true, user: false } },
+    });
+    expect(ctx.codexSkillInheritance).toEqual({ repo: true, user: false });
+    expect(mockResolveNonWorkflowProviderOptions).toHaveBeenCalledWith(
+      projectDir,
+      undefined,
+      defaultExecSkillProviderOptions.codex.skills,
+    );
+  });
+
+  it('should keep explicitly configured Skill inheritance in assistant and generated workflow', async () => {
+    const configuredSkillOptions = {
+      codex: { skills: { repo: false, user: true } },
+    } as const;
+    mockResolveNonWorkflowProviderOptions.mockImplementation((_cwd, options, defaults) => (
+      defaults === undefined ? options : configuredSkillOptions
+    ));
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    for (const call of mockCallAIWithRetry.mock.calls) {
+      expect(call[4].providerOptions).toEqual(configuredSkillOptions);
+      expect(call[4].codexSkillInheritance).toEqual({ repo: false, user: true });
+    }
+    const workflow = parseYaml(
+      readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'),
+    );
+    expect(workflow.workflow_config.provider_options).toEqual(configuredSkillOptions);
+  });
+
   it('should pass explicit assistant effort as provider options for exec assistant calls', async () => {
     saveExecPreset('effort-team', 'Explicit effort team', {
       ...DEFAULT_EXEC_CONFIG,
@@ -227,10 +282,16 @@ describe('exec command setup', () => {
     await expect(runExecCommand(projectDir, { preset: 'effort-team' })).resolves.toBeUndefined();
 
     expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
-      providerOptions: { claude: { effort: 'high' } },
+      providerOptions: {
+        ...defaultExecSkillProviderOptions,
+        claude: { effort: 'high' },
+      },
     }));
     expect(mockCallAIWithRetry.mock.calls[1]?.[4]).toEqual(expect.objectContaining({
-      providerOptions: { claude: { effort: 'high' } },
+      providerOptions: {
+        ...defaultExecSkillProviderOptions,
+        claude: { effort: 'high' },
+      },
     }));
   });
 
@@ -835,6 +896,7 @@ describe('exec command setup', () => {
     expect(execute.parallel[0]).not.toHaveProperty('provider_options');
     expect(judge.parallel[0]).not.toHaveProperty('provider_options');
     expect(replan).not.toHaveProperty('provider_options');
+    expect(workflow.workflow_config.provider_options).toEqual(defaultExecSkillProviderOptions);
 
     expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
 
@@ -842,7 +904,7 @@ describe('exec command setup', () => {
       const ctx = call[4];
       expect(ctx.providerType).toBe('mock');
       expect(ctx.model).toBe('override-model');
-      expect(ctx.providerOptions).toBeUndefined();
+      expect(ctx.providerOptions).toEqual(defaultExecSkillProviderOptions);
     }
   });
 
@@ -1256,7 +1318,7 @@ describe('exec command setup', () => {
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
-    expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toBeUndefined();
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toEqual(defaultExecSkillProviderOptions);
     expect(execute.parallel[0].provider_options.claude).not.toHaveProperty('effort');
     expect(judge.parallel[0].provider_options.claude).not.toHaveProperty('effort');
     expect(replan.provider_options.claude).not.toHaveProperty('effort');
@@ -1367,8 +1429,14 @@ describe('exec command setup', () => {
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
-    expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toEqual({ claude: { effort: 'medium' } });
-    expect(mockCallAIWithRetry.mock.calls[1]?.[4].providerOptions).toEqual({ claude: { effort: 'medium' } });
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toEqual({
+      ...defaultExecSkillProviderOptions,
+      claude: { effort: 'medium' },
+    });
+    expect(mockCallAIWithRetry.mock.calls[1]?.[4].providerOptions).toEqual({
+      ...defaultExecSkillProviderOptions,
+      claude: { effort: 'medium' },
+    });
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
     expect(replan).toMatchObject({
@@ -1424,7 +1492,10 @@ describe('exec command setup', () => {
 
     await expect(runExecCommand(projectDir, { preset: 'xhigh-team' })).resolves.toBeUndefined();
 
-    expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toEqual({ claude: { effort: 'xhigh' } });
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toEqual({
+      ...defaultExecSkillProviderOptions,
+      claude: { effort: 'xhigh' },
+    });
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
@@ -1501,7 +1572,10 @@ describe('exec command setup', () => {
     expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
       providerType: 'claude',
       model: 'opus',
-      providerOptions: { claude: { effort: 'medium' } },
+      providerOptions: {
+        ...defaultExecSkillProviderOptions,
+        claude: { effort: 'medium' },
+      },
       sessionId: undefined,
     }));
   });
@@ -1994,7 +2068,7 @@ describe('exec command setup', () => {
     expect(execute.parallel[0].provider_options.claude).not.toHaveProperty('effort');
     expect(judge.parallel[0].provider_options.claude).not.toHaveProperty('effort');
     expect(replan.provider_options.claude).not.toHaveProperty('effort');
-    expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toBeUndefined();
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toEqual(defaultExecSkillProviderOptions);
 
     const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
     expect(saved.session).not.toHaveProperty('model');

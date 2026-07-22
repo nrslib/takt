@@ -567,7 +567,13 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       ]);
 
       const startFn = vi.fn();
-      engine.on('step:start', startFn);
+      let resumePointAtParallelStart: ReturnType<WorkflowEngine['getResumePoint']>;
+      engine.on('step:start', (...args) => {
+        startFn(...args);
+        if (args[0].name === 'reviewers') {
+          resumePointAtParallelStart = engine.getResumePoint();
+        }
+      });
 
       await engine.run();
 
@@ -579,6 +585,8 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       // Parallel steps emit empty string for instruction
       const [, , instruction] = reviewersCall!;
       expect(instruction).toBe('');
+      expect(reviewersCall?.[6]).toBe(1);
+      expect(resumePointAtParallelStart?.stack[0]?.step_iterations?.reviewers).toBe(1);
     });
 
     it('should emit iteration:limit when max iterations reached', async () => {
@@ -770,6 +778,51 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   // 9. startStep option
   // =====================================================
   describe('startStep option', () => {
+    it('should continue the resumed step iteration in instructions, events, and the next resume point', async () => {
+      const config = buildDefaultWorkflowConfig({
+        name: 'resume-workflow',
+        maxSteps: 11,
+        initialStep: 'implement',
+        steps: [
+          makeStep('implement', {
+            persona: 'coder',
+            rules: [makeRule('done', 'COMPLETE')],
+          }),
+        ],
+      });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        startStep: 'implement',
+        initialIteration: 10,
+        resumePoint: {
+          version: 1,
+          stack: [{
+            workflow: 'resume-workflow',
+            step: 'implement',
+            kind: 'agent',
+            step_iterations: { implement: 4, reviewers: 2 },
+          }],
+          iteration: 10,
+          elapsed_ms: 1_000,
+        },
+      });
+      mockRunAgentSequence([makeResponse({ persona: 'coder', content: 'done' })]);
+      mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+      const startFn = vi.fn();
+      engine.on('step:start', startFn);
+
+      const state = await engine.run();
+
+      expect(state.stepIterations.get('implement')).toBe(5);
+      expect(state.stepIterations.get('reviewers')).toBe(2);
+      expect(startFn.mock.calls[0]?.[2]).toContain('Step Iteration: 5');
+      expect(startFn.mock.calls[0]?.[6]).toBe(5);
+      expect(engine.getResumePoint()?.stack[0]?.step_iterations).toEqual({
+        implement: 5,
+        reviewers: 2,
+      });
+    });
+
     it('should start from specified step instead of initialStep', async () => {
       const config = buildDefaultWorkflowConfig();
       // Start from ai_review, skipping plan and implement

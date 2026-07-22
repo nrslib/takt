@@ -136,6 +136,7 @@ function createBridgeHarness(options?: {
     engine,
     out,
     runMetaManager,
+    prefixWriter,
     resumePoint,
     analyticsEmitter,
     usageEventLogger,
@@ -144,7 +145,7 @@ function createBridgeHarness(options?: {
 
 describe('bindWorkflowExecutionEvents', () => {
   it('event bridge が run meta と実行結果を同期する', () => {
-    const { bridge, engine, runMetaManager, resumePoint } = createBridgeHarness();
+    const { bridge, engine, runMetaManager, prefixWriter, resumePoint } = createBridgeHarness();
 
     const step = {
       name: 'review',
@@ -160,13 +161,28 @@ describe('bindWorkflowExecutionEvents', () => {
       matchedRuleIndex: 0,
     };
 
-    engine.emit('step:start', step, 2, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
+    engine.emit(
+      'step:start',
+      step,
+      2,
+      'instruction',
+      { provider: 'mock', model: 'gpt-test' },
+      'parent',
+      step.name,
+      7,
+    );
     engine.emit('phase:start', step, 1, 'main', 'instruction', [], 'phase-1', 2);
     engine.emit('phase:complete', step, 1, 'main', 'approved', 'done', undefined, 'phase-1', 2);
     engine.emit('step:complete', step, response, 'instruction', step.name);
     engine.emit('workflow:complete', { iteration: 2 });
 
     expect(runMetaManager.updateStep).toHaveBeenCalledWith('review', 2, resumePoint);
+    expect(prefixWriter.setStepContext).toHaveBeenCalledWith({
+      stepName: 'review',
+      iteration: 2,
+      maxSteps: 5,
+      stepIteration: 7,
+    });
     expect(runMetaManager.updatePhase).toHaveBeenCalledTimes(2);
     expect(runMetaManager.updatePhase.mock.calls[0]?.slice(0, 3)).toEqual(['review', 2, 1]);
     expect(runMetaManager.updatePhase.mock.calls[1]?.slice(0, 3)).toEqual(['review', 2, 1]);

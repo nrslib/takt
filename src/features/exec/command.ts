@@ -104,7 +104,14 @@ async function runGoCommand(
     { imageAttachments: trustedImageAttachments },
   );
   const summaryCtx = { ...ctx, sessionId: summary.sessionId };
-  const runContext = await runGeneratedWorkflow(cwd, runtimeConfig, summary.content, agentOverrides, taskAttachments);
+  const runContext = await runGeneratedWorkflow(
+    cwd,
+    runtimeConfig,
+    summary.content,
+    agentOverrides,
+    taskAttachments,
+    ctx.codexSkillInheritance,
+  );
   const formattedRun = formatRunSessionForPrompt(runContext);
   const completionPrompt = [
     `The generated workflow completed for this task:\n${summary.content}`,
@@ -176,7 +183,12 @@ async function runExecConversation(
           currentConfig = nextConfig;
           currentRuntimeConfig = resolveExecConfigProviderModel(currentConfig, providerModelDefaults);
           const nextSessionId = shouldKeepExecSession(previousSessionConfig, currentRuntimeConfig.session) ? ctx.sessionId : undefined;
-          ctx = createExecSessionContext(cwd, currentRuntimeConfig, nextSessionId);
+          ctx = createExecSessionContext(
+            cwd,
+            currentRuntimeConfig,
+            nextSessionId,
+            ctx.codexSkillInheritance,
+          );
           info(formatExecConfigSummary(currentRuntimeConfig));
         } catch (error) {
           info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));

@@ -46,6 +46,9 @@ vi.mock('../infra/config/index.js', () => ({
   resolveConfigValues: vi.fn(() => ({ syncConflictResolver: undefined })),
   resolveNonWorkflowProviderModel: (...args: unknown[]) =>
     mockResolveNonWorkflowProviderModel(...args),
+  resolveNonWorkflowProviderOptions: vi.fn(() => ({
+    codex: { skills: { repo: false, user: false } },
+  })),
 }));
 
 const mockRelayPushCloneToOrigin = vi.fn();

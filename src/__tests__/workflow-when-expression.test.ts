@@ -120,6 +120,14 @@ describe('parseWhenConditionExpression', () => {
       'exists predicate',
       'exists(findings.open.items, item.severity == "high" && item.title == "Example")',
     ],
+    [
+      'contains predicate',
+      'exists(findings.open.items, contains(item.familyTags, "provider-e2e"))',
+    ],
+    [
+      'top-level contains',
+      'contains(findings.open.items[0].familyTags, "provider-e2e")',
+    ],
   ])('should accept a valid %s expression', (_label, expression) => {
     expect(() => parseWhenConditionExpression(expression)).not.toThrow();
   });
@@ -132,6 +140,9 @@ describe('parseWhenConditionExpression', () => {
     ['unbalanced quote', 'structured.scan.note == "unfinished'],
     ['missing exists predicate', 'exists(findings.open.items)'],
     ['unsupported exists operator', 'exists(findings.open.items, item.severity != "high")'],
+    ['missing contains value', 'contains(findings.open.items[0].familyTags)'],
+    ['too many contains arguments', 'contains(findings.open.items[0].familyTags, "a", "b")'],
+    ['non-array contains operand', 'contains(findings.open.count, 1)'],
     ['multiple comparison operators', 'findings.open.count == 0 == true'],
     ['unsupported bare operand', 'unknown'],
     ['unsupported comparison operand', 'unknown == true'],
@@ -182,6 +193,20 @@ describe('parseWhenConditionExpression', () => {
           { right: { kind: 'literal', value: 'a"b' } },
           { right: { kind: 'literal', value: 'C:\\tmp' } },
         ],
+      }]],
+    });
+  });
+
+  it('should decode supported escapes in contains() string literals', () => {
+    const expression = String.raw`exists(findings.open.items, contains(item.familyTags, "a\"b\\c"))`;
+
+    expect(parseWhenConditionExpression(expression)).toMatchObject({
+      alternatives: [[{
+        kind: 'exists',
+        predicate: [{
+          kind: 'contains',
+          valueExpression: { kind: 'literal', value: 'a"b\\c' },
+        }],
       }]],
     });
   });
@@ -446,6 +471,12 @@ describe('WorkflowConfigRawSchema when operand validation', () => {
           'reviewers',
           'reviewers.length',
           'reviewers.0',
+          'familyTags',
+          'familyTags.length',
+          'familyTags.0',
+          'unknownRawFindingIds',
+          'unknownRawFindingIds.length',
+          'unknownRawFindingIds.0',
         ]],
         ['findings.provisional.items', ['id', 'kind', 'reason']],
         ['findings.conflicts.items', [
@@ -601,6 +632,7 @@ describe('WorkflowConfigRawSchema when operand validation', () => {
       const expressions = [
         String.raw`when(structured.scan.note == "a\"b\\c")`,
         String.raw`when(exists(findings.open.items, item.title == "a\"b\\c"))`,
+        String.raw`when(exists(findings.open.items, contains(item.familyTags, "a\"b\\c")))`,
       ];
 
       for (const expression of expressions) {

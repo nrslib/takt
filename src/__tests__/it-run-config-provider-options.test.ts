@@ -28,6 +28,7 @@ import { runAgent } from '../agents/runner.js';
 import { invalidateGlobalConfigCache } from '../infra/config/index.js';
 
 const runAllTasksNoWorkflow = runAllTasks as (projectCwd: string) => ReturnType<typeof runAllTasks>;
+const defaultCodexSkills = { repo: false, user: false } as const;
 
 interface TestEnv {
   root: string;
@@ -137,6 +138,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
+      codex: { skills: defaultCodexSkills },
       opencode: { variant: 'high' },
     });
   });
@@ -152,6 +154,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
+      codex: { skills: defaultCodexSkills },
       opencode: { variant: 'high' },
     });
   });
@@ -172,7 +175,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
-      codex: { networkAccess: false },
+      codex: { networkAccess: false, skills: defaultCodexSkills },
     });
   });
 
@@ -196,6 +199,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
+      codex: { skills: defaultCodexSkills },
       claude: { allowedTools: ['Read', 'Edit'] },
     });
     expect(options?.allowedTools).toEqual(['Read', 'Edit']);
@@ -220,6 +224,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
+      codex: { skills: defaultCodexSkills },
       opencode: {
         networkAccess: true,
         variant: 'high',
@@ -245,7 +250,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
-      codex: { networkAccess: true },
+      codex: { networkAccess: true, skills: defaultCodexSkills },
     });
   });
 });

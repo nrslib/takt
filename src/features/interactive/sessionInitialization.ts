@@ -1,6 +1,7 @@
 import {
   resolveConfigValues,
   resolveNonWorkflowProviderModel,
+  resolveNonWorkflowProviderOptions,
 } from '../../infra/config/index.js';
 import { getProvider } from '../../infra/providers/index.js';
 import {
@@ -36,5 +37,6 @@ export function initializeSession(
     lang,
     personaName,
     sessionId: undefined,
+    providerOptions: resolveNonWorkflowProviderOptions(cwd),
   };
 }

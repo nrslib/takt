@@ -204,7 +204,15 @@ export type WorkflowCallResolver = (request: WorkflowCallResolutionRequest) => W
 
 /** Events emitted by workflow engine */
 export interface WorkflowEvents {
-  'step:start': (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo, workflowName: string, resumeStepName: string) => void;
+  'step:start': (
+    step: WorkflowStep,
+    iteration: number,
+    instruction: string,
+    providerInfo: StepProviderInfo,
+    workflowName: string,
+    resumeStepName: string,
+    stepIteration: number,
+  ) => void;
   'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string, resumeStepName: string) => void;
   'routing:decision': (
     step: WorkflowStep,

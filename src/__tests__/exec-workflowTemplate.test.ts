@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentWorkflowStep } from '../core/models/index.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
 import type { ExecConfig } from '../features/exec/types.js';
-import { buildExecWorkflowYaml } from '../features/exec/workflowTemplate.js';
+import { buildExecWorkflowYaml as buildExecWorkflowYamlRaw } from '../features/exec/workflowTemplate.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 
 type ExecConfigOverrides = Omit<Partial<ExecConfig>, 'session' | 'replan' | 'loop'> & {
@@ -15,7 +15,32 @@ type ExecConfigOverrides = Omit<Partial<ExecConfig>, 'session' | 'replan' | 'loo
   loop?: Partial<ExecConfig['loop']>;
 };
 
+const defaultExecWorkflowSkillOptions = {
+  codex: { skills: { repo: true, user: true } },
+} as const;
+
+function buildExecWorkflowYaml(
+  config: ExecConfig,
+  options: {
+    workflowName: string;
+    taskDescription: string;
+    codexSkillInheritance?: { repo: boolean; user: boolean };
+  },
+): string {
+  return buildExecWorkflowYamlRaw(config, {
+    codexSkillInheritance: defaultExecWorkflowSkillOptions.codex.skills,
+    ...options,
+  });
+}
+
 type RawWorkflow = {
+  workflow_config?: {
+    provider_options?: {
+      codex?: {
+        skills?: { repo?: boolean; user?: boolean };
+      };
+    };
+  };
   loop_monitors?: Array<{
     cycle: string[];
     threshold: number;
@@ -153,6 +178,10 @@ describe('exec workflow template', () => {
       expect(workflow.description).toBe('Implement the requested task');
       expect(workflow.initialStep).toBe('execute');
       expect(workflow.maxSteps).toBe(20);
+      expect(raw.workflow_config?.provider_options?.codex?.skills).toEqual({
+        repo: true,
+        user: true,
+      });
       expect(execute?.parallel).toHaveLength(1);
       expect(judge?.parallel).toHaveLength(1);
       expect(worker?.sessionKey).toBe('worker-1');
@@ -208,6 +237,19 @@ describe('exec workflow template', () => {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(globalConfigDir, { recursive: true, force: true });
     }
+  });
+
+  it('should snapshot explicitly disabled Codex Skill inheritance in generated YAML', () => {
+    const raw = parseRawWorkflow(buildExecWorkflowYaml(createExecConfig(), {
+      workflowName: 'exec-skills-disabled',
+      taskDescription: 'Run without ambient Skills',
+      codexSkillInheritance: { repo: false, user: false },
+    }));
+
+    expect(raw.workflow_config?.provider_options?.codex?.skills).toEqual({
+      repo: false,
+      user: false,
+    });
   });
 
   it('should load generated parallel sub-steps with explicit model omission', () => {
@@ -510,6 +552,7 @@ describe('exec workflow template', () => {
       const terminalJudge = judge?.parallel?.find((step) => step.name === 'terminal-review');
       const copilotJudge = judge?.parallel?.find((step) => step.name === 'copilot-review');
       expect(claudeWorker?.providerOptions).toEqual({
+        ...defaultExecWorkflowSkillOptions,
         claude: {
           effort: 'high',
           allowedTools: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'],
@@ -517,17 +560,20 @@ describe('exec workflow template', () => {
       });
       expect(codexWorker?.providerOptions).toEqual({
         codex: {
+          skills: { repo: true, user: true },
           reasoningEffort: 'medium',
         },
       });
-      expect(opencodeWorker?.providerOptions).toBeUndefined();
+      expect(opencodeWorker?.providerOptions).toEqual(defaultExecWorkflowSkillOptions);
       expect(terminalJudge?.providerOptions).toEqual({
+        ...defaultExecWorkflowSkillOptions,
         claude: {
           effort: 'medium',
           allowedTools: ['Read', 'Glob', 'Grep'],
         },
       });
       expect(copilotJudge?.providerOptions).toEqual({
+        ...defaultExecWorkflowSkillOptions,
         copilot: {
           effort: 'low',
         },

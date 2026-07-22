@@ -4,6 +4,7 @@ import {
   getLanguage,
   resolveConfigValues,
   resolveNonWorkflowProviderModel,
+  resolveNonWorkflowProviderOptions,
 } from '../config/index.js';
 import { getProvider, type ProviderCallOptions } from '../providers/index.js';
 import { buildProviderRuntimeSystemPrompt } from '../providers/runtimeSystemPrompt.js';
@@ -49,6 +50,7 @@ export async function runSyncConflictResolver(
     cwd: options.cwd,
     model: resolvedProviderModel.model,
     permissionMode: 'edit',
+    providerOptions: resolveNonWorkflowProviderOptions(options.projectCwd),
     onPermissionRequest,
     onStream: options.onStream,
   });

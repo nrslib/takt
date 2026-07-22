@@ -198,6 +198,7 @@ export class ParallelRunner {
     maxSteps: WorkflowMaxSteps,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     runtime?: RuntimeStepResolution,
+    activeStepIteration?: number,
   ): Promise<StepRunResult> {
     if (!step.parallel) {
       throw new Error(`Step "${step.name}" has no parallel sub-steps`);
@@ -206,7 +207,7 @@ export class ParallelRunner {
     // 直前ステップ（通常は coder の fix）の応答。異議申告の裁定材料として
     // manager に渡すため、サブステップ実行で lastOutput が変わる前に捕捉する。
     const priorStepResponseText = state.lastOutput?.content;
-    const stepIteration = incrementStepIteration(state, step.name);
+    const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
     log.debug('Running parallel step', {
       step: step.name,
       subSteps: subSteps.map(s => s.name),

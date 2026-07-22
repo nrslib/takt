@@ -20,7 +20,10 @@ vi.mock('../shared/ui/index.js', async (importOriginal) => {
 
 import { selectExecOption, promptTextOrCancel } from '../features/exec/promptUtils.js';
 import { info } from '../shared/ui/index.js';
-import { editPresetSetup, exportPresetAsWorkflow } from '../features/exec/presetSetup.js';
+import {
+  editPresetSetup as editPresetSetupRaw,
+  exportPresetAsWorkflow as exportPresetAsWorkflowRaw,
+} from '../features/exec/presetSetup.js';
 
 const mockSelectExecOption = vi.mocked(selectExecOption);
 const mockPromptTextOrCancel = vi.mocked(promptTextOrCancel);
@@ -30,6 +33,24 @@ const PROVIDER_MODEL_DEFAULTS: ExecProviderModelDefaults = {
   provider: 'claude',
   model: 'opus',
 };
+const TEST_SKILL_INHERITANCE = { repo: false, user: true } as const;
+
+function exportPresetAsWorkflow(
+  cwd: string,
+  lang: 'en' | 'ja',
+  defaults: ExecProviderModelDefaults,
+): ReturnType<typeof exportPresetAsWorkflowRaw> {
+  return exportPresetAsWorkflowRaw(cwd, lang, defaults, TEST_SKILL_INHERITANCE);
+}
+
+function editPresetSetup(
+  cwd: string,
+  config: ExecConfig,
+  lang: 'en' | 'ja',
+  defaults: ExecProviderModelDefaults,
+): ReturnType<typeof editPresetSetupRaw> {
+  return editPresetSetupRaw(cwd, config, lang, defaults, TEST_SKILL_INHERITANCE);
+}
 
 function createExecConfig(): ExecConfig {
   return {
@@ -117,6 +138,11 @@ type RawWorkflow = {
   description: string;
   initial_step: string;
   max_steps: number;
+  workflow_config?: {
+    provider_options?: {
+      codex?: { skills?: { repo?: boolean; user?: boolean } };
+    };
+  };
   steps: RawWorkflowStep[];
   loop_monitors?: Array<{
     cycle: string[];
@@ -162,6 +188,9 @@ describe('exec preset export', () => {
       expect(parsed.description).toBe('my-workflow');
       expect(parsed.initial_step).toBe('execute');
       expect(parsed.max_steps).toBe(20);
+      expect(parsed.workflow_config?.provider_options?.codex?.skills).toEqual(
+        TEST_SKILL_INHERITANCE,
+      );
       expect(parsed.steps.map((s) => s.name)).toEqual(['execute', 'review', 'replan']);
     });
 

@@ -1,28 +1,74 @@
-import { FINDING_SEVERITIES, type FindingLedger, type FindingSeverity, type FindingsRuleContext } from './types.js';
+import {
+  FINDING_SEVERITIES,
+  type FindingLedger,
+  type FindingLedgerEntry,
+  type FindingSeverity,
+  type FindingsRuleContext,
+} from './types.js';
 import { isLedgerConflictUnadjudicated } from './adjudication-evidence.js';
 import { computeReviewScopeSnapshotId } from './snapshot.js';
 
+function indexRawFindingFamilyTags(ledger: FindingLedger): ReadonlyMap<string, string> {
+  const familyTagsByRawFindingId = new Map<string, string>();
+  for (const finding of ledger.rawFindings) {
+    const existingFamilyTag = familyTagsByRawFindingId.get(finding.rawFindingId);
+    if (existingFamilyTag !== undefined && existingFamilyTag !== finding.familyTag) {
+      throw new Error(
+        `Raw finding "${finding.rawFindingId}" has conflicting family tags: `
+        + `"${existingFamilyTag}" and "${finding.familyTag}"`,
+      );
+    }
+    familyTagsByRawFindingId.set(finding.rawFindingId, finding.familyTag);
+  }
+  return familyTagsByRawFindingId;
+}
+
+function deriveFindingFamilyTags(
+  finding: FindingLedgerEntry,
+  familyTagsByRawFindingId: ReadonlyMap<string, string>,
+): { familyTags: string[]; unknownRawFindingIds: string[] } {
+  const familyTags = new Set<string>();
+  const unknownRawFindingIds: string[] = [];
+  for (const rawFindingId of finding.rawFindingIds) {
+    const familyTag = familyTagsByRawFindingId.get(rawFindingId);
+    if (familyTag === undefined) {
+      unknownRawFindingIds.push(rawFindingId);
+    } else {
+      familyTags.add(familyTag);
+    }
+  }
+  return {
+    familyTags: [...familyTags].sort(),
+    unknownRawFindingIds: [...new Set(unknownRawFindingIds)].sort(),
+  };
+}
+
 export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): string {
+  const familyTagsByRawFindingId = indexRawFindingFamilyTags(ledger);
   return JSON.stringify({
     version: ledger.version,
     workflowName: ledger.workflowName,
     open: ledger.findings
       .filter((finding) => finding.status === 'open')
-      .map((finding) => ({
-        id: finding.id,
-        lifecycle: finding.lifecycle,
-        severity: finding.severity,
-        title: finding.title,
-        location: finding.location,
-        description: finding.description,
-        suggestion: finding.suggestion,
-        reviewers: finding.reviewers,
-        // provisional は fixer が直接直せない system finding なので、agent が
-        // 識別できるようサマリへ kind/reason を出す。
-        ...(finding.provisional !== undefined
-          ? { provisional: { kind: finding.provisional.kind, reason: finding.provisional.reason } }
-          : {}),
-      })),
+      .map((finding) => {
+        const familyContext = deriveFindingFamilyTags(finding, familyTagsByRawFindingId);
+        return {
+          id: finding.id,
+          lifecycle: finding.lifecycle,
+          severity: finding.severity,
+          title: finding.title,
+          location: finding.location,
+          description: finding.description,
+          suggestion: finding.suggestion,
+          reviewers: finding.reviewers,
+          ...familyContext,
+          // provisional は fixer が直接直せない system finding なので、agent が
+          // 識別できるようサマリへ kind/reason を出す。
+          ...(finding.provisional !== undefined
+            ? { provisional: { kind: finding.provisional.kind, reason: finding.provisional.reason } }
+            : {}),
+        };
+      }),
     resolved: ledger.findings
       .filter((finding) => finding.status === 'resolved')
       .map((finding) => ({
@@ -121,6 +167,7 @@ export function ledgerHasDismissedFindings(ledger: FindingLedger): boolean {
 
 export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): FindingsRuleContext {
   const openItems = ledger.findings.filter((finding) => finding.status === 'open');
+  const familyTagsByRawFindingId = indexRawFindingFamilyTags(ledger);
   const activeConflicts = ledger.conflicts.filter((conflict) => conflict.status === 'active');
   let unadjudicatedConflictCount = 0;
   if (activeConflicts.length > 0) {
@@ -148,6 +195,7 @@ export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): Fi
         description: finding.description,
         suggestion: finding.suggestion,
         reviewers: finding.reviewers,
+        ...deriveFindingFamilyTags(finding, familyTagsByRawFindingId),
       })),
     },
     // provisional は status=open の finding に付く optional メタデータなので

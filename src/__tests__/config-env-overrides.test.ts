@@ -105,6 +105,31 @@ describe('config traced env overrides', () => {
     });
   });
 
+  it('project config は Codex Skill scope ごとの env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-codex-skills-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  codex:',
+        '    skills:',
+        '      repo: false',
+        '      user: true',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO = 'true';
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER = 'false';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: { skills: { repo: true, user: false } },
+    });
+  });
+
   it('project config は effort 系の env override を traced-config 経由で反映する', () => {
     const projectDir = join(testRoot, 'project-effort-env');
     const configDir = getProjectConfigDir(projectDir);

@@ -226,6 +226,15 @@ provisional finding は final gate を塞ぎます。
 
 provisional finding を確定・解消できるのは後続ラウンドの clean なレビュー証拠だけです。同じ claim の clean な再観測は確定 finding へ昇格させ、既存 finding への決定的な対応づけは resolved にします。「後のラウンドで言及されなかった」だけでは決して解消されず、waive / invalidate / supersede もできません。
 
+open finding の各 item は、fixer instruction と `when()` の rule state の両方で `familyTags` を公開します。配列順に依存せず family でルーティングするには、`exists()` 内で `contains()` を使います。
+
+```yaml
+- condition: when(exists(findings.open.items, contains(item.familyTags, "provider-e2e")))
+  next: fix
+```
+
+ledger が既に存在しない raw finding を参照している場合、その id は黙って破棄されたり ledger 全体を読めなくしたりせず、`unknownRawFindingIds` に公開されます。どちらの配列も重複排除・ソート済みで、`contains(item.unknownRawFindingIds, "raw-id")` も同じ包含構文を使います。
+
 **v2 以前の invalid-manager-output ルーティングからの移行:** 旧 workflow は、Finding Manager output が retry 後も意味論的に invalid なとき、エンジンが決定的な迂回 rule（`return: need_replan` / `return: needs_fix` / 非AI `next: fix`）を自動選択することに依存していました。この run-level の失敗経路は廃止されています — invalid・欠落した manager の判断は provisional finding として台帳へ着地して run が継続するため、これらの迂回 rule が自動選択されることはもうありません。移行するには、`COMPLETE` の rule より*前*に `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` を再計画ステップへ向ける rule を追加してください（配線の参考は builtin の `takt-default-high` workflow）。`finding_contract` を使う workflow が `findings.provisional` を一切参照していない場合、`takt workflow doctor` が警告します。
 
 ### Arpeggio Step（データ駆動バッチ）
@@ -375,6 +384,8 @@ promotion は並列サブ step ではサポートされません。
 | `provider_options.opencode.variant` | - | OpenCode の model variant。プロバイダー / model 固有の文字列としてパススルー |
 | `provider_options.codex.base_url` | - | Codex SDK constructor option 用の OpenAI 互換 base URL（[configuration ガイド](./configuration.ja.md#provider-base-url-base_url) 参照） |
 | `provider_options.codex.network_access` | - | Codex サンドボックスからのネットワークアクセスを許可（[configuration ガイド](./configuration.ja.md#ネットワークアクセス-network_access) 参照） |
+| `provider_options.codex.skills.repo` | `false` | 実行 CWD から repository root までの `.agents/skills` にある Codex Skill を継承（[configuration ガイド](./configuration.ja.md#codex-skill-の継承-skills) 参照） |
+| `provider_options.codex.skills.user` | `false` | user scope の Codex Skill を継承（[configuration ガイド](./configuration.ja.md#codex-skill-の継承-skills) 参照） |
 | `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Claude の Bash を macOS Seatbelt サンドボックス外で実行（[configuration ガイド](./configuration.ja.md#claude-code-の-sandbox-制御-allow_unsandboxed_commands) 参照） |
 | `provider_options.kiro.agent` | - | Kiro CLI の custom agent 名。`kiro-cli chat --agent` として渡される。未指定の step は Kiro CLI 側の default agent を使用 |
 | `provider` | - | この step の provider を上書き (`claude`, `claude-sdk`, `claude-terminal`, `codex`, `opencode`, `cursor`, `copilot`, `kiro`, `mock`) |

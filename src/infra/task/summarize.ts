@@ -8,6 +8,7 @@ import * as wanakana from 'wanakana';
 import {
   resolveConfigValues,
   resolveNonWorkflowProviderModel,
+  resolveNonWorkflowProviderOptions,
 } from '../config/index.js';
 import { getProvider, type ProviderType } from '../providers/index.js';
 import { buildProviderRuntimeSystemPrompt } from '../providers/runtimeSystemPrompt.js';
@@ -82,6 +83,7 @@ class TaskSummarizer {
       cwd,
       model: this.model,
       permissionMode: 'readonly',
+      providerOptions: resolveNonWorkflowProviderOptions(cwd),
     });
 
     const slug = slugify(response.content);
