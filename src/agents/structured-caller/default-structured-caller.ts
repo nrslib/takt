@@ -45,24 +45,22 @@ export class DefaultStructuredCaller implements StructuredCaller {
 
   async decomposeTask(
     instruction: string,
-    maxTotalParts: number,
+    maxInitialParts: number | undefined,
     options: DecomposeTaskOptions,
   ): Promise<DecomposeTaskResponse> {
-    return decomposeTask(instruction, maxTotalParts, options);
+    return decomposeTask(instruction, maxInitialParts, options);
   }
 
   async requestMoreParts(
     originalInstruction: string,
     allResults: Array<{ id: string; title: string; status: string; content: string }>,
     existingIds: string[],
-    maxAdditionalParts: number,
     options: MorePartsOptions,
   ): Promise<MorePartsResponse> {
     return requestMoreParts(
       originalInstruction,
       allResults,
       existingIds,
-      maxAdditionalParts,
       options,
     );
   }

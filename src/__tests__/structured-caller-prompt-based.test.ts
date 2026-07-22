@@ -726,7 +726,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       { cwd: '/tmp/project', provider: 'cursor' },
     );
 
@@ -764,7 +763,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       {
         cwd: '/tmp/project',
         provider: 'cursor',
@@ -797,7 +795,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       {
         cwd: '/tmp/project',
         provider: 'claude',
@@ -844,7 +841,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       {
         cwd: '/tmp/project',
         provider: 'cursor',
@@ -877,7 +873,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       {
         cwd: '/tmp/project',
         resolvedProvider: 'claude-terminal',
@@ -917,7 +912,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       {
         cwd: '/tmp/project',
         persona: 'team-leader',
@@ -953,7 +947,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       {
         cwd: '/tmp/project',
         persona: 'team-leader',
@@ -998,7 +991,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       { cwd: '/tmp/project', provider: 'cursor' },
     );
     await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
@@ -1046,7 +1038,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       { cwd: '/tmp/project', provider: 'cursor' },
     );
     await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
@@ -1077,7 +1068,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       { cwd: '/tmp/project', provider: 'cursor' },
     );
     const assertion = expect(promise).rejects.toThrow(/```json \.\.\. ``` block/);
@@ -1112,7 +1102,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       { cwd: '/tmp/project', provider: 'cursor' },
     );
     await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
@@ -1140,7 +1129,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       { cwd: '/tmp/project', provider: 'cursor' },
     );
     const assertion = expect(promise).rejects.toThrow(/Team leader feedback failed: provider blew up/);
@@ -1168,7 +1156,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       {
         cwd: '/tmp/project',
         provider: 'cursor',
@@ -1206,7 +1193,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       { cwd: '/tmp/project', provider: 'cursor' },
     );
     await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 2);
@@ -1233,7 +1219,6 @@ describe('PromptBasedStructuredCaller', () => {
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       { cwd: '/tmp/project', provider: 'cursor' },
     );
     const assertion = expect(promise).rejects.toThrow(/```json \.\.\. ``` block/);

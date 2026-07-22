@@ -16,7 +16,6 @@ describe('createPartStep', () => {
       teamLeader: {
         persona: 'leader',
         maxConcurrency: 3,
-        maxTotalParts: 20,
         timeoutMs: 900000,
         partTags: ['coding'],
       },
@@ -43,7 +42,6 @@ describe('createPartStep', () => {
       teamLeader: {
         persona: 'leader',
         maxConcurrency: 3,
-        maxTotalParts: 20,
         timeoutMs: 900000,
       },
     };
@@ -85,7 +83,6 @@ describe('createPartStep', () => {
       teamLeader: {
         persona: 'leader',
         maxConcurrency: 3,
-        maxTotalParts: 20,
         timeoutMs: 900000,
       },
     };
@@ -113,7 +110,6 @@ describe('createPartStep', () => {
       teamLeader: {
         persona: 'leader',
         maxConcurrency: 3,
-        maxTotalParts: 20,
         timeoutMs: 600000,
         partPersona: 'coder',
       },
@@ -144,7 +140,6 @@ describe('createPartStep', () => {
       qualityGates: ['run focused tests'],
       teamLeader: {
         maxConcurrency: 1,
-        maxTotalParts: 2,
         timeoutMs: 900000,
       },
     };
@@ -193,7 +188,6 @@ describe('createTeamLeaderPlanningStep', () => {
         personaDisplayName: 'lead',
         providerRoutingPersonaKey: 'lead',
         maxConcurrency: 3,
-        maxTotalParts: 20,
         timeoutMs: 900000,
       },
     };
@@ -218,7 +212,6 @@ describe('createTeamLeaderPlanningStep', () => {
       passPreviousResponse: false,
       teamLeader: {
         maxConcurrency: 3,
-        maxTotalParts: 20,
         timeoutMs: 900000,
       },
     };
@@ -237,7 +230,6 @@ describe('createTeamLeaderPlanningStep', () => {
       passPreviousResponse: true,
       teamLeader: {
         maxConcurrency: 2,
-        maxTotalParts: 4,
         timeoutMs: 900000,
       },
     };

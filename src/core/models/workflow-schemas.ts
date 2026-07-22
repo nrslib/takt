@@ -37,7 +37,6 @@ import {
   SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
 } from './workflow-session-constraints.js';
 import { WORKFLOW_SESSION_MODES } from './workflow-types.js';
-import { MAX_TEAM_LEADER_MAX_TOTAL_PARTS } from '../../shared/constants.js';
 
 const RESERVED_WORKFLOW_CALL_RESULTS = ['COMPLETE', 'ABORT'] as const;
 const WorkflowStepNameSchema = z.string().min(1);
@@ -281,8 +280,7 @@ export const TeamLeaderConfigRawSchema = z.object({
   persona: z.string().optional(),
   max_parts: z.number().int().positive().max(3).optional(),
   max_concurrency: z.number().int().positive().max(3).optional(),
-  max_total_parts: z.number().int().positive().max(MAX_TEAM_LEADER_MAX_TOTAL_PARTS).optional(),
-  initial_max_parts: z.number().int().positive().max(MAX_TEAM_LEADER_MAX_TOTAL_PARTS).optional(),
+  initial_max_parts: z.number().int().positive().optional(),
   fail_on_part_error: z.boolean().optional(),
   refill_threshold: z.literal(0).optional(),
   timeout_ms: z.number().int().positive().optional(),
@@ -298,15 +296,6 @@ export const TeamLeaderConfigRawSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['max_concurrency'],
       message: "'max_parts' and 'max_concurrency' cannot be specified together",
-    });
-  }
-
-  const maxTotalParts = data.max_total_parts ?? MAX_TEAM_LEADER_MAX_TOTAL_PARTS;
-  if (data.initial_max_parts !== undefined && data.initial_max_parts > maxTotalParts) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['initial_max_parts'],
-      message: "'initial_max_parts' must be less than or equal to team leader total part limit",
     });
   }
 });

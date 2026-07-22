@@ -204,7 +204,7 @@
 
 ### Changed
 
-- `team_leader` のパート上限を `max_concurrency` と `max_total_parts` に分割 (#799)。`max_concurrency`（最大 3）は同時に走るワーカーパート数を、`max_total_parts`（最大 20）はリーダーがそのステップで計画できるパートの総数を制限する。従来の `max_parts` キーは `max_concurrency` の互換エイリアスとして引き続き受け付ける。あわせてチームリーダーの予算エラー検出を厳密化し、ワーカーパートが予算上限に達しても実行全体が中断しないようにした
+- `team_leader` の同時実行数と初回分解を分離 (#799)。`max_concurrency`（最大 3）は同時に走るワーカーパート数を制限し、任意の `initial_max_parts` は最初の分解 batch だけを制限する。以降はリーダーが作業完了と判断するまで batch を追加できる。従来の `max_parts` キーは `max_concurrency` の互換エイリアスとして引き続き受け付ける
 - ビルトインのレビュー系・開発系ワークフローに純粋レビューパスを追加。汎用の `pure-reviewer` ペルソナ（`review-pure` インストラクションと `pure-review` 出力契約を伴う）が「この変更は今マージできるか」だけを判定し、未対応の要求・既存挙動の破壊・テスト不足・スコープ外の変更を検出する。peer-review・review・review-fix・backend(-cqrs)・frontend・dual(-cqrs)・terraform・maintenance の各ワークフローに組み込んだ。これにより従来の要件レビュアー（`requirements-reviewer` ペルソナと `requirements-review` 出力契約）は削除した
 - ビルトインのレビュー・テスト系ファセットを強化。レビュアーとテスト作成ガイダンスが、置き換えられた仕様が消えたことだけを確認する「不在のみ」テストに対するガードレールを持つようになり、coding・review・testing ポリシー全体で挙動検証・レビュー検証・命名ポリシーのガイダンスを強化した
 

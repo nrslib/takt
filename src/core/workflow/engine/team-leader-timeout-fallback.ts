@@ -9,7 +9,6 @@ import {
 export function createTimeoutContinuationFeedback(args: {
   partResults: PartResult[];
   scheduledIds: string[];
-  remainingPartBudget: number;
   coveredTimedOutPartIds: ReadonlySet<string>;
   language?: Language;
 }): MorePartsResponse | undefined {
@@ -23,7 +22,7 @@ export function createTimeoutContinuationFeedback(args: {
     };
   }
 
-  if (!canCreateTimeoutContinuation(args.partResults, timedOutPartIds, args.remainingPartBudget)) {
+  if (!canCreateTimeoutContinuation(args.partResults, timedOutPartIds)) {
     return undefined;
   }
 
@@ -59,10 +58,8 @@ function canFinishTimeoutContinuationPlanning(args: {
 function canCreateTimeoutContinuation(
   partResults: PartResult[],
   timedOutPartIds: string[],
-  remainingPartBudget: number,
 ): boolean {
-  return remainingPartBudget > 0
-    && timedOutPartIds.length > 0
+  return timedOutPartIds.length > 0
     && !hasFailedTimeoutContinuationResult(partResults)
     && partResults.every(isSuccessfulOrPartTimeoutResult);
 }

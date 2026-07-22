@@ -126,7 +126,6 @@ function teamLeaderStepConfig(): WorkflowConfig {
         teamLeader: {
           persona: '../personas/team-leader.md',
           maxConcurrency: 1,
-          maxTotalParts: 20,
           timeoutMs: 10000,
           partPersona: '../personas/coder.md',
           partAllowedTools: ['Read', 'Edit'],
@@ -880,7 +879,6 @@ describe('WorkflowEngine rate limit fallback', () => {
           teamLeader: {
             persona: '../personas/team-leader.md',
             maxConcurrency: 1,
-            maxTotalParts: 20,
             timeoutMs: 10000,
             partPersona: '../personas/coder.md',
             partAllowedTools: ['Read', 'Edit'],

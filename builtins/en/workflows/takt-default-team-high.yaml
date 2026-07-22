@@ -145,7 +145,6 @@ steps:
     team_leader:
       max_concurrency: 2
       initial_max_parts: 2
-      max_total_parts: 6
       fail_on_part_error: false
       part_tags: [coding]
       part_persona: coder
@@ -300,7 +299,6 @@ steps:
     team_leader:
       max_concurrency: 2
       initial_max_parts: 2
-      max_total_parts: 6
       fail_on_part_error: false
       part_tags: [coding]
       part_persona: coder

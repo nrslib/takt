@@ -20,7 +20,6 @@ steps:
     team_leader:
       max_concurrency: 2
       initial_max_parts: 2
-      max_total_parts: 4
       part_persona: ./agents/test-coder.md
       part_edit: true
       part_allowed_tools:
