@@ -31,9 +31,10 @@ function findOperator(expression: string): { operator: string; index: number } |
   return undefined;
 }
 
-function splitFunctionArgs(argsText: string): [string, string] {
+function splitFunctionArgs(argsText: string, functionName: string): [string, string] {
   let inString = false;
   let depth = 0;
+  let separatorIndex: number | undefined;
 
   for (let index = 0; index < argsText.length; index++) {
     const current = argsText[index];
@@ -50,17 +51,28 @@ function splitFunctionArgs(argsText: string): [string, string] {
     }
     if (current === ')') {
       depth--;
+      if (depth < 0) {
+        throw new Error(`Invalid ${functionName}() expression "${argsText}"`);
+      }
       continue;
     }
     if (current === ',' && depth === 0) {
-      return [
-        argsText.slice(0, index).trim(),
-        argsText.slice(index + 1).trim(),
-      ];
+      if (separatorIndex !== undefined) {
+        throw new Error(`${functionName}() requires exactly two arguments`);
+      }
+      separatorIndex = index;
     }
   }
 
-  throw new Error(`Invalid exists() expression "${argsText}"`);
+  if (inString || depth !== 0 || separatorIndex === undefined) {
+    throw new Error(`Invalid ${functionName}() expression "${argsText}"`);
+  }
+  const first = argsText.slice(0, separatorIndex).trim();
+  const second = argsText.slice(separatorIndex + 1).trim();
+  if (first.length === 0 || second.length === 0) {
+    throw new Error(`${functionName}() requires exactly two arguments`);
+  }
+  return [first, second];
 }
 
 function resolveReference(reference: string, state: WorkflowState): unknown {
@@ -92,7 +104,11 @@ function parseLiteral(raw: string, state: WorkflowState, item?: unknown): unknow
   if (value === 'null') return null;
   if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
   if (value.startsWith('"') && value.endsWith('"')) {
-    return value.slice(1, -1);
+    try {
+      return JSON.parse(value) as unknown;
+    } catch {
+      throw new Error(`Invalid string literal "${value}"`);
+    }
   }
   if (
     value.startsWith('context.')
@@ -110,9 +126,13 @@ function parseLiteral(raw: string, state: WorkflowState, item?: unknown): unknow
 
 function evaluateExistsPredicate(predicate: string, item: unknown, state: WorkflowState): boolean {
   return splitTopLevel(predicate, '&&').every((clause) => {
+    const normalized = clause.trim();
+    if (normalized.startsWith('contains(') && normalized.endsWith(')')) {
+      return evaluateContainsClause(normalized, state, item);
+    }
     const operatorMatch = findOperator(clause);
     if (operatorMatch?.operator !== '==') {
-      throw new Error(`exists() only supports "==" and "&&": "${predicate}"`);
+      throw new Error(`exists() only supports "==", "contains()", and "&&": "${predicate}"`);
     }
 
     const leftRaw = clause.slice(0, operatorMatch.index);
@@ -131,7 +151,7 @@ function evaluateExistsClause(clause: string, state: WorkflowState): boolean {
     throw new Error(`Invalid exists() clause "${clause}"`);
   }
 
-  const [listExpression, predicate] = splitFunctionArgs(match[1]);
+  const [listExpression, predicate] = splitFunctionArgs(match[1], 'exists');
   const list = parseLiteral(listExpression, state);
   if (!Array.isArray(list)) {
     throw new Error(`exists() requires an array expression: "${listExpression}"`);
@@ -140,12 +160,30 @@ function evaluateExistsClause(clause: string, state: WorkflowState): boolean {
   return list.some((item) => evaluateExistsPredicate(predicate, item, state));
 }
 
+function evaluateContainsClause(clause: string, state: WorkflowState, item?: unknown): boolean {
+  const match = clause.match(/^contains\((.*)\)$/);
+  if (!match?.[1]) {
+    throw new Error(`Invalid contains() clause "${clause}"`);
+  }
+
+  const [listExpression, valueExpression] = splitFunctionArgs(match[1], 'contains');
+  const list = parseLiteral(listExpression, state, item);
+  if (!Array.isArray(list)) {
+    throw new Error(`contains() requires an array expression: "${listExpression}"`);
+  }
+  const value = parseLiteral(valueExpression, state, item);
+  return list.some((candidate) => candidate === value);
+}
+
 function evaluateClause(clause: string, state: WorkflowState): boolean {
   const normalized = clause.trim();
   if (normalized === 'true') return true;
   if (normalized === 'false') return false;
   if (normalized.startsWith('exists(') && normalized.endsWith(')')) {
     return evaluateExistsClause(normalized, state);
+  }
+  if (normalized.startsWith('contains(') && normalized.endsWith(')')) {
+    return evaluateContainsClause(normalized, state);
   }
 
   const operatorMatch = findOperator(normalized);

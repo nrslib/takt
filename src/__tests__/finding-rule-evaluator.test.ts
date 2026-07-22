@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { RuleEvaluator, type RuleEvaluatorContext } from '../core/workflow/evaluation/RuleEvaluator.js';
+import { evaluateWhenExpression } from '../core/workflow/evaluation/when-evaluator.js';
 import { isDeterministicCondition } from '../core/workflow/evaluation/rule-utils.js';
 import type { AgentResponse, WorkflowState } from '../core/models/types.js';
 import { makeRule, makeStep } from './test-helpers.js';
@@ -9,7 +10,7 @@ type FindingsRuleContext = {
     open: {
       count: number;
       bySeverity: Record<string, number>;
-        items: Array<{ id: string; severity: string; title: string }>;
+        items: Array<{ id: string; severity: string; title: string; familyTags?: string[] }>;
       };
     resolved: {
       count: number;
@@ -123,6 +124,103 @@ describe('RuleEvaluator findings conditions', () => {
     const result = await new RuleEvaluator(step, makeContext(state)).evaluate('', '');
 
     expect(result).toEqual({ index: 0, method: 'auto_select' });
+  });
+
+  it('should evaluate family membership without relying on array order', async () => {
+    const state = makeState({
+      open: {
+        count: 2,
+        bySeverity: { high: 1, medium: 1 },
+        items: [
+          {
+            id: 'F-0001',
+            severity: 'high',
+            title: 'Provider E2E is incomplete',
+            familyTags: ['architecture', 'provider-e2e'],
+          },
+          {
+            id: 'F-0002',
+            severity: 'medium',
+            title: 'Unit coverage is incomplete',
+            familyTags: ['testing'],
+          },
+        ],
+      },
+      resolved: { count: 0 },
+      conflicts: { count: 0, items: [] },
+    });
+    const step = makeStep({
+      name: 'peer-review',
+      rules: [
+        {
+          condition: 'when(exists(findings.open.items, contains(item.familyTags, "provider-e2e")))',
+          next: 'fix',
+        },
+        { condition: 'when(true)', next: 'COMPLETE' },
+      ],
+    });
+
+    const result = await new RuleEvaluator(step, makeContext(state)).evaluate('', '');
+
+    expect(result).toEqual({ index: 0, method: 'auto_select' });
+
+    const withoutProviderE2e = makeState({
+      ...state.findings!,
+      open: {
+        ...state.findings!.open,
+        items: state.findings!.open.items.map((item) => ({
+          ...item,
+          familyTags: item.familyTags?.filter((familyTag) => familyTag !== 'provider-e2e'),
+        })),
+      },
+    });
+    const fallbackResult = await new RuleEvaluator(step, makeContext(withoutProviderE2e)).evaluate('', '');
+
+    expect(fallbackResult).toEqual({ index: 1, method: 'auto_select' });
+  });
+
+  it('should reject malformed contains() arity instead of silently routing to fallback', () => {
+    const state = makeState({
+      open: {
+        count: 1,
+        bySeverity: { high: 1 },
+        items: [{
+          id: 'F-0001',
+          severity: 'high',
+          title: 'Provider E2E is incomplete',
+          familyTags: ['provider-e2e'],
+        }],
+      },
+      resolved: { count: 0 },
+      conflicts: { count: 0, items: [] },
+    });
+
+    expect(() => evaluateWhenExpression(
+      'exists(findings.open.items, contains(item.familyTags, "provider-e2e", "testing"))',
+      state,
+    )).toThrow('contains() requires exactly two arguments');
+  });
+
+  it('should decode escaped string literals in contains()', () => {
+    const state = makeState({
+      open: {
+        count: 1,
+        bySeverity: { high: 1 },
+        items: [{
+          id: 'F-0001',
+          severity: 'high',
+          title: 'Quoted family',
+          familyTags: ['tag"quote'],
+        }],
+      },
+      resolved: { count: 0 },
+      conflicts: { count: 0, items: [] },
+    });
+
+    expect(evaluateWhenExpression(
+      String.raw`exists(findings.open.items, contains(item.familyTags, "tag\"quote"))`,
+      state,
+    )).toBe(true);
   });
 
   it('should use AI adjudication when conflicts exist with open findings', async () => {

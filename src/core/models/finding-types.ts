@@ -320,8 +320,8 @@ export interface FindingLedgerStopBudgetState {
    * stepIteration) から作る run 内一意の値であり、進捗（resolved の増加等）では
    * 変化しないため、予算は単調累積のみとなる。
    *
-   * 注意: 実 `takt resume` は run slug（= runId）を採り直し stepIterations を
-   * リセットするため、resume 後の reviewers 再走はマーカーが変わり「新しい
+   * 注意: 実 `takt resume` は stepIterations を継続する一方、run slug（= runId）を
+   * 採り直す。したがって resume 後の reviewers 再走はマーカーが変わり「新しい
    * ラウンド」として1回だけ計上される。これは意図した挙動で、resume ごとに
    * 実際にレビューが再実行される（＝実作業が発生する）以上、liveness 予算は
    * それを1ラウンドとして数えるのが安全側（無料の再レビュー枠を作らない）。
@@ -1055,6 +1055,8 @@ export interface FindingsRuleContext {
       description?: string;
       suggestion?: string;
       reviewers: string[];
+      familyTags: string[];
+      unknownRawFindingIds: string[];
     }>;
   };
   resolved: {

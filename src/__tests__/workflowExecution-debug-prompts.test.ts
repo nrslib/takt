@@ -61,7 +61,7 @@ const {
         phase: 3,
         sequence: 1,
       });
-      this.emit('step:start', step, 1, 'step instruction', providerInfo, this.config.name, step.name);
+      this.emit('step:start', step, 1, 'step instruction', providerInfo, this.config.name, step.name, 1);
       if (shouldReversePhaseCompletion) {
         this.emit('phase:start', step, 1, 'execute', 'phase prompt first', {
           systemPrompt: '../agents/coder.md',
@@ -132,6 +132,7 @@ const {
           providerInfo,
           this.config.name,
           step.name,
+          2,
         );
         this.emit(
           'step:complete',

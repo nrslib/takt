@@ -1247,8 +1247,18 @@ describe('TaskRunner (tasks.yaml)', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'implement', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          step: 'implement',
+          kind: 'workflow_call' as const,
+          step_iterations: { implement: 3 },
+        },
+        {
+          workflow: 'takt/coding',
+          step: 'review',
+          kind: 'agent' as const,
+          step_iterations: { review: 6, fix: 2 },
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,

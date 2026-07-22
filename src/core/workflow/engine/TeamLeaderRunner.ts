@@ -90,16 +90,17 @@ export class TeamLeaderRunner {
     maxSteps: WorkflowMaxSteps,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     runtime?: RuntimeStepResolution,
+    activeStepIteration?: number,
   ): Promise<StepRunResult> {
     if (!step.teamLeader) {
       throw new Error(`Step "${step.name}" has no teamLeader configuration`);
     }
     const teamLeaderConfig = step.teamLeader;
     const parentIteration = state.iteration;
-    const attemptState = captureTeamLeaderAttemptState(state);
+    const attemptState = captureTeamLeaderAttemptState(state, step.name, activeStepIteration);
     const instructionTransaction = new InstructionBuildTransaction();
 
-    const stepIteration = incrementStepIteration(state, step.name);
+    const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
     const leaderStep = createTeamLeaderPlanningStep(step);
     const instruction = this.deps.stepExecutor.buildInstruction(
       leaderStep,
@@ -696,14 +697,32 @@ interface TeamLeaderAttemptState {
   readonly stepIterations: Map<string, number>;
 }
 
-function captureTeamLeaderAttemptState(state: WorkflowState): TeamLeaderAttemptState {
+function captureTeamLeaderAttemptState(
+  state: WorkflowState,
+  stepName: string,
+  activeStepIteration?: number,
+): TeamLeaderAttemptState {
+  const stepIterations = new Map(state.stepIterations);
+  if (activeStepIteration !== undefined) {
+    if (stepIterations.get(stepName) !== activeStepIteration) {
+      throw new Error(
+        `Active step iteration mismatch for "${stepName}": expected ${activeStepIteration}`,
+      );
+    }
+    const previousStepIteration = activeStepIteration - 1;
+    if (previousStepIteration > 0) {
+      stepIterations.set(stepName, previousStepIteration);
+    } else {
+      stepIterations.delete(stepName);
+    }
+  }
   return {
     lastOutput: state.lastOutput,
     previousResponseSourcePath: state.previousResponseSourcePath,
     pendingFallback: state.pendingFallback,
     stepOutputs: new Map(state.stepOutputs),
     personaSessions: new Map(state.personaSessions),
-    stepIterations: new Map(state.stepIterations),
+    stepIterations,
   };
 }
 

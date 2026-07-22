@@ -14,6 +14,7 @@ export function buildWorkflowResumePointEntry(
   workflow: WorkflowConfig,
   step: string,
   kind: WorkflowStepKind,
+  stepIterations?: ReadonlyMap<string, number>,
 ): WorkflowResumePointEntry {
   const workflowRef = getWorkflowReference(workflow);
   return {
@@ -21,6 +22,9 @@ export function buildWorkflowResumePointEntry(
     ...(workflowRef !== workflow.name ? { workflow_ref: workflowRef } : {}),
     step,
     kind,
+    ...(stepIterations !== undefined
+      ? { step_iterations: Object.fromEntries(stepIterations) }
+      : {}),
   };
 }
 

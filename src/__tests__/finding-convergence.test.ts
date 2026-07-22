@@ -761,6 +761,60 @@ describe('B5: invalidated / superseded audit visibility', () => {
   });
 });
 
+describe('finding family visibility', () => {
+  it('Given one canonical finding backed by multiple raw families When fixer contexts are built Then all family tags are exposed once in stable order', async () => {
+    const ledger = makeLedger({
+      rawFindings: [
+        makeRawFinding({ rawFindingId: 'raw-b', familyTag: 'testing' }),
+        makeRawFinding({ rawFindingId: 'raw-a', familyTag: 'architecture' }),
+        makeRawFinding({ rawFindingId: 'raw-c', familyTag: 'testing' }),
+      ],
+      findings: [makeFinding({ rawFindingIds: ['raw-b', 'raw-a', 'raw-c'] })],
+    });
+
+    const ruleContext = buildFindingsRuleContext(ledger);
+    expect(ruleContext.open.items[0]?.familyTags).toEqual(['architecture', 'testing']);
+    expect(ruleContext.open.items[0]?.unknownRawFindingIds).toEqual([]);
+
+    const { renderFindingLedgerInstructionSummary } = await import('../core/workflow/findings/context.js');
+    const instructionSummary = JSON.parse(renderFindingLedgerInstructionSummary(ledger)) as {
+      open: Array<{ familyTags: string[]; unknownRawFindingIds: string[] }>;
+    };
+    expect(instructionSummary.open[0]?.familyTags).toEqual(['architecture', 'testing']);
+    expect(instructionSummary.open[0]?.unknownRawFindingIds).toEqual([]);
+  });
+
+  it('Given a canonical finding with an unknown raw reference When contexts are built Then the missing reference stays visible', async () => {
+    const ledger = makeLedger({
+      findings: [makeFinding({ rawFindingIds: ['raw-missing'] })],
+    });
+
+    const ruleContext = buildFindingsRuleContext(ledger);
+    expect(ruleContext.open.items[0]?.familyTags).toEqual([]);
+    expect(ruleContext.open.items[0]?.unknownRawFindingIds).toEqual(['raw-missing']);
+
+    const { renderFindingLedgerInstructionSummary } = await import('../core/workflow/findings/context.js');
+    const instructionSummary = JSON.parse(renderFindingLedgerInstructionSummary(ledger)) as {
+      open: Array<{ familyTags: string[]; unknownRawFindingIds: string[] }>;
+    };
+    expect(instructionSummary.open[0]?.unknownRawFindingIds).toEqual(['raw-missing']);
+  });
+
+  it('Given duplicate raw IDs with different families When context is built Then the ambiguous family is rejected', () => {
+    const ledger = makeLedger({
+      rawFindings: [
+        makeRawFinding({ rawFindingId: 'raw-1', familyTag: 'architecture' }),
+        makeRawFinding({ rawFindingId: 'raw-1', familyTag: 'testing' }),
+      ],
+      findings: [makeFinding({ rawFindingIds: ['raw-1'] })],
+    });
+
+    expect(() => buildFindingsRuleContext(ledger)).toThrow(
+      'Raw finding "raw-1" has conflicting family tags: "architecture" and "testing"',
+    );
+  });
+});
+
 // B4: v3-r2 実台帳の F-0016 raw 群（AI-PERSIST-F-0011-ROUTING /
 // AI-PERSIST-F-0006-ROUTING / AI-PERSIST-F-0017-ROUTING）の replay。旧エンジンの
 // familyTag + exact location 機械マージは、この3件（同じ familyTag=resource-leak、

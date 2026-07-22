@@ -251,13 +251,14 @@ export class ArpeggioRunner {
     step: WorkflowStep,
     state: WorkflowState,
     runtime?: RuntimeStepResolution,
+    activeStepIteration?: number,
   ): Promise<StepRunResult> {
     const arpeggioConfig = step.arpeggio;
     if (!arpeggioConfig) {
       throw new Error(`Step "${step.name}" has no arpeggio configuration`);
     }
 
-    const stepIteration = incrementStepIteration(state, step.name);
+    const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
     log.debug('Running arpeggio step', {
       step: step.name,
       source: arpeggioConfig.source,

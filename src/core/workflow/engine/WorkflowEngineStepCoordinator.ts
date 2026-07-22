@@ -41,6 +41,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       maxSteps: WorkflowMaxSteps,
       updateSession: (persona: string, sessionId: string | undefined) => void,
       runtime?: RuntimeStepResolution,
+      activeStepIteration?: number,
     ) => Promise<StepRunResult>;
   };
   arpeggioRunner: {
@@ -48,6 +49,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       step: WorkflowStep,
       state: WorkflowState,
       runtime?: RuntimeStepResolution,
+      activeStepIteration?: number,
     ) => Promise<StepRunResult>;
   };
   teamLeaderRunner: {
@@ -58,6 +60,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       maxSteps: WorkflowMaxSteps,
       updateSession: (persona: string, sessionId: string | undefined) => void,
       runtime?: RuntimeStepResolution,
+      activeStepIteration?: number,
     ) => Promise<StepRunResult>;
   };
   systemStepExecutor: {
@@ -111,6 +114,7 @@ export class WorkflowEngineStepCoordinator {
     step: WorkflowStep,
     prebuiltInstruction?: string,
     runtime?: RuntimeStepResolution,
+    stepIteration?: number,
   ): Promise<StepRunResult> {
     const updateSession = this.deps.updatePersonaSession;
     let result: StepRunResult;
@@ -131,9 +135,15 @@ export class WorkflowEngineStepCoordinator {
         this.deps.getMaxSteps(),
         updateSession,
         runtime,
+        stepIteration,
       );
     } else if (step.arpeggio) {
-      result = await this.deps.arpeggioRunner.runArpeggioStep(step, this.deps.state, runtime);
+      result = await this.deps.arpeggioRunner.runArpeggioStep(
+        step,
+        this.deps.state,
+        runtime,
+        stepIteration,
+      );
     } else if (step.teamLeader) {
       result = await this.deps.teamLeaderRunner.runTeamLeaderStep(
         step,
@@ -142,6 +152,7 @@ export class WorkflowEngineStepCoordinator {
         this.deps.getMaxSteps(),
         updateSession,
         runtime,
+        stepIteration,
       );
     } else if (isSystemWorkflowStep(step)) {
       result = {

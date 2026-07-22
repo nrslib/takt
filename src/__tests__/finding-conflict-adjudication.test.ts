@@ -74,7 +74,16 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
     findings: [makeFinding()],
-    rawFindings: [],
+    rawFindings: [{
+      rawFindingId: 'raw-1',
+      stepName: 'reviewers',
+      reviewer: 'coding-review',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Disputed issue',
+      location: 'src/a.ts:10',
+      description: 'The bug is present.',
+    }],
     conflicts: [makeConflict()],
     ...overrides,
   };
