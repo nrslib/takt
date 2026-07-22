@@ -194,6 +194,7 @@ vi.mock('../shared/exitCodes.js', () => ({
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { error, info } from '../shared/ui/index.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 function makeConfig(): WorkflowConfig {
   return {
@@ -207,7 +208,7 @@ function makeConfig(): WorkflowConfig {
         personaDisplayName: 'coder',
         instruction: 'Implement task',
         passPreviousResponse: true,
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
       },
     ],
   };

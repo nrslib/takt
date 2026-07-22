@@ -161,9 +161,9 @@ finding_contract:
 
 指定値は step レベル provider/model として扱われ、`provider_routing`、deprecated の `persona_providers.findings-manager`、workflow 既定値、解決済み入力より優先される。両方とも未指定の場合は通常の workflow step provider/model 解決を使う。`provider` だけを指定すると下位優先度の model fallback は停止し、明示 model が必須の provider では検証エラーになる。
 
-### Finding Contract parallel の invalid manager output rule
+### Finding Contract provisional finding の明示的 route
 
-workflow に `finding_contract` がある場合、各 parallel 親 step は Finding Manager output が retry 後も意味論的に invalid な場合の制御先を宣言する必要がある。許可される rule は、選択優先順に `return: need_replan`（推奨）、`return: needs_fix`、非AIの `next: fix`。`ai("...")` で `fix` へ向かう rule は、この失敗経路では自動選択されない。該当 rule がない場合、workflow validation は実行前に失敗する。
+Finding Manager の invalid・欠落した判断は provisional finding として台帳へ保存され、旧 invalid-manager-output 用の detour rule は自動選択されない。`finding_contract` を使う workflow は、`COMPLETE` の rule より前に `when(findings.provisional.count > 0)` などの rule を置き、再計画先を明示する。
 
 ## Rules 定義
 
@@ -181,11 +181,16 @@ rules:
 
 | 記法 | 説明 | 例 |
 |-----|------|-----|
-| 文字列 | AI判定またはタグで照合 | `"タスク完了"` |
-| `ai("...")` | AI が出力に対して条件を評価 | `ai("コードに問題がある")` |
+| 意味ラベル | status judge が一度だけ選択 | `approved` |
+| `when(...)` | workflow state を決定的に評価 | `when(findings.open.count == 0)` |
 | `all("...")` | 全サブステップがマッチ（parallel 親のみ） | `all("approved")` |
 | `any("...")` | いずれかがマッチ（parallel 親のみ） | `any("needs_fix")` |
 | `all("X", "Y")` | 位置対応で全マッチ（parallel 親のみ） | `all("問題なし", "テスト成功")` |
+| `<label> && when(...)` | 意味ラベルと state predicate の AND | `approved && when(findings.open.count == 0)` |
+| `all("...") && when(...)` | 全 sub-step の集約と state predicate の AND | `all("approved") && when(findings.open.count == 0)` |
+| `any("...") && when(...)` | いずれかの sub-step の集約と state predicate の AND | `any("needs_fix") && when(findings.open.count > 0)` |
+
+rule は YAML 順の first-match で評価する。workflow rule では `ai(...)` と `when:` 別名を使わない。どの rule も成立しない場合は `rule_no_match` で ABORT する。
 
 ### 特殊な next 値
 

@@ -241,24 +241,24 @@ steps:
             - name: robustness-review.md
               format: robustness-review-finding-contract
     rules:
-      - condition: all("approved", "AI特有の問題なし", "approved", "approved", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
-        next: final-gate
-      - condition: any("approved", "needs_fix", "AI特有の問題なし", "AI特有の問題あり") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
-        next: final-gate
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
         next: replan
       - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
         next: replan
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
         next: replan
+      - condition: all("approved", "AI特有の問題なし", "approved", "approved", "approved", "approved") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+        next: final-gate
+      - condition: any("approved", "needs_fix", "AI特有の問題なし", "AI特有の問題あり") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        next: final-gate
       - condition: any("needs_fix", "AI特有の問題あり") && when(findings.conflicts.count == 0)
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix
-      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
-        next: finding-conflict-adjudication
-      - condition: when(findings.conflicts.count > 0)
-        next: ABORT
 
   - name: final-gate
     kind: workflow_call

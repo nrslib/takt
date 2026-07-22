@@ -1,6 +1,6 @@
 import type { WorkflowConfig, WorkflowCallStep, WorkflowResumePointEntry, WorkflowStep } from '../models/types.js';
 import type { WorkflowCallResolver } from './types.js';
-import { getReportFiles } from './evaluation/rule-utils.js';
+import { getReportFiles } from './output-contract-files.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from './workflow-call-depth.js';
 import { buildWorkflowCallNamespaceSegment } from './workflow-call-namespace.js';
 import { getWorkflowReference } from './workflow-reference.js';

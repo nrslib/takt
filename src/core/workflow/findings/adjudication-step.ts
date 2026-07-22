@@ -5,6 +5,7 @@ import type {
   WorkflowConfig,
   WorkflowStep,
 } from '../../models/types.js';
+import { parseWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 import { FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
 import { FindingConflictAdjudicationOutputJsonSchema } from './schemas.js';
 
@@ -92,9 +93,9 @@ export function buildFindingConflictAdjudicationStep(input: {
       // Dynamic next (resolved from WorkflowState.previousStep) — see
       // FINDING_CONFLICT_ADJUDICATION_RULE_INDEX and
       // WorkflowEngineStepCoordinator.resolveTransitionFromDone.
-      { condition: 'finding_closed' },
-      { condition: 'actionable_fix' },
-      { condition: 'unresolved', next: 'ABORT' },
+      { condition: parseWorkflowRuleCondition('finding_closed') },
+      { condition: parseWorkflowRuleCondition('actionable_fix') },
+      { condition: parseWorkflowRuleCondition('unresolved'), next: 'ABORT' },
     ],
   };
 }

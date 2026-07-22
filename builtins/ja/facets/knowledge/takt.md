@@ -29,27 +29,21 @@ CLI → WorkflowEngine → Runner（4種） → RuleEvaluator → 次の step
 
 ## ルール評価
 
-RuleEvaluator は5段階フォールバックで遷移先を決定する。先にマッチした方法が優先される。
+RuleEvaluator は YAML 記述順にすべての rule を評価し、最初に成立した rule を採用する。意味ラベルは Phase 3 で一度だけ選択し、`when(...)` と aggregate 条件は同じ順序ループで決定的に評価する。どの rule も成立しなければ workflow は `rule_no_match` で ABORT する。
 
 | 優先度 | 方法 | 対象 |
 |--------|------|------|
-| 1 | aggregate | parallel 親（all/any） |
-| 2 | Phase 3 タグ | `[STEP:N]` 出力 |
-| 3 | Phase 1 タグ | `[STEP:N]` 出力（フォールバック） |
-| 4 | ai() judge | ai("条件") ルール |
-| 5 | AI fallback | 全条件を AI が判定 |
-
-タグが複数出現した場合は**最後のマッチ**が採用される。
+| YAML 順 | condition | 最初に true となる rule |
 
 ### Condition の記法
 
 | 記法 | パース | 正規表現 |
 |------|--------|---------|
-| `ai("...")` | AI 条件評価 | `AI_CONDITION_REGEX` |
+| `when(...)` | workflow state の決定的 predicate | `isWhenConditionExpression` |
 | `all("...")` / `any("...")` | 集約条件 | `AGGREGATE_CONDITION_REGEX` |
-| 文字列 | タグまたは AI フォールバック | — |
+| 裸の意味ラベル | Phase 3 の単一選択値との一致 | — |
 
-新しい特殊構文を追加する場合は workflowParser.ts の正規表現と RuleEvaluator の両方を更新する。
+意味・aggregate 条件は `&& when(...)` と組み合わせられる。特殊構文を追加する場合は condition parser と RuleEvaluator を同時に更新する。
 
 ## プロバイダー統合
 

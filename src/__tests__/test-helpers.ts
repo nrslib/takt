@@ -6,10 +6,11 @@
  */
 
 import type { WorkflowStep, WorkflowRule } from '../core/models/types.js';
+import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
 
 export function makeRule(condition: string, next: string, extra: Partial<WorkflowRule> = {}): WorkflowRule {
-  return { condition, next, ...extra };
+  return { condition: parseWorkflowRuleCondition(condition), next, ...extra };
 }
 
 export function makeStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {

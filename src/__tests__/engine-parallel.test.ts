@@ -17,14 +17,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -36,14 +40,14 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import {
   makeResponse,
   makeStep,
   buildDefaultWorkflowConfig,
   mockRunAgentSequence,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   createTestTmpDir,
   applyDefaultMocks,
   makeRule,
@@ -94,14 +98,14 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       makeResponse({ persona: 'supervise', content: 'All passed' }),
     ]);
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },  // arch-review
-      { index: 0, method: 'phase1_tag' },  // security-review
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },  // arch-review
+      { index: 0, method: 'phase3_tag' },  // security-review
       { index: 0, method: 'aggregate' },   // reviewers
-      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
@@ -131,14 +135,14 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       makeResponse({ persona: 'supervise', content: 'Pass' }),
     ]);
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
-      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
@@ -168,11 +172,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
             }),
           ],
           rules: [
-            makeRule('all("approved")', 'COMPLETE', {
-              isAggregateCondition: true,
-              aggregateType: 'all',
-              aggregateConditionText: 'approved',
-            }),
+            makeRule('all("approved")', 'COMPLETE'),
           ],
         }),
       ],
@@ -190,8 +190,8 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'coder', content: 'approved', sessionId: 'session-codex-1' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
 
@@ -220,11 +220,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
             }),
           ],
           rules: [
-            makeRule('all("approved")', 'COMPLETE', {
-              isAggregateCondition: true,
-              aggregateType: 'all',
-              aggregateConditionText: 'approved',
-            }),
+            makeRule('all("approved")', 'COMPLETE'),
           ],
         }),
       ],
@@ -247,8 +243,8 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'coder', content: 'approved', sessionId: undefined }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
 
@@ -312,9 +308,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       makeResponse({ persona: 'arch-review', content: 'approved' }),
       makeResponse({ persona: 'security-review', content: 'approved' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const result = await engine.runSingleIteration();
@@ -346,14 +342,14 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       makeResponse({ persona: 'supervise', content: 'Pass' }),
     ]);
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
-      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
@@ -386,14 +382,14 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       makeResponse({ persona: 'supervise', content: 'Pass' }),
     ]);
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
-      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     await engine.run();
@@ -404,46 +400,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const calledAgents = vi.mocked(runAgent).mock.calls.map(call => call[0]);
     expect(calledAgents).toContain('../personas/arch-review.md');
     expect(calledAgents).toContain('../personas/security-review.md');
-  });
-
-  it('should pass resolved providers to rule evaluation for sub-steps and parent step', async () => {
-    const config = buildDefaultWorkflowConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
-      projectCwd: tmpDir,
-      provider: 'claude',
-      personaProviders: {
-        'arch-review': { provider: 'cursor' },
-        'security-review': { provider: 'copilot' },
-      },
-    });
-
-    mockRunAgentSequence([
-      makeResponse({ persona: 'plan', content: 'Plan done' }),
-      makeResponse({ persona: 'implement', content: 'Impl done' }),
-      makeResponse({ persona: 'ai_review', content: 'OK' }),
-      makeResponse({ persona: 'arch-review', content: 'Architecture review content' }),
-      makeResponse({ persona: 'security-review', content: 'Security review content' }),
-      makeResponse({ persona: 'supervise', content: 'All passed' }),
-    ]);
-
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'aggregate' },
-      { index: 0, method: 'phase1_tag' },
-    ]);
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('completed');
-
-    const detectCalls = vi.mocked(detectMatchedRule).mock.calls;
-    expect(detectCalls[3]?.[3].provider).toBe('cursor');
-    expect(detectCalls[4]?.[3].provider).toBe('copilot');
-    expect(detectCalls[5]?.[3].provider).toBe('claude');
   });
 
   it('should output rich parallel prefix when taskPrefix/taskColorIndex are provided', async () => {
@@ -480,14 +436,14 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       return response;
     });
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
-      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const engine = new WorkflowEngine(config, tmpDir, 'test task', {
@@ -547,14 +503,14 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       return makeResponse({ persona: persona ?? 'unknown', content: `${persona} done` });
     });
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },  // plan
-      { index: 0, method: 'phase1_tag' },  // implement
-      { index: 0, method: 'phase1_tag' },  // ai_review
-      { index: 0, method: 'phase1_tag' },  // arch-review
-      { index: 0, method: 'phase1_tag' },  // security-review
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },  // plan
+      { index: 0, method: 'phase3_tag' },  // implement
+      { index: 0, method: 'phase3_tag' },  // ai_review
+      { index: 0, method: 'phase3_tag' },  // arch-review
+      { index: 0, method: 'phase3_tag' },  // security-review
       { index: 0, method: 'aggregate' },   // reviewers
-      { index: 0, method: 'phase1_tag' },  // supervise
+      { index: 0, method: 'phase3_tag' },  // supervise
     ]);
 
     const state = await engine.run();
@@ -589,14 +545,14 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       return makeResponse({ persona: persona ?? 'unknown', content: `${persona} done` });
     });
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
-      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();

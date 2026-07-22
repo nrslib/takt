@@ -260,6 +260,86 @@ describe('WorkflowConfigRawSchema', () => {
     expect(result.max_steps).toBe(10);
   });
 
+  it.each([
+    {
+      label: 'agent step',
+      step: {
+        name: 'review',
+        persona: 'reviewer',
+        instruction: 'Review the task',
+        rules: [
+          { condition: 'approved && when(false)', next: 'review', appendix: 'FIRST' },
+          { condition: 'approved', next: 'COMPLETE', appendix: 'SECOND' },
+        ],
+      },
+    },
+    {
+      label: 'parallel sub-step',
+      step: {
+        name: 'reviewers',
+        parallel: [
+          {
+            name: 'architecture',
+            persona: 'reviewer',
+            instruction: 'Review the architecture',
+            rules: [
+              { condition: 'approved && when(false)', next: 'COMPLETE', appendix: 'FIRST' },
+              { condition: 'approved', next: 'COMPLETE', appendix: 'SECOND' },
+            ],
+          },
+        ],
+        rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+      },
+    },
+    {
+      label: 'workflow_call step',
+      step: {
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'child',
+        rules: [
+          { condition: 'approved && when(false)', next: 'delegate', appendix: 'FIRST' },
+          { condition: 'approved', next: 'COMPLETE', appendix: 'SECOND' },
+        ],
+      },
+    },
+  ])('should reject conflicting appendices for a repeated semantic label in $label rules', ({ step }) => {
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'duplicate-appendix',
+      initial_step: step.name,
+      steps: [step],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          message: 'Rules sharing semantic label "approved" must use the same appendix',
+        }),
+      ]));
+    }
+  });
+
+  it('should allow a repeated semantic label when every rule uses the same appendix', () => {
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'shared-appendix',
+      initial_step: 'review',
+      steps: [
+        {
+          name: 'review',
+          persona: 'reviewer',
+          instruction: 'Review the task',
+          rules: [
+            { condition: 'approved && when(false)', next: 'review', appendix: 'APPENDIX' },
+            { condition: 'approved', next: 'COMPLETE', appendix: 'APPENDIX' },
+          ],
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it('should parse step with required_permission_mode', () => {
     const config = {
       name: 'test-workflow',
@@ -758,6 +838,16 @@ describe('WorkflowConfigRawSchema', () => {
     };
 
     const result = WorkflowStepRawSchema.safeParse(step);
+    expect(result.success).toBe(false);
+  });
+
+  it('should return a failed parse result for an invalid normal-step rule condition', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'step1',
+      instruction: 'Do something',
+      rules: [{ condition: 'ai("route to plan")', next: 'COMPLETE' }],
+    });
+
     expect(result.success).toBe(false);
   });
 });

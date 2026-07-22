@@ -5,7 +5,7 @@
  * loop detection, scenario queue exhaustion, and step execution exceptions.
  *
  * Mocked: UI, session, phase-runner, notifications, config
- * Not mocked: WorkflowEngine, runAgent, detectMatchedRule, rule-evaluator
+ * Not mocked: WorkflowEngine, runAgent, RuleEvaluator
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -15,15 +15,25 @@ import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 import { DefaultStructuredCaller } from '../agents/structured-caller.js';
 import type { WorkflowConfig, WorkflowStep, WorkflowRule } from '../core/models/index.js';
-import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
+import { semanticRuleCandidatesOf } from '../core/models/workflow-rule-condition.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
+import { detectCandidateIndex } from '../shared/utils/ruleIndex.js';
 import { makeRule } from './test-helpers.js';
 
 // --- Mocks ---
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../core/workflow/phase-runner.js')>()),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockImplementation((step: WorkflowStep, context: { lastResponse?: string }) => {
+    const candidates = semanticRuleCandidatesOf(step.rules ?? [], false);
+    const candidateIndex = detectCandidateIndex(context.lastResponse ?? '', step.name);
+    const candidate = candidates[candidateIndex];
+    if (!candidate) {
+      throw new RuleDetectionExhaustedError(step.name);
+    }
+    return { label: candidate.label, method: 'phase3_tag' as const };
+  }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -83,7 +93,6 @@ function createTestEnv(): { dir: string; agentPaths: Record<string, string> } {
 function buildEngineOptions(projectCwd: string) {
   return {
     projectCwd,
-    detectRuleIndex,
     structuredCaller: new DefaultStructuredCaller(),
   };
 }
@@ -144,9 +153,9 @@ describe('Error Recovery IT: agent blocked response', () => {
     expect(state.status).toBe('aborted');
   });
 
-  it('should handle empty content from agent', async () => {
+  it('should abort with rule_no_match when the agent omits a semantic tag', async () => {
     setMockScenario([
-      { persona: 'plan', status: 'done', content: '' },
+      { persona: 'plan', status: 'done', content: 'Plan completed without a semantic tag.' },
     ]);
 
     const config = buildWorkflow(agentPaths, 10);
@@ -155,10 +164,13 @@ describe('Error Recovery IT: agent blocked response', () => {
       provider: 'mock',
     });
 
+    const abortFn = vi.fn();
+    engine.on('workflow:abort', abortFn);
+
     const state = await engine.run();
 
-    // Empty content means no tag match; should eventually abort
-    expect(['aborted', 'completed']).toContain(state.status);
+    expect(state.status).toBe('aborted');
+    expect(abortFn).toHaveBeenCalledWith(expect.anything(), 'rule_no_match', 'rule_no_match');
   });
 });
 

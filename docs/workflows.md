@@ -135,9 +135,13 @@ rules:
 
 | Type | Syntax | Description |
 |------|--------|-------------|
-| Tag-based | `"condition text"` | Agent outputs `[STEP:N]` tag, matched by index |
-| AI judge | `ai("condition text")` | AI evaluates the condition against step output |
+| Semantic label | `approved` | The status judge selects one deduplicated label once |
+| State predicate | `when(...)` | Evaluates workflow state deterministically |
 | Aggregate | `all("X")` / `any("X")` | Aggregates parallel sub-step results |
+| Combined | `approved && when(...)` | Requires both the selected label and state predicate |
+| Aggregate + state | `all("X") && when(...)` / `any("X") && when(...)` | Requires the aggregate result and state predicate |
+
+Rules are evaluated in YAML order. The first matching rule is selected; no rule-type priority or fallback transition applies. If no rule matches, the workflow aborts with `rule_no_match`.
 
 ### Special `next` Values
 

@@ -278,6 +278,7 @@ vi.mock('../shared/exitCodes.js', () => ({
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
 import { ensureDir, writeFileAtomic } from '../infra/config/index.js';
 import { appendNdjsonLine } from '../infra/fs/index.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 describe('executeWorkflow debug prompts logging', () => {
   beforeEach(() => {
@@ -296,7 +297,7 @@ describe('executeWorkflow debug prompts logging', () => {
           personaDisplayName: 'coder',
           instruction: 'Implement task',
           passPreviousResponse: true,
-          rules: [{ condition: 'done', next: 'COMPLETE' }],
+          rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
         },
       ],
     };

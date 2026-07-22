@@ -16,6 +16,7 @@ import type {
   WorkflowSystemInput,
 } from './workflow-system-input-types.js';
 import type { FindingContractConfig, FindingsRuleContext } from './finding-types.js';
+import type { WorkflowRuleCondition } from './workflow-rule-condition.js';
 
 export const WORKFLOW_SESSION_MODES = ['continue', 'refresh', 'compact'] as const;
 export type WorkflowSessionMode = typeof WORKFLOW_SESSION_MODES[number];
@@ -64,24 +65,12 @@ export {
 } from './workflow-provider-options.js';
 
 export interface WorkflowRule {
-  condition: string;
+  condition: import('./workflow-rule-condition.js').WorkflowRuleCondition;
   next?: string;
   returnValue?: string;
   appendix?: string;
   requiresUserInput?: boolean;
   interactiveOnly?: boolean;
-  isAiCondition?: boolean;
-  aiConditionText?: string;
-  isAggregateCondition?: boolean;
-  aggregateType?: 'all' | 'any';
-  aggregateConditionText?: string | string[];
-  aggregateGuardCondition?: string;
-  /**
-   * Deterministic guard split from a plain-rule compound condition
-   * ("<tag text> && findings...."). The tag part stays in `condition`;
-   * this guard must also hold for the rule to match.
-   */
-  guardCondition?: string;
 }
 
 export type WorkflowMaxSteps = number | 'infinite';
@@ -358,7 +347,7 @@ export interface LoopDetectionConfig {
 }
 
 export interface LoopMonitorRule {
-  condition: string;
+  condition: WorkflowRuleCondition;
   next: string;
 }
 

@@ -1,4 +1,4 @@
-import type { WorkflowRule } from '../../core/models/types.js';
+import type { SemanticRuleCandidate } from '../../core/models/workflow-rule-condition.js';
 import type { JudgeStatusOptions, JudgeStatusResult, EvaluateConditionOptions } from '../judge-status-usecase.js';
 import type { DecomposeTaskOptions, DecomposeTaskResponse, MorePartsOptions, MorePartsResponse } from '../decompose-task-usecase.js';
 
@@ -6,7 +6,7 @@ export interface StructuredCaller {
   judgeStatus(
     structuredInstruction: string,
     tagInstruction: string,
-    rules: WorkflowRule[],
+    candidates: SemanticRuleCandidate[],
     options: JudgeStatusOptions,
   ): Promise<JudgeStatusResult>;
 

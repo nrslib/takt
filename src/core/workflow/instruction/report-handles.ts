@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readdirSync, type Stats } from 'node:fs';
 import { join, relative } from 'node:path';
 import type { WorkflowStep } from '../../models/types.js';
-import { getReportFiles } from '../evaluation/rule-utils.js';
+import { getReportFiles } from '../output-contract-files.js';
 import { scanReportEntries } from '../report-file-index.js';
 import { resolveReviewReportSourceSteps } from '../review-report-discovery.js';
 import { workflowCallNamespacePathsMatch } from '../workflow-call-namespace.js';

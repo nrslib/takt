@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import type { WorkflowConfig } from '../core/models/index.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 const {
   MockWorkflowEngine,
@@ -282,7 +283,7 @@ function makeConfig(): WorkflowConfig {
         personaDisplayName: 'coder',
         instruction: 'Implement task',
         passPreviousResponse: true,
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
       },
     ],
   };

@@ -1,9 +1,10 @@
 import type { AgentResponse, LoopMonitorConfig, WorkflowMaxSteps, WorkflowState, WorkflowStep } from '../../models/types.js';
 import { ABORT_STEP, FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
 import { FINDING_CONFLICT_ADJUDICATION_RULE_INDEX } from '../findings/adjudication-step.js';
-import { getWorkflowStepKind, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
+import { isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
 import type { RuntimeStepResolution, StepRunResult, WorkflowEngineOptions } from '../types.js';
 import { determineRuleTransition, type WorkflowRuleTransition } from './transitions.js';
+import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 
 interface WorkflowEngineStepCoordinatorDeps {
   config: {
@@ -61,7 +62,11 @@ interface WorkflowEngineStepCoordinatorDeps {
     ) => Promise<StepRunResult>;
   };
   systemStepExecutor: {
-    run: (step: WorkflowStep, state: WorkflowState) => Promise<AgentResponse>;
+    run: (
+      step: WorkflowStep,
+      state: WorkflowState,
+      runtime?: RuntimeStepResolution,
+    ) => Promise<AgentResponse>;
   };
   loopMonitorJudgeRunner: {
     run: (
@@ -145,7 +150,7 @@ export class WorkflowEngineStepCoordinator {
       );
     } else if (isSystemWorkflowStep(step)) {
       result = {
-        response: await this.deps.systemStepExecutor.run(step, this.deps.state),
+        response: await this.deps.systemStepExecutor.run(step, this.deps.state, runtime),
         instruction: '',
       };
     } else if (isWorkflowCallStep(step)) {
@@ -196,7 +201,7 @@ export class WorkflowEngineStepCoordinator {
         return transition;
       }
     }
-    throw new Error(`No matching rule found for step "${step.name}" (status: ${response.status}, kind: ${getWorkflowStepKind(step)})`);
+    throw new RuleDetectionExhaustedError(step.name);
   }
 
   /**
@@ -240,7 +245,7 @@ export class WorkflowEngineStepCoordinator {
       return originName;
     }
     const originStep = this.deps.config.steps.find((candidate) => candidate.name === originName);
-    const fixRule = (originStep?.rules ?? []).find((rule) => rule.isAiCondition !== true && rule.next === 'fix');
+    const fixRule = (originStep?.rules ?? []).find((rule) => rule.next === 'fix');
     return fixRule?.next ?? originName;
   }
 

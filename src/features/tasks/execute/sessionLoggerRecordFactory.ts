@@ -18,27 +18,10 @@ import type {
 } from '../../../core/models/index.js';
 import type { JudgeStageEntry, PhasePromptParts, StepProviderInfo } from '../../../core/workflow/types.js';
 import { redactProviderOptionsForLogging } from '../../../core/workflow/providerOptionsRedaction.js';
+import { toJudgmentMatchMethod } from '../../../core/logging/contracts.js';
 import type { InteractiveMetadata } from './types.js';
 
 type SanitizeText = (text: string) => string;
-
-function toJudgmentMatchMethod(
-  matchedRuleMethod: string | undefined,
-): string | undefined {
-  if (!matchedRuleMethod) {
-    return undefined;
-  }
-  if (matchedRuleMethod === 'structured_output') {
-    return 'structured_output';
-  }
-  if (matchedRuleMethod === 'ai_judge' || matchedRuleMethod === 'ai_judge_fallback') {
-    return 'ai_judge';
-  }
-  if (matchedRuleMethod === 'phase3_tag' || matchedRuleMethod === 'phase1_tag') {
-    return 'tag_fallback';
-  }
-  return undefined;
-}
 
 function serializeWorkflowStack(stack: WorkflowResumePointEntry[] | undefined): {
   workflow?: string;

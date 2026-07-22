@@ -1,7 +1,6 @@
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
 import type { WorkflowConfig, WorkflowResumePointEntry } from '../../../core/models/index.js';
 import type { WorkflowExecutionResult, WorkflowExecutionOptions } from './types.js';
-import { detectRuleIndex } from '../../../shared/utils/ruleIndex.js';
 import { createDefaultSystemStepServices } from '../../../infra/workflow/system/DefaultSystemStepServices.js';
 import { createDefaultStructuredOutputNormalizers } from '../../../infra/workflow/structured-output/followup-task-normalizer.js';
 import { AbortHandler } from './abortHandler.js';
@@ -240,7 +239,6 @@ async function executeWorkflowInternal(
       providerProfiles: options.providerProfiles,
       mcpServers: options.mcpServers,
       interactive: bootstrap.interactiveUserInput,
-      detectRuleIndex,
       structuredCaller: bootstrap.structuredCaller,
       structuredOutputNormalizers: createDefaultStructuredOutputNormalizers(),
       startStep: options.startStep,

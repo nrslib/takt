@@ -227,7 +227,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'context.route_context.task.exists == true',
+          condition: 'when(context.route_context.task.exists == true)',
           next: 'plan_from_issue',
         },
       ],
@@ -250,7 +250,7 @@ describe('system workflow schema', () => {
       ]);
       expect(step.rules).toEqual([
         {
-          when: 'context.route_context.task.exists == true',
+          condition: 'when(context.route_context.task.exists == true)',
           next: 'plan_from_issue',
         },
       ]);
@@ -266,7 +266,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -297,7 +297,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'context.route_context.prs.length > 0',
+          condition: 'when(context.route_context.prs.length > 0)',
           next: 'plan_from_existing_pr',
         },
       ],
@@ -345,7 +345,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'context.route_context.selected_pr.exists == true',
+          condition: 'when(context.route_context.selected_pr.exists == true)',
           next: 'plan_from_existing_pr',
         },
       ],
@@ -390,7 +390,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'context.route_context.tracked_issues.length > 0',
+          condition: 'when(context.route_context.tracked_issues.length > 0)',
           next: 'plan_from_issue',
         },
       ],
@@ -428,7 +428,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'context.route_context.selected_issue.exists == true',
+          condition: 'when(context.route_context.selected_issue.exists == true)',
           next: 'plan_from_issue',
         },
       ],
@@ -466,7 +466,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'context.route_context.tracked_issues.length > 0',
+          condition: 'when(context.route_context.tracked_issues.length > 0)',
           next: 'plan_from_issue',
         },
       ],
@@ -500,7 +500,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'context.route_context.tracked_issues.length > 0',
+          condition: 'when(context.route_context.tracked_issues.length > 0)',
           next: 'plan_from_issue',
         },
       ],
@@ -529,11 +529,11 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'context.confirm_issue_enqueue.approval.exists == false',
+          condition: 'when(context.confirm_issue_enqueue.approval.exists == false)',
           requires_user_input: true,
         },
         {
-          when: 'context.confirm_issue_enqueue.approval.value == "approve"',
+          condition: 'when(context.confirm_issue_enqueue.approval.value == "approve")',
           next: 'enqueue_from_issue',
         },
       ],
@@ -549,7 +549,7 @@ describe('system workflow schema', () => {
       requires_user_input: true,
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -581,7 +581,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'context.route_context.issues.length > 0',
+          condition: 'when(context.route_context.issues.length > 0)',
           next: 'plan_from_issue',
         },
       ],
@@ -622,7 +622,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'context.route_context.selected_pr.exists == true',
+          condition: 'when(context.route_context.selected_pr.exists == true)',
           next: 'plan_from_existing_pr',
         },
       ],
@@ -663,7 +663,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'context.route_context.selected_pr.exists == true',
+          condition: 'when(context.route_context.selected_pr.exists == true)',
           next: 'plan_from_existing_pr',
         },
       ],
@@ -696,7 +696,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'context.route_context.selected_issue.exists == true',
+          condition: 'when(context.route_context.selected_issue.exists == true)',
           next: 'plan_from_issue',
         },
       ],
@@ -719,7 +719,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'exists(context.wait_before_next_scan.queue.items, item.kind == "running")',
+          condition: 'when(exists(context.wait_before_next_scan.queue.items, item.kind == "running"))',
           next: 'wait_before_next_scan',
         },
       ],
@@ -749,7 +749,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -780,7 +780,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -794,7 +794,7 @@ describe('system workflow schema', () => {
       name: 'route_context',
       mode: 'system',
       parallel: [{ name: 'substep' }],
-      rules: [{ when: 'true', next: 'COMPLETE' }],
+      rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
     });
     const arpeggio = WorkflowStepRawSchema.safeParse({
       name: 'route_context',
@@ -804,13 +804,13 @@ describe('system workflow schema', () => {
         source_path: 'items.json',
         template: '{item}',
       },
-      rules: [{ when: 'true', next: 'COMPLETE' }],
+      rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
     });
     const teamLeader = WorkflowStepRawSchema.safeParse({
       name: 'route_context',
       mode: 'system',
       team_leader: {},
-      rules: [{ when: 'true', next: 'COMPLETE' }],
+      rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
     });
 
     for (const [result, field] of [
@@ -843,7 +843,7 @@ describe('system workflow schema', () => {
           pr: 42,
         },
       ],
-      rules: [{ when: 'true', next: 'COMPLETE' }],
+      rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
     });
     const fromPrMode = WorkflowStepRawSchema.safeParse({
       name: 'enqueue_from_pr',
@@ -859,7 +859,7 @@ describe('system workflow schema', () => {
           worktree: { enabled: true },
         },
       ],
-      rules: [{ when: 'true', next: 'COMPLETE' }],
+      rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
     });
 
     expect(newMode.success).toBe(false);
@@ -900,7 +900,7 @@ describe('system workflow schema', () => {
           issue: { create: true },
         },
       ],
-      rules: [{ when: 'true', next: 'COMPLETE' }],
+      rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
     });
 
     expect(result.success).toBe(false);
@@ -922,7 +922,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -945,7 +945,7 @@ describe('system workflow schema', () => {
       system_inputs: [],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -968,7 +968,7 @@ describe('system workflow schema', () => {
       effects: [],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -998,7 +998,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -1020,7 +1020,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -1044,7 +1044,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -1065,7 +1065,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -1089,7 +1089,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -1117,7 +1117,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -1140,7 +1140,7 @@ describe('system workflow schema', () => {
           issue: { create: false },
         },
       ],
-      rules: [{ when: 'true', next: 'COMPLETE' }],
+      rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
     });
 
     expect(result.success).toBe(true);
@@ -1160,7 +1160,7 @@ describe('system workflow schema', () => {
           issue_number: 42,
         },
       ],
-      rules: [{ when: 'true', next: 'COMPLETE' }],
+      rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
     });
 
     expect(result.success).toBe(false);
@@ -1187,7 +1187,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -1224,7 +1224,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -1254,7 +1254,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -1279,7 +1279,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -1308,7 +1308,7 @@ describe('system workflow schema', () => {
       quality_gates: ['Review before finishing'],
       rules: [
         {
-          when: 'structured.plan_from_issue.action == "enqueue_new_task"',
+          condition: 'when(structured.plan_from_issue.action == "enqueue_new_task")',
           next: 'enqueue_from_issue',
         },
       ],
@@ -1339,7 +1339,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'done',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -1375,7 +1375,7 @@ describe('system workflow schema', () => {
       ],
       rules: [
         {
-          when: 'done',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -1417,7 +1417,7 @@ describe('system workflow schema', () => {
       quality_gates: ['System route must pass'],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -1484,7 +1484,7 @@ describe('system workflow schema', () => {
             },
             rules: [
               {
-                when: 'structured.plan_from_issue.action == "noop"',
+                condition: 'when(structured.plan_from_issue.action == "noop")',
                 next: 'COMPLETE',
               },
             ],
@@ -1532,7 +1532,7 @@ describe('system workflow schema', () => {
             },
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'COMPLETE',
               },
             ],
@@ -1571,7 +1571,7 @@ describe('system workflow schema', () => {
             },
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'COMPLETE',
               },
             ],
@@ -1666,7 +1666,7 @@ describe('system workflow schema', () => {
             },
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'COMPLETE',
               },
             ],
@@ -1715,7 +1715,7 @@ describe('system workflow schema', () => {
             },
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'COMPLETE',
               },
             ],
@@ -1763,7 +1763,7 @@ describe('system workflow schema', () => {
             },
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'COMPLETE',
               },
             ],
@@ -1809,7 +1809,7 @@ describe('system workflow schema', () => {
             },
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'COMPLETE',
               },
             ],
@@ -1856,7 +1856,7 @@ describe('system workflow schema', () => {
             },
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'COMPLETE',
               },
             ],
@@ -1904,7 +1904,7 @@ describe('system workflow schema', () => {
             },
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'COMPLETE',
               },
             ],
@@ -1957,7 +1957,7 @@ describe('system workflow schema', () => {
             mode: 'system',
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'COMPLETE',
               },
             ],
@@ -2008,7 +2008,7 @@ steps:
     structured_output:
       schema_ref: followup-task
     rules:
-      - when: structured.plan_from_issue.action == "noop"
+      - condition: when(structured.plan_from_issue.action == "noop")
         next: COMPLETE
 `,
       'utf-8',
@@ -2071,7 +2071,7 @@ steps:
             },
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'COMPLETE',
               },
             ],
@@ -2155,7 +2155,7 @@ steps:
             },
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'merge_ready_pr',
               },
             ],
@@ -2171,7 +2171,7 @@ steps:
             ],
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'COMPLETE',
               },
             ],
@@ -2240,7 +2240,7 @@ steps:
     structured_output:
       schema_ref: followup-task
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: merge_ready_pr
   - name: merge_ready_pr
     mode: system
@@ -2248,7 +2248,7 @@ steps:
       - type: merge_pr
         pr: 42
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `,
       'utf-8',
@@ -2292,7 +2292,7 @@ steps:
             },
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'COMPLETE',
               },
             ],
@@ -2321,7 +2321,7 @@ steps:
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -2349,7 +2349,7 @@ steps:
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -2384,7 +2384,7 @@ steps:
       ],
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -2422,7 +2422,7 @@ steps:
             },
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'COMPLETE',
               },
             ],
@@ -2454,7 +2454,7 @@ steps:
       - type: close_pr
         pr: 42
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `,
       'utf-8',
@@ -2488,7 +2488,7 @@ steps:
         source: current_task
         as: task
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `, 'utf-8');
 

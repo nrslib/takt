@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
 
@@ -138,7 +137,6 @@ function createEngine(
   return new WorkflowEngine(config, projectDir, 'Resolve conflicts', {
     projectCwd: projectDir,
     provider: 'mock',
-    detectRuleIndex,
     structuredCaller: {
       judgeStatus: vi.fn(),
       evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -192,8 +190,8 @@ function createConflictCleanupWorkflowConfig() {
           },
         ],
         rules: [
-          { when: 'context.route_context.selected_pr.exists == true', next: 'prepare_merge' },
-          { when: 'true', next: 'ABORT' },
+          { condition: 'when(context.route_context.selected_pr.exists == true)', next: 'prepare_merge' },
+          { condition: 'when(true)', next: 'ABORT' },
         ],
       },
       {
@@ -201,8 +199,8 @@ function createConflictCleanupWorkflowConfig() {
         mode: 'system',
         effects: [{ type: 'sync_with_root', pr: '{context:route_context.selected_pr.number}' }],
         rules: [
-          { when: 'effect.prepare_merge.sync_with_root.conflicted == true', next: 'COMPLETE' },
-          { when: 'true', next: 'ABORT' },
+          { condition: 'when(effect.prepare_merge.sync_with_root.conflicted == true)', next: 'COMPLETE' },
+          { condition: 'when(true)', next: 'ABORT' },
         ],
       },
     ],
@@ -233,8 +231,8 @@ function createConflictThenThrowWorkflowConfig() {
           },
         ],
         rules: [
-          { when: 'context.route_context.selected_pr.exists == true', next: 'prepare_merge' },
-          { when: 'true', next: 'ABORT' },
+          { condition: 'when(context.route_context.selected_pr.exists == true)', next: 'prepare_merge' },
+          { condition: 'when(true)', next: 'ABORT' },
         ],
       },
       {
@@ -242,15 +240,15 @@ function createConflictThenThrowWorkflowConfig() {
         mode: 'system',
         effects: [{ type: 'sync_with_root', pr: '{context:route_context.selected_pr.number}' }],
         rules: [
-          { when: 'effect.prepare_merge.sync_with_root.conflicted == true', next: 'explode' },
-          { when: 'true', next: 'ABORT' },
+          { condition: 'when(effect.prepare_merge.sync_with_root.conflicted == true)', next: 'explode' },
+          { condition: 'when(true)', next: 'ABORT' },
         ],
       },
       {
         name: 'explode',
         mode: 'system',
         effects: [{ type: 'merge_pr', pr: '{context:route_context.selected_pr}' }],
-        rules: [{ when: 'true', next: 'COMPLETE' }],
+        rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
       },
     ],
   };
@@ -329,8 +327,8 @@ describe('system workflow PR sync integration', () => {
             },
           ],
           rules: [
-            { when: 'context.route_context.selected_pr.exists == true', next: 'prepare_merge' },
-            { when: 'true', next: 'ABORT' },
+            { condition: 'when(context.route_context.selected_pr.exists == true)', next: 'prepare_merge' },
+            { condition: 'when(true)', next: 'ABORT' },
           ],
         },
         {
@@ -338,15 +336,15 @@ describe('system workflow PR sync integration', () => {
           mode: 'system',
           effects: [{ type: 'sync_with_root', pr: '{context:route_context.selected_pr.number}' }],
           rules: [
-            { when: 'effect.prepare_merge.sync_with_root.success == true', next: 'merge_pr' },
-            { when: 'true', next: 'ABORT' },
+            { condition: 'when(effect.prepare_merge.sync_with_root.success == true)', next: 'merge_pr' },
+            { condition: 'when(true)', next: 'ABORT' },
           ],
         },
         {
           name: 'merge_pr',
           mode: 'system',
           effects: [{ type: 'merge_pr', pr: '{context:route_context.selected_pr.number}' }],
-          rules: [{ when: 'effect.merge_pr.merge_pr.success == true', next: 'COMPLETE' }],
+          rules: [{ condition: 'when(effect.merge_pr.merge_pr.success == true)', next: 'COMPLETE' }],
         },
       ],
     });
@@ -411,8 +409,8 @@ describe('system workflow PR sync integration', () => {
             },
           ],
           rules: [
-            { when: 'context.route_context.selected_pr.exists == true', next: 'prepare_merge' },
-            { when: 'true', next: 'ABORT' },
+            { condition: 'when(context.route_context.selected_pr.exists == true)', next: 'prepare_merge' },
+            { condition: 'when(true)', next: 'ABORT' },
           ],
         },
         {
@@ -420,9 +418,9 @@ describe('system workflow PR sync integration', () => {
           mode: 'system',
           effects: [{ type: 'sync_with_root', pr: '{context:route_context.selected_pr.number}' }],
           rules: [
-            { when: 'effect.prepare_merge.sync_with_root.success == true', next: 'merge_pr' },
-            { when: 'effect.prepare_merge.sync_with_root.conflicted == true', next: 'resolve_conflicts' },
-            { when: 'true', next: 'ABORT' },
+            { condition: 'when(effect.prepare_merge.sync_with_root.success == true)', next: 'merge_pr' },
+            { condition: 'when(effect.prepare_merge.sync_with_root.conflicted == true)', next: 'resolve_conflicts' },
+            { condition: 'when(true)', next: 'ABORT' },
           ],
         },
         {
@@ -430,12 +428,12 @@ describe('system workflow PR sync integration', () => {
           mode: 'system',
           effects: [{ type: 'resolve_conflicts_with_ai', pr: '{context:route_context.selected_pr.number}' }],
           rules: [
-            { when: 'effect.resolve_conflicts.resolve_conflicts_with_ai.success == true', next: 'merge_pr' },
+            { condition: 'when(effect.resolve_conflicts.resolve_conflicts_with_ai.success == true)', next: 'merge_pr' },
             {
-              when: 'effect.resolve_conflicts.resolve_conflicts_with_ai.failed == true',
+              condition: 'when(effect.resolve_conflicts.resolve_conflicts_with_ai.failed == true)',
               next: 'enqueue_conflict_resolution_task',
             },
-            { when: 'true', next: 'ABORT' },
+            { condition: 'when(true)', next: 'ABORT' },
           ],
         },
         {
@@ -450,13 +448,13 @@ describe('system workflow PR sync integration', () => {
               task: 'Resolve merge conflict',
             },
           ],
-          rules: [{ when: 'effect.enqueue_conflict_resolution_task.enqueue_task.success == true', next: 'COMPLETE' }],
+          rules: [{ condition: 'when(effect.enqueue_conflict_resolution_task.enqueue_task.success == true)', next: 'COMPLETE' }],
         },
         {
           name: 'merge_pr',
           mode: 'system',
           effects: [{ type: 'merge_pr', pr: '{context:route_context.selected_pr.number}' }],
-          rules: [{ when: 'effect.merge_pr.merge_pr.success == true', next: 'COMPLETE' }],
+          rules: [{ condition: 'when(effect.merge_pr.merge_pr.success == true)', next: 'COMPLETE' }],
         },
       ],
     });

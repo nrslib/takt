@@ -6,12 +6,17 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn(),
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../core/workflow/phase-runner.js')>()),
   runReportPhase: vi.fn(),
   runStatusJudgmentPhase: vi.fn(),
 }));
@@ -33,6 +38,7 @@ import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
 import { getWorkflowTrustInfo } from '../infra/config/loaders/workflowTrustSource.js';
 import { WorkflowCallRunner } from '../core/workflow/engine/WorkflowCallRunner.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import {
   applyWorkflowCallOverridesToPersonaProviders,
   applyWorkflowCallOverridesToProviderRouting,
@@ -42,12 +48,13 @@ import {
   applyDefaultMocks,
   cleanupWorkflowEngine,
   createTestTmpDir,
+  makeRule,
   makeResponse,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
 import { findWorkflowCallStep } from './testUtils/workflowCallStepTestHelper.js';
-import type { AutoRoutingConfig, WorkflowConfig } from '../core/models/index.js';
+import type { AutoRoutingConfig, WorkflowConfig, WorkflowState } from '../core/models/index.js';
 import { initAnalyticsWriter } from '../features/analytics/index.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
@@ -220,7 +227,7 @@ describe('WorkflowEngine workflow_call integration', () => {
     }));
     expect(workflowCallResolver).not.toHaveBeenCalled();
     mockPersonaResponses({ finisher: 'done' });
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     const state = await engine.run();
 
@@ -252,13 +259,13 @@ describe('WorkflowEngine workflow_call integration', () => {
           name: 'finish-child',
           persona: 'child-finisher',
           instruction: 'Finish child without delegation',
-          rules: [{ condition: 'done', next: 'COMPLETE' }],
+          rules: [makeRule('done', 'COMPLETE')],
         },
         {
           name: 'unreachable-grandchild',
           kind: 'workflow_call',
           call: 'grandchild-that-must-not-load',
-          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+          rules: [makeRule('COMPLETE', 'COMPLETE')],
         },
       ],
     };
@@ -273,9 +280,9 @@ describe('WorkflowEngine workflow_call integration', () => {
       workflowCallResolver,
     }));
     mockPersonaResponses({ 'child-finisher': 'done' });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
@@ -427,7 +434,7 @@ describe('WorkflowEngine workflow_call integration', () => {
         name: 'child-step',
         personaDisplayName: 'Child',
         instruction: 'Run child',
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [makeRule('done', 'COMPLETE')],
       }],
     };
     const createEngine = vi.fn().mockReturnValue({
@@ -526,7 +533,7 @@ describe('WorkflowEngine workflow_call integration', () => {
           name: 'review',
           persona: 'reviewer',
           instruction: 'Review child workflow',
-          rules: [{ condition: 'done', next: 'COMPLETE' }],
+          rules: [makeRule('done', 'COMPLETE')],
         },
       ],
     };
@@ -660,9 +667,9 @@ steps:
       reviewer: 'Child review complete',
       supervisor: 'approved',
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Implement workflow composition', createWorkflowCallOptions(tmpDir));
@@ -911,9 +918,9 @@ steps:
       persona: 'reviewer',
       content: 'done',
     }));
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const parentTask = 'Propagate parent task into child workflow';
@@ -986,9 +993,9 @@ steps:
       reviewer: 'Child requested replan',
       planner: 'done',
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Branch on child return', createWorkflowCallOptions(tmpDir));
@@ -1104,9 +1111,9 @@ steps:
       persona: 'reviewer',
       content: 'done',
     }));
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Override child provider', createWorkflowCallOptions(tmpDir, {
@@ -1167,9 +1174,9 @@ steps:
       persona: 'reviewer',
       content: 'done',
     }));
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Override child provider only', createWorkflowCallOptions(tmpDir, {
@@ -1226,7 +1233,7 @@ steps:
       persona: 'reviewer',
       content: 'done',
     }));
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Override child provider without stale persona model', createWorkflowCallOptions(tmpDir, {
       provider: 'claude',
@@ -1288,7 +1295,7 @@ steps:
       persona: 'reviewer',
       content: 'done',
     }));
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Override child provider without stale routing model', createWorkflowCallOptions(tmpDir, {
       provider: 'claude',
@@ -1358,7 +1365,7 @@ steps:
       persona: 'reviewer',
       content: 'done',
     }));
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Keep child persona provider options on workflow_call override', createWorkflowCallOptions(tmpDir, {
       provider: 'claude',
@@ -1432,7 +1439,7 @@ steps:
       persona: 'reviewer',
       content: 'done',
     }));
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Override child model with persona provider fallback', createWorkflowCallOptions(tmpDir, {
       provider: 'claude',
@@ -1575,7 +1582,7 @@ steps:
       persona: 'reviewer',
       content: 'done',
     }));
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Override child provider options only', createWorkflowCallOptions(tmpDir, {
       provider: 'mock',
@@ -1649,7 +1656,7 @@ steps:
       persona: 'reviewer',
       content: 'done',
     }));
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Inherited child provider', createWorkflowCallOptions(tmpDir, {
       provider: 'claude',
@@ -1706,7 +1713,7 @@ steps:
       persona: 'reviewer',
       content: 'done',
     }));
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Avoid personaProviders collision on workflow_call', createWorkflowCallOptions(tmpDir, {
       provider: 'claude',
@@ -1778,10 +1785,10 @@ steps:
       reviewer: 'done',
       supervisor: 'Unproductive',
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 1, method: 'ai_judge_fallback' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 1, method: 'ai_judge' },
     ]);
 
     const startedProviderInfo: Array<{ provider: string | undefined; model: string | undefined }> = [];
@@ -1881,15 +1888,23 @@ steps:
         content: 'done',
       });
     });
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Route child workflow with child context', createWorkflowCallOptions(tmpDir, {
       provider: 'mock',
       autoRouting: createWorkflowCallAutoRoutingConfig(),
     }));
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
     const routingEventsDir = join(tmpDir, '.takt', 'events');
     initAnalyticsWriter(false, join(tmpDir, 'analytics'), { routingEventsDir });
-    const analyticsEmitter = new AnalyticsEmitter('run-workflow-call-routing', 'mock', 'parent-model', 'parent');
+    const analyticsEmitter = new AnalyticsEmitter(
+      'run-workflow-call-routing',
+      'mock',
+      'parent-model',
+      'parent',
+      false,
+    );
     engine.on('step:start', (_step, iteration, instruction, providerInfo, workflowName) => {
       analyticsEmitter.updateProviderInfo(
         iteration,
@@ -1919,6 +1934,7 @@ steps:
     const routerCall = routerCalls[0];
     const childCall = vi.mocked(runAgent).mock.calls.find(([persona]) => String(persona).includes('reviewer'));
 
+    expect(abortReasons).toEqual([]);
     expect(state.status).toBe('completed');
     expect(routerCalls).toHaveLength(1);
     expect(routerCall?.[1]).toContain('Workflow: takt/coding');
@@ -1992,7 +2008,7 @@ steps:
         content: 'done',
       });
     });
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Route inherited auto provider child workflow', createWorkflowCallOptions(tmpDir, {
       provider: 'mock',
@@ -2071,9 +2087,9 @@ steps:
       });
       return makeResponse({ persona: 'reviewer', content: 'done' });
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
     engine = new WorkflowEngine(parentConfig, tmpDir, 'Override child auto strategy', createWorkflowCallOptions(tmpDir, {
       provider: 'mock',
@@ -2124,7 +2140,7 @@ steps:
           name: 'review',
           persona: 'reviewer',
           instruction: 'Review child workflow',
-          rules: [{ condition: 'done', next: 'COMPLETE' }],
+          rules: [makeRule('done', 'COMPLETE')],
         },
       ],
     };
@@ -2239,7 +2255,7 @@ steps:
           name: 'review',
           persona: 'reviewer',
           instruction: 'Review child workflow',
-          rules: [{ condition: 'done', next: 'COMPLETE' }],
+          rules: [makeRule('done', 'COMPLETE')],
         },
       ],
     };
@@ -2419,7 +2435,7 @@ steps:
   it.each([
     {
       label: 'when rule',
-      rule: 'when: "true"\n        next: COMPLETE',
+      rule: 'condition: "when(true)"\n        next: COMPLETE',
     },
     {
       label: 'ai() condition',
@@ -2457,7 +2473,7 @@ steps:
       - type: merge_pr
         pr: 42
     rules:
-      - when: "true"
+      - condition: when(true)
         next: COMPLETE
 `, 'utf-8');
     writeWorkflow(tmpDir, 'parent.yaml', `name: parent
@@ -2540,7 +2556,7 @@ steps:
       persona: 'external-reviewer',
       content: 'done',
     }));
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(loadWorkflowOrThrow(externalParentPath, tmpDir), tmpDir, 'Resolve relative child from parent dir', createWorkflowCallOptions(tmpDir));
 
@@ -3302,7 +3318,7 @@ steps:
       - type: merge_pr
         pr: 42
     rules:
-      - when: "true"
+      - condition: when(true)
         next: COMPLETE
 `, 'utf-8');
     writeWorkflow(tmpDir, 'parent.yaml', `name: parent
@@ -3446,7 +3462,7 @@ steps:
       - type: merge_pr
         pr: 42
     rules:
-      - when: "true"
+      - condition: when(true)
         next: COMPLETE
 `);
 
@@ -3514,9 +3530,9 @@ steps:
       reviewer: 'child abort output',
       planner: 'done',
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Abort branch test', createWorkflowCallOptions(tmpDir));
@@ -3614,9 +3630,9 @@ steps:
           content: 'done',
         });
       });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Abort branch with exception', createWorkflowCallOptions(tmpDir));
@@ -3689,10 +3705,10 @@ steps:
       fixer: 'Fix done',
       supervisor: 'approved',
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const startedIterations: Array<{ step: string; iteration: number }> = [];
@@ -3775,10 +3791,10 @@ steps:
       fixer: 'Fix done',
       supervisor: 'approved',
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const onIterationLimit = vi.fn().mockResolvedValueOnce(2);
@@ -3864,10 +3880,10 @@ steps:
       fixer: 'Fix done',
       supervisor: 'approved',
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const onIterationLimit = vi.fn().mockResolvedValue(null);
@@ -3948,7 +3964,7 @@ steps:
         content: 'Review done',
       });
     });
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     let capturedResumePoint: ReturnType<WorkflowEngine['getResumePoint']>;
     engine = new WorkflowEngine(config, tmpDir, 'Capture latest child resume point', createWorkflowCallOptions(tmpDir, {
@@ -4144,6 +4160,102 @@ steps:
     expect(createEngine).toHaveBeenCalledTimes(1);
   });
 
+  it('non-interactive workflow_call fails closed when only interactive result rules match', async () => {
+    const executeWithRules = async (
+      rules: Array<{
+        condition: string;
+        next: string;
+        interactive_only?: boolean;
+      }>,
+      interactive: boolean,
+      execution: 'direct' | 'isolated',
+    ) => {
+      const parentConfig = createParentWorkflow(tmpDir, {
+        name: 'parent',
+        initial_step: 'delegate',
+        max_steps: 5,
+        steps: [{
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'child',
+          rules,
+        }],
+      });
+      const childConfig = {
+        name: 'child',
+        initialStep: 'review',
+        maxSteps: 5,
+        subworkflow: { callable: true },
+        steps: [{ name: 'review' }],
+      } as WorkflowConfig;
+      const childState = {
+        workflowName: childConfig.name,
+        currentStep: 'review',
+        iteration: 2,
+        stepOutputs: new Map(),
+        structuredOutputs: new Map(),
+        systemContexts: new Map(),
+        effectResults: new Map(),
+        lastOutput: makeResponse({ persona: 'child-reviewer', content: 'done' }),
+        userInputs: [],
+        personaSessions: new Map(),
+        stepIterations: new Map(),
+        status: 'completed',
+      } as WorkflowState;
+      const createEngine = vi.fn().mockReturnValue({
+        on: vi.fn(),
+        runWithResult: vi.fn().mockResolvedValue({ state: childState }),
+      });
+      const runner = new WorkflowCallRunner({
+        getConfig: () => parentConfig,
+        state: {
+          ...childState,
+          workflowName: parentConfig.name,
+          currentStep: 'delegate',
+          iteration: 1,
+          status: 'running',
+        },
+        projectCwd: tmpDir,
+        getMaxSteps: () => parentConfig.maxSteps,
+        updateMaxSteps: vi.fn(),
+        getCwd: () => tmpDir,
+        task: 'Filter interactive workflow_call rules',
+        getOptions: () => createWorkflowCallOptions(tmpDir, { interactive }),
+        sharedRuntime: { startedAtMs: Date.now() },
+        resumeStackPrefix: [],
+        runPaths: { slug: 'test-report-dir' } as never,
+        setActiveResumePoint: vi.fn(),
+        emit: vi.fn(),
+        resolveWorkflowCall: () => childConfig,
+        createEngine,
+        refreshFindingsState: vi.fn(),
+      });
+      const step = parentConfig.steps[0] as never;
+
+      if (execution === 'direct') {
+        return (await runner.run(step)).response.matchedRuleIndex;
+      }
+      return (await runner.runIsolated(step)).result.response.matchedRuleIndex;
+    };
+
+    const regularRules = [
+      { condition: 'COMPLETE', next: 'ABORT', interactive_only: true },
+      { condition: 'COMPLETE', next: 'COMPLETE' },
+    ];
+    await expect(executeWithRules(regularRules, false, 'direct')).resolves.toBe(1);
+    await expect(executeWithRules(regularRules, false, 'isolated')).resolves.toBe(1);
+
+    const interactiveOnlyRules = [
+      { condition: 'COMPLETE', next: 'COMPLETE', interactive_only: true },
+    ];
+    await expect(executeWithRules(interactiveOnlyRules, false, 'direct'))
+      .rejects.toBeInstanceOf(RuleDetectionExhaustedError);
+    await expect(executeWithRules(interactiveOnlyRules, false, 'isolated'))
+      .rejects.toBeInstanceOf(RuleDetectionExhaustedError);
+    await expect(executeWithRules(interactiveOnlyRules, true, 'direct')).resolves.toBe(0);
+    await expect(executeWithRules(interactiveOnlyRules, true, 'isolated')).resolves.toBe(0);
+  });
+
   it('WorkflowCallRunner は step_transition abort では abortReason 文字列より child の最終出力を優先する', async () => {
     const parentConfig = createParentWorkflow(tmpDir, {
       name: 'parent',
@@ -4233,7 +4345,7 @@ steps:
     expect(result.response.matchedRuleIndex).toBe(1);
   });
 
-  it('WorkflowCallRunner は non-step_transition abort で reason と lastOutput がなくても ABORT を優先する', async () => {
+  it('WorkflowCallRunner は child の rule_no_match abort reason を親の ABORT 応答へ伝播する', async () => {
     const parentConfig = createParentWorkflow(tmpDir, {
       name: 'parent',
       initial_step: 'delegate',
@@ -4289,6 +4401,10 @@ steps:
       on: vi.fn(),
       runWithResult: vi.fn().mockResolvedValue({
         state: childState,
+        abort: {
+          kind: 'rule_no_match',
+          reason: 'rule_no_match',
+        },
       }),
     });
     const runner = new WorkflowCallRunner({
@@ -4313,9 +4429,9 @@ steps:
 
     const result = await runner.run(parentConfig.steps[0] as never);
 
-    expect(result.response.content).toBe('ABORT');
+    expect(result.response.content).toBe('rule_no_match');
     expect(result.response.matchedRuleIndex).toBe(1);
-    expect(parentState.lastOutput?.content).toBe('ABORT');
+    expect(parentState.lastOutput?.content).toBe('rule_no_match');
   });
 
   it('resume_point は workflow_ref が一致する child workflow にだけ適用する', async () => {
@@ -4480,7 +4596,7 @@ steps:
       persona: 'fixer',
       content: 'done',
     }));
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Resume workflow_call from child initial step', createWorkflowCallOptions(tmpDir, {
       initialIteration: 7,
@@ -4546,7 +4662,7 @@ steps:
       persona: 'fixer',
       content: 'done',
     }));
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Resume workflow_call from child resume step', createWorkflowCallOptions(tmpDir, {
       initialIteration: 7,
@@ -4619,7 +4735,7 @@ steps:
       persona: 'fixer',
       content: 'done',
     }));
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Resume nested workflow_call from nearest valid parent', createWorkflowCallOptions(tmpDir, {
       initialIteration: 7,
@@ -5203,9 +5319,9 @@ steps:
       }
       throw new Error(`Unexpected persona: ${String(persona)}`);
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
     engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel review', createWorkflowCallOptions(tmpDir));
@@ -5219,6 +5335,79 @@ steps:
     expect(delegatedOutput?.content).toBe('Child review complete');
     expect(parentOutput?.content).toContain('## delegate-review\nChild review complete');
     expect(parentOutput?.content).toContain('## local-review\nLocal review complete');
+  });
+
+  it('non-interactive parallel workflow_call の no-match は親 fallback rule より先に中断する', async () => {
+    writeWorkflow(tmpDir, 'shared/review.yaml', `name: shared/review
+subworkflow:
+  callable: true
+initial_step: child-review
+max_steps: 3
+steps:
+  - name: child-review
+    persona: child-reviewer
+    instruction: "Review through child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'reviewers',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'reviewers',
+          instruction: 'Run reviewers',
+          parallel: [
+            {
+              name: 'delegate-review',
+              kind: 'workflow_call',
+              call: 'shared/review',
+              rules: [
+                {
+                  condition: 'COMPLETE',
+                  next: 'COMPLETE',
+                  interactive_only: true,
+                },
+              ],
+            },
+          ],
+          rules: [
+            { condition: 'when(true)', next: 'finish' },
+          ],
+        },
+        {
+          name: 'finish',
+          persona: 'finisher',
+          instruction: 'Finish after parent fallback',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      return makeResponse({ persona: String(persona), content: 'done' });
+    });
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'auto_select' },
+      { index: 0, method: 'auto_select' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Reject parallel workflow call no-match', createWorkflowCallOptions(tmpDir, {
+      interactive: false,
+    }));
+    const abortFn = vi.fn();
+    engine.on('workflow:abort', abortFn);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortFn).toHaveBeenCalledWith(expect.anything(), 'rule_no_match', 'rule_no_match');
+    expect(vi.mocked(runAgent).mock.calls.map(([persona]) => persona)).toEqual(['child-reviewer']);
   });
 
   it('parallel 内 workflow_call 後は親 parallel step の resume point に戻す', async () => {
@@ -5268,8 +5457,8 @@ steps:
       }
       throw new Error(`Unexpected persona: ${String(persona)}`);
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
     engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel review', createWorkflowCallOptions(tmpDir));
@@ -5351,11 +5540,11 @@ steps:
       }
       throw new Error(`Unexpected prompt: ${prompt}`);
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
-      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
     engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel review', createWorkflowCallOptions(tmpDir, {
       onIterationLimit,
@@ -5450,10 +5639,10 @@ steps:
       }
       throw new Error(`Unexpected persona: ${String(persona)}`);
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
     engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel review', createWorkflowCallOptions(tmpDir, {
@@ -5515,8 +5704,8 @@ steps:
       }
       throw new Error(`Unexpected persona: ${String(persona)}`);
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
     engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel review', createWorkflowCallOptions(tmpDir));
 
@@ -5604,9 +5793,9 @@ steps:
       }
       throw new Error(`Unexpected prompt: ${prompt}`);
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
     engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel reviews', createWorkflowCallOptions(tmpDir));
@@ -5689,9 +5878,9 @@ steps:
       }
       throw new Error(`Unexpected prompt: ${prompt}`);
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
     engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel reviews', createWorkflowCallOptions(tmpDir, {

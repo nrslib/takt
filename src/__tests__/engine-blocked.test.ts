@@ -17,14 +17,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -39,7 +43,7 @@ import {
   makeResponse,
   buildDefaultWorkflowConfig,
   mockRunAgentSequence,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   createTestTmpDir,
   applyDefaultMocks,
   makeStep,
@@ -69,8 +73,8 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
       makeResponse({ persona: 'plan', status: 'blocked', content: 'Need clarification' }),
     ]);
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const blockedFn = vi.fn();
@@ -94,8 +98,8 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
       makeResponse({ persona: 'plan', status: 'blocked', content: 'Need info' }),
     ]);
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
@@ -121,17 +125,17 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
       makeResponse({ persona: 'supervise', content: 'All passed' }),
     ]);
 
-    mockDetectMatchedRuleSequence([
+    mockRuleEvaluationSequence([
       // First plan call: blocked, rule matched but blocked handling takes over
-      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase3_tag' },
       // Second plan call: success
-      { index: 0, method: 'phase1_tag' },  // plan → implement
-      { index: 0, method: 'phase1_tag' },  // implement → ai_review
-      { index: 0, method: 'phase1_tag' },  // ai_review → reviewers
-      { index: 0, method: 'phase1_tag' },  // arch-review → approved
-      { index: 0, method: 'phase1_tag' },  // security-review → approved
+      { index: 0, method: 'phase3_tag' },  // plan → implement
+      { index: 0, method: 'phase3_tag' },  // implement → ai_review
+      { index: 0, method: 'phase3_tag' },  // ai_review → reviewers
+      { index: 0, method: 'phase3_tag' },  // arch-review → approved
+      { index: 0, method: 'phase3_tag' },  // security-review → approved
       { index: 0, method: 'aggregate' },   // reviewers → supervise
-      { index: 0, method: 'phase1_tag' },  // supervise → COMPLETE
+      { index: 0, method: 'phase3_tag' },  // supervise → COMPLETE
     ]);
 
     const userInputFn = vi.fn();
@@ -155,8 +159,8 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
       makeResponse({ persona: 'implement', status: 'blocked', content: 'Need clarification' }),
     ]);
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan -> implement
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan -> implement
     ]);
 
     const state = await engine.run();
@@ -236,8 +240,8 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
       makeResponse({ persona: 'plan', status: 'error', content: 'Transport error', error: 'Transport error' }),
     ]);
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const abortFn = vi.fn();

@@ -29,27 +29,21 @@ Normal steps execute in up to 3 phases. Sessions persist across phases.
 
 ## Rule Evaluation
 
-RuleEvaluator determines the next step via 5-stage fallback. Earlier match takes priority.
+RuleEvaluator evaluates every rule in YAML order and adopts the first matching rule. Semantic labels are selected once during Phase 3; `when(...)` and aggregate conditions are evaluated deterministically in that same ordered loop. If no rule matches, the workflow aborts with `rule_no_match`.
 
 | Priority | Method | Target |
 |----------|--------|--------|
-| 1 | aggregate | parallel parent (all/any) |
-| 2 | Phase 3 tag | `[STEP:N]` output |
-| 3 | Phase 1 tag | `[STEP:N]` output (fallback) |
-| 4 | ai() judge | ai("condition") rules |
-| 5 | AI fallback | AI evaluates all conditions |
-
-When multiple tags appear in output, the **last match** wins.
+| YAML order | condition | first true rule |
 
 ### Condition Syntax
 
 | Syntax | Parsing | Regex |
 |--------|---------|-------|
-| `ai("...")` | AI condition evaluation | `AI_CONDITION_REGEX` |
+| `when(...)` | Deterministic workflow-state predicate | `isWhenConditionExpression` |
 | `all("...")` / `any("...")` | Aggregate condition | `AGGREGATE_CONDITION_REGEX` |
-| Plain string | Tag or AI fallback | — |
+| Plain semantic label | Matches the single Phase 3 selection | — |
 
-Adding new special syntax requires updating both workflowParser.ts regex and RuleEvaluator.
+Semantic and aggregate conditions can be combined with `&& when(...)`. The condition parser and RuleEvaluator must be updated together for new syntax.
 
 ## Provider Integration
 

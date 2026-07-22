@@ -134,9 +134,13 @@ rules:
 
 | タイプ | 構文 | 説明 |
 |--------|------|------|
-| タグベース | `"condition text"` | エージェントが `[STEP:N]` タグを出力し、インデックスで照合 |
-| AI 判定 | `ai("condition text")` | step 出力に対して AI が条件を評価 |
+| 意味ラベル | `approved` | status judge が重複排除したラベルを一度だけ選択 |
+| 状態 predicate | `when(...)` | workflow state を決定的に評価 |
 | 集約 | `all("X")` / `any("X")` | 並列サブ step の結果を集約 |
+| 複合 | `approved && when(...)` | 選択ラベルと状態 predicate の両方を要求 |
+| 集約 + 状態 | `all("X") && when(...)` / `any("X") && when(...)` | 集約結果と状態 predicate の両方を要求 |
+
+rule は YAML 記述順で評価され、最初に成立した rule を採用します。condition 種別による暗黙の優先順位や fallback 遷移はありません。どの rule も成立しない場合、workflow は `rule_no_match` で ABORT します。
 
 ### 特殊な `next` 値
 

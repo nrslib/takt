@@ -9,6 +9,7 @@ import {
   type StructuredCaller,
 } from '../agents/structured-caller.js';
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 const {
   MockWorkflowEngine,
@@ -216,7 +217,7 @@ function makeConfig(): WorkflowConfig {
         personaDisplayName: 'coder',
         instruction: 'Implement task',
         passPreviousResponse: true,
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
       },
     ],
   };
@@ -420,8 +421,8 @@ beforeEach(() => {
       'structured judge prompt',
       'tag judge prompt',
       [
-        { condition: 'approved', next: 'COMPLETE' },
-        { condition: 'needs_fix', next: 'fix' },
+        { label: 'approved' },
+        { label: 'needs_fix' },
       ],
       {
         cwd: '/tmp/project',
@@ -431,7 +432,7 @@ beforeEach(() => {
       },
     );
 
-    expect(result).toEqual({ ruleIndex: 0, method: 'phase3_tag' });
+    expect(result).toEqual({ candidateIndex: 0, method: 'phase3_tag' });
     expect(mockGetProvider).toHaveBeenCalledWith('cursor');
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
     const [, firstPrompt, firstRunOptions] = mockRunAgent.mock.calls[0] ?? [];
@@ -482,8 +483,8 @@ beforeEach(() => {
       'structured judge prompt',
       'tag judge prompt',
       [
-        { condition: 'approved', next: 'COMPLETE' },
-        { condition: 'needs_fix', next: 'fix' },
+        { label: 'approved' },
+        { label: 'needs_fix' },
       ],
       {
         cwd: '/tmp/project',
@@ -494,7 +495,7 @@ beforeEach(() => {
       },
     );
 
-    expect(result).toEqual({ ruleIndex: 0, method: 'structured_output' });
+    expect(result).toEqual({ candidateIndex: 0, method: 'structured_output' });
     expect(mockGetProvider).toHaveBeenCalledWith('claude');
     const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(prompt).toContain('structured judge prompt');
@@ -749,7 +750,7 @@ steps:
       instruction: '',
       personaDisplayName: 'delegate',
       passPreviousResponse: true,
-      rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
     };
     const childResumePoint = {
       version: 1 as const,
@@ -811,7 +812,7 @@ steps:
       instruction: '',
       personaDisplayName: 'delegate',
       passPreviousResponse: true,
-      rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
     };
     const childResumePoint = {
       version: 1 as const,

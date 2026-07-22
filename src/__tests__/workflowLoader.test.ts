@@ -258,7 +258,7 @@ steps:
       - type: merge_pr
         pr: 42
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `);
 
@@ -281,7 +281,7 @@ steps:
       - type: merge_pr
         pr: 42
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `);
 
@@ -345,7 +345,7 @@ steps:
         source: current_branch
         as: pr
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `);
 
@@ -688,7 +688,7 @@ steps:
       - type: merge_pr
         pr: 42
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `);
 
@@ -720,7 +720,7 @@ steps:
       - type: merge_pr
         pr: 42
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `);
 
@@ -746,7 +746,7 @@ steps:
       - type: merge_pr
         pr: 42
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `);
 
@@ -790,7 +790,7 @@ steps:
       - type: merge_pr
         pr: 42
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `);
 
@@ -1010,7 +1010,7 @@ steps:
       - type: merge_pr
         pr: 42
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `);
     const onWarning = vi.fn();
@@ -1377,7 +1377,7 @@ steps:
       - type: merge_pr
         pr: 42
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `);
     const onWarning = vi.fn();

@@ -1051,9 +1051,9 @@ export interface FindingsRuleContext {
       id: string;
       severity: FindingSeverity;
       title: string;
-      location?: string;
-      description?: string;
-      suggestion?: string;
+      location: string | undefined;
+      description: string | undefined;
+      suggestion: string | undefined;
       reviewers: string[];
     }>;
   };

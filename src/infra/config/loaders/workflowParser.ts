@@ -11,7 +11,7 @@ import type {
   WorkflowStep,
   WorkflowSubworkflowConfig,
 } from '../../../core/models/index.js';
-import { hasUnquotedFindingsReference, isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
+import { hasFindingsReference } from '../../../core/models/workflow-rule-condition.js';
 import {
   FINDING_CONFLICT_ADJUDICATION_PERSONA,
   workflowWiresFindingConflictAdjudication,
@@ -37,12 +37,6 @@ import {
   type WorkflowCallArgResolutionPolicy,
 } from './workflowCallableArgResolver.js';
 import { prepareCallableSubworkflowDiscoveryArgs } from './workflowCallableDiscoveryArgs.js';
-
-function ruleReferencesFindings(rule: { condition: string; aggregateGuardCondition?: string; guardCondition?: string }): boolean {
-  return isFindingsCondition(rule.condition)
-    || (rule.aggregateGuardCondition !== undefined && hasUnquotedFindingsReference(rule.aggregateGuardCondition))
-    || (rule.guardCondition !== undefined && hasUnquotedFindingsReference(rule.guardCondition));
-}
 
 function normalizeSubworkflowConfig(
   raw: ReturnType<typeof WorkflowConfigRawSchema.parse>['subworkflow'],
@@ -201,14 +195,14 @@ function validateFindingsRulesRequireContract(
 
   for (const step of steps) {
     for (const rule of step.rules ?? []) {
-      if (rule.isAiCondition || !ruleReferencesFindings(rule)) {
+      if (!hasFindingsReference(rule.condition)) {
         continue;
       }
       throw new Error(`Configuration error: step "${step.name}" uses findings.* rule but finding_contract is not configured`);
     }
     for (const subStep of step.parallel ?? []) {
       for (const rule of subStep.rules ?? []) {
-        if (rule.isAiCondition || !ruleReferencesFindings(rule)) {
+        if (!hasFindingsReference(rule.condition)) {
           continue;
         }
         throw new Error(
@@ -220,7 +214,7 @@ function validateFindingsRulesRequireContract(
 
   for (const monitor of loopMonitors ?? []) {
     for (const rule of monitor.judge.rules) {
-      if (!ruleReferencesFindings(rule)) {
+      if (!hasFindingsReference(rule.condition)) {
         continue;
       }
       throw new Error('Configuration error: loop_monitor judge uses findings.* rule but finding_contract is not configured');

@@ -116,7 +116,7 @@ steps:
           head_branch: feature/*
           draft: false
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `, 'utf-8');
 
@@ -146,7 +146,7 @@ steps:
         as: tracked_issues
         exclude_selected_from: missing_issue_selection
     rules:
-      - when: "true"
+      - condition: "when(true)"
         next: COMPLETE
 `, 'utf-8');
 

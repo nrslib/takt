@@ -1,6 +1,4 @@
-import type {
-  WorkflowRule,
-} from '../../core/models/types.js';
+import type { SemanticRuleCandidate } from '../../core/models/workflow-rule-condition.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type {
   JudgeStatusOptions,
@@ -34,15 +32,15 @@ export class CapabilityAwareStructuredCaller extends DefaultStructuredCaller {
   async judgeStatus(
     structuredInstruction: string,
     tagInstruction: string,
-    rules: WorkflowRule[],
+    candidates: SemanticRuleCandidate[],
     options: JudgeStatusOptions,
   ): Promise<JudgeStatusResult> {
     const provider = resolveProvider(options.provider, options.resolvedProvider);
     if (shouldUsePromptBased(provider)) {
-      return this.promptBased.judgeStatus(structuredInstruction, tagInstruction, rules, options);
+      return this.promptBased.judgeStatus(structuredInstruction, tagInstruction, candidates, options);
     }
 
-    return super.judgeStatus(structuredInstruction, tagInstruction, rules, options);
+    return super.judgeStatus(structuredInstruction, tagInstruction, candidates, options);
   }
 
   async evaluateCondition(

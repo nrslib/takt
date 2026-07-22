@@ -1,71 +1,11 @@
 import type { WorkflowState } from '../../models/types.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
-import { isEscapedQuote, splitTopLevelClausesOrThrow } from '../../models/workflow-condition-expression.js';
-
-export function splitTopLevel(expression: string, separator: '||' | '&&'): string[] {
-  // トークナイズは models の唯一実装に委譲（parse/normalize と同一契約）。
-  // 空節は黙殺しない: when(a && && b) は不正な式として即座に失敗させる
-  // （不正オペランドを throw する評価器の既存の厳格性と同じ扱い）。
-  return splitTopLevelClausesOrThrow(expression, separator, 'when expression');
-}
-
-function findOperator(expression: string): { operator: string; index: number } | undefined {
-  const operators = ['>=', '<=', '!=', '==', '>', '<'] as const;
-  let inString = false;
-
-  for (let index = 0; index < expression.length; index++) {
-    if (expression[index] === '"' && !isEscapedQuote(expression, index)) {
-      inString = !inString;
-      continue;
-    }
-    if (inString) {
-      continue;
-    }
-    for (const operator of operators) {
-      if (expression.slice(index, index + operator.length) === operator) {
-        return { operator, index };
-      }
-    }
-  }
-
-  return undefined;
-}
-
-function splitFunctionArgs(argsText: string): [string, string] {
-  let inString = false;
-  let depth = 0;
-
-  for (let index = 0; index < argsText.length; index++) {
-    const current = argsText[index];
-    if (current === '"' && !isEscapedQuote(argsText, index)) {
-      inString = !inString;
-      continue;
-    }
-    if (inString) {
-      continue;
-    }
-    if (current === '(') {
-      depth++;
-      continue;
-    }
-    if (current === ')') {
-      depth--;
-      continue;
-    }
-    if (current === ',' && depth === 0) {
-      return [
-        argsText.slice(0, index).trim(),
-        argsText.slice(index + 1).trim(),
-      ];
-    }
-  }
-
-  throw new Error(`Invalid exists() expression "${argsText}"`);
-}
-
-function resolveReference(reference: string, state: WorkflowState): unknown {
-  return resolveWorkflowStateReference(reference, state);
-}
+import {
+  parseWhenConditionExpression,
+  type WhenClauseExpression,
+  type WhenComparisonOperator,
+  type WhenOperandExpression,
+} from '../../models/workflow-when-expression.js';
 
 function parseItemReference(reference: string, item: unknown): unknown {
   if (!reference.startsWith('item.')) {
@@ -77,7 +17,7 @@ function parseItemReference(reference: string, item: unknown): unknown {
     if (!key) {
       throw new Error(`Unsupported exists() operand "${reference}"`);
     }
-    if (current == null || typeof current !== 'object' || !(key in current)) {
+    if (current == null || typeof current !== 'object' || !Object.hasOwn(current, key)) {
       throw new Error(`Unsupported exists() operand "${reference}"`);
     }
     current = (current as Record<string, unknown>)[key];
@@ -85,90 +25,53 @@ function parseItemReference(reference: string, item: unknown): unknown {
   return current;
 }
 
-function parseLiteral(raw: string, state: WorkflowState, item?: unknown): unknown {
-  const value = raw.trim();
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  if (value === 'null') return null;
-  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
-  if (value.startsWith('"') && value.endsWith('"')) {
-    return value.slice(1, -1);
-  }
-  if (
-    value.startsWith('context.')
-    || value.startsWith('structured.')
-    || value.startsWith('effect.')
-    || value.startsWith('findings.')
-  ) {
-    return resolveReference(value, state);
-  }
-  if (item !== undefined && value.startsWith('item.')) {
-    return parseItemReference(value, item);
-  }
-  throw new Error(`Unsupported when operand "${value}"`);
+function formatOperand(operand: WhenOperandExpression): string {
+  return operand.kind === 'literal' ? operand.raw : operand.reference;
 }
 
-function evaluateExistsPredicate(predicate: string, item: unknown, state: WorkflowState): boolean {
-  return splitTopLevel(predicate, '&&').every((clause) => {
-    const operatorMatch = findOperator(clause);
-    if (operatorMatch?.operator !== '==') {
-      throw new Error(`exists() only supports "==" and "&&": "${predicate}"`);
-    }
-
-    const leftRaw = clause.slice(0, operatorMatch.index);
-    const rightRaw = clause.slice(operatorMatch.index + operatorMatch.operator.length);
-    if (leftRaw.trim().length === 0 || rightRaw.trim().length === 0) {
-      throw new Error(`Invalid exists() clause "${clause}"`);
-    }
-
-    return parseLiteral(leftRaw, state, item) === parseLiteral(rightRaw, state, item);
-  });
+function resolveOperand(
+  operand: WhenOperandExpression,
+  state: WorkflowState,
+  itemContext?: { item: unknown },
+): unknown {
+  if (operand.kind === 'literal') return operand.value;
+  if (operand.kind === 'state') {
+    return resolveWorkflowStateReference(operand.reference, state);
+  }
+  if (itemContext === undefined) {
+    throw new Error(`Unsupported exists() operand "${operand.reference}"`);
+  }
+  return parseItemReference(operand.reference, itemContext.item);
 }
 
-function evaluateExistsClause(clause: string, state: WorkflowState): boolean {
-  const match = clause.match(/^exists\((.*)\)$/);
-  if (!match?.[1]) {
-    throw new Error(`Invalid exists() clause "${clause}"`);
-  }
-
-  const [listExpression, predicate] = splitFunctionArgs(match[1]);
-  const list = parseLiteral(listExpression, state);
+function evaluateExistsClause(
+  clause: Extract<WhenClauseExpression, { kind: 'exists' }>,
+  state: WorkflowState,
+): boolean {
+  const list = resolveOperand(clause.listExpression, state);
   if (!Array.isArray(list)) {
-    throw new Error(`exists() requires an array expression: "${listExpression}"`);
+    throw new Error(
+      `exists() requires an array expression: "${formatOperand(clause.listExpression)}"`,
+    );
   }
-
-  return list.some((item) => evaluateExistsPredicate(predicate, item, state));
+  return list.some((item) => clause.predicate.every((predicate) =>
+    resolveOperand(predicate.left, state, { item })
+      === resolveOperand(predicate.right, state, { item }),
+  ));
 }
 
-function evaluateClause(clause: string, state: WorkflowState): boolean {
-  const normalized = clause.trim();
-  if (normalized === 'true') return true;
-  if (normalized === 'false') return false;
-  if (normalized.startsWith('exists(') && normalized.endsWith(')')) {
-    return evaluateExistsClause(normalized, state);
-  }
-
-  const operatorMatch = findOperator(normalized);
-  if (!operatorMatch) {
-    const value = parseLiteral(normalized, state);
-    if (typeof value !== 'boolean') {
-      throw new Error(`Bare when clause must resolve to boolean: "${normalized}"`);
-    }
-    return value;
-  }
-  const { operator } = operatorMatch;
-
-  const leftRaw = normalized.slice(0, operatorMatch.index);
-  const rightRaw = normalized.slice(operatorMatch.index + operator.length);
-  if (leftRaw.trim().length === 0 || rightRaw.trim().length === 0) {
-    throw new Error(`Invalid when clause "${normalized}"`);
-  }
-  const left = parseLiteral(leftRaw, state);
-  const right = parseLiteral(rightRaw, state);
+function compareWhenOperands(
+  operator: WhenComparisonOperator,
+  left: unknown,
+  right: unknown,
+  clause: Extract<WhenClauseExpression, { kind: 'comparison' }>,
+): boolean {
   if (operator === '==') return left === right;
   if (operator === '!=') return left !== right;
   if (typeof left !== 'number' || typeof right !== 'number') {
-    throw new Error(`Operator "${operator}" requires numeric operands: "${normalized}"`);
+    throw new Error(
+      `Operator "${operator}" requires numeric operands: "${formatOperand(clause.left)} ${operator} ${formatOperand(clause.right)}"`,
+    );
   }
   if (operator === '>') return left > right;
   if (operator === '<') return left < right;
@@ -176,8 +79,30 @@ function evaluateClause(clause: string, state: WorkflowState): boolean {
   return left <= right;
 }
 
+function evaluateClause(clause: WhenClauseExpression, state: WorkflowState): boolean {
+  switch (clause.kind) {
+    case 'boolean': return clause.value;
+    case 'exists': return evaluateExistsClause(clause, state);
+    case 'operand': {
+      const value = resolveOperand(clause.operand, state);
+      if (typeof value !== 'boolean') {
+        throw new Error(
+          `Bare when clause must resolve to boolean: "${formatOperand(clause.operand)}"`,
+        );
+      }
+      return value;
+    }
+    case 'comparison': return compareWhenOperands(
+      clause.operator,
+      resolveOperand(clause.left, state),
+      resolveOperand(clause.right, state),
+      clause,
+    );
+  }
+}
+
 export function evaluateWhenExpression(expression: string, state: WorkflowState): boolean {
-  return splitTopLevel(expression, '||').some((orPart) =>
-    splitTopLevel(orPart, '&&').every((andPart) => evaluateClause(andPart, state)),
+  return parseWhenConditionExpression(expression).alternatives.some((alternative) =>
+    alternative.every((clause) => evaluateClause(clause, state)),
   );
 }

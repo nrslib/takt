@@ -10,9 +10,8 @@ import { TaskRunner } from '../infra/task/index.js';
 import { invalidateGlobalConfigCache } from '../infra/config/index.js';
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -57,7 +56,7 @@ function createEnv(): TestEnv {
       '    persona: ./personas/planner.md',
       '    instruction: "{task}"',
       '    rules:',
-      '      - condition: done',
+      '      - condition: when(true)',
       '        next: COMPLETE',
       '      - condition: blocked',
       '        next: ABORT',

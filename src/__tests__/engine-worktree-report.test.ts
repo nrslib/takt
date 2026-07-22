@@ -17,14 +17,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -41,7 +45,7 @@ import {
   makeStep,
   makeRule,
   mockRunAgentSequence,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
 import type { WorkflowConfig } from '../core/models/index.js';
@@ -107,8 +111,8 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'review', content: 'Review done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'tag' as const },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'auto_select' },
     ]);
 
     // When: run the workflow
@@ -153,8 +157,8 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'review', content: 'Review done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'tag' as const },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'auto_select' },
     ]);
 
     // When: run the workflow
@@ -183,8 +187,8 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'review', content: 'Review done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'tag' as const },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'auto_select' },
     ]);
 
     // When: run the workflow
@@ -210,8 +214,8 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'review', content: 'Review done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'tag' as const },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'auto_select' },
     ]);
 
     await engine.run();
@@ -269,9 +273,9 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
       makeResponse({ persona: 'implement', content: 'implement output' }),
       makeResponse({ persona: 'review', content: 'review output' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'tag' as const },
-      { index: 0, method: 'tag' as const },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'auto_select' },
+      { index: 0, method: 'auto_select' },
     ]);
 
     await engine.run();

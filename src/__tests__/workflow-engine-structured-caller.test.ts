@@ -14,17 +14,20 @@ vi.mock('../infra/providers/index.js', () => ({
   })),
 }));
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
-  runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock('../core/workflow/phase-runner.js', async () => {
+  const { runStatusJudgmentPhase } = await import('../core/workflow/status-judgment-phase.js');
+  return {
+    runReportPhase: vi.fn().mockResolvedValue(undefined),
+    runStatusJudgmentPhase,
+  };
+});
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import type { WorkflowConfig, WorkflowRule } from '../core/models/index.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { resolveFindingLedgerRoot } from '../core/workflow/findings/store.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
@@ -289,7 +292,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: (_content, stepName) => (stepName === 'fix' ? 0 : -1),
     });
     engine.on('findings:ledger', ledgerUpdated);
     const abortReasons: string[] = [];
@@ -316,11 +318,23 @@ describe('WorkflowEngine structured caller defaults', () => {
           timestamp: new Date('2026-04-01T00:00:00.000Z'),
         };
       })
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'system',
+          userInstruction: instruction,
+        });
+        return {
+          persona: 'conductor',
+          status: 'done',
+          content: 'no JSON result',
+          timestamp: new Date('2026-04-01T00:00:01.000Z'),
+        };
+      })
       .mockResolvedValueOnce({
         persona: 'conductor',
         status: 'done',
-        content: '[JUDGE:1]',
-        timestamp: new Date('2026-04-01T00:00:01.000Z'),
+        content: '[REVIEW:1]',
+        timestamp: new Date('2026-04-01T00:00:02.000Z'),
       });
 
     const config: WorkflowConfig = {
@@ -335,10 +349,8 @@ describe('WorkflowEngine structured caller defaults', () => {
           provider: 'cursor',
           instruction: 'Review the response',
           rules: [
-            makeRule('approved', 'COMPLETE', {
-              isAiCondition: true,
-              aiConditionText: 'is it approved?',
-            }),
+            makeRule('approved', 'COMPLETE'),
+            makeRule('needs_fix', 'ABORT'),
           ],
         }),
       ],
@@ -348,15 +360,13 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     });
-
     const result = await engine.run();
 
     expect(result.status).toBe('completed');
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
-    const [, prompt, judgeOptions] = vi.mocked(runAgent).mock.calls[1] ?? [];
-    expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    const [, prompt, judgeOptions] = vi.mocked(runAgent).mock.calls[2] ?? [];
+    expect(prompt).toContain('Output the tag corresponding to your decision:');
     expect(judgeOptions).toEqual(expect.objectContaining({
       cwd,
       provider: 'cursor',
@@ -366,18 +376,25 @@ describe('WorkflowEngine structured caller defaults', () => {
   });
 
   it('system step の ai() rule でも resolved cursor を使って prompt-based judge に切り替える', async () => {
-    vi.mocked(runAgent).mockImplementationOnce(async (_persona, instruction, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: 'system',
-        userInstruction: instruction,
-      });
-      return {
+    vi.mocked(runAgent)
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'system',
+          userInstruction: instruction,
+        });
+        return {
+          persona: 'conductor',
+          status: 'done',
+          content: 'no JSON result',
+          timestamp: new Date('2026-04-01T00:00:02.000Z'),
+        };
+      })
+      .mockResolvedValueOnce({
         persona: 'conductor',
         status: 'done',
-        content: '[JUDGE:1]',
-        timestamp: new Date('2026-04-01T00:00:02.000Z'),
-      };
-    });
+        content: '[ROUTE:1]',
+        timestamp: new Date('2026-04-01T00:00:03.000Z'),
+      });
 
     const config: WorkflowConfig = {
       name: 'system-structured-caller-test',
@@ -390,13 +407,9 @@ describe('WorkflowEngine structured caller defaults', () => {
           persona: undefined,
           instruction: '',
           rules: [
-            makeRule('approved', 'COMPLETE', {
-              isAiCondition: true,
-              aiConditionText: 'is this workflow ready to complete?',
-            }),
-            makeRule('fallback', 'ABORT', {
-              condition: 'when(true)',
-            }),
+            makeRule('approved', 'COMPLETE'),
+            makeRule('needs_fix', 'ABORT'),
+            makeRule('when(true)', 'ABORT'),
           ],
         }),
       ],
@@ -407,15 +420,14 @@ describe('WorkflowEngine structured caller defaults', () => {
       provider: 'cursor',
       model: 'cursor-fast',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     });
 
     const result = await engine.run();
 
     expect(result.status).toBe('completed');
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
-    const [, prompt, judgeOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
-    expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+    const [, prompt, judgeOptions] = vi.mocked(runAgent).mock.calls[1] ?? [];
+    expect(prompt).toContain('Output the tag corresponding to your decision:');
     expect(judgeOptions).toEqual(expect.objectContaining({
       cwd,
       resolvedProvider: 'cursor',
@@ -497,7 +509,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     });
 
     const result = await engine.run();
@@ -624,7 +635,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     expect(result.status).toBe('completed');
@@ -698,7 +708,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     expect(result.status).toBe('completed');
@@ -781,7 +790,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     expect(result.status).toBe('completed');
@@ -863,9 +871,8 @@ describe('WorkflowEngine structured caller defaults', () => {
           name: 'final-gate',
           persona: 'merge-readiness-reviewer',
           instruction: 'Judge merge readiness.',
-          outputContracts: [{ name: 'merge-readiness-review.md', format: '# Merge Readiness Review' }],
           rules: [
-            makeRule('approved', 'COMPLETE', { guardCondition: 'findings.open.count == 0' }),
+            makeRule('approved && when(findings.open.count == 0)', 'COMPLETE'),
             makeRule('when(findings.open.count > 0)', 'fix'),
           ],
         }),
@@ -886,7 +893,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     });
     const result = await engine.run();
 
@@ -980,7 +986,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     // conflict が実在する以上、approved 判定でも ABORT が先行する
@@ -1089,7 +1094,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     expect(result.status).toBe('completed');
@@ -1190,7 +1194,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       provider: 'auto' as never,
       autoRouting: createStructuredCorrectionAutoRoutingConfig(),
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     });
     engine.on('routing:decision', (...args) => {
       routingEvents.push(args);
@@ -1298,7 +1301,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       provider: 'auto' as never,
       autoRouting: createStructuredCorrectionAutoRoutingConfig(),
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     });
     engine.on('routing:decision', (...args) => {
       routingEvents.push(args);
@@ -1416,9 +1418,8 @@ describe('WorkflowEngine structured caller defaults', () => {
               name: 'guarded-review',
               persona: 'guarded-reviewer',
               instruction: 'Review with guard.',
-              outputContracts: [{ name: 'guarded-review.md', format: '# Guarded Review' }],
               rules: [
-                makeRule('approved', 'COMPLETE', { guardCondition: 'findings.open.count == 0' }),
+                makeRule('approved && when(findings.open.count == 0)', 'COMPLETE'),
                 makeRule('when(findings.open.count > 0)', 'fix'),
               ],
             }),
@@ -1445,7 +1446,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     expect(result.status).toBe('completed');
@@ -1623,7 +1623,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     expect(result.status).toBe('completed');
@@ -1819,7 +1818,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     });
     engine.on('findings:ledger', ledgerUpdated);
     const abortReasons: string[] = [];
@@ -1969,7 +1967,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     });
     engine.on('findings:ledger', ledgerUpdated);
 
@@ -2151,7 +2148,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           // conflicts.count のルールが選ばれたことを検証できなくなる。ここでは
           // conflicts.count > 0 だけを見るルールにする。
           rules: [
-            { condition: 'when(findings.conflicts.count > 0)', returnValue: 'need_replan' },
+            normalizeRule({ condition: 'when(findings.conflicts.count > 0)', return: 'need_replan' }),
             makeRule('when(findings.open.count == 0)', 'COMPLETE'),
           ],
         }),
@@ -2167,7 +2164,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     });
     engine.on('findings:ledger', ledgerUpdated);
     const abortReasons: string[] = [];
@@ -2333,7 +2329,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             }),
           ],
           rules: [
-            { condition: 'when(findings.conflicts.count > 0)', returnValue: 'need_replan' },
+            normalizeRule({ condition: 'when(findings.conflicts.count > 0)', return: 'need_replan' }),
             makeRule('when(findings.open.count == 0)', 'COMPLETE'),
           ],
         }),
@@ -2349,7 +2345,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     });
     engine.on('findings:ledger', ledgerUpdated);
     const abortReasons: string[] = [];
@@ -2395,8 +2390,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     // findings.provisional.count でルーティングできる。
     const { abortReasons, initialLedger, ledgerPath, ledgerUpdated, result } = await runInvalidManagerRetryFailureWithRules([
       {
-        condition: 'when(findings.provisional.count > 0)',
-        returnValue: 'need_replan',
+        ...normalizeRule({ condition: 'when(findings.provisional.count > 0)', return: 'need_replan' }),
       },
       makeRule('when(true)', 'COMPLETE'),
     ]);
@@ -2566,8 +2560,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             makeRule('when(findings.open.bySeverity.high > 0)', 'COMPLETE'),
             makeRule('when(findings.open.count == 0)', 'ABORT'),
             {
-              condition: 'when(findings.conflicts.count > 0)',
-              returnValue: 'need_replan',
+              ...normalizeRule({ condition: 'when(findings.conflicts.count > 0)', return: 'need_replan' }),
             },
           ],
         }),
@@ -2583,7 +2576,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     });
     engine.on('findings:ledger', ledgerUpdated);
     const abortReasons: string[] = [];
@@ -2743,8 +2735,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             makeRule('when(findings.open.bySeverity.high > 0)', 'COMPLETE'),
             makeRule('when(findings.open.count == 0)', 'ABORT'),
             {
-              condition: 'when(findings.conflicts.count > 0)',
-              returnValue: 'need_replan',
+              ...normalizeRule({ condition: 'when(findings.conflicts.count > 0)', return: 'need_replan' }),
             },
           ],
         }),
@@ -2755,7 +2746,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
@@ -2836,7 +2826,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       provider: 'opencode',
       model: 'opencode/test',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     expect(result.status).toBe('completed');
@@ -2938,8 +2927,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             makeRule('when(findings.open.bySeverity.high > 0)', 'COMPLETE'),
             makeRule('when(findings.open.count == 0)', 'ABORT'),
             {
-              condition: 'when(findings.conflicts.count > 0)',
-              returnValue: 'need_replan',
+              ...normalizeRule({ condition: 'when(findings.conflicts.count > 0)', return: 'need_replan' }),
             },
           ],
         }),
@@ -2950,7 +2938,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
       personaProviders: {
         'findings-manager': {
           provider: 'opencode',
@@ -3061,8 +3048,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             makeRule('when(findings.open.bySeverity.high > 0)', 'COMPLETE'),
             makeRule('when(findings.open.count == 0)', 'ABORT'),
             {
-              condition: 'when(findings.conflicts.count > 0)',
-              returnValue: 'need_replan',
+              ...normalizeRule({ condition: 'when(findings.conflicts.count > 0)', return: 'need_replan' }),
             },
           ],
         }),
@@ -3073,7 +3059,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     expect(result.status).toBe('completed');
@@ -3170,8 +3155,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             makeRule('when(findings.open.bySeverity.high > 0)', 'COMPLETE'),
             makeRule('when(findings.open.count == 0)', 'ABORT'),
             {
-              condition: 'when(findings.conflicts.count > 0)',
-              returnValue: 'need_replan',
+              ...normalizeRule({ condition: 'when(findings.conflicts.count > 0)', return: 'need_replan' }),
             },
           ],
         }),
@@ -3182,7 +3166,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
       providerRouting: {
         personas: {
           'findings-manager': {
@@ -3336,7 +3319,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       provider: 'opencode',
       model: 'opencode/test',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     expect(result.status).toBe('completed');
@@ -3429,7 +3411,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             makeRule('when(findings.open.count == 0)', 'COMPLETE'),
             // needs_fix は non-AI return value ルールとして、finding_contract
             // parallel parent に必須の「invalid manager output ルール」も兼ねる。
-            { condition: 'when(findings.open.count > 0)', returnValue: 'needs_fix' },
+            normalizeRule({ condition: 'when(findings.open.count > 0)', return: 'needs_fix' }),
           ],
         }),
       ],
@@ -3456,7 +3438,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           personaDisplayName: 'delegate',
           instruction: '',
           passPreviousResponse: true,
-          rules: [{ condition: 'needs_fix', next: 'COMPLETE' }],
+          rules: [normalizeRule({ condition: 'needs_fix', next: 'COMPLETE' })],
         },
       ],
     };
@@ -3465,7 +3447,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
       workflowCallResolver: () => childConfig,
     });
     const abortReasons: string[] = [];
@@ -3544,7 +3525,7 @@ describe('WorkflowEngine structured caller defaults', () => {
               call: 'child-parallel-collision',
               personaDisplayName: 'child-a',
               instruction: '',
-              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+              rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
             },
             {
               name: 'child-b',
@@ -3552,20 +3533,16 @@ describe('WorkflowEngine structured caller defaults', () => {
               call: 'child-parallel-collision',
               personaDisplayName: 'child-b',
               instruction: '',
-              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+              rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
             },
           ],
           rules: [
-            makeRule('all("COMPLETE")', 'COMPLETE', {
-              isAggregateCondition: true,
-              aggregateType: 'all',
-              aggregateConditionText: 'COMPLETE',
-            }),
+            makeRule('all("COMPLETE")', 'COMPLETE'),
             // finding_contract を持つ parallel parent には invalid manager
             // output ルールが必須（WorkflowValidator）。この経路では
             // raw findings が空（workflow_call サブステップは除外される）のため
             // 実際には発火しないが、静的検証を満たすために必要。
-            { condition: 'when(findings.open.count > 0)', returnValue: 'needs_fix' },
+            normalizeRule({ condition: 'when(findings.open.count > 0)', return: 'needs_fix' }),
           ],
         }),
       ],
@@ -3626,7 +3603,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
       workflowCallResolver: () => childConfig,
     });
     const abortReasons: string[] = [];
@@ -3690,8 +3666,8 @@ describe('WorkflowEngine structured caller defaults', () => {
           // は子のこのステップ側に置き、親へは returnValue という単純な
           // 文字列トークンで伝える。
           rules: [
-            { condition: 'when(findings.open.count == 1)', returnValue: 'needs_fix' },
-            { condition: 'when(findings.open.count >= 2)', returnValue: 'loop_complete' },
+            normalizeRule({ condition: 'when(findings.open.count == 1)', return: 'needs_fix' }),
+            normalizeRule({ condition: 'when(findings.open.count >= 2)', return: 'loop_complete' }),
           ],
         }),
       ],
@@ -3720,8 +3696,8 @@ describe('WorkflowEngine structured caller defaults', () => {
           // 子の returnValue が "needs_fix"（1周目）なら自分自身へループ、
           // "loop_complete"（2周目）なら完了する。
           rules: [
-            { condition: 'needs_fix', next: 'delegate' },
-            { condition: 'loop_complete', next: 'COMPLETE' },
+            normalizeRule({ condition: 'needs_fix', next: 'delegate' }),
+            normalizeRule({ condition: 'loop_complete', next: 'COMPLETE' }),
           ],
         }),
       ],
@@ -3786,7 +3762,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
       workflowCallResolver: () => childConfig,
     });
     const abortReasons: string[] = [];

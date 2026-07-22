@@ -47,13 +47,13 @@ steps:
         as: tracked_issues
         exclude_selected_from: selected_issue
     rules:
-      - when: context.route_context.active_queue.pending_count > 0 || context.route_context.active_queue.running_count > 0
+      - condition: when(context.route_context.active_queue.pending_count > 0 || context.route_context.active_queue.running_count > 0)
         next: wait_before_next_scan
-      - when: context.route_context.selected_pr.exists == true
+      - condition: when(context.route_context.selected_pr.exists == true)
         next: plan_from_existing_pr
-      - when: context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true
+      - condition: when(context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true)
         next: plan_from_issue
-      - when: context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == false
+      - condition: when(context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == false)
         next: plan_fresh_improvement
 
   - name: plan_from_issue
@@ -112,12 +112,10 @@ steps:
     structured_output:
       schema_ref: followup-task
     rules:
-      - when: structured.plan_from_issue.action == "enqueue_new_task"
+      - condition: when(structured.plan_from_issue.action == "enqueue_new_task")
         next: enqueue_from_issue
-      - when: structured.plan_from_issue.action == "wait_before_next_scan"
+      - condition: when(structured.plan_from_issue.action == "wait_before_next_scan")
         next: wait_before_next_scan
-      - when: "true"
-        next: ABORT
 
   - name: enqueue_from_issue
     mode: system
@@ -139,12 +137,10 @@ steps:
           draft_pr: false
           managed_pr: true
     rules:
-      - when: effect.enqueue_from_issue.enqueue_task.success == false && effect.enqueue_from_issue.enqueue_task.failed == false
+      - condition: when(effect.enqueue_from_issue.enqueue_task.success == false && effect.enqueue_from_issue.enqueue_task.failed == false)
         next: wait_before_next_scan
-      - when: effect.enqueue_from_issue.enqueue_task.success == true
+      - condition: when(effect.enqueue_from_issue.enqueue_task.success == true)
         next: wait_before_next_scan
-      - when: "true"
-        next: ABORT
 
   - name: plan_fresh_improvement
     tags:
@@ -191,12 +187,10 @@ steps:
     structured_output:
       schema_ref: followup-task
     rules:
-      - when: structured.plan_fresh_improvement.action == "enqueue_new_task"
+      - condition: when(structured.plan_fresh_improvement.action == "enqueue_new_task")
         next: enqueue_fresh
-      - when: structured.plan_fresh_improvement.action == "wait_before_next_scan"
+      - condition: when(structured.plan_fresh_improvement.action == "wait_before_next_scan")
         next: wait_before_next_scan
-      - when: "true"
-        next: ABORT
 
   - name: enqueue_fresh
     mode: system
@@ -217,12 +211,10 @@ steps:
           draft_pr: false
           managed_pr: true
     rules:
-      - when: effect.enqueue_fresh.enqueue_task.success == false && effect.enqueue_fresh.enqueue_task.failed == false
+      - condition: when(effect.enqueue_fresh.enqueue_task.success == false && effect.enqueue_fresh.enqueue_task.failed == false)
         next: wait_before_next_scan
-      - when: effect.enqueue_fresh.enqueue_task.success == true
+      - condition: when(effect.enqueue_fresh.enqueue_task.success == true)
         next: wait_before_next_scan
-      - when: "true"
-        next: ABORT
 
   - name: plan_from_existing_pr
     tags:
@@ -279,16 +271,14 @@ steps:
     structured_output:
       schema_ref: pr-followup-task
     rules:
-      - when: structured.plan_from_existing_pr.action == "enqueue_from_pr"
+      - condition: when(structured.plan_from_existing_pr.action == "enqueue_from_pr")
         next: enqueue_from_pr
-      - when: structured.plan_from_existing_pr.action == "prepare_merge"
+      - condition: when(structured.plan_from_existing_pr.action == "prepare_merge")
         next: prepare_merge
-      - when: structured.plan_from_existing_pr.action == "reject_pr"
+      - condition: when(structured.plan_from_existing_pr.action == "reject_pr")
         next: reject_pr
-      - when: structured.plan_from_existing_pr.action == "wait_before_next_scan"
+      - condition: when(structured.plan_from_existing_pr.action == "wait_before_next_scan")
         next: wait_before_next_scan
-      - when: "true"
-        next: ABORT
 
   - name: reject_pr
     mode: system
@@ -296,10 +286,8 @@ steps:
       - type: close_pr
         pr: "{context:route_context.selected_pr.number}"
     rules:
-      - when: effect.reject_pr.close_pr.success == true
+      - condition: when(effect.reject_pr.close_pr.success == true)
         next: wait_before_next_scan
-      - when: "true"
-        next: ABORT
 
   - name: enqueue_from_pr
     mode: system
@@ -315,12 +303,10 @@ steps:
             push: true
         task: "{structured:plan_from_existing_pr.task_markdown}"
     rules:
-      - when: effect.enqueue_from_pr.enqueue_task.success == false && effect.enqueue_from_pr.enqueue_task.failed == false
+      - condition: when(effect.enqueue_from_pr.enqueue_task.success == false && effect.enqueue_from_pr.enqueue_task.failed == false)
         next: wait_before_next_scan
-      - when: effect.enqueue_from_pr.enqueue_task.success == true
+      - condition: when(effect.enqueue_from_pr.enqueue_task.success == true)
         next: wait_before_next_scan
-      - when: "true"
-        next: ABORT
 
   - name: prepare_merge
     mode: system
@@ -328,12 +314,10 @@ steps:
       - type: sync_with_root
         pr: "{context:route_context.selected_pr.number}"
     rules:
-      - when: effect.prepare_merge.sync_with_root.success == true
+      - condition: when(effect.prepare_merge.sync_with_root.success == true)
         next: merge_pr
-      - when: effect.prepare_merge.sync_with_root.conflicted == true
+      - condition: when(effect.prepare_merge.sync_with_root.conflicted == true)
         next: resolve_conflicts
-      - when: "true"
-        next: ABORT
 
   - name: resolve_conflicts
     mode: system
@@ -341,12 +325,10 @@ steps:
       - type: resolve_conflicts_with_ai
         pr: "{context:route_context.selected_pr.number}"
     rules:
-      - when: effect.resolve_conflicts.resolve_conflicts_with_ai.success == true
+      - condition: when(effect.resolve_conflicts.resolve_conflicts_with_ai.success == true)
         next: merge_pr
-      - when: effect.resolve_conflicts.resolve_conflicts_with_ai.failed == true
+      - condition: when(effect.resolve_conflicts.resolve_conflicts_with_ai.failed == true)
         next: enqueue_conflict_resolution_task
-      - when: "true"
-        next: ABORT
 
   - name: enqueue_conflict_resolution_task
     mode: system
@@ -364,12 +346,10 @@ steps:
           Resolve the conflicts raised while syncing the PR with its base branch.
           Target PR: {context:route_context.selected_pr.number}
     rules:
-      - when: effect.enqueue_conflict_resolution_task.enqueue_task.success == false && effect.enqueue_conflict_resolution_task.enqueue_task.failed == false
+      - condition: when(effect.enqueue_conflict_resolution_task.enqueue_task.success == false && effect.enqueue_conflict_resolution_task.enqueue_task.failed == false)
         next: wait_before_next_scan
-      - when: effect.enqueue_conflict_resolution_task.enqueue_task.success == true
+      - condition: when(effect.enqueue_conflict_resolution_task.enqueue_task.success == true)
         next: wait_before_next_scan
-      - when: "true"
-        next: ABORT
 
   - name: merge_pr
     mode: system
@@ -377,10 +357,8 @@ steps:
       - type: merge_pr
         pr: "{context:route_context.selected_pr.number}"
     rules:
-      - when: effect.merge_pr.merge_pr.success == true
+      - condition: when(effect.merge_pr.merge_pr.success == true)
         next: wait_before_next_scan
-      - when: "true"
-        next: ABORT
 
   - name: wait_before_next_scan
     mode: system
@@ -391,7 +369,7 @@ steps:
         as: queue
         exclude_current_task: true
     rules:
-      - when: context.wait_before_next_scan.queue.pending_count > 0 || context.wait_before_next_scan.queue.running_count > 0
+      - condition: when(context.wait_before_next_scan.queue.pending_count > 0 || context.wait_before_next_scan.queue.running_count > 0)
         next: wait_before_next_scan
-      - when: "true"
+      - condition: when(context.wait_before_next_scan.queue.pending_count == 0 && context.wait_before_next_scan.queue.running_count == 0)
         next: route_context

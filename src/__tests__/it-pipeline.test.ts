@@ -14,6 +14,20 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
+import type { WorkflowStep } from '../core/models/index.js';
+import { semanticRuleCandidatesOf } from '../core/models/workflow-rule-condition.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
+import { detectCandidateIndex } from '../shared/utils/ruleIndex.js';
+
+function selectSemanticLabelFromTag(step: WorkflowStep, context: { lastResponse?: string }) {
+  const candidates = semanticRuleCandidatesOf(step.rules ?? [], false);
+  const candidateIndex = detectCandidateIndex(context.lastResponse ?? '', step.name);
+  const candidate = candidates[candidateIndex];
+  if (!candidate) {
+    throw new RuleDetectionExhaustedError(step.name);
+  }
+  return { label: candidate.label, method: 'phase3_tag' as const };
+}
 
 const { mockWorkflowWarn } = vi.hoisted(() => ({
   mockWorkflowWarn: vi.fn(),
@@ -118,10 +132,10 @@ vi.mock('../shared/prompt/index.js', () => ({
   promptInput: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../core/workflow/phase-runner.js')>()),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockImplementation(selectSemanticLabelFromTag),
 }));
 
 vi.mock('../core/workflow/quality-gates/commandGateRunner.js', () => ({
@@ -383,6 +397,23 @@ describe('Pipeline Integration Tests', () => {
     });
 
     // ABORT means workflow failed -> EXIT_WORKFLOW_FAILED (3)
+    expect(exitCode).toBe(3);
+  });
+
+  it('should fail the pipeline when the semantic tag is missing', async () => {
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: 'Requirements are clear.' },
+    ]);
+
+    const exitCode = await executePipeline({
+      task: 'Task without a status tag',
+      workflow: workflowPath,
+      autoPr: false,
+      skipGit: true,
+      cwd: testDir,
+      provider: 'mock',
+    });
+
     expect(exitCode).toBe(3);
   });
 

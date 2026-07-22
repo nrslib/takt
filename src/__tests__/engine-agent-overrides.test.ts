@@ -11,12 +11,16 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn(),
   runReportPhase: vi.fn(),
   runStatusJudgmentPhase: vi.fn(),
 }));
@@ -34,7 +38,7 @@ import {
   makeRule,
   makeStep,
   mockRunAgentSequence,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
 
@@ -60,7 +64,7 @@ describe('WorkflowEngine agent overrides', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     const engine = new WorkflowEngine(config, '/tmp/project', 'override task', {
       projectCwd: '/tmp/project',
@@ -91,7 +95,7 @@ describe('WorkflowEngine agent overrides', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     const engine = new WorkflowEngine(config, '/tmp/project', 'override task', {
       projectCwd: '/tmp/project',
@@ -124,7 +128,7 @@ describe('WorkflowEngine agent overrides', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     const engine = new WorkflowEngine(config, '/tmp/project', 'step task', { projectCwd: '/tmp/project' });
     await engine.run();
@@ -151,7 +155,7 @@ describe('WorkflowEngine agent overrides', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     const engine = new WorkflowEngine(config, '/tmp/project', 'child env task', {
       projectCwd: '/tmp/project',

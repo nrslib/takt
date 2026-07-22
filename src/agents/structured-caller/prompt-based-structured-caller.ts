@@ -1,14 +1,15 @@
-import type { AgentResponse, WorkflowRule } from '../../core/models/types.js';
+import type { AgentResponse } from '../../core/models/types.js';
+import type { SemanticRuleCandidate } from '../../core/models/workflow-rule-condition.js';
 import {
   buildPromptBasedDecomposePrompt,
   buildPromptBasedMorePartsPrompt,
   toMorePartsResponse,
 } from '../team-leader-structured-output.js';
-import { buildJudgePrompt, detectJudgeIndex, isValidRuleIndex, buildJudgeConditions } from '../judge-utils.js';
+import { buildJudgePrompt, detectJudgeIndex } from '../judge-utils.js';
 import { runAgent } from '../runner.js';
 import {
-  createJudgeStageRecorder,
-  runTagJudgeStage,
+  isValidCandidateIndex,
+  runJudgeFallbackStages,
   type EvaluateConditionOptions,
   type JudgeStatusOptions,
   type JudgeStatusResult,
@@ -39,17 +40,13 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
   async judgeStatus(
     structuredInstruction: string,
     tagInstruction: string,
-    rules: WorkflowRule[],
+    candidates: SemanticRuleCandidate[],
     options: JudgeStatusOptions,
   ): Promise<JudgeStatusResult> {
-    if (rules.length === 0) {
-      throw new Error('judgeStatus requires at least one rule');
+    options.abortSignal?.throwIfAborted();
+    if (candidates.length < 2) {
+      throw new Error('judgeStatus requires at least two semantic candidates');
     }
-    if (rules.length === 1) {
-      return { ruleIndex: 0, method: 'auto_select' };
-    }
-
-    const interactiveEnabled = options.interactive === true;
 
     let structuredResponse: AgentResponse;
     try {
@@ -63,6 +60,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         language: options.language,
         onStream: options.onStream,
         childProcessEnv: options.childProcessEnv,
+        abortSignal: options.abortSignal,
         onPromptResolved: options.onStructuredPromptResolved,
       });
     } catch (error) {
@@ -79,80 +77,39 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     options.onJudgeStage?.({
       stage: 1,
       method: 'structured_output',
-      status: structuredResponse.status === 'done' ? 'done' : 'error',
+      status: options.abortSignal?.aborted === true
+        ? 'error'
+        : structuredResponse.status === 'done' ? 'done' : 'error',
       instruction: structuredInstruction,
       response: structuredResponse.content,
       providerUsage: structuredResponse.providerUsage,
     });
 
+    options.abortSignal?.throwIfAborted();
+
     let structuredParseError: string | undefined;
     if (structuredResponse.status === 'done') {
       try {
-        const ruleIndex = resolveStructuredStep(parseLastJsonBlock(structuredResponse.content));
-        if (isValidRuleIndex(ruleIndex, rules, interactiveEnabled)) {
-          return { ruleIndex, method: 'structured_output' };
+        const candidateIndex = resolveStructuredStep(parseLastJsonBlock(structuredResponse.content));
+        if (isValidCandidateIndex(candidateIndex, candidates)) {
+          return { candidateIndex, method: 'structured_output' };
         }
       } catch (error) {
         structuredParseError = getErrorDetail(error);
       }
     }
 
-    const tagResult = await runTagJudgeStage(
-      tagInstruction,
-      rules,
-      interactiveEnabled,
-      {
-        cwd: options.cwd,
-        provider: options.provider,
-        resolvedProvider: options.resolvedProvider,
-        resolvedModel: options.resolvedModel,
-        language: options.language,
-        onStream: options.onStream,
-        childProcessEnv: options.childProcessEnv,
-        stepName: options.stepName,
-      },
-      options.onJudgeStage,
-    );
-    if (tagResult !== undefined) {
-      return tagResult;
-    }
-
-    const conditions = buildJudgeConditions(rules, interactiveEnabled);
-
-    if (conditions.length > 0) {
-      const stage3 = createJudgeStageRecorder();
-      let fallbackIndex: number;
-      try {
-        fallbackIndex = await this.evaluateCondition(structuredInstruction, conditions, {
-          cwd: options.cwd,
-          provider: options.provider,
-          resolvedProvider: options.resolvedProvider,
-          resolvedModel: options.resolvedModel,
-          childProcessEnv: options.childProcessEnv,
-          onJudgeResponse: stage3.capture,
-        });
-      } catch (error) {
-        options.onJudgeStage?.(stage3.stage({
-          stage: 3,
-          method: 'ai_judge',
-        }));
-        throw error;
-      }
-
-      options.onJudgeStage?.(stage3.stage({
-        stage: 3,
-        method: 'ai_judge',
-      }));
-
-      if (isValidRuleIndex(fallbackIndex, rules, interactiveEnabled)) {
-        return { ruleIndex: fallbackIndex, method: 'ai_judge' };
-      }
-    }
-
     const detail = structuredParseError == null
-      ? ''
+      ? undefined
       : ` Structured response parsing failed: ${structuredParseError}`;
-    throw new Error(`Status not found for step "${options.stepName}".${detail}`);
+    return runJudgeFallbackStages(
+      structuredInstruction,
+      tagInstruction,
+      candidates,
+      options,
+      this.evaluateCondition.bind(this),
+      detail,
+    );
   }
 
   async evaluateCondition(
@@ -160,6 +117,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     conditions: Array<{ index: number; text: string }>,
     options: EvaluateConditionOptions,
   ): Promise<number> {
+    options.abortSignal?.throwIfAborted();
     const prompt = buildJudgePrompt(agentOutput, conditions);
     let response: AgentResponse;
     try {
@@ -171,6 +129,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 1),
         permissionMode: 'readonly',
         childProcessEnv: options.childProcessEnv,
+        abortSignal: options.abortSignal,
       });
     } catch (error) {
       options.onJudgeResponse?.({
@@ -183,10 +142,14 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
 
     options.onJudgeResponse?.({
       instruction: prompt,
-      status: response.status === 'done' ? 'done' : 'error',
+      status: options.abortSignal?.aborted === true
+        ? 'error'
+        : response.status === 'done' ? 'done' : 'error',
       response: response.content,
       providerUsage: response.providerUsage,
     });
+
+    options.abortSignal?.throwIfAborted();
 
     if (response.status !== 'done') {
       return -1;

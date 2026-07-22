@@ -18,6 +18,7 @@ import { resolvePromotionRuntime } from '../promotion/promotion-runtime.js';
 import { resolveAutoRoutingRuntime } from '../auto-routing/resolver.js';
 import { runWithStepSpan, type StepSpanParams } from '../observability/workflowSpans.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
+import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 
 const log = createLogger('workflow-run-loop');
 
@@ -303,10 +304,11 @@ function abortWorkflow(
 }
 
 function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): WorkflowAbortResult {
-  if (deps.abortRequested()) {
-    return abortWorkflow(deps, 'interrupt', 'Workflow interrupted by user (SIGINT)', {
-      clearLastOutput: true,
-    });
+  if (workflowInterruptRequested(deps)) {
+    return abortInterruptedWorkflow(deps);
+  }
+  if (error instanceof RuleDetectionExhaustedError) {
+    return abortWorkflow(deps, 'rule_no_match', 'rule_no_match', { clearLastOutput: true });
   }
   return abortWorkflow(
     deps,
@@ -317,11 +319,25 @@ function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): W
 }
 
 function workflowInterruptRequested(deps: WorkflowRunLoopDeps): boolean {
-  return deps.abortRequested() || deps.options.abortSignal?.aborted === true;
+  return workflowInterruptReason(deps) !== undefined;
+}
+
+function workflowInterruptReason(deps: WorkflowRunLoopDeps): string | undefined {
+  if (deps.abortRequested()) {
+    return 'Workflow interrupted by user (SIGINT)';
+  }
+  if (deps.options.abortSignal?.aborted === true) {
+    return 'Workflow interrupted by external AbortSignal';
+  }
+  return undefined;
 }
 
 function abortInterruptedWorkflow(deps: WorkflowRunLoopDeps): WorkflowAbortResult {
-  return abortWorkflow(deps, 'interrupt', 'Workflow interrupted by user (SIGINT)', {
+  const reason = workflowInterruptReason(deps);
+  if (reason === undefined) {
+    throw new Error('Cannot abort workflow as interrupted without an interrupt request');
+  }
+  return abortWorkflow(deps, 'interrupt', reason, {
     clearLastOutput: true,
   });
 }
@@ -491,8 +507,8 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
   let returnValue: string | undefined;
 
   while (deps.state.status === 'running') {
-    if (deps.abortRequested()) {
-      abort = abortWorkflow(deps, 'interrupt', 'Workflow interrupted by user (SIGINT)');
+    if (workflowInterruptRequested(deps)) {
+      abort = abortInterruptedWorkflow(deps);
       break;
     }
 
@@ -594,6 +610,10 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
         traceTaskMetadata: deps.options.traceTaskMetadata,
       }, () => deps.runStep(step, prebuiltInstruction, stepRuntime));
+      if (workflowInterruptRequested(deps)) {
+        abort = abortInterruptedWorkflow(deps);
+        break;
+      }
       const { response, instruction, providerInfo: resultProviderInfo } = result;
       const completedProviderInfo = resultProviderInfo ?? providerInfo;
       emitNormalRoutingDecision(
@@ -750,7 +770,26 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
 }
 
 export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Promise<SingleWorkflowIterationResult> {
-  return runSingleWorkflowIterationCore(deps);
+  const step = deps.getStep(deps.state.currentStep);
+  try {
+    return await runSingleWorkflowIterationCore(deps);
+  } catch (error) {
+    if (!workflowInterruptRequested(deps) && !(error instanceof RuleDetectionExhaustedError)) {
+      throw error;
+    }
+    const abort = abortWorkflowRuntimeError(deps, error);
+    return {
+      response: {
+        persona: step.persona ?? step.name,
+        status: 'blocked',
+        content: abort.reason,
+        timestamp: new Date(),
+      },
+      nextStep: ABORT_STEP,
+      isComplete: true,
+      abort,
+    };
+  }
 }
 
 async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promise<SingleWorkflowIterationResult> {
@@ -836,6 +875,9 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
     traceTaskMetadata: deps.options.traceTaskMetadata,
   }, () => deps.runStep(step, prebuiltInstruction, stepRuntime));
+  if (workflowInterruptRequested(deps)) {
+    return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
+  }
   const { response, providerInfo: resultProviderInfo } = result;
   const completedProviderInfo = resultProviderInfo ?? providerInfo;
   emitNormalRoutingDecision(

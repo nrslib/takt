@@ -8,12 +8,11 @@ import { extractReportReferences } from '../../core/workflow/instruction/report-
 import { isReservedReportFileName } from '../../core/models/reserved-report-names.js';
 import { validateWorkflowConfig } from '../../core/workflow/engine/WorkflowValidator.js';
 import {
-  hasUnquotedFindingsReference,
+  formatWorkflowRuleCondition,
+  hasFindingsReference,
   hasUnquotedIdentifierReference,
-  isDeferredDeterministicCondition,
-  isDeterministicCondition,
-  unwrapWhenCondition,
-} from '../../core/workflow/evaluation/rule-utils.js';
+  type WorkflowRuleCondition,
+} from '../../core/models/workflow-rule-condition.js';
 import { evaluateWhenExpression } from '../../core/workflow/evaluation/when-evaluator.js';
 import { splitTopLevelClausesOrThrow } from '../../core/models/workflow-condition-expression.js';
 import { resolveWorkflowConfigValues } from '../../infra/config/index.js';
@@ -120,10 +119,15 @@ function warnOnUnsafeFindingBudgetRouting(
 }
 
 function isFindingBudgetCondition(rule: WorkflowRule): boolean {
-  const condition = getRuleGuardCondition(rule) ?? rule.condition;
-  return condition.includes('findings.provisional.fixpoint')
-    || condition.includes('findings.rounds.budgetExhausted')
-    || condition.includes('findings.reviewerAnomalies.budgetExhausted');
+  const condition = getRuleGuardCondition(rule);
+  if (condition === undefined) {
+    return false;
+  }
+  return [
+    'findings.provisional.fixpoint',
+    'findings.rounds.budgetExhausted',
+    'findings.reviewerAnomalies.budgetExhausted',
+  ].some((identifier) => hasUnquotedIdentifierReference(condition, identifier));
 }
 
 function hasBoundedReplanMonitor(workflow: WorkflowConfig, sourceStep: string, replanStep: string): boolean {
@@ -155,7 +159,11 @@ function warnOnMissingProvisionalRouting(
     return;
   }
   const referencesProvisional = workflow.steps.some((step) => (
-    (step.rules ?? []).some((rule) => rule.condition.includes('findings.provisional'))
+    (step.rules ?? []).some((rule) => {
+      const condition = getRuleGuardCondition(rule);
+      return condition !== undefined
+        && hasUnquotedIdentifierReference(condition, 'findings.provisional');
+    })
   ));
   if (referencesProvisional) {
     return;
@@ -206,21 +214,12 @@ function warnOnMissingReviewerAnomalyRouting(
 
 function isReviewerOrFindingsCompletionGate(step: WorkflowStep, rule: WorkflowRule): boolean {
   return hasReviewTag(step)
-    || ruleHasFindingsGuard(rule)
-    || (isDeterministicCondition(rule.condition)
-      && hasUnquotedFindingsReference(rule.condition));
+    || hasFindingsReference(rule.condition);
 }
 
 function hasReviewTag(step: WorkflowStep): boolean {
   return step.tags?.includes('review') === true
     || step.parallel?.some((child) => child.tags?.includes('review') === true) === true;
-}
-
-function ruleHasFindingsGuard(rule: WorkflowRule): boolean {
-  return (rule.aggregateGuardCondition !== undefined
-    && hasUnquotedFindingsReference(rule.aggregateGuardCondition))
-    || (rule.guardCondition !== undefined
-      && hasUnquotedFindingsReference(rule.guardCondition));
 }
 
 function hasEffectiveReviewerAnomalyRouting(
@@ -299,11 +298,21 @@ function hasExpectedReviewerAnomalyGuard(
 }
 
 function getRuleGuardCondition(rule: WorkflowRule): string | undefined {
-  if (rule.isAggregateCondition) {
-    return rule.aggregateGuardCondition;
-  }
-  return rule.guardCondition
-    ?? (isDeterministicCondition(rule.condition) ? unwrapWhenCondition(rule.condition) : undefined);
+  return whenExpressionOf(rule.condition);
+}
+
+function whenExpressionOf(condition: WorkflowRuleCondition): string | undefined {
+  if (condition.kind === 'when') return condition.expression;
+  return condition.kind === 'and' && condition.right.kind === 'when'
+    ? condition.right.expression
+    : undefined;
+}
+
+function aggregateOf(condition: WorkflowRuleCondition): Extract<WorkflowRuleCondition, { kind: 'aggregate' }> | undefined {
+  if (condition.kind === 'aggregate') return condition;
+  return condition.kind === 'and' && condition.left.kind === 'aggregate'
+    ? condition.left
+    : undefined;
 }
 
 function aggregateRouteCoversCompletion(
@@ -311,20 +320,22 @@ function aggregateRouteCoversCompletion(
   route: WorkflowRule,
   completeRule: WorkflowRule,
 ): boolean {
-  if (!route.isAggregateCondition || !completeRule.isAggregateCondition || step.parallel === undefined) {
+  const routeAggregate = aggregateOf(route.condition);
+  const completeAggregate = aggregateOf(completeRule.condition);
+  if (routeAggregate === undefined || completeAggregate === undefined || step.parallel === undefined) {
     return false;
   }
   const completionOutputs = getPossibleCompletionOutputs(step.parallel, completeRule);
   if (completionOutputs === undefined) {
     return false;
   }
-  if (route.aggregateType === 'any') {
+  if (routeAggregate.aggregate === 'any') {
     const routeTargets = getAggregateTargets(route);
-    return completeRule.aggregateType === 'all'
+    return completeAggregate.aggregate === 'all'
       ? completionOutputs.some((output) => routeTargets.has(output))
       : completionOutputs.every((output) => routeTargets.has(output));
   }
-  if (route.aggregateType === 'all' && completeRule.aggregateType === 'all') {
+  if (routeAggregate.aggregate === 'all' && completeAggregate.aggregate === 'all') {
     const routeOutputs = getPossibleCompletionOutputs(step.parallel, route);
     return routeOutputs !== undefined
       && routeOutputs.length === completionOutputs.length
@@ -340,36 +351,41 @@ function getPossibleCompletionOutputs(
   if (parallel.length === 0) {
     return undefined;
   }
-  const aggregateCondition = completeRule.aggregateConditionText;
+  const aggregate = aggregateOf(completeRule.condition);
   const targets = getAggregateTargets(completeRule);
-  if (aggregateCondition === undefined || targets.size === 0 || completeRule.aggregateType === undefined) {
+  if (aggregate === undefined || targets.size === 0) {
     return undefined;
   }
-  if (completeRule.aggregateType === 'any') {
+  if (aggregate.aggregate === 'any') {
     const possible = parallel.flatMap((child) => (
-      (child.rules ?? []).map((rule) => rule.condition).filter((condition) => targets.has(condition))
+      formattedRuleConditions(child).filter((condition) => targets.has(condition))
     ));
     return possible.length === 0 ? undefined : possible;
   }
-  const allTargets = Array.isArray(aggregateCondition)
-    ? aggregateCondition
-    : parallel.map(() => aggregateCondition);
+  const aggregateTargets = aggregate.targetConditions.map(formatWorkflowRuleCondition);
+  const allTargets = aggregateTargets.length === 1
+    ? parallel.map(() => aggregateTargets[0]!)
+    : aggregateTargets;
   if (allTargets.length !== parallel.length) {
     return undefined;
   }
   return parallel.every((child, index) => (
-    (child.rules ?? []).some((rule) => rule.condition === allTargets[index])
+    formattedRuleConditions(child).includes(allTargets[index]!)
   ))
     ? allTargets
     : undefined;
 }
 
+function formattedRuleConditions(step: WorkflowStep): string[] {
+  return (step.rules ?? []).map((rule) => formatWorkflowRuleCondition(rule.condition));
+}
+
 function getAggregateTargets(rule: WorkflowRule): Set<string> {
-  const targets = rule.aggregateConditionText;
-  if (targets === undefined) {
+  const aggregate = aggregateOf(rule.condition);
+  if (aggregate === undefined) {
     return new Set();
   }
-  return new Set(Array.isArray(targets) ? targets : [targets]);
+  return new Set(aggregate.targetConditions.map(formatWorkflowRuleCondition));
 }
 
 function isSafeReviewerAnomalyBudgetRoute(
@@ -390,7 +406,7 @@ function isReReviewRoute(workflow: WorkflowConfig, rule: WorkflowRule): boolean 
 
 function isCompletionReachable(step: WorkflowStep, completeRuleIndex: number): boolean {
   const completeRule = step.rules?.[completeRuleIndex];
-  if (completeRule?.isAggregateCondition) {
+  if (completeRule !== undefined && aggregateOf(completeRule.condition) !== undefined) {
     return getPossibleCompletionOutputs(step.parallel ?? [], completeRule) !== undefined
       && !(step.rules ?? []).slice(0, completeRuleIndex).some((rule) => (
         isEarlierAggregateTerminalRoute(step, rule, completeRule)
@@ -408,7 +424,7 @@ function isEarlierAggregateTerminalRoute(
   rule: WorkflowRule,
   completeRule: WorkflowRule,
 ): boolean {
-  if (rule.next === undefined || rule.next === COMPLETE_STEP || !rule.isAggregateCondition) {
+  if (rule.next === undefined || rule.next === COMPLETE_STEP || aggregateOf(rule.condition) === undefined) {
     return false;
   }
   const terminalGuard = getRuleGuardCondition(rule);
@@ -418,10 +434,10 @@ function isEarlierAggregateTerminalRoute(
 }
 
 function isKnownAlwaysMatchingImmediateCondition(rule: WorkflowRule): boolean {
-  if (!isDeterministicCondition(rule.condition) || isDeferredDeterministicCondition(rule.condition)) {
+  if (rule.condition.kind !== 'when') {
     return false;
   }
-  const condition = unwrapWhenCondition(rule.condition);
+  const condition = rule.condition.expression;
   return condition === 'true'
     || condition === 'findings.open.count >= 0';
 }

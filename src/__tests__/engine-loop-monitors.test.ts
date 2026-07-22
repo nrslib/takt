@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, rmSync } from 'node:fs';
-import type { WorkflowConfig, WorkflowStep, LoopMonitorConfig } from '../core/models/index.js';
+import type { WorkflowConfig, WorkflowStep, LoopMonitorConfig, LoopMonitorRule } from '../core/models/index.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
 
@@ -20,14 +20,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -40,16 +44,24 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import {
   makeResponse,
   makeStep,
   makeRule,
   mockRunAgentSequence,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   createTestTmpDir,
   applyDefaultMocks,
   cleanupWorkflowEngine,
 } from './engine-test-helpers.js';
+
+function loopJudgeRules(): LoopMonitorRule[] {
+  return [
+    normalizeRule({ condition: 'Healthy', next: 'ai_review' }),
+    normalizeRule({ condition: 'Unproductive', next: 'reviewers' }),
+  ];
+}
 
 /**
  * Build a workflow config with ai_review ↔ ai_fix loop and loop_monitors.
@@ -58,7 +70,7 @@ function buildConfigWithLoopMonitor(
   threshold = 3,
   monitorOverrides: Partial<LoopMonitorConfig> = {},
 ): WorkflowConfig {
-  return {
+  const config = {
     name: 'test-loop-monitor',
     description: 'Test workflow with loop monitors',
     maxSteps: 30,
@@ -68,10 +80,7 @@ function buildConfigWithLoopMonitor(
         cycle: ['ai_review', 'ai_fix'],
         threshold,
         judge: {
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
         ...monitorOverrides,
       },
@@ -97,6 +106,8 @@ function buildConfigWithLoopMonitor(
       }),
     ],
   };
+
+  return config;
 }
 
 describe('WorkflowEngine Integration: Loop Monitors', () => {
@@ -128,10 +139,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         judge: {
           persona: 'supervisor',
           instruction: 'The loop repeated {cycle_count} times.',
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       });
       engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
@@ -153,16 +161,16 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },  // implement → ai_review
-        { index: 1, method: 'phase1_tag' },  // ai_review → ai_fix (issues found)
-        { index: 0, method: 'phase1_tag' },  // ai_fix → ai_review (fixed)
-        { index: 1, method: 'phase1_tag' },  // ai_review → ai_fix (issues found again)
-        { index: 0, method: 'phase1_tag' },  // ai_fix → ai_review (fixed) — but cycle detected!
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },  // implement → ai_review
+        { index: 1, method: 'phase3_tag' },  // ai_review → ai_fix (issues found)
+        { index: 0, method: 'phase3_tag' },  // ai_fix → ai_review (fixed)
+        { index: 1, method: 'phase3_tag' },  // ai_review → ai_fix (issues found again)
+        { index: 0, method: 'phase3_tag' },  // ai_fix → ai_review (fixed) — but cycle detected!
         // Judge rule match: Unproductive (index 1) → reviewers
-        { index: 1, method: 'ai_judge_fallback' },
+        { index: 1, method: 'ai_judge' },
         // reviewers → COMPLETE
-        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const cycleDetectedFn = vi.fn();
@@ -201,18 +209,18 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },  // implement → ai_review
-        { index: 1, method: 'phase1_tag' },  // ai_review → ai_fix
-        { index: 0, method: 'phase1_tag' },  // ai_fix → ai_review
-        { index: 1, method: 'phase1_tag' },  // ai_review → ai_fix
-        { index: 0, method: 'phase1_tag' },  // ai_fix → ai_review — cycle detected!
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },  // implement → ai_review
+        { index: 1, method: 'phase3_tag' },  // ai_review → ai_fix
+        { index: 0, method: 'phase3_tag' },  // ai_fix → ai_review
+        { index: 1, method: 'phase3_tag' },  // ai_review → ai_fix
+        { index: 0, method: 'phase3_tag' },  // ai_fix → ai_review — cycle detected!
         // Judge: Healthy (index 0) → ai_review
-        { index: 0, method: 'ai_judge_fallback' },
+        { index: 0, method: 'ai_judge' },
         // ai_review → reviewers (no issues)
-        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase3_tag' },
         // reviewers → COMPLETE
-        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -241,12 +249,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const abortFn = vi.fn();
@@ -282,12 +290,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -337,12 +345,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'supervisor', content: 'Unproductive loop detected' }),
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -361,10 +369,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           persona: 'supervisor',
           provider: 'codex',
           model: 'gpt-5.2-codex',
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
@@ -387,12 +392,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -459,10 +464,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           persona: 'supervisor',
           provider: 'codex',
           model: 'codex/judge-model',
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
@@ -492,12 +494,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'supervisor', content: 'Unproductive loop detected' }),
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -516,10 +518,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         judge: {
           persona: 'supervisor',
           provider: 'codex',
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
@@ -542,12 +541,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -568,10 +567,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           provider: 'codex',
           model: undefined,
           modelSpecified: true,
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
@@ -595,12 +591,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const startedJudgeProviderInfo: Array<{ provider?: string; model?: string; modelSource?: string }> = [];
@@ -634,10 +630,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
@@ -671,12 +664,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -695,10 +688,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         judge: {
           persona: 'supervisor',
           model: 'opencode/zai-coding-plan/glm-5.2',
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
@@ -721,12 +711,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -746,10 +736,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           persona: 'supervisor',
           provider: 'codex',
           model: 'gpt-5.2-codex',
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
@@ -778,12 +765,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -801,10 +788,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
@@ -833,12 +817,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -856,10 +840,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
@@ -890,12 +871,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -913,10 +894,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
@@ -947,12 +925,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -970,10 +948,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
@@ -1001,12 +976,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -1026,10 +1001,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           persona: 'supervisor',
           provider: 'cursor',
           model: 'cursor-override',
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
@@ -1063,12 +1035,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -1098,10 +1070,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
               },
             },
           },
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
 
@@ -1118,12 +1087,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -1156,10 +1125,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
               effort: 'low',
             },
           },
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
 
@@ -1184,12 +1150,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const startedJudgeProviderOptions: unknown[] = [];
@@ -1225,10 +1191,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         judge: {
           sessionKey: 'loop-watch',
           persona: 'supervisor',
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
@@ -1254,15 +1217,15 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'ai_judge_fallback' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'ai_judge' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -1278,10 +1241,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          rules: [
-            { condition: 'Healthy', next: 'ai_review' },
-            { condition: 'Unproductive', next: 'reviewers' },
-          ],
+          rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
@@ -1304,12 +1264,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'ai_judge_fallback' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -1335,12 +1295,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },  // implement → ai_review
-        { index: 1, method: 'phase1_tag' },  // ai_review → ai_fix
-        { index: 0, method: 'phase1_tag' },  // ai_fix → ai_review
-        { index: 0, method: 'phase1_tag' },  // ai_review → reviewers (no issues)
-        { index: 0, method: 'phase1_tag' },  // reviewers → COMPLETE
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },  // implement → ai_review
+        { index: 1, method: 'phase3_tag' },  // ai_review → ai_fix
+        { index: 0, method: 'phase3_tag' },  // ai_fix → ai_review
+        { index: 0, method: 'phase3_tag' },  // ai_review → reviewers (no issues)
+        { index: 0, method: 'phase3_tag' },  // reviewers → COMPLETE
       ]);
 
       const cycleDetectedFn = vi.fn();
@@ -1367,7 +1327,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           cycle: ['ai_review', 'nonexistent'],
           threshold: 3,
           judge: {
-            rules: [{ condition: 'test', next: 'ai_review' }],
+            rules: [normalizeRule({ condition: 'test', next: 'ai_review' })],
           },
         },
       ];
@@ -1384,7 +1344,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           cycle: ['ai_review', 'ai_fix'],
           threshold: 3,
           judge: {
-            rules: [{ condition: 'test', next: 'nonexistent_target' }],
+            rules: [normalizeRule({ condition: 'test', next: 'nonexistent_target' })],
           },
         },
       ];
@@ -1494,10 +1454,10 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -1535,10 +1495,7 @@ describe('Judge failure falls back to the natural transition', () => {
       judge: {
         persona: 'supervisor',
         instruction: 'The loop repeated {cycle_count} times.',
-        rules: [
-          { condition: 'Healthy', next: 'ai_review' },
-          { condition: 'Unproductive', next: 'reviewers' },
-        ],
+        rules: loopJudgeRules(),
       },
     });
     engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
@@ -1556,15 +1513,15 @@ describe('Judge failure falls back to the natural transition', () => {
       makeResponse({ persona: 'reviewers', content: 'All approved' }),
     ]);
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },  // implement → ai_review
-      { index: 1, method: 'phase1_tag' },  // ai_review → ai_fix
-      { index: 0, method: 'phase1_tag' },  // ai_fix → ai_review
-      { index: 1, method: 'phase1_tag' },  // ai_review → ai_fix
-      { index: 0, method: 'phase1_tag' },  // ai_fix → ai_review（ここで cycle 検出）
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },  // implement → ai_review
+      { index: 1, method: 'phase3_tag' },  // ai_review → ai_fix
+      { index: 0, method: 'phase3_tag' },  // ai_fix → ai_review
+      { index: 1, method: 'phase3_tag' },  // ai_review → ai_fix
+      { index: 0, method: 'phase3_tag' },  // ai_fix → ai_review（ここで cycle 検出）
       // 判定役は error なのでルール照合なし
-      { index: 0, method: 'phase1_tag' },  // ai_review → reviewers（No issues）
-      { index: 0, method: 'phase1_tag' },  // reviewers → COMPLETE
+      { index: 0, method: 'phase3_tag' },  // ai_review → reviewers（No issues）
+      { index: 0, method: 'phase3_tag' },  // reviewers → COMPLETE
     ]);
 
     const abortFn = vi.fn();
@@ -1614,9 +1571,9 @@ describe('Replan-family judge transitions (runtime)', () => {
             persona: 'supervisor',
             instruction: 'The replan loop repeated {cycle_count} times.',
             rules: [
-              { condition: 'The latest fix ended with fixes complete', next: 'reviewers' },
-              { condition: 'Healthy replanning', next: 'plan' },
-              { condition: 'Same dead end repeats', next: 'ABORT' },
+              normalizeRule({ condition: 'The latest fix ended with fixes complete', next: 'reviewers' }),
+              normalizeRule({ condition: 'Healthy replanning', next: 'plan' }),
+              normalizeRule({ condition: 'Same dead end repeats', next: 'ABORT' }),
             ],
           },
         },
@@ -1638,9 +1595,9 @@ describe('Replan-family judge transitions (runtime)', () => {
   }
 
   /** 2周分の応答とルール一致を積み、judge の選択だけ差し替える */
-  function primeTwoCycles(judgeMatch: { index: number; method: 'ai_judge_fallback' }, tail: {
+  function primeTwoCycles(judgeMatch: { index: number; method: 'ai_judge' }, tail: {
     responses: ReturnType<typeof makeResponse>[];
-    matches: { index: number; method: 'phase1_tag' }[];
+    matches: { index: number; method: 'phase3_tag' }[];
   }): void {
     const cycleResponses = [
       makeResponse({ persona: 'plan', content: 'Planned' }),
@@ -1655,14 +1612,14 @@ describe('Replan-family judge transitions (runtime)', () => {
       makeResponse({ persona: 'supervisor', content: 'judged' }),
       ...tail.responses,
     ]);
-    const cycleMatches: { index: number; method: 'phase1_tag' }[] = [
-      { index: 0, method: 'phase1_tag' }, // plan → write_tests
-      { index: 0, method: 'phase1_tag' }, // write_tests → implement
-      { index: 0, method: 'phase1_tag' }, // implement → reviewers
-      { index: 0, method: 'phase1_tag' }, // reviewers → fix
-      { index: 1, method: 'phase1_tag' }, // fix → plan（行き詰まり）
+    const cycleMatches: { index: number; method: 'phase3_tag' }[] = [
+      { index: 0, method: 'phase3_tag' }, // plan → write_tests
+      { index: 0, method: 'phase3_tag' }, // write_tests → implement
+      { index: 0, method: 'phase3_tag' }, // implement → reviewers
+      { index: 0, method: 'phase3_tag' }, // reviewers → fix
+      { index: 1, method: 'phase3_tag' }, // fix → plan（行き詰まり）
     ];
-    mockDetectMatchedRuleSequence([
+    mockRuleEvaluationSequence([
       ...cycleMatches,
       ...cycleMatches,
       judgeMatch,
@@ -1683,9 +1640,9 @@ describe('Replan-family judge transitions (runtime)', () => {
 
   it('should return to reviewers when the judge sees the latest fix as complete', async () => {
     engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', { projectCwd: tmpDir });
-    primeTwoCycles({ index: 0, method: 'ai_judge_fallback' }, {
+    primeTwoCycles({ index: 0, method: 'ai_judge' }, {
       responses: [makeResponse({ persona: 'reviewers', content: 'All approved' })],
-      matches: [{ index: 1, method: 'phase1_tag' }],
+      matches: [{ index: 1, method: 'phase3_tag' }],
     });
     const steps = collectStepStarts(engine);
 
@@ -1697,9 +1654,9 @@ describe('Replan-family judge transitions (runtime)', () => {
 
   it('should return to plan when the judge sees healthy replanning', async () => {
     engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', { projectCwd: tmpDir });
-    primeTwoCycles({ index: 1, method: 'ai_judge_fallback' }, {
+    primeTwoCycles({ index: 1, method: 'ai_judge' }, {
       responses: [makeResponse({ persona: 'plan', content: 'Cannot plan' })],
-      matches: [{ index: 1, method: 'phase1_tag' }],
+      matches: [{ index: 1, method: 'phase3_tag' }],
     });
     const steps = collectStepStarts(engine);
 
@@ -1712,7 +1669,7 @@ describe('Replan-family judge transitions (runtime)', () => {
 
   it('should abort when the judge sees the same dead end repeating', async () => {
     engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', { projectCwd: tmpDir });
-    primeTwoCycles({ index: 2, method: 'ai_judge_fallback' }, { responses: [], matches: [] });
+    primeTwoCycles({ index: 2, method: 'ai_judge' }, { responses: [], matches: [] });
     const steps = collectStepStarts(engine);
 
     const state = await engine.run();

@@ -22,6 +22,7 @@ import {
 } from '../../analytics/index.js';
 import type { StepResultEvent, ReviewFindingEvent, RoutingDecisionEvent } from '../../analytics/index.js';
 import type { WorkflowStep, AgentResponse, FindingLedger } from '../../../core/models/index.js';
+import { formatWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
 import type { StepProviderInfo } from '../../../core/workflow/types.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import { needsStatusJudgmentPhase } from '../../../core/workflow/phase-runner.js';
@@ -43,6 +44,7 @@ export class AnalyticsEmitter {
     initialProvider: string,
     initialModel: string,
     workflowName: string,
+    private readonly interactive: boolean,
     routingRunId?: string,
   ) {
     this.runSlug = runSlug;
@@ -69,9 +71,12 @@ export class AnalyticsEmitter {
 
   /** step:complete 時に StepResultEvent と FixAction/Rebuttal を発行する */
   onStepComplete(step: WorkflowStep, response: AgentResponse): void {
-    const decisionTag = (response.matchedRuleIndex != null && step.rules)
-      ? (step.rules[response.matchedRuleIndex]?.condition ?? response.status)
-      : response.status;
+    const matchedRule = response.matchedRuleIndex != null && step.rules
+      ? step.rules[response.matchedRuleIndex]
+      : undefined;
+    const decisionTag = matchedRule === undefined
+      ? response.status
+      : formatWorkflowRuleCondition(matchedRule.condition);
 
     const stepResultEvent: StepResultEvent = {
       type: 'step_result',
@@ -154,7 +159,7 @@ export class AnalyticsEmitter {
       workflowName: input.workflowName ?? this.currentWorkflowName,
       stepType: input.stepType,
       instructionTokenCount: input.instructionTokenCount,
-      phaseCount: countExpectedPhases(input.step),
+      phaseCount: countExpectedPhases(input.step, this.interactive),
       provider: input.providerInfo.provider,
       model: input.providerInfo.model,
       selectedCategory: decision.candidateName,
@@ -225,12 +230,12 @@ export class AnalyticsEmitter {
   }
 }
 
-function countExpectedPhases(step: WorkflowStep): number {
+function countExpectedPhases(step: WorkflowStep, interactive: boolean): number {
   let phaseCount = 1;
   if (step.outputContracts !== undefined && step.outputContracts.length > 0) {
     phaseCount += 1;
   }
-  if (needsStatusJudgmentPhase(step)) {
+  if (needsStatusJudgmentPhase(step, interactive)) {
     phaseCount += 1;
   }
   return phaseCount;

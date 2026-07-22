@@ -38,7 +38,6 @@ vi.mock('../core/workflow/findings/snapshot.js', () => ({
 }));
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue(undefined),
 }));
@@ -162,7 +161,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     });
     let abortReason = '';
     engine.on('workflow:abort', (_state, reason: string) => { abortReason = reason; });
@@ -201,7 +199,11 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [
-        reviewerStep([{ condition: 'when(findings.open.count == 0 && findings.conflicts.count == 0)', returnValue: 'done' }]),
+        reviewerStep([makeRule(
+          'when(findings.open.count == 0 && findings.conflicts.count == 0)',
+          '',
+          { returnValue: 'done' },
+        )]),
       ],
     };
 
@@ -209,7 +211,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     });
     let abortReason = '';
     engine.on('workflow:abort', (_state, reason: string) => { abortReason = reason; });
@@ -235,10 +236,11 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       initialStep: 'reviewers',
       provider: 'claude',
       steps: [
-        reviewerStep([{
-          condition: 'when(findings.reviewerAnomalies.count > 0)',
-          returnValue: 'need_replan',
-        }]),
+        reviewerStep([makeRule(
+          'when(findings.reviewerAnomalies.count > 0)',
+          '',
+          { returnValue: 'need_replan' },
+        )]),
       ],
     };
     const parentConfig: WorkflowConfig = {
@@ -259,7 +261,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
           personaDisplayName: 'final-gate',
           instruction: '',
           passPreviousResponse: true,
-          rules: [{ condition: 'need_replan', next: 'replan' }],
+          rules: [makeRule('need_replan', 'replan')],
         },
         makeStep({
           name: 'replan',
@@ -287,7 +289,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
       workflowCallResolver: () => childConfig,
     });
     let abortReason = '';
@@ -319,8 +320,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
           persona: 'supervisor',
           instruction: 'Abort only when no feasible requirements-compliant approach remains.',
           rules: [
-            { condition: 'A requirements-compliant alternative remains', next: 'replan' },
-            { condition: 'No feasible requirements-compliant approach remains', next: 'ABORT' },
+            makeRule('when(true)', 'ABORT'),
           ],
         },
       }],
@@ -362,7 +362,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: (_content, stepName) => (stepName.startsWith('_loop_judge_') ? 1 : -1),
     });
     let abortReason = '';
     engine.on('workflow:abort', (_state, reason: string) => { abortReason = reason; });
@@ -430,7 +429,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => 0,
     });
     await engine.run();
 

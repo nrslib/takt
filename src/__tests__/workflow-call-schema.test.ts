@@ -302,6 +302,67 @@ describe('workflow_call schema', () => {
     }
   });
 
+  it.each([
+    'when(true)',
+    'all("approved")',
+    'any("needs_fix")',
+    'approved && when(true)',
+    'ai("approved")',
+  ])('subworkflow.returns でcondition予約構文 %s を reject する', (reservedResult) => {
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'shared/review-loop',
+      subworkflow: {
+        callable: true,
+        returns: [reservedResult],
+      },
+      initial_step: 'review',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'review',
+          persona: 'reviewer',
+          instruction: 'Review child workflow',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: ['subworkflow', 'returns', 0] }),
+      ]));
+    }
+  });
+
+  it.each([
+    'when(true)',
+    'all("COMPLETE")',
+    'any("ABORT")',
+    'approved && when(true)',
+  ])('workflow全体のworkflow_callで非semantic condition %s をrejectする', (condition) => {
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'shared/review-loop',
+          rules: [{ condition, next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: ['steps', 0, 'rules', 0, 'condition'] }),
+      ]));
+    }
+  });
+
   it.each(workflowCallForbiddenFieldCases)(
     'workflow_call step で $field を reject する',
     ({ field, value }) => {
@@ -357,7 +418,7 @@ describe('workflow_call schema', () => {
     const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],
@@ -367,7 +428,7 @@ describe('workflow_call schema', () => {
     if (!result.success) {
       expect(result.error.issues).toEqual(expect.arrayContaining([
         expect.objectContaining({
-          path: ['rules', 0, 'when'],
+          path: ['rules', 0, 'condition'],
         }),
       ]));
     }
@@ -574,13 +635,6 @@ describe('workflow_call schema', () => {
 
   it.each([
     {
-      label: 'when rule',
-      rule: {
-        when: 'true',
-        next: 'COMPLETE',
-      },
-    },
-    {
       label: 'ai() condition',
       rule: {
         condition: 'ai("route to plan")',
@@ -625,7 +679,7 @@ describe('workflow_call schema', () => {
           kind,
           rules: [
             {
-              when: 'true',
+              condition: 'when(true)',
               next: 'COMPLETE',
             },
           ],
@@ -787,7 +841,7 @@ describe('workflow_call schema', () => {
             mode: 'system',
             rules: [
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'COMPLETE',
               },
             ],
@@ -836,7 +890,7 @@ describe('workflow_call schema', () => {
       mode: 'system',
       rules: [
         {
-          when: 'true',
+          condition: 'when(true)',
           next: 'COMPLETE',
         },
       ],

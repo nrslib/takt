@@ -9,6 +9,7 @@ import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
 import { bindWorkflowExecutionEvents } from '../features/tasks/execute/workflowExecutionEvents.js';
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/debug.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 class TestEngine extends EventEmitter {
   public abort = vi.fn();
@@ -149,7 +150,7 @@ describe('bindWorkflowExecutionEvents', () => {
       name: 'review',
       personaDisplayName: 'Reviewer',
       instruction: '',
-      rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
     } as WorkflowStep;
     const response = {
       persona: 'reviewer',
@@ -182,7 +183,7 @@ describe('bindWorkflowExecutionEvents', () => {
       name: '_loop_judge_review_fix',
       personaDisplayName: 'loop-judge',
       instruction: '',
-      rules: [{ condition: 'done', next: 'review' }],
+      rules: [normalizeRule({ condition: 'done', next: 'review' })],
     } as WorkflowStep;
     const response = {
       persona: 'loop-judge',
@@ -288,7 +289,7 @@ describe('bindWorkflowExecutionEvents', () => {
     writeFileSync(analyticsPath, 'not a directory', 'utf-8');
     initAnalyticsWriter(true, analyticsPath);
     try {
-      const actualAnalyticsEmitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'parent');
+      const actualAnalyticsEmitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'parent', false);
       const { engine, runMetaManager, analyticsEmitter } = createBridgeHarness();
       analyticsEmitter.onFindingLedgerUpdated.mockImplementation((ledger: FindingLedger) => {
         actualAnalyticsEmitter.onFindingLedgerUpdated(ledger);

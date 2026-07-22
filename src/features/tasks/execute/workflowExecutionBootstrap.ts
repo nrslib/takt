@@ -324,6 +324,7 @@ export async function createWorkflowExecutionBootstrap(
     currentProvider,
     configuredModel ?? '(default)',
     workflowConfig.name,
+    interactiveUserInput,
     workflowSessionId,
   );
   const structuredCaller = new CapabilityAwareStructuredCaller();

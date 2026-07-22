@@ -7,18 +7,22 @@ vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 import { executeAgent } from '../agents/agent-usecases.js';
-import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 
 function makeState(): WorkflowState {
   return {
@@ -67,16 +71,8 @@ function makeParallelStep(): WorkflowStep {
       makeReviewStep('security-review'),
     ],
     rules: [
-      makeRule('all("approved")', 'COMPLETE', {
-        isAggregateCondition: true,
-        aggregateType: 'all',
-        aggregateConditionText: 'approved',
-      }),
-      makeRule('any("needs_fix")', 'fix', {
-        isAggregateCondition: true,
-        aggregateType: 'any',
-        aggregateConditionText: 'needs_fix',
-      }),
+      makeRule('all("approved")', 'COMPLETE'),
+      makeRule('any("needs_fix")', 'fix'),
     ],
   });
 }
@@ -101,7 +97,6 @@ function makeRunner(): { runner: ParallelRunner; deps: ParallelRunnerDeps } {
     getWorkflowName: () => 'test-workflow',
     getInteractive: () => false,
     observabilityEnabled: false,
-    detectRuleIndex: vi.fn(),
     structuredCaller: {
       evaluateCondition: vi.fn(),
       judgeStatus: vi.fn(),
@@ -138,9 +133,9 @@ function queueAgentRejection(error: Error): void {
 describe('ParallelRunner terminal sub-step statuses', () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(detectMatchedRule).mockImplementation(async (step) => {
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => {
       return step.name === 'security-review'
-        ? { index: 0, method: 'phase1_tag' }
+        ? { index: 0, method: 'phase3_tag' }
         : undefined;
     });
   });

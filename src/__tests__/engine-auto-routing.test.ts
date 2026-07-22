@@ -6,12 +6,16 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn(),
   runReportPhase: vi.fn(),
   runStatusJudgmentPhase: vi.fn(),
 }));
@@ -38,7 +42,7 @@ import {
   makeResponse,
   makeRule,
   makeStep,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
 
@@ -147,8 +151,8 @@ describe('WorkflowEngine auto routing integration', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
@@ -226,7 +230,7 @@ describe('WorkflowEngine auto routing integration', () => {
       });
       return makeResponse({ persona: step.persona, content: 'done' });
     });
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     const state = await engine.run();
 
@@ -279,7 +283,7 @@ describe('WorkflowEngine auto routing integration', () => {
     }));
     engine.on('routing:decision', routingDecision);
     mockRunAgentSequence([makeResponse({ persona: step.persona, content: 'done' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     const state = await engine.run();
 
@@ -313,7 +317,7 @@ describe('WorkflowEngine auto routing integration', () => {
     }));
     engine.on('step:start', stepStarted);
     mockRunAgentSequence([makeResponse({ persona: step.persona, content: 'done' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     const state = await engine.run();
 
@@ -350,7 +354,7 @@ describe('WorkflowEngine auto routing integration', () => {
     }));
     engine.on('step:start', stepStarted);
     mockRunAgentSequence([makeResponse({ persona: step.persona, content: 'done' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     const state = await engine.run();
 
@@ -383,7 +387,7 @@ describe('WorkflowEngine auto routing integration', () => {
     }));
     engine.on('step:start', stepStarted);
     mockRunAgentSequence([makeResponse({ persona: step.persona, content: 'done' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     const state = await engine.run();
 
@@ -428,8 +432,8 @@ describe('WorkflowEngine auto routing integration', () => {
       }
       return makeResponse({ persona: step.persona, content: 'done' });
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(
@@ -476,8 +480,8 @@ describe('WorkflowEngine auto routing integration', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
@@ -582,8 +586,8 @@ describe('WorkflowEngine auto routing integration', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
@@ -617,8 +621,8 @@ describe('WorkflowEngine auto routing integration', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
@@ -661,8 +665,8 @@ describe('WorkflowEngine auto routing integration', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
@@ -710,8 +714,8 @@ describe('WorkflowEngine auto routing integration', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
@@ -748,11 +752,7 @@ describe('WorkflowEngine auto routing integration', () => {
             }),
           ],
           rules: [
-            makeRule('all("approved")', 'COMPLETE', {
-              isAggregateCondition: true,
-              aggregateType: 'all',
-              aggregateConditionText: 'approved',
-            }),
+            makeRule('all("approved")', 'COMPLETE'),
           ],
         }),
       ],
@@ -810,9 +810,9 @@ describe('WorkflowEngine auto routing integration', () => {
         },
       });
     });
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
 
@@ -899,11 +899,7 @@ describe('WorkflowEngine auto routing integration', () => {
             }),
           ],
           rules: [
-            makeRule('all("approved")', 'COMPLETE', {
-              isAggregateCondition: true,
-              aggregateType: 'all',
-              aggregateConditionText: 'approved',
-            }),
+            makeRule('all("approved")', 'COMPLETE'),
           ],
         }),
       ],
@@ -916,9 +912,9 @@ describe('WorkflowEngine auto routing integration', () => {
       makeResponse({ persona: 'explicit-review', content: 'approved' }),
       makeResponse({ persona: 'format-review', content: 'approved' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
 
@@ -952,11 +948,7 @@ describe('WorkflowEngine auto routing integration', () => {
             }),
           ],
           rules: [
-            makeRule('all("approved")', 'COMPLETE', {
-              isAggregateCondition: true,
-              aggregateType: 'all',
-              aggregateConditionText: 'approved',
-            }),
+            makeRule('all("approved")', 'COMPLETE'),
           ],
         }),
       ],
@@ -1039,11 +1031,7 @@ describe('WorkflowEngine auto routing integration', () => {
             }),
           ],
           rules: [
-            makeRule('all("approved")', 'COMPLETE', {
-              isAggregateCondition: true,
-              aggregateType: 'all',
-              aggregateConditionText: 'approved',
-            }),
+            makeRule('all("approved")', 'COMPLETE'),
           ],
         }),
       ],
@@ -1060,9 +1048,9 @@ describe('WorkflowEngine auto routing integration', () => {
       makeResponse({ persona: 'api-review', content: 'approved' }),
       makeResponse({ persona: 'format-review', content: 'approved' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
 
@@ -1121,11 +1109,7 @@ describe('WorkflowEngine auto routing integration', () => {
             }),
           ],
           rules: [
-            makeRule('all("approved")', 'COMPLETE', {
-              isAggregateCondition: true,
-              aggregateType: 'all',
-              aggregateConditionText: 'approved',
-            }),
+            makeRule('all("approved")', 'COMPLETE'),
           ],
         }),
       ],
@@ -1156,8 +1140,8 @@ describe('WorkflowEngine auto routing integration', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'format-review', content: 'approved' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();

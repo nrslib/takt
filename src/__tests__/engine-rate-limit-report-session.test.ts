@@ -11,9 +11,10 @@ vi.mock('../agents/runner.js', () => ({
 
 import { runAgent } from '../agents/runner.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
+import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 
 function makeRule(condition: string, next: string): WorkflowRule {
-  return { condition, next };
+  return { condition: parseWorkflowRuleCondition(condition), next };
 }
 
 function makeStep(name: string, overrides: Partial<WorkflowStep> = {}): WorkflowStep {
@@ -23,7 +24,7 @@ function makeStep(name: string, overrides: Partial<WorkflowStep> = {}): Workflow
     personaDisplayName: 'Coder',
     instruction: `Run ${name}`,
     passPreviousResponse: false,
-    rules: [makeRule('true', 'COMPLETE')],
+    rules: [makeRule('when(true)', 'COMPLETE')],
     ...overrides,
   };
 }
@@ -73,10 +74,10 @@ function buildConfig(): WorkflowConfig {
     steps: [
       makeStep('plan', {
         outputContracts: [{ name: 'plan.md', useJudge: false }],
-        rules: [makeRule('true', 'verify')],
+        rules: [makeRule('when(true)', 'verify')],
       }),
       makeStep('verify', {
-        rules: [makeRule('true', 'COMPLETE')],
+        rules: [makeRule('when(true)', 'COMPLETE')],
       }),
     ],
   };
@@ -100,7 +101,7 @@ function buildTeamLeaderReportConfig(): WorkflowConfig {
           partEdit: true,
           partPermissionMode: 'edit',
         },
-        rules: [makeRule('true', 'COMPLETE')],
+        rules: [makeRule('when(true)', 'COMPLETE')],
       }),
     ],
   };
@@ -112,7 +113,6 @@ function buildOptions(tmpDir: string): WorkflowEngineOptions {
     provider: 'claude',
     model: 'claude-sonnet',
     reportDirName: 'test-report-dir',
-    detectRuleIndex: () => 0,
     rateLimitFallback: {
       switchChain: [{ provider: 'codex', model: 'gpt-5' }],
     },

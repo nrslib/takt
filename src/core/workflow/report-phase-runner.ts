@@ -6,7 +6,7 @@ import { createLogger } from '../../shared/utils/index.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
 import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
 import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder.js';
-import { getReportFiles } from './evaluation/rule-utils.js';
+import { getReportFiles } from './output-contract-files.js';
 import type { PhasePromptParts, StepProviderInfo } from './types.js';
 import type { ReportPhaseRunnerContext } from './phase-runner.js';
 import { runWithPhaseSpan } from './observability/workflowSpans.js';

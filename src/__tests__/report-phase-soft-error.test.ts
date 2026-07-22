@@ -4,6 +4,7 @@ import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import type { AgentResponse, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import { makeStep } from './test-helpers.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -13,7 +14,6 @@ vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../core/workflow/phase-runner.js')>();
   return {
     ...actual,
-    needsStatusJudgmentPhase: vi.fn(),
     runReportPhase: vi.fn(),
     runStatusJudgmentPhase: vi.fn(),
   };
@@ -21,7 +21,6 @@ vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => {
 
 import { executeAgent } from '../agents/agent-usecases.js';
 import {
-  needsStatusJudgmentPhase,
   runReportPhase,
   ReportPhaseGenerationError,
   runStatusJudgmentPhase,
@@ -59,6 +58,10 @@ function makeReportStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
     persona: 'reviewer',
     instruction: 'Review the change',
     outputContracts: [{ name: 'review.md', format: 'markdown' }],
+    rules: [
+      normalizeRule({ condition: 'complete', next: 'COMPLETE' }),
+      normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+    ],
     ...overrides,
   });
 }
@@ -100,7 +103,6 @@ function makeStepExecutor(): StepExecutor {
     getWorkflowDescription: () => undefined,
     getInheritedPeerReportPaths: () => [],
     getRetryNote: () => undefined,
-    detectRuleIndex: vi.fn().mockReturnValue(-1),
     structuredCaller: {
       evaluateCondition: vi.fn(),
       judgeStatus: vi.fn(),
@@ -136,7 +138,6 @@ function makeParallelRunner(): ParallelRunner {
     getWorkflowName: () => 'test-workflow',
     getInteractive: () => false,
     observabilityEnabled: false,
-    detectRuleIndex: vi.fn(),
     structuredCaller: {
       evaluateCondition: vi.fn(),
       judgeStatus: vi.fn(),
@@ -170,10 +171,8 @@ function queueAgentResponse(response: AgentResponse): void {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.mocked(needsStatusJudgmentPhase).mockReturnValue(true);
   vi.mocked(runStatusJudgmentPhase).mockResolvedValue({
-    tag: 'complete',
-    ruleIndex: 0,
+    label: 'complete',
     method: 'phase3_tag',
   });
 });
@@ -256,7 +255,6 @@ describe('ReportPhaseGenerationError soft error', () => {
       content: '',
       structuredOutput: { result: 'ok' },
     }));
-    vi.mocked(needsStatusJudgmentPhase).mockReturnValue(false);
 
     const result = await runner.runParallelStep(makeParallelStep(subStep), state, 'review task', 5, vi.fn());
 
@@ -288,7 +286,6 @@ describe('ReportPhaseGenerationError soft error', () => {
       content: '',
       structuredOutput: { result: 'ok' },
     }));
-    vi.mocked(needsStatusJudgmentPhase).mockReturnValue(false);
     vi.spyOn(executor, 'persistPreviousResponseSnapshot').mockReturnValue('');
 
     const result = await executor.runNormalStep(step, state, 'review task', 5, vi.fn());

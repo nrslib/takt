@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 const terminalMocks = vi.hoisted(() => ({
   start: vi.fn().mockResolvedValue({ id: 'tmux-session', name: 'takt-claude-terminal' }),
@@ -48,7 +49,7 @@ function makeConfig(): WorkflowConfig {
         personaDisplayName: 'implement',
         instruction: 'Implement {task}',
         provider: 'claude-terminal',
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
       },
     ],
   };
@@ -66,7 +67,7 @@ function makeReportConfig(): WorkflowConfig {
         instruction: 'Implement {task}',
         provider: 'claude-terminal',
         outputContracts: [{ name: 'report.md', format: '# Report' }],
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
       },
     ],
   };
@@ -84,8 +85,8 @@ function makeMultiRuleConfig(): WorkflowConfig {
         instruction: 'Implement {task}',
         provider: 'claude-terminal',
         rules: [
-          { condition: 'done', next: 'COMPLETE' },
-          { condition: 'fix', next: 'implement' },
+          normalizeRule({ condition: 'done', next: 'COMPLETE' }),
+          normalizeRule({ condition: 'fix', next: 'implement' }),
         ],
       },
     ],

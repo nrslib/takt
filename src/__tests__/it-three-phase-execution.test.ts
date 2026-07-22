@@ -6,7 +6,7 @@
  *
  * Mocked: UI, session, config
  * Selectively mocked: phase-runner (to inspect call patterns)
- * Not mocked: WorkflowEngine, runAgent, detectMatchedRule, rule-evaluator
+ * Not mocked: WorkflowEngine, runAgent, RuleEvaluator
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -16,17 +16,14 @@ import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 import { DefaultStructuredCaller } from '../agents/structured-caller.js';
 import type { WorkflowConfig, WorkflowStep, WorkflowRule } from '../core/models/index.js';
-import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 import { makeRule } from './test-helpers.js';
 
 // --- Mocks ---
 
-const mockNeedsStatusJudgmentPhase = vi.fn();
 const mockRunReportPhase = vi.fn();
 const mockRunStatusJudgmentPhase = vi.fn();
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: (...args: unknown[]) => mockNeedsStatusJudgmentPhase(...args),
   runReportPhase: (...args: unknown[]) => mockRunReportPhase(...args),
   runStatusJudgmentPhase: (...args: unknown[]) => mockRunStatusJudgmentPhase(...args),
 }));
@@ -69,7 +66,6 @@ function createTestEnv(): { dir: string; agentPath: string } {
 function buildEngineOptions(projectCwd: string) {
   return {
     projectCwd,
-    detectRuleIndex,
     structuredCaller: new DefaultStructuredCaller(),
   };
 }
@@ -103,10 +99,8 @@ describe('Three-Phase Execution IT: phase1 only (no report, no tag rules)', () =
     testDir = env.dir;
     agentPath = env.agentPath;
 
-    // No tag rules needed → Phase 3 not needed
-    mockNeedsStatusJudgmentPhase.mockReturnValue(false);
     mockRunReportPhase.mockResolvedValue(undefined);
-    mockRunStatusJudgmentPhase.mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' });
+    mockRunStatusJudgmentPhase.mockResolvedValue({ label: '', method: 'auto_select' });
   });
 
   afterEach(() => {
@@ -126,8 +120,8 @@ describe('Three-Phase Execution IT: phase1 only (no report, no tag rules)', () =
       initialStep: 'step',
       steps: [
         makeStep('step', agentPath, [
-          makeRule('Done', 'COMPLETE'),
-          makeRule('Not done', 'ABORT'),
+          makeRule('when(true)', 'COMPLETE'),
+          makeRule('when(false)', 'ABORT'),
         ]),
       ],
     };
@@ -141,7 +135,6 @@ describe('Three-Phase Execution IT: phase1 only (no report, no tag rules)', () =
 
     expect(state.status).toBe('completed');
     expect(mockRunReportPhase).not.toHaveBeenCalled();
-    // needsStatusJudgmentPhase is called but returns false
     expect(mockRunStatusJudgmentPhase).not.toHaveBeenCalled();
   });
 });
@@ -156,9 +149,8 @@ describe('Three-Phase Execution IT: phase1 + phase2 (report defined)', () => {
     testDir = env.dir;
     agentPath = env.agentPath;
 
-    mockNeedsStatusJudgmentPhase.mockReturnValue(false);
     mockRunReportPhase.mockResolvedValue(undefined);
-    mockRunStatusJudgmentPhase.mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' });
+    mockRunStatusJudgmentPhase.mockResolvedValue({ label: '', method: 'auto_select' });
   });
 
   afterEach(() => {
@@ -178,8 +170,8 @@ describe('Three-Phase Execution IT: phase1 + phase2 (report defined)', () => {
       initialStep: 'step',
       steps: [
         makeStep('step', agentPath, [
-          makeRule('Done', 'COMPLETE'),
-          makeRule('Not done', 'ABORT'),
+          makeRule('when(true)', 'COMPLETE'),
+          makeRule('when(false)', 'ABORT'),
         ], { outputContracts: [{ name: 'test-report.md', format: 'test-report', useJudge: true }] }),
       ],
     };
@@ -208,7 +200,7 @@ describe('Three-Phase Execution IT: phase1 + phase2 (report defined)', () => {
       initialStep: 'step',
       steps: [
         makeStep('step', agentPath, [
-          makeRule('Done', 'COMPLETE'),
+          makeRule('when(true)', 'COMPLETE'),
         ], { outputContracts: [{ name: 'scope.md', format: 'scope', useJudge: true }, { name: 'decisions.md', format: 'decisions', useJudge: true }] }),
       ],
     };
@@ -235,10 +227,9 @@ describe('Three-Phase Execution IT: phase1 + phase3 (tag rules defined)', () => 
     testDir = env.dir;
     agentPath = env.agentPath;
 
-    mockNeedsStatusJudgmentPhase.mockReturnValue(true);
     mockRunReportPhase.mockResolvedValue(undefined);
     // Phase 3 returns content with a tag
-    mockRunStatusJudgmentPhase.mockResolvedValue({ tag: '[STEP:1]', ruleIndex: 0, method: 'structured_output' });
+    mockRunStatusJudgmentPhase.mockResolvedValue({ label: 'Done', method: 'structured_output' });
   });
 
   afterEach(() => {
@@ -288,9 +279,8 @@ describe('Three-Phase Execution IT: all three phases', () => {
     testDir = env.dir;
     agentPath = env.agentPath;
 
-    mockNeedsStatusJudgmentPhase.mockReturnValue(true);
     mockRunReportPhase.mockResolvedValue(undefined);
-    mockRunStatusJudgmentPhase.mockResolvedValue({ tag: '[STEP:1]', ruleIndex: 0, method: 'structured_output' });
+    mockRunStatusJudgmentPhase.mockResolvedValue({ label: 'Done', method: 'structured_output' });
   });
 
   afterEach(() => {
@@ -344,7 +334,6 @@ describe('Three-Phase Execution IT: phase3 tag → rule match', () => {
     testDir = env.dir;
     agentPath = env.agentPath;
 
-    mockNeedsStatusJudgmentPhase.mockReturnValue(true);
     mockRunReportPhase.mockResolvedValue(undefined);
   });
 
@@ -361,7 +350,7 @@ describe('Three-Phase Execution IT: phase3 tag → rule match', () => {
     ]);
 
     // Phase 3 returns rule 2 (ABORT)
-    mockRunStatusJudgmentPhase.mockResolvedValue({ tag: '[STEP1:2]', ruleIndex: 1, method: 'structured_output' });
+    mockRunStatusJudgmentPhase.mockResolvedValue({ label: 'needs_fix', method: 'structured_output' });
 
     const config: WorkflowConfig = {
       name: 'it-phase3-tag',

@@ -13,7 +13,11 @@ import {
 } from '../provider-resolution.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
 import { getWorkflowStepKind, isDelegatedWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
-import { hasUnquotedFindingsReference, isFindingsCondition } from '../evaluation/rule-utils.js';
+import {
+  findSemanticAppendixConflicts,
+  hasAggregateCondition,
+  hasFindingsReference,
+} from '../../models/workflow-rule-condition.js';
 import { buildFindingInterpretationStep, buildFindingManagerStep } from '../findings/manager-step.js';
 import { findingContractFormatRef, hasFindingContractFormat } from '../findings/finding-contract-format.js';
 import {
@@ -75,16 +79,7 @@ function validateResolvedProviderInfo(
 }
 
 function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
-  if ('isAiCondition' in rule && rule.isAiCondition === true) {
-    return false;
-  }
-  return isFindingsCondition(rule.condition)
-    || ('aggregateGuardCondition' in rule
-      && rule.aggregateGuardCondition !== undefined
-      && hasUnquotedFindingsReference(rule.aggregateGuardCondition))
-    || ('guardCondition' in rule
-      && rule.guardCondition !== undefined
-      && hasUnquotedFindingsReference(rule.guardCondition));
+  return hasFindingsReference(rule.condition);
 }
 
 function validateFindingsRuleContract(
@@ -94,6 +89,33 @@ function validateFindingsRuleContract(
 ): void {
   if (!findingContractConfigured && isFindingsRule(rule)) {
     throw new Error(`${source}: findings.* conditions require finding_contract`);
+  }
+}
+
+function validateAggregateRulePlacement(
+  rules: readonly (WorkflowRule | LoopMonitorRule)[],
+  aggregateAllowed: boolean,
+  source: string,
+): void {
+  if (aggregateAllowed) {
+    return;
+  }
+  if (rules.some((rule) => hasAggregateCondition(rule.condition))) {
+    throw new Error(`${source}: aggregate conditions are only allowed on parallel parent steps with sub-steps`);
+  }
+}
+
+function validateSemanticAppendices(rules: readonly WorkflowRule[], source: string): void {
+  const conflicts = findSemanticAppendixConflicts(rules.map((rule, ruleIndex) => ({
+    ruleIndex,
+    condition: rule.condition,
+    appendix: rule.appendix,
+  })));
+  const conflict = conflicts[0];
+  if (conflict !== undefined) {
+    throw new Error(
+      `${source}: Rules sharing semantic label "${conflict.label}" must use the same appendix`,
+    );
   }
 }
 
@@ -457,6 +479,12 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   for (const step of config.steps) {
     validateSessionEntrypoint(step, `Configuration error: step "${step.name}"`);
     validateAgentStepProviderModel(step, options, `Configuration error: step "${step.name}"`);
+    validateAggregateRulePlacement(
+      step.rules ?? [],
+      (step.parallel?.length ?? 0) > 0,
+      `Invalid rule in step "${step.name}"`,
+    );
+    validateSemanticAppendices(step.rules ?? [], `Invalid rule in step "${step.name}"`);
     for (const rule of step.rules ?? []) {
       if (rule.next && !stepNames.has(rule.next)) {
         throw new Error(`Invalid rule in step "${step.name}": target step "${rule.next}" does not exist`);
@@ -473,6 +501,15 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       );
     }
     for (const subStep of step.parallel ?? []) {
+      validateAggregateRulePlacement(
+        subStep.rules ?? [],
+        false,
+        `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
+      );
+      validateSemanticAppendices(
+        subStep.rules ?? [],
+        `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
+      );
       validateSessionEntrypoint(
         subStep,
         `Configuration error: parallel sub-step "${subStep.name}" of step "${step.name}"`,
@@ -498,6 +535,11 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   }
 
   for (const monitor of config.loopMonitors ?? []) {
+    validateAggregateRulePlacement(
+      monitor.judge.rules,
+      false,
+      'Invalid loop_monitor judge rule',
+    );
     for (const cycleName of monitor.cycle) {
       if (!stepNames.has(cycleName)) {
         throw new Error(`Invalid loop_monitor: cycle references unknown step "${cycleName}"`);

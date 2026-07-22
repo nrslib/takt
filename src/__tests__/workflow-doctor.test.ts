@@ -258,6 +258,172 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
+  it('ignores quoted findings identifiers when classifying provisional and budget routes', async () => {
+    writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/quoted-findings-routing.yaml', `name: quoted-findings-routing
+max_steps: 10
+initial_step: reviewers
+finding_contract:
+  ledger_path: .takt/findings/peer-review.json
+  raw_findings_path: .takt/findings/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+steps:
+  - name: reviewers
+    parallel:
+      - name: review
+        persona: reviewer
+        instruction: review it
+        rules:
+          - condition: approved
+    rules:
+      - condition: 'when(structured.note == "findings.provisional.count")'
+        next: ABORT
+      - condition: 'when(structured.note == "findings.provisional.fixpoint")'
+        next: ABORT
+      - condition: 'when(structured.note == "findings.rounds.budgetExhausted")'
+        next: ABORT
+      - condition: 'when(structured.note == "findings.reviewerAnomalies.budgetExhausted")'
+        next: ABORT
+      - condition: when(findings.open.count == 0)
+        next: COMPLETE
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining(
+      'no rule routing on findings.provisional.count',
+    ));
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('directly to ABORT'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('warns for a reachable COMPLETE rule after a semantic condition with when(true)', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/semantic-guard-before-complete.yaml', `name: semantic-guard-before-complete
+max_steps: 10
+initial_step: reviewers
+finding_contract:
+  ledger_path: .takt/findings/peer-review.json
+  raw_findings_path: .takt/findings/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+steps:
+  - name: reviewers
+    tags: [review]
+    instruction: review it
+    rules:
+      - condition: needs_fix && when(true)
+        next: fix
+      - condition: approved && when(findings.open.count == 0)
+        next: COMPLETE
+  - name: fix
+    instruction: fix it
+    rules:
+      - condition: done
+        next: reviewers
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining(
+      'COMPLETE gate without an effective reviewer-anomaly route',
+    ));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'when(true)',
+    'when(findings.open.count >= 0)',
+  ])('treats the known deterministic condition %s as an unreachable COMPLETE guard', async (condition) => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/deterministic-guard-before-complete.yaml', `name: deterministic-guard-before-complete
+max_steps: 10
+initial_step: reviewers
+finding_contract:
+  ledger_path: .takt/findings/peer-review.json
+  raw_findings_path: .takt/findings/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+steps:
+  - name: reviewers
+    tags: [review]
+    instruction: review it
+    rules:
+      - condition: ${condition}
+        next: fix
+      - condition: approved && when(findings.open.count == 0)
+        next: COMPLETE
+  - name: fix
+    instruction: fix it
+    rules:
+      - condition: done
+        next: reviewers
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining(
+      'COMPLETE gate without an effective reviewer-anomaly route',
+    ));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['all with a deterministic child result', ['when(true)'], 'all("when(true)")'],
+    ['any with a deterministic child result', ['when(true)'], 'any("when(true)")'],
+    [
+      'all with a compound child result',
+      ['approved && when(true)'],
+      'all("approved && when(true)")',
+    ],
+    [
+      'all with positional full child conditions',
+      ['when(true)', 'approved && when(true)'],
+      'all("when(true)", "approved && when(true)")',
+    ],
+  ])('warns for a reachable aggregate COMPLETE rule using %s', async (
+    _caseName,
+    childConditions,
+    aggregateCondition,
+  ) => {
+    const parallelSteps = childConditions.map((condition, index) => `      - name: review-${index}
+        instruction: review it
+        rules:
+          - condition: ${condition}`).join('\n');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/aggregate-condition-complete.yaml', `name: aggregate-condition-complete
+max_steps: 10
+initial_step: reviewers
+finding_contract:
+  ledger_path: .takt/findings/peer-review.json
+  raw_findings_path: .takt/findings/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+steps:
+  - name: reviewers
+    parallel:
+${parallelSteps}
+    rules:
+      - condition: ${aggregateCondition} && when(findings.open.count == 0)
+        next: COMPLETE
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining(
+      'COMPLETE gate without an effective reviewer-anomaly route',
+    ));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
   it('does not warn when fixpoint and exhausted budget route through a bounded requirements-preserving replan', async () => {
     writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
     writeWorkflow(projectDir, '.takt/facets/personas/planner.md', 'You are a planner.');
