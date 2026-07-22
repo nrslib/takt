@@ -772,6 +772,9 @@ function reconcileFindingLedgerWithValidator(
     ...(input.previousLedger.interpretations !== undefined
       ? { interpretations: input.previousLedger.interpretations }
       : {}),
+    ...(input.previousLedger.reviewerAnomalies !== undefined
+      ? { reviewerAnomalies: input.previousLedger.reviewerAnomalies }
+      : {}),
   });
 }
 
