@@ -211,13 +211,25 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.abortSignal).toBe(abortController.signal);
   });
 
-  it('feedback call 中の親中断を workflow aborted として伝播し後続callを停止する', async () => {
+  it('timeout part 後の feedback call 中に親中断された場合は継続 part を routing しない', async () => {
     const config = buildTeamLeaderConfig();
     const abortController = new AbortController();
+    const autoRouting: AutoRoutingConfig = {
+      ...createAutoRoutingConfig(),
+      rules: undefined,
+    };
+    const routeStep = vi.fn().mockResolvedValue(autoRouting.candidates[0]);
+    const routeBatch = vi.fn(async (_autoRouting: AutoRoutingConfig, steps: Array<{ id: string }>) =>
+      new Map(steps.map((step) => [step.id, autoRouting.candidates[0]])));
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
       projectCwd: tmpDir,
-      provider: 'claude',
+      provider: 'mock',
       abortSignal: abortController.signal,
+      autoRouting,
+      autoRoutingAiRouter: {
+        routeStep,
+        routeBatch,
+      },
     });
     mockRunAgentWithPrompt(
       makeResponse({
@@ -226,7 +238,13 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
           parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
         },
       }),
-      makeResponse({ persona: 'coder', content: 'API done' }),
+      makeResponse({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'Part timeout after 1000ms',
+        failureCategory: 'part_timeout',
+      }),
     );
     vi.mocked(runAgent).mockImplementationOnce(async () => {
       abortController.abort(new Error('feedback aborted'));
@@ -238,6 +256,10 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(state.status).toBe('aborted');
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
     expect(vi.mocked(runAgent).mock.calls[2]?.[2]?.abortSignal).toBe(abortController.signal);
+    expect(routeBatch).toHaveBeenCalledOnce();
+    expect(routeBatch.mock.calls[0]?.[1]).toEqual([
+      expect.objectContaining({ id: 'part-1' }),
+    ]);
   });
 
   // buildGitRules は team-leader-part-runner の buildTeamLeaderPartInstruction 経由でも
