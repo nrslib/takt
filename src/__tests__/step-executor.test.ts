@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +25,9 @@ import { executeAgent } from '../agents/agent-usecases.js';
 import { ingestFindingContractResults } from '../core/workflow/findings/contract-intake.js';
 import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
 import { RawFindingsOutputValidationJsonSchema } from '../core/models/finding-schemas.js';
+import { createFindingLedgerStore, type FindingManagerValidationReport } from '../core/workflow/findings/store.js';
+import { initializeGitFixture } from './helpers/git-fixture.js';
+import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 
 function makeState(): WorkflowState {
   return {
@@ -169,8 +172,23 @@ describe('StepExecutor', () => {
     );
   });
 
-  it('単独 reviewer は snapshot A/B 不一致を拒否し、準備済みの同一 structured output 契約を prompt と provider に渡す', async () => {
-    const structuredOutput = createRawFindingsStructuredOutput('review-snapshot-single');
+  it('単独 reviewer は snapshot A/B 不一致を拒否し、non-open confirmation の意味を変えず audit-only で取り込む', async () => {
+    mkdirSync(join(cwd, 'src'), { recursive: true });
+    writeFileSync(join(cwd, 'src/fixed.ts'), 'const fixed = true;\n');
+    initializeGitFixture(cwd, ['src/fixed.ts']);
+    const evidence = verifiedSourceQuoteFields(cwd, 'src/fixed.ts', 1);
+    const structuredOutput = createRawFindingsStructuredOutput(evidence.snapshotId);
+    const reviewerRawFindings = [{
+      rawFindingId: 'confirmation-resolved',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Confirmed fixed',
+      description: 'The previously reported issue remains fixed.',
+      suggestion: '',
+      relation: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+      ...evidence,
+    }];
     expect(structuredOutput.validationSchema).toBe(RawFindingsOutputValidationJsonSchema);
     const findingContractContext = {
       ledgerCopyPath: '.takt/runs/test-run/reports/findings-ledger.json',
@@ -180,7 +198,7 @@ describe('StepExecutor', () => {
       hasWaivedFindings: false,
       hasDismissedFindings: false,
       rawFindingsStructuredOutput: structuredOutput,
-      reviewScopeSnapshotId: 'review-snapshot-single',
+      reviewScopeSnapshotId: evidence.snapshotId,
     };
     let agentCallCount = 0;
     vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
@@ -199,8 +217,8 @@ describe('StepExecutor', () => {
       return {
         persona: 'reviewer',
         status: 'done',
-        content: 'No findings.',
-        structuredOutput: { rawFindings: [] },
+        content: 'Confirmed fixed.',
+        structuredOutput: { rawFindings: reviewerRawFindings },
         timestamp: new Date('2026-07-22T00:00:00.000Z'),
       };
     });
@@ -212,6 +230,44 @@ describe('StepExecutor', () => {
     });
     const buildAgentOptions = vi.fn().mockReturnValue({});
     const buildFindingContractInstructionContext = vi.fn().mockReturnValue(findingContractContext);
+    mkdirSync(join(cwd, '.takt/reports'), { recursive: true });
+    const findingLedgerStore = createFindingLedgerStore({
+      projectCwd: cwd,
+      reportDir: join(cwd, '.takt/reports'),
+      workflowName: 'test-workflow',
+      ledgerPath: '.takt/findings/ledger.json',
+      rawFindingsPath: '.takt/findings/raw',
+    });
+    findingLedgerStore.saveLedger({
+      version: 1,
+      workflowName: 'test-workflow',
+      nextId: 2,
+      updatedAt: '2026-07-22T00:00:00.000Z',
+      findings: [{
+        id: 'F-0001',
+        status: 'resolved',
+        lifecycle: 'resolved',
+        severity: 'high',
+        title: 'Fixed issue',
+        location: 'src/fixed.ts:1',
+        reviewers: ['reviewer'],
+        rawFindingIds: ['raw-existing'],
+        firstSeen: { runId: 'old-run', stepName: 'review', timestamp: '2026-07-21T00:00:00.000Z' },
+        lastSeen: { runId: 'old-run', stepName: 'review', timestamp: '2026-07-21T00:00:00.000Z' },
+      }],
+      rawFindings: [{
+        rawFindingId: 'raw-existing',
+        stepName: 'review',
+        reviewer: 'reviewer',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Fixed issue',
+        location: 'src/fixed.ts:1',
+        description: 'Previously reported issue.',
+        relation: 'new',
+      }],
+      conflicts: [],
+    });
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions,
@@ -253,18 +309,7 @@ describe('StepExecutor', () => {
         rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'Return JSON.' },
       },
-      findingLedgerStore: {
-        workflowName: 'test-workflow',
-        loadLedger: vi.fn().mockReturnValue({
-          version: 1,
-          workflowName: 'test-workflow',
-          nextId: 1,
-          updatedAt: '2026-07-22T00:00:00.000Z',
-          findings: [],
-          rawFindings: [],
-          conflicts: [],
-        }),
-      } as unknown as StepExecutorDeps['findingLedgerStore'],
+      findingLedgerStore,
       refreshFindingsState: vi.fn(),
       emitEvent: vi.fn(),
       recordSynthesizedAgentUsage: vi.fn(),
@@ -272,8 +317,6 @@ describe('StepExecutor', () => {
       getFindingCallNamespace: () => '',
       onPhaseComplete: vi.fn(),
     };
-
-    mkdirSync(join(cwd, '.takt/reports'), { recursive: true });
 
     const executor = new StepExecutor(deps);
     const state = makeState();
@@ -351,11 +394,15 @@ describe('StepExecutor', () => {
         ...preparedExecution,
         executableStep: {
           ...preparedExecution.executableStep,
-          structuredOutput: createRawFindingsStructuredOutput('review-snapshot-single'),
+          structuredOutput: createRawFindingsStructuredOutput(evidence.snapshotId),
         },
       },
     )).rejects.toThrow(`Prepared reviewer step "${step.name}" has mismatched structured output`);
 
+    const actualContractIntake = await vi.importActual<typeof import('../core/workflow/findings/contract-intake.js')>(
+      '../core/workflow/findings/contract-intake.js',
+    );
+    vi.mocked(ingestFindingContractResults).mockImplementationOnce(actualContractIntake.ingestFindingContractResults);
     const result = await executor.runNormalStep(
       step,
       state,
@@ -371,9 +418,30 @@ describe('StepExecutor', () => {
     expect(buildAgentOptions).toHaveBeenCalledWith(expect.objectContaining({
       structuredOutput,
     }), undefined);
-    expect(result.instruction).toContain('review-snapshot-single');
+    expect(result.instruction).toContain(evidence.snapshotId);
     expect(result.instruction).toContain(JSON.stringify(structuredOutput.schema, null, 2));
+    expect(agentCallCount).toBe(2);
+    expect(vi.mocked(executeAgent).mock.calls.some(
+      ([, instruction]) => instruction.includes('Some of your raw findings have contradictory relation/targetFindingId labeling'),
+    )).toBe(false);
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
+    const intake = vi.mocked(ingestFindingContractResults).mock.calls[0]![0];
+    expect(intake.subResults[0]?.relationClarification).toBeUndefined();
+    expect(intake.subResults[0]?.response.structuredOutput?.rawFindings).toEqual(reviewerRawFindings);
+    const savedLedger = findingLedgerStore.loadLedger();
+    expect(savedLedger.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('resolved');
+    expect(savedLedger.findings.every((finding) => finding.provisional === undefined)).toBe(true);
+    const report = JSON.parse(readFileSync(
+      join(cwd, '.takt/reports/findings-manager-validation.review.json'),
+      'utf-8',
+    )) as FindingManagerValidationReport;
+    expect(report.unsupportedRawFindings?.some(
+      (entry) => entry.rawFindingId.endsWith(':confirmation-resolved'),
+    )).toBe(true);
+    expect(report.rawNormalizations?.find(
+      (entry) => entry.rawFindingId.endsWith(':confirmation-resolved'),
+    )?.ambiguityCodes).toContain('confirmation-target-not-open');
+    expect(report.interpretationStats?.managerCalls).toBe(0);
   });
 
   it('provider が未解決なら structured_output を fail fast にする', () => {

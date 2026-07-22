@@ -35,7 +35,9 @@ const log = createLogger('finding-relation-coherence');
 /**
  * relation/target の付け替えだけで解消し得る ambiguity。missing-required-field
  * は本文の追加（= 禁止された内容変更）が必要なため突き返し対象にしない —
- * そのまま ambiguous ladder（manager 解釈 / provisional）へ進む。
+ * そのまま ambiguous ladder（manager 解釈 / provisional）へ進む。また、
+ * confirmation-target-not-open は冪等な audit-only 観測なので、relation の
+ * 意味変換を許す突き返し対象にはしない。
  */
 const CLARIFIABLE_AMBIGUITY_CODES: ReadonlySet<RawAmbiguityCode> = new Set([
   'relation-target-mismatch',
@@ -44,7 +46,6 @@ const CLARIFIABLE_AMBIGUITY_CODES: ReadonlySet<RawAmbiguityCode> = new Set([
   'reopened-target-open',
   'reopened-target-unknown',
   'confirmation-target-unknown',
-  'confirmation-target-not-open',
   'new-collides-open-finding',
 ]);
 

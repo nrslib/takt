@@ -10,15 +10,24 @@
  * ここでは ParallelRunner が optionsBuilder.buildFindingContractInstructionContext
  * （WorkflowEngineSetup と同じヘルパ）をラウンドに1回だけ呼び、その結果
  * （reviewScopeSnapshotId を含む）を全 sub-step instruction へ配ることを固定する。
+ * また、実 intake を通す回帰ケースは一時 Git fixture 上で独立して検証し、
+ * 配線検証を共有 checkout や manager の詳細へ依存させない。
  * その reviewScopeSnapshotId が実際に admission の結果を左右することは
  * finding-review-scope-snapshot-admission.test.ts で別途確認する。
  */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import type { AgentResponse, FindingContractConfig, WorkflowState, WorkflowStep } from '../core/models/types.js';
 import type { FindingContractInstructionContext } from '../core/workflow/instruction/instruction-context.js';
 import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
+import type { FindingLedger } from '../core/workflow/findings/types.js';
+import type { FindingManagerValidationReport } from '../core/workflow/findings/store.js';
 import { makeRule, makeStep } from './test-helpers.js';
+import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -38,9 +47,8 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
-// manager 検証（runFindingManagerForStep 経由の突合）は
-// finding-review-scope-snapshot-admission.test.ts が別途 cover するため、
-// ここでは ingestFindingContractResults を空振りさせ、instruction 組み立てだけを見る。
+// 配線ケースでは intake を空振りさせる。実 intake を確認する専用ケースだけが
+// vi.importActual でこの mock を一時的に差し替える。
 vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../core/workflow/findings/contract-intake.js')>();
   return {
@@ -50,6 +58,7 @@ vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) =
 });
 
 import { executeAgent } from '../agents/agent-usecases.js';
+import { ingestFindingContractResults } from '../core/workflow/findings/contract-intake.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 
 function makeState(): WorkflowState {
@@ -147,17 +156,24 @@ function getSnapshotIdEnum(context: FindingContractInstructionContext): unknown 
   return items.properties.snapshotId.enum;
 }
 
-function makeRunner(options: { withFindingContract?: boolean } = {}): {
+function makeRunner(options: {
+  withFindingContract?: boolean;
+  projectCwd?: string;
+  findingContractContext?: FindingContractInstructionContext;
+} = {}): {
   runner: ParallelRunner;
   deps: ParallelRunnerDeps;
 } {
   const withFindingContract = options.withFindingContract ?? true;
+  const projectCwd = options.projectCwd ?? '/tmp/project';
   const deps: ParallelRunnerDeps = {
     optionsBuilder: {
       buildAgentOptions: vi.fn().mockReturnValue({}),
       buildPhaseRunnerContext: vi.fn().mockReturnValue({}),
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
-      buildFindingContractInstructionContext: vi.fn().mockReturnValue(makeFindingContractContext()),
+      buildFindingContractInstructionContext: vi.fn().mockReturnValue(
+        options.findingContractContext ?? makeFindingContractContext(),
+      ),
     } as unknown as ParallelRunnerDeps['optionsBuilder'],
     stepExecutor: {
       buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
@@ -170,9 +186,9 @@ function makeRunner(options: { withFindingContract?: boolean } = {}): {
       })),
     } as unknown as ParallelRunnerDeps['stepExecutor'],
     engineOptions: {
-      projectCwd: '/tmp/project',
+      projectCwd,
     },
-    getCwd: () => '/tmp/project',
+    getCwd: () => projectCwd,
     getReportDir: () => '.takt/runs/test/reports',
     getWorkflowName: () => 'test-workflow',
     getInteractive: () => false,
@@ -229,12 +245,12 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'phase3_tag' });
   });
 
-  it('builds the finding-contract context once per round via optionsBuilder and shares the same non-empty reviewScopeSnapshotId across every reviewer instruction', async () => {
+  it('builds one snapshot context per round and shares it with every parallel reviewer', async () => {
     const { runner, deps } = makeRunner();
     const step = makeParallelStep();
     const state = makeState();
-    queueAgentResponse(makeAgentResponse({ persona: 'ai-antipattern-review', content: '[STEP:1] approved' }));
-    queueAgentResponse(makeAgentResponse({ persona: 'security-review', content: '[STEP:1] approved' }));
+    queueAgentResponse(makeAgentResponse({ persona: 'ai-antipattern-review' }));
+    queueAgentResponse(makeAgentResponse({ persona: 'security-review' }));
 
     await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
@@ -245,10 +261,13 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     expect(deps.optionsBuilder.buildFindingContractInstructionContext).toHaveBeenCalledTimes(1);
     expect(deps.optionsBuilder.buildFindingContractInstructionContext).toHaveBeenCalledWith(step, true);
 
+    const builtContext = vi.mocked(deps.optionsBuilder.buildFindingContractInstructionContext).mock.results[0]?.value;
+    expect(builtContext).toBeDefined();
     const buildInstructionCalls = vi.mocked(deps.stepExecutor.buildInstruction).mock.calls;
     expect(buildInstructionCalls).toHaveLength(2);
     for (const call of buildInstructionCalls) {
       const findingContractArg = call[6] as FindingContractInstructionContext | undefined;
+      expect(findingContractArg).toBe(builtContext);
       expect(findingContractArg?.reviewScopeSnapshotId).toBe('round-snapshot-abc123');
       expect(findingContractArg?.ledgerCopyPath).toBe('.takt/runs/test/reports/findings-ledger.json');
       if (!findingContractArg) {
@@ -257,13 +276,115 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       expect(getSnapshotIdEnum(findingContractArg)).toEqual(['', 'round-snapshot-abc123']);
     }
 
-    const outputContract = vi.mocked(deps.optionsBuilder.buildFindingContractInstructionContext).mock.results[0]?.value
-      ?.rawFindingsStructuredOutput;
+    const outputContract = builtContext?.rawFindingsStructuredOutput;
     expect(outputContract).toBeDefined();
     for (const call of vi.mocked(deps.optionsBuilder.buildAgentOptions).mock.calls) {
       const executableStep = call[0] as WorkflowStep;
       expect(executableStep.structuredOutput).toBe(outputContract);
       expect(executableStep.structuredOutput?.schema).toBe(outputContract?.schema);
+    }
+    expect(executeAgent).toHaveBeenCalledTimes(2);
+    expect(ingestFindingContractResults).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a non-open confirmation as audit-only through the actual parallel intake path', async () => {
+    const projectCwd = mkdtempSync(join(tmpdir(), 'takt-parallel-snapshot-wiring-'));
+    try {
+      mkdirSync(join(projectCwd, 'src'), { recursive: true });
+      writeFileSync(join(projectCwd, 'src/fixed.ts'), 'const fixed = true;\n');
+      initializeGitFixture(projectCwd, ['src/fixed.ts']);
+      const evidence = verifiedSourceQuoteFields(projectCwd, 'src/fixed.ts', 1);
+      const findingContractContext = makeFindingContractContext({
+        rawFindingsStructuredOutput: createRawFindingsStructuredOutput(evidence.snapshotId),
+        reviewScopeSnapshotId: evidence.snapshotId,
+      });
+      const { runner, deps } = makeRunner({ projectCwd, findingContractContext });
+      const reviewerRawFindings = [{
+        rawFindingId: 'confirmation-resolved',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Confirmed fixed',
+        description: 'The previously reported issue remains fixed.',
+        suggestion: '',
+        relation: 'resolution_confirmation',
+        targetFindingId: 'F-0001',
+        ...evidence,
+      }];
+      let ledger: FindingLedger = {
+        version: 1,
+        workflowName: 'test-workflow',
+        nextId: 2,
+        updatedAt: '2026-07-13T00:00:00.000Z',
+        findings: [{
+          id: 'F-0001',
+          status: 'resolved',
+          lifecycle: 'resolved',
+          severity: 'high',
+          title: 'Fixed issue',
+          location: evidence.location,
+          reviewers: ['ai-antipattern-review'],
+          rawFindingIds: ['raw-existing'],
+          firstSeen: { runId: 'old-run', stepName: 'reviewers', timestamp: '2026-07-12T00:00:00.000Z' },
+          lastSeen: { runId: 'old-run', stepName: 'reviewers', timestamp: '2026-07-12T00:00:00.000Z' },
+        }],
+        rawFindings: [{
+          rawFindingId: 'raw-existing',
+          stepName: 'reviewers',
+          reviewer: 'ai-antipattern-review',
+          familyTag: 'bug',
+          severity: 'high',
+          title: 'Fixed issue',
+          location: evidence.location,
+          description: 'Previously reported issue.',
+          relation: 'new',
+        }],
+        conflicts: [],
+      };
+      const reports: FindingManagerValidationReport[] = [];
+      const ledgerStore = deps.findingLedgerStore!;
+      vi.mocked(ledgerStore.loadLedger).mockImplementation(() => ledger);
+      vi.mocked(ledgerStore.saveLedger).mockImplementation((next) => { ledger = next; });
+      vi.mocked(ledgerStore.updateLedger).mockImplementation(async (mutator) => {
+        const mutation = mutator(ledger);
+        ledger = mutation.ledger;
+        return mutation;
+      });
+      vi.mocked(ledgerStore.saveRawFindings).mockReturnValue(join(projectCwd, 'raw-findings.json'));
+      vi.mocked(ledgerStore.saveManagerValidationReport).mockImplementation((report) => {
+        reports.push(report);
+        return join(projectCwd, 'manager-report.json');
+      });
+      queueAgentResponse(makeAgentResponse({
+        persona: 'ai-antipattern-review',
+        structuredOutput: { rawFindings: reviewerRawFindings },
+      }));
+      queueAgentResponse(makeAgentResponse({
+        persona: 'security-review',
+        structuredOutput: { rawFindings: [] },
+      }));
+      const actualContractIntake = await vi.importActual<typeof import('../core/workflow/findings/contract-intake.js')>(
+        '../core/workflow/findings/contract-intake.js',
+      );
+      vi.mocked(ingestFindingContractResults).mockImplementationOnce(actualContractIntake.ingestFindingContractResults);
+
+      await runner.runParallelStep(makeParallelStep(), makeState(), 'test task', 5, vi.fn());
+
+      expect(executeAgent).toHaveBeenCalledTimes(2);
+      expect(ingestFindingContractResults).toHaveBeenCalledOnce();
+      const intake = vi.mocked(ingestFindingContractResults).mock.calls[0]![0];
+      expect(intake.subResults[0]?.relationClarification).toBeUndefined();
+      expect(intake.subResults[0]?.response.structuredOutput?.rawFindings).toEqual(reviewerRawFindings);
+      expect(ledger.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('resolved');
+      expect(ledger.findings.every((finding) => finding.provisional === undefined)).toBe(true);
+      expect(reports.at(-1)?.unsupportedRawFindings?.some(
+        (entry) => entry.rawFindingId.endsWith(':confirmation-resolved'),
+      )).toBe(true);
+      expect(reports.at(-1)?.rawNormalizations?.find(
+        (entry) => entry.rawFindingId.endsWith(':confirmation-resolved'),
+      )?.ambiguityCodes).toContain('confirmation-target-not-open');
+      expect(reports.at(-1)?.interpretationStats?.managerCalls).toBe(0);
+    } finally {
+      rmSync(projectCwd, { recursive: true, force: true });
     }
   });
 
