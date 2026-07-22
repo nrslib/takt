@@ -62,6 +62,9 @@ vi.mock('../infra/config/index.js', () => ({
   getLanguage: vi.fn(() => 'en'),
   resolveConfigValues: vi.fn(() => ({ syncConflictResolver: undefined })),
   resolveNonWorkflowProviderModel: mockResolveNonWorkflowProviderModel,
+  resolveNonWorkflowProviderOptions: vi.fn(() => ({
+    codex: { skills: { repo: false, user: false } },
+  })),
 }));
 
 vi.mock('../shared/prompts/index.js', () => ({

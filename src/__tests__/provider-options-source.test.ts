@@ -244,10 +244,27 @@ describe('resolveProviderOptionsSources (all paths)', () => {
   it('exposes the full list of tracked paths', () => {
     expect(PROVIDER_OPTION_PATHS).toContain('claude.effort');
     expect(PROVIDER_OPTION_PATHS).toContain('codex.reasoningEffort');
+    expect(PROVIDER_OPTION_PATHS).toContain('codex.skills.repo');
+    expect(PROVIDER_OPTION_PATHS).toContain('codex.skills.user');
     expect(PROVIDER_OPTION_PATHS).toContain('opencode.variant');
     expect(PROVIDER_OPTION_PATHS).toContain('opencode.allowedTools');
     expect(PROVIDER_OPTION_PATHS).toContain('copilot.effort');
     expect(PROVIDER_OPTION_PATHS).toContain('kiro.agent');
+  });
+
+  it('includes Codex Skill scope sources independently', () => {
+    const result = resolveProviderOptionsSources(
+      { codex: { skills: { user: true } } },
+      [],
+      { codex: { skills: { repo: true, user: false } } },
+      (path) => (path === 'codex.skills.repo' ? 'env' : 'default'),
+      'env',
+    );
+
+    expect(result).toEqual({
+      'codex.skills.repo': 'env',
+      'codex.skills.user': 'step',
+    });
   });
 
   it('includes kiro.agent in resolved sources when set', () => {

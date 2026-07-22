@@ -19,6 +19,10 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     onStream: options.onStream,
     openaiApiKey: options.openaiApiKey ?? resolveOpenaiApiKey(),
     baseUrl: options.providerOptions?.codex?.baseUrl,
+    skills: {
+      repo: options.providerOptions?.codex?.skills?.repo ?? false,
+      user: options.providerOptions?.codex?.skills?.user ?? false,
+    },
     codexPathOverride: resolveCodexCliPath(),
     outputSchema: options.outputSchema,
     imageAttachments: options.imageAttachments,

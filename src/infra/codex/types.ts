@@ -38,6 +38,11 @@ export interface CodexCallOptions {
   openaiApiKey?: string;
   /** OpenAI-compatible API base URL */
   baseUrl?: string;
+  /** Ambient Codex Skill scopes inherited by this call */
+  skills?: {
+    repo: boolean;
+    user: boolean;
+  };
   /** Override path to external Codex CLI binary (bypasses SDK vendored binary) */
   codexPathOverride?: string;
   /** JSON Schema for structured output */

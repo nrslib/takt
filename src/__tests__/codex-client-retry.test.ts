@@ -14,6 +14,7 @@ let runPlanIndex = 0;
 let startThreadCalls: Array<Record<string, unknown> | undefined> = [];
 let resumeThreadCalls: Array<{ threadId: string; options?: Record<string, unknown> }> = [];
 let runStreamedInputs: unknown[] = [];
+let codexConstructorCalls: Array<Record<string, unknown> | undefined> = [];
 const tempRoots = new Set<string>();
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_RECONNECT_FAILURE_MESSAGE = 'Reconnecting... 2/5 (timeout waiting for child process to exit)';
@@ -116,6 +117,10 @@ function createTempImage(fileName: string): string {
 vi.mock('@openai/codex-sdk', () => {
   return {
     Codex: class MockCodex {
+      constructor(options?: Record<string, unknown>) {
+        codexConstructorCalls.push(options);
+      }
+
       async startThread(options?: Record<string, unknown>) {
         startThreadCalls.push(options);
         return createThread('thread-1');
@@ -140,6 +145,7 @@ describe('CodexClient retry', () => {
     startThreadCalls = [];
     resumeThreadCalls = [];
     runStreamedInputs = [];
+    codexConstructorCalls = [];
   });
 
   afterEach(() => {
@@ -267,6 +273,57 @@ describe('CodexClient retry', () => {
     ]);
     expect(result.status).toBe('done');
     expect(result.content).toBe('retry succeeded');
+  });
+
+  it('retry と session resume に同じ Codex Skill override を適用する', async () => {
+    vi.useFakeTimers();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-codex-skill-retry-'));
+    tempRoots.add(root);
+    fs.mkdirSync(path.join(root, '.git'));
+    const skillDir = path.join(root, '.agents', 'skills', 'repo-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    const skillPath = path.join(skillDir, 'SKILL.md');
+    fs.writeFileSync(skillPath, '# repo-skill\n', 'utf-8');
+
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'turn.failed', error: { message: 'Selected model is at capacity.' } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: 'done' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+    const resultPromise = client.call('coder', 'prompt', {
+      cwd: root,
+      childProcessEnv: { HOME: path.join(root, 'home') },
+      skills: { repo: false, user: true },
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await resultPromise;
+    const expectedConfig = {
+      skills: {
+        config: [{ path: fs.realpathSync(skillPath), enabled: false }],
+      },
+    };
+
+    expect(result.status).toBe('done');
+    expect(resumeThreadCalls).toHaveLength(1);
+    expect(codexConstructorCalls).toHaveLength(2);
+    expect(codexConstructorCalls.map((options) => options?.config)).toEqual([
+      expectedConfig,
+      expectedConfig,
+    ]);
   });
 
   it('例外経路の at capacity を 1 秒、2 秒の指数バックオフで retry する', async () => {

@@ -638,7 +638,7 @@ Workflow `provider_options.extends` can load shared YAML presets by name. Names 
 
 `provider_options.extends` fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
 
-Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`.
+Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`.
 
 This allows mixing providers and models within a single workflow while keeping display names independent from provider selection.
 
@@ -691,6 +691,25 @@ provider_options:
 ```
 
 `network_access` can be set at step / `provider_routing` / deprecated `persona_providers` / `workflow_config` / project / global levels, with step having the highest priority. The environment variable `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` also works as an override.
+
+#### Codex Skill inheritance (`skills`)
+
+TAKT workflows do not inherit repository or user Codex Skills by default. Enable either scope explicitly when a workflow should use those environment-dependent instructions. `takt exec` is the exception: each scope defaults to inheritance when that scope is not explicitly configured, and the resolved values are written into the generated `.takt/exec/workflow.yaml`. The Assistant dialogue and generated workflow therefore use the same snapshot, and direct reruns using that generated path retain it. This does not add CLI resume support to exec runs. A `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` environment override supplied to a later invocation remains higher priority and intentionally replaces the stored value.
+
+```yaml
+provider_options:
+  codex:
+    skills:
+      repo: true
+      user: false
+```
+
+- `repo` covers `.agents/skills` directories from the Codex execution CWD through the repository root.
+- `user` covers `$HOME/.agents/skills` and the compatibility location `$CODEX_HOME/skills`. The `.system` directory below the compatibility location is excluded.
+- `false` discovers each `SKILL.md` in that scope, resolves symlinks to absolute paths, removes duplicates, and passes an exact `enabled: false` override to the Codex process.
+- `true` passes no enable override for that scope, so Codex's standard behavior and existing user configuration remain in effect.
+
+Discovery uses the same depth, directory, and entry limits as Codex. If a scan exceeds a limit, TAKT fails the provider call instead of applying a partial deny list. These settings do not modify the user's Codex config. ADMIN, SYSTEM, and Plugin Skills are outside their discovery roots and retain Codex's standard behavior. The settings use the normal provider-option leaf priority and apply unchanged to retries and resumed sessions.
 
 #### Claude Code sandbox control (`allow_unsandboxed_commands`)
 

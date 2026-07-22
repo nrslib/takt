@@ -25,6 +25,10 @@ export interface CodexProviderOptions {
   baseUrl?: string;
   networkAccess?: boolean;
   reasoningEffort?: CodexReasoningEffort;
+  skills?: {
+    repo?: boolean;
+    user?: boolean;
+  };
 }
 
 export interface OpenCodeProviderOptions {

@@ -381,6 +381,8 @@ Promotion is not supported on parallel sub-steps.
 | `provider_options.opencode.variant` | - | OpenCode model variant, passed through as a provider/model-specific string |
 | `provider_options.codex.base_url` | - | OpenAI-compatible base URL for Codex SDK constructor options (see [configuration guide](./configuration.md#provider-base-url-base_url)) |
 | `provider_options.codex.network_access` | - | Allow Codex sandbox to access the network (see [configuration guide](./configuration.md#network-access-network_access)) |
+| `provider_options.codex.skills.repo` | `false` | Inherit Codex Skills from `.agents/skills` between the execution CWD and repository root (see [configuration guide](./configuration.md#codex-skill-inheritance-skills)) |
+| `provider_options.codex.skills.user` | `false` | Inherit Codex Skills from user scope (see [configuration guide](./configuration.md#codex-skill-inheritance-skills)) |
 | `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Run Claude Bash outside the macOS Seatbelt sandbox (see [configuration guide](./configuration.md#claude-code-sandbox-control-allow_unsandboxed_commands)) |
 | `provider_options.kiro.agent` | - | Kiro CLI custom agent name passed as `kiro-cli chat --agent`. Steps without it use the Kiro CLI default agent |
 | `provider` | - | Override provider for this step (`claude`, `claude-sdk`, `claude-terminal`, `codex`, `opencode`, `cursor`, `copilot`, `kiro`, or `mock`) |

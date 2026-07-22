@@ -220,7 +220,7 @@ takt exec backend  # start from a named preset
 takt exec --list   # list available exec presets
 ```
 
-Preset lookup order is project `.takt/exec/presets/`, then global `$TAKT_CONFIG_DIR/exec/presets/` (or `~/.takt/exec/presets/` when unset), then builtin `builtins/exec/presets/`. Builtin/default presets define agent roles, facets, and loop thresholds only. Provider and model are resolved from normal TAKT configuration when exec mode starts, and the same resolved values are used for the Assistant dialogue, `/setup` display, and workflow generation. An exec config overrides provider/model only when it sets them explicitly. `effort` is emitted only when it is explicitly configured. Changes made in `/setup` are saved to `$TAKT_CONFIG_DIR/exec.yaml` (or `~/.takt/exec.yaml` when unset) for the next exec session.
+Preset lookup order is project `.takt/exec/presets/`, then global `$TAKT_CONFIG_DIR/exec/presets/` (or `~/.takt/exec/presets/` when unset), then builtin `builtins/exec/presets/`. Builtin/default presets define agent roles, facets, and loop thresholds only. Provider and model are resolved from normal TAKT configuration when exec mode starts, and the same resolved values are used for the Assistant dialogue, `/setup` display, and workflow generation. An exec config overrides provider/model only when it sets them explicitly. `effort` is emitted only when it is explicitly configured. Each Codex repository or user Skill scope is inherited when that scope is omitted; explicit `provider_options.codex.skills` values take precedence, and the resolved values are embedded in the generated workflow. Changes made in `/setup` are saved to `$TAKT_CONFIG_DIR/exec.yaml` (or `~/.takt/exec.yaml` when unset) for the next exec session.
 
 Inside exec mode:
 

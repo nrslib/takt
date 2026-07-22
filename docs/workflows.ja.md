@@ -380,6 +380,8 @@ promotion は並列サブ step ではサポートされません。
 | `provider_options.opencode.variant` | - | OpenCode の model variant。プロバイダー / model 固有の文字列としてパススルー |
 | `provider_options.codex.base_url` | - | Codex SDK constructor option 用の OpenAI 互換 base URL（[configuration ガイド](./configuration.ja.md#provider-base-url-base_url) 参照） |
 | `provider_options.codex.network_access` | - | Codex サンドボックスからのネットワークアクセスを許可（[configuration ガイド](./configuration.ja.md#ネットワークアクセス-network_access) 参照） |
+| `provider_options.codex.skills.repo` | `false` | 実行 CWD から repository root までの `.agents/skills` にある Codex Skill を継承（[configuration ガイド](./configuration.ja.md#codex-skill-の継承-skills) 参照） |
+| `provider_options.codex.skills.user` | `false` | user scope の Codex Skill を継承（[configuration ガイド](./configuration.ja.md#codex-skill-の継承-skills) 参照） |
 | `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Claude の Bash を macOS Seatbelt サンドボックス外で実行（[configuration ガイド](./configuration.ja.md#claude-code-の-sandbox-制御-allow_unsandboxed_commands) 参照） |
 | `provider_options.kiro.agent` | - | Kiro CLI の custom agent 名。`kiro-cli chat --agent` として渡される。未指定の step は Kiro CLI 側の default agent を使用 |
 | `provider` | - | この step の provider を上書き (`claude`, `claude-sdk`, `claude-terminal`, `codex`, `opencode`, `cursor`, `copilot`, `kiro`, `mock`) |

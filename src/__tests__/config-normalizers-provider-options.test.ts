@@ -106,6 +106,30 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
   });
 
+  it('should round-trip Codex Skill inheritance leaves', () => {
+    const rawProviderOptions = {
+      codex: {
+        skills: {
+          repo: false,
+          user: true,
+        },
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      codex: {
+        skills: {
+          repo: false,
+          user: true,
+        },
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
   it('should round-trip copilot effort through normalize and denormalize', () => {
     const rawProviderOptions = {
       copilot: {

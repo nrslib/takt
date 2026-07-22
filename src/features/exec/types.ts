@@ -2,6 +2,16 @@ import type { ProviderType } from '../../infra/providers/index.js';
 
 export type ExecEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+export interface ExecCodexSkillInheritance {
+  readonly repo: boolean;
+  readonly user: boolean;
+}
+
+export const DEFAULT_EXEC_CODEX_SKILL_INHERITANCE: ExecCodexSkillInheritance = {
+  repo: true,
+  user: true,
+};
+
 export interface ExecSessionConfig {
   provider?: ProviderType;
   model?: string;
