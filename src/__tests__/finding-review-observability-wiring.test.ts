@@ -72,7 +72,7 @@ function readSpanInstruction(span: ReadableSpan): string {
 }
 
 function readPromptSnapshotId(instruction: string): string {
-  const snapshotId = instruction.match(/unchanged: ([^\n]+)/)?.[1];
+  const snapshotId = instruction.match(/unchanged: ([0-9a-f]{64})\b/)?.[1];
   if (!snapshotId) {
     throw new Error('Expected reviewScopeSnapshotId in reviewer instruction');
   }

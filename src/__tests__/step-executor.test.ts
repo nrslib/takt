@@ -305,6 +305,57 @@ describe('StepExecutor', () => {
       5,
       1,
     );
+
+    const {
+      findingContractContext: _findingContractContext,
+      ...preparedExecutionWithoutFindingContractContext
+    } = preparedExecution;
+    await expect(executor.runNormalStep(
+      step,
+      state,
+      'review task',
+      5,
+      vi.fn(),
+      undefined,
+      undefined,
+      preparedExecutionWithoutFindingContractContext,
+    )).rejects.toThrow(`Prepared reviewer step "${step.name}" is missing finding contract context`);
+
+    const {
+      rawFindingsStructuredOutput: _rawFindingsStructuredOutput,
+      ...findingContractContextWithoutStructuredOutput
+    } = findingContractContext;
+    await expect(executor.runNormalStep(
+      step,
+      state,
+      'review task',
+      5,
+      vi.fn(),
+      undefined,
+      undefined,
+      {
+        ...preparedExecution,
+        findingContractContext: findingContractContextWithoutStructuredOutput,
+      },
+    )).rejects.toThrow(`Prepared reviewer step "${step.name}" is missing raw findings structured output`);
+
+    await expect(executor.runNormalStep(
+      step,
+      state,
+      'review task',
+      5,
+      vi.fn(),
+      undefined,
+      undefined,
+      {
+        ...preparedExecution,
+        executableStep: {
+          ...preparedExecution.executableStep,
+          structuredOutput: createRawFindingsStructuredOutput('review-snapshot-single'),
+        },
+      },
+    )).rejects.toThrow(`Prepared reviewer step "${step.name}" has mismatched structured output`);
+
     const result = await executor.runNormalStep(
       step,
       state,
