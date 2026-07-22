@@ -82,6 +82,7 @@ describe('unverifiable propagation', () => {
 
     expect(() => evaluateRawAdmission({
       cwd: '/project',
+      reviewScopeSnapshotId: 'snapshot',
       previousLedger: ledger,
       intake: {
         items: [{ canonical, wire: toLedgerRawFinding(canonical) }],

@@ -8,6 +8,7 @@ import type {
 import { runManagerDecisionStage } from './manager-decision.js';
 import { prepareFindingManagerRound } from './manager-preparation.js';
 import { retainInterpretationRecoveryForLadder } from './interpretation-recovery.js';
+import { computeReviewScopeSnapshotId } from './snapshot.js';
 
 const log = createLogger('finding-manager-runner');
 
@@ -19,15 +20,17 @@ export type {
 export {
   FINDING_MANAGER_SCHEMA_REF,
   RAW_FINDINGS_SCHEMA_REF,
-  RawFindingsStructuredOutput,
+  createRawFindingsStructuredOutput,
 } from './manager-decision.js';
 
 export async function runFindingManagerForStep(
   input: RunFindingManagerForStepInput,
 ): Promise<FindingManagerRunResult> {
+  const reviewScopeSnapshotId = computeReviewScopeSnapshotId(input.cwd);
   const prepared = prepareFindingManagerRound(input);
   const admission = retainInterpretationRecoveryForLadder(evaluateRawAdmission({
     cwd: input.cwd,
+    reviewScopeSnapshotId,
     previousLedger: prepared.previousLedger,
     intake: prepared.intake,
   }), prepared.intake);
@@ -39,6 +42,7 @@ export async function runFindingManagerForStep(
     ledgerCopyPath: prepared.ledgerCopyPath,
     rawFindingsPath: prepared.rawFindingsPath,
     observation: prepared.observation,
+    reviewScopeSnapshotId,
   });
   const committed = await commitFindingManagerRound({
     input,
@@ -51,6 +55,7 @@ export async function runFindingManagerForStep(
     stopBudgetLimits: prepared.stopBudgetLimits,
     stopBudgetRoundMarker: prepared.stopBudgetRoundMarker,
     reviewIntegrityLimits: prepared.reviewIntegrityLimits,
+    reviewScopeSnapshotId,
   });
 
   log.info('Finding contract intake completed', {

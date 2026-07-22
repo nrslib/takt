@@ -133,6 +133,18 @@ export interface StepExecutorDeps {
   ) => void;
 }
 
+/**
+ * 通常 agent ステップを実行前に確定した結果。RunLoop の観測イベント、
+ * StepExecutor、provider がこの同じ値を共有する。
+ */
+export interface PreparedNormalStepExecution {
+  readonly executableStep: AgentWorkflowStep;
+  readonly findingContractContext?: FindingContractInstructionContext;
+  readonly phase1Instruction: string;
+  readonly priorStepResponseText?: string;
+  readonly stepIteration: number;
+}
+
 export class StepExecutor {
   private readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
 
@@ -314,6 +326,43 @@ export class StepExecutor {
       step.structuredOutput.schema,
       this.deps.getLanguage() ?? 'en',
     );
+  }
+
+  prepareNormalStepExecution(
+    step: WorkflowStep,
+    state: WorkflowState,
+    task: string,
+    maxSteps: number | 'infinite',
+    stepIteration: number,
+    runtime?: RuntimeStepResolution,
+  ): PreparedNormalStepExecution {
+    const findingContractIntakeStep = this.resolveFindingContractIntakeStep(step);
+    const findingContractContext = findingContractIntakeStep
+      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(findingContractIntakeStep, true)
+      : this.buildFindingContractInstructionContext(step, undefined);
+    const executableStep = findingContractIntakeStep
+      ? withFindingContractStructuredOutput(
+          findingContractIntakeStep,
+          findingContractContext,
+        )
+      : step as AgentWorkflowStep;
+    const instruction = this.buildInstruction(
+      executableStep,
+      stepIteration,
+      state,
+      task,
+      maxSteps,
+      undefined,
+      findingContractContext,
+    );
+
+    return {
+      executableStep,
+      ...(findingContractContext !== undefined ? { findingContractContext } : {}),
+      phase1Instruction: this.buildPhase1Instruction(instruction, executableStep, runtime),
+      ...(state.lastOutput?.content !== undefined ? { priorStepResponseText: state.lastOutput.content } : {}),
+      stepIteration,
+    };
   }
 
   /**
@@ -662,37 +711,49 @@ export class StepExecutor {
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     prebuiltInstruction?: string,
     runtime?: RuntimeStepResolution,
+    preparedExecution?: PreparedNormalStepExecution,
   ): Promise<StepRunResult> {
     await waitForStepDelay(step);
-    const stepIteration = prebuiltInstruction
+    const stepIteration = preparedExecution?.stepIteration ?? (prebuiltInstruction
       ? state.stepIterations.get(step.name) ?? 1
-      : incrementStepIteration(state, step.name);
+      : incrementStepIteration(state, step.name));
 
-    // Finding Contract の単独ステップ取り込み。対象なら raw findings の構造化
-    // 出力を強制し、Phase 1 の結果をルール評価の前に台帳へ反映する
-    // （ParallelRunner の findingLedgerCopyPath 準備と同じタイミング）。
     const findingContractIntakeStep = this.resolveFindingContractIntakeStep(step);
-    const findingContractContext = findingContractIntakeStep
-      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(findingContractIntakeStep, true)
-      : undefined;
-    const executableStep = findingContractIntakeStep && findingContractContext
-      ? withFindingContractStructuredOutput(findingContractIntakeStep, findingContractContext.ledgerCopyPath)
-      : step;
+    if (findingContractIntakeStep !== undefined) {
+      if (preparedExecution === undefined) {
+        throw new Error(
+          `Finding contract reviewer step "${step.name}" requires prepared execution input`,
+        );
+      }
+      if (preparedExecution.findingContractContext === undefined) {
+        throw new Error(`Prepared reviewer step "${step.name}" is missing finding contract context`);
+      }
+      const structuredOutput = preparedExecution.findingContractContext.rawFindingsStructuredOutput;
+      if (structuredOutput === undefined) {
+        throw new Error(`Prepared reviewer step "${step.name}" is missing raw findings structured output`);
+      }
+      if (preparedExecution.executableStep.structuredOutput !== structuredOutput) {
+        throw new Error(`Prepared reviewer step "${step.name}" has mismatched structured output`);
+      }
+    }
+    const findingContractContext = preparedExecution?.findingContractContext;
+    const executableStep = preparedExecution?.executableStep ?? step;
     // 直前ステップ（通常は coder の fix）の応答。異議申告の裁定材料として
     // manager に渡すため、Phase 1 実行で lastOutput が上書きされる前に捕捉する
     // （ParallelRunner の priorStepResponseText 捕捉と同じタイミング）。
-    const priorStepResponseText = state.lastOutput?.content;
+    const priorStepResponseText = preparedExecution?.priorStepResponseText ?? state.lastOutput?.content;
 
-    const instruction = prebuiltInstruction ?? this.buildInstruction(
-      executableStep,
-      stepIteration,
-      state,
-      task,
-      maxSteps,
-      undefined,
-      findingContractContext,
-    );
-    const phase1Instruction = this.buildPhase1Instruction(instruction, executableStep, runtime);
+    const instruction = preparedExecution?.phase1Instruction
+      ?? prebuiltInstruction
+      ?? this.buildInstruction(
+        executableStep,
+        stepIteration,
+        state,
+        task,
+        maxSteps,
+      );
+    const phase1Instruction = preparedExecution?.phase1Instruction
+      ?? this.buildPhase1Instruction(instruction, executableStep, runtime);
     const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(executableStep, runtime);
     const sessionKey = buildSessionKey(executableStep, providerInfo.provider);
     log.debug('Running step', {

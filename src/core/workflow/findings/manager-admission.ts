@@ -11,7 +11,6 @@ import {
   type ReviewerAnomalyPromotionCandidate,
   type ReviewerAnomalySpec,
 } from './reviewer-anomalies.js';
-import { computeReviewScopeSnapshotId } from './snapshot.js';
 import { isLocationClaimAbsent, verifySourceQuoteEvidence } from './admission-validation.js';
 
 export interface CanonicalIntakeItem {
@@ -206,6 +205,7 @@ function definedValues<T>(items: readonly (T | undefined)[]): T[] {
 
 export function evaluateRawAdmission(input: {
   cwd: string;
+  reviewScopeSnapshotId: string;
   previousLedger: FindingLedger;
   intake: ReviewerIntakeResult;
 }): RawAdmissionEvaluation {
@@ -217,18 +217,17 @@ export function evaluateRawAdmission(input: {
   );
   const tainted = nonOverflow.filter((item) => item.canonical.provenance.ambiguityOrigin);
   const previousFindingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
-  const reviewScopeSnapshotId = computeReviewScopeSnapshotId(input.cwd);
   const evaluations = [
     ...clean.map((item) => evaluateAdmissionItem({
       cwd: input.cwd,
-      reviewScopeSnapshotId,
+      reviewScopeSnapshotId: input.reviewScopeSnapshotId,
       item,
       pool: 'clean',
       previousFindingsById,
     })),
     ...tainted.map((item) => evaluateAdmissionItem({
       cwd: input.cwd,
-      reviewScopeSnapshotId,
+      reviewScopeSnapshotId: input.reviewScopeSnapshotId,
       item,
       pool: 'tainted',
       previousFindingsById,

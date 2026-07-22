@@ -647,6 +647,60 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(persistedLedger.findings.some((f) => f.title === 'Secret is logged' && f.status === 'open')).toBe(true);
   });
 
+  it('fallback retry の単独 reviewer prompt に fallback notice を保持する', async () => {
+    const config: WorkflowConfig = {
+      name: 'single-reviewer-fallback-notice',
+      maxSteps: 2,
+      initialStep: 'review',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+      },
+      steps: [makeStep({
+        name: 'review',
+        persona: 'reviewer',
+        instruction: 'Review the implementation.',
+        outputContracts: [{ name: 'review.md', format: 'resolved facet body', formatRef: 'review-finding-contract' }],
+        rules: [makeRule('when(true)', 'COMPLETE')],
+      })],
+    };
+    const prompts: string[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      prompts.push(instruction);
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      if (prompts.length === 1) {
+        return {
+          persona,
+          status: 'rate_limited',
+          content: '',
+          error: 'Rate limit exceeded.',
+          rateLimitInfo: { provider: 'claude', detectedAt: new Date(), source: 'stream_marker' },
+          timestamp: new Date(),
+        };
+      }
+      return {
+        persona,
+        status: 'done',
+        content: 'No findings.',
+        structuredOutput: { rawFindings: [] },
+        timestamp: new Date(),
+      };
+    });
+
+    const result = await new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      rateLimitFallback: { switchChain: [{ provider: 'codex', model: 'gpt-5' }] },
+    }).run();
+
+    expect(result.status).toBe('completed');
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('## Notice: This Step Is A Fallback Execution');
+    expect(prompts[1]).toContain('Previous provider/model: claude');
+  });
+
   it('projectCwd 側の ledger を rule 評価の正本として信頼する', async () => {
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
     mkdirSync(join(resolveFindingLedgerRoot(cwd), '.takt', 'findings'), { recursive: true });

@@ -38,6 +38,7 @@ export {
   parseRawFindings,
   parseReviewerRawFindings,
   toAmbiguousInterpretation,
+  createRawFindingsOutputJsonSchema,
 } from '../../models/finding-schemas.js';
 
 export type { ParsedAmbiguousInterpretation } from '../../models/finding-schemas.js';

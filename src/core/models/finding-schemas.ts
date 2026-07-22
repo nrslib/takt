@@ -991,6 +991,38 @@ export const RawFindingsOutputJsonSchema = {
 } as const;
 
 /**
+ * native structured output に渡す raw findings schema を、現在の review scope に
+ * 束縛して生成する。locationless の空文字と source_quote の現在 snapshot だけを
+ * 許可し、evidenceKind との意味的な対応は admission 層で引き続き検証する。
+ */
+export function createRawFindingsOutputJsonSchema(reviewScopeSnapshotId: string) {
+  if (!reviewScopeSnapshotId) {
+    throw new Error('reviewScopeSnapshotId is required to create the raw findings output schema');
+  }
+  const rawFindings = RawFindingsOutputJsonSchema.properties.rawFindings;
+  const rawFindingItem = rawFindings.items;
+  return {
+    ...RawFindingsOutputJsonSchema,
+    properties: {
+      ...RawFindingsOutputJsonSchema.properties,
+      rawFindings: {
+        ...rawFindings,
+        items: {
+          ...rawFindingItem,
+          properties: {
+            ...rawFindingItem.properties,
+            snapshotId: {
+              ...rawFindingItem.properties.snapshotId,
+              enum: ['', reviewScopeSnapshotId],
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+/**
  * post-hoc 検証専用の raw findings schema（review-integrity requirement対応）。
  *
  * RawFindingsOutputJsonSchema（provider-facing、strict 様式）と役割を分離する:

@@ -13,7 +13,18 @@ vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
 }));
 
+vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/findings/contract-intake.js')>();
+  return {
+    ...actual,
+    ingestFindingContractResults: vi.fn().mockResolvedValue({ status: 'updated' }),
+  };
+});
+
 import { executeAgent } from '../agents/agent-usecases.js';
+import { ingestFindingContractResults } from '../core/workflow/findings/contract-intake.js';
+import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
+import { RawFindingsOutputValidationJsonSchema } from '../core/models/finding-schemas.js';
 
 function makeState(): WorkflowState {
   return {
@@ -156,6 +167,162 @@ describe('StepExecutor', () => {
       undefined,
       3,
     );
+  });
+
+  it('単独 reviewer は snapshot A/B 不一致を拒否し、準備済みの同一 structured output 契約を prompt と provider に渡す', async () => {
+    const structuredOutput = createRawFindingsStructuredOutput('review-snapshot-single');
+    expect(structuredOutput.validationSchema).toBe(RawFindingsOutputValidationJsonSchema);
+    const findingContractContext = {
+      ledgerCopyPath: '.takt/runs/test-run/reports/findings-ledger.json',
+      ledgerSummary: { findings: [] },
+      reportLedgerSummary: { ids: [] },
+      hasOpenFindings: false,
+      hasWaivedFindings: false,
+      hasDismissedFindings: false,
+      rawFindingsStructuredOutput: structuredOutput,
+      reviewScopeSnapshotId: 'review-snapshot-single',
+    };
+    let agentCallCount = 0;
+    vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: 'system prompt',
+        userInstruction: prompt,
+      });
+      if (agentCallCount++ > 0) {
+        return {
+          persona: 'reviewer',
+          status: 'done',
+          content: '[]',
+          timestamp: new Date('2026-07-22T00:00:01.000Z'),
+        };
+      }
+      return {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'No findings.',
+        structuredOutput: { rawFindings: [] },
+        timestamp: new Date('2026-07-22T00:00:00.000Z'),
+      };
+    });
+    const step = makeStep({
+      name: 'review',
+      persona: 'reviewer',
+      instruction: 'Review the implementation.',
+      outputContracts: [{ name: 'findings.json', format: 'json', formatRef: 'review-finding-contract' }],
+    });
+    const buildAgentOptions = vi.fn().mockReturnValue({});
+    const buildFindingContractInstructionContext = vi.fn().mockReturnValue(findingContractContext);
+    const deps: StepExecutorDeps = {
+      optionsBuilder: {
+        buildAgentOptions,
+        buildPhaseRunnerContext: vi.fn().mockReturnValue({
+          cwd,
+          reportDir: '.takt/reports',
+          language: 'en',
+          lastResponse: 'No findings.',
+          getSessionId: () => undefined,
+          resolveSessionKey: () => 'reviewer:claude',
+          buildResumeOptions: () => ({}),
+          buildNewSessionReportOptions: () => ({}),
+          buildFallbackReportOptions: () => undefined,
+          resolveReportFallbackProviderModel: () => undefined,
+          updatePersonaSession: vi.fn(),
+          resolveStepProviderModel: () => ({ provider: 'claude', model: 'claude-sonnet' }),
+        }),
+        buildFindingContractInstructionContext,
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
+      } as unknown as StepExecutorDeps['optionsBuilder'],
+      getCwd: () => cwd,
+      getProjectCwd: () => cwd,
+      getReportDir: () => '.takt/reports',
+      getRunPaths: () => runPaths,
+      getLanguage: () => 'en',
+      getInteractive: () => false,
+      getWorkflowSteps: () => [{ name: 'review' }],
+      getWorkflowDefinitionSteps: () => [step],
+      getWorkflowName: () => 'test-workflow',
+      getWorkflowDescription: () => undefined,
+      getInheritedPeerReportPaths: () => [],
+      getRetryNote: () => undefined,
+      structuredCaller: {
+        evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
+      },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+      findingContract: {
+        ledgerPath: '.takt/findings/ledger.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'Return JSON.' },
+      },
+      findingLedgerStore: {
+        workflowName: 'test-workflow',
+        loadLedger: vi.fn().mockReturnValue({
+          version: 1,
+          workflowName: 'test-workflow',
+          nextId: 1,
+          updatedAt: '2026-07-22T00:00:00.000Z',
+          findings: [],
+          rawFindings: [],
+          conflicts: [],
+        }),
+      } as unknown as StepExecutorDeps['findingLedgerStore'],
+      refreshFindingsState: vi.fn(),
+      emitEvent: vi.fn(),
+      recordSynthesizedAgentUsage: vi.fn(),
+      getRunId: () => 'run',
+      getFindingCallNamespace: () => '',
+      onPhaseComplete: vi.fn(),
+    };
+
+    mkdirSync(join(cwd, '.takt/reports'), { recursive: true });
+
+    const executor = new StepExecutor(deps);
+    const state = makeState();
+
+    buildFindingContractInstructionContext.mockReturnValueOnce({
+      ...findingContractContext,
+      reviewScopeSnapshotId: 'prompt-snapshot-B',
+    });
+    expect(() => executor.prepareNormalStepExecution(
+      step,
+      state,
+      'review task',
+      5,
+      1,
+    )).toThrow(/snapshotId enum.*exactly/);
+
+    await expect(executor.runNormalStep(
+      step,
+      state,
+      'review task',
+      5,
+      vi.fn(),
+    )).rejects.toThrow('requires prepared execution input');
+
+    const preparedExecution = executor.prepareNormalStepExecution(
+      step,
+      state,
+      'review task',
+      5,
+      1,
+    );
+    const result = await executor.runNormalStep(
+      step,
+      state,
+      'review task',
+      5,
+      vi.fn(),
+      undefined,
+      undefined,
+      preparedExecution,
+    );
+
+    expect(buildFindingContractInstructionContext).toHaveBeenCalledWith(step, true);
+    expect(buildAgentOptions).toHaveBeenCalledWith(expect.objectContaining({
+      structuredOutput,
+    }), undefined);
+    expect(result.instruction).toContain('review-snapshot-single');
+    expect(result.instruction).toContain(JSON.stringify(structuredOutput.schema, null, 2));
+    expect(ingestFindingContractResults).toHaveBeenCalledOnce();
   });
 
   it('provider が未解決なら structured_output を fail fast にする', () => {

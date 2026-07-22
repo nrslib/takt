@@ -22,9 +22,10 @@ export interface FindingContractInstructionInput {
 
 export function buildFindingContractInstruction(input: FindingContractInstructionInput): string {
   const { contract, language, renderFencedJsonBlock } = input;
-  const isReviewer = Boolean(contract.rawFindingsJsonSchema);
+  const rawFindingsStructuredOutput = contract.rawFindingsStructuredOutput;
+  const isReviewer = rawFindingsStructuredOutput !== undefined;
 
-  // review-integrity protocol: rawFindingsJsonSchema と reviewScopeSnapshotId は同じ
+  // review-integrity protocol: rawFindingsStructuredOutput と reviewScopeSnapshotId は同じ
   // includeRawFindingsSchema 条件下で必ずセットで生成される（WorkflowEngineSetup.ts
   // の buildFindingContractInstructionContext 参照）。reviewer 用の
   // FindingContractInstructionContext を組む経路が reviewScopeSnapshotId の配線を
@@ -41,8 +42,8 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
   if (isReviewer && !contract.reviewScopeSnapshotId) {
     throw new Error(
       'Finding contract reviewer instruction is missing reviewScopeSnapshotId even though '
-      + 'rawFindingsJsonSchema is present. This is a wiring bug in the caller that built the '
-      + 'FindingContractInstructionContext: rawFindingsJsonSchema and reviewScopeSnapshotId must '
+      + 'rawFindingsStructuredOutput is present. This is a wiring bug in the caller that built the '
+      + 'FindingContractInstructionContext: rawFindingsStructuredOutput and reviewScopeSnapshotId must '
       + 'always be set together (see WorkflowEngineSetup.buildFindingContractInstructionContext). '
       + 'Build the context via optionsBuilder.buildFindingContractInstructionContext(step, true) '
       + 'instead of constructing it inline.',
@@ -56,8 +57,8 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
     reviewerHasOpenFindings: isReviewer && contract.hasOpenFindings,
     reviewerHasWaivedFindings: isReviewer && contract.hasWaivedFindings,
     reviewerHasDismissedFindings: isReviewer && contract.hasDismissedFindings,
-    rawFindingsJsonSchema: contract.rawFindingsJsonSchema
-      ? renderFencedJsonBlock(contract.rawFindingsJsonSchema)
+    rawFindingsJsonSchema: rawFindingsStructuredOutput
+      ? renderFencedJsonBlock(rawFindingsStructuredOutput.schema)
       : '',
     // review-integrity protocol: reviewer step のときだけ設定される（instruction-context.ts
     // 参照）。空文字は「該当なし」— テンプレート側は isReviewer と一緒にしか

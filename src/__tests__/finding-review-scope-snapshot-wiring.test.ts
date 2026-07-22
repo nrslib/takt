@@ -17,6 +17,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import type { AgentResponse, FindingContractConfig, WorkflowState, WorkflowStep } from '../core/models/types.js';
 import type { FindingContractInstructionContext } from '../core/workflow/instruction/instruction-context.js';
+import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
 import { makeRule, makeStep } from './test-helpers.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -124,10 +125,26 @@ function makeFindingContractContext(
     hasOpenFindings: false,
     hasWaivedFindings: false,
     hasDismissedFindings: false,
-    rawFindingsJsonSchema: { type: 'object' },
+    rawFindingsStructuredOutput: createRawFindingsStructuredOutput('round-snapshot-abc123'),
     reviewScopeSnapshotId: 'round-snapshot-abc123',
     ...overrides,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getSnapshotIdEnum(context: FindingContractInstructionContext): unknown {
+  const properties = context.rawFindingsStructuredOutput?.schema.properties;
+  if (!isRecord(properties) || !isRecord(properties.rawFindings)) {
+    return undefined;
+  }
+  const items = properties.rawFindings.items;
+  if (!isRecord(items) || !isRecord(items.properties) || !isRecord(items.properties.snapshotId)) {
+    return undefined;
+  }
+  return items.properties.snapshotId.enum;
 }
 
 function makeRunner(options: { withFindingContract?: boolean } = {}): {
@@ -234,7 +251,39 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       const findingContractArg = call[6] as FindingContractInstructionContext | undefined;
       expect(findingContractArg?.reviewScopeSnapshotId).toBe('round-snapshot-abc123');
       expect(findingContractArg?.ledgerCopyPath).toBe('.takt/runs/test/reports/findings-ledger.json');
+      if (!findingContractArg) {
+        throw new Error('Expected finding contract context');
+      }
+      expect(getSnapshotIdEnum(findingContractArg)).toEqual(['', 'round-snapshot-abc123']);
     }
+
+    const outputContract = vi.mocked(deps.optionsBuilder.buildFindingContractInstructionContext).mock.results[0]?.value
+      ?.rawFindingsStructuredOutput;
+    expect(outputContract).toBeDefined();
+    for (const call of vi.mocked(deps.optionsBuilder.buildAgentOptions).mock.calls) {
+      const executableStep = call[0] as WorkflowStep;
+      expect(executableStep.structuredOutput).toBe(outputContract);
+      expect(executableStep.structuredOutput?.schema).toBe(outputContract?.schema);
+    }
+  });
+
+  it('rejects a parallel reviewer context when the schema snapshot enum is A but the prompt snapshot token is B', async () => {
+    const { runner, deps } = makeRunner();
+    vi.mocked(deps.optionsBuilder.buildFindingContractInstructionContext).mockReturnValue(
+      makeFindingContractContext({ reviewScopeSnapshotId: 'prompt-snapshot-B' }),
+    );
+
+    const result = await runner.runParallelStep(
+      makeParallelStep(),
+      makeState(),
+      'test task',
+      5,
+      vi.fn(),
+    );
+
+    expect(result.response.status).toBe('error');
+    expect(result.response.error).toMatch(/snapshotId enum.*exactly/);
+    expect(executeAgent).not.toHaveBeenCalled();
   });
 
   it('does not call optionsBuilder.buildFindingContractInstructionContext when the workflow has no finding_contract configured', async () => {
@@ -244,8 +293,9 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     queueAgentResponse(makeAgentResponse({ persona: 'ai-antipattern-review', content: '[STEP:1] approved' }));
     queueAgentResponse(makeAgentResponse({ persona: 'security-review', content: '[STEP:1] approved' }));
 
-    await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
+    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
+    expect(result.response.status).toBe('done');
     expect(deps.optionsBuilder.buildFindingContractInstructionContext).not.toHaveBeenCalled();
     const buildInstructionCalls = vi.mocked(deps.stepExecutor.buildInstruction).mock.calls;
     for (const call of buildInstructionCalls) {

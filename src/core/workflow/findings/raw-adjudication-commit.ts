@@ -109,12 +109,14 @@ export function applyRawAdjudicationRecovery(input: {
   recovery: RawAdjudicationRecoveryResult;
   runInput: RunFindingManagerForStepInput;
   observation: FindingObservation;
+  reviewScopeSnapshotId: string;
 }): FindingLedger {
   if (input.recovery.origins.size === 0) {
     return input.freshLedger;
   }
   const admission = evaluateRawAdmission({
     cwd: input.runInput.cwd,
+    reviewScopeSnapshotId: input.reviewScopeSnapshotId,
     previousLedger: input.freshLedger,
     intake: input.recovery.intake,
   });

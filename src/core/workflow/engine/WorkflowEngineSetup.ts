@@ -26,7 +26,7 @@ import type { WorkflowCallChildEngine } from '../types.js';
 import type { StructuredOutputNormalizerRegistry } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import type { FindingLedgerStore } from '../findings/store.js';
-import { RawFindingsStructuredOutput } from '../findings/manager-runner.js';
+import { createRawFindingsStructuredOutput } from '../findings/manager-runner.js';
 import {
   ledgerHasDismissedFindings,
   ledgerHasOpenFindings,
@@ -157,6 +157,17 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     }
 
     const ledger = params.findingLedgerStore.loadLedger();
+    let reviewerContext: Pick<
+      FindingContractInstructionContext,
+      'rawFindingsStructuredOutput' | 'reviewScopeSnapshotId'
+    > | undefined;
+    if (includeRawFindingsSchema) {
+      const reviewScopeSnapshotId = computeReviewScopeSnapshotId(params.getCwd());
+      reviewerContext = {
+        rawFindingsStructuredOutput: createRawFindingsStructuredOutput(reviewScopeSnapshotId),
+        reviewScopeSnapshotId,
+      };
+    }
     return {
       ledgerCopyPath: params.findingLedgerStore.createRunCopy(),
       ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
@@ -164,17 +175,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       hasOpenFindings: ledgerHasOpenFindings(ledger),
       hasWaivedFindings: ledgerHasWaivedFindings(ledger),
       hasDismissedFindings: ledgerHasDismissedFindings(ledger),
-      ...(includeRawFindingsSchema
-        ? {
-            rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,
-            // review-integrity protocol: このラウンドの reviewer 全員へ同じ snapshot id を
-            // 配る。manager-runner.ts の runFindingManagerForStep が同じ cwd に
-            // 対して同じ関数をもう一度呼び、reviewer 呼び出しと検証呼び出しの
-            // 間に書き込みが起きない通常経路では同じ値になる（値の一致で
-            // 「reviewer が見た版のまま」を確認する — snapshot.ts 参照）。
-            reviewScopeSnapshotId: computeReviewScopeSnapshotId(params.getCwd()),
-          }
-        : {}),
+      ...reviewerContext,
     };
   };
 
