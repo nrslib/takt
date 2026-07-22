@@ -32,8 +32,8 @@ vi.mock('../infra/resources/schema-loader.js', () => ({
     properties: { matched_index: { type: 'integer' }, reason: { type: 'string' } },
     additionalProperties: false,
   })),
-  loadDecompositionSchema: vi.fn((maxTotalParts: number) => ({ type: 'decomposition', maxTotalParts })),
-  loadMorePartsSchema: vi.fn((maxAdditionalParts: number) => ({ type: 'more-parts', maxAdditionalParts })),
+  loadDecompositionSchema: vi.fn((maxInitialParts?: number) => ({ type: 'decomposition', maxInitialParts })),
+  loadMorePartsSchema: vi.fn(() => ({ type: 'more-parts' })),
 }));
 
 vi.mock('../core/workflow/engine/task-decomposer.js', () => ({
@@ -581,7 +581,7 @@ describe('agent-usecases', () => {
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({
       allowedTools: [],
       permissionMode: 'readonly',
-      outputSchema: { type: 'decomposition', maxTotalParts: 3 },
+      outputSchema: { type: 'decomposition', maxInitialParts: 3 },
     }));
     const [, , callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
     expect(callOptions).not.toHaveProperty('maxTurns');
@@ -603,7 +603,7 @@ describe('agent-usecases', () => {
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({
       allowedTools: ['Read', 'Glob', 'Grep'],
       permissionMode: 'readonly',
-      outputSchema: { type: 'decomposition', maxTotalParts: 3 },
+      outputSchema: { type: 'decomposition', maxInitialParts: 3 },
     }));
   });
 
@@ -770,7 +770,6 @@ describe('agent-usecases', () => {
       'original instruction',
       [{ id: 'p1', title: 'Part 1', status: 'done', content: 'done' }],
       ['p1', 'p2'],
-      2,
       { cwd: '/repo', persona: 'team-leader' },
     );
 
@@ -781,7 +780,7 @@ describe('agent-usecases', () => {
     });
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.stringContaining('original instruction'), expect.objectContaining({
       allowedTools: [],
-      outputSchema: { type: 'more-parts', maxAdditionalParts: 2 },
+      outputSchema: { type: 'more-parts' },
       permissionMode: 'readonly',
     }));
     const [, , callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
@@ -799,17 +798,16 @@ describe('agent-usecases', () => {
       'original instruction',
       [{ id: 'p1', title: 'Part 1', status: 'done', content: 'done' }],
       ['p1'],
-      2,
       {
         cwd: '/repo',
         persona: 'team-leader',
         inspectTools: ['Read', 'Glob', 'Grep'],
-      } as Parameters<typeof requestMoreParts>[4] & { inspectTools: string[] },
+      } as Parameters<typeof requestMoreParts>[3] & { inspectTools: string[] },
     );
 
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({
       allowedTools: [],
-      outputSchema: { type: 'more-parts', maxAdditionalParts: 2 },
+      outputSchema: { type: 'more-parts' },
       permissionMode: 'readonly',
     }));
   });
@@ -827,7 +825,6 @@ describe('agent-usecases', () => {
       'instruction',
       [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
       ['p1'],
-      1,
       { cwd: '/repo', persona: 'team-leader' },
     )).rejects.toThrow('Team leader feedback failed: timeout');
   });
@@ -853,7 +850,6 @@ describe('agent-usecases', () => {
       'instruction',
       [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
       ['p1'],
-      1,
       {
         cwd: '/repo',
         abortSignal: abortController.signal,
@@ -890,7 +886,6 @@ describe('agent-usecases', () => {
       'instruction',
       [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
       ['p1'],
-      1,
       {
         cwd: '/repo',
         persona: 'team-leader',
@@ -919,7 +914,6 @@ describe('agent-usecases', () => {
       'instruction',
       [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
       ['p1'],
-      1,
       {
         cwd: '/repo',
         persona: 'team-leader',
@@ -945,7 +939,6 @@ describe('agent-usecases', () => {
       'instruction',
       [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
       ['p1'],
-      1,
       {
         cwd: '/repo',
         persona: 'team-leader',

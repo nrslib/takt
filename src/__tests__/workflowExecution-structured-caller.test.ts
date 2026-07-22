@@ -1186,7 +1186,6 @@ steps:
       'break down the work',
       [{ id: 'part-1', title: 'API', status: 'done', content: 'Implemented API' }],
       ['part-1'],
-      2,
       { cwd: '/tmp/project', resolvedProvider: 'cursor', resolvedModel: 'cursor-fast', persona: 'team-leader' },
     );
 
@@ -1231,7 +1230,6 @@ steps:
       'break down the work',
       [{ id: 'part-1', title: 'API', status: 'done', content: 'Implemented API' }],
       ['part-1'],
-      2,
       { cwd: '/tmp/project', resolvedProvider: 'claude', resolvedModel: 'sonnet', persona: 'team-leader' },
     );
 

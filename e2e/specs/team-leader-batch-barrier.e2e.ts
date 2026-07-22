@@ -101,14 +101,16 @@ describe('E2E: Team leader batch barrier', () => {
         ? [index]
         : [],
     );
-    const initialMemberCompletionIndexes = calls.flatMap((call, index) =>
+    const memberCompletionIndexes = calls.flatMap((call, index) =>
       call.event === 'complete' && call.personaName === 'agents/test-coder'
         ? [index]
         : [],
-    ).slice(0, 2);
+    );
+    const initialMemberCompletionIndexes = memberCompletionIndexes.slice(0, 2);
 
-    expect(leaderStartIndexes).toHaveLength(2);
-    expect(initialMemberCompletionIndexes).toHaveLength(2);
+    expect(leaderStartIndexes).toHaveLength(3);
+    expect(memberCompletionIndexes).toHaveLength(4);
     expect(leaderStartIndexes[1]).toBeGreaterThan(Math.max(...initialMemberCompletionIndexes));
+    expect(leaderStartIndexes[2]).toBeGreaterThan(Math.max(...memberCompletionIndexes));
   }, 120_000);
 });

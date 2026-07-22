@@ -236,7 +236,6 @@ describe('StepExecutor', () => {
       passPreviousResponse: true,
       teamLeader: {
         maxConcurrency: 2,
-        maxTotalParts: 4,
         timeoutMs: 1000,
       },
     }));

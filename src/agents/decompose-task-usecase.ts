@@ -50,14 +50,14 @@ export interface DecomposeTaskResponse {
 
 export async function decomposeTask(
   instruction: string,
-  maxTotalParts: number,
+  maxInitialParts: number | undefined,
   options: DecomposeTaskOptions,
 ): Promise<DecomposeTaskResponse> {
   let response: AgentResponse;
   try {
     response = await runAgent(options.persona, buildDecomposePrompt(
       instruction,
-      maxTotalParts,
+      maxInitialParts,
       options.language,
       options.inspectTools,
     ), {
@@ -71,7 +71,7 @@ export async function decomposeTask(
       allowedTools: options.inspectTools ?? [],
       mcpServers: options.mcpServers,
       permissionMode: 'readonly',
-      outputSchema: loadDecompositionSchema(maxTotalParts),
+      outputSchema: loadDecompositionSchema(maxInitialParts),
       onStream: options.onStream,
       workflowMeta: options.workflowMeta,
       childProcessEnv: options.childProcessEnv,
@@ -92,13 +92,13 @@ export async function decomposeTask(
   const parts = response.structuredOutput?.parts;
   if (parts != null) {
     return {
-      parts: toPartDefinitions(parts, maxTotalParts),
+      parts: toPartDefinitions(parts, maxInitialParts),
       ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
     };
   }
 
   return {
-    parts: parseParts(response.content, maxTotalParts),
+    parts: parseParts(response.content, maxInitialParts),
     ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
   };
 }
@@ -107,14 +107,12 @@ export async function requestMoreParts(
   originalInstruction: string,
   allResults: Array<{ id: string; title: string; status: string; content: string }>,
   existingIds: string[],
-  maxAdditionalParts: number,
   options: MorePartsOptions,
 ): Promise<MorePartsResponse> {
   const prompt = buildMorePartsPrompt(
     originalInstruction,
     allResults,
     existingIds,
-    maxAdditionalParts,
     options.language,
   );
 
@@ -131,7 +129,7 @@ export async function requestMoreParts(
       allowedTools: [],
       mcpServers: options.mcpServers,
       permissionMode: 'readonly',
-      outputSchema: loadMorePartsSchema(maxAdditionalParts),
+      outputSchema: loadMorePartsSchema(),
       onStream: options.onStream,
       workflowMeta: options.workflowMeta,
       childProcessEnv: options.childProcessEnv,
@@ -149,7 +147,7 @@ export async function requestMoreParts(
   }
 
   return {
-    ...toMorePartsResponse(response.structuredOutput, maxAdditionalParts),
+    ...toMorePartsResponse(response.structuredOutput),
     ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
   };
 }

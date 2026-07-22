@@ -160,12 +160,12 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
 
   async decomposeTask(
     instruction: string,
-    maxTotalParts: number,
+    maxInitialParts: number | undefined,
     options: DecomposeTaskOptions,
   ): Promise<DecomposeTaskResponse> {
     const prompt = buildPromptBasedDecomposePrompt(
       instruction,
-      maxTotalParts,
+      maxInitialParts,
       options.language,
       options.inspectTools,
     );
@@ -202,7 +202,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       }
 
       return {
-        parts: parseParts(response.content, maxTotalParts),
+        parts: parseParts(response.content, maxInitialParts),
         ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
       };
     }, options.abortSignal);
@@ -212,14 +212,12 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     originalInstruction: string,
     allResults: Array<{ id: string; title: string; status: string; content: string }>,
     existingIds: string[],
-    maxAdditionalParts: number,
     options: MorePartsOptions,
   ): Promise<MorePartsResponse> {
     const prompt = buildPromptBasedMorePartsPrompt(
       originalInstruction,
       allResults,
       existingIds,
-      maxAdditionalParts,
       options.language,
     );
 
@@ -254,7 +252,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       }
 
       return {
-        ...toMorePartsResponse(parseLastJsonBlock(response.content), maxAdditionalParts),
+        ...toMorePartsResponse(parseLastJsonBlock(response.content)),
         ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
       };
     }, options.abortSignal);

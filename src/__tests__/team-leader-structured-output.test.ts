@@ -10,7 +10,7 @@ function makeRawPart(id: string): Record<string, string> {
 }
 
 describe('toPartDefinitions', () => {
-  it('総 parts 数の上限内なら5パートを受け付ける', () => {
+  it('initial_max_parts の上限内なら5パートを受け付ける', () => {
     const rawParts = ['p1', 'p2', 'p3', 'p4', 'p5'].map(makeRawPart);
 
     const result = toPartDefinitions(rawParts, 5);
@@ -18,12 +18,18 @@ describe('toPartDefinitions', () => {
     expect(result.map((part) => part.id)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5']);
   });
 
-  it('総 parts 数の上限を超えたら明確なエラーにする', () => {
+  it('initial_max_parts を超えたら明確なエラーにする', () => {
     const rawParts = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'].map(makeRawPart);
 
     expect(() => toPartDefinitions(rawParts, 5)).toThrow(
-      'Structured output produced too many total parts: 6 > max_total_parts 5',
+      'Structured output produced too many initial parts: 6 > initial_max_parts 5',
     );
+  });
+
+  it('initial_max_parts 未指定時はpart数を制限しない', () => {
+    const rawParts = Array.from({ length: 25 }, (_, index) => makeRawPart(`p${index + 1}`));
+
+    expect(toPartDefinitions(rawParts)).toHaveLength(25);
   });
 });
 
@@ -50,7 +56,6 @@ describe('Team Leader feedback prompt', () => {
       'Complete the implementation.',
       [{ id: 'part-1', title: 'Implementation', status: 'done', content }],
       ['part-1'],
-      1,
       'en',
     );
 

@@ -54,7 +54,7 @@ codex exec --full-auto - < "$tmp_prompt_file"
 
 ## Team Leader step の実行
 
-1. 親 Team Leader はタスクを最大 `initial_max_parts` 個の独立 part に分解する
+1. 親 Team Leader はタスクを独立 part に分解する。`initial_max_parts` 指定時のみ初回 batch の part 数を制限する
 2. member は `session: refresh` と part 固有 session key で、最大 `max_concurrency` 個ずつ実行する
 3. 現在 batch の全 part が完了するまで次の分解を要求しない
 4. 次 batch は完了結果だけを基に計画する。依存する検証はこの段階でのみ追加できる

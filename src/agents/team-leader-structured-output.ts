@@ -2,15 +2,15 @@ import type { Language, PartDefinition } from '../core/models/types.js';
 import { ensureUniquePartIds, parsePartDefinitionEntry } from '../core/workflow/part-definition-validator.js';
 import type { MorePartsResponse } from './decompose-task-usecase.js';
 
-export function toPartDefinitions(raw: unknown, maxTotalParts: number): PartDefinition[] {
+export function toPartDefinitions(raw: unknown, maxInitialParts?: number): PartDefinition[] {
   if (!Array.isArray(raw)) {
     throw new Error('Structured output "parts" must be an array');
   }
   if (raw.length === 0) {
     throw new Error('Structured output "parts" must not be empty');
   }
-  if (raw.length > maxTotalParts) {
-    throw new Error(`Structured output produced too many total parts: ${raw.length} > max_total_parts ${maxTotalParts}`);
+  if (maxInitialParts !== undefined && raw.length > maxInitialParts) {
+    throw new Error(`Structured output produced too many initial parts: ${raw.length} > initial_max_parts ${maxInitialParts}`);
   }
 
   const parts = raw.map((entry, index) => parsePartDefinitionEntry(entry, index));
@@ -18,7 +18,7 @@ export function toPartDefinitions(raw: unknown, maxTotalParts: number): PartDefi
   return parts;
 }
 
-export function toMorePartsResponse(raw: unknown, maxAdditionalParts: number): MorePartsResponse {
+export function toMorePartsResponse(raw: unknown): MorePartsResponse {
   if (typeof raw !== 'object' || raw == null || Array.isArray(raw)) {
     throw new Error('Structured output must be an object');
   }
@@ -33,10 +33,6 @@ export function toMorePartsResponse(raw: unknown, maxAdditionalParts: number): M
   if (!Array.isArray(payload.parts)) {
     throw new Error('Structured output "parts" must be an array');
   }
-  if (payload.parts.length > maxAdditionalParts) {
-    throw new Error(`Structured output produced too many parts: ${payload.parts.length} > ${maxAdditionalParts}`);
-  }
-
   const parts = payload.parts.map((entry, index) => parsePartDefinitionEntry(entry, index));
   ensureUniquePartIds(parts);
 
@@ -91,7 +87,7 @@ function buildInspectToolGuidance(
 
 function buildDecomposeBasePrompt(
   instruction: string,
-  maxTotalParts: number,
+  maxInitialParts?: number,
   language?: Language,
   inspectTools?: readonly string[],
 ): string {
@@ -99,9 +95,10 @@ function buildDecomposeBasePrompt(
     return [
       '以下はタスク分解専用の指示です。タスクを実行せず、分解だけを行ってください。',
       ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: true }),
-      `- 返してよい総 parts 数は 1 以上 ${maxTotalParts} 以下`,
-      '- この上限は同時実行数ではない',
-      '- 上限内で、同じバッチ内の part は互いに独立させる',
+      ...(maxInitialParts === undefined
+        ? []
+        : [`- 返してよい初回 parts 数は 1 以上 ${maxInitialParts} 以下`]),
+      '- 同じバッチ内の part は互いに独立させる',
       '- まず並行可能な責務境界を探す',
       '- 「実装と検証」のような巨大な単一 part を避ける',
       '- 検証が必要なら、実装結果がそろった後の後続 batch で追加する',
@@ -117,9 +114,10 @@ function buildDecomposeBasePrompt(
   return [
     'This is decomposition-only planning. Do not execute the task.',
     ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: true }),
-    `- Produce a total number of parts between 1 and ${maxTotalParts}`,
-    '- This limit is not a concurrency limit',
-    '- Within this limit, keep parts in the same batch independently executable',
+    ...(maxInitialParts === undefined
+      ? []
+      : [`- Produce between 1 and ${maxInitialParts} parts in the initial batch`]),
+    '- Keep parts in the same batch independently executable',
     '- Keep each part self-contained',
     '- First look for parallelizable responsibility boundaries',
     '- Avoid oversized single parts such as "implementation and verification"',
@@ -138,7 +136,6 @@ function buildMorePartsBasePrompt(
   originalInstruction: string,
   allResults: Array<{ id: string; title: string; status: string; content: string }>,
   existingIds: string[],
-  maxAdditionalParts: number,
   language?: Language,
 ): string {
   const resultBlock = allResults.map((result) => [
@@ -166,7 +163,6 @@ function buildMorePartsBasePrompt(
       '- 同じバッチ内の part は互いに依存させない',
       '- 実装結果がそろった後にのみ、後続 batch で検証 part を追加する',
       `- 既存IDは再利用しない: ${existingIds.join(', ') || '(なし)'}`,
-      `- 追加できる最大数: ${maxAdditionalParts}`,
     ].join('\n');
   }
 
@@ -189,22 +185,21 @@ function buildMorePartsBasePrompt(
     '- Do not create parts that depend on another unfinished part',
     '- Add a verification part only after its implementation results are complete',
     `- Do not reuse existing IDs: ${existingIds.join(', ') || '(none)'}`,
-    `- Maximum additional parts: ${maxAdditionalParts}`,
   ].join('\n');
 }
 
 export function buildDecomposePrompt(
   instruction: string,
-  maxTotalParts: number,
+  maxInitialParts?: number,
   language?: Language,
   inspectTools?: readonly string[],
 ): string {
-  return buildDecomposeBasePrompt(instruction, maxTotalParts, language, inspectTools);
+  return buildDecomposeBasePrompt(instruction, maxInitialParts, language, inspectTools);
 }
 
 export function buildPromptBasedDecomposePrompt(
   instruction: string,
-  maxTotalParts: number,
+  maxInitialParts?: number,
   language?: Language,
   inspectTools?: readonly string[],
 ): string {
@@ -226,7 +221,7 @@ export function buildPromptBasedDecomposePrompt(
 
   return `${buildDecomposeBasePrompt(
     instruction,
-    maxTotalParts,
+    maxInitialParts,
     language,
     inspectTools,
   )}\n${outputInstruction.join('\n')}`;
@@ -236,14 +231,12 @@ export function buildMorePartsPrompt(
   originalInstruction: string,
   allResults: Array<{ id: string; title: string; status: string; content: string }>,
   existingIds: string[],
-  maxAdditionalParts: number,
   language?: Language,
 ): string {
   return buildMorePartsBasePrompt(
     originalInstruction,
     allResults,
     existingIds,
-    maxAdditionalParts,
     language,
   );
 }
@@ -252,7 +245,6 @@ export function buildPromptBasedMorePartsPrompt(
   originalInstruction: string,
   allResults: Array<{ id: string; title: string; status: string; content: string }>,
   existingIds: string[],
-  maxAdditionalParts: number,
   language?: Language,
 ): string {
   const outputInstruction = language === 'ja'
@@ -273,7 +265,6 @@ export function buildPromptBasedMorePartsPrompt(
     originalInstruction,
     allResults,
     existingIds,
-    maxAdditionalParts,
     language,
   )}\n${outputInstruction.join('\n')}`;
 }

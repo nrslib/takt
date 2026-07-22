@@ -58,22 +58,21 @@ export class CapabilityAwareStructuredCaller extends DefaultStructuredCaller {
 
   async decomposeTask(
     instruction: string,
-    maxTotalParts: number,
+    maxInitialParts: number | undefined,
     options: DecomposeTaskOptions,
   ): Promise<DecomposeTaskResponse> {
     const provider = resolveProvider(options.provider, options.resolvedProvider);
     if (shouldUsePromptBased(provider)) {
-      return this.promptBased.decomposeTask(instruction, maxTotalParts, options);
+      return this.promptBased.decomposeTask(instruction, maxInitialParts, options);
     }
 
-    return super.decomposeTask(instruction, maxTotalParts, options);
+    return super.decomposeTask(instruction, maxInitialParts, options);
   }
 
   async requestMoreParts(
     originalInstruction: string,
     allResults: Array<{ id: string; title: string; status: string; content: string }>,
     existingIds: string[],
-    maxAdditionalParts: number,
     options: MorePartsOptions,
   ): Promise<MorePartsResponse> {
     const provider = resolveProvider(options.provider, options.resolvedProvider);
@@ -82,7 +81,6 @@ export class CapabilityAwareStructuredCaller extends DefaultStructuredCaller {
         originalInstruction,
         allResults,
         existingIds,
-        maxAdditionalParts,
         options,
       );
     }
@@ -91,7 +89,6 @@ export class CapabilityAwareStructuredCaller extends DefaultStructuredCaller {
       originalInstruction,
       allResults,
       existingIds,
-      maxAdditionalParts,
       options,
     );
   }

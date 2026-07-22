@@ -44,7 +44,6 @@ describe('runTeamLeaderExecution', () => {
     const result = await runTeamLeaderExecution({
       initialParts: parts,
       maxConcurrency: 2,
-      maxTotalParts: 5,
       runPart,
       requestMoreParts,
     });
@@ -53,23 +52,6 @@ describe('runTeamLeaderExecution', () => {
     expect(result.partResults.map((result) => result.part.id).sort()).toEqual(['p1', 'p2', 'p3', 'p4', 'p5']);
     expect(runPart).toHaveBeenCalledTimes(5);
     expect(maxActiveParts).toBe(2);
-  });
-
-  it('初回パート数が maxTotalParts を超える場合は実行前にエラーにする', async () => {
-    const parts = ['p1', 'p2', 'p3'].map(makePart);
-    const runPart = vi.fn(async (part: PartDefinition) => makeResult(part));
-    const requestMoreParts = vi.fn();
-
-    await expect(runTeamLeaderExecution({
-      initialParts: parts,
-      maxConcurrency: 2,
-      maxTotalParts: 2,
-      runPart,
-      requestMoreParts,
-    })).rejects.toThrow('Initial team leader parts exceed total part budget: 3 > 2');
-
-    expect(runPart).not.toHaveBeenCalled();
-    expect(requestMoreParts).not.toHaveBeenCalled();
   });
 
   it('予定済みパートがすべて完了してから追加パートを取り込む', async () => {
@@ -111,51 +93,56 @@ describe('runTeamLeaderExecution', () => {
     expect(result.partResults.some((r) => r.part.id === part3.id)).toBe(true);
   });
 
-  it('追加パートが残り maxTotalParts 予算を超える場合はエラーにする', async () => {
+  it('追加パートの総数を制限せずリーダーの完了判断まで実行する', async () => {
     const parts = ['p1', 'p2'].map(makePart);
     const runPart = vi.fn(async (part: PartDefinition) => makeResult(part));
-    const requestMoreParts = vi.fn().mockResolvedValue({
-      done: false,
-      reasoning: 'too many new parts',
-      parts: [makePart('p3'), makePart('p4')],
-    });
+    const requestMoreParts = vi.fn()
+      .mockResolvedValueOnce({
+        done: false,
+        reasoning: 'more work remains',
+        parts: [makePart('p3'), makePart('p4')],
+      })
+      .mockResolvedValueOnce({
+        done: true,
+        reasoning: 'all work completed',
+        parts: [],
+      });
 
-    await expect(runTeamLeaderExecution({
+    const result = await runTeamLeaderExecution({
       initialParts: parts,
       maxConcurrency: 1,
-      maxTotalParts: 3,
       runPart,
       requestMoreParts,
-    })).rejects.toThrow('Team leader planned parts exceed max_total_parts: 4 > 3');
+    });
 
-    expect(requestMoreParts).toHaveBeenCalledWith({
+    expect(result.plannedParts.map((part) => part.id)).toEqual(['p1', 'p2', 'p3', 'p4']);
+    expect(runPart).toHaveBeenCalledTimes(4);
+    expect(requestMoreParts).toHaveBeenNthCalledWith(1, {
       partResults: expect.arrayContaining([
         expect.objectContaining({ part: parts[0] }),
         expect.objectContaining({ part: parts[1] }),
       ]),
       scheduledIds: ['p1', 'p2'],
-      remainingPartBudget: 1,
     });
+    expect(requestMoreParts).toHaveBeenCalledTimes(2);
   });
 
-  it('追加パート数超過の planning error は握りつぶさず伝播する', async () => {
+  it('追加計画が失敗した場合は既存パートの結果で終了する', async () => {
     const parts = ['p1', 'p2'].map(makePart);
     const runPart = vi.fn(async (part: PartDefinition) => makeResult(part));
-    const requestMoreParts = vi.fn().mockRejectedValue(
-      new Error('Structured output produced too many parts: 2 > 1'),
-    );
+    const requestMoreParts = vi.fn().mockRejectedValue(new Error('feedback failed'));
     const onPlanningError = vi.fn();
 
-    await expect(runTeamLeaderExecution({
+    const result = await runTeamLeaderExecution({
       initialParts: parts,
       maxConcurrency: 1,
-      maxTotalParts: 3,
       runPart,
       requestMoreParts,
       onPlanningError,
-    })).rejects.toThrow('Structured output produced too many parts: 2 > 1');
+    });
 
-    expect(onPlanningError).not.toHaveBeenCalled();
+    expect(result.partResults).toHaveLength(2);
+    expect(onPlanningError).toHaveBeenCalledWith(expect.objectContaining({ message: 'feedback failed' }));
   });
 
   it('重複IDだけ返された場合は追加せず終了する', async () => {

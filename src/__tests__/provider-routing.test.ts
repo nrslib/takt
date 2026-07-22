@@ -479,7 +479,6 @@ describe('provider_routing provider_options resolution', () => {
       teamLeader: {
         persona: 'planner',
         maxConcurrency: 3,
-        maxTotalParts: 20,
         timeoutMs: 900000,
         partPersona: 'coder',
       },
@@ -549,7 +548,6 @@ describe('provider_routing provider_options resolution', () => {
       teamLeader: {
         persona: 'planner',
         maxConcurrency: 3,
-        maxTotalParts: 20,
         timeoutMs: 900000,
         partPersona: 'coder',
         partTags: ['coding'],
@@ -608,7 +606,6 @@ describe('provider_routing provider_options resolution', () => {
       teamLeader: {
         persona: 'planner',
         maxConcurrency: 3,
-        maxTotalParts: 20,
         timeoutMs: 900000,
         partPersona: 'coder',
         partTags: ['coding'],

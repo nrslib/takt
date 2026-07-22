@@ -473,7 +473,7 @@ describe('bindWorkflowExecutionEvents', () => {
 
   it.each([
     ['parallel', { parallel: { steps: [] } }],
-    ['team_leader', { teamLeader: { maxConcurrency: 1, maxTotalParts: 1, refillThreshold: 0, timeoutMs: 1000 } }],
+    ['team_leader', { teamLeader: { maxConcurrency: 1, refillThreshold: 0, timeoutMs: 1000 } }],
   ])('%s parent の集約レスポンスを usage として記録しない', (_stepType, delegatedConfig) => {
     const { engine, usageEventLogger } = createBridgeHarness();
     const step = {

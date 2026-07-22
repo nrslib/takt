@@ -37,7 +37,6 @@ export interface TeamLeaderConfig {
   maxConcurrency: number;
   /** Maximum number of parts the initial decomposition may create */
   initialMaxParts?: number;
-  maxTotalParts: number;
   /** Fail the parent step when any member part fails. */
   failOnPartError?: boolean;
   /** Default timeout for parts in milliseconds */

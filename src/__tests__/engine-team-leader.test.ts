@@ -52,7 +52,6 @@ function buildTeamLeaderConfig(): WorkflowConfig {
         teamLeader: {
           persona: '../personas/team-leader.md',
           maxConcurrency: 3,
-          maxTotalParts: 20,
           timeoutMs: 10000,
           partPersona: '../personas/coder.md',
           partAllowedTools: ['Read', 'Edit', 'Write'],
@@ -1121,7 +1120,6 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     step.teamLeader.providerRoutingPersonaKey = 'team-leader';
     step.teamLeader.partTags = ['implementation'];
     step.teamLeader.timeoutMs = 5;
-    step.teamLeader.maxTotalParts = 2;
     const autoRouting = createTeamLeaderAutoRoutingConfig();
     const logsDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'logs');
     const usageLogger = createUsageEventLogger({
@@ -1169,6 +1167,14 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     );
     mockRunAgentRejectingOnAbort();
     mockRunAgentRejectingOnAbort();
+    mockRunAgentWithPrompt(makeResponse({
+      persona: 'team-leader',
+      structuredOutput: {
+        done: true,
+        reasoning: 'No recovery requested',
+        parts: [],
+      },
+    }));
 
     const state = await engine.run();
 
@@ -1219,9 +1225,9 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       .map((line) => JSON.parse(line) as UsageEventLogRecord);
     const leaderRecords = usageRecords.filter((record) => record.step === 'implement');
     const partRecords = usageRecords.filter((record) => record.step.startsWith('implement.part-'));
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
     expect(usageRecords).toHaveLength(vi.mocked(runAgent).mock.calls.length);
-    expect(leaderRecords).toHaveLength(1);
+    expect(leaderRecords).toHaveLength(2);
     expect(leaderRecords.every((record) => (
       record.provider === 'codex'
       && record.provider_model === 'gpt-5'
@@ -1355,7 +1361,6 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     }
     step.teamLeader.providerRoutingPersonaKey = 'team-leader';
     step.teamLeader.partTags = ['implementation'];
-    step.teamLeader.maxTotalParts = 1;
     const abortController = new AbortController();
     const autoRouting = createTeamLeaderAutoRoutingConfig();
     const logsDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'logs');

@@ -14,7 +14,6 @@ import {
   resolvePersona,
   resolveRefToContent,
 } from './resource-resolver.js';
-import { DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS } from '../../../shared/constants.js';
 import {
   formatTeamLeaderInspectTools,
   isTeamLeaderInspectTool,
@@ -135,7 +134,6 @@ export function normalizeTeamLeader(
     providerRoutingPersonaKey,
     maxConcurrency: raw.max_concurrency ?? raw.max_parts ?? 3,
     ...(raw.initial_max_parts !== undefined ? { initialMaxParts: raw.initial_max_parts } : {}),
-    maxTotalParts: raw.max_total_parts ?? DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS,
     ...(raw.fail_on_part_error !== undefined ? { failOnPartError: raw.fail_on_part_error } : {}),
     timeoutMs: raw.timeout_ms ?? 900000,
     inspectTools: normalizeTeamLeaderInspectTools(raw.inspect_tools),

@@ -21,13 +21,13 @@ describe('team_leader schema', () => {
     expect(result.success).toBe(true);
   });
 
-  it('max_concurrency と max_total_parts の設定を受け付ける', () => {
+  it('max_concurrency と initial_max_parts の設定を受け付ける', () => {
     const raw = {
       name: 'implement',
       team_leader: {
         persona: 'team-leader',
         max_concurrency: 2,
-        max_total_parts: 5,
+        initial_max_parts: 5,
         timeout_ms: 120000,
       },
       instruction: 'decompose',
@@ -40,7 +40,7 @@ describe('team_leader schema', () => {
     }
     const teamLeader = result.data.team_leader as Record<string, unknown>;
     expect(teamLeader.max_concurrency).toBe(2);
-    expect(teamLeader.max_total_parts).toBe(5);
+    expect(teamLeader.initial_max_parts).toBe(5);
   });
 
   it('initial_max_parts と fail_on_part_error の設定を受け付ける', () => {
@@ -48,7 +48,6 @@ describe('team_leader schema', () => {
       name: 'implement',
       team_leader: {
         initial_max_parts: 2,
-        max_total_parts: 4,
         fail_on_part_error: true,
       },
       instruction: 'decompose',
@@ -59,17 +58,16 @@ describe('team_leader schema', () => {
     expect(result.success).toBe(true);
   });
 
-  it('initial_max_parts が max_total_parts を超える設定は拒否する', () => {
+  it('initial_max_parts は20を超えても受け付ける', () => {
     const raw = {
       name: 'implement',
       team_leader: {
-        initial_max_parts: 3,
-        max_total_parts: 2,
+        initial_max_parts: 21,
       },
       instruction: 'decompose',
     };
 
-    expect(WorkflowStepRawSchema.safeParse(raw).success).toBe(false);
+    expect(WorkflowStepRawSchema.safeParse(raw).success).toBe(true);
   });
 
   it('max_parts > 3 は拒否する', () => {
@@ -90,19 +88,6 @@ describe('team_leader schema', () => {
       name: 'implement',
       team_leader: {
         max_concurrency: 4,
-      },
-      instruction: 'decompose',
-    };
-
-    const result = WorkflowStepRawSchema.safeParse(raw);
-    expect(result.success).toBe(false);
-  });
-
-  it('max_total_parts > 20 は拒否する', () => {
-    const raw = {
-      name: 'implement',
-      team_leader: {
-        max_total_parts: 21,
       },
       instruction: 'decompose',
     };
@@ -267,7 +252,7 @@ describe('team_leader schema', () => {
 });
 
 describe('normalizeWorkflowConfig team_leader', () => {
-  it('team_leader の新しい上限設定を内部形式へ正規化する', () => {
+  it('team_leader の並列・初回分解設定を内部形式へ正規化する', () => {
     const workflowDir = join(process.cwd(), 'src', '__tests__');
     const raw = {
       name: 'workflow',
@@ -279,7 +264,6 @@ describe('normalizeWorkflowConfig team_leader', () => {
             persona: 'team-leader',
             max_concurrency: 2,
             initial_max_parts: 2,
-            max_total_parts: 5,
             fail_on_part_error: true,
             timeout_ms: 90000,
             inspect_tools: [' Read ', 'Glob', 'grep'],
@@ -305,7 +289,6 @@ describe('normalizeWorkflowConfig team_leader', () => {
       providerRoutingPersonaKey: 'team-leader',
       maxConcurrency: 2,
       initialMaxParts: 2,
-      maxTotalParts: 5,
       failOnPartError: true,
       timeoutMs: 90000,
       inspectTools: ['read', 'glob', 'grep'],
@@ -393,7 +376,6 @@ describe('normalizeWorkflowConfig team_leader', () => {
       personaDisplayName: undefined,
       providerRoutingPersonaKey: undefined,
       maxConcurrency: 2,
-      maxTotalParts: 20,
       timeoutMs: 900000,
       inspectTools: undefined,
       partPersona: undefined,

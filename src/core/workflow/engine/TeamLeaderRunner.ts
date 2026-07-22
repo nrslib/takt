@@ -27,7 +27,6 @@ import type { RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../
 import { buildTeamLeaderErrorPartResult, runTeamLeaderPart } from './team-leader-part-runner.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
-import { isPlanningBudgetError } from './team-leader-budget-errors.js';
 import { resolveInspectToolsForProvider } from './engine-provider-options.js';
 import { resolveAutoRoutingBatch, resolveAutoRoutingRuntime } from '../auto-routing/resolver.js';
 import { InstructionBuildTransaction } from './instruction-build-transaction.js';
@@ -154,7 +153,7 @@ export class TeamLeaderRunner {
       },
       () => structuredCaller.decomposeTask(
         instruction,
-        teamLeaderConfig.initialMaxParts ?? teamLeaderConfig.maxTotalParts,
+        teamLeaderConfig.initialMaxParts,
         {
           cwd: this.deps.getCwd(),
           persona: leaderStep.persona,
@@ -239,7 +238,7 @@ export class TeamLeaderRunner {
     const { plannedParts, partResults } = await runTeamLeaderExecution({
       initialParts: parts,
       maxConcurrency: teamLeaderConfig.maxConcurrency,
-      maxTotalParts: teamLeaderConfig.maxTotalParts,
+      abortSignal: leaderBaseOptions.abortSignal,
       onPartQueued: (part) => {
         parallelLogger?.addSubStep(part.id);
       },
@@ -280,7 +279,6 @@ export class TeamLeaderRunner {
       requestMoreParts: async ({
         partResults: currentResults,
         scheduledIds,
-        remainingPartBudget,
       }) => {
         emitTeamLeaderProgressHint(this.deps.engineOptions, 'feedback');
         try {
@@ -295,7 +293,6 @@ export class TeamLeaderRunner {
                 : result.response.content,
             })),
             scheduledIds,
-            remainingPartBudget,
             {
               cwd: this.deps.getCwd(),
               persona: leaderStep.persona,
@@ -326,14 +323,9 @@ export class TeamLeaderRunner {
           await this.addPartAutoRouting(routedProviderInfoByPart, step, moreParts.parts, runtime);
           return moreParts;
         } catch (error) {
-          if (isPlanningBudgetError(error)) {
-            throw error;
-          }
-
           const timeoutFallback = createTimeoutContinuationFeedback({
             partResults: currentResults,
             scheduledIds,
-            remainingPartBudget,
             coveredTimedOutPartIds,
             language: this.deps.engineOptions.language,
           });

@@ -1,19 +1,15 @@
 import type { MorePartsResponse } from '../../../agents/agent-usecases.js';
 import type { PartDefinition, PartResult } from '../../models/types.js';
-import { DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS } from '../../../shared/constants.js';
-import { isPlanningBudgetError } from './team-leader-budget-errors.js';
 
 export interface TeamLeaderExecutionOptions {
   initialParts: PartDefinition[];
   maxConcurrency: number;
-  maxTotalParts?: number;
   abortSignal?: AbortSignal;
   runPart: (part: PartDefinition, partIndex: number) => Promise<PartResult>;
   requestMoreParts: (
     args: {
       partResults: PartResult[];
       scheduledIds: string[];
-      remainingPartBudget: number;
     }
   ) => Promise<MorePartsResponse>;
   onPartQueued?: (part: PartDefinition, partIndex: number) => void;
@@ -38,11 +34,6 @@ export async function runTeamLeaderExecution(
   options: TeamLeaderExecutionOptions,
 ): Promise<TeamLeaderExecutionResult> {
   options.abortSignal?.throwIfAborted();
-  const maxTotalParts = options.maxTotalParts ?? DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS;
-  if (options.initialParts.length > maxTotalParts) {
-    throw new Error(`Initial team leader parts exceed total part budget: ${options.initialParts.length} > ${maxTotalParts}`);
-  }
-
   const queue: PartDefinition[] = [...options.initialParts];
   const plannedParts: PartDefinition[] = [...options.initialParts];
   const partResults: PartResult[] = [];
@@ -57,17 +48,10 @@ export async function runTeamLeaderExecution(
       return;
     }
 
-    const remainingPartBudget = maxTotalParts - plannedParts.length;
-    if (remainingPartBudget <= 0) {
-      leaderDone = true;
-      return;
-    }
-
     try {
       const feedback = await options.requestMoreParts({
         partResults,
         scheduledIds: [...scheduledIds],
-        remainingPartBudget,
       });
       options.abortSignal?.throwIfAborted();
 
@@ -100,7 +84,6 @@ export async function runTeamLeaderExecution(
         return;
       }
 
-      assertPlannedPartsWithinLimit(plannedParts.length, newParts.length, maxTotalParts);
       plannedParts.push(...newParts);
       queue.push(...newParts);
       options.onPartsAdded?.({
@@ -110,9 +93,6 @@ export async function runTeamLeaderExecution(
       });
     } catch (error) {
       if (options.abortSignal?.aborted) {
-        throw error;
-      }
-      if (isPlanningBudgetError(error)) {
         throw error;
       }
       options.onPlanningError?.(error);
@@ -162,15 +142,4 @@ export async function runTeamLeaderExecution(
   }
 
   return { plannedParts, partResults };
-}
-
-function assertPlannedPartsWithinLimit(
-  currentPlannedCount: number,
-  newPartCount: number,
-  maxTotalParts: number,
-): void {
-  const totalPlannedParts = currentPlannedCount + newPartCount;
-  if (totalPlannedParts > maxTotalParts) {
-    throw new Error(`Team leader planned parts exceed max_total_parts: ${totalPlannedParts} > ${maxTotalParts}`);
-  }
 }

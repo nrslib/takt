@@ -18,7 +18,7 @@ export interface StructuredCaller {
 
   decomposeTask(
     instruction: string,
-    maxTotalParts: number,
+    maxInitialParts: number | undefined,
     options: DecomposeTaskOptions,
   ): Promise<DecomposeTaskResponse>;
 
@@ -26,7 +26,6 @@ export interface StructuredCaller {
     originalInstruction: string,
     allResults: Array<{ id: string; title: string; status: string; content: string }>,
     existingIds: string[],
-    maxAdditionalParts: number,
     options: MorePartsOptions,
   ): Promise<MorePartsResponse>;
 }
