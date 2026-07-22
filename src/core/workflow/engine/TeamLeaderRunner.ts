@@ -323,6 +323,9 @@ export class TeamLeaderRunner {
           await this.addPartAutoRouting(routedProviderInfoByPart, step, moreParts.parts, runtime);
           return moreParts;
         } catch (error) {
+          if (leaderBaseOptions.abortSignal?.aborted) {
+            throw error;
+          }
           const timeoutFallback = createTimeoutContinuationFeedback({
             partResults: currentResults,
             scheduledIds,
