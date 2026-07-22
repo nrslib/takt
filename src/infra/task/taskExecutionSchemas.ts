@@ -6,6 +6,10 @@ const ResumePointEntrySchema = z.object({
   workflow_ref: z.string().min(1).optional(),
   step: z.string().min(1),
   kind: z.enum(['agent', 'system', 'workflow_call']),
+  step_iterations: z.record(
+    z.string().min(1),
+    z.number().int().positive(),
+  ).optional(),
 }).strict();
 
 const ResumePointSchema = z.object({

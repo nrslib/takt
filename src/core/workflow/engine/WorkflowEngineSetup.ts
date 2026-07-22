@@ -340,7 +340,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     language: params.options.language,
     updatePersonaSession: params.updatePersonaSession,
     resolveNextStepFromDone: params.resolveNextStepFromDone as never,
-    onStepStart: (step, iteration, instruction, providerInfo, resumeStepName) => {
+    onStepStart: (step, iteration, instruction, providerInfo, resumeStepName, stepIteration) => {
       params.emitEvent(
         'step:start',
         step,
@@ -349,6 +349,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
         providerInfo,
         params.config.name,
         resumeStepName,
+        stepIteration,
       );
     },
     onStepComplete: (step, response, instruction, resumeStepName) => {

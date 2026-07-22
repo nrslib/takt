@@ -152,6 +152,7 @@ export interface WorkflowResumePointEntry {
   workflow_ref?: string;
   step: string;
   kind: WorkflowStepKind;
+  step_iterations?: Record<string, number>;
 }
 
 export interface WorkflowResumePoint {
