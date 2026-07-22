@@ -8,13 +8,19 @@
  * この形式を許すが、取り込み経路自体が無かった）。
  */
 
-import type { AgentWorkflowStep, FindingContractConfig, WorkflowConfig, WorkflowStep } from '../../models/types.js';
+import type {
+  AgentWorkflowStep,
+  FindingContractConfig,
+  WorkflowConfig,
+  WorkflowStep,
+  WorkflowStructuredOutput,
+} from '../../models/types.js';
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
+import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
 import { hasFindingContractFormat } from './finding-contract-format.js';
 import {
-  RawFindingsStructuredOutput,
   runFindingManagerForStep,
   type FindingManagerRunResult,
   type FindingManagerSubStepResult,
@@ -113,6 +119,51 @@ export async function ingestFindingContractResults(
   return result;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getRawFindingSnapshotIdEnum(structuredOutput: WorkflowStructuredOutput): unknown {
+  const properties = structuredOutput.schema.properties;
+  if (!isRecord(properties)) {
+    return undefined;
+  }
+  const rawFindings = properties.rawFindings;
+  if (!isRecord(rawFindings) || !isRecord(rawFindings.items)) {
+    return undefined;
+  }
+  const itemProperties = rawFindings.items.properties;
+  if (!isRecord(itemProperties) || !isRecord(itemProperties.snapshotId)) {
+    return undefined;
+  }
+  return itemProperties.snapshotId.enum;
+}
+
+function assertReviewerStructuredOutputSnapshot(
+  context: FindingContractInstructionContext | undefined,
+): asserts context is FindingContractInstructionContext & {
+  rawFindingsStructuredOutput: WorkflowStructuredOutput;
+  reviewScopeSnapshotId: string;
+} {
+  const structuredOutput = context?.rawFindingsStructuredOutput;
+  const reviewScopeSnapshotId = context?.reviewScopeSnapshotId;
+  if (!structuredOutput || !reviewScopeSnapshotId) {
+    throw new Error('Finding contract reviewer context requires raw findings structured output and reviewScopeSnapshotId');
+  }
+  const snapshotIdEnum = getRawFindingSnapshotIdEnum(structuredOutput);
+  if (
+    !Array.isArray(snapshotIdEnum)
+    || snapshotIdEnum.length !== 2
+    || snapshotIdEnum[0] !== ''
+    || snapshotIdEnum[1] !== reviewScopeSnapshotId
+  ) {
+    throw new Error(
+      'Finding contract reviewer context requires rawFindings snapshotId enum to be exactly '
+      + '["", reviewScopeSnapshotId]',
+    );
+  }
+}
+
 /**
  * finding_contract のステップに raw findings 構造化出力を強制する。ステップが
  * 既に structuredOutput を持つ場合は併用できないため設定エラーとして拒否する
@@ -121,16 +172,15 @@ export async function ingestFindingContractResults(
  */
 export function withFindingContractStructuredOutput(
   step: AgentWorkflowStep,
-  ledgerCopyPath: string | undefined,
+  context: FindingContractInstructionContext | undefined,
 ): AgentWorkflowStep {
-  if (!ledgerCopyPath) {
-    return step;
-  }
+  assertReviewerStructuredOutputSnapshot(context);
+  const structuredOutput = context.rawFindingsStructuredOutput;
   if (step.structuredOutput) {
     throw new Error(`Step "${step.name}" cannot combine finding_contract raw findings with structured_output`);
   }
   return {
     ...step,
-    structuredOutput: RawFindingsStructuredOutput,
+    structuredOutput,
   };
 }

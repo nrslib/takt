@@ -4,6 +4,7 @@ import { ledgerHasOpenFindings, ledgerHasWaivedFindings } from '../core/workflow
 import type { FindingLedger } from '../core/models/finding-types.js';
 import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
 import type { WorkflowStep } from '../core/models/types.js';
+import type { WorkflowStructuredOutput } from '../core/models/types.js';
 
 function makeStep(): WorkflowStep {
   return {
@@ -19,7 +20,7 @@ function makeContext(options: {
   hasOpenFindings: boolean;
   hasWaivedFindings?: boolean;
   hasDismissedFindings?: boolean;
-  rawFindingsJsonSchema?: Record<string, unknown>;
+  rawFindingsStructuredOutput?: WorkflowStructuredOutput;
   language?: 'en' | 'ja';
 }): InstructionContext {
   return {
@@ -38,12 +39,12 @@ function makeContext(options: {
       hasOpenFindings: options.hasOpenFindings,
       hasWaivedFindings: options.hasWaivedFindings ?? false,
       hasDismissedFindings: options.hasDismissedFindings ?? false,
-      // codex 対策#4: rawFindingsJsonSchema と reviewScopeSnapshotId は常に
+      // codex 対策#4: rawFindingsStructuredOutput と reviewScopeSnapshotId は常に
       // セットで生成される（WorkflowEngineSetup.buildFindingContractInstructionContext
       // 参照）。片方だけの fixture は finding-contract-instruction.ts の
       // fail-loud ガードに引っかかるため、実際の生成規則に合わせて両方立てる。
-      ...(options.rawFindingsJsonSchema !== undefined
-        ? { rawFindingsJsonSchema: options.rawFindingsJsonSchema, reviewScopeSnapshotId: 'test-snapshot-id' }
+      ...(options.rawFindingsStructuredOutput !== undefined
+        ? { rawFindingsStructuredOutput: options.rawFindingsStructuredOutput, reviewScopeSnapshotId: 'test-snapshot-id' }
         : {}),
     },
   } as unknown as InstructionContext;
@@ -76,10 +77,10 @@ describe('dispute guidance injection', () => {
     expect(section).toContain('evidence: file:line references from the current code backing the reason');
   });
 
-  it('should not inject dispute guidance when rawFindingsJsonSchema is present (reviewer branch wins)', () => {
+  it('should not inject dispute guidance when rawFindingsStructuredOutput is present (reviewer branch wins)', () => {
     const instruction = new InstructionBuilder(
       makeStep(),
-      makeContext({ hasOpenFindings: true, rawFindingsJsonSchema: { type: 'object' } }),
+      makeContext({ hasOpenFindings: true, rawFindingsStructuredOutput: { schemaRef: 'test', schema: { type: 'object' } } }),
     ).build();
 
     const section = extractFindingContractSection(instruction);
@@ -115,7 +116,7 @@ describe('reviewer duty gating', () => {
   it('should omit confirmation and waived duties for reviewers when the ledger is empty', () => {
     const instruction = new InstructionBuilder(
       makeStep(),
-      makeContext({ hasOpenFindings: false, rawFindingsJsonSchema: { type: 'object' } }),
+      makeContext({ hasOpenFindings: false, rawFindingsStructuredOutput: { schemaRef: 'test', schema: { type: 'object' } } }),
     ).build();
 
     const section = extractFindingContractSection(instruction);
@@ -127,7 +128,7 @@ describe('reviewer duty gating', () => {
   it('should inject the waived duty independently of open findings', () => {
     const section = extractFindingContractSection(new InstructionBuilder(
       makeStep(),
-      makeContext({ hasOpenFindings: false, hasWaivedFindings: true, rawFindingsJsonSchema: { type: 'object' } }),
+      makeContext({ hasOpenFindings: false, hasWaivedFindings: true, rawFindingsStructuredOutput: { schemaRef: 'test', schema: { type: 'object' } } }),
     ).build());
 
     expect(section).toContain('listed as waived');
@@ -137,14 +138,14 @@ describe('reviewer duty gating', () => {
   it('should inject confirmation duties when open findings exist and waived duty only with waived findings', () => {
     const withOpen = extractFindingContractSection(new InstructionBuilder(
       makeStep(),
-      makeContext({ hasOpenFindings: true, rawFindingsJsonSchema: { type: 'object' } }),
+      makeContext({ hasOpenFindings: true, rawFindingsStructuredOutput: { schemaRef: 'test', schema: { type: 'object' } } }),
     ).build());
     expect(withOpen).toContain(CONFIRMATION_DUTY);
     expect(withOpen).not.toContain('listed as waived');
 
     const withWaived = extractFindingContractSection(new InstructionBuilder(
       makeStep(),
-      makeContext({ hasOpenFindings: true, hasWaivedFindings: true, rawFindingsJsonSchema: { type: 'object' } }),
+      makeContext({ hasOpenFindings: true, hasWaivedFindings: true, rawFindingsStructuredOutput: { schemaRef: 'test', schema: { type: 'object' } } }),
     ).build());
     expect(withWaived).toContain('listed as waived');
   });

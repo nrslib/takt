@@ -4,7 +4,14 @@
  * Defines the context structures used by instruction builders.
  */
 
-import type { AgentResponse, FallbackContext, Language, WorkflowMaxSteps, WorkflowState } from '../../models/types.js';
+import type {
+  AgentResponse,
+  FallbackContext,
+  Language,
+  WorkflowMaxSteps,
+  WorkflowState,
+  WorkflowStructuredOutput,
+} from '../../models/types.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 
 export interface FindingContractInstructionContext {
@@ -16,7 +23,11 @@ export interface FindingContractInstructionContext {
   /** Whether the ledger currently has waived findings. */
   hasWaivedFindings: boolean;
   hasDismissedFindings: boolean;
-  rawFindingsJsonSchema?: Record<string, unknown>;
+  /**
+   * このレビューラウンドで生成した raw findings の provider-facing 契約。
+   * プロンプト表示と実行ステップの structuredOutput に同じオブジェクトを渡す。
+   */
+  rawFindingsStructuredOutput?: WorkflowStructuredOutput;
   /**
    * review-integrity protocol: reviewer が typed evidence protocol の source_quote 主張に
    * echo する review scope snapshot id（snapshot.ts の

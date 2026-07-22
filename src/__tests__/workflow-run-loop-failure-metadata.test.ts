@@ -47,6 +47,7 @@ function makeDeps(
     runQualityGates: vi.fn(async () => ({ ok: true as const })),
     buildInstruction: vi.fn((_step: WorkflowStep, stepIteration: number) => `instruction ${stepIteration}`),
     buildPhase1Instruction: vi.fn((_step: WorkflowStep, instruction: string) => instruction),
+    prepareNormalStepExecution: vi.fn(() => undefined),
     resolveStepProviderModel: vi.fn(() => ({
       provider: undefined,
       model: undefined,

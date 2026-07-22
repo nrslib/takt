@@ -7,6 +7,7 @@ import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import type { StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import type { ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
+import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
 import { makeRule, makeStep } from './test-helpers.js';
 
 const { compactSessionBeforePhase1Mock, ingestFindingContractResultsMock } = vi.hoisted(() => ({
@@ -161,6 +162,7 @@ describe('session compaction Phase 1 wiring', () => {
     runPaths = makeRunPaths(cwd);
     mkdirSync(runPaths.contextPreviousResponsesAbs, { recursive: true });
     vi.clearAllMocks();
+    vi.mocked(executeAgent).mockReset();
     compactSessionBeforePhase1Mock.mockResolvedValue('reused');
     vi.mocked(runReportPhase).mockResolvedValue(undefined);
     vi.mocked(runStatusJudgmentPhase).mockResolvedValue({
@@ -283,11 +285,21 @@ describe('session compaction Phase 1 wiring', () => {
       resolvedModel: 'opencode/big-pickle',
       sessionId: 'session-old',
     };
+    const reviewScopeSnapshotId = 'session-compaction-review-snapshot';
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue(phase1Options),
         buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        buildFindingContractInstructionContext: vi.fn().mockReturnValue({ ledgerCopyPath: undefined }),
+        buildFindingContractInstructionContext: vi.fn().mockReturnValue({
+          ledgerCopyPath: '.takt/runs/test-run/reports/findings-ledger.json',
+          ledgerSummary: '{"findings":[]}',
+          reportLedgerSummary: '{"ids":[]}',
+          hasOpenFindings: false,
+          hasWaivedFindings: false,
+          hasDismissedFindings: false,
+          rawFindingsStructuredOutput: createRawFindingsStructuredOutput(reviewScopeSnapshotId),
+          reviewScopeSnapshotId,
+        }),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,
@@ -361,7 +373,18 @@ describe('session compaction Phase 1 wiring', () => {
       },
     }));
 
-    await new StepExecutor(deps).runNormalStep(step, state, 'task', 5, vi.fn(), 'Review');
+    const executor = new StepExecutor(deps);
+    const preparedExecution = executor.prepareNormalStepExecution(step, state, 'task', 5, 1);
+    await executor.runNormalStep(
+      step,
+      state,
+      'task',
+      5,
+      vi.fn(),
+      undefined,
+      undefined,
+      preparedExecution,
+    );
 
     expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(2);
     expect(vi.mocked(executeAgent).mock.calls.map(([, , options]) => options.sessionId)).toEqual([undefined, undefined]);

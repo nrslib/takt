@@ -265,6 +265,7 @@ function makeHarness(
       managerStep,
       ledgerCopyPath: '/tmp/raw-adjudication-ledger.json',
       observation,
+      reviewScopeSnapshotId: quote.snapshotId,
     }),
   };
 }
@@ -304,6 +305,7 @@ function applyRecovery(harness: RecoveryHarness, recovery: Awaited<ReturnType<Re
     recovery,
     runInput: harness.runInput,
     observation,
+    reviewScopeSnapshotId: quote.snapshotId,
   });
 }
 

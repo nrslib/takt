@@ -171,6 +171,7 @@ export async function runRawAdjudicationRecovery(input: {
   managerStep: AgentWorkflowStep;
   ledgerCopyPath: string;
   observation: FindingObservation;
+  reviewScopeSnapshotId: string;
 }): Promise<RawAdjudicationRecoveryResult> {
   const reservation = await reserveRawAdjudicationRecovery(input.runInput.ledgerStore);
   const reservationTokens = new Set(reservation.result.map((item) => item.reservationToken));
@@ -193,6 +194,7 @@ async function runReservedRawAdjudicationRecovery(input: {
   managerStep: AgentWorkflowStep;
   ledgerCopyPath: string;
   observation: FindingObservation;
+  reviewScopeSnapshotId: string;
   reservations: readonly RawAdjudicationReservation[];
   reservationTokens: Set<string>;
 }): Promise<RawAdjudicationRecoveryResult> {
@@ -219,6 +221,7 @@ async function runReservedRawAdjudicationRecovery(input: {
   }
   const admission = evaluateRawAdmission({
     cwd: input.runInput.cwd,
+    reviewScopeSnapshotId: input.reviewScopeSnapshotId,
     previousLedger: input.previousLedger,
     intake: prepared.intake,
   });

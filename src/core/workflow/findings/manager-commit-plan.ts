@@ -47,6 +47,7 @@ export interface FindingManagerCommitPlanInput {
   stopBudgetLimits: ReturnType<typeof resolveStopBudgetLimits>;
   stopBudgetRoundMarker: string;
   reviewIntegrityLimits: ReturnType<typeof resolveReviewIntegrityLimits>;
+  reviewScopeSnapshotId: string;
 }
 
 function prepareCommitReconciliation(
@@ -56,6 +57,7 @@ function prepareCommitReconciliation(
 ) {
   const admission = retainInterpretationRecoveryForLadder(evaluateRawAdmission({
     cwd: params.input.cwd,
+    reviewScopeSnapshotId: params.reviewScopeSnapshotId,
     previousLedger: freshLedger,
     intake: params.intake,
   }), params.intake);
@@ -124,6 +126,7 @@ export function buildFindingManagerCommitMutation(
     recovery: params.managerDecision.rawRecovery,
     runInput: params.input,
     observation: params.observation,
+    reviewScopeSnapshotId: params.reviewScopeSnapshotId,
   });
   const ladder = selectCommittableLadder(params.managerDecision.ladder, recoveryLedger);
   const prepared = prepareCommitReconciliation(params, recoveryLedger, ladder);

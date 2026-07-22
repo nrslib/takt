@@ -42,6 +42,7 @@ export async function commitFindingManagerRound(params: {
   stopBudgetLimits: ReturnType<typeof resolveStopBudgetLimits>;
   stopBudgetRoundMarker: string;
   reviewIntegrityLimits: ReturnType<typeof resolveReviewIntegrityLimits>;
+  reviewScopeSnapshotId: string;
 }): Promise<CommitFindingManagerRoundResult> {
   try {
     const mutation = await params.input.ledgerStore.updateLedger((freshLedger) => (

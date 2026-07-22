@@ -1,8 +1,8 @@
 import { executeAgent } from '../../../agents/agent-usecases.js';
-import type { AgentResponse, AgentWorkflowStep, FindingContractConfig } from '../../models/types.js';
+import type { AgentResponse, AgentWorkflowStep, FindingContractConfig, WorkflowStructuredOutput } from '../../models/types.js';
 import {
-  RawFindingsOutputJsonSchema,
   RawFindingsOutputValidationJsonSchema,
+  createRawFindingsOutputJsonSchema,
   parseFindingManagerDecisions,
 } from './schemas.js';
 import { normalizeFindingText, parseFindingLocation, parseFindingLocationRange } from './location.js';
@@ -21,13 +21,16 @@ import { loadTemplate } from '../../../shared/prompts/index.js';
 
 export const RAW_FINDINGS_SCHEMA_REF = 'takt.findings.raw.v1';
 export { FINDING_MANAGER_SCHEMA_REF } from './manager-step.js';
-export const RawFindingsStructuredOutput = {
-  schemaRef: RAW_FINDINGS_SCHEMA_REF,
-  /** provider-facing strict schema。native structured output の生成拘束用。 */
-  schema: RawFindingsOutputJsonSchema,
-  /** post-hoc 検証用 schema。provider へは渡さない。 */
-  validationSchema: RawFindingsOutputValidationJsonSchema,
-} as const;
+
+export function createRawFindingsStructuredOutput(
+  reviewScopeSnapshotId: string,
+): WorkflowStructuredOutput {
+  return {
+    schemaRef: RAW_FINDINGS_SCHEMA_REF,
+    schema: createRawFindingsOutputJsonSchema(reviewScopeSnapshotId),
+    validationSchema: RawFindingsOutputValidationJsonSchema,
+  };
+}
 
 /**
  * v2: run-level の invalid_manager_output は存在しない。manager の壊れた応答・

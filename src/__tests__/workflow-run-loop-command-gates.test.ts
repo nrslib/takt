@@ -62,6 +62,7 @@ function makeDeps(
       return previous ? `instruction ${stepIteration}\n${previous}` : `instruction ${stepIteration}`;
     }),
     buildPhase1Instruction: vi.fn((_step: WorkflowStep, instruction: string) => instruction),
+    prepareNormalStepExecution: vi.fn(() => undefined),
     resolveStepProviderModel: vi.fn(() => ({
       provider: undefined,
       model: undefined,
@@ -296,10 +297,8 @@ describe('WorkflowRunLoop command quality gates', () => {
 
     await runSingleWorkflowIteration(deps);
 
-    // options.observability is undefined (disabled): the shadow-span instruction
-    // must not be built — it is only consumed by the (disabled) span and would be
-    // a redundant second buildPhase1Instruction call.
     expect(deps.buildPhase1Instruction).not.toHaveBeenCalled();
+    expect(deps.emit.mock.calls.some(([event]) => event === 'step:start')).toBe(false);
   });
 
   it('should return the current step from runSingleIteration when a command gate fails', async () => {

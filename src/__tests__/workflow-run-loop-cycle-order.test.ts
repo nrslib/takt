@@ -40,6 +40,7 @@ function makeDeps(nextStep: string) {
     persistPreviousResponseSnapshot: vi.fn(),
     buildInstruction: vi.fn(() => 'instruction'),
     buildPhase1Instruction: vi.fn((_step: WorkflowStep, instruction: string) => instruction),
+    prepareNormalStepExecution: vi.fn(() => undefined),
     resolveStepProviderModel: vi.fn(() => ({ provider: undefined, model: undefined })),
     resolveStepProviderModelBeforeAutoRouting: vi.fn(() => ({ provider: undefined, model: undefined })),
     resolveRuntimeForStep: vi.fn(),

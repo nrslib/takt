@@ -1,8 +1,9 @@
 import type { AgentResponse, LoopMonitorConfig, WorkflowMaxSteps, WorkflowState, WorkflowStep } from '../../models/types.js';
 import { ABORT_STEP, FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
 import { FINDING_CONFLICT_ADJUDICATION_RULE_INDEX } from '../findings/adjudication-step.js';
-import { isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
+import { isDelegatedWorkflowStep, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
 import type { RuntimeStepResolution, StepRunResult, WorkflowEngineOptions } from '../types.js';
+import type { PreparedNormalStepExecution } from './StepExecutor.js';
 import { determineRuleTransition, type WorkflowRuleTransition } from './transitions.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 
@@ -23,7 +24,16 @@ interface WorkflowEngineStepCoordinatorDeps {
       updateSession: (persona: string, sessionId: string | undefined) => void,
       prebuiltInstruction?: string,
       runtime?: RuntimeStepResolution,
+      preparedExecution?: PreparedNormalStepExecution,
     ) => Promise<StepRunResult>;
+    prepareNormalStepExecution: (
+      step: WorkflowStep,
+      state: WorkflowState,
+      task: string,
+      maxSteps: WorkflowMaxSteps,
+      stepIteration: number,
+      runtime?: RuntimeStepResolution,
+    ) => PreparedNormalStepExecution;
     buildInstruction: (
       step: WorkflowStep,
       stepIteration: number,
@@ -120,6 +130,7 @@ export class WorkflowEngineStepCoordinator {
     prebuiltInstruction?: string,
     runtime?: RuntimeStepResolution,
     stepIteration?: number,
+    preparedExecution?: PreparedNormalStepExecution,
   ): Promise<StepRunResult> {
     const updateSession = this.deps.updatePersonaSession;
     let result: StepRunResult;
@@ -175,6 +186,7 @@ export class WorkflowEngineStepCoordinator {
         updateSession,
         prebuiltInstruction,
         runtime,
+        preparedExecution,
       );
     }
 
@@ -287,6 +299,29 @@ export class WorkflowEngineStepCoordinator {
       this.deps.state,
       this.deps.task,
       this.deps.getMaxSteps(),
+    );
+  }
+
+  prepareNormalStepExecution(
+    step: WorkflowStep,
+    stepIteration: number,
+    runtime?: RuntimeStepResolution,
+  ): PreparedNormalStepExecution | undefined {
+    if (
+      (step.name === FINDING_CONFLICT_ADJUDICATION_STEP && step.engineSynthesized === true)
+      || isDelegatedWorkflowStep(step)
+      || isSystemWorkflowStep(step)
+      || isWorkflowCallStep(step)
+    ) {
+      return undefined;
+    }
+    return this.deps.stepExecutor.prepareNormalStepExecution(
+      step,
+      this.deps.state,
+      this.deps.task,
+      this.deps.getMaxSteps(),
+      stepIteration,
+      runtime,
     );
   }
 

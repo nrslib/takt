@@ -227,6 +227,7 @@ describe('provisional recovery', () => {
         timestamp: observation.timestamp,
       } as RunFindingManagerForStepInput,
       observation,
+      reviewScopeSnapshotId: 'snapshot',
     });
 
     expect(recovered.findings[0]?.provisional?.adjudicationAttempts).toEqual([

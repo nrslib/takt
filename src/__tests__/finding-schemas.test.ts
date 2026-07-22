@@ -17,6 +17,7 @@ import {
   RawFindingsOutputJsonSchema,
   RawFindingsOutputValidationJsonSchema,
   ReviewerRawFindingSchema,
+  createRawFindingsOutputJsonSchema,
   parseFindingManagerOutput,
 } from '../core/models/finding-schemas.js';
 import { compareRfc3339Timestamps } from '../core/models/rfc3339.js';
@@ -144,6 +145,19 @@ describe('finding schemas', () => {
     expect(Object.keys(lenientItem.properties).sort()).toEqual(
       Object.keys(strictItem.properties).sort(),
     );
+  });
+
+  it('creates a provider-facing snapshotId enum for each review round without changing the static lenient validation schema', () => {
+    const firstRound = createRawFindingsOutputJsonSchema('review-snapshot-first');
+    const secondRound = createRawFindingsOutputJsonSchema('review-snapshot-second');
+    const getSnapshotIdSchema = (schema: typeof firstRound) =>
+      schema.properties.rawFindings.items.properties.snapshotId;
+
+    expect(getSnapshotIdSchema(firstRound).enum).toEqual(['', 'review-snapshot-first']);
+    expect(getSnapshotIdSchema(secondRound).enum).toEqual(['', 'review-snapshot-second']);
+    expect(getSnapshotIdSchema(firstRound).enum).not.toContain('review-snapshot-second');
+    expect(RawFindingsOutputValidationJsonSchema.properties.rawFindings.items.properties.snapshotId)
+      .toEqual(RawFindingsOutputJsonSchema.properties.rawFindings.items.properties.snapshotId);
   });
 
   it('uses finding type constants for schema enum values', () => {

@@ -27,7 +27,7 @@ const log = createLogger('finding-manager-decision');
 export {
   FINDING_MANAGER_SCHEMA_REF,
   RAW_FINDINGS_SCHEMA_REF,
-  RawFindingsStructuredOutput,
+  createRawFindingsStructuredOutput,
 } from './manager-agent.js';
 
 export async function runManagerDecisionStage(params: {
@@ -38,6 +38,7 @@ export async function runManagerDecisionStage(params: {
   ledgerCopyPath: string;
   rawFindingsPath: string;
   observation: FindingObservation;
+  reviewScopeSnapshotId: string;
 }): Promise<ManagerDecisionStageResult> {
   const {
     input,
@@ -47,6 +48,7 @@ export async function runManagerDecisionStage(params: {
     ledgerCopyPath,
     rawFindingsPath,
     observation,
+    reviewScopeSnapshotId,
   } = params;
   const {
     cleanWire,
@@ -59,6 +61,7 @@ export async function runManagerDecisionStage(params: {
     managerStep,
     ledgerCopyPath,
     observation,
+    reviewScopeSnapshotId,
   });
   try {
     const invalidLocationCandidates = computeInvalidLocationCandidates(input.cwd, previousLedger.findings);

@@ -247,6 +247,7 @@ export class ParallelRunner {
       ? this.deps.optionsBuilder.buildFindingContractInstructionContext(step, true)
       : undefined;
     const findingLedgerCopyPath = findingContractContext?.ledgerCopyPath;
+    const rawFindingsStructuredOutput = findingContractContext?.rawFindingsStructuredOutput;
     const agentSubSteps = subSteps.filter(isAgentParallelSubStep);
     const routedProviderInfoByStep = this.deps.engineOptions.autoRouting
       ? await resolveAutoRoutingBatch({
@@ -287,7 +288,9 @@ export class ParallelRunner {
             throw new Error(`Unsupported parallel sub-step kind for "${subStep.name}"`);
           }
 
-          const executableSubStep = withFindingContractStructuredOutput(subStep, findingLedgerCopyPath);
+          const executableSubStep = findingContractContext
+            ? withFindingContractStructuredOutput(subStep, findingContractContext)
+            : subStep;
           const subRuntime = routedProviderInfoByStep.has(subStep.name)
             ? {
                 ...runtime,
@@ -304,7 +307,7 @@ export class ParallelRunner {
             subRuntime?.fallback,
             findingContractContext,
           );
-          const phase1Instruction = findingLedgerCopyPath
+          const phase1Instruction = rawFindingsStructuredOutput
             ? this.deps.stepExecutor.buildPhase1Instruction(subInstruction, executableSubStep, subRuntime)
             : subInstruction;
           subStepInstructionByName.set(subStep.name, phase1Instruction);

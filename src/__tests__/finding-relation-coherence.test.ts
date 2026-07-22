@@ -16,8 +16,14 @@ import {
   clarifyAmbiguousRawRelationsOnce,
   detectClarifiableRawMismatches,
 } from '../core/workflow/findings/relation-coherence.js';
+import { detectRawFindingAmbiguities } from '../core/workflow/findings/raw-canonicalization.js';
 import type { AgentResponse } from '../core/models/types.js';
-import type { FindingLedger, FindingLedgerEntry } from '../core/workflow/findings/types.js';
+import type {
+  FindingLedger,
+  FindingLedgerEntry,
+  FindingLifecycle,
+  FindingStatus,
+} from '../core/workflow/findings/types.js';
 
 const { executeAgent } = await import('../agents/agent-usecases.js');
 const executeAgentMock = vi.mocked(executeAgent);
@@ -106,6 +112,45 @@ describe('detectClarifiableRawMismatches', () => {
       makeRawItem({ rawFindingId: 'raw-c', relation: 'resolution_confirmation', targetFindingId: 'F-0002', title: 'Another one is fixed', location: 'src/two.ts:1' }),
     ];
     expect(detectClarifiableRawMismatches(raws, ledger)).toHaveLength(0);
+  });
+
+  it.each([
+    { status: 'resolved', lifecycle: 'resolved' },
+    { status: 'waived', lifecycle: 'waived' },
+    { status: 'invalidated', lifecycle: 'invalidated' },
+    { status: 'superseded', lifecycle: 'superseded' },
+    { status: 'dismissed', lifecycle: 'dismissed' },
+  ] satisfies Array<{ status: FindingStatus; lifecycle: FindingLifecycle }>)(
+    'resolution_confirmation は $status target の ambiguity を監査用に保持しつつ突き返さない',
+    ({ status, lifecycle }) => {
+      const ledger = makeLedger({
+        findings: [makeOpenFinding({ status, lifecycle })],
+      });
+      const raw = makeRawItem({
+        relation: 'resolution_confirmation',
+        targetFindingId: 'F-0001',
+      });
+
+      expect(detectRawFindingAmbiguities(raw, ledger).codes).toContain('confirmation-target-not-open');
+      expect(detectClarifiableRawMismatches([raw], ledger)).toEqual([]);
+    },
+  );
+
+  it('resolution_confirmation の unknown target は clarification 対象にする', () => {
+    const raw = makeRawItem({
+      relation: 'resolution_confirmation',
+      targetFindingId: 'F-9999',
+    });
+    const ledger = makeLedger();
+
+    expect(detectRawFindingAmbiguities(raw, ledger).codes).toContain('confirmation-target-unknown');
+    expect(detectClarifiableRawMismatches([raw], ledger)).toEqual([
+      expect.objectContaining({
+        rawFindingId: 'raw-new',
+        targetFindingId: 'F-9999',
+        codes: ['confirmation-target-unknown'],
+      }),
+    ]);
   });
 
   it('persists が未知 / 非 open target を指す矛盾を検出する', () => {
@@ -235,6 +280,32 @@ describe('clarifyAmbiguousRawRelationsOnce', () => {
       agentOptions: { provider: 'claude' },
       normalize: identityNormalize,
     });
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(result.response).toBe(response);
+    expect(result.clarification).toBeUndefined();
+  });
+
+  it('resolved target への resolution_confirmation は再生成せず元の応答を保持する', async () => {
+    executeAgentMock.mockReset();
+    const response = makeResponse({
+      structuredOutput: {
+        rawFindings: [makeRawItem({
+          relation: 'resolution_confirmation',
+          targetFindingId: 'F-0001',
+        })],
+      },
+    });
+    const result = await clarifyAmbiguousRawRelationsOnce({
+      stepName: 'coding-review',
+      persona: 'coding-reviewer',
+      response,
+      ledger: makeLedger({
+        findings: [makeOpenFinding({ status: 'resolved', lifecycle: 'resolved' })],
+      }),
+      agentOptions: { provider: 'claude' },
+      normalize: identityNormalize,
+    });
+
     expect(executeAgentMock).not.toHaveBeenCalled();
     expect(result.response).toBe(response);
     expect(result.clarification).toBeUndefined();
