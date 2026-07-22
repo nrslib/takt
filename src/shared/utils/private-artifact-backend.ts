@@ -192,6 +192,13 @@ export class PrivateArtifactPublicationConflictError extends Error {
   }
 }
 
+export class PrivateArtifactCreationConflictError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'PrivateArtifactCreationConflictError';
+  }
+}
+
 function parseArtifactCreationIdentity(output: string): SerializedPrivateArtifactIdentity {
   const parsed: unknown = JSON.parse(output);
   if (
@@ -220,12 +227,20 @@ export function createPrivateArtifact(
     parentDev: String(parentStat.dev),
     parentIno: String(parentStat.ino),
   });
-  return parseArtifactCreationIdentity(runPrivateArtifactHelper(
-    ARTIFACT_CREATOR_SCRIPT,
-    request,
-    parentPath,
-    `Private artifact ${kind} creation failed`,
-  ));
+  try {
+    return parseArtifactCreationIdentity(runPrivateArtifactHelper(
+      ARTIFACT_CREATOR_SCRIPT,
+      request,
+      parentPath,
+      `Private artifact ${kind} creation failed`,
+    ));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.startsWith('EEXIST:')) {
+      throw new PrivateArtifactCreationConflictError(message, { cause: error });
+    }
+    throw error;
+  }
 }
 
 export function publishPrivateArtifact(

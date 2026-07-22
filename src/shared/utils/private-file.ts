@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import {
   createPrivateArtifact as createPrivateArtifactAtBoundary,
+  PrivateArtifactCreationConflictError,
   publishPrivateArtifact as publishPrivateArtifactAtBoundary,
   PrivateArtifactPublicationConflictError,
 } from './private-artifact-backend.js';
@@ -80,7 +81,13 @@ export function ensurePrivateDirectory(directoryPath: string): void {
     const parentStat = current === trustedRoot ? statSync(current) as Stats : lstatSync(current) as Stats;
     current = join(parentPath, component);
     if (lstatOrUndefined(current) === undefined) {
-      createPrivateArtifact(parentPath, current, parentStat, 'directory', PRIVATE_DIRECTORY_MODE);
+      try {
+        createPrivateArtifact(parentPath, current, parentStat, 'directory', PRIVATE_DIRECTORY_MODE);
+      } catch (error) {
+        if (!(error instanceof PrivateArtifactCreationConflictError)) {
+          throw error;
+        }
+      }
     }
     const stat = lstatSync(current);
     if (stat.isSymbolicLink() || !stat.isDirectory()) {
