@@ -23,12 +23,9 @@ import type { PhaseName, PhasePromptParts, JudgeStageEntry, RuntimeStepResolutio
 import type { ProviderUsageSnapshot } from '../../models/response.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
-import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
-import { detectMatchedRule } from '../evaluation/index.js';
+import { runReportPhase, ReportPhaseGenerationError } from '../phase-runner.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
-import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
-import { resolvePhase3Adoption } from '../evaluation/rule-utils.js';
-import type { BasePhaseRunnerContext, StatusJudgmentPhaseResult } from '../phase-runner.js';
+import type { BasePhaseRunnerContext } from '../phase-runner.js';
 import { buildSessionKey } from '../session-key.js';
 import { incrementStepIteration, getPreviousOutput } from './state-manager.js';
 import { createLogger, getErrorMessage, slugify } from '../../../shared/utils/index.js';
@@ -41,7 +38,6 @@ import {
   assertProviderResolvedForCapabilitySensitiveOptions,
 } from './engine-provider-options.js';
 import {
-  StructuredOutputSchemaError,
   validateStructuredOutputAgainstSchema,
 } from './structured-output-schema-validator.js';
 import { providerSupportsStructuredOutput } from '../../../infra/providers/provider-capabilities.js';
@@ -66,6 +62,7 @@ import {
 import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
 import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
 import type { InstructionBuildTransaction } from './instruction-build-transaction.js';
+import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 
 const log = createLogger('step-executor');
 
@@ -87,7 +84,6 @@ export interface StepExecutorDeps {
   readonly observabilityEnabled?: () => boolean;
   readonly sanitizeObservabilityText?: (text: string) => string;
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
-  readonly detectRuleIndex: (content: string, stepName: string) => number;
   readonly structuredCaller: StructuredCaller;
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
   /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
@@ -636,62 +632,9 @@ export class StepExecutor {
       state.structuredOutputs.set(step.name, nextResponse.structuredOutput);
     }
 
-    // Phase 3: status judgment (new session, no tools, determines matched rule)
-    let phase3Result: StatusJudgmentPhaseResult | undefined;
-    try {
-      phase3Result = needsStatusJudgmentPhase(step)
-        ? await runStatusJudgmentPhase(step, phaseCtx)
-        : undefined;
-    } catch (error) {
-      if (error instanceof StructuredOutputSchemaError) {
-        throw error;
-      }
-      log.info('Phase 3 status judgment failed, falling back to phase1 rule evaluation', {
-        step: step.name,
-        error: getErrorMessage(error),
-      });
-    }
-
-    if (phase3Result) {
-      // Phase 3 の判定はタグ/構造化出力からルール番号を直接採用するため、
-      // ここでガード（findings 条件）を評価する。不成立なら採用せず、
-      // ガード対応済みの通常ルール評価へフォールバックする。
-      // 採用判定は共通ヘルパに委譲（先行決定的評価 + ガード/決定的再評価）。
-      const adoption = resolvePhase3Adoption(step.rules, phase3Result, state, this.deps.getInteractive(), evaluateWhenExpression);
-      phase3Result = adoption.result;
-      if (adoption.blocked) {
-        log.debug('Phase 3 rule guard failed; falling back to rule evaluation', {
-          step: step.name,
-          ruleIndex: phase3Result.ruleIndex,
-          ruleCondition: step.rules?.[phase3Result.ruleIndex]?.condition,
-        });
-      } else {
-        log.debug('Rule matched (Phase 3)', {
-          step: step.name,
-          ruleIndex: phase3Result.ruleIndex,
-          method: phase3Result.method,
-        });
-        nextResponse = {
-          ...nextResponse,
-          matchedRuleIndex: phase3Result.ruleIndex,
-          matchedRuleMethod: phase3Result.method,
-        };
-        return nextResponse;
-      }
-    }
-
-    // No Phase 3 — use rule evaluator with Phase 1 content
-    const stepProviderModel = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime);
-    const match = await detectMatchedRule(step, nextResponse.content, '', {
+    const match = await evaluatePostExecutionRules(step, () => phaseCtx, {
       state,
-      cwd: this.deps.getCwd(),
-      provider: stepProviderModel.provider,
-      resolvedProvider: stepProviderModel.provider,
-      resolvedModel: stepProviderModel.model,
-      childProcessEnv: phaseCtx.childProcessEnv,
       interactive: this.deps.getInteractive(),
-      detectRuleIndex: this.deps.detectRuleIndex,
-      structuredCaller: this.deps.structuredCaller,
     });
     if (match) {
       log.debug('Rule matched', { step: step.name, ruleIndex: match.index, method: match.method });

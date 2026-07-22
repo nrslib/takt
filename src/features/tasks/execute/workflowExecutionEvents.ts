@@ -1,5 +1,6 @@
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
 import type { WorkflowResumePointEntry } from '../../../core/models/index.js';
+import { formatWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
 import type { WorkflowEngine } from '../../../core/workflow/index.js';
 import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
@@ -486,7 +487,7 @@ export function bindWorkflowExecutionEvents(
     if (response.matchedRuleIndex != null && step.rules) {
       const rule = step.rules[response.matchedRuleIndex];
       const methodLabel = response.matchedRuleMethod ? ` (${response.matchedRuleMethod})` : '';
-      deps.out.status('Status', rule ? `${rule.condition}${methodLabel}` : response.status);
+      deps.out.status('Status', rule ? `${formatWorkflowRuleCondition(rule.condition)}${methodLabel}` : response.status);
     } else {
       deps.out.status('Status', response.status);
     }

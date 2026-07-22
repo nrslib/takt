@@ -1253,16 +1253,15 @@ describe('PromptBasedStructuredCaller', () => {
     );
   });
 
-  it('should return auto_select without calling agent when only one rule exists', async () => {
+  it('should reject a single candidate because auto-selection belongs to the workflow boundary', async () => {
     const caller = new PromptBasedStructuredCaller();
-    const result = await caller.judgeStatus(
+    await expect(caller.judgeStatus(
       'structured instruction',
       'tag instruction',
-      [{ condition: 'approved', next: 'done' }],
+      [{ label: 'approved' }],
       { cwd: '/tmp/project', stepName: 'review', provider: 'cursor' },
-    );
+    )).rejects.toThrow('judgeStatus requires at least two semantic candidates');
 
-    expect(result).toEqual({ ruleIndex: 0, method: 'auto_select' });
     expect(mockRunAgent).not.toHaveBeenCalled();
   });
 
@@ -1279,8 +1278,8 @@ describe('PromptBasedStructuredCaller', () => {
       'structured instruction',
       'tag instruction',
       [
-        { condition: 'approved', next: 'done' },
-        { condition: 'rejected', next: 'failed' },
+        { label: 'approved' },
+        { label: 'rejected' },
       ],
       {
         cwd: '/tmp/project',
@@ -1291,7 +1290,7 @@ describe('PromptBasedStructuredCaller', () => {
       },
     );
 
-    expect(result).toEqual({ ruleIndex: 1, method: 'structured_output' });
+    expect(result).toEqual({ candidateIndex: 1, method: 'structured_output' });
     expect(mockRunAgent).toHaveBeenCalledTimes(1);
     expect(mockRunAgent).toHaveBeenNthCalledWith(
       1,
@@ -1326,14 +1325,48 @@ describe('PromptBasedStructuredCaller', () => {
       'structured instruction',
       'tag instruction',
       [
-        { condition: 'approved', next: 'done' },
-        { condition: 'rejected', next: 'failed' },
+        { label: 'approved' },
+        { label: 'rejected' },
       ],
       { cwd: '/tmp/project', stepName: 'review', provider: 'cursor' },
     );
 
-    expect(result).toEqual({ ruleIndex: 0, method: 'phase3_tag' });
+    expect(result).toEqual({ candidateIndex: 0, method: 'phase3_tag' });
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('should pass structured prompt resolution callback to Stage 2', async () => {
+    const onStructuredPromptResolved = vi.fn();
+    mockRunAgent
+      .mockResolvedValueOnce({
+        persona: 'conductor',
+        status: 'done',
+        content: 'no json block here',
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'conductor',
+        status: 'done',
+        content: '[REVIEW:1]',
+        timestamp: new Date(),
+      });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.judgeStatus(
+      'structured instruction',
+      'tag instruction',
+      [{ label: 'approved' }, { label: 'needs_fix' }],
+      {
+        cwd: '/tmp/project',
+        stepName: 'review',
+        provider: 'cursor',
+        onStructuredPromptResolved,
+      },
+    );
+
+    expect(mockRunAgent.mock.calls[1]?.[2]).toEqual(expect.objectContaining({
+      onPromptResolved: onStructuredPromptResolved,
+    }));
   });
 
   it('should return ai_judge when Stage 1 and Stage 2 fail and evaluateCondition succeeds', async () => {
@@ -1362,13 +1395,13 @@ describe('PromptBasedStructuredCaller', () => {
       'structured instruction',
       'tag instruction',
       [
-        { condition: 'approved', next: 'done' },
-        { condition: 'rejected', next: 'failed' },
+        { label: 'approved' },
+        { label: 'rejected' },
       ],
       { cwd: '/tmp/project', stepName: 'review', provider: 'cursor' },
     );
 
-    expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
+    expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
     expect(mockRunAgent).toHaveBeenCalledTimes(3);
   });
 
@@ -1388,8 +1421,8 @@ describe('PromptBasedStructuredCaller', () => {
       'structured instruction',
       'tag instruction',
       [
-        { condition: 'approved', next: 'COMPLETE' },
-        { condition: 'needs_fix', next: 'fix' },
+        { label: 'approved' },
+        { label: 'needs_fix' },
       ],
       { cwd: '/tmp/project', stepName: 'review', onJudgeStage },
     )).rejects.toThrow('tag provider rejected');
@@ -1430,20 +1463,125 @@ describe('PromptBasedStructuredCaller', () => {
       'structured instruction',
       'tag instruction',
       [
-        { condition: 'approved', next: 'done' },
-        { condition: 'rejected', next: 'failed' },
+        { label: 'approved' },
+        { label: 'rejected' },
       ],
       { cwd: '/tmp/project', stepName: 'review', resolvedProvider: 'claude-terminal' },
     );
 
-    expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
+    expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
     expect(mockRunAgent).toHaveBeenCalledTimes(3);
     for (const call of mockRunAgent.mock.calls) {
       expect(call[2]).not.toHaveProperty('maxTurns');
     }
   });
 
-  it('should exclude interactiveOnly rules from Stage 3 conditions when interactive is false', async () => {
+  it('should pass abortSignal to all prompt-based judgeStatus provider calls', async () => {
+    const abortController = new AbortController();
+    mockRunAgent
+      .mockResolvedValueOnce({ persona: 'conductor', status: 'done', content: 'no json block here', timestamp: new Date() })
+      .mockResolvedValueOnce({ persona: 'conductor', status: 'done', content: 'no matching tag', timestamp: new Date() })
+      .mockResolvedValueOnce({ persona: 'default', status: 'done', content: '[JUDGE:2]', timestamp: new Date() });
+
+    const caller = new PromptBasedStructuredCaller();
+    const result = await caller.judgeStatus(
+      'structured instruction',
+      'tag instruction',
+      [{ label: 'approved' }, { label: 'needs_fix' }],
+      { cwd: '/tmp/project', stepName: 'review', abortSignal: abortController.signal },
+    );
+
+    expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
+    for (const call of mockRunAgent.mock.calls) {
+      expect(call[2]).toEqual(expect.objectContaining({ abortSignal: abortController.signal }));
+    }
+  });
+
+  it('should reject a pre-aborted signal without starting a prompt-based provider stage', async () => {
+    const abortController = new AbortController();
+    abortController.abort(new Error('cancelled before judgment'));
+    const caller = new PromptBasedStructuredCaller();
+
+    await expect(caller.judgeStatus(
+      'structured instruction',
+      'tag instruction',
+      [{ label: 'approved' }, { label: 'needs_fix' }],
+      { cwd: '/tmp/project', stepName: 'review', abortSignal: abortController.signal },
+    )).rejects.toThrow('cancelled before judgment');
+
+    expect(mockRunAgent).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 2, 3])(
+    'should record prompt-based provider stage %i before stopping when the signal is aborted',
+    async (abortStage) => {
+      const abortController = new AbortController();
+      const onJudgeStage = vi.fn();
+      const providerUsages = [1, 2, 3].map((stage) => ({
+        inputTokens: stage,
+        outputTokens: stage,
+        totalTokens: stage * 2,
+        usageMissing: false,
+      }));
+      let stage = 0;
+      mockRunAgent.mockImplementation(async () => {
+        stage++;
+        if (stage === abortStage) {
+          abortController.abort(new Error(`cancelled during stage ${stage}`));
+        }
+        if (stage === 1) {
+          return {
+            persona: 'conductor',
+            status: 'done',
+            content: 'no json block',
+            timestamp: new Date(),
+            providerUsage: providerUsages[stage - 1],
+          };
+        }
+        if (stage === 2) {
+          return {
+            persona: 'conductor',
+            status: 'done',
+            content: 'no matching tag',
+            timestamp: new Date(),
+            providerUsage: providerUsages[stage - 1],
+          };
+        }
+        return {
+          persona: 'default',
+          status: 'done',
+          content: '[JUDGE:2]',
+          timestamp: new Date(),
+          providerUsage: providerUsages[stage - 1],
+        };
+      });
+      const caller = new PromptBasedStructuredCaller();
+
+      await expect(caller.judgeStatus(
+        'structured instruction',
+        'tag instruction',
+        [{ label: 'approved' }, { label: 'needs_fix' }],
+        {
+          cwd: '/tmp/project',
+          stepName: 'review',
+          abortSignal: abortController.signal,
+          onJudgeStage,
+        },
+      )).rejects.toThrow(`cancelled during stage ${abortStage}`);
+
+      expect(mockRunAgent).toHaveBeenCalledTimes(abortStage);
+      expect(onJudgeStage).toHaveBeenCalledTimes(abortStage);
+      for (let index = 0; index < abortStage; index++) {
+        expect(onJudgeStage).toHaveBeenNthCalledWith(index + 1, expect.objectContaining({
+          stage: index + 1,
+          status: index + 1 === abortStage ? 'error' : 'done',
+          providerUsage: providerUsages[index],
+        }));
+      }
+    },
+  );
+
+  it('should use the provided candidate order for Stage 3 conditions', async () => {
     mockRunAgent
       .mockResolvedValueOnce({
         persona: 'conductor',
@@ -1469,20 +1607,19 @@ describe('PromptBasedStructuredCaller', () => {
       'structured instruction',
       'tag instruction',
       [
-        { condition: 'approved', next: 'done' },
-        { condition: 'interactive-only-rule', next: 'blocked', interactiveOnly: true },
+        { label: 'approved' },
+        { label: 'needs_fix' },
       ],
-      { cwd: '/tmp/project', stepName: 'review', provider: 'cursor', interactive: false },
+      { cwd: '/tmp/project', stepName: 'review', provider: 'cursor' },
     );
 
-    // interactiveOnly rule (index 1) is excluded; only index 0 is passed to evaluateCondition
-    // [JUDGE:1] → 0-based index 0, which maps to original index 0
-    expect(result).toEqual({ ruleIndex: 0, method: 'ai_judge' });
+    expect(result).toEqual({ candidateIndex: 0, method: 'ai_judge' });
     const [, judgePrompt] = mockRunAgent.mock.calls[2] ?? [];
-    expect(judgePrompt).not.toContain('interactive-only-rule');
+    expect(judgePrompt).toContain('approved');
+    expect(judgePrompt).toContain('needs_fix');
   });
 
-  it('should include interactiveOnly rules in Stage 3 conditions when interactive is true', async () => {
+  it('should retain every provided candidate for Stage 3 conditions', async () => {
     mockRunAgent
       .mockResolvedValueOnce({
         persona: 'conductor',
@@ -1508,14 +1645,13 @@ describe('PromptBasedStructuredCaller', () => {
       'structured instruction',
       'tag instruction',
       [
-        { condition: 'approved', next: 'done' },
-        { condition: 'interactive-only-rule', next: 'blocked', interactiveOnly: true },
+        { label: 'approved' },
+        { label: 'interactive-only-rule' },
       ],
-      { cwd: '/tmp/project', stepName: 'review', provider: 'cursor', interactive: true },
+      { cwd: '/tmp/project', stepName: 'review', provider: 'cursor' },
     );
 
-    // interactiveOnly rule (index 1) is included; [JUDGE:2] → 0-based index 1, which maps to original index 1
-    expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
+    expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
     const [, judgePrompt] = mockRunAgent.mock.calls[2] ?? [];
     expect(judgePrompt).toContain('interactive-only-rule');
   });
@@ -1547,8 +1683,8 @@ describe('PromptBasedStructuredCaller', () => {
       'structured',
       'tag instruction',
       [
-        { condition: 'approved', next: 'done' },
-        { condition: 'rejected', next: 'failed' },
+        { label: 'approved' },
+        { label: 'rejected' },
       ],
       { cwd: '/tmp/project', stepName: 'review', provider: 'cursor' },
     )).rejects.toThrow('Structured response parsing failed');

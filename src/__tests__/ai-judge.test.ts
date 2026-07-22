@@ -1,85 +1,50 @@
-/**
- * Tests for AI judge (ai() condition evaluation)
- */
-
-import { describe, it, expect } from 'vitest';
-import { detectJudgeIndex, isValidRuleIndex, buildJudgeConditions } from '../agents/judge-utils.js';
+import { describe, expect, it } from 'vitest';
+import { detectJudgeIndex } from '../agents/judge-utils.js';
+import {
+  needsSemanticStatusJudgment,
+  semanticRuleCandidatesOf,
+} from '../core/models/workflow-rule-condition.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 describe('detectJudgeIndex', () => {
-  it('should detect [JUDGE:1] as index 0', () => {
-    expect(detectJudgeIndex('[JUDGE:1]')).toBe(0);
-  });
-
-  it('should detect [JUDGE:3] as index 2', () => {
+  it('converts a one-based judge tag to a candidate index', () => {
     expect(detectJudgeIndex('Some output [JUDGE:3] more text')).toBe(2);
   });
 
-  it('should return -1 for no match', () => {
+  it('rejects missing and zero judge tags', () => {
     expect(detectJudgeIndex('No judge tag here')).toBe(-1);
-  });
-
-  it('should return -1 for [JUDGE:0]', () => {
     expect(detectJudgeIndex('[JUDGE:0]')).toBe(-1);
   });
-
-  it('should be case-insensitive', () => {
-    expect(detectJudgeIndex('[judge:2]')).toBe(1);
-  });
 });
 
-describe('isValidRuleIndex', () => {
-  const rules = [
-    { condition: 'approved', next: 'done' },
-    { condition: 'blocked', next: 'wait', interactiveOnly: true },
-  ];
+describe('semanticRuleCandidatesOf', () => {
+  it('keeps the first YAML occurrence of each interactive candidate', () => {
+    const rules = [
+      normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
+      normalizeRule({ condition: 'needs_fix && when(findings.open.count > 0)', next: 'fix' }),
+      normalizeRule({ condition: 'approved && when(findings.open.count == 0)', next: 'COMPLETE' }),
+      normalizeRule({ condition: 'when(findings.conflicts.count > 0)', next: 'ABORT' }),
+      normalizeRule({ condition: 'blocked', next: 'wait', interactive_only: true }),
+    ];
 
-  it('should return false for negative index', () => {
-    expect(isValidRuleIndex(-1, rules, false)).toBe(false);
-  });
-
-  it('should return false for index >= rules.length', () => {
-    expect(isValidRuleIndex(2, rules, false)).toBe(false);
-  });
-
-  it('should return true for non-interactiveOnly rule', () => {
-    expect(isValidRuleIndex(0, rules, false)).toBe(true);
-  });
-
-  it('should return false for interactiveOnly rule when interactive=false', () => {
-    expect(isValidRuleIndex(1, rules, false)).toBe(false);
-  });
-
-  it('should return true for interactiveOnly rule when interactive=true', () => {
-    expect(isValidRuleIndex(1, rules, true)).toBe(true);
-  });
-});
-
-describe('buildJudgeConditions', () => {
-  const rules = [
-    { condition: 'approved', next: 'done' },
-    { condition: 'blocked', next: 'wait', interactiveOnly: true },
-  ];
-
-  it('should include all conditions when interactive=true', () => {
-    expect(buildJudgeConditions(rules, true)).toEqual([
-      { index: 0, text: 'approved' },
-      { index: 1, text: 'blocked' },
+    expect(semanticRuleCandidatesOf(rules, false)).toEqual([
+      { label: 'approved' },
+      { label: 'needs_fix' },
+    ]);
+    expect(semanticRuleCandidatesOf(rules, true)).toEqual([
+      { label: 'approved' },
+      { label: 'needs_fix' },
+      { label: 'blocked' },
     ]);
   });
 
-  it('should exclude interactiveOnly conditions when interactive=false', () => {
-    expect(buildJudgeConditions(rules, false)).toEqual([
-      { index: 0, text: 'approved' },
-    ]);
-  });
+  it('requires status judgment only for multiple active semantic candidates', () => {
+    const rules = [
+      normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
+      normalizeRule({ condition: 'blocked', next: 'wait', interactive_only: true }),
+    ];
 
-  it('should return empty array for empty rules', () => {
-    expect(buildJudgeConditions([], false)).toEqual([]);
-  });
-
-  it('should preserve provided original indexes', () => {
-    expect(buildJudgeConditions([rules[0]], true, [2])).toEqual([
-      { index: 2, text: 'approved' },
-    ]);
+    expect(needsSemanticStatusJudgment(rules, false)).toBe(false);
+    expect(needsSemanticStatusJudgment(rules, true)).toBe(true);
   });
 });

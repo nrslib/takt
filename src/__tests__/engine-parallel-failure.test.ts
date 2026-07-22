@@ -6,14 +6,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -23,16 +27,16 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
-import { needsStatusJudgmentPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import { StructuredOutputSchemaError } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/index.js';
 import {
   makeResponse,
   makeStep,
   makeRule,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   createTestTmpDir,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
@@ -61,16 +65,8 @@ function buildParallelOnlyConfig(): WorkflowConfig {
           }),
         ],
         rules: [
-          makeRule('all("approved")', 'done', {
-            isAggregateCondition: true,
-            aggregateType: 'all',
-            aggregateConditionText: 'approved',
-          }),
-          makeRule('any("needs_fix")', 'fix', {
-            isAggregateCondition: true,
-            aggregateType: 'any',
-            aggregateConditionText: 'needs_fix',
-          }),
+          makeRule('all("approved")', 'done'),
+          makeRule('any("needs_fix")', 'fix'),
         ],
       }),
       makeStep('done', {
@@ -160,11 +156,11 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
       return makeResponse({ persona: String(persona), content: 'approved' });
     });
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // arch-review（再試行後）→ approved
-      { index: 0, method: 'phase1_tag' }, // security-review → approved
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // arch-review（再試行後）→ approved
+      { index: 0, method: 'phase3_tag' }, // security-review → approved
       { index: 0, method: 'aggregate' },  // 親 reviewers → done
-      { index: 0, method: 'phase1_tag' }, // done → COMPLETE
+      { index: 0, method: 'phase3_tag' }, // done → COMPLETE
     ]);
 
     const state = await engine.run();
@@ -227,11 +223,11 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
       }
       return makeResponse({ persona: String(persona), content: 'approved', sessionId: 'security-session' });
     });
-    vi.mocked(detectMatchedRule).mockImplementation(async (step) => {
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => {
       if (step.name === 'arch-review') {
         throw new RuleDetectionExhaustedError('arch-review');
       }
-      return { index: 0, method: 'phase1_tag' };
+      return { index: 0, method: 'phase3_tag' };
     });
 
     const state = await engine.run();
@@ -255,11 +251,7 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
         rules: [makeRule('approved', 'COMPLETE')],
       }),
     ];
-    reviewers.rules = [makeRule('all("approved")', 'COMPLETE', {
-      isAggregateCondition: true,
-      aggregateType: 'all',
-      aggregateConditionText: 'approved',
-    })];
+    reviewers.rules = [makeRule('all("approved")', 'COMPLETE')];
     const onSessionUpdate = vi.fn();
     const engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
@@ -274,12 +266,18 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
       }
       return makeResponse({ persona: String(persona), content: 'approved', sessionId: 'session-newer' });
     });
-    vi.mocked(detectMatchedRule).mockImplementation(async (step) => {
+    vi.mocked(runStatusJudgmentPhase).mockImplementation(async (step) => {
       if (step.name === 'stale-review') {
         await new Promise((resolve) => setTimeout(resolve, 20));
+        return { label: 'approved', method: 'phase3_tag' };
+      }
+      return { label: 'approved', method: 'phase3_tag' };
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => {
+      if (step.name === 'stale-review') {
         throw new RuleDetectionExhaustedError('stale-review');
       }
-      return { index: 0, method: 'phase1_tag' };
+      return { index: 0, method: 'phase3_tag' };
     });
 
     const state = await engine.run();
@@ -303,8 +301,8 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
       return makeResponse({ persona: 'security-review', content: '[SECURITY-REVIEW:1] approved' });
     });
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const abortFn = vi.fn();
@@ -406,8 +404,8 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
       return makeResponse({ persona: 'security-review', content: '[SECURITY-REVIEW:1] approved' });
     });
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
@@ -439,8 +437,8 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
       return makeResponse({ persona: 'security-review', content: '[SECURITY-REVIEW:1] approved' });
     });
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const abortFn = vi.fn();
@@ -492,8 +490,8 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
       return makeResponse({ persona: 'security-review', content: '[SECURITY-REVIEW:1] approved' });
     });
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     const blockedFn = vi.fn();
@@ -522,18 +520,15 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(snapshot).toBe(reviewersOutput!.content);
   });
 
-  it('should fallback to phase1 rule evaluation when sub-step phase3 throws', async () => {
+  it('should abort when sub-step phase3 throws instead of falling back to phase1 tags', async () => {
     const config = buildParallelOnlyConfig();
     const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
-    vi.mocked(needsStatusJudgmentPhase).mockImplementation((step) => {
-      return step.name === 'arch-review' || step.name === 'security-review';
-    });
     vi.mocked(runStatusJudgmentPhase).mockImplementation(async (step) => {
       if (step.name === 'arch-review') {
         throw new Error('Phase 3 failed for arch-review');
       }
-      return { tag: '', ruleIndex: 0, method: 'auto_select' };
+      return { label: '', method: 'auto_select' };
     });
 
     const mock = vi.mocked(runAgent);
@@ -559,33 +554,21 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
       return makeResponse({ persona: 'done', content: 'completed' });
     });
 
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'aggregate' },
-      { index: 0, method: 'phase1_tag' },
-    ]);
-
     const state = await engine.run();
 
-    expect(state.status).toBe('completed');
-    expect(state.stepOutputs.get('arch-review')?.status).toBe('done');
-    expect(state.stepOutputs.get('arch-review')?.matchedRuleMethod).toBe('phase1_tag');
-    expect(
-      vi.mocked(detectMatchedRule).mock.calls.some(([step, content, tagContent]) => {
-        return step.name === 'arch-review' && content === '[STEP:1] done' && tagContent === '';
-      }),
-    ).toBe(true);
+    expect(state.status).toBe('aborted');
+    expect(state.stepOutputs.get('arch-review')?.status).toBe('error');
+    expect(vi.mocked(mockRuleEvaluation).mock.calls.some(([step]) => step.name === 'arch-review')).toBe(false);
   });
 
   it('should fail the parallel boundary on a sub-step Phase 3 schema error instead of using a matching Phase 1 tag', async () => {
     const config = buildParallelOnlyConfig();
     const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
-    vi.mocked(needsStatusJudgmentPhase).mockImplementation((step) => step.name === 'arch-review');
     vi.mocked(runStatusJudgmentPhase).mockImplementation(async (step) => {
       if (step.name === 'arch-review') {
         throw new StructuredOutputSchemaError('Structured output schema is invalid');
       }
-      return { tag: '', ruleIndex: 0, method: 'auto_select' };
+      return { label: '', method: 'auto_select' };
     });
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({
@@ -594,14 +577,14 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
       });
       return makeResponse({ persona: String(persona), content: '[ARCH-REVIEW:1] approved' });
     });
-    vi.mocked(detectMatchedRule).mockResolvedValue({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
     expect(runStatusJudgmentPhase).toHaveBeenCalled();
     expect(
-      vi.mocked(detectMatchedRule).mock.calls.some(([step]) => step.name === 'arch-review'),
+      vi.mocked(mockRuleEvaluation).mock.calls.some(([step]) => step.name === 'arch-review'),
     ).toBe(false);
   });
 });

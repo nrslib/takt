@@ -33,26 +33,26 @@ steps:
     policy: review
     instruction: review-merge-readiness
     rules:
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
-        return: need_replan
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
-        return: needs_review
-      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
-        next: supervise
-      - condition: needs_fix && when(findings.conflicts.count == 0)
-        return: needs_fix
-      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-        return: need_replan
-      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
-        return: need_replan
-      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
-        return: need_replan
-      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
-        return: needs_fix
       - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
         return: needs_conflict_adjudication
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
+      - condition: when(findings.provisional.fixpoint == true)
+        return: need_replan
+      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0)
+        return: need_replan
+      - condition: when(findings.provisional.count > 0)
+        return: need_replan
+      - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
+        return: need_replan
+      - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0)
+        return: needs_review
+      - condition: needs_fix
+        return: needs_fix
+      - condition: when(findings.open.count > 0)
+        return: needs_fix
+      - condition: approved && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+        next: supervise
     output_contracts:
       report:
         - name: merge-readiness-review.md
@@ -68,28 +68,28 @@ steps:
       $param: supervise_knowledge
     instruction: supervise-finding-contract
     rules:
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
-        return: need_replan
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
-        return: needs_review
-      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
-        next: COMPLETE
-      - condition: needs_fix && when(findings.conflicts.count == 0)
-        return: needs_fix
-      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-        return: need_replan
-      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
-        return: need_replan
-      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
-        return: need_replan
-      - condition: need_replan && when(findings.conflicts.count == 0)
-        return: need_replan
-      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
-        return: needs_fix
       - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
         return: needs_conflict_adjudication
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
+      - condition: when(findings.provisional.fixpoint == true)
+        return: need_replan
+      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0)
+        return: need_replan
+      - condition: when(findings.provisional.count > 0)
+        return: need_replan
+      - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
+        return: need_replan
+      - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0)
+        return: needs_review
+      - condition: needs_fix
+        return: needs_fix
+      - condition: need_replan
+        return: need_replan
+      - condition: when(findings.open.count > 0)
+        return: needs_fix
+      - condition: approved && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+        next: COMPLETE
     output_contracts:
       report:
         - name: supervisor-validation.md

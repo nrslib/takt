@@ -9,9 +9,8 @@ vi.mock('../agents/runner.js', () => ({
 }));
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({

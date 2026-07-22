@@ -9,7 +9,7 @@ import type { ProviderUsageSnapshot } from '../models/response.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { PhaseName, PhasePromptParts, JudgeStageEntry, StepProviderInfo } from './types.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
-import { hasTagBasedRules } from './evaluation/rule-utils.js';
+import { needsSemanticStatusJudgment } from '../models/workflow-rule-condition.js';
 import type { FindingContractInstructionContext } from './instruction/instruction-context.js';
 export { runReportPhase, ReportPhaseGenerationError, type ReportPhaseBlockedResult, type ReportPhaseRateLimitedResult } from './report-phase-runner.js';
 export { runStatusJudgmentPhase, type StatusJudgmentPhaseResult } from './status-judgment-phase.js';
@@ -37,6 +37,8 @@ export interface BasePhaseRunnerContext {
   getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   /** Run-local environment values passed to trusted child processes. */
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  /** Interrupts active provider calls when the workflow is cancelled. */
+  abortSignal?: AbortSignal;
   /** Stream callback for provider event logging */
   onStream?: import('../../agents/types.js').StreamCallback;
   /** Parent workflow iteration for sub-step phase events */
@@ -110,8 +112,8 @@ export interface StatusJudgmentPhaseContext extends BasePhaseRunnerContext {
 
 /**
  * Check if a step needs Phase 3 (status judgment).
- * Returns true when at least one rule requires tag-based detection.
+ * Returns true when the step has multiple semantic label candidates.
  */
-export function needsStatusJudgmentPhase(step: WorkflowStep): boolean {
-  return hasTagBasedRules(step);
+export function needsStatusJudgmentPhase(step: WorkflowStep, interactive: boolean): boolean {
+  return needsSemanticStatusJudgment(step.rules ?? [], interactive);
 }

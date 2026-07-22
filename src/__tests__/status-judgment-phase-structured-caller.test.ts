@@ -3,6 +3,7 @@ import type { WorkflowStep } from '../core/models/types.js';
 import { runStatusJudgmentPhase } from '../core/workflow/status-judgment-phase.js';
 import { runAgent } from '../agents/runner.js';
 import { PromptBasedStructuredCaller } from '../agents/structured-caller.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -20,7 +21,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
           systemPrompt: 'judge-system',
           userInstruction: 'judge-instruction',
         });
-        return { ruleIndex: 1, method: 'phase3_tag' as const };
+        return { candidateIndex: 1, method: 'phase3_tag' as const };
       }),
     };
 
@@ -31,8 +32,8 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       instruction: 'Review',
       passPreviousResponse: true,
       rules: [
-        { condition: 'needs_fix', next: 'fix' },
-        { condition: 'approved', next: 'COMPLETE' },
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
       ],
     };
 
@@ -48,14 +49,16 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
     });
 
     expect(result).toEqual({
-      tag: '[REVIEW:2]',
-      ruleIndex: 1,
+      label: 'approved',
       method: 'phase3_tag',
     });
     expect(structuredCaller.judgeStatus).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      step.rules,
+      [
+        { label: 'needs_fix' },
+        { label: 'approved' },
+      ],
       expect.objectContaining({
         cwd: '/tmp/project',
         stepName: 'review',
@@ -71,7 +74,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
           systemPrompt: 'judge-system',
           userInstruction: 'judge-instruction',
         });
-        return { ruleIndex: 0, method: 'structured_output' as const };
+        return { candidateIndex: 0, method: 'structured_output' as const };
       }),
     };
 
@@ -82,8 +85,8 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       instruction: 'Review',
       passPreviousResponse: true,
       rules: [
-        { condition: 'needs_fix', next: 'fix' },
-        { condition: 'approved', next: 'COMPLETE' },
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
       ],
     };
 
@@ -121,7 +124,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
           systemPrompt: 'judge-system',
           userInstruction: 'judge-instruction',
         });
-        return { ruleIndex: 0, method: 'structured_output' as const };
+        return { candidateIndex: 0, method: 'structured_output' as const };
       }),
     };
     const step: WorkflowStep = {
@@ -131,8 +134,8 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       instruction: 'Review',
       passPreviousResponse: true,
       rules: [
-        { condition: 'needs_fix', next: 'fix' },
-        { condition: 'approved', next: 'COMPLETE' },
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
       ],
     };
 
@@ -151,7 +154,10 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
     expect(structuredCaller.judgeStatus).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      step.rules,
+      [
+        { label: 'needs_fix' },
+        { label: 'approved' },
+      ],
       expect.objectContaining({ childProcessEnv }),
     );
   });
@@ -177,7 +183,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
           response: '{"step":1}',
           providerUsage,
         });
-        return { ruleIndex: 0, method: 'structured_output' as const };
+        return { candidateIndex: 0, method: 'structured_output' as const };
       }),
     };
     const step: WorkflowStep = {
@@ -187,8 +193,8 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       instruction: 'Review',
       passPreviousResponse: true,
       rules: [
-        { condition: 'approved', next: 'COMPLETE' },
-        { condition: 'needs_fix', next: 'fix' },
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
       ],
     };
     const onProviderAttempt = vi.fn();
@@ -234,8 +240,8 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       instruction: 'Review',
       passPreviousResponse: true,
       rules: [
-        { condition: 'approved', next: 'COMPLETE' },
-        { condition: 'needs_fix', next: 'fix' },
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
       ],
     };
     const onProviderAttempt = vi.fn();
@@ -283,8 +289,8 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       instruction: 'Review',
       passPreviousResponse: true,
       rules: [
-        { condition: 'approved', next: 'COMPLETE' },
-        { condition: 'needs_fix', next: 'fix' },
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
       ],
     };
     const onProviderAttempt = vi.fn();

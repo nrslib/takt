@@ -41,7 +41,7 @@ describe('workflow finding_contract schema', () => {
           name: 'peer-review',
           persona: 'reviewer',
           instruction: 'Review the change.',
-          rules: [{ when: 'findings.open.count == 0', next: 'COMPLETE' }],
+          rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
         },
       ],
     }, '/tmp/project');
@@ -59,7 +59,7 @@ describe('workflow finding_contract schema', () => {
     });
     expect(workflow.steps[0]?.rules?.[0]).toEqual(
       expect.objectContaining({
-        condition: 'when(findings.open.count == 0)',
+        condition: { kind: 'when', expression: 'findings.open.count == 0' },
         next: 'COMPLETE',
       }),
     );
@@ -85,7 +85,7 @@ describe('workflow finding_contract schema', () => {
           name: 'peer-review',
           persona: 'reviewer',
           instruction: 'Review the change.',
-          rules: [{ when: 'findings.open.count == 0', next: 'COMPLETE' }],
+          rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
         },
       ],
     }, '/tmp/project');
@@ -116,7 +116,7 @@ describe('workflow finding_contract schema', () => {
           name: 'peer-review',
           persona: 'reviewer',
           instruction: 'Review the change.',
-          rules: [{ when: 'findings.open.count == 0', next: 'COMPLETE' }],
+          rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
         },
       ],
     }, '/tmp/project');
@@ -146,7 +146,7 @@ describe('workflow finding_contract schema', () => {
           name: 'peer-review',
           persona: 'reviewer',
           instruction: 'Review the change.',
-          rules: [{ when: 'findings.open.count == 0', next: 'COMPLETE' }],
+          rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
         },
       ],
     }, '/tmp/project');
@@ -246,7 +246,7 @@ describe('workflow finding_contract schema', () => {
           name: 'peer-review',
           persona: 'reviewer',
           instruction: 'Review the change.',
-          rules: [{ when: 'findings.open.count == 0', next: 'COMPLETE' }],
+          rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
         },
       ],
     }, '/tmp/project');
@@ -292,7 +292,7 @@ describe('workflow finding_contract schema', () => {
             name: 'peer-review',
             persona: 'reviewer',
             instruction: 'Review the change.',
-            rules: [{ when: 'findings.open.count == 0', next: 'COMPLETE' }],
+            rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
           },
         ],
       }, workflowDir, { projectDir, lang: 'ja', workflowDir });
@@ -325,7 +325,7 @@ describe('workflow finding_contract schema', () => {
     }, '/tmp/project');
 
     expect(workflow.findingContract).toBeUndefined();
-    expect(workflow.steps[0]?.rules?.[0]?.condition).toBe('approved');
+    expect(workflow.steps[0]?.rules?.[0]?.condition).toEqual({ kind: 'semantic', label: 'approved' });
   });
 
   it('should reject findings rules when finding_contract is not configured', () => {
@@ -339,7 +339,7 @@ describe('workflow finding_contract schema', () => {
             name: 'review',
             persona: 'reviewer',
             instruction: 'Review the change.',
-            rules: [{ when: 'findings.open.count == 0', next: 'COMPLETE' }],
+            rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
           },
         ],
       }, '/tmp/project'),
@@ -361,7 +361,7 @@ describe('workflow finding_contract schema', () => {
           name: 'review',
           persona: 'reviewer',
           instruction: 'Review the change.',
-          rules: [{ when: 'findings.open.count == 0', next: 'COMPLETE' }],
+          rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
         },
       ],
     }, '/tmp/project');
@@ -518,7 +518,7 @@ describe('workflow finding_contract schema', () => {
 
     expect(workflow.steps[0]?.parallel?.[0]?.rules?.[0]).toEqual(
       expect.objectContaining({
-        condition: 'when(findings.open.count == 0)',
+        condition: { kind: 'when', expression: 'findings.open.count == 0' },
       }),
     );
   });
@@ -557,8 +557,15 @@ describe('workflow finding_contract schema', () => {
 
     expect(workflow.steps[0]?.rules?.[0]).toEqual(
       expect.objectContaining({
-        isAggregateCondition: true,
-        aggregateGuardCondition: 'findings.open.count == 0',
+        condition: {
+          kind: 'and',
+          left: {
+            kind: 'aggregate',
+            aggregate: 'all',
+            targetConditions: [{ kind: 'semantic', label: 'approved' }],
+          },
+          right: { kind: 'when', expression: 'findings.open.count == 0' },
+        },
       }),
     );
   });
@@ -598,7 +605,7 @@ describe('workflow finding_contract schema', () => {
 
     expect(workflow.loopMonitors?.[0]?.judge.rules[0]).toEqual(
       expect.objectContaining({
-        condition: 'when(findings.open.count == 0)',
+        condition: { kind: 'when', expression: 'findings.open.count == 0' },
         next: 'COMPLETE',
       }),
     );

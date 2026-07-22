@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { makeStep, makeRule, makeResponse, createTestTmpDir, applyDefaultMocks } from './engine-test-helpers.js';
 import type { WorkflowConfig } from '../core/models/index.js';
@@ -22,14 +22,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -176,7 +180,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
@@ -259,7 +263,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
@@ -305,7 +309,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         structuredOutput: { done: true, reasoning: 'enough', parts: [] },
       }),
     );
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
     const routingEvents = routingDecision.mock.calls;
@@ -455,7 +459,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       }
       return response;
     });
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
     const routingEvents = routingDecision.mock.calls;
@@ -643,7 +647,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       }
       throw new Error(`Unexpected provider: ${options?.resolvedProvider ?? '(missing)'}`);
     });
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
     const routingEvents = routingDecision.mock.calls;
@@ -744,7 +748,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         structuredOutput: { done: true, reasoning: 'enough', parts: [] },
       }),
     );
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
     const routedStep = routeStep.mock.calls[0]?.[1];
@@ -879,7 +883,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         structuredOutput: { done: true, reasoning: 'enough', parts: [] },
       }),
     );
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
     const routingEvents = routingDecision.mock.calls;
@@ -922,7 +926,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     await engine.run();
 
@@ -1082,7 +1086,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
             '```',
           ].join('\n'),
         }));
-      vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+      vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
       const runPromise = engine.run();
       await vi.advanceTimersByTimeAsync(4_000);
@@ -1375,6 +1379,8 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         },
       }),
     });
+    const abortFn = vi.fn();
+    engine.on('workflow:abort', abortFn);
 
     mockRunAgentWithPrompt(
       makeResponse({
@@ -1395,10 +1401,12 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       status: 'error',
       error: 'All team leader parts failed: part-1: external abort: This operation was aborted',
     });
-    expect(state.lastOutput).toMatchObject({
-      status: 'error',
-      error: 'All team leader parts failed: part-1: external abort: This operation was aborted',
-    });
+    expect(state.lastOutput).toBeUndefined();
+    expect(abortFn).toHaveBeenCalledWith(
+      state,
+      'Workflow interrupted by external AbortSignal',
+      'interrupt',
+    );
 
     const usageRecords = readFileSync(usageLogger.filepath, 'utf-8')
       .trim()
@@ -1492,7 +1500,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
@@ -1527,7 +1535,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
@@ -1574,7 +1582,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
@@ -1632,7 +1640,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
@@ -1689,7 +1697,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
@@ -1739,7 +1747,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
@@ -1795,7 +1803,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
@@ -1867,7 +1875,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
@@ -1931,7 +1939,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
 
@@ -1974,7 +1982,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         structuredOutput: { done: true, reasoning: 'enough', parts: [] },
       }),
     );
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
     const phaseStarts = phaseStarted.mock.calls

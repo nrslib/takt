@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LoopMonitorConfig } from '../core/models/index.js';
+import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
 
 function makeMonitor(cycle: string[], threshold: number): LoopMonitorConfig {
@@ -8,8 +9,8 @@ function makeMonitor(cycle: string[], threshold: number): LoopMonitorConfig {
     threshold,
     judge: {
       rules: [
-        { condition: 'progress', next: cycle[0]! },
-        { condition: 'stalled', next: 'ABORT' },
+        { condition: parseWorkflowRuleCondition('progress'), next: cycle[0]! },
+        { condition: parseWorkflowRuleCondition('stalled'), next: 'ABORT' },
       ],
     },
   };

@@ -10,6 +10,7 @@ import {
   parseAggregateConditionExpression,
   parseAiConditionExpression,
 } from '../core/models/workflow-condition-expression.js';
+import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 describe('ParallelSubStepRawSchema', () => {
@@ -32,6 +33,30 @@ describe('ParallelSubStepRawSchema', () => {
 
     const result = ParallelSubStepRawSchema.safeParse(raw);
     expect(result.success).toBe(true);
+  });
+
+  it('should return a failed parse result for an invalid parallel rule condition', () => {
+    const result = ParallelSubStepRawSchema.safeParse({
+      name: 'review',
+      instruction: 'Review',
+      rules: [{ condition: 'ai("route to plan")' }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it.each([
+    ['agent', { name: 'review', instruction: 'Review' }],
+    ['workflow_call', { name: 'review', kind: 'workflow_call', call: 'shared/review' }],
+  ] as const)('should reject aggregate conditions on a %s parallel sub-step', (_kind, subStep) => {
+    for (const condition of ['all("approved")', 'any("needs_fix") && when(true)']) {
+      const result = ParallelSubStepRawSchema.safeParse({
+        ...subStep,
+        rules: [{ condition, next: 'COMPLETE' }],
+      });
+
+      expect(result.success).toBe(false);
+    }
   });
 
   it('should accept a sub-step with instruction field', () => {
@@ -563,10 +588,26 @@ describe('WorkflowConfigRawSchema with parallel steps', () => {
       personaDisplayName: 'delegate-review',
     });
   });
+
+  it('should reject an unreachable aggregate sub-step condition during workflow loading', () => {
+    expect(() => normalizeWorkflowConfig({
+      name: 'invalid-parallel-child-aggregate',
+      initial_step: 'review',
+      steps: [{
+        name: 'review',
+        parallel: [{
+          name: 'architecture',
+          instruction: 'Review architecture',
+          rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+        }],
+        rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+      }],
+    }, process.cwd())).toThrow(/parallel sub-step rules do not allow aggregate conditions/);
+  });
 });
 
 describe('ai() condition in WorkflowRuleSchema', () => {
-  it('should accept ai() condition as a string', () => {
+  it('should reject ai() conditions', () => {
     const raw = {
       name: 'test-step',
       persona: 'agent.md',
@@ -577,14 +618,10 @@ describe('ai() condition in WorkflowRuleSchema', () => {
     };
 
     const result = WorkflowStepRawSchema.safeParse(raw);
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.rules?.[0].condition).toBe('ai("All reviews approved")');
-      expect(result.data.rules?.[1].condition).toBe('ai("Issues detected")');
-    }
+    expect(result.success).toBe(false);
   });
 
-  it('should accept mixed regular and ai() conditions', () => {
+  it('should reject ai() conditions mixed with valid conditions', () => {
     const raw = {
       name: 'mixed-rules',
       persona: 'agent.md',
@@ -595,7 +632,15 @@ describe('ai() condition in WorkflowRuleSchema', () => {
     };
 
     const result = WorkflowStepRawSchema.safeParse(raw);
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject ai() conditions in loop monitor rules', () => {
+    const result = LoopMonitorJudgeSchema.safeParse({
+      rules: [{ condition: 'ai("Escalate")', next: 'fix' }],
+    });
+
+    expect(result.success).toBe(false);
   });
 });
 
@@ -671,32 +716,18 @@ describe('all()/any() aggregate condition expression parsing', () => {
     });
   });
 
-  it('should match aggregate condition with deterministic guard', () => {
-    expect(() => parseAggregateConditionExpression('all("approved") && findings.open.count == 0'))
-      .toThrow('must be wrapped in when(...)');
-    expect(() => parseAggregateConditionExpression('all("approved") && && when(findings.open.count == 0)'))
-      .toThrow('contains an empty clause');
-    expect(parseAggregateConditionExpression('all("approved") && when(findings.open.count == 0)')).toEqual({
-      type: 'all',
-      argsText: '"approved"',
-      guardCondition: 'findings.open.count == 0',
-    });
+  it('should only parse a standalone aggregate condition', () => {
+    expect(parseAggregateConditionExpression('all("approved") && findings.open.count == 0')).toBeUndefined();
+    expect(parseAggregateConditionExpression('all("approved") && && when(findings.open.count == 0)')).toBeUndefined();
+    expect(parseAggregateConditionExpression('all("approved") && when(findings.open.count == 0)')).toBeUndefined();
   });
 
-  it('should keep escaped quotes inside aggregate arguments when locating the closing parenthesis', () => {
-    expect(parseAggregateConditionExpression('any("approved with \\"quoted ) text\\"") && when(findings.open.count == 0)')).toEqual({
-      type: 'any',
-      argsText: '"approved with \\"quoted ) text\\""',
-      guardCondition: 'findings.open.count == 0',
-    });
+  it('should reject a composite condition when locating escaped aggregate arguments', () => {
+    expect(parseAggregateConditionExpression('any("approved with \\"quoted ) text\\"") && when(findings.open.count == 0)')).toBeUndefined();
   });
 
-  it('should treat a quote after an even backslash run as the aggregate argument boundary', () => {
-    expect(parseAggregateConditionExpression(String.raw`any("path ends with \\") && when(findings.open.count == 0)`)).toEqual({
-      type: 'any',
-      argsText: String.raw`"path ends with \\"`,
-      guardCondition: 'findings.open.count == 0',
-    });
+  it('should reject a composite condition after an even backslash run', () => {
+    expect(parseAggregateConditionExpression(String.raw`any("path ends with \\") && when(findings.open.count == 0)`)).toBeUndefined();
   });
 
   it('should not match regular condition text', () => {
@@ -750,7 +781,7 @@ describe('all()/any() condition in WorkflowStepRawSchema', () => {
     }
   });
 
-  it('should accept mixed regular, ai(), and all()/any() conditions', () => {
+  it('should reject ai() conditions mixed with aggregate conditions', () => {
     const raw = {
       name: 'mixed-rules',
       parallel: [
@@ -764,142 +795,167 @@ describe('all()/any() condition in WorkflowStepRawSchema', () => {
     };
 
     const result = WorkflowStepRawSchema.safeParse(raw);
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+  });
+
+  it.each(['all', 'any'] as const)(
+    'should normalize every supported child condition in %s()',
+    (aggregate) => {
+      const children = [
+        ' approved ',
+        'when( true )',
+        'needs_fix && when( findings.open.count > 0 )',
+      ];
+      const source = `${aggregate}(${children.map((child) => JSON.stringify(child)).join(', ')})`;
+
+      expect(parseWorkflowRuleCondition(source)).toEqual({
+        kind: 'aggregate',
+        aggregate,
+        targetConditions: [
+          { kind: 'semantic', label: 'approved' },
+          { kind: 'when', expression: 'true' },
+          {
+            kind: 'and',
+            left: { kind: 'semantic', label: 'needs_fix' },
+            right: { kind: 'when', expression: 'findings.open.count > 0' },
+          },
+        ],
+      });
+    },
+  );
+
+  it.each(['all', 'any'] as const)(
+    'should reject invalid child conditions in %s() at the workflow schema boundary',
+    (aggregate) => {
+      const invalidChildren = [
+        'ai("legacy")',
+        'when()',
+        'when(unclosed',
+        'all("approved")',
+        'any("needs_fix") && when(true)',
+      ];
+
+      for (const child of invalidChildren) {
+        const result = WorkflowStepRawSchema.safeParse({
+          name: 'parallel-review',
+          parallel: [
+            { name: 'review', persona: 'reviewer.md', instruction: 'Review' },
+          ],
+          rules: [
+            { condition: `${aggregate}(${JSON.stringify(child)})`, next: 'COMPLETE' },
+          ],
+        });
+
+        expect(result.success).toBe(false);
+      }
+    },
+  );
+
+  describe.each([
+    ['normal agent', { name: 'agent', instruction: 'Work' }],
+    ['system', { name: 'system', kind: 'system' }],
+    [
+      'arpeggio',
+      {
+        name: 'batch',
+        arpeggio: { source: 'csv', source_path: 'input.csv', template: 'prompt.md' },
+      },
+    ],
+    ['team_leader', { name: 'team', team_leader: { max_parts: 2 }, instruction: 'Lead' }],
+    ['empty parallel parent', { name: 'empty-parallel', parallel: [] }],
+  ] as const)('%s step', (_label, step) => {
+    it.each([
+      'all("approved")',
+      'any("needs_fix") && when(true)',
+    ])('should reject unreachable aggregate condition %s', (condition) => {
+      expect(WorkflowStepRawSchema.safeParse({
+        ...step,
+        rules: [{ condition: 'approved', next: 'COMPLETE' }],
+      }).success).toBe(true);
+
+      const result = WorkflowStepRawSchema.safeParse({
+        ...step,
+        rules: [{ condition, next: 'COMPLETE' }],
+      });
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  it.each([
+    'all("approved")',
+    'any("needs_fix") && when(true)',
+  ])('should reject aggregate condition %s in a loop monitor judge', (condition) => {
+    expect(LoopMonitorJudgeSchema.safeParse({
+      rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    }).success).toBe(true);
+
+    const result = LoopMonitorJudgeSchema.safeParse({
+      rules: [{ condition, next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(false);
   });
 });
 
-describe('aggregate condition evaluation logic', () => {
-  // Simulate the evaluation logic from engine.ts
-  type SubResult = { name: string; matchedRuleIndex?: number; rules?: { condition: string }[] };
+describe('when expression syntax at the raw workflow boundary', () => {
+  const invalidWhen = 'when(findings.open.count ==)';
+  const validWhen = 'when(findings.open.count == 0)';
 
-  function evaluateAggregate(
-    aggregateType: 'all' | 'any',
-    targetCondition: string,
-    subSteps: SubResult[],
-  ): boolean {
-    if (subSteps.length === 0) return false;
+  const makeAgentStep = (condition: string) => ({
+    name: 'review',
+    instruction: 'Review',
+    rules: [{ condition, next: 'COMPLETE' }],
+  });
+  const makeParallelStep = (condition: string) => ({
+    name: 'parallel-review',
+    parallel: [{ name: 'architecture', instruction: 'Review architecture' }],
+    rules: [{ condition, next: 'COMPLETE' }],
+  });
+  const makeLoopMonitorWorkflow = (condition: string) => ({
+    name: 'loop-monitor-workflow',
+    steps: [
+      { name: 'review', instruction: 'Review' },
+      { name: 'fix', instruction: 'Fix' },
+    ],
+    loop_monitors: [{
+      cycle: ['review', 'fix'],
+      judge: { rules: [{ condition, next: 'ABORT' }] },
+    }],
+  });
 
-    if (aggregateType === 'all') {
-      return subSteps.every((sub) => {
-        if (sub.matchedRuleIndex == null || !sub.rules) return false;
-        const matchedRule = sub.rules[sub.matchedRuleIndex];
-        return matchedRule?.condition === targetCondition;
-      });
+  it.each([
+    [
+      'normal step rule',
+      (condition: string) => ({ name: 'normal', steps: [makeAgentStep(condition)] }),
+      (condition: string) => condition,
+    ],
+    [
+      'semantic and when rule',
+      (condition: string) => ({ name: 'compound', steps: [makeAgentStep(condition)] }),
+      (condition: string) => `approved && ${condition}`,
+    ],
+    [
+      'aggregate target rule',
+      (condition: string) => ({ name: 'aggregate', steps: [makeParallelStep(condition)] }),
+      (condition: string) => `all(${JSON.stringify(condition)})`,
+    ],
+    [
+      'loop monitor rule',
+      makeLoopMonitorWorkflow,
+      (condition: string) => condition,
+    ],
+  ])('should reject an invalid predicate in a %s', (_label, makeWorkflow, makeCondition) => {
+    const validResult = WorkflowConfigRawSchema.safeParse(makeWorkflow(makeCondition(validWhen)));
+    const invalidResult = WorkflowConfigRawSchema.safeParse(makeWorkflow(makeCondition(invalidWhen)));
+
+    expect(validResult.success).toBe(true);
+    expect(invalidResult.success).toBe(false);
+    if (!invalidResult.success) {
+      expect(invalidResult.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ message: expect.stringContaining('Invalid when operand') }),
+      ]));
     }
-    // 'any'
-    return subSteps.some((sub) => {
-      if (sub.matchedRuleIndex == null || !sub.rules) return false;
-      const matchedRule = sub.rules[sub.matchedRuleIndex];
-      return matchedRule?.condition === targetCondition;
-    });
-  }
-
-  const rules = [
-    { condition: 'approved' },
-    { condition: 'rejected' },
-  ];
-
-  it('all(): true when all sub-steps match', () => {
-    const subs: SubResult[] = [
-      { name: 'a', matchedRuleIndex: 0, rules },
-      { name: 'b', matchedRuleIndex: 0, rules },
-    ];
-    expect(evaluateAggregate('all', 'approved', subs)).toBe(true);
-  });
-
-  it('all(): false when some sub-steps do not match', () => {
-    const subs: SubResult[] = [
-      { name: 'a', matchedRuleIndex: 0, rules },
-      { name: 'b', matchedRuleIndex: 1, rules },
-    ];
-    expect(evaluateAggregate('all', 'approved', subs)).toBe(false);
-  });
-
-  it('all(): false when sub-step has no matched rule', () => {
-    const subs: SubResult[] = [
-      { name: 'a', matchedRuleIndex: 0, rules },
-      { name: 'b', matchedRuleIndex: undefined, rules },
-    ];
-    expect(evaluateAggregate('all', 'approved', subs)).toBe(false);
-  });
-
-  it('all(): false when sub-step has no rules', () => {
-    const subs: SubResult[] = [
-      { name: 'a', matchedRuleIndex: 0, rules },
-      { name: 'b', matchedRuleIndex: 0, rules: undefined },
-    ];
-    expect(evaluateAggregate('all', 'approved', subs)).toBe(false);
-  });
-
-  it('all(): false with zero sub-steps', () => {
-    expect(evaluateAggregate('all', 'approved', [])).toBe(false);
-  });
-
-  it('any(): true when one sub-step matches', () => {
-    const subs: SubResult[] = [
-      { name: 'a', matchedRuleIndex: 0, rules },
-      { name: 'b', matchedRuleIndex: 1, rules },
-    ];
-    expect(evaluateAggregate('any', 'rejected', subs)).toBe(true);
-  });
-
-  it('any(): true when all sub-steps match', () => {
-    const subs: SubResult[] = [
-      { name: 'a', matchedRuleIndex: 1, rules },
-      { name: 'b', matchedRuleIndex: 1, rules },
-    ];
-    expect(evaluateAggregate('any', 'rejected', subs)).toBe(true);
-  });
-
-  it('any(): false when no sub-steps match', () => {
-    const subs: SubResult[] = [
-      { name: 'a', matchedRuleIndex: 0, rules },
-      { name: 'b', matchedRuleIndex: 0, rules },
-    ];
-    expect(evaluateAggregate('any', 'rejected', subs)).toBe(false);
-  });
-
-  it('any(): false with zero sub-steps', () => {
-    expect(evaluateAggregate('any', 'rejected', [])).toBe(false);
-  });
-
-  it('any(): skips sub-steps without matched rule (does not count as match)', () => {
-    const subs: SubResult[] = [
-      { name: 'a', matchedRuleIndex: undefined, rules },
-      { name: 'b', matchedRuleIndex: 1, rules },
-    ];
-    expect(evaluateAggregate('any', 'rejected', subs)).toBe(true);
-  });
-
-  it('any(): false when only unmatched sub-steps exist', () => {
-    const subs: SubResult[] = [
-      { name: 'a', matchedRuleIndex: undefined, rules },
-      { name: 'b', matchedRuleIndex: undefined, rules },
-    ];
-    expect(evaluateAggregate('any', 'rejected', subs)).toBe(false);
-  });
-
-  it('evaluation priority: first matching aggregate rule wins', () => {
-    const parentRules = [
-      { type: 'all' as const, condition: 'approved' },
-      { type: 'any' as const, condition: 'rejected' },
-    ];
-    const subs: SubResult[] = [
-      { name: 'a', matchedRuleIndex: 0, rules },
-      { name: 'b', matchedRuleIndex: 0, rules },
-    ];
-
-    // Find the first matching rule
-    let matchedIndex = -1;
-    for (let i = 0; i < parentRules.length; i++) {
-      const r = parentRules[i]!;
-      if (evaluateAggregate(r.type, r.condition, subs)) {
-        matchedIndex = i;
-        break;
-      }
-    }
-
-    expect(matchedIndex).toBe(0); // all("approved") matches first
   });
 });
 

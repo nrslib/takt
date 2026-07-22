@@ -17,14 +17,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -44,7 +48,7 @@ import {
   makeResponse,
   makeRule,
   makeStep,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
 
@@ -88,11 +92,7 @@ function buildParallelReviewerConfig(): WorkflowConfig {
           }),
         ],
         rules: [
-          makeRule('all("approved")', 'COMPLETE', {
-            isAggregateCondition: true,
-            aggregateType: 'all',
-            aggregateConditionText: 'approved',
-          }),
+          makeRule('all("approved")', 'COMPLETE'),
         ],
       }),
     ],
@@ -122,11 +122,7 @@ function buildFixHandleConfig(): WorkflowConfig {
           }),
         ],
         rules: [
-          makeRule('all("approved")', 'fix', {
-            isAggregateCondition: true,
-            aggregateType: 'all',
-            aggregateConditionText: 'approved',
-          }),
+          makeRule('all("approved")', 'fix'),
         ],
       }),
       makeStep('fix', {
@@ -167,11 +163,7 @@ function buildSuperviseHandleConfig(): WorkflowConfig {
           }),
         ],
         rules: [
-          makeRule('all("approved")', 'supervise', {
-            isAggregateCondition: true,
-            aggregateType: 'all',
-            aggregateConditionText: 'approved',
-          }),
+          makeRule('all("approved")', 'supervise'),
         ],
       }),
       makeStep('supervise', {
@@ -206,11 +198,7 @@ function buildMergeReadinessReviewerConfig(): WorkflowConfig {
             rules: [makeRule('approved', 'COMPLETE')],
           }),
         ],
-        rules: [makeRule('all("approved")', 'COMPLETE', {
-          isAggregateCondition: true,
-          aggregateType: 'all',
-          aggregateConditionText: 'approved',
-        })],
+        rules: [makeRule('all("approved")', 'COMPLETE')],
       }),
     ],
   };
@@ -295,9 +283,9 @@ describe('WorkflowEngine report handle integration', () => {
       makeResponse({ persona: 'arch-review', content: 'approved' }),
       makeResponse({ persona: 'security-review', content: 'approved' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
 
@@ -342,8 +330,8 @@ describe('WorkflowEngine report handle integration', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'fix', content: 'Fix complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     // When
@@ -398,8 +386,8 @@ describe('WorkflowEngine report handle integration', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'fix', content: 'Fix complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     // When
@@ -455,7 +443,7 @@ describe('WorkflowEngine report handle integration', () => {
     });
     engines.push(engine);
     mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -517,7 +505,7 @@ describe('WorkflowEngine report handle integration', () => {
     });
     engines.push(engine);
     mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -592,7 +580,7 @@ describe('WorkflowEngine report handle integration', () => {
     });
     engines.push(engine);
     mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -670,7 +658,7 @@ describe('WorkflowEngine report handle integration', () => {
     });
     engines.push(engine);
     mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -798,7 +786,7 @@ describe('WorkflowEngine report handle integration', () => {
     });
     engines.push(engine);
     mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -930,7 +918,7 @@ describe('WorkflowEngine report handle integration', () => {
     });
     engines.push(engine);
     mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -981,7 +969,7 @@ describe('WorkflowEngine report handle integration', () => {
     });
     engines.push(engine);
     mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -1194,7 +1182,7 @@ describe('WorkflowEngine report handle integration', () => {
     });
     engines.push(engine);
     mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -1225,7 +1213,7 @@ describe('WorkflowEngine report handle integration', () => {
     const engine = new WorkflowEngine(config, cloneCwd, 'test task', { projectCwd });
     engines.push(engine);
     mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -1256,7 +1244,7 @@ describe('WorkflowEngine report handle integration', () => {
     });
     engines.push(engine);
     mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -1286,8 +1274,8 @@ describe('WorkflowEngine report handle integration', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'fix', content: 'Fix complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     // When
@@ -1341,7 +1329,7 @@ describe('WorkflowEngine report handle integration', () => {
     });
     engines.push(engine);
     mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -1402,7 +1390,7 @@ describe('WorkflowEngine report handle integration', () => {
     });
     engines.push(engine);
     mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -1460,9 +1448,9 @@ describe('WorkflowEngine report handle integration', () => {
     });
     engines.push(engine);
     mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'Fix complete' })]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     // When
@@ -1494,11 +1482,11 @@ describe('WorkflowEngine report handle integration', () => {
       makeResponse({ persona: 'security-review', content: 'approved' }),
       makeResponse({ persona: 'supervise', content: 'All checks passed' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
-      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     // When

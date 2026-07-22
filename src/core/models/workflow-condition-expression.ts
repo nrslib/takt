@@ -5,7 +5,6 @@ export interface AiConditionExpression {
 export interface AggregateConditionExpression {
   type: 'all' | 'any';
   argsText: string;
-  guardCondition?: string;
 }
 
 const AI_CONDITION_EXPRESSION_REGEX = /^ai\("(.+)"\)$/;
@@ -22,7 +21,7 @@ export function isAiConditionExpression(value: string): boolean {
   return parseAiConditionExpression(value) !== undefined;
 }
 
-function findClosingParen(value: string, startIndex: number): number {
+export function findClosingParen(value: string, startIndex: number): number {
   let inString = false;
   let depth = 0;
 
@@ -262,40 +261,14 @@ export function parseAggregateConditionExpression(value: string): AggregateCondi
     return undefined;
   }
   const remainder = trimmed.slice(argsEnd + 1).trim();
-  if (remainder.length > 0 && !remainder.startsWith('&&')) {
+  if (remainder.length > 0) {
     return undefined;
   }
-  const guardText = remainder.length > 0 ? remainder.slice(2).trim() : undefined;
-  if (guardText === '') {
-    return undefined;
-  }
-  // ガードは when(式) の列として書かれる。内側の式に unwrap して保持し、
-  // 評価側（evaluateWhenExpression）は素の式だけを扱う。裸の式は認めない
-  // （集約条件のガードに散文はあり得ないため、明示エラーで移行させる）。
-  let guardCondition: string | undefined;
-  if (guardText !== undefined) {
-    const clauses = splitGuardClauses(guardText);
-    for (const clause of clauses) {
-      if (!isWhenConditionExpression(clause)) {
-        throw new Error(
-          `Configuration error: aggregate guard clause "${clause}" must be wrapped in when(...), e.g. when(${clause})`,
-        );
-      }
-    }
-    guardCondition = clauses.map(unwrapWhenConditionExpression).join(' && ');
-  }
-
   return {
     type: match[1] as AggregateConditionExpression['type'],
     argsText,
-    ...(guardCondition !== undefined ? { guardCondition } : {}),
   };
 }
-
-/**
- * when(<式>) 形式か（括弧バランスで判定。when(A) && when(B) のような
- * 連結は単一の when 条件ではない）。
- */
 
 /**
  * 括弧・引用符（エスケープ含む）を尊重してトップレベルの論理区切りで分割する。
@@ -325,11 +298,6 @@ export function splitTopLevelClauses(expression: string, separator: '||' | '&&')
   return parts;
 }
 
-/** 後方の呼び出し向け: && 専用の別名。 */
-export function splitTopLevelAndClauses(expression: string): string[] {
-  return splitTopLevelClauses(expression, '&&');
-}
-
 /** 分割して空節があれば fail-fast する（subject はエラー文の主語）。 */
 export function splitTopLevelClausesOrThrow(
   expression: string,
@@ -345,11 +313,10 @@ export function splitTopLevelClausesOrThrow(
   return clauses;
 }
 
-function splitGuardClauses(expression: string): string[] {
-  return splitTopLevelClausesOrThrow(expression, '&&', 'aggregate guard');
-}
-
-
+/**
+ * when(<式>) 形式か（括弧バランスで判定。when(A) && when(B) のような
+ * 連結は単一の when 条件ではない）。
+ */
 export function isWhenConditionExpression(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed.startsWith('when(') || !trimmed.endsWith(')')) {
@@ -366,8 +333,4 @@ export function unwrapWhenConditionExpression(value: string): string {
     throw new Error(`unwrapWhenConditionExpression requires a when(...) condition, got "${value}"`);
   }
   return trimmed.slice('when('.length, -1).trim();
-}
-
-export function isAggregateConditionExpression(value: string): boolean {
-  return parseAggregateConditionExpression(value) !== undefined;
 }

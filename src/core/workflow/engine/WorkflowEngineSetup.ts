@@ -52,7 +52,6 @@ interface WorkflowEngineSetupParams {
   getRunPaths: () => RunPaths;
   getMaxSteps: () => WorkflowMaxSteps;
   options: WorkflowEngineOptions & { structuredOutputNormalizers: StructuredOutputNormalizerRegistry };
-  detectRuleIndex: (content: string, stepName: string) => number;
   structuredCaller: StructuredCaller;
   sharedRuntime: WorkflowSharedRuntimeState;
   resumeStackPrefix: WorkflowEngineOptions['resumeStackPrefix'];
@@ -211,7 +210,6 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     observabilityEnabled: () => params.options.observability?.enabled === true,
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,
     getCurrentWorkflowStack,
-    detectRuleIndex: params.detectRuleIndex,
     structuredCaller: params.structuredCaller,
     structuredOutputNormalizers: params.options.structuredOutputNormalizers,
     findingContract: params.findingContract,
@@ -260,8 +258,6 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     observabilityRunId: params.options.observabilityRunId,
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,
     getCurrentWorkflowStack,
-    detectRuleIndex: params.detectRuleIndex,
-    structuredCaller: params.structuredCaller,
     refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
     findingContract: params.findingContract,
@@ -288,8 +284,6 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     observabilityRunId: params.options.observabilityRunId,
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,
     getCurrentWorkflowStack,
-    detectRuleIndex: params.detectRuleIndex,
-    structuredCaller: params.structuredCaller,
     onPhaseStart: phaseRelay.onPhaseStart,
     onPhaseComplete: phaseRelay.onPhaseComplete,
   });
@@ -315,20 +309,23 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     projectCwd: params.projectCwd,
     getCwd: params.getCwd,
     taskContext: params.options.currentTask,
-    getRuleContext: (step) => {
-      const providerInfo = optionsBuilder.resolveStepProviderModel(step);
+    getRuleContext: () => {
       return {
-        cwd: params.getCwd(),
-          provider: step.provider ?? params.options.provider,
-          resolvedProvider: providerInfo.provider,
-          resolvedModel: providerInfo.model,
-          childProcessEnv: params.options.childProcessEnv,
-          interactive: params.options.interactive === true,
-          detectRuleIndex: params.detectRuleIndex,
-          structuredCaller: params.structuredCaller,
-        };
-      },
-      systemStepServicesFactory: params.options.systemStepServicesFactory,
+        interactive: params.options.interactive === true,
+      };
+    },
+    getStatusJudgmentContext: (step, state, lastResponse, runtime) => optionsBuilder.buildPhaseRunnerContext(
+      step,
+      state,
+      lastResponse,
+      params.updatePersonaSession,
+      phaseRelay.onPhaseStart,
+      phaseRelay.onPhaseComplete,
+      phaseRelay.onJudgeStage,
+      state.iteration,
+      runtime,
+    ),
+    systemStepServicesFactory: params.options.systemStepServicesFactory,
   });
 
   const loopMonitorJudgeRunner = new LoopMonitorJudgeRunner({

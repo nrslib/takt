@@ -104,7 +104,7 @@ describe('allow_git_commit', () => {
         allow_git_commit: true,
         rules: [
           {
-            when: 'true',
+            condition: 'when(true)',
             next: 'COMPLETE',
           },
         ],

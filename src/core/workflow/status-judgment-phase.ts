@@ -2,18 +2,19 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { WorkflowStep, RuleMatchMethod } from '../models/types.js';
 import { StatusJudgmentBuilder, type StatusJudgmentContext } from './instruction/StatusJudgmentBuilder.js';
-import { getJudgmentReportFiles } from './evaluation/rule-utils.js';
+import { getJudgmentReportFiles } from './output-contract-files.js';
 import { createLogger } from '../../shared/utils/index.js';
 import type { StatusJudgmentPhaseContext } from './phase-runner.js';
 import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
 import { recordJudgeStageSpan, runWithPhaseSpan } from './observability/workflowSpans.js';
+import { semanticRuleCandidatesOf } from '../models/workflow-rule-condition.js';
+import { RuleDetectionExhaustedError } from './evaluation/RuleDetectionExhaustedError.js';
 
 const log = createLogger('phase-runner');
 
 /** Result of Phase 3 status judgment, including the detection method. */
 export interface StatusJudgmentPhaseResult {
-  tag: string;
-  ruleIndex: number;
+  label: string;
   method: RuleMatchMethod;
 }
 
@@ -73,6 +74,10 @@ export async function runStatusJudgmentPhase(
     throw new Error(`Status judgment requires rules for step "${step.name}"`);
   }
   const rules = step.rules;
+  const semanticCandidates = semanticRuleCandidatesOf(rules, ctx.interactive === true);
+  if (semanticCandidates.length < 2) {
+    throw new Error(`Status judgment requires multiple semantic rules for step "${step.name}"`);
+  }
 
   const baseContext = buildBaseContext(step, ctx);
   if (!baseContext) {
@@ -81,11 +86,13 @@ export async function runStatusJudgmentPhase(
 
   const structuredInstruction = new StatusJudgmentBuilder(step, {
     ...baseContext,
+    semanticCandidates,
     structuredOutput: true,
   }).build();
 
   const tagInstruction = new StatusJudgmentBuilder(step, {
     ...baseContext,
+    semanticCandidates,
   }).build();
   if (!ctx.iteration || !Number.isInteger(ctx.iteration) || ctx.iteration <= 0) {
     throw new Error(`Status judgment requires iteration for step "${step.name}"`);
@@ -104,13 +111,6 @@ export async function runStatusJudgmentPhase(
     ctx.onPhaseStart?.(step, 3, 'judge', structuredInstruction, promptParts, phaseExecutionId, ctx.iteration);
     didEmitPhaseStart = true;
   };
-
-  if (step.rules.length === 1) {
-    emitPhaseStart({
-      systemPrompt: '',
-      userInstruction: structuredInstruction,
-    });
-  }
 
   let stepProvider: ReturnType<StatusJudgmentPhaseContext['resolveStepProviderModel']> | undefined;
   let didRecordProviderAttempt = false;
@@ -133,14 +133,15 @@ export async function runStatusJudgmentPhase(
         providerInfo: resolvedStepProvider,
         getPromptParts: () => resolvedPromptParts,
       },
-      () => ctx.structuredCaller.judgeStatus(structuredInstruction, tagInstruction, rules, {
+      async () => {
+        const judgeResult = await ctx.structuredCaller.judgeStatus(structuredInstruction, tagInstruction, semanticCandidates, {
         cwd: ctx.cwd,
         stepName: step.name,
         provider: resolvedStepProvider.provider,
         resolvedProvider: resolvedStepProvider.provider,
         resolvedModel: resolvedStepProvider.model,
         language: ctx.language,
-        interactive: ctx.interactive,
+        abortSignal: ctx.abortSignal,
         childProcessEnv: ctx.childProcessEnv,
         onStream: ctx.onStream,
         onStructuredPromptResolved: (promptParts) => {
@@ -169,19 +170,23 @@ export async function runStatusJudgmentPhase(
           });
           ctx.onJudgeStage?.(step, 3, 'judge', entry, phaseExecutionId, ctx.iteration);
         },
-      }), (judgeResult) => ({
+        });
+        const label = semanticCandidates[judgeResult.candidateIndex]?.label;
+        if (label === undefined) {
+          throw new RuleDetectionExhaustedError(step.name);
+        }
+        if (!didEmitPhaseStart) {
+          throw new Error(`Missing prompt parts for phase start: ${step.name}:3`);
+        }
+        return { candidateIndex: judgeResult.candidateIndex, label, method: judgeResult.method };
+      }, (judgment) => ({
         status: 'done',
-        content: `[${step.name.toUpperCase()}:${judgeResult.ruleIndex + 1}]`,
-        matchedRuleIndex: judgeResult.ruleIndex,
-        matchedRuleMethod: judgeResult.method,
+        content: `[${step.name.toUpperCase()}:${judgment.candidateIndex + 1}]`,
+        matchedRuleMethod: judgment.method,
       }),
     );
-    if (!didEmitPhaseStart) {
-      throw new Error(`Missing prompt parts for phase start: ${step.name}:3`);
-    }
-    const tag = `[${step.name.toUpperCase()}:${result.ruleIndex + 1}]`;
-    ctx.onPhaseComplete?.(step, 3, 'judge', tag, 'done', undefined, phaseExecutionId, ctx.iteration);
-    return { tag, ruleIndex: result.ruleIndex, method: result.method };
+    ctx.onPhaseComplete?.(step, 3, 'judge', result.label, 'done', undefined, phaseExecutionId, ctx.iteration);
+    return { label: result.label, method: result.method };
   } catch (error) {
     if (stepProvider !== undefined && !didRecordProviderAttempt) {
       ctx.onProviderAttempt?.(stepProvider, false, undefined);

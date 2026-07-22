@@ -169,9 +169,11 @@ codex exec --full-auto - < "$tmp_prompt_file_2"
 `codex exec` から返ってきたサブエージェント出力から matched_rule を決定する。
 
 **通常 step:**
-1. 出力に `[STEP:N]` タグがあるか探す（複数ある場合は最後のタグを採用）
-2. タグがあれば → rules[N] を選択（0始まりインデックス）
-3. タグがなければ → 出力全体を読み、全 condition と比較して最も近いものを選択
+1. rules を YAML 記述順に評価する。
+2. `when(...)` と `all(...)` / `any(...)` は workflow state とサブステップ結果から決定的に評価する。
+3. 最初の意味ラベル condition に到達した場合だけ、重複を除いた意味ラベル候補から一度だけ選択する。
+4. 選択したラベルと guard を使って以後も YAML 順に評価し、最初に true となった rule を選択する。
+5. どの rule も成立しない、または意味ラベル選択が不正なら `rule_no_match` として ABORT する。
 
 **parallel step:**
 1. 各サブステップの `codex exec` 出力に対して、サブステップの rules で条件マッチを判定

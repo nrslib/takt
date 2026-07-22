@@ -42,7 +42,7 @@ export class AbortHandler {
       throw err;
     };
 
-    const abortEngine = () => {
+    const prepareAbort = (): WorkflowEngine => {
       const engine = getEngine();
       if (!engine || !this.onEpipe) {
         throw new Error('Abort handler invoked before WorkflowEngine initialization');
@@ -52,14 +52,16 @@ export class AbortHandler {
       }
       process.on('uncaughtException', this.onEpipe);
       interruptAllQueries();
-      engine.abort();
+      return engine;
     };
 
     if (externalSignal) {
       // 並列実行モード: 外部シグナルへ委譲
-      this.onAbortSignal = abortEngine;
+      this.onAbortSignal = () => {
+        prepareAbort();
+      };
       if (externalSignal.aborted) {
-        abortEngine();
+        this.onAbortSignal();
       } else {
         externalSignal.addEventListener('abort', this.onAbortSignal, { once: true });
       }
@@ -67,7 +69,7 @@ export class AbortHandler {
       // シングル実行モード: SIGINT を自前でハンドリング
       this.shutdownManager = new ShutdownManager({
         callbacks: {
-          onGraceful: abortEngine,
+          onGraceful: () => prepareAbort().abort(),
           onForceKill: () => process.exit(EXIT_SIGINT),
         },
       });

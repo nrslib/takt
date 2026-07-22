@@ -122,6 +122,47 @@ steps:
     ]);
   });
 
+  it('normalizes callable result labels consistently across child declarations and parent conditions', () => {
+    writeProjectWorkflow('parent.yaml', `name: parent
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: " ok "
+        next: COMPLETE
+`);
+    writeProjectWorkflow('child.yaml', `name: child
+subworkflow:
+  callable: true
+  returns: [" ok "]
+initial_step: review
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review the task
+    rules:
+      - condition: done
+        return: " ok "
+`);
+
+    const parentWorkflow = loadProjectWorkflow('parent.yaml');
+    expect(parentWorkflow).not.toBeNull();
+
+    const delegate = findWorkflowCallStep(parentWorkflow!, 'delegate');
+    const childWorkflow = workflowCallResolver.resolveWorkflowCallTarget(
+      parentWorkflow!,
+      delegate,
+      projectDir,
+      projectDir,
+    );
+
+    expect(delegate.rules?.[0]?.condition).toEqual({ kind: 'semantic', label: 'ok' });
+    expect(childWorkflow?.subworkflow?.returns).toEqual(['ok']);
+    expect(childWorkflow?.steps[0]?.rules?.[0]?.returnValue).toBe('ok');
+  });
+
   it('rejects a Finding Contract subworkflow when its caller does not provide the required contract', () => {
     writeProjectWorkflow('parent.yaml', `name: parent
 initial_step: delegate

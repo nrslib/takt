@@ -9,14 +9,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -27,7 +31,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { InstructionBuildTransaction } from '../core/workflow/engine/instruction-build-transaction.js';
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
 import {
   applyDefaultMocks,
@@ -36,7 +40,7 @@ import {
   makeResponse,
   makeRule,
   makeStep,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
 
@@ -105,11 +109,7 @@ function parallelStepConfig(): WorkflowConfig {
           }),
         ],
         rules: [
-          makeRule('any("done")', 'COMPLETE', {
-            isAggregateCondition: true,
-            aggregateType: 'any',
-            aggregateConditionText: 'done',
-          }),
+          makeRule('any("done")', 'COMPLETE'),
         ],
       }),
     ],
@@ -177,7 +177,7 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeRateLimitedResponse('claude'),
       makeResponse({ persona: 'plan', content: '[STEP:1] continue', sessionId: 'codex-session' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -190,7 +190,7 @@ describe('WorkflowEngine rate limit fallback', () => {
       { resolvedProvider: 'claude', resolvedModel: 'claude-sonnet', sessionId: undefined },
       { resolvedProvider: 'codex', resolvedModel: 'gpt-5', sessionId: undefined },
     ]);
-    expect(detectMatchedRule).toHaveBeenCalledOnce();
+    expect(mockRuleEvaluation).toHaveBeenCalledOnce();
   });
 
   it('runSingleIteration は rate_limited 時に abort せず次回実行を fallback provider に切り替える', async () => {
@@ -204,7 +204,7 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeRateLimitedResponse('claude'),
       makeResponse({ persona: 'plan', content: '[STEP:1] continue', sessionId: 'codex-session' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const rateLimited = await engine.runSingleIteration();
@@ -239,7 +239,7 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeRateLimitedResponse('codex'),
       makeResponse({ persona: 'plan', content: '[STEP:1] continue', sessionId: 'opencode-session' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -249,7 +249,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(state.iteration).toBe(1);
     expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'codex', 'opencode']);
     expect(providerCalls().map((call) => call.sessionId)).toEqual([undefined, undefined, undefined]);
-    expect(detectMatchedRule).toHaveBeenCalledOnce();
+    expect(mockRuleEvaluation).toHaveBeenCalledOnce();
   });
 
   it('switch_chain がすべて rate_limited の場合は同じ provider へ戻らず abort する', async () => {
@@ -277,7 +277,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(state.status).toBe('aborted');
     expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'codex', 'opencode']);
     expect(runAgent).toHaveBeenCalledTimes(3);
-    expect(detectMatchedRule).not.toHaveBeenCalled();
+    expect(mockRuleEvaluation).not.toHaveBeenCalled();
     expect(abortFn).toHaveBeenCalledOnce();
   });
 
@@ -297,7 +297,7 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeRateLimitedResponse('codex'),
       makeResponse({ persona: 'plan', content: '[STEP:1] continue', sessionId: 'opencode-session' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -322,7 +322,7 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeRateLimitedResponse('claude'),
       makeResponse({ persona: 'plan', content: '[STEP:1] continue', sessionId: 'claude-opus-session' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -350,7 +350,7 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeRateLimitedResponse('claude'),
       makeResponse({ persona: 'plan', content: '[STEP:1] continue', sessionId: 'codex-session' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -376,7 +376,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     // Then
     expect(state.status).toBe('aborted');
     expect(runAgent).toHaveBeenCalledOnce();
-    expect(detectMatchedRule).not.toHaveBeenCalled();
+    expect(mockRuleEvaluation).not.toHaveBeenCalled();
     expect(abortFn).toHaveBeenCalledOnce();
     const reason = abortFn.mock.calls[0]?.[1] as string;
     expect(reason).toContain('rate limit');
@@ -402,7 +402,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(state.status).toBe('aborted');
     expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude']);
     expect(runAgent).toHaveBeenCalledOnce();
-    expect(detectMatchedRule).not.toHaveBeenCalled();
+    expect(mockRuleEvaluation).not.toHaveBeenCalled();
     expect(abortFn).toHaveBeenCalledOnce();
   });
 
@@ -432,9 +432,9 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeResponse({ persona: 'plan', content: '[STEP:1] plan done', sessionId: 'codex-session' }),
       makeResponse({ persona: 'verify', content: '[STEP:1] verify done', sessionId: 'claude-session' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     // When
@@ -476,9 +476,9 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeRateLimitedResponse('claude', { persona: 'verify' }),
       makeResponse({ persona: 'verify', content: '[STEP:1] verify done', sessionId: 'codex-verify-session' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     // When
@@ -522,7 +522,7 @@ describe('WorkflowEngine rate limit fallback', () => {
         response: makeRateLimitedResponse('claude', { persona: 'plan' }),
       })
       .mockResolvedValueOnce(undefined);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -533,7 +533,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(state.stepIterations.get('plan')).toBe(1);
     expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'codex']);
     expect(runReportPhase).toHaveBeenCalledTimes(2);
-    expect(detectMatchedRule).toHaveBeenCalledOnce();
+    expect(mockRuleEvaluation).toHaveBeenCalledOnce();
   });
 
   it('report phase が rate_limited の場合は previous response snapshot に保存しない', async () => {
@@ -563,7 +563,7 @@ describe('WorkflowEngine rate limit fallback', () => {
         response: makeRateLimitedResponse('claude', { persona: 'plan' }),
       })
       .mockResolvedValueOnce(undefined);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const rateLimited = await engine.runSingleIteration();
@@ -620,9 +620,9 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeResponse({ persona: 'process', content: '[STEP:1] process done', sessionId: 'codex-session' }),
       makeResponse({ persona: 'verify', content: '[STEP:1] verify done', sessionId: 'claude-session' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     // When
@@ -652,9 +652,9 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeResponse({ persona: 'arch-review', content: '[STEP:1] done' }),
       makeResponse({ persona: 'security-review', content: '[STEP:1] done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
 
@@ -684,7 +684,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(prompts[3]).toContain('Aggregate rules were not evaluated');
     expect(prompts[3]).toContain('Rate limit exceeded. Please try again later.');
     expect(runAgent).toHaveBeenCalledTimes(4);
-    expect(detectMatchedRule).toHaveBeenCalledTimes(3);
+    expect(mockRuleEvaluation).toHaveBeenCalledTimes(3);
   });
 
   it('parallel sub-step の rate_limited は別 sub-step の command gate failure より優先して fallback provider で再実行する', async () => {
@@ -711,11 +711,7 @@ describe('WorkflowEngine rate limit fallback', () => {
             }),
           ],
           rules: [
-            makeRule('any("done")', 'COMPLETE', {
-              isAggregateCondition: true,
-              aggregateType: 'any',
-              aggregateConditionText: 'done',
-            }),
+            makeRule('any("done")', 'COMPLETE'),
           ],
         }),
       ],
@@ -731,10 +727,10 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeResponse({ persona: 'arch-review', content: '[STEP:1] done' }),
       makeResponse({ persona: 'security-review', content: '[STEP:1] done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
 
@@ -770,11 +766,7 @@ describe('WorkflowEngine rate limit fallback', () => {
             }),
           ],
           rules: [
-            makeRule('any("done")', 'COMPLETE', {
-              isAggregateCondition: true,
-              aggregateType: 'any',
-              aggregateConditionText: 'done',
-            }),
+            makeRule('any("done")', 'COMPLETE'),
           ],
         }),
       ],
@@ -798,10 +790,10 @@ describe('WorkflowEngine rate limit fallback', () => {
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(undefined);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
 
@@ -816,7 +808,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(state.stepIterations.get('security-review')).toBe(1);
     expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'claude', 'codex', 'codex']);
     expect(runReportPhase).toHaveBeenCalledTimes(4);
-    expect(detectMatchedRule).toHaveBeenCalledTimes(4);
+    expect(mockRuleEvaluation).toHaveBeenCalledTimes(4);
   });
 
   it('parallel sub-step の provider が親 step と異なる場合は rate limit した sub-step provider を再選択しない', async () => {
@@ -837,11 +829,7 @@ describe('WorkflowEngine rate limit fallback', () => {
             }),
           ],
           rules: [
-            makeRule('any("done")', 'COMPLETE', {
-              isAggregateCondition: true,
-              aggregateType: 'any',
-              aggregateConditionText: 'done',
-            }),
+            makeRule('any("done")', 'COMPLETE'),
           ],
         }),
       ],
@@ -860,10 +848,10 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeResponse({ persona: 'arch-review', content: '[STEP:1] done' }),
       makeResponse({ persona: 'security-review', content: '[STEP:1] done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
       { index: 0, method: 'aggregate' },
     ]);
 
@@ -877,7 +865,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(prompts[2]).toContain('Previous provider/model: codex / gpt-5');
     expect(prompts[2]).toContain('Current provider/model: opencode / opencode/big-pickle');
     expect(runAgent).toHaveBeenCalledTimes(4);
-    expect(detectMatchedRule).toHaveBeenCalledTimes(4);
+    expect(mockRuleEvaluation).toHaveBeenCalledTimes(4);
   });
 
   it('team_leader の report phase が rate_limited の場合は previous response snapshot に保存しない', async () => {
@@ -926,7 +914,7 @@ describe('WorkflowEngine rate limit fallback', () => {
         response: makeRateLimitedResponse('claude', { persona: 'implement' }),
       })
       .mockResolvedValueOnce(undefined);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const rateLimited = await engine.runSingleIteration();
@@ -952,7 +940,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-1:claude', 'part-claude-session');
     expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-1:claude', undefined);
     expect(runReportPhase).toHaveBeenCalledTimes(2);
-    expect(detectMatchedRule).toHaveBeenCalledOnce();
+    expect(mockRuleEvaluation).toHaveBeenCalledOnce();
   });
 
   it('team_leader part の rate-limit fallback retry は member iteration と snapshot 名を同じ論理試行に戻す', async () => {
@@ -986,7 +974,7 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeResponse({ persona: 'implement.part-3', content: '[STEP:1] done' }),
       makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
     const previousResponse = makeResponse({ persona: 'review', content: `${'x'.repeat(2500)}\n${previousTail}` });
     const initialState = engine.getState();
     initialState.stepOutputs.set('review', previousResponse);
@@ -1036,7 +1024,7 @@ describe('WorkflowEngine rate limit fallback', () => {
       .filter((file) => file.startsWith('implement-part-'));
     expect(policySnapshots).toEqual(['implement-part-3.1.20260620T010204Z.md']);
     expect(runAgent).toHaveBeenCalledTimes(7);
-    expect(detectMatchedRule).toHaveBeenCalledOnce();
+    expect(mockRuleEvaluation).toHaveBeenCalledOnce();
   });
 
   it('team_leader part の rate-limit rollback は既存 part session の上書きを外部にも復元する', async () => {
@@ -1199,7 +1187,7 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeResponse({ persona: 'implement.part-1', content: '[STEP:1] done' }),
       makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();
@@ -1243,7 +1231,7 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeResponse({ persona: 'implement.part-1', content: '[STEP:1] done' }),
       makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     // When
     const state = await engine.run();

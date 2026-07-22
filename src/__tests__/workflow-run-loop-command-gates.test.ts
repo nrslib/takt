@@ -174,7 +174,7 @@ describe('WorkflowRunLoop command quality gates', () => {
           command: './.takt/quality-gates/check.sh',
         },
       ],
-      rules: [{ condition: 'need_replan', returnValue: 'need_replan' }],
+      rules: [makeRule('need_replan', '', { returnValue: 'need_replan' })],
     });
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const firstResponse = makeResponse({ persona: 'reviewers', content: 'invalid manager output' });
@@ -345,7 +345,7 @@ describe('WorkflowRunLoop command quality gates', () => {
           command: './.takt/quality-gates/check.sh',
         },
       ],
-      rules: [{ condition: 'need_replan', returnValue: 'need_replan' }],
+      rules: [makeRule('need_replan', '', { returnValue: 'need_replan' })],
     });
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'reviewers', content: 'invalid manager output' });
@@ -379,7 +379,7 @@ describe('WorkflowRunLoop command quality gates', () => {
           command: './.takt/quality-gates/check.sh',
         },
       ],
-      rules: [{ condition: 'need_replan', returnValue: 'need_replan' }],
+      rules: [makeRule('need_replan', '', { returnValue: 'need_replan' })],
     });
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'reviewers', content: 'invalid manager output' });

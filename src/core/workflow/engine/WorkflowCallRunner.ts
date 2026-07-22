@@ -36,6 +36,8 @@ import {
   type WorkflowCallIsolatedStateSync,
   type WorkflowCallSessionUpdates,
 } from './WorkflowCallExecutor.js';
+import { terminalLabelOf } from '../../models/workflow-rule-condition.js';
+import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 
 interface WorkflowCallRunnerDeps {
   getConfig: () => WorkflowConfig;
@@ -187,14 +189,23 @@ export class WorkflowCallRunner {
       : abortKind === 'step_transition'
         ? childState.lastOutput?.content ?? abortReason ?? terminalStatus
         : abortReason ?? terminalStatus;
-    const matchedRuleIndex = step.rules?.findIndex((rule) => rule.condition === matchedCondition);
+    const interactive = this.deps.getOptions().interactive === true;
+    const matchedRuleIndex = step.rules?.findIndex(
+      (rule) => (
+        (rule.interactiveOnly !== true || interactive)
+        && terminalLabelOf(rule.condition) === matchedCondition
+      ),
+    );
+    if (matchedRuleIndex === undefined || matchedRuleIndex < 0) {
+      throw new RuleDetectionExhaustedError(step.name);
+    }
 
     return {
       persona: step.name,
       status: 'done',
       content: finalContent,
       timestamp: new Date(),
-      ...(matchedRuleIndex !== undefined && matchedRuleIndex >= 0 ? { matchedRuleIndex } : {}),
+      matchedRuleIndex,
     };
   }
 

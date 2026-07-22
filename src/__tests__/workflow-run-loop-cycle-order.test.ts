@@ -7,7 +7,7 @@ import { makeResponse, makeRule, makeStep } from './engine-test-helpers.js';
 const monitor: LoopMonitorConfig = {
   cycle: ['fix', 'reviewers'],
   threshold: 1,
-  judge: { rules: [{ condition: 'stalled', next: 'ABORT' }] },
+  judge: { rules: [makeRule('stalled', 'ABORT')] },
 };
 
 function makeDeps(nextStep: string) {

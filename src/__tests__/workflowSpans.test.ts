@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { StepRunResult } from '../core/workflow/types.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 type FakeSpanStatus = {
   code: number;
@@ -174,7 +175,7 @@ function makeStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
     name: 'implement',
     persona: '../agents/coder.md',
     instruction: 'Implement',
-    rules: [{ condition: 'done', next: 'COMPLETE' }],
+    rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     ...overrides,
   };
 }
@@ -763,7 +764,13 @@ describe('workflow OpenTelemetry spans', () => {
         iteration: 2,
         stepIteration: 1,
         getFinalStepIteration: () => 1,
-      }, async () => makeDoneResult());
+      }, async () => ({
+        ...makeDoneResult(),
+        response: {
+          ...makeDoneResult().response,
+          matchedRuleMethod: 'phase3_tag',
+        },
+      }));
       return { done: true };
     }, () => ({ status: 'completed' }));
 
@@ -781,6 +788,7 @@ describe('workflow OpenTelemetry spans', () => {
       'takt.step.iteration': 2,
       'takt.step.local_iteration': 1,
       'takt.step.status': 'done',
+      'takt.step.result.match_method': 'tag_fallback',
       'takt.provider.name': 'codex',
       'takt.provider.source': 'project',
       'takt.model.name': 'gpt-5',

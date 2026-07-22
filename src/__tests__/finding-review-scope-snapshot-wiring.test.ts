@@ -23,14 +23,18 @@ vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 // manager 検証（runFindingManagerForStep 経由の突合）は
@@ -45,7 +49,7 @@ vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) =
 });
 
 import { executeAgent } from '../agents/agent-usecases.js';
-import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 
 function makeState(): WorkflowState {
   return {
@@ -94,16 +98,8 @@ function makeParallelStep(): WorkflowStep {
       makeReviewStep('security-review'),
     ],
     rules: [
-      makeRule('all("approved")', 'COMPLETE', {
-        isAggregateCondition: true,
-        aggregateType: 'all',
-        aggregateConditionText: 'approved',
-      }),
-      makeRule('any("needs_fix")', 'fix', {
-        isAggregateCondition: true,
-        aggregateType: 'any',
-        aggregateConditionText: 'needs_fix',
-      }),
+      makeRule('all("approved")', 'COMPLETE'),
+      makeRule('any("needs_fix")', 'fix'),
     ],
   });
 }
@@ -164,7 +160,6 @@ function makeRunner(options: { withFindingContract?: boolean } = {}): {
     getWorkflowName: () => 'test-workflow',
     getInteractive: () => false,
     observabilityEnabled: false,
-    detectRuleIndex: vi.fn(),
     structuredCaller: {
       evaluateCondition: vi.fn(),
       judgeStatus: vi.fn(),
@@ -214,7 +209,7 @@ function queueAgentResponse(response: AgentResponse): void {
 describe('ParallelRunner finding-contract instruction wiring', () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(detectMatchedRule).mockResolvedValue({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'phase3_tag' });
   });
 
   it('builds the finding-contract context once per round via optionsBuilder and shares the same non-empty reviewScopeSnapshotId across every reviewer instruction', async () => {

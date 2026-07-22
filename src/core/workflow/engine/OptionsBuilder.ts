@@ -560,6 +560,7 @@ export class OptionsBuilder {
       sanitizeObservabilityText: this.engineOptions.sanitizeObservabilityText,
       getCurrentWorkflowStack: this.getCurrentWorkflowStack,
       childProcessEnv: this.engineOptions.childProcessEnv,
+      abortSignal: this.engineOptions.abortSignal,
       onStream: this.buildProviderStream(
         step,
         stepProvider.provider,

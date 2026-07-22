@@ -2,11 +2,11 @@
  * Workflow execution integration tests.
  *
  * Tests WorkflowEngine with real runAgent + MockProvider + ScenarioQueue.
- * No vi.mock on runAgent or detectMatchedRule — rules are matched via
+ * No vi.mock on runAgent or RuleEvaluator — rules are matched via
  * [STEP_NAME:N] tags in scenario content (tag-based detection).
  *
  * Mocked: UI, session, phase-runner (report/judgment phases), notifications, config
- * Not mocked: WorkflowEngine, runAgent, detectMatchedRule, rule-evaluator
+ * Not mocked: WorkflowEngine, runAgent, RuleEvaluator
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -16,15 +16,23 @@ import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 import { DefaultStructuredCaller } from '../agents/structured-caller.js';
 import type { WorkflowConfig, WorkflowStep, WorkflowRule } from '../core/models/index.js';
-import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
+import { semanticRuleCandidatesOf } from '../core/models/workflow-rule-condition.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
+import { detectCandidateIndex } from '../shared/utils/ruleIndex.js';
 import { makeRule } from './test-helpers.js';
 
 // --- Mocks (minimal — only infrastructure, not core logic) ---
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockImplementation((step, ctx) => {
+    const candidateIndex = detectCandidateIndex(ctx.lastResponse ?? '', step.name);
+    const candidate = semanticRuleCandidatesOf(step.rules ?? [], ctx.interactive === true)[candidateIndex];
+    if (!candidate) {
+      throw new RuleDetectionExhaustedError(step.name);
+    }
+    return { label: candidate.label, method: 'phase3_tag' };
+  }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -82,7 +90,6 @@ function createTestEnv(): { dir: string; agentPaths: Record<string, string> } {
 function buildEngineOptions(projectCwd: string) {
   return {
     projectCwd,
-    detectRuleIndex,
     structuredCaller: new DefaultStructuredCaller(),
   };
 }
@@ -183,6 +190,23 @@ describe('Workflow Engine IT: Happy Path', () => {
 
     const config = buildSimpleWorkflow(agentPaths);
     const engine = new WorkflowEngine(config, testDir, 'Vague task', {
+      ...buildEngineOptions(testDir),
+      provider: 'mock',
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(state.iteration).toBe(1);
+  });
+
+  it('should abort when a tag belongs to a different step', async () => {
+    setMockScenario([
+      { persona: 'plan', status: 'done', content: '[OTHER:1]\n\nRequirements are clear.' },
+    ]);
+
+    const config = buildSimpleWorkflow(agentPaths);
+    const engine = new WorkflowEngine(config, testDir, 'Test task', {
       ...buildEngineOptions(testDir),
       provider: 'mock',
     });

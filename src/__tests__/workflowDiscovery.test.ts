@@ -7,6 +7,22 @@ import {
 } from '../infra/config/loaders/workflowDiscovery.js';
 
 describe('workflowDiscovery', () => {
+  it('loads every shipped English and Japanese workflow through the normalized rule schema', () => {
+    const onWarning = vi.fn();
+    const loadLanguageWorkflows = (language: 'en' | 'ja') => loadAllWorkflowsWithSourcesFromDirs(
+      process.cwd(),
+      [{ dir: join(process.cwd(), 'builtins', language, 'workflows'), source: 'builtin' }],
+      { onWarning },
+      undefined,
+      true,
+    );
+    const englishWorkflows = loadLanguageWorkflows('en');
+    const japaneseWorkflows = loadLanguageWorkflows('ja');
+
+    expect(onWarning).not.toHaveBeenCalled();
+    expect(englishWorkflows.size + japaneseWorkflows.size).toBe(108);
+  });
+
   it('repo 直下でも builtin の privileged workflow を discovery で skip しない', () => {
     const onWarning = vi.fn();
     const workflows = loadAllWorkflowsWithSourcesFromDirs(

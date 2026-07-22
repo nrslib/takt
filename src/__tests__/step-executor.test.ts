@@ -111,7 +111,6 @@ describe('StepExecutor', () => {
       getWorkflowDescription: () => undefined,
       getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -192,7 +191,6 @@ describe('StepExecutor', () => {
       getWorkflowDescription: () => undefined,
       getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -272,7 +270,6 @@ describe('StepExecutor', () => {
       getWorkflowDescription: () => undefined,
       getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
       },
@@ -336,7 +333,6 @@ describe('StepExecutor', () => {
       getWorkflowDescription: () => undefined,
       getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -410,7 +406,6 @@ describe('StepExecutor', () => {
       getWorkflowDescription: () => undefined,
       getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -491,7 +486,6 @@ describe('StepExecutor', () => {
       getWorkflowDescription: () => undefined,
       getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -567,7 +561,6 @@ describe('StepExecutor', () => {
       getWorkflowDescription: () => undefined,
       getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -642,7 +635,6 @@ describe('StepExecutor', () => {
       getWorkflowDescription: () => undefined,
       getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -720,7 +712,6 @@ describe('StepExecutor', () => {
       getWorkflowDescription: () => undefined,
       getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),

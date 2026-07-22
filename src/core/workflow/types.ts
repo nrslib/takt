@@ -75,8 +75,6 @@ export type AskUserQuestionHandler = (
   input: AskUserQuestionInput
 ) => Promise<Record<string, string>>;
 
-export type RuleIndexDetector = (content: string, stepName: string) => number;
-
 export type PhaseName = 'execute' | 'report' | 'judge';
 
 export interface PhasePromptParts {
@@ -163,6 +161,7 @@ export type WorkflowAbortKind =
   | 'user_input_cancelled'
   | 'step_transition'
   | 'runtime_error'
+  | 'rule_no_match'
   /**
    * COMPLETE への遷移時に open な provisional finding（意味を確定できなかった
    * 観測）が残っていた。エンジン最終不変条件のバックストップ発火 = workflow の
@@ -364,8 +363,6 @@ export interface WorkflowEngineOptions {
   providerProfiles?: ProviderPermissionProfiles;
   /** Enable interactive-only rules and user-input transitions */
   interactive?: boolean;
-  /** Rule tag index detector (required for rules evaluation) */
-  detectRuleIndex?: RuleIndexDetector;
   /** Structured caller (required for rule evaluation and status/decomposition flows) */
   structuredCaller?: StructuredCaller;
   /** Structured output normalizers supplied by the composition root. */

@@ -12,7 +12,7 @@ import type {
   WorkflowTraceTaskMetadata,
 } from '../types.js';
 import { getWorkflowStepKind } from '../step-kind.js';
-import { USAGE_MISSING_REASONS } from '../../logging/contracts.js';
+import { toJudgmentMatchMethod, USAGE_MISSING_REASONS } from '../../logging/contracts.js';
 import {
   sanitizeTraceTaskMetadataText,
   sanitizeTraceTaskSummary,
@@ -570,24 +570,6 @@ function providerOptionsAttributes(providerInfo: StepProviderInfo | undefined): 
       ? JSON.stringify(providerInfo.providerOptionsSources)
       : undefined,
   };
-}
-
-function toJudgmentMatchMethod(
-  matchedRuleMethod: string | undefined,
-): string | undefined {
-  if (!matchedRuleMethod) {
-    return undefined;
-  }
-  if (matchedRuleMethod === 'structured_output') {
-    return 'structured_output';
-  }
-  if (matchedRuleMethod === 'ai_judge' || matchedRuleMethod === 'ai_judge_fallback') {
-    return 'ai_judge';
-  }
-  if (matchedRuleMethod === 'phase3_tag' || matchedRuleMethod === 'phase1_tag') {
-    return 'tag_fallback';
-  }
-  return undefined;
 }
 
 function recordSpanError(span: Span, error: unknown): void {

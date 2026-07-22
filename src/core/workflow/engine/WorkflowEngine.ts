@@ -108,7 +108,6 @@ export class WorkflowEngine extends EventEmitter {
   private readonly loopMonitorJudgeRunner: WorkflowEngineServices['loopMonitorJudgeRunner'];
   private readonly workflowCallRunner: WorkflowEngineServices['workflowCallRunner'];
   private readonly stepCoordinator: WorkflowEngineStepCoordinator;
-  private readonly detectRuleIndex: (content: string, stepName: string) => number;
   private readonly structuredCaller: StructuredCaller;
   private readonly inheritedReviewReports: Array<{ reportName: string; path: string }> = [];
   private resolvedReviewReportNames: InheritedReviewReportNamesResult | undefined;
@@ -202,9 +201,6 @@ export class WorkflowEngine extends EventEmitter {
       this.refreshFindingsState();
       this.findingLedgerStore.createRunCopy();
     }
-    this.detectRuleIndex = this.options.detectRuleIndex ?? (() => {
-      throw new Error('detectRuleIndex is required for rule evaluation');
-    });
     const services = createWorkflowEngineServices({
       config: this.config,
       state: this.state,
@@ -215,7 +211,6 @@ export class WorkflowEngine extends EventEmitter {
       getRunPaths: () => this.runPaths,
       getMaxSteps: () => this.maxSteps,
       options: this.options,
-      detectRuleIndex: this.detectRuleIndex,
       structuredCaller: this.structuredCaller,
       sharedRuntime: this.sharedRuntime,
       resumeStackPrefix: this.resumeStackPrefix,
@@ -680,10 +675,13 @@ export class WorkflowEngine extends EventEmitter {
   }
 
   private buildWorkflowErrorSpanOutcome(error: unknown): WorkflowSpanOutcome {
-    const kind: WorkflowAbortKind = this.abortRequested ? 'interrupt' : 'runtime_error';
-    const reason = this.abortRequested
+    const interruptReason = this.abortRequested
       ? 'Workflow interrupted by user (SIGINT)'
-      : ERROR_MESSAGES.STEP_EXECUTION_FAILED(getErrorMessage(error));
+      : this.options.abortSignal?.aborted === true
+        ? 'Workflow interrupted by external AbortSignal'
+        : undefined;
+    const kind: WorkflowAbortKind = interruptReason === undefined ? 'runtime_error' : 'interrupt';
+    const reason = interruptReason ?? ERROR_MESSAGES.STEP_EXECUTION_FAILED(getErrorMessage(error));
     return {
       status: 'error',
       abortKind: kind,

@@ -6,8 +6,8 @@ import type { StructuredCaller } from '../agents/structured-caller.js';
 import type { RunAgentOptions } from '../agents/runner.js';
 import type { AgentResponse, WorkflowConfig } from '../core/models/index.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
-import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 import type { StreamEvent } from '../shared/types/provider.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -37,7 +37,10 @@ function workflowConfig(): WorkflowConfig {
       instruction: 'Implement the task',
       passPreviousResponse: false,
       outputContracts: [{ name: 'review.md' }],
-      rules: [{ condition: 'approved', next: 'COMPLETE' }],
+      rules: [
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
+        normalizeRule({ condition: 'needs_fix', next: 'ABORT' }),
+      ],
     }],
   };
 }
@@ -89,7 +92,13 @@ describe('WorkflowEngine report fallback integration', () => {
       sessionId: 'codex-fallback-session',
     }));
     const structuredCaller: StructuredCaller = {
-      judgeStatus: vi.fn().mockResolvedValue({ ruleIndex: 0, method: 'structured_output' }),
+      judgeStatus: vi.fn().mockImplementation(async (_structured, _tag, _candidates, options) => {
+        options.onStructuredPromptResolved?.({
+          systemPrompt: 'conductor-system',
+          userInstruction: 'structured prompt',
+        });
+        return { candidateIndex: 0, method: 'structured_output' };
+      }),
       evaluateCondition: vi.fn(),
       decomposeTask: vi.fn(),
       requestMoreParts: vi.fn(),
@@ -104,7 +113,6 @@ describe('WorkflowEngine report fallback integration', () => {
         model: 'gpt-5-report',
       },
       reportDirName: 'report-fallback-it',
-      detectRuleIndex,
       structuredCaller,
     });
 
@@ -118,7 +126,7 @@ describe('WorkflowEngine report fallback integration', () => {
     expect(structuredCaller.judgeStatus).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      [{ condition: 'approved', next: 'COMPLETE' }],
+      [{ label: 'approved' }, { label: 'needs_fix' }],
       expect.objectContaining({
         stepName: 'implement',
         resolvedProvider: 'opencode',

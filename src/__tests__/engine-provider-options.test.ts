@@ -5,12 +5,16 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn(),
   runReportPhase: vi.fn(),
   runStatusJudgmentPhase: vi.fn(),
 }));
@@ -29,7 +33,7 @@ import {
   makeStep,
   makeResponse,
   makeRule,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
 import type { WorkflowConfig } from '../core/models/index.js';
@@ -74,7 +78,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
@@ -117,7 +121,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
@@ -153,7 +157,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
@@ -188,7 +192,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
@@ -220,7 +224,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
@@ -260,7 +264,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
@@ -340,7 +344,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
@@ -372,7 +376,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
@@ -415,7 +419,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
@@ -473,7 +477,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
@@ -530,7 +534,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: '```json\n{"result":"done"}\n```' }),
     ]);
-    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,

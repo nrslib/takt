@@ -7,7 +7,7 @@ import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import type { StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import type { ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
-import { makeStep } from './test-helpers.js';
+import { makeRule, makeStep } from './test-helpers.js';
 
 const { compactSessionBeforePhase1Mock, ingestFindingContractResultsMock } = vi.hoisted(() => ({
   compactSessionBeforePhase1Mock: vi.fn().mockResolvedValue('reused'),
@@ -34,7 +34,6 @@ vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../core/workflow/phase-runner.js')>();
   return {
     ...actual,
-    needsStatusJudgmentPhase: vi.fn(),
     runReportPhase: vi.fn(),
     runStatusJudgmentPhase: vi.fn(),
   };
@@ -44,7 +43,6 @@ import { executeAgent } from '../agents/agent-usecases.js';
 import { StepExecutor } from '../core/workflow/engine/StepExecutor.js';
 import { ParallelRunner } from '../core/workflow/engine/ParallelRunner.js';
 import {
-  needsStatusJudgmentPhase,
   runReportPhase,
   runStatusJudgmentPhase,
 } from '../core/workflow/phase-runner.js';
@@ -147,7 +145,6 @@ function makeParallelDeps(cwd: string): ParallelRunnerDeps {
     getWorkflowName: () => 'test-workflow',
     getInteractive: () => false,
     observabilityEnabled: false,
-    detectRuleIndex: vi.fn().mockReturnValue(-1),
     structuredCaller: {
       evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
     },
@@ -165,11 +162,9 @@ describe('session compaction Phase 1 wiring', () => {
     mkdirSync(runPaths.contextPreviousResponsesAbs, { recursive: true });
     vi.clearAllMocks();
     compactSessionBeforePhase1Mock.mockResolvedValue('reused');
-    vi.mocked(needsStatusJudgmentPhase).mockReturnValue(false);
     vi.mocked(runReportPhase).mockResolvedValue(undefined);
     vi.mocked(runStatusJudgmentPhase).mockResolvedValue({
-      tag: 'approved',
-      ruleIndex: 0,
+      label: 'approved',
       method: 'phase3_tag',
     });
   });
@@ -205,7 +200,6 @@ describe('session compaction Phase 1 wiring', () => {
       getWorkflowDescription: () => undefined,
       getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -254,7 +248,6 @@ describe('session compaction Phase 1 wiring', () => {
       getWorkflowDescription: () => undefined,
       getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
       },
@@ -309,7 +302,6 @@ describe('session compaction Phase 1 wiring', () => {
       getWorkflowDescription: () => undefined,
       getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
       },
@@ -379,7 +371,10 @@ describe('session compaction Phase 1 wiring', () => {
   it('Given report and status phases run When a compact normal step executes Then compaction is still Phase 1 only', async () => {
     const step = makeCompactStep({
       outputContracts: [{ name: 'review.md', format: 'markdown' }],
-      rules: [{ condition: 'approved', next: 'COMPLETE' }],
+      rules: [
+        makeRule('approved', 'COMPLETE'),
+        makeRule('needs_fix', 'ABORT'),
+      ],
     });
     const phase1Options = {
       cwd,
@@ -406,7 +401,6 @@ describe('session compaction Phase 1 wiring', () => {
       getWorkflowDescription: () => undefined,
       getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -418,7 +412,6 @@ describe('session compaction Phase 1 wiring', () => {
       onPhaseComplete: vi.fn(),
       onJudgeStage: vi.fn(),
     };
-    vi.mocked(needsStatusJudgmentPhase).mockReturnValue(true);
     queueAgentResponse(makeDoneResponse());
 
     await new StepExecutor(deps).runNormalStep(step, makeState(), 'task', 5, vi.fn());
@@ -467,7 +460,6 @@ describe('session compaction Phase 1 wiring', () => {
       getWorkflowName: () => 'test-workflow',
       getInteractive: () => false,
       observabilityEnabled: false,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -515,7 +507,6 @@ describe('session compaction Phase 1 wiring', () => {
       getWorkflowName: () => 'test-workflow',
       getInteractive: () => false,
       observabilityEnabled: false,
-      detectRuleIndex: vi.fn().mockReturnValue(-1),
       structuredCaller: {
         evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
       },

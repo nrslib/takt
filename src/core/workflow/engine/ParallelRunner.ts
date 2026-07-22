@@ -17,12 +17,8 @@ import type {
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { isWorkflowCallStep } from '../step-kind.js';
 import { ParallelLogger } from './parallel-logger.js';
-import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
-import { detectMatchedRule } from '../evaluation/index.js';
+import { runReportPhase, ReportPhaseGenerationError } from '../phase-runner.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
-import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
-import { resolvePhase3Adoption } from '../evaluation/rule-utils.js';
-import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { incrementStepIteration } from './state-manager.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { buildSessionKey } from '../session-key.js';
@@ -31,7 +27,6 @@ import type { StepExecutor } from './StepExecutor.js';
 import type { WorkflowEngineOptions, PhaseName, PhasePromptParts, JudgeStageEntry, StepRunResult } from '../types.js';
 import type { RuntimeStepResolution } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
-import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { resolveAutoRoutingBatch } from '../auto-routing/resolver.js';
@@ -50,8 +45,9 @@ import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallIsolatedStateSync, WorkflowCallSessionUpdates } from './WorkflowCallExecutor.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
 import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
-import { StructuredOutputSchemaError } from './structured-output-schema-validator.js';
 import { recordAgentUsageEvent } from './agent-usage-event.js';
+import { formatWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
+import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 
 const log = createLogger('parallel-runner');
 
@@ -138,8 +134,6 @@ export interface ParallelRunnerDeps {
   readonly observabilityRunId?: string;
   readonly sanitizeObservabilityText?: (text: string) => string;
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
-  readonly detectRuleIndex: (content: string, stepName: string) => number;
-  readonly structuredCaller: StructuredCaller;
   readonly refreshFindingsState: () => void;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
   readonly findingContract?: FindingContractConfig;
@@ -230,14 +224,7 @@ export class ParallelRunner {
       : this.deps.optionsBuilder.resolveStepProviderModel(step);
     const parentRuleCtx = {
       state,
-      cwd: this.deps.getCwd(),
-      provider: parentPm.provider,
-      resolvedProvider: parentPm.provider,
-      resolvedModel: parentPm.model,
-      childProcessEnv: this.deps.engineOptions.childProcessEnv,
       interactive: this.deps.getInteractive(),
-      detectRuleIndex: this.deps.detectRuleIndex,
-      structuredCaller: this.deps.structuredCaller,
     };
 
     // Create semaphore for concurrency control (if configured)
@@ -326,11 +313,8 @@ export class ParallelRunner {
             ? this.deps.optionsBuilder.resolveStepProviderModel(executableSubStep, subRuntime)
             : this.deps.optionsBuilder.resolveStepProviderModel(executableSubStep);
           const subRuleCtx = {
-            ...parentRuleCtx,
-            provider: subPm.provider,
-            resolvedProvider: subPm.provider,
-            resolvedModel: subPm.model,
-            childProcessEnv: this.deps.engineOptions.childProcessEnv,
+            state,
+            interactive: this.deps.getInteractive(),
           };
 
         // Session key uses the same resolved provider as Phase 1 options and resume phases.
@@ -636,48 +620,11 @@ export class ParallelRunner {
           }
         }
 
-        // Phase 3: status judgment for sub-step
-        let subPhase3: StatusJudgmentPhaseResult | undefined;
-        try {
-          subPhase3 = needsStatusJudgmentPhase(subStep)
-            ? await runStatusJudgmentPhase(subStep, phaseCtx)
-            : undefined;
-        } catch (error) {
-          if (error instanceof StructuredOutputSchemaError) {
-            throw error;
-          }
-          log.info('Phase 3 status judgment failed for sub-step, falling back to phase1 rule evaluation', {
-            step: subStep.name,
-            error: getErrorMessage(error),
-          });
-        }
-
-        // Phase 3 はルール番号を直接採用するため、ガード（findings 条件）を
-        // ここで評価する。不成立なら採用せず、ガード対応済みの通常ルール
-        // 評価へフォールバックする（StepExecutor 側と同じ扱い）。
-        // 採用判定は共通ヘルパに委譲（StepExecutor と同一ロジック）
-        const subAdoption = subPhase3 !== undefined
-          ? resolvePhase3Adoption(subStep.rules, subPhase3, state, this.deps.getInteractive(), evaluateWhenExpression)
-          : undefined;
-        if (subAdoption !== undefined) {
-          subPhase3 = subAdoption.result;
-        }
-        const subPhase3GuardFailed = subAdoption?.blocked === true;
-        if (subPhase3GuardFailed && subPhase3 !== undefined) {
-          log.debug('Phase 3 rule guard failed for sub-step; falling back to rule evaluation', {
-            step: subStep.name,
-            ruleIndex: subPhase3.ruleIndex,
-            ruleCondition: subStep.rules?.[subPhase3.ruleIndex]?.condition,
-          });
-        }
-
         let finalResponse: AgentResponse;
-        if (subPhase3 && !subPhase3GuardFailed) {
-          finalResponse = { ...subResponse, matchedRuleIndex: subPhase3.ruleIndex, matchedRuleMethod: subPhase3.method };
-        } else {
+        {
           let match;
           try {
-            match = await detectMatchedRule(subStep, subResponse.content, '', subRuleCtx);
+            match = await evaluatePostExecutionRules(subStep, () => phaseCtx, subRuleCtx);
           } catch (error) {
             if (error instanceof RuleDetectionExhaustedError) {
               invalidateExpectedPersonaSession(
@@ -764,6 +711,14 @@ export class ParallelRunner {
     this.mergeWorkflowCallSubStepEffects(step, subResults, state, updatePersonaSession);
     this.emitSubStepRoutingDecisionEvents(subResults, state.iteration);
 
+    const ruleDetectionFailure = settled.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected'
+        && result.reason instanceof RuleDetectionExhaustedError,
+    );
+    if (ruleDetectionFailure) {
+      throw ruleDetectionFailure.reason;
+    }
+
     const terminalResults = this.collectTerminalResults(subResults);
     const rateLimitedResult = terminalResults.find((r) => r.response.status === 'rate_limited');
     if (rateLimitedResult) {
@@ -840,7 +795,9 @@ export class ParallelRunner {
         subResults.map((r) => ({
           name: r.subStep.name,
           condition: r.response.matchedRuleIndex != null && r.subStep.rules
-            ? r.subStep.rules[r.response.matchedRuleIndex]?.condition
+            ? r.subStep.rules[r.response.matchedRuleIndex] === undefined
+              ? undefined
+              : formatWorkflowRuleCondition(r.subStep.rules[r.response.matchedRuleIndex]!.condition)
             : undefined,
         })),
       );
@@ -855,8 +812,21 @@ export class ParallelRunner {
       .map((r) => r.instruction)
       .join('\n\n');
 
-    // Parent step uses aggregate conditions, so tagContent is empty
-    const match = await detectMatchedRule(step, aggregatedContent, '', parentRuleCtx);
+    const match = await evaluatePostExecutionRules(
+      step,
+      () => this.deps.optionsBuilder.buildPhaseRunnerContext(
+        step,
+        state,
+        aggregatedContent,
+        updatePersonaSession,
+        this.deps.onPhaseStart,
+        this.deps.onPhaseComplete,
+        this.deps.onJudgeStage,
+        state.iteration,
+        runtime,
+      ),
+      parentRuleCtx,
+    );
 
     const aggregatedResponse: AgentResponse = {
       persona: step.name,

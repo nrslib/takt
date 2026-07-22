@@ -12,14 +12,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async () => {
@@ -66,9 +70,9 @@ vi.mock('../core/workflow/observability/workflowSpans.js', async () => {
 });
 
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
-import { createTestTmpDir } from './engine-test-helpers.js';
+import { createTestTmpDir, makeRule } from './engine-test-helpers.js';
 
 function createWorkflowConfig(): WorkflowConfig {
   return {
@@ -79,7 +83,7 @@ function createWorkflowConfig(): WorkflowConfig {
       name: 'implement',
       persona: 'coder',
       instruction: 'Implement',
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [makeRule('done', 'COMPLETE')],
     }],
   };
 }
@@ -98,7 +102,7 @@ describe('WorkflowEngine trace task metadata', () => {
       content: 'done',
       timestamp: new Date('2026-06-14T00:00:00.000Z'),
     });
-    vi.mocked(detectMatchedRule).mockResolvedValue({ index: 0, method: 'tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'auto_select' });
   });
 
   afterEach(() => {
@@ -126,7 +130,6 @@ describe('WorkflowEngine trace task metadata', () => {
       },
       observabilityRunId: 'test-report-dir',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => 0,
       traceTaskMetadata,
     } satisfies WorkflowEngineOptions & {
       traceTaskMetadata: typeof traceTaskMetadata;

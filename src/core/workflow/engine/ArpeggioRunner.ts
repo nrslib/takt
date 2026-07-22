@@ -18,13 +18,12 @@ import { loadTemplate, expandTemplate } from '../arpeggio/template.js';
 import { buildMergeFn, writeMergedOutput } from '../arpeggio/merge.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
-import { detectMatchedRule } from '../evaluation/index.js';
+import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import { incrementStepIteration } from './state-manager.js';
 import { createLogger, delay } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
 import type { PhaseName, PhasePromptParts, RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
-import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { buildGitRules } from '../instruction/instruction-context.js';
 import { renderFallbackNotice } from '../instruction/fallback-notice.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
@@ -43,8 +42,6 @@ export interface ArpeggioRunnerDeps {
   readonly observabilityRunId?: string;
   readonly sanitizeObservabilityText?: (text: string) => string;
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
-  readonly detectRuleIndex: (content: string, stepName: string) => number;
-  readonly structuredCaller: StructuredCaller;
   readonly onPhaseStart?: (
     step: WorkflowStep,
     phase: 1 | 2 | 3,
@@ -332,16 +329,23 @@ export class ArpeggioRunner {
 
     const ruleCtx = {
       state,
-      cwd: this.deps.getCwd(),
-      provider: stepProviderModel.provider,
-      resolvedProvider: stepProviderModel.provider,
-      resolvedModel: stepProviderModel.model,
-      childProcessEnv: this.deps.childProcessEnv,
       interactive: this.deps.getInteractive(),
-      detectRuleIndex: this.deps.detectRuleIndex,
-      structuredCaller: this.deps.structuredCaller,
     };
-    const match = await detectMatchedRule(step, mergedContent, '', ruleCtx);
+    const match = await evaluatePostExecutionRules(
+      step,
+      () => this.deps.optionsBuilder.buildPhaseRunnerContext(
+        step,
+        state,
+        mergedContent,
+        () => undefined,
+        this.deps.onPhaseStart,
+        this.deps.onPhaseComplete,
+        undefined,
+        state.iteration,
+        runtime,
+      ),
+      ruleCtx,
+    );
 
     const aggregatedResponse: AgentResponse = {
       persona: step.name,

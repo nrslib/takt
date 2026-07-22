@@ -7,6 +7,7 @@ import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import { incrementStepIteration } from './state-manager.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
+import { formatWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 
 const log = createLogger('loop-monitor-judge-runner');
 
@@ -146,10 +147,7 @@ export class LoopMonitorJudgeRunner {
         monitor.judge.providerOptions,
       ),
       instruction,
-      rules: monitor.judge.rules.map((rule) => ({
-        condition: rule.condition,
-        next: rule.next,
-      })),
+      rules: monitor.judge.rules,
       passPreviousResponse: true,
     };
   }
@@ -206,7 +204,9 @@ export class LoopMonitorJudgeRunner {
 
   private buildDefaultInstruction(monitor: LoopMonitorConfig, cycleCount: number): string {
     const cycleNames = monitor.cycle.join(' → ');
-    const rulesDesc = monitor.judge.rules.map((rule) => `- ${rule.condition} → ${rule.next}`).join('\n');
+    const rulesDesc = monitor.judge.rules
+      .map((rule) => `- ${formatWorkflowRuleCondition(rule.condition)} → ${rule.next}`)
+      .join('\n');
 
     if (this.deps.language === 'ja') {
       return [

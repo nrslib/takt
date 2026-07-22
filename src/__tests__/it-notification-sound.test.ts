@@ -243,6 +243,7 @@ vi.mock('../shared/exitCodes.js', () => ({
 
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
 import type { WorkflowConfig } from '../core/models/index.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 // --- Helpers ---
 
@@ -259,8 +260,8 @@ function makeConfig(): WorkflowConfig {
         instruction: 'Do something',
         passPreviousResponse: true,
         rules: [
-          { condition: 'done', next: 'COMPLETE' },
-          { condition: 'fail', next: 'ABORT' },
+          normalizeRule({ condition: 'done', next: 'COMPLETE' }),
+          normalizeRule({ condition: 'fail', next: 'ABORT' }),
         ],
       },
     ],

@@ -1,4 +1,4 @@
-import type { WorkflowRule } from '../../core/models/types.js';
+import type { SemanticRuleCandidate } from '../../core/models/workflow-rule-condition.js';
 import {
   judgeStatus,
   evaluateCondition,
@@ -20,10 +20,10 @@ export class DefaultStructuredCaller implements StructuredCaller {
   async judgeStatus(
     structuredInstruction: string,
     tagInstruction: string,
-    rules: WorkflowRule[],
+    candidates: SemanticRuleCandidate[],
     options: JudgeStatusOptions,
   ): Promise<JudgeStatusResult> {
-    return judgeStatus(structuredInstruction, tagInstruction, rules, options);
+    return judgeStatus(structuredInstruction, tagInstruction, candidates, options);
   }
 
   async evaluateCondition(

@@ -13,6 +13,7 @@ const {
   mockInstructionBuild,
   mockReportBuild,
   mockJudgmentBuild,
+  mockNeedsStatusJudgmentPhase,
 } = vi.hoisted(() => ({
   mockLoadWorkflowByIdentifier: vi.fn(),
   mockResolveWorkflowConfigValue: vi.fn(),
@@ -25,6 +26,7 @@ const {
   mockInstructionBuild: vi.fn(() => 'phase1'),
   mockReportBuild: vi.fn(() => 'phase2'),
   mockJudgmentBuild: vi.fn(() => 'phase3'),
+  mockNeedsStatusJudgmentPhase: vi.fn(() => false),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -53,7 +55,7 @@ vi.mock('../core/workflow/instruction/StatusJudgmentBuilder.js', () => ({
 }));
 
 vi.mock('../core/workflow/index.js', () => ({
-  needsStatusJudgmentPhase: vi.fn(() => false),
+  needsStatusJudgmentPhase: mockNeedsStatusJudgmentPhase,
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -182,6 +184,26 @@ describe('previewPrompts', () => {
     const outputLines = consoleLogSpy.mock.calls.map(([line]) => line);
     expect(outputLines.filter((line) => line === 'Session key: exec-replan')).toHaveLength(1);
     expect(outputLines.filter((line) => line === 'Requires user input: yes')).toHaveLength(1);
+  });
+
+  it('共通判定が不要とした step では Phase 3 prompt を表示しない', async () => {
+    await previewPrompts('/project');
+
+    expect(mockNeedsStatusJudgmentPhase).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'implement' }),
+      false,
+    );
+    expect(mockJudgmentBuild).not.toHaveBeenCalled();
+  });
+
+  it('共通判定が必要とした step では Phase 3 prompt を表示する', async () => {
+    mockNeedsStatusJudgmentPhase.mockReturnValueOnce(true);
+
+    await previewPrompts('/project');
+
+    expect(mockJudgmentBuild).toHaveBeenCalledOnce();
+    expect(console.log).toHaveBeenCalledWith('\n--- Phase 3 (Status Judgment) ---\n');
+    expect(console.log).toHaveBeenCalledWith('phase3');
   });
 
   it('finding manager の設定済み provider/model を表示する', async () => {

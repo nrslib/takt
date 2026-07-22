@@ -1,10 +1,11 @@
-import type { AgentResponse, WorkflowRule, RuleMatchMethod, Language } from '../core/models/types.js';
+import type { AgentResponse, RuleMatchMethod, Language } from '../core/models/types.js';
+import type { SemanticRuleCandidate } from '../core/models/workflow-rule-condition.js';
 import type { ProviderUsageSnapshot } from '../core/models/response.js';
 import type { ProviderType } from '../core/workflow/types.js';
 import { runAgent, type RunAgentOptions, type StreamCallback } from './runner.js';
-import { detectJudgeIndex, buildJudgePrompt, isValidRuleIndex, buildJudgeConditions } from './judge-utils.js';
+import { detectJudgeIndex, buildJudgePrompt } from './judge-utils.js';
 import { loadJudgmentSchema, loadEvaluationSchema } from '../infra/resources/schema-loader.js';
-import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
+import { detectCandidateIndex } from '../shared/utils/ruleIndex.js';
 import { buildMaxTurnsOption } from './provider-call-options.js';
 import {
   assertStructuredOutputSchema,
@@ -12,6 +13,7 @@ import {
   validateStructuredOutputAgainstSchema,
 } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { getErrorMessage } from '../shared/utils/index.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 
 export interface JudgeStatusOptions {
   cwd: string;
@@ -20,8 +22,8 @@ export interface JudgeStatusOptions {
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
   language?: Language;
-  interactive?: boolean;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  abortSignal?: AbortSignal;
   onStream?: StreamCallback;
   onJudgeStage?: (entry: JudgeStageLogEntry) => void;
   onStructuredPromptResolved?: (promptParts: {
@@ -49,16 +51,18 @@ export interface TagJudgeRunOptions {
   language?: Language;
   onStream?: StreamCallback;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  abortSignal?: AbortSignal;
   stepName: string;
+  onPromptResolved?: JudgeStatusOptions['onStructuredPromptResolved'];
 }
 
 export async function runTagJudgeStage(
   tagInstruction: string,
-  rules: WorkflowRule[],
-  interactiveEnabled: boolean,
+  candidates: SemanticRuleCandidate[],
   runOptions: TagJudgeRunOptions,
   onJudgeStage?: JudgeStatusOptions['onJudgeStage'],
 ): Promise<JudgeStatusResult | undefined> {
+  runOptions.abortSignal?.throwIfAborted();
   let tagResponse: AgentResponse;
   try {
     tagResponse = await runAgent('conductor', tagInstruction, {
@@ -71,6 +75,8 @@ export async function runTagJudgeStage(
       language: runOptions.language,
       onStream: runOptions.onStream,
       childProcessEnv: runOptions.childProcessEnv,
+      abortSignal: runOptions.abortSignal,
+      onPromptResolved: runOptions.onPromptResolved,
     });
   } catch (error) {
     onJudgeStage?.({
@@ -86,16 +92,20 @@ export async function runTagJudgeStage(
   onJudgeStage?.({
     stage: 2,
     method: 'phase3_tag',
-    status: tagResponse.status === 'done' ? 'done' : 'error',
+    status: runOptions.abortSignal?.aborted === true
+      ? 'error'
+      : tagResponse.status === 'done' ? 'done' : 'error',
     instruction: tagInstruction,
     response: tagResponse.content,
     providerUsage: tagResponse.providerUsage,
   });
 
+  runOptions.abortSignal?.throwIfAborted();
+
   if (tagResponse.status === 'done') {
-    const tagRuleIndex = detectRuleIndex(tagResponse.content, runOptions.stepName);
-    if (isValidRuleIndex(tagRuleIndex, rules, interactiveEnabled)) {
-      return { ruleIndex: tagRuleIndex, method: 'phase3_tag' };
+    const tagCandidateIndex = detectCandidateIndex(tagResponse.content, runOptions.stepName);
+    if (isValidCandidateIndex(tagCandidateIndex, candidates)) {
+      return { candidateIndex: tagCandidateIndex, method: 'phase3_tag' };
     }
   }
 
@@ -103,8 +113,12 @@ export async function runTagJudgeStage(
 }
 
 export interface JudgeStatusResult {
-  ruleIndex: number;
+  candidateIndex: number;
   method: RuleMatchMethod;
+}
+
+export function isValidCandidateIndex(index: number, candidates: SemanticRuleCandidate[]): boolean {
+  return Number.isInteger(index) && index >= 0 && index < candidates.length;
 }
 
 export interface EvaluateConditionOptions {
@@ -113,6 +127,7 @@ export interface EvaluateConditionOptions {
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  abortSignal?: AbortSignal;
   onJudgeResponse?: (entry: {
     instruction: string;
     status: 'done' | 'error';
@@ -145,6 +160,7 @@ export async function evaluateCondition(
   conditions: Array<{ index: number; text: string }>,
   options: EvaluateConditionOptions,
 ): Promise<number> {
+  options.abortSignal?.throwIfAborted();
   const prompt = buildJudgePrompt(agentOutput, conditions);
   const evaluationSchema = loadEvaluationSchema();
   assertStructuredOutputSchema(evaluationSchema);
@@ -157,14 +173,19 @@ export async function evaluateCondition(
     permissionMode: 'readonly',
     outputSchema: evaluationSchema,
     childProcessEnv: options.childProcessEnv,
+    abortSignal: options.abortSignal,
   });
 
   options.onJudgeResponse?.({
     instruction: prompt,
-    status: response.status === 'done' ? 'done' : 'error',
+    status: options.abortSignal?.aborted === true
+      ? 'error'
+      : response.status === 'done' ? 'done' : 'error',
     response: response.content,
     providerUsage: response.providerUsage,
   });
+
+  options.abortSignal?.throwIfAborted();
 
   if (response.status !== 'done') {
     return -1;
@@ -183,7 +204,7 @@ export async function evaluateCondition(
   return detectJudgeIndex(response.content);
 }
 
-export function createJudgeStageRecorder(): {
+function createJudgeStageRecorder(): {
   capture(entry: JudgeResponseEntry): void;
   stage(entry: Pick<JudgeStageLogEntry, 'stage' | 'method'>): JudgeStageLogEntry;
 } {
@@ -205,21 +226,104 @@ export function createJudgeStageRecorder(): {
   };
 }
 
+type JudgeConditionEvaluator = (
+  agentOutput: string,
+  conditions: Array<{ index: number; text: string }>,
+  options: EvaluateConditionOptions,
+) => Promise<number>;
+
+async function runAiJudgeStage(
+  structuredInstruction: string,
+  candidates: SemanticRuleCandidate[],
+  options: JudgeStatusOptions,
+  evaluate: JudgeConditionEvaluator,
+): Promise<JudgeStatusResult | undefined> {
+  const conditions = candidates.map((candidate, index) => ({ index, text: candidate.label }));
+  const stage3 = createJudgeStageRecorder();
+  let candidateIndex: number;
+  try {
+    candidateIndex = await evaluate(structuredInstruction, conditions, {
+      cwd: options.cwd,
+      provider: options.provider,
+      resolvedProvider: options.resolvedProvider,
+      resolvedModel: options.resolvedModel,
+      childProcessEnv: options.childProcessEnv,
+      abortSignal: options.abortSignal,
+      onJudgeResponse: stage3.capture,
+    });
+  } catch (error) {
+    const entry = stage3.stage({ stage: 3, method: 'ai_judge' });
+    options.onJudgeStage?.(entry.status === 'skipped'
+      ? {
+          stage: 3,
+          method: 'ai_judge',
+          status: 'error',
+          instruction: structuredInstruction,
+          response: getErrorMessage(error),
+        }
+      : entry);
+    throw error;
+  }
+
+  options.onJudgeStage?.(stage3.stage({ stage: 3, method: 'ai_judge' }));
+  return isValidCandidateIndex(candidateIndex, candidates)
+    ? { candidateIndex, method: 'ai_judge' }
+    : undefined;
+}
+
+export async function runJudgeFallbackStages(
+  structuredInstruction: string,
+  tagInstruction: string,
+  candidates: SemanticRuleCandidate[],
+  options: JudgeStatusOptions,
+  evaluate: JudgeConditionEvaluator,
+  detectionFailureDetail?: string,
+): Promise<JudgeStatusResult> {
+  const tagResult = await runTagJudgeStage(
+    tagInstruction,
+    candidates,
+    {
+      cwd: options.cwd,
+      provider: options.provider,
+      resolvedProvider: options.resolvedProvider,
+      resolvedModel: options.resolvedModel,
+      language: options.language,
+      onStream: options.onStream,
+      childProcessEnv: options.childProcessEnv,
+      abortSignal: options.abortSignal,
+      stepName: options.stepName,
+      onPromptResolved: options.onStructuredPromptResolved,
+    },
+    options.onJudgeStage,
+  );
+  if (tagResult !== undefined) {
+    return tagResult;
+  }
+
+  const aiJudgeResult = await runAiJudgeStage(
+    structuredInstruction,
+    candidates,
+    options,
+    evaluate,
+  );
+  if (aiJudgeResult !== undefined) {
+    return aiJudgeResult;
+  }
+
+  throw new RuleDetectionExhaustedError(options.stepName, detectionFailureDetail);
+}
+
 export async function judgeStatus(
   structuredInstruction: string,
   tagInstruction: string,
-  rules: WorkflowRule[],
+  candidates: SemanticRuleCandidate[],
   options: JudgeStatusOptions,
 ): Promise<JudgeStatusResult> {
-  if (rules.length === 0) {
-    throw new Error('judgeStatus requires at least one rule');
+  options.abortSignal?.throwIfAborted();
+  if (candidates.length < 2) {
+    throw new Error('judgeStatus requires at least two semantic candidates');
   }
 
-  if (rules.length === 1) {
-    return { ruleIndex: 0, method: 'auto_select' };
-  }
-
-  const interactiveEnabled = options.interactive === true;
   const judgmentSchema = loadJudgmentSchema();
   assertStructuredOutputSchema(judgmentSchema);
 
@@ -230,6 +334,7 @@ export async function judgeStatus(
     language: options.language,
     onStream: options.onStream,
     childProcessEnv: options.childProcessEnv,
+    abortSignal: options.abortSignal,
   };
 
   const structuredResponse = await runAgent('conductor', structuredInstruction, {
@@ -244,80 +349,31 @@ export async function judgeStatus(
   options.onJudgeStage?.({
     stage: 1,
     method: 'structured_output',
-    status: structuredResponse.status === 'done' ? 'done' : 'error',
+    status: options.abortSignal?.aborted === true
+      ? 'error'
+      : structuredResponse.status === 'done' ? 'done' : 'error',
     instruction: structuredInstruction,
     response: structuredResponse.content,
     providerUsage: structuredResponse.providerUsage,
   });
 
+  options.abortSignal?.throwIfAborted();
+
   if (structuredResponse.status === 'done' && isValidJudgeStructuredOutput(structuredResponse.structuredOutput, judgmentSchema)) {
     const stepNumber = structuredResponse.structuredOutput.step;
     if (typeof stepNumber === 'number' && Number.isInteger(stepNumber)) {
-      const ruleIndex = stepNumber - 1;
-      if (isValidRuleIndex(ruleIndex, rules, interactiveEnabled)) {
-        return { ruleIndex, method: 'structured_output' };
+      const candidateIndex = stepNumber - 1;
+      if (isValidCandidateIndex(candidateIndex, candidates)) {
+        return { candidateIndex, method: 'structured_output' };
       }
     }
   }
 
-  const tagResult = await runTagJudgeStage(
+  return runJudgeFallbackStages(
+    structuredInstruction,
     tagInstruction,
-    rules,
-    interactiveEnabled,
-    {
-      cwd: options.cwd,
-      provider: options.provider,
-      resolvedProvider: options.resolvedProvider,
-      resolvedModel: options.resolvedModel,
-      language: options.language,
-      onStream: options.onStream,
-      childProcessEnv: options.childProcessEnv,
-      stepName: options.stepName,
-    },
-    options.onJudgeStage,
+    candidates,
+    options,
+    evaluateCondition,
   );
-  if (tagResult !== undefined) {
-    return tagResult;
-  }
-
-  const conditions = buildJudgeConditions(rules, interactiveEnabled);
-
-  if (conditions.length > 0) {
-    const stage3 = createJudgeStageRecorder();
-    const normalizedConditions = conditions.map((c, pos) => ({ index: pos, text: c.text }));
-    let fallbackPosition: number;
-    try {
-      fallbackPosition = await evaluateCondition(structuredInstruction, normalizedConditions, {
-        cwd: options.cwd,
-        provider: options.provider,
-        resolvedProvider: options.resolvedProvider,
-        resolvedModel: options.resolvedModel,
-        childProcessEnv: options.childProcessEnv,
-        onJudgeResponse: stage3.capture,
-      });
-    } catch (error) {
-      options.onJudgeStage?.({
-        stage: 3,
-        method: 'ai_judge',
-        status: 'error',
-        instruction: structuredInstruction,
-        response: getErrorMessage(error),
-      });
-      throw error;
-    }
-
-    options.onJudgeStage?.(stage3.stage({
-      stage: 3,
-      method: 'ai_judge',
-    }));
-
-    if (fallbackPosition >= 0 && fallbackPosition < conditions.length) {
-      const originalIndex = conditions[fallbackPosition]?.index;
-      if (originalIndex !== undefined) {
-        return { ruleIndex: originalIndex, method: 'ai_judge' };
-      }
-    }
-  }
-
-  throw new Error(`Status not found for step "${options.stepName}"`);
 }

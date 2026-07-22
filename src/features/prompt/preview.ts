@@ -170,7 +170,7 @@ function previewAgentStep(
     console.log(reportBuilder.build());
   }
 
-  if (needsStatusJudgmentPhase(step)) {
+  if (needsStatusJudgmentPhase(step, false)) {
     const judgmentBuilder = new StatusJudgmentBuilder(step, { language });
     console.log('\n--- Phase 3 (Status Judgment) ---\n');
     console.log(judgmentBuilder.build());

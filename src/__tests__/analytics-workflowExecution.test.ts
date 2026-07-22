@@ -24,6 +24,7 @@ import type {
   RoutingDecisionEvent,
 } from '../features/analytics/index.js';
 import type { StepProviderInfo } from '../core/workflow/types.js';
+import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 
 describe('workflow execution analytics initialization', () => {
   let testDir: string;
@@ -122,7 +123,7 @@ describe('routing_decision event assembly', () => {
 
   it('writes normal step routing decisions from explicit routing event data', () => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
-    const emitter = new AnalyticsEmitter('run-routing', 'mock', 'test-model', 'auto-workflow');
+    const emitter = new AnalyticsEmitter('run-routing', 'mock', 'test-model', 'auto-workflow', false);
     const sentinelInstruction = 'Implement API with SECRET_PROMPT_SENTINEL and /tmp/private-repo';
     const step = {
       name: 'implement',
@@ -196,7 +197,7 @@ describe('routing_decision event assembly', () => {
 
   it('does not duplicate routing decisions when the same step completes', () => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
-    const emitter = new AnalyticsEmitter('run-routing-single', 'mock', 'test-model', 'auto-workflow');
+    const emitter = new AnalyticsEmitter('run-routing-single', 'mock', 'test-model', 'auto-workflow', false);
     const step = {
       name: 'implement',
       tags: ['implementation'],
@@ -235,7 +236,7 @@ describe('routing_decision event assembly', () => {
 
   it('writes team leader worker routing decisions from explicit routing event data', () => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
-    const emitter = new AnalyticsEmitter('run-worker-routing', 'mock', 'test-model', 'team-workflow');
+    const emitter = new AnalyticsEmitter('run-worker-routing', 'mock', 'test-model', 'team-workflow', false);
     const partStep = {
       name: 'implement.part-1',
       tags: ['implementation'],
@@ -282,16 +283,22 @@ describe('routing_decision event assembly', () => {
     });
   });
 
-  it('writes phaseCount including report and status judgment phases', () => {
+  it.each([
+    ['a single semantic candidate', ['approved'], 2],
+    ['multiple semantic candidates', ['approved', 'needs_fix'], 3],
+  ])('writes the executed phaseCount for %s', (_case, conditions, expectedPhaseCount) => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
-    const emitter = new AnalyticsEmitter('run-phase-count', 'mock', 'test-model', 'auto-workflow');
+    const emitter = new AnalyticsEmitter('run-phase-count', 'mock', 'test-model', 'auto-workflow', false);
     const step = {
       name: 'review',
       tags: ['review'],
       persona: 'reviewer',
       instruction: 'Review API',
       outputContracts: [{ name: 'review.md', useJudge: true }],
-      rules: [{ condition: 'approved', next: 'COMPLETE' }],
+      rules: conditions.map((condition) => ({
+        condition: parseWorkflowRuleCondition(condition),
+        next: 'COMPLETE',
+      })),
     } as WorkflowStep;
     const providerInfo: StepProviderInfo = {
       provider: 'claude-sdk',
@@ -323,12 +330,12 @@ describe('routing_decision event assembly', () => {
     );
 
     const parsed = JSON.parse(readFileSync(join(routingEventsDir, '2026-02-18.jsonl'), 'utf-8').trim()) as RoutingDecisionEvent;
-    expect(parsed.phaseCount).toBe(3);
+    expect(parsed.phaseCount).toBe(expectedPhaseCount);
   });
 
   it('skips non-auto provider sources while still writing auto routing decisions', () => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
-    const emitter = new AnalyticsEmitter('run-non-auto-source', 'mock', 'test-model', 'auto-workflow');
+    const emitter = new AnalyticsEmitter('run-non-auto-source', 'mock', 'test-model', 'auto-workflow', false);
     const step = {
       name: 'implement',
       tags: ['implementation'],
@@ -395,7 +402,14 @@ describe('routing_decision event assembly', () => {
 
   it('writes routing decisions when auto routing selects the provider and a higher-priority layer selects the model', () => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
-    const emitter = new AnalyticsEmitter('task-derived-slug', 'mock', 'test-model', 'auto-workflow', 'routing-run-id');
+    const emitter = new AnalyticsEmitter(
+      'task-derived-slug',
+      'mock',
+      'test-model',
+      'auto-workflow',
+      false,
+      'routing-run-id',
+    );
     const step = {
       name: 'implement',
       tags: ['implementation'],
@@ -505,7 +519,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
 
   it('writes review_finding events from findings ledger updates to JSONL', () => {
     initAnalyticsWriter(true, testDir);
-    const emitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'peer-review');
+    const emitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'peer-review', false);
     const ledger: FindingLedger = {
       version: 1,
       workflowName: 'peer-review',
@@ -556,7 +570,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
     const fileInsteadOfDirectory = join(testDir, 'events-file');
     writeFileSync(fileInsteadOfDirectory, 'not a directory', 'utf-8');
     initAnalyticsWriter(true, fileInsteadOfDirectory);
-    const emitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'peer-review');
+    const emitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'peer-review', false);
     const ledger: FindingLedger = {
       version: 1,
       workflowName: 'peer-review',
@@ -584,7 +598,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
 
   it('writes fix_action for seeded finding ids before a ledger update event', () => {
     initAnalyticsWriter(true, testDir);
-    const emitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'peer-review');
+    const emitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'peer-review', false);
     emitter.updateProviderInfo(8, 'mock', 'test-model', 'peer-review');
     emitter.seedFindingContractFindingIds(['F-0001']);
 

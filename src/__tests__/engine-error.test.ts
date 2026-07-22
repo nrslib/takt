@@ -5,14 +5,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -22,15 +26,17 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
-import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
+import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import {
   makeResponse,
   makeStep,
   makeRule,
   buildDefaultWorkflowConfig,
   mockRunAgentSequence,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   createTestTmpDir,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
@@ -51,7 +57,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
   });
 
   describe('No rule matched', () => {
-    it('should abort when detectMatchedRule returns undefined', async () => {
+    it('should abort when mockRuleEvaluation returns undefined', async () => {
       const config = buildDefaultWorkflowConfig();
       const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
@@ -59,7 +65,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
         makeResponse({ persona: 'plan', content: 'Unclear output' }),
       ]);
 
-      mockDetectMatchedRuleSequence([undefined]);
+      mockRuleEvaluationSequence([undefined]);
 
       const abortFn = vi.fn();
       engine.on('workflow:abort', abortFn);
@@ -69,7 +75,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       expect(state.status).toBe('aborted');
       expect(abortFn).toHaveBeenCalledOnce();
       const reason = abortFn.mock.calls[0]![1] as string;
-      expect(reason).toContain('plan');
+      expect(reason).toContain('rule_no_match');
     });
   });
 
@@ -151,7 +157,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       mockRunAgentSequence([
         makeResponse({ persona: 'replan', status: 'done', content: 'done' }),
       ]);
-      mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+      mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
       const state = await engine.run();
 
@@ -177,26 +183,14 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           makeStep('execute', {
             parallel: [workerStep],
             rules: [
-              makeRule('all("done")', 'judge', {
-                isAggregateCondition: true,
-                aggregateType: 'all',
-                aggregateConditionText: 'done',
-              }),
+              makeRule('all("done")', 'judge'),
             ],
           }),
           makeStep('judge', {
             parallel: [judgeStep],
             rules: [
-              makeRule('all("approved")', 'COMPLETE', {
-                isAggregateCondition: true,
-                aggregateType: 'all',
-                aggregateConditionText: 'approved',
-              }),
-              makeRule('any("needs_replan")', 'replan', {
-                isAggregateCondition: true,
-                aggregateType: 'any',
-                aggregateConditionText: 'needs_replan',
-              }),
+              makeRule('all("approved")', 'COMPLETE'),
+              makeRule('any("needs_replan")', 'replan'),
             ],
           }),
           makeStep('replan', {
@@ -227,16 +221,16 @@ describe('WorkflowEngine Integration: Error Handling', () => {
         makeResponse({ persona: 'worker-1', content: 'done' }),
         makeResponse({ persona: 'judge-1', content: 'approved' }),
       ]);
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
         { index: 0, method: 'aggregate' },
-        { index: 2, method: 'phase1_tag' },
+        { index: 2, method: 'phase3_tag' },
         { index: 1, method: 'aggregate' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 1, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
         { index: 0, method: 'aggregate' },
-        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase3_tag' },
         { index: 0, method: 'aggregate' },
       ]);
 
@@ -280,26 +274,14 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           makeStep('execute', {
             parallel: [workerStep],
             rules: [
-              makeRule('all("done")', 'judge', {
-                isAggregateCondition: true,
-                aggregateType: 'all',
-                aggregateConditionText: 'done',
-              }),
+              makeRule('all("done")', 'judge'),
             ],
           }),
           makeStep('judge', {
             parallel: [judgeStep],
             rules: [
-              makeRule('all("approved")', 'COMPLETE', {
-                isAggregateCondition: true,
-                aggregateType: 'all',
-                aggregateConditionText: 'approved',
-              }),
-              makeRule('any("needs_replan")', 'replan', {
-                isAggregateCondition: true,
-                aggregateType: 'any',
-                aggregateConditionText: 'needs_replan',
-              }),
+              makeRule('all("approved")', 'COMPLETE'),
+              makeRule('any("needs_replan")', 'replan'),
             ],
           }),
           makeStep('replan', {
@@ -326,12 +308,12 @@ describe('WorkflowEngine Integration: Error Handling', () => {
         makeResponse({ persona: 'judge-1', content: 'needs_replan' }),
         makeResponse({ persona: 'replan', content: 'User input needed for clarification' }),
       ]);
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
         { index: 0, method: 'aggregate' },
-        { index: 1, method: 'phase1_tag' },
+        { index: 1, method: 'phase3_tag' },
         { index: 1, method: 'aggregate' },
-        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();
@@ -364,39 +346,32 @@ describe('WorkflowEngine Integration: Error Handling', () => {
 
   });
 
-  describe('Phase 3 fallback', () => {
-    it('should continue with phase1 rule evaluation when status judgment throws', async () => {
+  describe('Phase 3 failure', () => {
+    it('should abort without Phase 1 rule evaluation when status judgment throws', async () => {
       const config = buildDefaultWorkflowConfig({
         initialStep: 'plan',
         steps: [
           makeStep('plan', {
-            rules: [makeRule('continue', 'COMPLETE')],
+            rules: [
+              makeRule('continue', 'COMPLETE'),
+              makeRule('retry', 'plan'),
+            ],
           }),
         ],
       });
       const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
-      vi.mocked(needsStatusJudgmentPhase).mockReturnValue(true);
       vi.mocked(runStatusJudgmentPhase).mockRejectedValueOnce(new Error('Phase 3 failed'));
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: '[STEP:1] continue' }),
       ]);
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-      ]);
-
       const state = await engine.run();
 
-      expect(state.status).toBe('completed');
+      expect(state.status).toBe('aborted');
       expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
-      expect(detectMatchedRule).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'plan' }),
-        '[STEP:1] continue',
-        '',
-        expect.any(Object),
-      );
-      expect(state.stepOutputs.get('plan')?.matchedRuleMethod).toBe('phase1_tag');
+      expect(mockRuleEvaluation).not.toHaveBeenCalled();
+      expect(state.stepOutputs.get('plan')).toBeUndefined();
     });
   });
 
@@ -466,6 +441,31 @@ describe('WorkflowEngine Integration: Error Handling', () => {
   });
 
   describe('runSingleIteration status routing', () => {
+    it('should classify an exhausted semantic selection as rule_no_match', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
+            rules: [makeRule('continue', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      mockRunAgentSequence([makeResponse({ persona: 'plan', content: 'no matching label' })]);
+      vi.mocked(mockRuleEvaluation).mockImplementationOnce(() => {
+        throw new RuleDetectionExhaustedError('plan');
+      });
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const result = await engine.runSingleIteration();
+
+      expect(result.nextStep).toBe('ABORT');
+      expect(result.isComplete).toBe(true);
+      expect(engine.getState().status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledWith(expect.anything(), 'rule_no_match', 'rule_no_match');
+    });
+
     it('should abort without rule resolution when a step returns blocked', async () => {
       const config = buildDefaultWorkflowConfig({
         initialStep: 'plan',
@@ -535,7 +535,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
         steps: [
           makeStep('plan', {
             rules: [
-              { condition: 'retry', returnValue: 'retry_plan' },
+              normalizeRule({ condition: 'retry', return: 'retry_plan' }),
             ],
           }),
         ],
@@ -548,8 +548,8 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           content: '[STEP:1] retry',
         }),
       ]);
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const result = await engine.runSingleIteration();
@@ -560,6 +560,38 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       expect(engine.getState().status).toBe('completed');
       expect(result.response.matchedRuleIndex).toBe(0);
     });
+  });
+
+  it('should classify an aborted execution as interrupt before rule_no_match', async () => {
+    const abortController = new AbortController();
+    const config = buildDefaultWorkflowConfig({
+      initialStep: 'plan',
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('continue', 'COMPLETE')],
+        }),
+      ],
+    });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      abortSignal: abortController.signal,
+    });
+    mockRunAgentSequence([makeResponse({ persona: 'plan', content: 'no matching label' })]);
+    vi.mocked(mockRuleEvaluation).mockImplementationOnce(() => {
+      abortController.abort(new Error('cancelled'));
+      throw new RuleDetectionExhaustedError('plan');
+    });
+    const abortFn = vi.fn();
+    engine.on('workflow:abort', abortFn);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortFn).toHaveBeenCalledWith(
+      expect.anything(),
+      'Workflow interrupted by external AbortSignal',
+      'interrupt',
+    );
   });
 
   describe('Loop detection', () => {
@@ -585,8 +617,8 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           });
           return makeResponse({ content: `iteration ${i}` });
         });
-        vi.mocked(detectMatchedRule).mockResolvedValueOnce(
-          { index: 0, method: 'phase1_tag' }
+        vi.mocked(mockRuleEvaluation).mockReturnValueOnce(
+          { index: 0, method: 'phase3_tag' }
         );
       }
 
@@ -614,10 +646,10 @@ describe('WorkflowEngine Integration: Error Handling', () => {
         makeResponse({ persona: 'ai_review', content: 'OK' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const limitFn = vi.fn();
@@ -653,14 +685,14 @@ describe('WorkflowEngine Integration: Error Handling', () => {
         makeResponse({ persona: 'supervise', content: 'All passed' }),
       ]);
 
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
-        { index: 0, method: 'phase1_tag' },
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
         { index: 0, method: 'aggregate' },
-        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase3_tag' },
       ]);
 
       const state = await engine.run();

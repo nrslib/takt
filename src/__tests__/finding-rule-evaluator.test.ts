@@ -1,133 +1,72 @@
-import { describe, expect, it, vi } from 'vitest';
-import { RuleEvaluator, type RuleEvaluatorContext } from '../core/workflow/evaluation/RuleEvaluator.js';
+import { describe, expect, it } from 'vitest';
+import type { WorkflowState } from '../core/models/types.js';
+import { RuleEvaluator } from '../core/workflow/evaluation/RuleEvaluator.js';
 import { evaluateWhenExpression } from '../core/workflow/evaluation/when-evaluator.js';
-import { isDeterministicCondition } from '../core/workflow/evaluation/rule-utils.js';
-import type { AgentResponse, WorkflowState } from '../core/models/types.js';
 import { makeRule, makeStep } from './test-helpers.js';
 
-type FindingsRuleContext = {
-  findings: {
-    open: {
-      count: number;
-      bySeverity: Record<string, number>;
-        items: Array<{ id: string; severity: string; title: string; familyTags?: string[] }>;
-      };
-    resolved: {
-      count: number;
-    };
-    conflicts: {
-      count: number;
-      items: Array<{ id: string; status: string; findingIds: string[]; rawFindingIds: string[]; description: string }>;
-    };
-  };
-};
-
-function makeStepOutput(persona: string, matchedRuleIndex: number): AgentResponse {
-  return {
-    persona,
-    status: 'done',
-    content: '',
-    timestamp: new Date('2026-06-13T00:00:00.000Z'),
-    matchedRuleIndex,
-  };
-}
-
-function makeState(
-  findings?: FindingsRuleContext['findings'],
-  stepOutputs?: Record<string, number>,
-): WorkflowState & Partial<FindingsRuleContext> {
+function stateWithFindings(overrides: Record<string, unknown> = {}): WorkflowState {
   return {
     workflowName: 'finding-workflow',
-    currentStep: 'peer-review',
+    currentStep: 'final-gate',
     iteration: 1,
-    stepOutputs: new Map(
-      Object.entries(stepOutputs ?? {}).map(([persona, matchedRuleIndex]) => [
-        persona,
-        makeStepOutput(persona, matchedRuleIndex),
-      ]),
-    ),
-    structuredOutputs: new Map(),
-    systemContexts: new Map(),
-    effectResults: new Map(),
-    userInputs: [],
-    personaSessions: new Map(),
-    stepIterations: new Map(),
     status: 'running',
-    ...(findings !== undefined ? { findings } : {}),
-  };
-}
-
-function makeContext(state: WorkflowState): RuleEvaluatorContext {
-  return {
-    state,
-    cwd: '/tmp/project',
-    detectRuleIndex: vi.fn().mockReturnValue(-1),
-    structuredCaller: {
-      evaluateCondition: vi.fn().mockRejectedValue(new Error('AI judge should not run for findings rules')),
-    } as RuleEvaluatorContext['structuredCaller'],
-  };
+    stepOutputs: new Map(),
+    stepIterations: new Map(),
+    personaSessions: new Map(),
+    userInputs: [],
+    findings: {
+      open: { count: 0, bySeverity: {}, items: [] },
+      resolved: { count: 0 },
+      waived: { count: 0 },
+      invalidated: { count: 0 },
+      superseded: { count: 0 },
+      provisional: { count: 0, fixpoint: false, items: [] },
+      rounds: { budgetExhausted: false },
+      reviewerAnomalies: { count: 0, budgetExhausted: false },
+      conflicts: { count: 0, items: [], unadjudicated: { count: 0 } },
+      ...overrides,
+    },
+  } as WorkflowState;
 }
 
 describe('RuleEvaluator findings conditions', () => {
-  it('should classify findings references as deterministic conditions', () => {
-    expect(isDeterministicCondition('when(findings.open.count == 0)')).toBe(true);
-    expect(isDeterministicCondition('when(findings.open.bySeverity.high > 0)')).toBe(true);
-    // when() で包まない裸の式は決定的扱いしない（散文タグとして扱う）
-    expect(isDeterministicCondition('findings.open.count == 0')).toBe(false);
-  });
-
-  it('should evaluate finding count and severity without AI judge', async () => {
-    const state = makeState({
-      open: {
-        count: 2,
-        bySeverity: { high: 1, medium: 1, low: 0 },
-        items: [
-          { id: 'F-0001', severity: 'high', title: 'Blocks release' },
-          { id: 'F-0002', severity: 'medium', title: 'Needs cleanup' },
-        ],
-      },
-      resolved: { count: 0 },
-      conflicts: { count: 0, items: [] },
-    });
+  it('uses the first matching machine rule before a later semantic rule', () => {
     const step = makeStep({
-      name: 'peer-review',
       rules: [
-        { condition: 'when(findings.open.count == 0)', next: 'COMPLETE' },
-        { condition: 'when(findings.open.bySeverity.high > 0)', next: 'fix' },
+        makeRule('when(findings.provisional.count > 0)', 'replan'),
+        makeRule('needs_fix', 'fix'),
       ],
     });
-    const ctx = makeContext(state);
+    const state = stateWithFindings({ provisional: { count: 1, fixpoint: false, items: [] } });
 
-    const result = await new RuleEvaluator(step, ctx).evaluate('', '');
-
-    expect(result).toEqual({ index: 1, method: 'auto_select' });
-    expect(ctx.structuredCaller.evaluateCondition).not.toHaveBeenCalled();
+    expect(new RuleEvaluator(step, { state }).evaluate({ label: 'needs_fix', method: 'structured_output' }))
+      .toEqual({ index: 0, method: 'auto_select' });
   });
 
-  it('should evaluate exists() over open finding items', async () => {
-    const state = makeState({
-      open: {
-        count: 1,
-        bySeverity: { high: 1 },
-        items: [{ id: 'F-0001', severity: 'high', title: 'Blocks release' }],
-      },
-      resolved: { count: 0 },
-      conflicts: { count: 0, items: [] },
-    });
+  it('continues after a false semantic guard without selecting another label', () => {
     const step = makeStep({
-      name: 'peer-review',
       rules: [
-        { condition: 'when(exists(findings.open.items, item.severity == "high" && item.id == "F-0001"))', next: 'fix' },
+        makeRule('needs_fix && when(findings.provisional.count > 0)', 'replan'),
+        makeRule('needs_fix && when(findings.conflicts.count == 0)', 'fix'),
       ],
     });
 
-    const result = await new RuleEvaluator(step, makeContext(state)).evaluate('', '');
-
-    expect(result).toEqual({ index: 0, method: 'auto_select' });
+    expect(new RuleEvaluator(step, { state: stateWithFindings() })
+      .evaluate({ label: 'needs_fix', method: 'phase3_tag' }))
+      .toEqual({ index: 1, method: 'phase3_tag' });
   });
 
-  it('should evaluate family membership without relying on array order', async () => {
-    const state = makeState({
+  it('evaluates finding family membership without relying on array order', () => {
+    const step = makeStep({
+      rules: [
+        makeRule(
+          'when(exists(findings.open.items, contains(item.familyTags, "provider-e2e")))',
+          'fix',
+        ),
+        makeRule('when(true)', 'COMPLETE'),
+      ],
+    });
+    const withProviderE2e = stateWithFindings({
       open: {
         count: 2,
         bySeverity: { high: 1, medium: 1 },
@@ -137,72 +76,56 @@ describe('RuleEvaluator findings conditions', () => {
             severity: 'high',
             title: 'Provider E2E is incomplete',
             familyTags: ['architecture', 'provider-e2e'],
+            unknownRawFindingIds: [],
           },
           {
             id: 'F-0002',
             severity: 'medium',
             title: 'Unit coverage is incomplete',
             familyTags: ['testing'],
+            unknownRawFindingIds: [],
           },
         ],
       },
-      resolved: { count: 0 },
-      conflicts: { count: 0, items: [] },
     });
-    const step = makeStep({
-      name: 'peer-review',
-      rules: [
-        {
-          condition: 'when(exists(findings.open.items, contains(item.familyTags, "provider-e2e")))',
-          next: 'fix',
-        },
-        { condition: 'when(true)', next: 'COMPLETE' },
-      ],
-    });
-
-    const result = await new RuleEvaluator(step, makeContext(state)).evaluate('', '');
-
-    expect(result).toEqual({ index: 0, method: 'auto_select' });
-
-    const withoutProviderE2e = makeState({
-      ...state.findings!,
+    const withoutProviderE2e = stateWithFindings({
       open: {
-        ...state.findings!.open,
-        items: state.findings!.open.items.map((item) => ({
-          ...item,
-          familyTags: item.familyTags?.filter((familyTag) => familyTag !== 'provider-e2e'),
-        })),
+        count: 2,
+        bySeverity: { high: 1, medium: 1 },
+        items: [
+          {
+            id: 'F-0001',
+            severity: 'high',
+            title: 'Provider E2E is incomplete',
+            familyTags: ['architecture'],
+            unknownRawFindingIds: [],
+          },
+          {
+            id: 'F-0002',
+            severity: 'medium',
+            title: 'Unit coverage is incomplete',
+            familyTags: ['testing'],
+            unknownRawFindingIds: [],
+          },
+        ],
       },
     });
-    const fallbackResult = await new RuleEvaluator(step, makeContext(withoutProviderE2e)).evaluate('', '');
 
-    expect(fallbackResult).toEqual({ index: 1, method: 'auto_select' });
+    expect(new RuleEvaluator(step, { state: withProviderE2e }).evaluate(undefined))
+      .toEqual({ index: 0, method: 'auto_select' });
+    expect(new RuleEvaluator(step, { state: withoutProviderE2e }).evaluate(undefined))
+      .toEqual({ index: 1, method: 'auto_select' });
   });
 
-  it('should reject malformed contains() arity instead of silently routing to fallback', () => {
-    const state = makeState({
-      open: {
-        count: 1,
-        bySeverity: { high: 1 },
-        items: [{
-          id: 'F-0001',
-          severity: 'high',
-          title: 'Provider E2E is incomplete',
-          familyTags: ['provider-e2e'],
-        }],
-      },
-      resolved: { count: 0 },
-      conflicts: { count: 0, items: [] },
-    });
-
+  it('rejects malformed contains() arity instead of routing to another rule', () => {
     expect(() => evaluateWhenExpression(
       'exists(findings.open.items, contains(item.familyTags, "provider-e2e", "testing"))',
-      state,
+      stateWithFindings(),
     )).toThrow('contains() requires exactly two arguments');
   });
 
-  it('should decode escaped string literals in contains()', () => {
-    const state = makeState({
+  it('decodes escaped string literals in contains()', () => {
+    const state = stateWithFindings({
       open: {
         count: 1,
         bySeverity: { high: 1 },
@@ -211,10 +134,9 @@ describe('RuleEvaluator findings conditions', () => {
           severity: 'high',
           title: 'Quoted family',
           familyTags: ['tag"quote'],
+          unknownRawFindingIds: [],
         }],
       },
-      resolved: { count: 0 },
-      conflicts: { count: 0, items: [] },
     });
 
     expect(evaluateWhenExpression(
@@ -223,212 +145,11 @@ describe('RuleEvaluator findings conditions', () => {
     )).toBe(true);
   });
 
-  it('should use AI adjudication when conflicts exist with open findings', async () => {
-    const evaluateCondition = vi.fn().mockResolvedValue(2);
-    const state = makeState({
-      open: {
-        count: 1,
-        bySeverity: { high: 1, medium: 0, low: 0 },
-        items: [{ id: 'F-0001', severity: 'high', title: 'Blocks release' }],
-      },
-      resolved: { count: 1 },
-      conflicts: {
-        count: 1,
-        items: [
-          {
-            id: 'C-1CA24A220BC7',
-            status: 'active',
-            findingIds: ['F-0001'],
-            rawFindingIds: ['raw-security-review-1'],
-            description: 'Security and merge-readiness review disagree about resolution.',
-          },
-        ],
-      },
-    });
-    const step = makeStep({
-      name: 'peer-review',
-      rules: [
-        { condition: 'when(findings.open.count == 0 && findings.conflicts.count == 0)', next: 'COMPLETE' },
-        { condition: 'when(findings.conflicts.count == 0 && findings.open.count > 0)', next: 'fix' },
-        makeRule('ai("adjudicate active findings conflicts")', 'fix', {
-          isAiCondition: true,
-          aiConditionText: 'adjudicate active findings conflicts',
-        }),
-        { condition: 'when(findings.conflicts.count > 0)', return: 'need_replan' },
-      ],
-    });
-    const ctx = makeContext(state);
-    ctx.structuredCaller.evaluateCondition = evaluateCondition;
+  it('fails fast when a findings condition is evaluated without findings state', () => {
+    const step = makeStep({ rules: [makeRule('when(findings.open.count == 0)', 'COMPLETE')] });
+    const state = { ...stateWithFindings() } as WorkflowState;
+    delete (state as { findings?: unknown }).findings;
 
-    const result = await new RuleEvaluator(step, ctx).evaluate('', '');
-
-    expect(result).toEqual({ index: 2, method: 'ai_judge' });
-    expect(evaluateCondition).toHaveBeenCalled();
-  });
-
-  it('should route needs_fix aggregate to fix even when findings are empty', async () => {
-    const state = makeState(
-      {
-        open: {
-          count: 0,
-          bySeverity: { high: 0, medium: 0, low: 0 },
-          items: [],
-        },
-        resolved: { count: 0 },
-        conflicts: { count: 0, items: [] },
-      },
-      {
-        'coding-review': 1,
-        'security-review': 0,
-      },
-    );
-    const codingReview = makeStep({
-      name: 'coding-review',
-      rules: [{ condition: 'approved' }, { condition: 'needs_fix' }],
-    });
-    const securityReview = makeStep({
-      name: 'security-review',
-      rules: [{ condition: 'approved' }, { condition: 'needs_fix' }],
-    });
-    const step = makeStep({
-      name: 'peer-review',
-      parallel: [codingReview, securityReview],
-      rules: [
-        {
-          condition: 'all("approved") && findings.open.count == 0 && findings.conflicts.count == 0',
-          next: 'COMPLETE',
-          isAggregateCondition: true,
-          aggregateType: 'all',
-          aggregateConditionText: 'approved',
-          aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
-        },
-        {
-          condition: 'any("needs_fix") && findings.conflicts.count == 0',
-          next: 'fix',
-          isAggregateCondition: true,
-          aggregateType: 'any',
-          aggregateConditionText: 'needs_fix',
-          aggregateGuardCondition: 'findings.conflicts.count == 0',
-        },
-      ],
-    });
-    const ctx = makeContext(state);
-
-    const result = await new RuleEvaluator(step, ctx).evaluate('', '');
-
-    expect(result).toEqual({ index: 1, method: 'aggregate' });
-    expect(ctx.structuredCaller.evaluateCondition).not.toHaveBeenCalled();
-  });
-
-  it('should fail fast when findings state is absent for a findings rule', async () => {
-    const step = makeStep({
-      name: 'peer-review',
-      rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
-    });
-
-    await expect(new RuleEvaluator(step, makeContext(makeState())).evaluate('', '')).rejects.toThrow(
-      'Missing workflow findings state',
-    );
-  });
-
-  it('should fail fast when findings state is absent for a findings aggregate guard', async () => {
-    const reviewStep = makeStep({
-      name: 'review',
-      rules: [{ condition: 'approved' }],
-    });
-    const step = makeStep({
-      name: 'peer-review',
-      parallel: [reviewStep],
-      rules: [
-        {
-          condition: 'all("approved")',
-          next: 'COMPLETE',
-          isAggregateCondition: true,
-          aggregateType: 'all',
-          aggregateConditionText: 'approved',
-          aggregateGuardCondition: 'findings.open.count == 0',
-        },
-      ],
-    });
-
-    await expect(new RuleEvaluator(step, makeContext(makeState(undefined, { review: 0 }))).evaluate('', '')).rejects.toThrow(
-      'Missing workflow findings state',
-    );
-  });
-
-  it('should not treat findings text inside ai conditions as a findings rule', async () => {
-    const evaluateCondition = vi.fn().mockResolvedValue(0);
-    const step = makeStep({
-      name: 'peer-review',
-      rules: [
-        makeRule('ai("mention findings.open.count")', 'COMPLETE', {
-          isAiCondition: true,
-          aiConditionText: 'mention findings.open.count',
-        }),
-      ],
-    });
-    const ctx: RuleEvaluatorContext = {
-      ...makeContext(makeState()),
-      structuredCaller: {
-        evaluateCondition,
-      } as RuleEvaluatorContext['structuredCaller'],
-    };
-
-    const result = await new RuleEvaluator(step, ctx).evaluate('output', '');
-
-    expect(result).toEqual({ index: 0, method: 'ai_judge' });
-    expect(evaluateCondition).toHaveBeenCalledOnce();
-  });
-});
-
-describe('RuleEvaluator guarded tag rules', () => {
-  const openFindings = {
-    open: {
-      count: 1,
-      bySeverity: { high: 1 },
-      items: [{ id: 'F-0001', severity: 'high', title: 'Blocks release' }],
-    },
-    resolved: { count: 0 },
-    conflicts: { count: 0, items: [] },
-  };
-  const noFindings = {
-    open: { count: 0, bySeverity: {}, items: [] },
-    resolved: { count: 1 },
-    conflicts: { count: 0, items: [] },
-  };
-
-  it('should accept a tag-matched rule when its findings guard holds', async () => {
-    const state = makeState(noFindings);
-    const step = makeStep({
-      name: 'final-gate',
-      rules: [
-        { condition: 'approved', guardCondition: 'findings.open.count == 0', next: 'COMPLETE' },
-        { condition: 'needs_fix', next: 'fix' },
-      ],
-    });
-    const ctx = makeContext(state);
-    ctx.detectRuleIndex = vi.fn().mockReturnValue(0);
-
-    const result = await new RuleEvaluator(step, ctx).evaluate('', '[FINAL-GATE:1]');
-
-    expect(result).toEqual({ index: 0, method: 'phase3_tag' });
-  });
-
-  it('should skip a tag-matched rule whose findings guard fails and fall through to deterministic rules', async () => {
-    const state = makeState(openFindings);
-    const step = makeStep({
-      name: 'final-gate',
-      rules: [
-        { condition: 'approved', guardCondition: 'findings.open.count == 0', next: 'COMPLETE' },
-        { condition: 'when(findings.open.count > 0)', next: 'fix' },
-      ],
-    });
-    const ctx = makeContext(state);
-    ctx.detectRuleIndex = vi.fn().mockReturnValue(0);
-
-    const result = await new RuleEvaluator(step, ctx).evaluate('', '[FINAL-GATE:1]');
-
-    expect(result).toEqual({ index: 1, method: 'auto_select' });
-    expect(ctx.structuredCaller.evaluateCondition).not.toHaveBeenCalled();
+    expect(() => new RuleEvaluator(step, { state }).evaluate(undefined)).toThrow('Missing workflow findings state');
   });
 });

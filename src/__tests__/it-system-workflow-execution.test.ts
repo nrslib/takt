@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
-import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { parse } from 'yaml';
 import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
 import { createDefaultStructuredOutputNormalizers } from '../infra/workflow/structured-output/followup-task-normalizer.js';
 
@@ -100,7 +101,6 @@ function createSystemEngineOptions(projectDir: string) {
   return {
     projectCwd: projectDir,
     provider: 'mock' as const,
-    detectRuleIndex,
     structuredCaller: {
       judgeStatus: vi.fn(),
       evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -241,7 +241,7 @@ describe('system workflow execution integration', () => {
               schema_ref: 'followup-task',
             },
             rules: [
-              { when: 'structured.plan_fresh_improvement.action == "enqueue_new_task"', next: 'enqueue_fresh' },
+              { condition: 'when(structured.plan_fresh_improvement.action == "enqueue_new_task")', next: 'enqueue_fresh' },
             ],
           },
           {
@@ -257,7 +257,7 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.enqueue_fresh.enqueue_task.success == true', next: 'COMPLETE' },
+              { condition: 'when(effect.enqueue_fresh.enqueue_task.success == true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -295,11 +295,11 @@ describe('system workflow execution integration', () => {
             ],
             rules: [
               {
-                when: 'context.route_context.task.exists == true',
+                condition: 'when(context.route_context.task.exists == true)',
                 next: 'plan_followup',
               },
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'ABORT',
               },
             ],
@@ -313,11 +313,11 @@ describe('system workflow execution integration', () => {
             },
             rules: [
               {
-                when: 'structured.plan_followup.action == "noop"',
+                condition: 'when(structured.plan_followup.action == "noop")',
                 next: 'COMPLETE',
               },
               {
-                when: 'true',
+                condition: 'when(true)',
                 next: 'ABORT',
               },
             ],
@@ -330,7 +330,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -390,7 +389,7 @@ describe('system workflow execution integration', () => {
             },
             rules: [
               {
-                when: 'structured.plan_followup.action == "noop"',
+                condition: 'when(structured.plan_followup.action == "noop")',
                 next: 'COMPLETE',
               },
             ],
@@ -403,7 +402,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -454,7 +452,7 @@ describe('system workflow execution integration', () => {
               { type: 'task_context', source: 'current_task', as: 'task' },
             ],
             rules: [
-              { when: 'context.route_context.task.exists == true', next: 'plan_followup' },
+              { condition: 'when(context.route_context.task.exists == true)', next: 'plan_followup' },
             ],
           },
           {
@@ -465,7 +463,7 @@ describe('system workflow execution integration', () => {
               schema_ref: 'followup-task',
             },
             rules: [
-              { when: 'structured.plan_followup.action == "comment"', next: 'comment_on_pr' },
+              { condition: 'when(structured.plan_followup.action == "comment")', next: 'comment_on_pr' },
             ],
           },
           {
@@ -479,7 +477,7 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.comment_on_pr.comment_pr.success == true', next: 'COMPLETE' },
+              { condition: 'when(effect.comment_on_pr.comment_pr.success == true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -490,7 +488,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -543,8 +540,8 @@ describe('system workflow execution integration', () => {
               { type: 'task_queue_context', source: 'current_project', as: 'queue', exclude_current_task: true },
             ],
             rules: [
-              { when: 'exists(context.wait_before_next_scan.queue.items, item.kind == "running")', next: 'ABORT' },
-              { when: 'true', next: 'route_context' },
+              { condition: 'when(exists(context.wait_before_next_scan.queue.items, item.kind == "running"))', next: 'ABORT' },
+              { condition: 'when(true)', next: 'route_context' },
             ],
           },
           {
@@ -554,8 +551,8 @@ describe('system workflow execution integration', () => {
               { type: 'task_queue_context', source: 'current_project', as: 'queue' },
             ],
             rules: [
-              { when: 'context.route_context.queue.total_count == 1', next: 'COMPLETE' },
-              { when: 'true', next: 'ABORT' },
+              { condition: 'when(context.route_context.queue.total_count == 1)', next: 'COMPLETE' },
+              { condition: 'when(true)', next: 'ABORT' },
             ],
           },
         ],
@@ -586,6 +583,38 @@ describe('system workflow execution integration', () => {
     });
   });
 
+  it.each(['en', 'ja'] as const)('実 builtin の空キュー時に wait_before_next_scan から route_context へ遷移する (%s)', async (language) => {
+    const builtinPath = join(process.cwd(), 'builtins', language, 'workflows', 'auto-improvement-loop.yaml');
+    const builtin = parse(readFileSync(builtinPath, 'utf-8')) as {
+      steps: Array<Record<string, unknown>>;
+    };
+    const waitBeforeNextScan = builtin.steps.find((step) => step.name === 'wait_before_next_scan');
+    if (!waitBeforeNextScan) {
+      throw new Error('wait_before_next_scan is required in the auto-improvement-loop builtin');
+    }
+    const config = normalizeWorkflowConfig({
+      name: `builtin-empty-queue-${language}`,
+      initial_step: 'wait_before_next_scan',
+      max_steps: 2,
+      steps: [
+        { ...waitBeforeNextScan, delay_before_ms: 0 },
+        {
+          name: 'route_context',
+          mode: 'system',
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
+        },
+      ],
+    }, projectDir);
+    const visitedSteps: string[] = [];
+    const engine = new WorkflowEngine(config, projectDir, 'Current task body', createSystemEngineOptions(projectDir));
+    engine.on('step:start', (step) => visitedSteps.push(step.name));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(visitedSteps).toEqual(['wait_before_next_scan', 'route_context']);
+  });
+
   it('comment_pr.pr の full template を context 数値へ解決できる', async () => {
     mockCommentOnPr.mockReturnValue({ success: true });
 
@@ -602,7 +631,7 @@ describe('system workflow execution integration', () => {
               { type: 'pr_context', source: 'current_branch', as: 'pr' },
             ],
             rules: [
-              { when: 'context.route_context.pr.exists == true', next: 'comment_on_pr' },
+              { condition: 'when(context.route_context.pr.exists == true)', next: 'comment_on_pr' },
             ],
           },
           {
@@ -616,7 +645,7 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.comment_on_pr.comment_pr.success == true', next: 'COMPLETE' },
+              { condition: 'when(effect.comment_on_pr.comment_pr.success == true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -627,7 +656,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -666,7 +694,7 @@ describe('system workflow execution integration', () => {
               { type: 'task_context', source: 'current_task', as: 'task' },
             ],
             rules: [
-              { when: 'context.route_context.task.exists == true', next: 'comment_first' },
+              { condition: 'when(context.route_context.task.exists == true)', next: 'comment_first' },
             ],
           },
           {
@@ -676,7 +704,7 @@ describe('system workflow execution integration', () => {
               { type: 'comment_pr', pr: 42, body: 'First comment' },
             ],
             rules: [
-              { when: 'effect.comment_first.comment_pr.success == true', next: 'comment_second' },
+              { condition: 'when(effect.comment_first.comment_pr.success == true)', next: 'comment_second' },
             ],
           },
           {
@@ -687,7 +715,7 @@ describe('system workflow execution integration', () => {
             ],
             rules: [
               {
-                when: 'effect.comment_first.comment_pr.success == true && effect.comment_second.comment_pr.success == true',
+                condition: 'when(effect.comment_first.comment_pr.success == true && effect.comment_second.comment_pr.success == true)',
                 next: 'summarize',
               },
             ],
@@ -697,7 +725,7 @@ describe('system workflow execution integration', () => {
             persona: 'planner',
             instruction: 'Summarize follow-up state.',
             rules: [
-              { when: 'true', next: 'COMPLETE' },
+              { condition: 'when(true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -708,7 +736,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -778,7 +805,7 @@ describe('system workflow execution integration', () => {
               schema_ref: 'followup-task',
             },
             rules: [
-              { when: 'structured.plan_followup.action == "enqueue_new_task"', next: 'enqueue_followup' },
+              { condition: 'when(structured.plan_followup.action == "enqueue_new_task")', next: 'enqueue_followup' },
             ],
           },
           {
@@ -795,7 +822,7 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.enqueue_followup.enqueue_task.success == true', next: 'COMPLETE' },
+              { condition: 'when(effect.enqueue_followup.enqueue_task.success == true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -806,7 +833,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -874,7 +900,7 @@ describe('system workflow execution integration', () => {
               schema_ref: 'followup-task',
             },
             rules: [
-              { when: 'structured.plan_fresh_improvement.action == "enqueue_new_task"', next: 'enqueue_fresh' },
+              { condition: 'when(structured.plan_fresh_improvement.action == "enqueue_new_task")', next: 'enqueue_fresh' },
             ],
           },
           {
@@ -890,7 +916,7 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.enqueue_fresh.enqueue_task.success == true', next: 'COMPLETE' },
+              { condition: 'when(effect.enqueue_fresh.enqueue_task.success == true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -901,7 +927,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -955,7 +980,7 @@ describe('system workflow execution integration', () => {
               schema_ref: 'followup-task',
             },
             rules: [
-              { when: 'structured.plan_fresh_improvement.action == "enqueue_new_task"', next: 'enqueue_fresh' },
+              { condition: 'when(structured.plan_fresh_improvement.action == "enqueue_new_task")', next: 'enqueue_fresh' },
             ],
           },
           {
@@ -971,7 +996,7 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.enqueue_fresh.enqueue_task.success == true', next: 'COMPLETE' },
+              { condition: 'when(effect.enqueue_fresh.enqueue_task.success == true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -1042,7 +1067,7 @@ describe('system workflow execution integration', () => {
               schema_ref: 'followup-task',
             },
             rules: [
-              { when: 'structured.plan_fresh_improvement.action == "enqueue_new_task"', next: 'enqueue_fresh' },
+              { condition: 'when(structured.plan_fresh_improvement.action == "enqueue_new_task")', next: 'enqueue_fresh' },
             ],
           },
           {
@@ -1058,7 +1083,7 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.enqueue_fresh.enqueue_task.success == true', next: 'COMPLETE' },
+              { condition: 'when(effect.enqueue_fresh.enqueue_task.success == true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -1134,7 +1159,7 @@ describe('system workflow execution integration', () => {
               schema_ref: 'followup-task',
             },
             rules: [
-              { when: 'structured.plan_fresh_improvement.action == "enqueue_new_task"', next: 'enqueue_fresh' },
+              { condition: 'when(structured.plan_fresh_improvement.action == "enqueue_new_task")', next: 'enqueue_fresh' },
             ],
           },
           {
@@ -1150,7 +1175,7 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.enqueue_fresh.enqueue_task.success == true', next: 'COMPLETE' },
+              { condition: 'when(effect.enqueue_fresh.enqueue_task.success == true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -1351,7 +1376,7 @@ describe('system workflow execution integration', () => {
               { type: 'issue_context', source: 'current_task', as: 'issue' },
             ],
             rules: [
-              { when: 'context.route_context.issue.exists == false', next: 'plan_followup' },
+              { condition: 'when(context.route_context.issue.exists == false)', next: 'plan_followup' },
             ],
           },
           {
@@ -1362,7 +1387,7 @@ describe('system workflow execution integration', () => {
               schema_ref: 'followup-task',
             },
             rules: [
-              { when: 'structured.plan_followup.action == "comment_on_pr"', next: 'draft_comment' },
+              { condition: 'when(structured.plan_followup.action == "comment_on_pr")', next: 'draft_comment' },
             ],
           },
           {
@@ -1374,7 +1399,7 @@ describe('system workflow execution integration', () => {
               'Comment: {structured:plan_followup.pr_comment_markdown}',
             ].join('\\n'),
             rules: [
-              { when: 'true', next: 'COMPLETE' },
+              { condition: 'when(true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -1426,7 +1451,7 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.comment_on_pr.comment_pr.success == true', next: 'draft_review' },
+              { condition: 'when(effect.comment_on_pr.comment_pr.success == true)', next: 'draft_review' },
             ],
           },
           {
@@ -1434,7 +1459,7 @@ describe('system workflow execution integration', () => {
             persona: 'reviewer',
             instruction: 'Comment success: {effect:comment_on_pr.comment_pr.success}',
             rules: [
-              { when: 'true', next: 'COMPLETE' },
+              { condition: 'when(true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -1481,7 +1506,7 @@ describe('system workflow execution integration', () => {
             delay_before_ms: 50,
             instruction: 'Plan the next follow-up action.',
             rules: [
-              { when: 'true', next: 'COMPLETE' },
+              { condition: 'when(true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -1492,7 +1517,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -1537,7 +1561,7 @@ describe('system workflow execution integration', () => {
               { type: 'task_context', source: 'current_task', as: 'task' },
             ],
             rules: [
-              { when: 'true', next: 'COMPLETE' },
+              { condition: 'when(true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -1548,7 +1572,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -1592,8 +1615,8 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.merge_ready_pr.merge_pr.success == true', next: 'COMPLETE' },
-              { when: 'true', next: 'ABORT' },
+              { condition: 'when(effect.merge_ready_pr.merge_pr.success == true)', next: 'COMPLETE' },
+              { condition: 'when(true)', next: 'ABORT' },
             ],
           },
         ],
@@ -1632,8 +1655,8 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'effect.reject_pr.close_pr.success == true', next: 'COMPLETE' },
-              { when: 'true', next: 'ABORT' },
+              { condition: 'when(effect.reject_pr.close_pr.success == true)', next: 'COMPLETE' },
+              { condition: 'when(true)', next: 'ABORT' },
             ],
           },
         ],
@@ -1711,17 +1734,17 @@ describe('system workflow execution integration', () => {
             ],
             rules: [
               {
-                when: 'context.route_context.prs.length > 0 && context.route_context.prs[0].head_branch == "task/42" && exists(context.route_context.queue.items, item.kind == "running" && item.pr == 42)',
+                condition: 'when(context.route_context.prs.length > 0 && context.route_context.prs[0].head_branch == "task/42" && exists(context.route_context.queue.items, item.kind == "running" && item.pr == 42))',
                 next: 'wait_before_next_scan',
               },
-              { when: 'true', next: 'ABORT' },
+              { condition: 'when(true)', next: 'ABORT' },
             ],
           },
           {
             name: 'wait_before_next_scan',
             mode: 'system',
             rules: [
-              { when: 'true', next: 'COMPLETE' },
+              { condition: 'when(true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -1732,7 +1755,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -1813,8 +1835,8 @@ describe('system workflow execution integration', () => {
               { type: 'pr_selection', source: 'current_project', as: 'selected_pr', where: expectedFilter },
             ],
             rules: [
-              { when: 'context.route_context.selected_pr.exists == true', next: 'comment_on_pr' },
-              { when: 'true', next: 'COMPLETE' },
+              { condition: 'when(context.route_context.selected_pr.exists == true)', next: 'comment_on_pr' },
+              { condition: 'when(true)', next: 'COMPLETE' },
             ],
           },
           {
@@ -1828,7 +1850,7 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'true', next: 'ABORT' },
+              { condition: 'when(true)', next: 'ABORT' },
             ],
           },
         ],
@@ -1839,7 +1861,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -1891,25 +1912,25 @@ describe('system workflow execution integration', () => {
               { type: 'issue_selection', source: 'current_project', as: 'selected_issue' },
             ],
             rules: [
-              { when: 'context.route_context.selected_pr.exists == true', next: 'plan_from_existing_pr' },
-              { when: 'context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true', next: 'plan_from_issue' },
-              { when: 'true', next: 'plan_fresh_improvement' },
+              { condition: 'when(context.route_context.selected_pr.exists == true)', next: 'plan_from_existing_pr' },
+              { condition: 'when(context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true)', next: 'plan_from_issue' },
+              { condition: 'when(true)', next: 'plan_fresh_improvement' },
             ],
           },
           {
             name: 'plan_from_existing_pr',
             mode: 'system',
-            rules: [{ when: 'true', next: 'COMPLETE' }],
+            rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
           },
           {
             name: 'plan_from_issue',
             mode: 'system',
-            rules: [{ when: 'true', next: 'ABORT' }],
+            rules: [{ condition: 'when(true)', next: 'ABORT' }],
           },
           {
             name: 'plan_fresh_improvement',
             mode: 'system',
-            rules: [{ when: 'true', next: 'ABORT' }],
+            rules: [{ condition: 'when(true)', next: 'ABORT' }],
           },
         ],
       },
@@ -1919,7 +1940,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -1970,25 +1990,25 @@ describe('system workflow execution integration', () => {
               { type: 'issue_selection', source: 'current_project', as: 'selected_issue' },
             ],
             rules: [
-              { when: 'context.route_context.selected_pr.exists == true', next: 'plan_from_existing_pr' },
-              { when: 'context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true', next: 'plan_from_issue' },
-              { when: 'true', next: 'plan_fresh_improvement' },
+              { condition: 'when(context.route_context.selected_pr.exists == true)', next: 'plan_from_existing_pr' },
+              { condition: 'when(context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true)', next: 'plan_from_issue' },
+              { condition: 'when(true)', next: 'plan_fresh_improvement' },
             ],
           },
           {
             name: 'plan_from_existing_pr',
             mode: 'system',
-            rules: [{ when: 'true', next: 'ABORT' }],
+            rules: [{ condition: 'when(true)', next: 'ABORT' }],
           },
           {
             name: 'plan_from_issue',
             mode: 'system',
-            rules: [{ when: 'true', next: 'COMPLETE' }],
+            rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
           },
           {
             name: 'plan_fresh_improvement',
             mode: 'system',
-            rules: [{ when: 'true', next: 'ABORT' }],
+            rules: [{ condition: 'when(true)', next: 'ABORT' }],
           },
         ],
       },
@@ -1998,7 +2018,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -2054,25 +2073,25 @@ describe('system workflow execution integration', () => {
               { type: 'issue_selection', source: 'current_project', as: 'selected_issue' },
             ],
             rules: [
-              { when: 'context.route_context.selected_pr.exists == true', next: 'plan_from_existing_pr' },
-              { when: 'context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true', next: 'plan_from_issue' },
-              { when: 'true', next: 'plan_fresh_improvement' },
+              { condition: 'when(context.route_context.selected_pr.exists == true)', next: 'plan_from_existing_pr' },
+              { condition: 'when(context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true)', next: 'plan_from_issue' },
+              { condition: 'when(true)', next: 'plan_fresh_improvement' },
             ],
           },
           {
             name: 'plan_from_existing_pr',
             mode: 'system',
-            rules: [{ when: 'true', next: 'ABORT' }],
+            rules: [{ condition: 'when(true)', next: 'ABORT' }],
           },
           {
             name: 'plan_from_issue',
             mode: 'system',
-            rules: [{ when: 'true', next: 'ABORT' }],
+            rules: [{ condition: 'when(true)', next: 'ABORT' }],
           },
           {
             name: 'plan_fresh_improvement',
             mode: 'system',
-            rules: [{ when: 'true', next: 'COMPLETE' }],
+            rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
           },
         ],
       },
@@ -2082,7 +2101,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -2155,15 +2173,15 @@ describe('system workflow execution integration', () => {
               { type: 'issue_selection', source: 'current_project', as: 'selected_issue' },
             ],
             rules: [
-              { when: 'context.route_context.selected_issue.number == 587', next: 'wait_before_next_scan' },
-              { when: 'context.route_context.selected_issue.number == 586', next: 'COMPLETE' },
-              { when: 'true', next: 'ABORT' },
+              { condition: 'when(context.route_context.selected_issue.number == 587)', next: 'wait_before_next_scan' },
+              { condition: 'when(context.route_context.selected_issue.number == 586)', next: 'COMPLETE' },
+              { condition: 'when(true)', next: 'ABORT' },
             ],
           },
           {
             name: 'wait_before_next_scan',
             mode: 'system',
-            rules: [{ when: 'true', next: 'route_context' }],
+            rules: [{ condition: 'when(true)', next: 'route_context' }],
           },
         ],
       },
@@ -2173,7 +2191,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -2263,16 +2280,16 @@ describe('system workflow execution integration', () => {
               { type: 'pr_selection', source: 'current_project', as: 'selected_pr', where: { head_branch: 'takt/*', managed_by_takt: true, same_repository: true, draft: false } },
             ],
             rules: [
-              { when: 'context.route_context.selected_pr.number == 43', next: 'wait_before_next_scan' },
-              { when: 'context.route_context.selected_pr.number == 42', next: 'COMPLETE' },
-              { when: 'true', next: 'ABORT' },
+              { condition: 'when(context.route_context.selected_pr.number == 43)', next: 'wait_before_next_scan' },
+              { condition: 'when(context.route_context.selected_pr.number == 42)', next: 'COMPLETE' },
+              { condition: 'when(true)', next: 'ABORT' },
             ],
           },
           {
             name: 'wait_before_next_scan',
             mode: 'system',
             rules: [
-              { when: 'true', next: 'route_context' },
+              { condition: 'when(true)', next: 'route_context' },
             ],
           },
         ],
@@ -2283,7 +2300,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -2352,8 +2368,8 @@ describe('system workflow execution integration', () => {
                 },
             ],
             rules: [
-              { when: 'context.route_context.selected_pr.exists == true', next: 'comment_on_pr' },
-              { when: 'true', next: 'COMPLETE' },
+              { condition: 'when(context.route_context.selected_pr.exists == true)', next: 'comment_on_pr' },
+              { condition: 'when(true)', next: 'COMPLETE' },
             ],
           },
           {
@@ -2362,7 +2378,7 @@ describe('system workflow execution integration', () => {
             effects: [
               { type: 'comment_pr', pr: '{context:route_context.selected_pr.number}', body: 'noop' },
             ],
-            rules: [{ when: 'true', next: 'enqueue_from_pr' }],
+            rules: [{ condition: 'when(true)', next: 'enqueue_from_pr' }],
           },
           {
             name: 'enqueue_from_pr',
@@ -2376,7 +2392,7 @@ describe('system workflow execution integration', () => {
                 task: 'noop',
               },
             ],
-            rules: [{ when: 'true', next: 'prepare_merge' }],
+            rules: [{ condition: 'when(true)', next: 'prepare_merge' }],
           },
           {
             name: 'prepare_merge',
@@ -2384,7 +2400,7 @@ describe('system workflow execution integration', () => {
             effects: [
               { type: 'sync_with_root', pr: '{context:route_context.selected_pr.number}' },
             ],
-            rules: [{ when: 'true', next: 'merge_pr' }],
+            rules: [{ condition: 'when(true)', next: 'merge_pr' }],
           },
           {
             name: 'merge_pr',
@@ -2392,7 +2408,7 @@ describe('system workflow execution integration', () => {
             effects: [
               { type: 'merge_pr', pr: '{context:route_context.selected_pr.number}' },
             ],
-            rules: [{ when: 'true', next: 'ABORT' }],
+            rules: [{ condition: 'when(true)', next: 'ABORT' }],
           },
         ],
       },
@@ -2402,7 +2418,6 @@ describe('system workflow execution integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'mock',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -2493,8 +2508,8 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'context.route_context.selected_pr.exists == true', next: 'COMPLETE' },
-              { when: 'true', next: 'COMPLETE' },
+              { condition: 'when(context.route_context.selected_pr.exists == true)', next: 'COMPLETE' },
+              { condition: 'when(true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -2588,8 +2603,8 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'context.route_context.selected_pr.exists == true', next: 'COMPLETE' },
-              { when: 'true', next: 'COMPLETE' },
+              { condition: 'when(context.route_context.selected_pr.exists == true)', next: 'COMPLETE' },
+              { condition: 'when(true)', next: 'COMPLETE' },
             ],
           },
         ],
@@ -2649,8 +2664,8 @@ describe('system workflow execution integration', () => {
               },
             ],
             rules: [
-              { when: 'context.route_context.selected_pr.exists == true', next: 'comment_on_pr' },
-              { when: 'true', next: 'COMPLETE' },
+              { condition: 'when(context.route_context.selected_pr.exists == true)', next: 'comment_on_pr' },
+              { condition: 'when(true)', next: 'COMPLETE' },
             ],
           },
           {
@@ -2659,7 +2674,7 @@ describe('system workflow execution integration', () => {
             effects: [
               { type: 'comment_pr', pr: '{context:route_context.selected_pr.number}', body: 'should not run' },
             ],
-            rules: [{ when: 'true', next: 'ABORT' }],
+            rules: [{ condition: 'when(true)', next: 'ABORT' }],
           },
         ],
       },

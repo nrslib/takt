@@ -39,7 +39,6 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { loadWorkflow } from '../infra/config/index.js';
-import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 import { makeRule } from './test-helpers.js';
 import type { StructuredCaller } from '../agents/structured-caller.js';
 import type { AgentResponse, WorkflowConfig } from '../core/models/index.js';
@@ -173,7 +172,6 @@ describe('WorkflowEngine Integration: team_leader report phase fallback', () => 
       projectCwd: tmpDir,
       provider: 'mock',
       reportDirName,
-      detectRuleIndex,
       structuredCaller: createStructuredCaller(),
     });
 
@@ -278,7 +276,6 @@ describe('WorkflowEngine Integration: team_leader report phase fallback', () => 
         model: 'mock/fallback',
       },
       reportDirName,
-      detectRuleIndex,
       structuredCaller: createStructuredCaller(),
       initialSessions: {
         'testing-reviewer:opencode': 'leader-session',

@@ -19,14 +19,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -43,7 +47,7 @@ import {
   makeStep,
   makeRule,
   mockRunAgentSequence,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   createTestTmpDir,
   applyDefaultMocks,
   cleanupWorkflowEngine,
@@ -93,8 +97,8 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan → implement
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan → implement
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
@@ -134,9 +138,9 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
       makeResponse({ persona: 'plan', content: 'Plan complete' }),
       makeResponse({ persona: 'implement', content: 'Impl done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan → implement
-      { index: 0, method: 'phase1_tag' }, // implement → COMPLETE
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan → implement
+      { index: 0, method: 'phase3_tag' }, // implement → COMPLETE
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
@@ -174,9 +178,9 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
       makeResponse({ persona: 'plan', content: 'Plan complete' }),
       makeResponse({ persona: 'implement', content: 'Impl done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan → implement
-      { index: 0, method: 'phase1_tag' }, // implement → COMPLETE
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan → implement
+      { index: 0, method: 'phase3_tag' }, // implement → COMPLETE
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
@@ -223,11 +227,11 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
       makeResponse({ persona: 'fix', content: 'Fix complete' }),
       makeResponse({ persona: 'verify', content: 'Verify complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
@@ -271,10 +275,10 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
       makeResponse({ persona: 'review', content: 'Review complete' }),
       makeResponse({ persona: 'stop', content: 'Abort now' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
@@ -310,7 +314,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
         });
         return makeResponse({ content: `iteration ${i}` });
       });
-      mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+      mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
     }
 
     const loopEngine = new WorkflowEngine(loopConfig, tmpDir, 'loop task', {
@@ -432,8 +436,8 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan → implement
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan → implement
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
@@ -476,9 +480,9 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
       // Third step needed after extension
       makeResponse({ persona: 'implement', content: 'Impl done' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan → implement
-      { index: 0, method: 'phase1_tag' }, // implement → COMPLETE
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan → implement
+      { index: 0, method: 'phase3_tag' }, // implement → COMPLETE
       // This never runs because we complete on the second implement
     ]);
 
@@ -517,8 +521,8 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan → implement
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan → implement
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
@@ -577,8 +581,8 @@ describe('WorkflowEngine: initialIteration option', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
@@ -610,8 +614,8 @@ describe('WorkflowEngine: initialIteration option', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan complete' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' },
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
@@ -683,8 +687,8 @@ describe('WorkflowEngine: initialIteration option', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan' }),
     ]);
-    mockDetectMatchedRuleSequence([
-      { index: 0, method: 'phase1_tag' }, // plan → implement
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // plan → implement
     ]);
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {

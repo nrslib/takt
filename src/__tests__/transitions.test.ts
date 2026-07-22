@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { determineRuleTransition, extractBlockedPrompt } from '../core/workflow/engine/transitions.js';
 import { determineNextStepByRules } from '../core/workflow/index.js';
 import type { WorkflowStep } from '../core/models/index.js';
+import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 
 function createStepWithRules(
   rules: Array<{ condition: string; next?: string; returnValue?: string; requiresUserInput?: boolean }>,
@@ -17,7 +18,7 @@ function createStepWithRules(
     instruction: '{task}',
     passPreviousResponse: false,
     rules: rules.map((r) => ({
-      condition: r.condition,
+      condition: parseWorkflowRuleCondition(r.condition),
       ...(r.next !== undefined ? { next: r.next } : {}),
       ...(r.returnValue !== undefined ? { returnValue: r.returnValue } : {}),
       ...(r.requiresUserInput === true ? { requiresUserInput: true } : {}),
@@ -75,8 +76,8 @@ describe('determineNextStepByRules', () => {
       instruction: '{task}',
       passPreviousResponse: false,
       rules: [
-        { condition: 'approved' },
-        { condition: 'needs_fix' },
+        { condition: parseWorkflowRuleCondition('approved') },
+        { condition: parseWorkflowRuleCondition('needs_fix') },
       ],
     };
 
@@ -92,7 +93,7 @@ describe('determineNextStepByRules', () => {
       instruction: '{task}',
       passPreviousResponse: false,
       rules: [
-        { condition: 'retry', returnValue: 'retry_plan' },
+        { condition: parseWorkflowRuleCondition('retry'), returnValue: 'retry_plan' },
       ],
     };
 

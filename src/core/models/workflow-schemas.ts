@@ -23,10 +23,14 @@ import {
   validateSystemStepFields,
   WorkflowEffectRawSchema,
 } from './workflow-system-schemas.js';
+import { isAiConditionExpression } from './workflow-condition-expression.js';
 import {
-  isAggregateConditionExpression,
-  isAiConditionExpression,
-} from './workflow-condition-expression.js';
+  findSemanticAppendixConflicts,
+  hasAggregateCondition,
+  isParallelSubStepRuleCondition,
+  parseWorkflowRuleCondition,
+  type SemanticAppendixRule,
+} from './workflow-rule-condition.js';
 import { FindingContractConfigRawSchema } from './finding-schemas.js';
 import {
   SESSION_AGENT_STEP_REQUIRED_MESSAGE,
@@ -93,22 +97,56 @@ const WorkflowParamDeclarationRawSchema = z.object({
   }
 });
 
+const WorkflowRuleConditionRawSchema = z.string().trim().min(1).superRefine((condition, ctx) => {
+  try {
+    parseWorkflowRuleCondition(condition);
+  } catch (error) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: error instanceof Error ? error.message : 'Invalid workflow rule condition',
+    });
+  }
+});
+
+const WorkflowResultLabelSchema = z.string().trim().min(1);
+
 /** Rule-based transition schema (new unified format) */
 export const WorkflowRuleSchema = z.object({
-  condition: z.string().min(1).optional(),
-  when: z.string().min(1).optional(),
+  condition: WorkflowRuleConditionRawSchema,
   next: z.string().min(1).optional(),
-  return: z.string().min(1).optional(),
+  return: WorkflowResultLabelSchema.optional(),
   appendix: z.string().optional(),
   requires_user_input: z.boolean().optional(),
   interactive_only: z.boolean().optional(),
-}).refine(
-  (data) => (data.condition != null) !== (data.when != null),
-  {
-    message: "Rule requires exactly one of 'condition' or 'when'",
-    path: ['condition'],
-  },
-);
+}).strict();
+
+const WorkflowRulesSchema = z.array(WorkflowRuleSchema).superRefine((rules, ctx) => {
+  const semanticRules: SemanticAppendixRule[] = [];
+  rules.forEach((rule, index) => {
+    const condition = WorkflowRuleConditionRawSchema.safeParse(rule.condition);
+    if (!condition.success) return;
+    semanticRules.push({
+      ruleIndex: index,
+      condition: parseWorkflowRuleCondition(condition.data),
+      appendix: rule.appendix,
+    });
+  });
+  for (const conflict of findSemanticAppendixConflicts(semanticRules)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [conflict.ruleIndex, 'appendix'],
+      message: `Rules sharing semantic label "${conflict.label}" must use the same appendix`,
+    });
+  }
+});
+
+function isSemanticWorkflowRuleCondition(condition: string): boolean {
+  try {
+    return parseWorkflowRuleCondition(condition).kind === 'semantic';
+  } catch {
+    return false;
+  }
+}
 
 function validateWorkflowCallRules(
   rules: readonly z.output<typeof WorkflowRuleSchema>[] | undefined,
@@ -116,27 +154,9 @@ function validateWorkflowCallRules(
   options: { allowExtendedConditions: boolean },
 ): void {
   rules?.forEach((rule, index) => {
-    if (rule.when !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['rules', index, 'when'],
-        message: 'workflow_call rules do not allow "when"; use condition: COMPLETE or ABORT',
-      });
-    }
-
-    if (rule.condition === undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['rules', index, 'condition'],
-        message: 'workflow_call rules require condition: COMPLETE or ABORT',
-      });
-      return;
-    }
-
     const isBuiltInCondition = rule.condition === 'COMPLETE' || rule.condition === 'ABORT';
     const isExtendedCondition = options.allowExtendedConditions
-      && !isAiConditionExpression(rule.condition)
-      && !isAggregateConditionExpression(rule.condition);
+      && isSemanticWorkflowRuleCondition(rule.condition);
 
     if (!isBuiltInCondition && !isExtendedCondition) {
       ctx.addIssue({
@@ -147,6 +167,44 @@ function validateWorkflowCallRules(
           : 'workflow_call rules only allow COMPLETE or ABORT conditions',
       });
     }
+  });
+}
+
+function validateParallelSubStepRules(
+  rules: readonly z.output<typeof WorkflowRuleSchema>[] | undefined,
+  ctx: z.core.$RefinementCtx,
+): void {
+  rules?.forEach((rule, index) => {
+    const condition = WorkflowRuleConditionRawSchema.safeParse(rule.condition);
+    if (!condition.success) return;
+    if (!isParallelSubStepRuleCondition(parseWorkflowRuleCondition(condition.data))) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rules', index, 'condition'],
+        message: 'parallel sub-step rules do not allow aggregate conditions',
+      });
+    }
+  });
+}
+
+function validateAggregateRulePlacement(
+  rules: readonly z.output<typeof WorkflowRuleSchema>[] | undefined,
+  aggregateAllowed: boolean,
+  ctx: z.core.$RefinementCtx,
+): void {
+  if (aggregateAllowed) {
+    return;
+  }
+  rules?.forEach((rule, index) => {
+    const condition = WorkflowRuleConditionRawSchema.safeParse(rule.condition);
+    if (!condition.success || !hasAggregateCondition(parseWorkflowRuleCondition(condition.data))) {
+      return;
+    }
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['rules', index, 'condition'],
+      message: 'aggregate conditions are only allowed on parallel parent steps with sub-steps',
+    });
   });
 }
 
@@ -306,11 +364,12 @@ const AgentParallelSubStepRawSchema = z.object({
   requires_user_input: z.never().optional(),
   instruction: WorkflowFacetRefOrParamSchema.optional(),
   instruction_template: z.never().optional(),
-  rules: z.array(WorkflowRuleSchema).optional(),
+  rules: WorkflowRulesSchema.optional(),
   output_contracts: OutputContractsFieldSchema,
   quality_gates: QualityGatesSchema,
   pass_previous_response: z.boolean().optional(),
 }).superRefine((data, ctx) => {
+  validateParallelSubStepRules(data.rules, ctx);
   data.rules?.forEach((rule, index) => {
     if (rule.return !== undefined) {
       ctx.addIssue({
@@ -348,11 +407,12 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   requires_user_input: z.never().optional(),
   instruction: z.never().optional(),
   instruction_template: z.never().optional(),
-  rules: z.array(WorkflowRuleSchema).optional(),
+  rules: WorkflowRulesSchema.optional(),
   output_contracts: z.never().optional(),
   quality_gates: z.never().optional(),
   pass_previous_response: z.never().optional(),
 }).superRefine((data, ctx) => {
+  validateParallelSubStepRules(data.rules, ctx);
   validateWorkflowCallRules(data.rules, ctx, { allowExtendedConditions: true });
 });
 
@@ -366,7 +426,7 @@ const WorkflowSubworkflowRawSchema = z.object({
   callable: z.boolean().optional(),
   visibility: z.enum(['internal']).optional(),
   requires_finding_contract: z.literal(true).optional(),
-  returns: z.array(z.string().min(1)).optional(),
+  returns: z.array(WorkflowResultLabelSchema).optional(),
   params: z.record(z.string().min(1), WorkflowParamDeclarationRawSchema).optional(),
 }).strict().superRefine((data, ctx) => {
   if (data.callable === true) {
@@ -376,6 +436,14 @@ const WorkflowSubworkflowRawSchema = z.object({
           code: z.ZodIssueCode.custom,
           path: ['returns', index],
           message: `subworkflow.returns must not include reserved result "${value}"`,
+        });
+        return;
+      }
+      if (!isSemanticWorkflowRuleCondition(value)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['returns', index],
+          message: `subworkflow.returns must use a semantic result label: "${value}"`,
         });
       }
     });
@@ -426,7 +494,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     structured_output: StructuredOutputRawSchema.optional(),
     system_inputs: z.array(SystemInputRawSchema).optional(),
     effects: z.array(WorkflowEffectRawSchema).optional(),
-    rules: z.array(WorkflowRuleSchema).optional(),
+    rules: WorkflowRulesSchema.optional(),
     output_contracts: OutputContractsFieldSchema,
     quality_gates: QualityGatesSchema,
     pass_previous_response: z.boolean().optional(),
@@ -450,6 +518,9 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     }
 
     const stepKind = getWorkflowStepKind(data);
+    if (stepKind !== 'workflow_call') {
+      validateAggregateRulePlacement(data.rules, (data.parallel?.length ?? 0) > 0, ctx);
+    }
     if (data.session_key !== undefined && stepKind !== 'agent') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -613,7 +684,7 @@ const WorkflowConfigStepRawSchema = createWorkflowStepRawSchema({ relaxWorkflowC
 
 /** Loop monitor rule schema */
 export const LoopMonitorRuleSchema = z.object({
-  condition: z.string().min(1),
+  condition: WorkflowRuleConditionRawSchema,
   next: z.string().min(1),
 });
 
@@ -627,6 +698,8 @@ export const LoopMonitorJudgeSchema = z.object({
   instruction: z.string().optional(),
   instruction_template: z.never().optional(),
   rules: z.array(LoopMonitorRuleSchema).min(1),
+}).superRefine((data, ctx) => {
+  validateAggregateRulePlacement(data.rules, false, ctx);
 });
 
 /** Loop monitor configuration schema */

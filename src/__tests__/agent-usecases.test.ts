@@ -152,8 +152,8 @@ describe('agent-usecases', () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { step: 1, reason: 'first rule' }));
 
     await expect(judgeStatus('structured', 'tag', [
-      { condition: 'first', next: 'one' },
-      { condition: 'second', next: 'two' },
+      { label: 'first' },
+      { label: 'second' },
     ], judgeOptions)).rejects.toThrow('Structured output schema');
     expect(runAgent).not.toHaveBeenCalled();
   });
@@ -191,27 +191,24 @@ describe('agent-usecases', () => {
 
   // --- judgeStatus: 3-stage fallback ---
 
-  it('judgeStatus は単一ルール時に auto_select を返す', async () => {
-    const result = await judgeStatus('structured', 'tag', [{ condition: 'always', next: 'done' }], judgeOptions);
-
-    expect(result).toEqual({ ruleIndex: 0, method: 'auto_select' });
+  it.each([
+    ['候補が空', []],
+    ['候補が1件', [{ label: 'always' }]],
+  ])('judgeStatus は%sなら Phase 3 境界で拒否する', async (_case, candidates) => {
+    await expect(judgeStatus('structured', 'tag', candidates, judgeOptions))
+      .rejects.toThrow('judgeStatus requires at least two semantic candidates');
     expect(runAgent).not.toHaveBeenCalled();
-  });
-
-  it('judgeStatus はルールが空ならエラー', async () => {
-    await expect(judgeStatus('structured', 'tag', [], judgeOptions))
-      .rejects.toThrow('judgeStatus requires at least one rule');
   });
 
   it('judgeStatus は Stage 1 で構造化出力 step を採用する', async () => {
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('x', { step: 2, reason: 'matched rule' }));
 
     const result = await judgeStatus('structured', 'tag', [
-      { condition: 'a', next: 'one' },
-      { condition: 'b', next: 'two' },
+      { label: 'a' },
+      { label: 'b' },
     ], judgeOptions);
 
-    expect(result).toEqual({ ruleIndex: 1, method: 'structured_output' });
+    expect(result).toEqual({ candidateIndex: 1, method: 'structured_output' });
     expect(runAgent).toHaveBeenCalledTimes(1);
     expect(runAgent).toHaveBeenCalledWith('conductor', 'structured', expect.objectContaining({
       outputSchema: expect.objectContaining({
@@ -227,11 +224,11 @@ describe('agent-usecases', () => {
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('[REVIEW:2]'));
 
     const result = await judgeStatus('structured', 'tag', [
-      { condition: 'a', next: 'one' },
-      { condition: 'b', next: 'two' },
+      { label: 'a' },
+      { label: 'b' },
     ], judgeOptions);
 
-    expect(result).toEqual({ ruleIndex: 1, method: 'phase3_tag' });
+    expect(result).toEqual({ candidateIndex: 1, method: 'phase3_tag' });
     expect(runAgent).toHaveBeenCalledTimes(2);
     expect(runAgent).toHaveBeenNthCalledWith(1, 'conductor', 'structured', expect.objectContaining({
       outputSchema: expect.objectContaining({
@@ -253,11 +250,11 @@ describe('agent-usecases', () => {
       .mockResolvedValueOnce(doneResponse('[REVIEW:2]'));
 
     const result = await judgeStatus('structured', 'tag', [
-      { condition: 'a', next: 'one' },
-      { condition: 'b', next: 'two' },
+      { label: 'a' },
+      { label: 'b' },
     ], judgeOptions);
 
-    expect(result).toEqual({ ruleIndex: 1, method: 'phase3_tag' });
+    expect(result).toEqual({ candidateIndex: 1, method: 'phase3_tag' });
   });
 
   it('judgeStatus は Stage 3 で AI Judge を使う', async () => {
@@ -269,11 +266,11 @@ describe('agent-usecases', () => {
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }));
 
     const result = await judgeStatus('structured', 'tag', [
-      { condition: 'a', next: 'one' },
-      { condition: 'b', next: 'two' },
+      { label: 'a' },
+      { label: 'b' },
     ], judgeOptions);
 
-    expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
+    expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
     expect(runAgent).toHaveBeenCalledTimes(3);
   });
 
@@ -284,19 +281,101 @@ describe('agent-usecases', () => {
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }));
 
     const result = await judgeStatus('structured', 'tag', [
-      { condition: 'a', next: 'one' },
-      { condition: 'b', next: 'two' },
+      { label: 'a' },
+      { label: 'b' },
     ], {
       ...judgeOptions,
       childProcessEnv,
     });
 
-    expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
+    expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
     expect(runAgent).toHaveBeenCalledTimes(3);
     for (const call of vi.mocked(runAgent).mock.calls) {
       expect(call[2]).toEqual(expect.objectContaining({ childProcessEnv }));
     }
   });
+
+  it('judgeStatus passes abortSignal to all Phase 3 internal agent calls', async () => {
+    const abortController = new AbortController();
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no tag'));
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }));
+
+    const result = await judgeStatus('structured', 'tag', [
+      { label: 'a' },
+      { label: 'b' },
+    ], {
+      ...judgeOptions,
+      abortSignal: abortController.signal,
+    });
+
+    expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
+    for (const call of vi.mocked(runAgent).mock.calls) {
+      expect(call[2]).toEqual(expect.objectContaining({ abortSignal: abortController.signal }));
+    }
+  });
+
+  it('judgeStatus rejects a pre-aborted signal without starting a provider stage', async () => {
+    const abortController = new AbortController();
+    abortController.abort(new Error('cancelled before judgment'));
+
+    await expect(judgeStatus('structured', 'tag', [
+      { label: 'a' },
+      { label: 'b' },
+    ], {
+      ...judgeOptions,
+      abortSignal: abortController.signal,
+    })).rejects.toThrow('cancelled before judgment');
+
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 2, 3])(
+    'judgeStatus records provider stage %i before stopping when the signal is aborted',
+    async (abortStage) => {
+      const abortController = new AbortController();
+      const onJudgeStage = vi.fn();
+      const providerUsages = [1, 2, 3].map((stage) => ({
+        inputTokens: stage,
+        outputTokens: stage,
+        totalTokens: stage * 2,
+        usageMissing: false,
+      }));
+      let stage = 0;
+      vi.mocked(runAgent).mockImplementation(async () => {
+        stage++;
+        if (stage === abortStage) {
+          abortController.abort(new Error(`cancelled during stage ${stage}`));
+        }
+        const response = stage === 1
+          ? doneResponse('no structured match')
+          : stage === 2
+            ? doneResponse('no tag match')
+            : doneResponse('ignored', { matched_index: 2, reason: 'second condition' });
+        response.providerUsage = providerUsages[stage - 1];
+        return response;
+      });
+
+      await expect(judgeStatus('structured', 'tag', [
+        { label: 'a' },
+        { label: 'b' },
+      ], {
+        ...judgeOptions,
+        abortSignal: abortController.signal,
+        onJudgeStage,
+      })).rejects.toThrow(`cancelled during stage ${abortStage}`);
+
+      expect(runAgent).toHaveBeenCalledTimes(abortStage);
+      expect(onJudgeStage).toHaveBeenCalledTimes(abortStage);
+      for (let index = 0; index < abortStage; index++) {
+        expect(onJudgeStage).toHaveBeenNthCalledWith(index + 1, expect.objectContaining({
+          stage: index + 1,
+          status: index + 1 === abortStage ? 'error' : 'done',
+          providerUsage: providerUsages[index],
+        }));
+      }
+    },
+  );
 
   it('judgeStatus は maxTurns 非対応 provider では全内部ステージで maxTurns を渡さない', async () => {
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
@@ -304,14 +383,14 @@ describe('agent-usecases', () => {
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }));
 
     const result = await judgeStatus('structured', 'tag', [
-      { condition: 'done', next: 'complete' },
-      { condition: 'fix', next: 'fix' },
+      { label: 'done' },
+      { label: 'fix' },
     ], {
       ...judgeOptions,
       resolvedProvider: 'claude-terminal',
     });
 
-    expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
+    expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
     expect(runAgent).toHaveBeenCalledTimes(3);
     for (const call of vi.mocked(runAgent).mock.calls) {
       expect(call[2]).not.toHaveProperty('maxTurns');
@@ -329,8 +408,8 @@ describe('agent-usecases', () => {
       'structured',
       'tag',
       [
-        { condition: 'a', next: 'one' },
-        { condition: 'b', next: 'two' },
+        { label: 'a' },
+        { label: 'b' },
       ],
       {
         ...judgeOptions,
@@ -370,8 +449,8 @@ describe('agent-usecases', () => {
         'structured',
         'tag',
         [
-          { condition: 'a', next: 'one' },
-          { condition: 'b', next: 'two' },
+          { label: 'a' },
+          { label: 'b' },
         ],
         {
           ...judgeOptions,
@@ -387,29 +466,25 @@ describe('agent-usecases', () => {
     }));
   });
 
-  it('judgeStatus Stage 3 で interactiveOnly フィルタリング後の非連続インデックスが正しく返る', async () => {
-    // rules = [done(0), blocked(1, interactiveOnly), fix(2)]
-    // interactive=false → conditions = [{index:0}, {index:2}]
-    // AI が fix (matched_index=2) を選択 → position 1 → originalIndex = 2
+  it('judgeStatus Stage 3 は候補配列の位置を candidateIndex として返す', async () => {
     // Stage 1: structured output fails
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
     // Stage 2: tag detection fails
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no tag'));
-    // Stage 3: evaluateCondition - matched_index:2 means position 1 in normalized conditions
+    // Stage 3: evaluateCondition - matched_index:2 means candidate position 1
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }));
 
     const result = await judgeStatus(
       'structured',
       'tag',
       [
-        { condition: 'done', next: 'COMPLETE' },
-        { condition: 'blocked', next: 'ABORT', interactiveOnly: true },
-        { condition: 'fix', next: 'fix' },
+        { label: 'done' },
+        { label: 'fix' },
       ],
-      { ...judgeOptions, interactive: false },
+      judgeOptions,
     );
 
-    expect(result).toEqual({ ruleIndex: 2, method: 'ai_judge' });
+    expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
   });
 
   it('judgeStatus は全ての判定に失敗したらエラー', async () => {
@@ -422,8 +497,8 @@ describe('agent-usecases', () => {
     vi.mocked(detectJudgeIndex).mockReturnValue(-1);
 
     await expect(judgeStatus('structured', 'tag', [
-      { condition: 'a', next: 'one' },
-      { condition: 'b', next: 'two' },
+      { label: 'a' },
+      { label: 'b' },
     ], judgeOptions)).rejects.toThrow('Status not found for step "review"');
   });
 
@@ -446,8 +521,8 @@ describe('agent-usecases', () => {
 
     await expect(
       judgeStatus('structured', 'tag', [
-        { condition: 'a', next: 'one' },
-        { condition: 'b', next: 'two' },
+        { label: 'a' },
+        { label: 'b' },
       ], {
         ...judgeOptions,
         onJudgeStage,
@@ -471,8 +546,8 @@ describe('agent-usecases', () => {
       .mockRejectedValueOnce(new Error('stage 3 rejected'));
 
     await expect(judgeStatus('structured', 'tag', [
-      { condition: 'a', next: 'one' },
-      { condition: 'b', next: 'two' },
+      { label: 'a' },
+      { label: 'b' },
     ], {
       ...judgeOptions,
       onJudgeStage,
@@ -892,12 +967,11 @@ describe('agent-usecases', () => {
 
     const result = await runTagJudgeStage(
       'tag instruction',
-      [{ condition: 'done', next: 'COMPLETE' }, { condition: 'fix', next: 'fix' }],
-      false,
+      [{ label: 'done' }, { label: 'fix' }],
       { cwd: '/repo', stepName: 'review', provider: 'cursor' },
     );
 
-    expect(result).toEqual({ ruleIndex: 0, method: 'phase3_tag' });
+    expect(result).toEqual({ candidateIndex: 0, method: 'phase3_tag' });
     expect(runAgent).toHaveBeenCalledWith('conductor', 'tag instruction', expect.objectContaining({
       cwd: '/repo',
       provider: 'cursor',
@@ -911,12 +985,11 @@ describe('agent-usecases', () => {
 
     const result = await runTagJudgeStage(
       'tag instruction',
-      [{ condition: 'done', next: 'COMPLETE' }, { condition: 'fix', next: 'fix' }],
-      false,
+      [{ label: 'done' }, { label: 'fix' }],
       { cwd: '/repo', stepName: 'review', resolvedProvider: 'claude-terminal' },
     );
 
-    expect(result).toEqual({ ruleIndex: 0, method: 'phase3_tag' });
+    expect(result).toEqual({ candidateIndex: 0, method: 'phase3_tag' });
     expect(runAgent).toHaveBeenCalledWith('conductor', 'tag instruction', expect.not.objectContaining({
       maxTurns: expect.anything(),
     }));
@@ -927,25 +1000,21 @@ describe('agent-usecases', () => {
 
     const result = await runTagJudgeStage(
       'tag instruction',
-      [{ condition: 'done', next: 'COMPLETE' }],
-      false,
+      [{ label: 'done' }],
       { cwd: '/repo', stepName: 'review' },
     );
 
     expect(result).toBeUndefined();
   });
 
-  it('runTagJudgeStage は interactiveOnly ルールを interactive=false 時にスキップする', async () => {
-    // [REVIEW:2] → index 1 → interactiveOnly ルール → isValidRuleIndex が false → undefined
+  it('runTagJudgeStage は候補範囲外のタグを拒否する', async () => {
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('[REVIEW:2]'));
 
     const result = await runTagJudgeStage(
       'tag instruction',
       [
-        { condition: 'done', next: 'COMPLETE' },
-        { condition: 'blocked', next: 'ABORT', interactiveOnly: true },
+        { label: 'done' },
       ],
-      false,
       { cwd: '/repo', stepName: 'review' },
     );
 

@@ -129,10 +129,6 @@ vi.mock('../infra/claude/query-manager.js', () => ({
   interruptAllQueries: vi.fn(),
 }));
 
-vi.mock('../shared/utils/ruleIndex.js', () => ({
-  detectRuleIndex: vi.fn(() => 0),
-}));
-
 vi.mock('../infra/config/paths.js', () => ({
   getGlobalConfigDir: vi.fn(() => '/tmp/.takt'),
 }));

@@ -3,7 +3,6 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
-import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 import { createDefaultStructuredOutputNormalizers } from '../infra/workflow/structured-output/followup-task-normalizer.js';
 
 const {
@@ -78,7 +77,7 @@ describe('workflow structured_output fallback integration', () => {
             },
             rules: [
               {
-                when: 'structured.plan_followup.action == "noop"',
+                condition: 'when(structured.plan_followup.action == "noop")',
                 next: 'COMPLETE',
               },
             ],
@@ -91,7 +90,6 @@ describe('workflow structured_output fallback integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'claude',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -168,7 +166,7 @@ describe('workflow structured_output fallback integration', () => {
             },
             rules: [
               {
-                when: 'structured.plan_fresh_improvement.action == "enqueue_new_task"',
+                condition: 'when(structured.plan_fresh_improvement.action == "enqueue_new_task")',
                 next: 'COMPLETE',
               },
             ],
@@ -182,7 +180,6 @@ describe('workflow structured_output fallback integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'claude',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -248,7 +245,7 @@ describe('workflow structured_output fallback integration', () => {
             },
             rules: [
               {
-                when: 'structured.plan_fresh_improvement.action == "enqueue_new_task"',
+                condition: 'when(structured.plan_fresh_improvement.action == "enqueue_new_task")',
                 next: 'COMPLETE',
               },
             ],
@@ -261,7 +258,6 @@ describe('workflow structured_output fallback integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'claude',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -324,7 +320,7 @@ describe('workflow structured_output fallback integration', () => {
             },
             rules: [
               {
-                when: 'structured.plan_followup.contact == "user@example.com"',
+                condition: 'when(structured.plan_followup.contact == "user@example.com")',
                 next: 'COMPLETE',
               },
             ],
@@ -337,7 +333,6 @@ describe('workflow structured_output fallback integration', () => {
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
       provider: 'claude',
-      detectRuleIndex,
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),

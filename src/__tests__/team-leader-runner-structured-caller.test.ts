@@ -7,6 +7,7 @@ import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
 import { makeInstructionContext } from './test-helpers.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
   return {
@@ -137,7 +138,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         partEdit: true,
         partPermissionMode: 'edit',
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
 
     const state: WorkflowState = {
@@ -488,7 +489,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         timeoutMs: 1000,
         partPersona: 'coder',
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
     const state: WorkflowState = {
       workflowName: 'workflow',
@@ -576,7 +577,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         maxTotalParts: 1,
         timeoutMs: 1000,
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
     const state: WorkflowState = {
       workflowName: 'workflow',
@@ -742,7 +743,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         partPersona: 'coder',
         partTags: ['coding', 'edit'],
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
     const state: WorkflowState = {
       workflowName: 'workflow',
@@ -875,7 +876,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         timeoutMs: 1000,
         partPersona: 'coder',
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
 
     const state: WorkflowState = {
@@ -997,7 +998,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         timeoutMs: 1000,
         partPersona: 'coder',
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
 
     const state: WorkflowState = {
@@ -1122,7 +1123,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         partEdit: true,
         partPermissionMode: 'edit',
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
 
     const state: WorkflowState = {
@@ -1256,7 +1257,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         partPersona: 'coder',
         partAllowedTools: ['Read', 'Edit'],
       } as WorkflowStep['teamLeader'] & { inspectTools: string[] },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
     const state: WorkflowState = {
       workflowName: 'workflow',
@@ -1369,7 +1370,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         partPersona: 'coder',
         partAllowedTools: ['read', 'edit'],
       } as WorkflowStep['teamLeader'] & { inspectTools: string[] },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
     const state: WorkflowState = {
       workflowName: 'workflow',
@@ -1479,7 +1480,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         inspectTools: ['read', 'glob', 'grep'],
         partPersona: 'coder',
       } as WorkflowStep['teamLeader'] & { inspectTools: string[] },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
     const state: WorkflowState = {
       workflowName: 'workflow',
@@ -1591,7 +1592,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         timeoutMs: 1000,
         partPersona: 'coder',
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
 
     const state: WorkflowState = {
@@ -1695,7 +1696,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         timeoutMs: 1000,
         partPersona: 'coder',
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
 
     const state: WorkflowState = {
@@ -1802,7 +1803,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         partEdit: true,
         partPermissionMode: 'edit',
       },
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     };
 
     const state: WorkflowState = {
@@ -1894,7 +1895,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           timeoutMs: 1000,
           partPersona: 'coder',
         },
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
       };
     }
 
@@ -1994,7 +1995,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           timeoutMs: 1000,
           partPersona: 'coder',
         },
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
       };
     }
 

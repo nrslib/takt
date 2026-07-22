@@ -25,14 +25,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -49,7 +53,7 @@ import {
   makeResponse,
   makeRule,
   makeStep,
-  mockDetectMatchedRuleSequence,
+  mockRuleEvaluationSequence,
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
 
@@ -94,7 +98,7 @@ describe('report reference integration', () => {
     injectedLstatError.path = join(childPaths.reportsAbs, REPORT_NAME);
     injectedLstatError.error = Object.assign(new Error(`injected ${code}`), { code });
     mockRunAgentSequence([makeResponse({ persona: 'consumer', content: 'done' })]);
-    mockDetectMatchedRuleSequence([{ index: 0, matched: true } as never]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'auto_select' }]);
 
     const engine = new WorkflowEngine(workflowConfig(), tmpDir, 'consume report', {
       projectCwd: tmpDir,

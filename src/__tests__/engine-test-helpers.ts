@@ -16,9 +16,9 @@ import { makeRule } from './test-helpers.js';
 // --- Mock imports (consumers must call vi.mock before importing this) ---
 
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import type { RuleMatch } from '../core/workflow/evaluation/index.js';
-import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import { generateReportDir } from '../shared/utils/index.js';
 
 // --- Factory functions ---
@@ -99,16 +99,8 @@ export function buildDefaultWorkflowConfig(overrides: Partial<WorkflowConfig> = 
       makeStep('reviewers', {
         parallel: [archReviewStep, securityReviewStep],
         rules: [
-          makeRule('all("approved")', 'supervise', {
-            isAggregateCondition: true,
-            aggregateType: 'all',
-            aggregateConditionText: 'approved',
-          }),
-          makeRule('any("needs_fix")', 'fix', {
-            isAggregateCondition: true,
-            aggregateType: 'any',
-            aggregateConditionText: 'needs_fix',
-          }),
+          makeRule('all("approved")', 'supervise'),
+          makeRule('any("needs_fix")', 'fix'),
         ],
       }),
       makeStep('fix', {
@@ -147,12 +139,12 @@ export function mockRunAgentSequence(responses: AgentResponse[]): void {
 }
 
 /**
- * Configure detectMatchedRule mock to return a sequence of rule matches.
+ * Configure mockRuleEvaluation mock to return a sequence of rule matches.
  */
-export function mockDetectMatchedRuleSequence(matches: (RuleMatch | undefined)[]): void {
-  const mock = vi.mocked(detectMatchedRule);
+export function mockRuleEvaluationSequence(matches: (RuleMatch | undefined)[]): void {
+  const mock = vi.mocked(mockRuleEvaluation);
   for (const match of matches) {
-    mock.mockResolvedValueOnce(match);
+    mock.mockReturnValueOnce(match);
   }
 }
 
@@ -177,9 +169,8 @@ export function createTestTmpDir(): string {
  * Re-apply default mocks for phase-runner and session after vi.resetAllMocks().
  */
 export function applyDefaultMocks(): void {
-  vi.mocked(needsStatusJudgmentPhase).mockReturnValue(false);
   vi.mocked(runReportPhase).mockResolvedValue(undefined);
-  vi.mocked(runStatusJudgmentPhase).mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' });
+  vi.mocked(runStatusJudgmentPhase).mockResolvedValue({ label: '', method: 'auto_select' });
   vi.mocked(generateReportDir).mockReturnValue('test-report-dir');
 }
 

@@ -64,12 +64,9 @@ codex exec --full-auto - < "$tmp_prompt_file"
 
 ### サブステップ条件マッチ判定
 
-各サブステップ出力に対する判定優先順位:
+各サブステップは semantic 条件と `when(...)` 条件だけを通常 step と同じ YAML 順の first-match で判定する。意味ラベルが必要な場合だけ重複のない候補から一度選択し、その選択を以後の rule 評価に使う。どの rule も成立しなければ `rule_no_match` で ABORT する。
 
-1. `[STEP:N]` タグがあればインデックスで照合（最後のタグを採用）
-2. タグがなければ出力全文と条件文の意味一致で判定
-
-マッチした condition 文字列を記録し、親 step の aggregate 評価に使う。
+マッチした condition 文字列を記録し、parallel 親 step だけが確定済みのサブステップ結果を `all(...)` / `any(...)` で評価する。
 
 ## セクションマップの解決
 
@@ -152,24 +149,26 @@ report:
 
 ## ステータスタグ出力指示
 
-step に `rules` がある場合、最後に1つだけタグを出力するよう指示する。
+step に semantic rule がある場合、最後に意味ラベルを1つだけ出力するよう指示する。
 
 ```text
-[STEP:0] = {rules[0].condition}
-[STEP:1] = {rules[1].condition}
+[STEP:1] = {semanticCandidates[0].label}
+[STEP:2] = {semanticCandidates[1].label}
 ...
 ```
 
-- `ai("...")` は括弧を外した条件文を表示する
+- `when(...)` と `all(...)` / `any(...)` は候補に含めない
+- 同じ意味ラベルは最初の YAML 出現だけを候補にする
 - parallel サブステップでも同様に適用する
 
 ## Rule 評価
 
 ### 通常 step
 
-1. 出力中の `[STEP:N]` を検出（複数なら最後を採用）
-2. 該当 index の rule を採用
-3. タグがない場合は全文を読み condition と意味照合して最も近い rule を採用
+1. rules を YAML 順に評価する。意味ラベルを必要としない先行 machine rule が成立した場合は、意味ラベルを選択せずその rule を採用する
+2. 最初の semantic condition に到達した時点でのみ、structured output、タグ検出、AI judge の順で意味ラベルを一度だけ選択する
+3. 選択した意味ラベルと各 rule の guard を使って、現在の rule から後続 rules を YAML 順に評価する。guard が偽でも意味ラベルは再選択しない
+4. どの rule も成立しない場合は `rule_no_match` で ABORT する
 
 ### Parallel step（Aggregate）
 
@@ -225,7 +224,7 @@ initial_step 取得
 │   ↓
 │   Loop Monitor チェック（必要時 judge を codex exec で実行）
 │   ↓
-│   Rule 評価（タグ優先、未タグ時は意味照合）
+│   Rule 評価（YAML 順 first-match）
 │   ↓
 │   next 決定
 │     ├── COMPLETE → 終了報告

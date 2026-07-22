@@ -212,26 +212,26 @@ describe('exec workflow template', () => {
       expect(judgeActor?.passPreviousResponse).toBe(false);
       expect(replan?.sessionKey).toBe('exec-replan');
       expect(execute?.rules).toEqual([
-        expect.objectContaining({ condition: 'all("done")', next: 'review', aggregateType: 'all' }),
-        expect.objectContaining({ condition: 'any("blocked")', next: 'review', aggregateType: 'any' }),
+        { condition: { kind: 'aggregate', aggregate: 'all', targetConditions: [{ kind: 'semantic', label: 'done' }] }, next: 'review' },
+        { condition: { kind: 'aggregate', aggregate: 'any', targetConditions: [{ kind: 'semantic', label: 'blocked' }] }, next: 'review' },
       ]);
       expect(judge?.rules).toEqual([
-        expect.objectContaining({ condition: 'all("approved")', next: 'COMPLETE', aggregateType: 'all' }),
-        expect.objectContaining({ condition: 'any("needs_replan")', next: 'replan', aggregateType: 'any' }),
-        expect.objectContaining({ condition: 'any("needs_fix")', next: 'execute', aggregateType: 'any' }),
+        { condition: { kind: 'aggregate', aggregate: 'all', targetConditions: [{ kind: 'semantic', label: 'approved' }] }, next: 'COMPLETE' },
+        { condition: { kind: 'aggregate', aggregate: 'any', targetConditions: [{ kind: 'semantic', label: 'needs_replan' }] }, next: 'replan' },
+        { condition: { kind: 'aggregate', aggregate: 'any', targetConditions: [{ kind: 'semantic', label: 'needs_fix' }] }, next: 'execute' },
       ]);
       expect(replan?.persona).toBe('exec-assistant');
       expect(rawReplan).toHaveProperty('requires_user_input', true);
       expect(replan?.requiresUserInput).toBe(true);
       expect(replan?.rules).toEqual([
         expect.objectContaining({
-          condition: 'User input needed for clarification',
+          condition: { kind: 'semantic', label: 'User input needed for clarification' },
           next: 'replan',
           requiresUserInput: true,
           interactiveOnly: true,
         }),
-        expect.objectContaining({ condition: 'New plan ready', next: 'execute' }),
-        expect.objectContaining({ condition: 'Cannot proceed', next: 'ABORT' }),
+        expect.objectContaining({ condition: { kind: 'semantic', label: 'New plan ready' }, next: 'execute' }),
+        expect.objectContaining({ condition: { kind: 'semantic', label: 'Cannot proceed' }, next: 'ABORT' }),
       ]);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
@@ -431,8 +431,8 @@ describe('exec workflow template', () => {
             persona: 'exec-assistant',
             instruction: 'exec-loop-monitor {cycle_count} instruction',
             rules: [
-              { condition: 'Healthy (progress being made)', next: 'execute' },
-              { condition: 'Unproductive (same rework repeating)', next: 'replan' },
+              { condition: { kind: 'semantic', label: 'Healthy (progress being made)' }, next: 'execute' },
+              { condition: { kind: 'semantic', label: 'Unproductive (same rework repeating)' }, next: 'replan' },
             ],
           }),
         }),
@@ -444,8 +444,8 @@ describe('exec workflow template', () => {
             persona: 'exec-assistant',
             instruction: 'exec-loop-monitor {cycle_count} instruction',
             rules: [
-              { condition: 'Healthy (progress being made)', next: 'replan' },
-              { condition: 'Unproductive (no convergence)', next: 'COMPLETE' },
+              { condition: { kind: 'semantic', label: 'Healthy (progress being made)' }, next: 'replan' },
+              { condition: { kind: 'semantic', label: 'Unproductive (no convergence)' }, next: 'COMPLETE' },
             ],
           }),
         }),

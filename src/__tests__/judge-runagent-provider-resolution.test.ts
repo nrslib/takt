@@ -103,8 +103,7 @@ describe('judge runAgent provider/model resolution (#556)', () => {
       };
       await runTagJudgeStage(
         'tag instruction',
-        [{ condition: 'done', next: 'COMPLETE' }],
-        false,
+        [{ label: 'done' }],
         runOpts,
       );
 
@@ -128,8 +127,8 @@ describe('judge runAgent provider/model resolution (#556)', () => {
       vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }));
 
       await judgeStatus('structured', 'tag', [
-        { condition: 'a', next: 'one' },
-        { condition: 'b', next: 'two' },
+        { label: 'a' },
+        { label: 'b' },
       ], judgeBase);
 
       expect(runAgent).toHaveBeenCalledTimes(3);

@@ -3,6 +3,7 @@ import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import type { NormalAgentWorkflowStep, WorkflowConfig, WorkflowRule } from '../core/models/index.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 function createFakeLedgerStore(): FindingLedgerStore {
   return {
@@ -46,7 +47,7 @@ function createWorkflow(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig
         edit: false,
         instruction: '{task}',
         passPreviousResponse: true,
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
       },
     ],
     ...overrides,
@@ -61,7 +62,7 @@ function createPlanAgent(overrides: Partial<NormalAgentWorkflowStep> = {}): Norm
     edit: false,
     instruction: '{task}',
     passPreviousResponse: true,
-    rules: [{ condition: 'done', next: 'COMPLETE' }],
+    rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     ...overrides,
   };
 }
@@ -96,7 +97,7 @@ function createFindingContractParallelWorkflow(
             edit: false,
             instruction: 'review',
             passPreviousResponse: true,
-            rules: [{ condition: 'approved' }],
+            rules: [normalizeRule({ condition: 'approved' })],
           },
         ],
         rules,
@@ -173,7 +174,7 @@ describe('validateWorkflowConfig', () => {
         edit: false,
         instruction: '{task}',
         passPreviousResponse: true,
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
         parallel: [createPlanAgent({ name: 'review', model: 'sonnet' })],
       }],
     });
@@ -258,7 +259,7 @@ describe('validateWorkflowConfig', () => {
         threshold: 1,
         judge: {
           model: 'sonnet',
-          rules: [{ condition: 'done', next: 'COMPLETE' }],
+          rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
         },
       }],
     });
@@ -276,7 +277,7 @@ describe('validateWorkflowConfig', () => {
           cycle: ['plan', 'plan'],
           threshold: 2,
           judge: {
-            rules: [{ condition: 'continue', next: 'missing-step' }],
+            rules: [normalizeRule({ condition: 'continue', next: 'missing-step' })],
           },
         },
       ],
@@ -295,7 +296,7 @@ describe('validateWorkflowConfig', () => {
           edit: false,
           instruction: '{task}',
           passPreviousResponse: true,
-          rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
+          rules: [normalizeRule({ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' })],
         },
       ],
     });
@@ -323,18 +324,14 @@ describe('validateWorkflowConfig', () => {
               edit: false,
               instruction: 'review',
               passPreviousResponse: true,
-              rules: [{ condition: 'approved' }],
+              rules: [normalizeRule({ condition: 'approved' })],
             },
           ],
           rules: [
-            {
-              condition: 'all("approved")',
+            normalizeRule({
+              condition: 'all("approved") && when(findings.open.count == 0)',
               next: 'COMPLETE',
-              isAggregateCondition: true,
-              aggregateType: 'all',
-              aggregateConditionText: 'approved',
-              aggregateGuardCondition: 'findings.open.count == 0',
-            },
+            }),
           ],
         },
       ],
@@ -365,8 +362,8 @@ describe('validateWorkflowConfig', () => {
           instruction: '{task}',
           passPreviousResponse: true,
           rules: [
-            { condition: 'when(findings.open.count == 0)', next: 'COMPLETE' },
-            { condition: 'when(findings.conflicts.count > 0)', returnValue: 'need_replan' },
+            normalizeRule({ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }),
+            normalizeRule({ condition: 'when(findings.conflicts.count > 0)', return: 'need_replan' }),
           ],
         },
       ],
@@ -385,7 +382,7 @@ describe('validateWorkflowConfig', () => {
           edit: false,
           instruction: '{task}',
           passPreviousResponse: true,
-          rules: [{ condition: 'stalled', next: 'REMOVED_TERMINAL' }],
+          rules: [normalizeRule({ condition: 'stalled', next: 'REMOVED_TERMINAL' })],
         },
       ],
     });
@@ -398,7 +395,7 @@ describe('validateWorkflowConfig', () => {
   it('fails fast when a rule routes to finding-conflict-adjudication without findingContract', () => {
     const workflow = createWorkflow({
       steps: [createPlanAgent({
-        rules: [{ condition: 'conflicts', next: 'finding-conflict-adjudication' }],
+        rules: [normalizeRule({ condition: 'conflicts', next: 'finding-conflict-adjudication' })],
       })],
     });
 
@@ -414,7 +411,7 @@ describe('validateWorkflowConfig', () => {
           name: 'review',
           persona: 'reviewer',
           personaDisplayName: 'reviewer',
-          rules: [{ condition: 'conflicts', next: 'finding-conflict-adjudication' }],
+          rules: [normalizeRule({ condition: 'conflicts', next: 'finding-conflict-adjudication' })],
         })],
       })],
     });
@@ -430,7 +427,7 @@ describe('validateWorkflowConfig', () => {
         cycle: ['plan', 'plan'],
         threshold: 2,
         judge: {
-          rules: [{ condition: 'conflicts', next: 'finding-conflict-adjudication' }],
+          rules: [normalizeRule({ condition: 'conflicts', next: 'finding-conflict-adjudication' })],
         },
       }],
     });
@@ -452,19 +449,19 @@ describe('validateWorkflowConfig', () => {
         },
       },
       steps: [createPlanAgent({
-        rules: [{ condition: 'conflicts', next: 'finding-conflict-adjudication' }],
+        rules: [normalizeRule({ condition: 'conflicts', next: 'finding-conflict-adjudication' })],
         parallel: [createPlanAgent({
           name: 'review',
           persona: 'reviewer',
           personaDisplayName: 'reviewer',
-          rules: [{ condition: 'conflicts', next: 'finding-conflict-adjudication' }],
+          rules: [normalizeRule({ condition: 'conflicts', next: 'finding-conflict-adjudication' })],
         })],
       })],
       loopMonitors: [{
         cycle: ['plan', 'plan'],
         threshold: 2,
         judge: {
-          rules: [{ condition: 'conflicts', next: 'finding-conflict-adjudication' }],
+          rules: [normalizeRule({ condition: 'conflicts', next: 'finding-conflict-adjudication' })],
         },
       }],
     });
@@ -609,10 +606,10 @@ describe('validateWorkflowConfig', () => {
               edit: false,
               instruction: 'review',
               passPreviousResponse: true,
-              rules: [{ condition: 'approved' }],
+              rules: [normalizeRule({ condition: 'approved' })],
             },
           ],
-          rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
+          rules: [normalizeRule({ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' })],
         },
       ],
     });
@@ -636,7 +633,7 @@ describe('validateWorkflowConfig', () => {
           cycle: ['plan', 'plan'],
           threshold: 2,
           judge: {
-            rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
+            rules: [normalizeRule({ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' })],
           },
         },
       ],
@@ -663,10 +660,10 @@ describe('validateWorkflowConfig', () => {
               edit: false,
               instruction: 'review',
               passPreviousResponse: true,
-              rules: [{ condition: 'when(findings.open.count == 0)' }],
+              rules: [normalizeRule({ condition: 'when(findings.open.count == 0)' })],
             },
           ],
-          rules: [{ condition: 'done', next: 'COMPLETE' }],
+          rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
         },
       ],
     });
@@ -703,12 +700,12 @@ describe('validateWorkflowConfig', () => {
               edit: false,
               instruction: 'review',
               passPreviousResponse: true,
-              rules: [{ condition: 'when(findings.open.count == 0)' }],
+              rules: [normalizeRule({ condition: 'when(findings.open.count == 0)' })],
             },
           ],
           rules: [
-            { condition: 'when(findings.open.count == 0)', next: 'COMPLETE' },
-            { condition: 'when(findings.conflicts.count > 0)', returnValue: 'need_replan' },
+            normalizeRule({ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }),
+            normalizeRule({ condition: 'when(findings.conflicts.count > 0)', return: 'need_replan' }),
           ],
         },
       ],
@@ -724,7 +721,7 @@ describe('validateWorkflowConfig', () => {
           cycle: ['plan', 'plan'],
           threshold: 2,
           judge: {
-            rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
+            rules: [normalizeRule({ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' })],
           },
         },
       ],
@@ -766,10 +763,10 @@ describe('validateWorkflowConfig', () => {
                 schemaRef: 'existing.schema',
                 schema: { type: 'object' },
               },
-              rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
+              rules: [normalizeRule({ condition: 'when(true)', next: 'COMPLETE' })],
             },
           ],
-          rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
+          rules: [normalizeRule({ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' })],
         },
       ],
     });
@@ -807,7 +804,7 @@ describe('validateWorkflowConfig', () => {
           personaDisplayName: 'delegate',
           instruction: '',
           passPreviousResponse: true,
-          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+          rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
         },
       ],
     });
@@ -833,10 +830,10 @@ describe('validateWorkflowConfig', () => {
               personaDisplayName: 'delegate',
               instruction: '',
               passPreviousResponse: true,
-              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+              rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
             },
           ],
-          rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }],
+          rules: [normalizeRule({ condition: 'all("COMPLETE")', next: 'COMPLETE' })],
         },
       ],
     });
@@ -861,7 +858,7 @@ describe('validateWorkflowConfig', () => {
               personaDisplayName: 'reviewer-a',
               instruction: 'review api',
               passPreviousResponse: true,
-              rules: [{ condition: 'approved', next: 'COMPLETE' }],
+              rules: [normalizeRule({ condition: 'approved', next: 'COMPLETE' })],
             },
             {
               name: 'delegate',
@@ -869,16 +866,70 @@ describe('validateWorkflowConfig', () => {
               personaDisplayName: 'reviewer-b',
               instruction: 'review ui',
               passPreviousResponse: true,
-              rules: [{ condition: 'approved', next: 'COMPLETE' }],
+              rules: [normalizeRule({ condition: 'approved', next: 'COMPLETE' })],
             },
           ],
-          rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+          rules: [normalizeRule({ condition: 'all("approved")', next: 'COMPLETE' })],
         },
       ],
     });
 
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
       'Configuration error: parallel step "reviewers" contains duplicate sub-step name "delegate"',
+    );
+  });
+
+  it('rejects conflicting appendices in normalized normal-step rules', () => {
+    const workflow = createWorkflow({
+      steps: [createPlanAgent({
+        rules: [
+          normalizeRule({
+            condition: 'approved && when(false)',
+            next: 'plan',
+            appendix: 'FIRST',
+          }),
+          normalizeRule({ condition: 'approved', next: 'COMPLETE', appendix: 'SECOND' }),
+        ],
+      })],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid rule in step "plan": Rules sharing semantic label "approved" must use the same appendix',
+    );
+  });
+
+  it('rejects conflicting appendices in normalized parallel sub-step rules', () => {
+    const workflow = createWorkflow({
+      initialStep: 'reviewers',
+      steps: [
+        {
+          name: 'reviewers',
+          personaDisplayName: 'reviewers',
+          instruction: 'review',
+          parallel: [
+            {
+              name: 'architecture',
+              persona: 'reviewer',
+              personaDisplayName: 'reviewer',
+              instruction: 'review architecture',
+              passPreviousResponse: true,
+              rules: [
+                normalizeRule({
+                  condition: 'approved && when(false)',
+                  appendix: 'FIRST',
+                }),
+                normalizeRule({ condition: 'approved', appendix: 'SECOND' }),
+              ],
+            },
+          ],
+          rules: [normalizeRule({ condition: 'all("approved")', next: 'COMPLETE' })],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid rule in parallel sub-step "architecture" of step "reviewers": '
+      + 'Rules sharing semantic label "approved" must use the same appendix',
     );
   });
 
@@ -897,10 +948,10 @@ describe('validateWorkflowConfig', () => {
               personaDisplayName: 'api-reviewer',
               instruction: 'review api',
               passPreviousResponse: true,
-              rules: [{ condition: 'approved', next: 'COMPLETE' }],
+              rules: [normalizeRule({ condition: 'approved', next: 'COMPLETE' })],
             },
           ],
-          rules: [{ condition: 'all("approved")', next: 'ui-reviewers' }],
+          rules: [normalizeRule({ condition: 'all("approved")', next: 'ui-reviewers' })],
         },
         {
           name: 'ui-reviewers',
@@ -913,15 +964,78 @@ describe('validateWorkflowConfig', () => {
               personaDisplayName: 'ui-reviewer',
               instruction: 'review ui',
               passPreviousResponse: true,
-              rules: [{ condition: 'approved', next: 'COMPLETE' }],
+              rules: [normalizeRule({ condition: 'approved', next: 'COMPLETE' })],
             },
           ],
-          rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+          rules: [normalizeRule({ condition: 'all("approved")', next: 'COMPLETE' })],
         },
       ],
     });
 
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
+
+  it.each([
+    ['normal agent', createPlanAgent()],
+    [
+      'system',
+      {
+        name: 'plan',
+        kind: 'system',
+        personaDisplayName: 'plan',
+        instruction: '',
+        passPreviousResponse: false,
+      },
+    ],
+    ['arpeggio', { ...createPlanAgent(), arpeggio: {} }],
+    ['team leader', { ...createPlanAgent(), teamLeader: {} }],
+    ['empty parallel parent', { ...createPlanAgent(), parallel: [] }],
+  ])('rejects aggregate rules on a programmatic %s step', (_label, step) => {
+    const workflow = createWorkflow({
+      steps: [{
+        ...step,
+        rules: [normalizeRule({ condition: 'all("approved")', next: 'COMPLETE' })],
+      } as WorkflowConfig['steps'][number]],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid rule in step "plan": aggregate conditions are only allowed on parallel parent steps with sub-steps',
+    );
+  });
+
+  it('rejects aggregate rules on a programmatic parallel sub-step', () => {
+    const workflow = createWorkflow({
+      steps: [{
+        ...createPlanAgent(),
+        parallel: [{
+          ...createPlanAgent(),
+          name: 'review',
+          rules: [normalizeRule({ condition: 'all("approved")', next: 'COMPLETE' })],
+        }],
+        rules: [normalizeRule({ condition: 'all("approved")', next: 'COMPLETE' })],
+      } as WorkflowConfig['steps'][number]],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid rule in parallel sub-step "review" of step "plan": aggregate conditions are only allowed on parallel parent steps with sub-steps',
+    );
+  });
+
+  it('rejects aggregate rules on a programmatic loop monitor judge', () => {
+    const workflow = createWorkflow({
+      loopMonitors: [{
+        cycle: ['plan', 'plan'],
+        threshold: 2,
+        judge: {
+          persona: 'loop-judge',
+          rules: [normalizeRule({ condition: 'any("approved")', next: 'COMPLETE' })],
+        },
+      }],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid loop_monitor judge rule: aggregate conditions are only allowed on parallel parent steps with sub-steps',
+    );
   });
 
   it.each([
@@ -1035,7 +1149,7 @@ describe('validateWorkflowConfig', () => {
             edit: false,
             instruction: '{task}',
             passPreviousResponse: true,
-            rules: [{ condition: 'done', next: 'COMPLETE' }],
+            rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
             outputContracts: [
               { name: 'plan.md', format: 'plan-review-body', formatRef: 'plan-review-finding-contract' },
             ],
@@ -1064,13 +1178,13 @@ describe('validateWorkflowConfig', () => {
                 edit: false,
                 instruction: 'review',
                 passPreviousResponse: true,
-                rules: [{ condition: 'approved' }],
+                rules: [normalizeRule({ condition: 'approved' })],
                 outputContracts: [
                   { name: 'merge-readiness-review.md', format: 'body', formatRef: 'merge-readiness-review-finding-contract' },
                 ],
               },
             ],
-            rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+            rules: [normalizeRule({ condition: 'all("approved")', next: 'COMPLETE' })],
           },
         ],
       });
@@ -1099,7 +1213,7 @@ describe('validateWorkflowConfig', () => {
             edit: false,
             instruction: '{task}',
             passPreviousResponse: true,
-            rules: [{ condition: 'done', next: 'COMPLETE' }],
+            rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
             outputContracts: [
               { name: 'plan.md', format: 'plan-review-body', formatRef: 'plan-review-finding-contract' },
             ],
@@ -1120,7 +1234,7 @@ describe('validateWorkflowConfig', () => {
             edit: false,
             instruction: '{task}',
             passPreviousResponse: true,
-            rules: [{ condition: 'done', next: 'COMPLETE' }],
+            rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
             outputContracts: [
               { name: 'plan.md', format: 'plan-review-body', formatRef: 'plan-review-finding-contract' },
             ],
@@ -1155,7 +1269,7 @@ describe('validateWorkflowConfig', () => {
             edit: false,
             instruction: '{task}',
             passPreviousResponse: true,
-            rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
+            rules: [normalizeRule({ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' })],
           },
         ],
       });

@@ -13,15 +13,18 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/evaluation/index.js', () => ({
-  detectMatchedRule: vi.fn(),
-  evaluateAggregateConditions: vi.fn(),
-}));
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return {
+    ...actual,
+    RuleEvaluator: MockRuleEvaluator,
+  };
+});
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
 
 vi.mock('../shared/utils/index.js', async () => {
@@ -33,7 +36,7 @@ vi.mock('../shared/utils/index.js', async () => {
 });
 
 import { runAgent } from '../agents/runner.js';
-import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { DefaultStructuredCaller } from '../agents/structured-caller.js';
 import type { WorkflowConfig, WorkflowStep, AgentResponse, ArpeggioStepConfig } from '../core/models/index.js';
@@ -112,7 +115,6 @@ function createEngineOptions(tmpDir: string): WorkflowEngineOptions {
   return {
     projectCwd: tmpDir,
     reportDirName: 'test-report-dir',
-    detectRuleIndex: () => 0,
     structuredCaller: new DefaultStructuredCaller(),
   };
 }
@@ -136,7 +138,7 @@ describe('ArpeggioRunner integration', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockRunWithPhaseSpan.mockImplementation(async (_params, execute) => execute());
-    vi.mocked(detectMatchedRule).mockResolvedValue(undefined);
+    vi.mocked(mockRuleEvaluation).mockReturnValue(undefined);
   });
 
   afterEach(() => {
@@ -160,9 +162,9 @@ describe('ArpeggioRunner integration', () => {
     );
 
     // Mock rule detection for the merged result
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({
       index: 0,
-      method: 'phase1_tag',
+      method: 'phase3_tag',
     });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
@@ -194,9 +196,9 @@ describe('ArpeggioRunner integration', () => {
       makeResponse({ content: 'Processed Bob' }),
       makeResponse({ content: 'Processed Charlie' }),
     );
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({
       index: 0,
-      method: 'phase1_tag',
+      method: 'phase3_tag',
     });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
@@ -245,9 +247,9 @@ describe('ArpeggioRunner integration', () => {
       makeResponse({ content: 'Batch 1 result' }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({
       index: 0,
-      method: 'phase1_tag',
+      method: 'phase3_tag',
     });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
@@ -256,34 +258,6 @@ describe('ArpeggioRunner integration', () => {
     expect(state.status).toBe('completed');
     // 4 rows / batch_size 2 = 2 batches
     expect(mockAgent).toHaveBeenCalledTimes(2);
-  });
-
-  it('should pass resolved provider to arpeggio rule evaluation', async () => {
-    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
-    const arpeggioConfig = createArpeggioConfig(csvPath, templatePath);
-    const config = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
-    config.steps[0]!.personaDisplayName = 'coder';
-
-    mockRunAgentWithPrompt(
-      makeResponse({ content: 'Processed Alice' }),
-      makeResponse({ content: 'Processed Bob' }),
-      makeResponse({ content: 'Processed Charlie' }),
-    );
-
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({
-      index: 0,
-      method: 'phase1_tag',
-    });
-
-    engine = new WorkflowEngine(config, tmpDir, 'test task', {
-      ...createEngineOptions(tmpDir),
-      provider: 'claude',
-      personaProviders: { coder: { provider: 'cursor' } },
-    });
-    const state = await engine.run();
-
-    expect(state.status).toBe('completed');
-    expect(vi.mocked(detectMatchedRule).mock.calls[0]?.[3].provider).toBe('cursor');
   });
 
   it('should abort when a batch fails and retries are exhausted', async () => {
@@ -321,9 +295,9 @@ describe('ArpeggioRunner integration', () => {
       makeResponse({ content: 'Result C' }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({
       index: 0,
-      method: 'phase1_tag',
+      method: 'phase3_tag',
     });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
@@ -346,9 +320,9 @@ describe('ArpeggioRunner integration', () => {
       makeResponse({ content: 'C' }),
     );
 
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({
       index: 0,
-      method: 'phase1_tag',
+      method: 'phase3_tag',
     });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
@@ -369,7 +343,7 @@ describe('ArpeggioRunner integration', () => {
       makeResponse({ content: 'B' }),
       makeResponse({ content: 'C' }),
     );
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
     engine.on('phase:start', (step, phase, phaseName, instruction) => {
@@ -403,7 +377,7 @@ describe('ArpeggioRunner integration', () => {
       makeResponse({ content: 'B' }),
       makeResponse({ content: 'C' }),
     );
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       ...createEngineOptions(tmpDir),
@@ -454,7 +428,7 @@ describe('ArpeggioRunner integration', () => {
       }
       return makeResponse({ content: 'Result Charlie' });
     });
-    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
     engine.on('phase:start', (step, phase, phaseName, instruction, _promptParts, phaseExecutionId) => {

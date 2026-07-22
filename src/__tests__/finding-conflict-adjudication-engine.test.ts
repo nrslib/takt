@@ -27,7 +27,6 @@ vi.mock('../infra/providers/index.js', () => ({
 }));
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue(undefined),
 }));
@@ -165,9 +164,9 @@ describe('finding-conflict-adjudication engine detour', () => {
 
   const rules = [
     makeRule('when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)', 'finding-conflict-adjudication'),
+    makeRule('when(findings.conflicts.count > 0)', 'ABORT'),
     makeRule('approved', 'COMPLETE'),
     makeRule('when(findings.conflicts.count == 0 && findings.open.count == 0)', 'COMPLETE'),
-    makeRule('when(findings.conflicts.count > 0)', 'ABORT'),
   ];
 
   it('finding_stale adjudication resolves the finding, resolves the conflict, and returns to reviewers which then completes', async () => {
@@ -205,7 +204,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     expect(result.status).toBe('completed');
@@ -258,7 +256,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     expect(result.status).toBe('aborted');
@@ -312,7 +309,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     });
 
     // 1回目: reviewers を実行し、遷移先が合成ステップになる
@@ -379,7 +375,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
       inheritedFindingContract: { contract: inheritedContract!, ledgerStore: parentLedgerStore },
     }).run();
 
@@ -426,7 +421,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
     expect(firstRun.status).toBe('aborted');
 
@@ -458,7 +452,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir-resume',
-      detectRuleIndex: () => -1,
     }).run();
     expect(secondRun.status).toBe('aborted');
     const adjudicatorCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
@@ -587,7 +580,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       provider: 'claude',
       reportDirName: 'test-report-dir',
       startStep: 'finding-conflict-adjudication',
-      detectRuleIndex: () => -1,
     }).run();
 
     expect(result.status).toBe('completed');
@@ -711,7 +703,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       provider: 'claude',
       reportDirName: 'test-report-dir',
       startStep: 'finding-conflict-adjudication',
-      detectRuleIndex: () => -1,
     }).run();
 
     // 裁定自体は適用されるが、戻り先が曖昧なため ABORT（誤遷移しない）
@@ -764,7 +755,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
       rateLimitFallback: { switchChain: [{ provider: 'codex' }] },
     }).run();
 
@@ -837,7 +827,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
       rateLimitFallback: { switchChain: [{ provider: 'cursor' }] },
     }).run();
 
@@ -886,7 +875,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     })).toThrow(/reserved/);
   });
 
@@ -912,7 +900,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     })).toThrow(/requires finding_contract/);
   });
 
@@ -930,8 +917,8 @@ describe('finding-conflict-adjudication engine detour', () => {
           personaDisplayName: 'supervisor',
           instruction: 'Judge the loop.',
           rules: [
-            { condition: 'still fixable', next: 'fix' },
-            { condition: 'needs adjudication', next: 'finding-conflict-adjudication' },
+            makeRule('still fixable', 'fix'),
+            makeRule('needs adjudication', 'finding-conflict-adjudication'),
           ],
         },
       }],
@@ -954,7 +941,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     })).toThrow(/requires finding_contract/);
   });
 
@@ -990,7 +976,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     })).toThrow(/requires finding_contract/);
   });
 
@@ -1048,7 +1033,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     })).not.toThrow();
   });
 
@@ -1081,8 +1065,8 @@ describe('finding-conflict-adjudication engine detour', () => {
           personaDisplayName: 'supervisor',
           instruction: 'Judge the loop.',
           rules: [
-            { condition: 'still fixable', next: 'fix' },
-            { condition: 'needs adjudication', next: 'finding-conflict-adjudication' },
+            makeRule('still fixable', 'fix'),
+            makeRule('needs adjudication', 'finding-conflict-adjudication'),
           ],
         },
       }],
@@ -1105,7 +1089,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     })).not.toThrow();
   });
 
@@ -1242,7 +1225,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     expect(result.status).toBe('completed');
@@ -1416,7 +1398,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     // v2 梯子設計: correction で persists に直っても taint は消えない（攻撃4:
@@ -1569,7 +1550,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      detectRuleIndex: () => -1,
     }).run();
 
     // v2: 直らなかった raw は drop されず provisional として台帳に残り、
