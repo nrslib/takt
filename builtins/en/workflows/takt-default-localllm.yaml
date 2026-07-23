@@ -603,8 +603,8 @@ steps:
     required_permission_mode: edit
     team_leader:
       mode: finding_contract_fix
-      max_concurrency: 2
-      initial_max_parts: 2
+      max_concurrency: 3
+      initial_max_parts: 3
       fail_on_part_error: false
       part_tags: [coding]
       part_persona: coder
