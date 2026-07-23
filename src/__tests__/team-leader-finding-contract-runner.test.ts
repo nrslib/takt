@@ -61,7 +61,28 @@ function makeLedger(): FindingLedger {
         observations: [],
       },
     ],
-    rawFindings: [],
+    rawFindings: [
+      {
+        rawFindingId: 'R-0001',
+        stepName: 'reviewers',
+        reviewer: 'reviewer',
+        familyTag: 'first-family',
+        severity: 'high',
+        title: 'First defect',
+        description: 'first description',
+        relation: 'new',
+      },
+      {
+        rawFindingId: 'R-0002',
+        stepName: 'reviewers',
+        reviewer: 'reviewer',
+        familyTag: 'second-family',
+        severity: 'medium',
+        title: 'Second defect',
+        description: 'second description',
+        relation: 'new',
+      },
+    ],
     conflicts: [],
     reviewerAnomalies: [],
   } as unknown as FindingLedger;
@@ -251,16 +272,22 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     const decompositionOptions = structuredCaller.decomposeTask.mock.calls[0]?.[2];
     expect(decompositionOptions?.findingContract.actionableFindings).toContain('F-0001');
     expect(decompositionOptions?.findingContract.actionableFindings).toContain('F-0002');
+    expect(decompositionOptions?.findingContract.actionableFindings).not.toContain('R-0001');
+    expect(decompositionOptions?.findingContract.actionableFindings).not.toContain('R-0002');
     const firstWorkerInstruction = executeAgentMock.mock.calls[0]?.[1] as string;
     const secondWorkerInstruction = executeAgentMock.mock.calls[1]?.[1] as string;
     expect(firstWorkerInstruction).toContain('## Finding Contract Part Assignment');
     expect(firstWorkerInstruction).toContain('src/first.ts');
     expect(firstWorkerInstruction).not.toContain('src/second.ts');
     expect(firstWorkerInstruction).toContain('F-0001');
+    expect(firstWorkerInstruction).toContain('R-0001');
     expect(firstWorkerInstruction).not.toContain('F-0002');
+    expect(firstWorkerInstruction).not.toContain('R-0002');
     expect(secondWorkerInstruction).toContain('src/second.ts');
     expect(secondWorkerInstruction).toContain('F-0002');
+    expect(secondWorkerInstruction).toContain('R-0002');
     expect(secondWorkerInstruction).not.toContain('F-0001');
+    expect(secondWorkerInstruction).not.toContain('R-0001');
     expect(firstWorkerInstruction).not.toContain('.takt/finding-ledger.json');
     const feedbackOptions = structuredCaller.requestMoreParts.mock.calls[0]?.[3];
     expect(feedbackOptions?.findingContract.completedPartIndex).toEqual([]);

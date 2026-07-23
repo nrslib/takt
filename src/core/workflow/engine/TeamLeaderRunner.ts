@@ -44,6 +44,7 @@ import {
   appendFindingContractPartAssignmentInstruction,
   collectActionableFindingIds,
   renderActionableFindingContractSummary,
+  renderCompactActionableFindingContractSummary,
   buildLatestFindingContractDigests,
 } from '../team-leader-finding-contract.js';
 import { validateFindingContractCompletionEvidence } from '../team-leader-finding-contract-decision.js';
@@ -729,7 +730,7 @@ export class TeamLeaderRunner {
     if (targetFindingIds.length === 0) {
       throw new Error('team_leader.mode "finding_contract_fix" requires at least one actionable open finding');
     }
-    const actionableFindings = renderActionableFindingContractSummary(ledger, targetFindingIds);
+    const actionableFindings = renderCompactActionableFindingContractSummary(ledger, targetFindingIds);
     return {
       targetFindingIds,
       actionableFindings,
