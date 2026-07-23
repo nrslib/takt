@@ -7,6 +7,7 @@ import type {
 } from '../../models/types.js';
 import { parseWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 import { FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
+import { transferReviewerAnomalyDefinitionCapability } from '../reviewer-anomaly-capability.js';
 import { FindingConflictAdjudicationOutputJsonSchema } from './schemas.js';
 
 // v1: { conflictId, outcome, findingTransition, evidence, actionableFix }. See
@@ -138,7 +139,7 @@ export function injectFindingConflictAdjudicationStep(
       `Configuration error: step name "${FINDING_CONFLICT_ADJUDICATION_STEP}" is reserved for the engine-synthesized conflict adjudication step`,
     );
   }
-  return {
+  const injectedConfig: WorkflowConfig = {
     ...config,
     steps: [
       ...config.steps,
@@ -149,4 +150,5 @@ export function injectFindingConflictAdjudicationStep(
       }),
     ],
   };
+  return transferReviewerAnomalyDefinitionCapability(config, injectedConfig);
 }

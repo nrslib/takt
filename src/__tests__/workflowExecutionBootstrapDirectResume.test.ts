@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkflowConfig } from '../core/models/index.js';
-import { attachWorkflowOpaqueRef } from '../infra/config/loaders/workflowSourceMetadata.js';
+import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/index.js';
+import { issueWorkflowOpaqueRef } from '../core/workflow/reviewer-anomaly-capability-storage.js';
 
 const TEST_TMPDIR = realpathSync(tmpdir());
 
@@ -683,7 +683,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
   });
 
   it('Given a same-name child workflow has a different reference and auto_routing, When bootstrap resolves config, Then strategy override applies', async () => {
-    const parentWorkflow = attachWorkflowOpaqueRef({
+    const parentWorkflow: WorkflowConfig = {
       ...workflowConfig,
       initialStep: 'call-child',
       steps: [
@@ -694,13 +694,15 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
           rules: [],
         },
       ],
-    }, 'project:sha256:parent');
-    const childWorkflow = attachWorkflowOpaqueRef({
+    };
+    issueWorkflowOpaqueRef(parentWorkflow, 'project:sha256:parent');
+    const childWorkflow: WorkflowConfig = {
       ...workflowConfig,
       name: parentWorkflow.name,
       provider: 'mock',
       autoRouting: createAutoRoutingConfig(),
-    }, 'project:sha256:child');
+    };
+    issueWorkflowOpaqueRef(childWorkflow, 'project:sha256:child');
 
     const bootstrap = await createWorkflowExecutionBootstrap(parentWorkflow, 'Run same-name child auto workflow', '/project', {
       projectCwd: '/project',
@@ -878,6 +880,359 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(
       existsSync(join(projectDir, '.takt', 'outside', 'operations', 'journal.json')),
     ).toBe(false);
+  });
+
+  it('Given a validated workflow_call child continuation, When bootstrap creates a new run, Then invocation identity remains bound to the source run', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir);
+    const childWorkflow: WorkflowConfig = {
+      name: 'child',
+      initialStep: 'review',
+      maxSteps: 5,
+      steps: [{ name: 'review', personaDisplayName: 'Reviewer', instruction: 'Review' }],
+    };
+    const parentWorkflow: WorkflowConfig = {
+      name: 'parent',
+      initialStep: 'delegate',
+      maxSteps: 5,
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: childWorkflow.name,
+        personaDisplayName: 'Delegate',
+        instruction: '',
+      }],
+    };
+    issueWorkflowOpaqueRef(parentWorkflow, 'project:sha256:parent-continuation');
+    issueWorkflowOpaqueRef(childWorkflow, 'builtin:sha256:child-continuation');
+    const resumePoint: WorkflowResumePoint = {
+      version: 1,
+      stack: [
+        {
+          workflow: parentWorkflow.name,
+          workflow_ref: 'project:sha256:parent-continuation',
+          step: 'delegate',
+          kind: 'workflow_call',
+          step_iterations: { delegate: 2 },
+        },
+        {
+          workflow: childWorkflow.name,
+          workflow_ref: 'builtin:sha256:child-continuation',
+          step: 'review',
+          kind: 'agent',
+          step_iterations: { review: 1 },
+        },
+      ],
+      iteration: 3,
+      elapsed_ms: 100,
+    };
+
+    const bootstrap = await createWorkflowExecutionBootstrap(
+      parentWorkflow,
+      'Resume workflow call',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'new-output-run',
+        resumePoint,
+        resumeSource: {
+          sourceRunSlug: '20260524-source-run',
+          resumeMode: 'retry',
+        },
+        workflowCallResolver: () => childWorkflow,
+      },
+    );
+
+    expect(bootstrap.runSlug).toBe('new-output-run');
+    expect(bootstrap.workflowCallContinuation).toEqual({
+      invocationRunId: '20260524-source-run',
+    });
+  });
+
+  it('Given a single-frame workflow_call retry, When bootstrap creates a new run, Then it does not inherit the prior invocation identity', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir);
+    const parentWorkflow: WorkflowConfig = {
+      name: 'parent',
+      initialStep: 'delegate',
+      maxSteps: 5,
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'child',
+        personaDisplayName: 'Delegate',
+        instruction: '',
+      }],
+    };
+
+    const bootstrap = await createWorkflowExecutionBootstrap(
+      parentWorkflow,
+      'Retry workflow call',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'new-retry-run',
+        resumePoint: {
+          version: 1,
+          stack: [{
+            workflow: parentWorkflow.name,
+            step: 'delegate',
+            kind: 'workflow_call',
+            step_iterations: { delegate: 2 },
+          }],
+          iteration: 3,
+          elapsed_ms: 100,
+        },
+        resumeSource: {
+          sourceRunSlug: '20260524-source-run',
+          resumeMode: 'retry',
+        },
+        workflowCallResolver: () => null,
+      },
+    );
+
+    expect(bootstrap.runSlug).toBe('new-retry-run');
+    expect(bootstrap.workflowCallContinuation).toBeUndefined();
+  });
+
+  it('Given an explicit start step outside a stale workflow_call stack, When bootstrap runs, Then it ignores the unrelated continuation', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir);
+    const childWorkflow: WorkflowConfig = {
+      name: 'child',
+      initialStep: 'review',
+      maxSteps: 5,
+      steps: [{ name: 'review', personaDisplayName: 'Reviewer', instruction: 'Review' }],
+    };
+    const parentWorkflow: WorkflowConfig = {
+      name: 'parent',
+      initialStep: 'delegate',
+      maxSteps: 5,
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: childWorkflow.name,
+        personaDisplayName: 'Delegate',
+        instruction: '',
+      }, {
+        name: 'fix',
+        personaDisplayName: 'Fixer',
+        instruction: 'Fix',
+      }],
+    };
+    const workflowCallResolver = vi.fn(() => childWorkflow);
+
+    const bootstrap = await createWorkflowExecutionBootstrap(
+      parentWorkflow,
+      'Resume explicit fix target',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'new-fix-run',
+        startStep: 'fix',
+        resumePoint: {
+          version: 1,
+          stack: [{
+            workflow: parentWorkflow.name,
+            step: 'delegate',
+            kind: 'workflow_call',
+            step_iterations: { delegate: 2 },
+          }, {
+            workflow: 'stale-child',
+            step: 'review',
+            kind: 'agent',
+          }],
+          iteration: 3,
+          elapsed_ms: 100,
+        },
+        resumeSource: {
+          sourceRunSlug: '20260524-source-run',
+          resumeMode: 'retry',
+        },
+        workflowCallResolver,
+      },
+    );
+
+    expect(bootstrap.workflowCallContinuation).toBeUndefined();
+    expect(workflowCallResolver).not.toHaveBeenCalled();
+  });
+
+  it('Given a persisted child frame with a different workflow name, When bootstrap resolves it, Then it fails loudly', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir);
+    const childWorkflow: WorkflowConfig = {
+      name: 'child',
+      initialStep: 'review',
+      maxSteps: 5,
+      steps: [{ name: 'review', personaDisplayName: 'Reviewer', instruction: 'Review' }],
+    };
+    const parentWorkflow: WorkflowConfig = {
+      name: 'parent',
+      initialStep: 'delegate',
+      maxSteps: 5,
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: childWorkflow.name,
+        personaDisplayName: 'Delegate',
+        instruction: '',
+      }],
+    };
+
+    await expect(createWorkflowExecutionBootstrap(
+      parentWorkflow,
+      'Resume unverified workflow call',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'new-unverified-run',
+        startStep: 'delegate',
+        resumePoint: {
+          version: 1,
+          stack: [
+            {
+              workflow: parentWorkflow.name,
+              step: 'delegate',
+              kind: 'workflow_call',
+              step_iterations: { delegate: 2 },
+            },
+            {
+              workflow: 'different-child',
+              step: 'review',
+              kind: 'agent',
+              step_iterations: { review: 1 },
+            },
+          ],
+          iteration: 3,
+          elapsed_ms: 100,
+        },
+        resumeSource: {
+          sourceRunSlug: '20260524-source-run',
+          resumeMode: 'retry',
+        },
+        workflowCallResolver: () => childWorkflow,
+      },
+    )).rejects.toThrow(
+      /Persisted workflow_call continuation.*child workflow name "different-child".*"child"/s,
+    );
+  });
+
+  it('Given a persisted child frame with a different workflow ref, When bootstrap resolves it, Then it fails loudly', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir);
+    const childWorkflow: WorkflowConfig = {
+      name: 'child',
+      initialStep: 'review',
+      maxSteps: 5,
+      steps: [{ name: 'review', personaDisplayName: 'Reviewer', instruction: 'Review' }],
+    };
+    const parentWorkflow: WorkflowConfig = {
+      name: 'parent',
+      initialStep: 'delegate',
+      maxSteps: 5,
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: childWorkflow.name,
+        personaDisplayName: 'Delegate',
+        instruction: '',
+      }],
+    };
+    issueWorkflowOpaqueRef(childWorkflow, 'builtin:sha256:resolved-child');
+
+    await expect(createWorkflowExecutionBootstrap(
+      parentWorkflow,
+      'Resume mismatched child ref',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'new-ref-mismatch-run',
+        resumePoint: {
+          version: 1,
+          stack: [{
+            workflow: parentWorkflow.name,
+            step: 'delegate',
+            kind: 'workflow_call',
+            step_iterations: { delegate: 2 },
+          }, {
+            workflow: childWorkflow.name,
+            workflow_ref: 'builtin:sha256:persisted-child',
+            step: 'review',
+            kind: 'agent',
+          }],
+          iteration: 3,
+          elapsed_ms: 100,
+        },
+        resumeSource: {
+          sourceRunSlug: '20260524-source-run',
+          resumeMode: 'retry',
+        },
+        workflowCallResolver: () => childWorkflow,
+      },
+    )).rejects.toThrow(
+      /Persisted workflow_call continuation.*child workflow reference.*does not match/s,
+    );
+  });
+
+  it('Given a child resume frame with a mismatched step kind, When bootstrap runs, Then it fails loudly', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir);
+    const childWorkflow: WorkflowConfig = {
+      name: 'child',
+      initialStep: 'review',
+      maxSteps: 5,
+      steps: [{ name: 'review', personaDisplayName: 'Reviewer', instruction: 'Review' }],
+    };
+    const parentWorkflow: WorkflowConfig = {
+      name: 'parent',
+      initialStep: 'delegate',
+      maxSteps: 5,
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: childWorkflow.name,
+        personaDisplayName: 'Delegate',
+        instruction: '',
+      }],
+    };
+
+    await expect(createWorkflowExecutionBootstrap(
+      parentWorkflow,
+      'Resume mismatched child kind',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'new-kind-mismatch-run',
+        resumePoint: {
+          version: 1,
+          stack: [{
+            workflow: parentWorkflow.name,
+            step: 'delegate',
+            kind: 'workflow_call',
+            step_iterations: { delegate: 2 },
+          }, {
+            workflow: childWorkflow.name,
+            step: 'review',
+            kind: 'system',
+          }],
+          iteration: 3,
+          elapsed_ms: 100,
+        },
+        resumeSource: {
+          sourceRunSlug: '20260524-source-run',
+          resumeMode: 'retry',
+        },
+        workflowCallResolver: () => childWorkflow,
+      },
+    )).rejects.toThrow(
+      /Persisted workflow_call continuation.*child step kind "system".*"agent"/s,
+    );
   });
 
   it('Given auto requeue reuses the source run slug, When bootstrap resumes, Then it skips snapshot inheritance', async () => {

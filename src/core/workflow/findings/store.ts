@@ -11,6 +11,7 @@ import type { FindingLedger, RawFinding } from './types.js';
 import { normalizeProvisionalInterpretationEpochs } from './interpretation-wal.js';
 import { parseFindingLedger, parseRawFindings } from './schemas.js';
 import { assertLedgerIdAllocationInvariant } from './ledger-validation.js';
+import { assertReviewerAnomalyAcknowledgementLedgerInvariant } from './reviewer-anomaly-acknowledgement-invariant.js';
 import { writeReportFile } from '../report-writer.js';
 
 interface FindingLedgerStoreOptions {
@@ -365,14 +366,17 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
   const rawFindingsDir = resolveInside(ledgerRoot, options.rawFindingsPath);
 
   const loadLedgerImpl = (): FindingLedger => {
-    return normalizeProvisionalInterpretationEpochs(
+    const ledger = normalizeProvisionalInterpretationEpochs(
       readProjectLedgerOrEmpty(ledgerRoot, ledgerPath, options.workflowName),
     );
+    assertReviewerAnomalyAcknowledgementLedgerInvariant(ledger);
+    return ledger;
   };
   const normalizeLedger = (ledger: FindingLedger): FindingLedger => {
     const parsedLedger = parseFindingLedger(normalizeProvisionalInterpretationEpochs(ledger));
     assertLedgerWorkflowName(parsedLedger, options.workflowName, ledgerPath);
     assertLedgerIdAllocationInvariant(parsedLedger);
+    assertReviewerAnomalyAcknowledgementLedgerInvariant(parsedLedger);
     return parsedLedger;
   };
   const normalizeMutation = <Result>(mutation: FindingLedgerMutation<Result>): FindingLedgerMutation<Result> => ({

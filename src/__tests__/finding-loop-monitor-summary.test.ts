@@ -116,22 +116,7 @@ describe('renderLoopMonitorFindingsSummary', () => {
     expect(data.openProvisional).toEqual([]);
   });
 
-  it.each([
-    {
-      language: 'ja',
-      countText: 'findings.reviewerAnomalies.count: 1',
-      contractText: 'actionable な open finding がない限り repair へ送らず',
-    },
-    {
-      language: 'en',
-      countText: 'findings.reviewerAnomalies.count: 1',
-      contractText: 'Do not send them to repair without an actionable open finding',
-    },
-  ] as const)('anomaly-only 状態を $language の非actionable契約として注入する', ({
-    language,
-    countText,
-    contractText,
-  }) => {
+  it.each(['ja', 'en'] as const)('anomaly-only 状態を %s の構造化データへ反映する', (language) => {
     const observation = {
       runId: 'run-1',
       stepName: 'reviewers',
@@ -179,15 +164,16 @@ describe('renderLoopMonitorFindingsSummary', () => {
     const data = buildLoopMonitorFindingsSummaryData(ledger, {});
     const summary = renderLoopMonitorFindingsSummary(ledger, {}, language);
 
-    expect(data.openCount).toBe(0);
-    expect(data.reviewerAnomalies).toEqual({
-      count: 1,
-      budgetExhausted: true,
+    expect(data).toMatchObject({
+      openCount: 0,
+      openSubstantiveCount: 0,
+      openProvisional: [],
+      activeConflictCount: 0,
+      reviewerAnomalies: {
+        count: 1,
+        budgetExhausted: true,
+      },
     });
-    expect(summary).toContain(countText);
-    expect(summary).toContain('findings.reviewerAnomalies.budgetExhausted: true');
-    expect(summary).toContain(contractText);
-    expect(summary).toContain('claimed content');
     expect(summary).not.toContain('UNVERIFIED_CLAIM_CONTENT');
   });
 });

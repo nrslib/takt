@@ -68,9 +68,10 @@ export interface FindingContractStopBudgetConfig {
  * review-integrity 予算（review-integrity requirement）の per-workflow 設定。二系統
  * 台帳（review-integrity protocol）で全指摘が reviewer anomaly に隔離された run は product gate
  * が空になり「即 COMPLETE」で実質レビューされずに通り得た。これを防ぐため、
- * 未昇格 anomaly が残る限り COMPLETE を許さず再レビューへ送る。その再レビューの
- * 回数上限がこれ — 有限回で正しい引用による promote も anomaly 解消もできなければ
- * ワークフローが有限停止を判断できるようにする。省略時は
+ * 有効な acknowledgement が無い anomaly が残る限り COMPLETE を許さない。その
+ * anomaly を伴うレビューの回数上限がこれ — 有限回で正しい引用による promote、
+ * anomaly 解消、または二段承認による acknowledgement ができなければワークフローが
+ * 有限停止を判断できるようにする。省略時は
  * review-integrity.ts の DEFAULT_REVIEW_INTEGRITY_BUDGET が補う。
  */
 export interface FindingContractReviewBudgetConfig {
@@ -347,18 +348,44 @@ export interface FindingLedgerStopBudgetState {
 
 /**
  * review-integrity 予算（review-integrity requirement）のラウンド跨ぎ累積状態。
- * 未昇格 reviewer anomaly が残る限り product gate とは別の review-integrity gate が
- * COMPLETE を拒否し再レビューへ送る — その再レビュー回数の消費を stop budget と
- * 同じ round-marker 方式（適用済みマーカー集合。crash/replay 冪等）で追跡する。
+ * reviewer anomaly を伴うレビュー回数の消費を stop budget と同じ round-marker
+ * 方式（適用済みマーカー集合。crash/replay 冪等）で追跡する。
  * roundMarkers は「未昇格 anomaly が残ったまま完了した findings-manager
  * ラウンド」の一意マーカー集合で、上限（DEFAULT_REVIEW_INTEGRITY_BUDGET または
- * finding_contract.review_budget）に達したら exhausted=true になり、builtin は
- * 再レビューではなく要件を維持した再計画へルーティングする。
+ * finding_contract.review_budget）に達したら exhausted=true になる。この値は
+ * 監査・ルーティング用であり、shared final gate は単独では再計画に使わない。
  */
 export interface FindingLedgerReviewIntegrityState {
   roundMarkers: string[];
   firstRoundAt: string;
   exhausted: boolean;
+}
+
+export interface ReviewerAnomalyApprovalReference {
+  stepName: string;
+  matchedRuleIndex: number;
+  condition: string;
+  observedAt: FindingObservation;
+}
+
+export const REVIEWER_ANOMALY_ACKNOWLEDGEMENT_DOMAIN = 'takt.reviewer-anomaly-acknowledgement' as const;
+
+export interface ReviewerAnomalyAcknowledgement {
+  domain: typeof REVIEWER_ANOMALY_ACKNOWLEDGEMENT_DOMAIN;
+  version: 1;
+  id: string;
+  anomalyStableKey: string;
+  anomalyEvidenceHash: string;
+  reviewScopeSnapshotId: string;
+  gate: {
+    invocationId: string;
+    issuerWorkflowRef: string;
+    workflowName: string;
+    callStepName: string;
+    startedAt: FindingObservation;
+    completedAt: FindingObservation;
+  };
+  approvals: [ReviewerAnomalyApprovalReference, ReviewerAnomalyApprovalReference];
 }
 
 export interface FindingLedger {
@@ -398,6 +425,13 @@ export interface FindingLedger {
    * optional なので既存 v1 ledger は migration なしで読める。
    */
   reviewerAnomalies?: ReviewerAnomalyEntry[];
+  /**
+   * 商用二段 final gate が、開始時点で固定した reviewer anomaly の証拠状態を
+   * 承認した監査履歴。追記専用であり、anomaly の再観測や review scope の変更で
+   * 現在有効でなくなっても削除しない。optional のため既存 v1 ledger は
+   * migration なしで fail-closed に読める。
+   */
+  reviewerAnomalyAcknowledgements?: ReviewerAnomalyAcknowledgement[];
   /**
    * review-integrity 予算（review-integrity requirement）の消費状況。未昇格 reviewer
    * anomaly が残ったまま完了した findings-manager ラウンド数を stop budget と
@@ -1105,22 +1139,20 @@ export interface FindingsRuleContext {
     count: number;
   };
   /**
-   * Audit-only visibility for the review-integrity side of the ledger.
-   * Counts reviewer-anomaly entries (unverifiable location/evidence claims —
-   * quote-mismatch or stale-snapshot) that have not yet been promoted to a
-   * product finding. Never part of the blocking set: this bucket lives in a
-   * separate ledger array (reviewerAnomalies) from `findings`, so it cannot
-   * affect `open.count` / `provisional.count` / the COMPLETE gate by
-   * construction. Workflow rules may still read it for reporting/audit.
+   * review-integrity 側の可視化。count は既存どおり未昇格 anomaly の総数で、
+   * acknowledgement の有無では変わらない。現在の snapshot と evidence hash に
+   * 対して有効な acknowledgement を除いた件数は outstanding、除かれた件数は
+   * acknowledged。product finding の open/provisional count とは独立している。
    */
   reviewerAnomalies: {
     count: number;
+    outstanding: number;
+    acknowledged: number;
     /**
-     * review-integrity 予算（review-integrity requirement）が尽きたか。未昇格 anomaly が
-     * 残る限り product gate とは別に COMPLETE を拒否し再レビューへ送るが、有限回で
-     * 補完（正しい引用による promote / anomaly 解消）できなければ true になり、
-     * builtin は再レビューではなく要件を維持した再計画へルーティングする。
-     * その反復の有限停止は loop monitor が担う。
+     * review-integrity 予算（review-integrity requirement）が尽きたか。有限回で
+     * 補完（正しい引用による promote / anomaly 解消 / 二段承認による
+     * acknowledgement）できなければ true になる。shared final gate はこの値だけでは
+     * 再計画せず、承認不能時の有限停止は loop monitor が担う。
      */
     budgetExhausted: boolean;
   };

@@ -27,6 +27,7 @@ import {
   INTERPRETATION_STAGES,
   RAW_DECISION_KINDS,
   RAW_FINDING_EVIDENCE_KINDS,
+  REVIEWER_ANOMALY_ACKNOWLEDGEMENT_DOMAIN,
   REVIEWER_ANOMALY_KINDS,
 } from './finding-types.js';
 
@@ -120,6 +121,34 @@ export const ReviewerAnomalyEntrySchema = z.object({
   lastObserved: FindingObservationSchema,
   occurrences: z.number().int().positive(),
   promotedFindingId: nonEmptyString.optional(),
+}).strict();
+
+export const ReviewerAnomalyApprovalReferenceSchema = z.object({
+  stepName: nonEmptyString,
+  matchedRuleIndex: z.number().int().min(0),
+  condition: nonEmptyString,
+  observedAt: FindingObservationSchema,
+}).strict();
+
+export const ReviewerAnomalyAcknowledgementSchema = z.object({
+  domain: z.literal(REVIEWER_ANOMALY_ACKNOWLEDGEMENT_DOMAIN),
+  version: z.literal(1),
+  id: z.string().regex(/^[a-f0-9]{64}$/),
+  anomalyStableKey: nonEmptyString,
+  anomalyEvidenceHash: nonEmptyString,
+  reviewScopeSnapshotId: nonEmptyString,
+  gate: z.object({
+    invocationId: nonEmptyString,
+    issuerWorkflowRef: z.string().regex(/^builtin:sha256:[a-f0-9]{64}$/),
+    workflowName: nonEmptyString,
+    callStepName: nonEmptyString,
+    startedAt: FindingObservationSchema,
+    completedAt: FindingObservationSchema,
+  }).strict(),
+  approvals: z.tuple([
+    ReviewerAnomalyApprovalReferenceSchema,
+    ReviewerAnomalyApprovalReferenceSchema,
+  ]),
 }).strict();
 
 /** provisional メタデータ。ledger v1 の optional field なので後方互換。 */
@@ -441,6 +470,7 @@ export const FindingLedgerSchema = z.object({
   // 二系統台帳（review-integrity protocol）の review-integrity 側。optional なので既存
   // v1 ledger は migration なしで読める。
   reviewerAnomalies: z.array(ReviewerAnomalyEntrySchema).optional(),
+  reviewerAnomalyAcknowledgements: z.array(ReviewerAnomalyAcknowledgementSchema).optional(),
   // review-integrity 予算（review-integrity requirement）。optional。
   reviewIntegrity: FindingLedgerReviewIntegrityStateSchema.optional(),
 }).strict();

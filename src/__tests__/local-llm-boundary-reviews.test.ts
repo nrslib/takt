@@ -34,6 +34,12 @@ interface RawStep {
 }
 
 interface RawWorkflow {
+  subworkflow?: {
+    attestation?: {
+      kind: string;
+      approval_steps: string[];
+    };
+  };
   loop_monitors?: Array<{
     cycle: string[];
     threshold: number;
@@ -365,9 +371,9 @@ describe('takt-default-localllm boundary reviews', () => {
     const finalGate = getRawStep(rawWorkflow, 'final-gate');
 
     expect(transitionFor(reviewers, 'all(')).toBe('boundary-reviewers');
-    expect(transitionFor(reviewers, 'reviewerAnomalies.count > 0')).toBe('local-review-integrity-gate');
+    expect(transitionFor(reviewers, 'reviewerAnomalies.outstanding > 0')).toBe('local-review-integrity-gate');
     expect(reviewers.rules?.find((rule) => rule.condition.includes('all('))?.condition)
-      .toContain('reviewerAnomalies.count == 0');
+      .toContain('reviewerAnomalies.outstanding == 0');
     expect(transitionFor(localIntegrityGate, 'COMPLETE')).toBe('boundary-reviewers');
     expect(transitionFor(localIntegrityGate, 'needs_review')).toBe('reviewers');
     expect(transitionFor(boundary, 'all(')).toBe('final-gate');
@@ -419,6 +425,24 @@ describe('takt-default-localllm boundary reviews', () => {
       expect(step?.knowledgeContents).toEqual([
         expect.stringContaining(expectedStep.knowledgeHeading),
       ]);
+    }
+  });
+
+  it.each(['ja', 'en'] as const)('%s の共有 final gate は二段承認 attestation を持ち、anomaly budget だけでは replan しない', (locale) => {
+    const rawWorkflow = readRawWorkflow(locale, 'merge-readiness-finding-contract-final-gate');
+    const subworkflow = rawWorkflow.subworkflow;
+    const mergeReadiness = getRawStep(rawWorkflow, 'merge-readiness-review');
+    const supervise = getRawStep(rawWorkflow, 'supervise');
+
+    expect(subworkflow?.attestation).toEqual({
+      kind: 'reviewer_anomaly_acknowledgement',
+      approval_steps: ['merge-readiness-review', 'supervise'],
+    });
+    expect(transitionFor(mergeReadiness, 'approved &&')).toBe('supervise');
+    expect(transitionFor(supervise, 'approved &&')).toBe('COMPLETE');
+    for (const step of [mergeReadiness, supervise]) {
+      expect(step.rules?.some((rule) => rule.condition.includes('reviewerAnomalies.budgetExhausted')))
+        .toBe(false);
     }
   });
 

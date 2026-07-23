@@ -50,6 +50,12 @@ function normalizeSubworkflowConfig(
     visibility: raw.visibility,
     requiresFindingContract: raw.requires_finding_contract,
     returns: raw.returns,
+    attestation: raw.attestation === undefined
+      ? undefined
+      : {
+          kind: raw.attestation.kind,
+          approvalSteps: raw.attestation.approval_steps,
+        },
     params: raw.params
       ? Object.fromEntries(
         Object.entries(raw.params).map(([name, param]) => [

@@ -10,7 +10,8 @@ function stateWithProvisionalFinding(): WorkflowState {
     findings: {
       open: { count: 1, bySeverity: { medium: 1 }, items: [] }, resolved: { count: 0 }, waived: { count: 0 },
       invalidated: { count: 0 }, superseded: { count: 0 }, provisional: { count: 1, fixpoint: false, items: [] },
-      rounds: { budgetExhausted: false }, reviewerAnomalies: { count: 0, budgetExhausted: false },
+      rounds: { budgetExhausted: false },
+      reviewerAnomalies: { count: 0, outstanding: 0, acknowledged: 0, budgetExhausted: false },
       conflicts: { count: 0, items: [], unadjudicated: { count: 0 } },
     },
   } as WorkflowState;

@@ -246,6 +246,7 @@ async function executeWorkflowInternal(
       resumePoint: options.resumePoint,
       resumeSource: options.resumeSource,
       operationJournal: bootstrap.operationJournal,
+      workflowCallContinuation: bootstrap.workflowCallContinuation,
       reportDirName: bootstrap.runSlug,
       taskPrefix: options.taskPrefix,
       taskColorIndex: options.taskColorIndex,

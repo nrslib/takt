@@ -1,8 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
 import type { AgentResponse, FindingContractConfig, FindingLedger, WorkflowConfig, WorkflowState, WorkflowCallStep } from '../core/models/index.js';
-import type { WorkflowCallChildEngine, WorkflowRunResult } from '../core/workflow/types.js';
+import type {
+  WorkflowCallChildEngine,
+  WorkflowEngineOptions,
+  WorkflowRunResult,
+} from '../core/workflow/types.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
+import { getReviewerAnomalyCallCapability } from '../core/workflow/reviewer-anomaly-capability.js';
+import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import { getBuiltinWorkflowsDir } from '../infra/config/paths.js';
+import { loadWorkflowFileWithResolutionOptions } from '../infra/config/loaders/workflowResolvedLoader.js';
+import { resolveWorkflowCallContinuation } from '../core/workflow/run/resume-point.js';
+import { StateManager } from '../core/workflow/engine/state-manager.js';
 
 function makeResponse(overrides: Partial<AgentResponse> = {}): AgentResponse {
   return {
@@ -14,10 +24,15 @@ function makeResponse(overrides: Partial<AgentResponse> = {}): AgentResponse {
   };
 }
 
-function makeState(workflowName: string, status: WorkflowState['status'], iteration: number): WorkflowState {
+function makeState(
+  workflowName: string,
+  status: WorkflowState['status'],
+  iteration: number,
+  activeStepName?: string,
+): WorkflowState {
   return {
     workflowName,
-    currentStep: 'review',
+    currentStep: activeStepName ?? 'review',
     iteration,
     stepOutputs: new Map(),
     structuredOutputs: new Map(),
@@ -25,7 +40,9 @@ function makeState(workflowName: string, status: WorkflowState['status'], iterat
     effectResults: new Map(),
     userInputs: [],
     personaSessions: new Map(),
-    stepIterations: new Map(),
+    stepIterations: activeStepName === undefined
+      ? new Map()
+      : new Map([[activeStepName, 1]]),
     status,
   };
 }
@@ -109,7 +126,7 @@ describe('WorkflowCallExecutor', () => {
       personaDisplayName: 'delegate',
       instruction: '',
     } as WorkflowCallStep;
-    const state = makeState(parentConfig.name, 'running', 2);
+    const state = makeState(parentConfig.name, 'running', 2, step.name);
     state.stepIterations.set('delegate', 3);
     const childState = makeState(childConfig.name, 'completed', 4);
     childState.lastOutput = makeResponse({ content: 'child complete' });
@@ -260,7 +277,7 @@ describe('WorkflowCallExecutor', () => {
       personaDisplayName: 'delegate',
       instruction: '',
     } as WorkflowCallStep;
-    const state = makeState(parentConfig.name, 'running', 2);
+    const state = makeState(parentConfig.name, 'running', 2, step.name);
     const childState = makeState(childConfig.name, 'aborted', 4);
     childState.lastOutput = makeResponse({ content: 'stale child success' });
 
@@ -327,7 +344,7 @@ describe('WorkflowCallExecutor', () => {
       personaDisplayName: 'delegate',
       instruction: '',
     } as WorkflowCallStep;
-    const state = makeState(parentConfig.name, 'running', 2);
+    const state = makeState(parentConfig.name, 'running', 2, step.name);
     const childState = makeState(childConfig.name, 'completed', 3);
     childState.lastOutput = makeResponse({ content: 'child complete' });
 
@@ -387,7 +404,7 @@ describe('WorkflowCallExecutor', () => {
       personaDisplayName: 'delegate',
       instruction: '',
     } as WorkflowCallStep;
-    const state = makeState(parentConfig.name, 'running', 2);
+    const state = makeState(parentConfig.name, 'running', 2, step.name);
     const childState = makeState(childConfig.name, 'completed', 3);
     childState.lastOutput = makeResponse({ content: 'child requested retry_plan' });
 
@@ -450,7 +467,7 @@ describe('WorkflowCallExecutor', () => {
       personaDisplayName: 'delegate',
       instruction: '',
     } as WorkflowCallStep;
-    const state = makeState(parentConfig.name, 'running', 2);
+    const state = makeState(parentConfig.name, 'running', 2, step.name);
     const childState = makeState(childConfig.name, 'completed', 3);
     childState.lastOutput = makeResponse({ content: 'child complete' });
 
@@ -498,6 +515,390 @@ describe('WorkflowCallExecutor', () => {
     });
   });
 
+  it('通常 retry は source run を継承せず、新しい出力 run の invocation ID で capability を発行する', async () => {
+    const projectCwd = process.cwd();
+    const childConfig = loadWorkflowFileWithResolutionOptions(
+      `${getBuiltinWorkflowsDir('ja')}/merge-readiness-finding-contract-final-gate.yaml`,
+      {
+        projectCwd,
+        lookupCwd: projectCwd,
+        source: 'builtin',
+      },
+    );
+    const step = {
+      name: 'final-gate',
+      call: childConfig.name,
+      personaDisplayName: 'final-gate',
+      instruction: '',
+    } as WorkflowCallStep;
+    const parentConfig = {
+      name: 'parent',
+      initialStep: step.name,
+      maxSteps: 10,
+      steps: [step],
+    } as WorkflowConfig;
+    const state = makeState(parentConfig.name, 'running', 2, step.name);
+    const childState = makeState(childConfig.name, 'completed', 4);
+    const createEngine = vi.fn().mockReturnValue(createChildEngine({ state: childState }));
+    const executor = new WorkflowCallExecutor({
+      getConfig: () => parentConfig,
+      getOptions: () => ({
+        projectCwd,
+        reportDirName: 'run',
+        resumeSource: {
+          sourceRunSlug: 'source-run',
+          resumeMode: 'retry',
+        },
+        workflowCallContinuation: {
+          invocationRunId: 'source-run',
+        } as unknown as NonNullable<WorkflowEngineOptions['workflowCallContinuation']>,
+        resumePoint: {
+          version: 1,
+          stack: [buildWorkflowResumePointEntry(
+            parentConfig,
+            step.name,
+            'workflow_call',
+            new Map([[step.name, 1]]),
+          )],
+          iteration: 2,
+          elapsed_ms: 100,
+        },
+      }),
+      getMaxSteps: () => 10,
+      updateMaxSteps: vi.fn(),
+      getCwd: () => projectCwd,
+      projectCwd,
+      task: 'task',
+      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      resumeStackPrefix: [],
+      runPaths: {
+        slug: 'run',
+      } as never,
+      resolveWorkflowCall: vi.fn(),
+      createEngine,
+      emit: vi.fn(),
+      state,
+      setActiveResumePoint: vi.fn(),
+      refreshFindingsState: vi.fn(),
+      findingContract: FAKE_FINDING_CONTRACT,
+      findingLedgerStore: createFakeLedgerStore(),
+    });
+
+    await executor.execute({
+      step,
+      childWorkflow: childConfig,
+      childProviderInfo: { provider: 'mock', model: 'test-model' },
+      parentProviderOptions: undefined,
+      personaProviders: undefined,
+    }, { syncParentState: true });
+
+    const childOptions = createEngine.mock.calls[0]?.[3] as object;
+    const capability = getReviewerAnomalyCallCapability(childOptions);
+    expect(capability).toMatchObject({
+      kind: 'reviewer_anomaly_acknowledgement',
+      approvalSteps: ['merge-readiness-review', 'supervise'],
+      evidenceReferences: [],
+      gate: {
+        invocationId: 'run:final-gate#1',
+      },
+    });
+    expect(Object.isFrozen(capability)).toBe(true);
+    expect(getReviewerAnomalyCallCapability({ ...childOptions })).toBeUndefined();
+    const descriptorCopy = {};
+    for (const symbol of Object.getOwnPropertySymbols(childOptions)) {
+      const descriptor = Object.getOwnPropertyDescriptor(childOptions, symbol);
+      if (descriptor !== undefined) {
+        Object.defineProperty(descriptorCopy, symbol, descriptor);
+      }
+    }
+    expect(getReviewerAnomalyCallCapability(descriptorCopy)).toBeUndefined();
+  });
+
+  it('StateManager が保存 invocation を復元後に resolver child が変わると namespace 再利用前に失敗する', async () => {
+    const projectCwd = process.cwd();
+    const validatedChild = loadWorkflowFileWithResolutionOptions(
+      `${getBuiltinWorkflowsDir('ja')}/merge-readiness-finding-contract-final-gate.yaml`,
+      {
+        projectCwd,
+        lookupCwd: projectCwd,
+        source: 'builtin',
+      },
+    );
+    const replacementChild = loadWorkflowFileWithResolutionOptions(
+      `${getBuiltinWorkflowsDir('en')}/merge-readiness-finding-contract-final-gate.yaml`,
+      {
+        projectCwd,
+        lookupCwd: projectCwd,
+        source: 'builtin',
+      },
+    );
+    const step = {
+      name: 'final-gate',
+      call: validatedChild.name,
+      personaDisplayName: 'final-gate',
+      instruction: '',
+    } as WorkflowCallStep;
+    const parentConfig = {
+      name: 'parent',
+      initialStep: step.name,
+      maxSteps: 10,
+      steps: [step],
+    } as WorkflowConfig;
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        buildWorkflowResumePointEntry(
+          parentConfig,
+          step.name,
+          'workflow_call',
+          new Map([[step.name, 3]]),
+        ),
+        buildWorkflowResumePointEntry(validatedChild, validatedChild.initialStep, 'agent'),
+      ],
+      iteration: 2,
+      elapsed_ms: 100,
+    };
+    const continuation = resolveWorkflowCallContinuation({
+      workflow: parentConfig,
+      resumePoint,
+      invocationRunId: 'source-run',
+      resolveWorkflowCall: () => validatedChild,
+    });
+    expect(continuation).toBeDefined();
+    const stateManager = new StateManager(parentConfig, {
+      projectCwd,
+      startStep: step.name,
+      resumePoint,
+      workflowCallContinuation: continuation,
+      initialIteration: resumePoint.iteration,
+    });
+    expect(stateManager.state.stepIterations.get(step.name)).toBe(2);
+    stateManager.state.iteration += 1;
+    expect(stateManager.incrementStepIteration(step.name)).toBe(3);
+    const state = stateManager.state;
+    const childState = makeState(replacementChild.name, 'completed', 4);
+    const createEngine = vi.fn().mockReturnValue(createChildEngine({ state: childState }));
+    const executor = new WorkflowCallExecutor({
+      getConfig: () => parentConfig,
+      getOptions: () => ({
+        projectCwd,
+        reportDirName: 'run',
+        resumePoint,
+        workflowCallContinuation: continuation,
+      }),
+      getMaxSteps: () => 10,
+      updateMaxSteps: vi.fn(),
+      getCwd: () => projectCwd,
+      projectCwd,
+      task: 'task',
+      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      resumeStackPrefix: [],
+      runPaths: {
+        slug: 'run',
+      } as never,
+      resolveWorkflowCall: vi.fn(),
+      createEngine,
+      emit: vi.fn(),
+      state,
+      setActiveResumePoint: vi.fn(),
+      refreshFindingsState: vi.fn(),
+      findingContract: FAKE_FINDING_CONTRACT,
+      findingLedgerStore: createFakeLedgerStore(),
+    });
+
+    await expect(executor.execute({
+      step,
+      childWorkflow: replacementChild,
+      childProviderInfo: { provider: 'mock', model: 'test-model' },
+      parentProviderOptions: undefined,
+      personaProviders: undefined,
+    }, { syncParentState: true })).rejects.toThrow(
+      /resolved to a different child while resuming a persisted invocation.*refusing to reuse its iteration and finding namespace/s,
+    );
+
+    expect(state.stepIterations.get(step.name)).toBe(3);
+    expect(createEngine).not.toHaveBeenCalled();
+  });
+
+  it('StateManager が保存 invocation を復元後に child step kind が変わると namespace 発行前に失敗する', async () => {
+    const projectCwd = process.cwd();
+    const validatedChild = {
+      name: 'child',
+      initialStep: 'review',
+      maxSteps: 10,
+      steps: [{
+        name: 'review',
+        personaDisplayName: 'review',
+        instruction: '',
+      }],
+    } as WorkflowConfig;
+    const replacementChild = {
+      ...validatedChild,
+      steps: [{
+        name: 'review',
+        kind: 'system',
+        action: 'report',
+      }],
+    } as WorkflowConfig;
+    const step = {
+      name: 'delegate',
+      kind: 'workflow_call',
+      call: validatedChild.name,
+      personaDisplayName: 'delegate',
+      instruction: '',
+    } as WorkflowCallStep;
+    const parentConfig = {
+      name: 'parent',
+      initialStep: step.name,
+      maxSteps: 10,
+      steps: [step],
+    } as WorkflowConfig;
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        buildWorkflowResumePointEntry(
+          parentConfig,
+          step.name,
+          'workflow_call',
+          new Map([[step.name, 3]]),
+        ),
+        buildWorkflowResumePointEntry(validatedChild, validatedChild.initialStep, 'agent'),
+      ],
+      iteration: 2,
+      elapsed_ms: 100,
+    };
+    const continuation = resolveWorkflowCallContinuation({
+      workflow: parentConfig,
+      resumePoint,
+      invocationRunId: 'source-run',
+      resolveWorkflowCall: () => validatedChild,
+    });
+    expect(continuation).toBeDefined();
+    const stateManager = new StateManager(parentConfig, {
+      projectCwd,
+      startStep: step.name,
+      resumePoint,
+      workflowCallContinuation: continuation,
+      initialIteration: resumePoint.iteration,
+    });
+    expect(stateManager.state.stepIterations.get(step.name)).toBe(2);
+    stateManager.state.iteration += 1;
+    expect(stateManager.incrementStepIteration(step.name)).toBe(3);
+    const createEngine = vi.fn();
+    const executor = new WorkflowCallExecutor({
+      getConfig: () => parentConfig,
+      getOptions: () => ({
+        projectCwd,
+        reportDirName: 'run',
+        resumePoint,
+        workflowCallContinuation: continuation,
+      }),
+      getMaxSteps: () => 10,
+      updateMaxSteps: vi.fn(),
+      getCwd: () => projectCwd,
+      projectCwd,
+      task: 'task',
+      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      resumeStackPrefix: [],
+      runPaths: {
+        slug: 'run',
+      } as never,
+      resolveWorkflowCall: vi.fn(),
+      createEngine,
+      emit: vi.fn(),
+      state: stateManager.state,
+      setActiveResumePoint: vi.fn(),
+      refreshFindingsState: vi.fn(),
+    });
+
+    await expect(executor.execute({
+      step,
+      childWorkflow: replacementChild,
+      childProviderInfo: { provider: 'mock', model: 'test-model' },
+      parentProviderOptions: undefined,
+      personaProviders: undefined,
+      providerRouting: undefined,
+    }, { syncParentState: true })).rejects.toThrow(
+      /resolved to a different child while resuming a persisted invocation.*refusing to reuse its iteration and finding namespace/s,
+    );
+
+    expect(stateManager.state.stepIterations.get(step.name)).toBe(3);
+    expect(createEngine).not.toHaveBeenCalled();
+  });
+
+  it('attestation のない通常 child は第二ステップの resume point を変更しない', async () => {
+    const childConfig = {
+      name: 'ordinary-child',
+      subworkflow: { callable: true },
+      initialStep: 'first',
+      maxSteps: 10,
+      steps: [
+        { name: 'first' },
+        { name: 'second' },
+      ],
+    } as WorkflowConfig;
+    const step = {
+      name: 'delegate',
+      call: childConfig.name,
+      personaDisplayName: 'delegate',
+      instruction: '',
+    } as WorkflowCallStep;
+    const parentConfig = {
+      name: 'parent',
+      initialStep: step.name,
+      maxSteps: 10,
+      steps: [step],
+    } as WorkflowConfig;
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        buildWorkflowResumePointEntry(parentConfig, step.name, 'workflow_call'),
+        buildWorkflowResumePointEntry(childConfig, 'second', 'agent'),
+      ],
+      iteration: 2,
+      elapsed_ms: 100,
+    };
+    const state = makeState(parentConfig.name, 'running', 2, step.name);
+    const childState = makeState(childConfig.name, 'completed', 3);
+    const createEngine = vi.fn().mockReturnValue(createChildEngine({ state: childState }));
+    const executor = new WorkflowCallExecutor({
+      getConfig: () => parentConfig,
+      getOptions: () => ({
+        projectCwd: '/tmp/project',
+        reportDirName: 'run',
+        resumePoint,
+      }),
+      getMaxSteps: () => 10,
+      updateMaxSteps: vi.fn(),
+      getCwd: () => '/tmp/project',
+      projectCwd: '/tmp/project',
+      task: 'task',
+      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      resumeStackPrefix: [],
+      runPaths: {
+        slug: 'run',
+      } as never,
+      resolveWorkflowCall: vi.fn(),
+      createEngine,
+      emit: vi.fn(),
+      state,
+      setActiveResumePoint: vi.fn(),
+      refreshFindingsState: vi.fn(),
+    });
+
+    await executor.execute({
+      step,
+      childWorkflow: childConfig,
+      childProviderInfo: { provider: 'mock', model: 'test-model' },
+      parentProviderOptions: undefined,
+      personaProviders: undefined,
+    }, { syncParentState: true });
+
+    const childOptions = createEngine.mock.calls[0]?.[3];
+    expect(childOptions?.startStep).toBe('second');
+    expect(childOptions?.resumePoint).toEqual(resumePoint);
+  });
+
   it('親が finding_contract を持たない場合、子エンジンへ inheritedFindingContract を渡さない', async () => {
     const parentConfig = {
       name: 'parent',
@@ -517,7 +918,7 @@ describe('WorkflowCallExecutor', () => {
       personaDisplayName: 'delegate',
       instruction: '',
     } as WorkflowCallStep;
-    const state = makeState(parentConfig.name, 'running', 2);
+    const state = makeState(parentConfig.name, 'running', 2, step.name);
     const childState = makeState(childConfig.name, 'completed', 3);
     childState.lastOutput = makeResponse({ content: 'child complete' });
 
@@ -578,7 +979,7 @@ describe('WorkflowCallExecutor', () => {
       personaDisplayName: 'delegate',
       instruction: '',
     } as WorkflowCallStep;
-    const state = makeState(parentConfig.name, 'running', 2);
+    const state = makeState(parentConfig.name, 'running', 2, step.name);
     const childState = makeState(childConfig.name, 'completed', 3);
     childState.lastOutput = makeResponse({ content: 'child complete' });
 
@@ -643,7 +1044,7 @@ describe('WorkflowCallExecutor', () => {
       personaDisplayName: 'delegate',
       instruction: '',
     } as WorkflowCallStep;
-    const state = makeState(parentConfig.name, 'running', 2);
+    const state = makeState(parentConfig.name, 'running', 2, step.name);
 
     const createEngine = vi.fn();
     const executor = new WorkflowCallExecutor({
@@ -702,7 +1103,7 @@ describe('WorkflowCallExecutor', () => {
       personaDisplayName: 'delegate',
       instruction: '',
     } as WorkflowCallStep;
-    const state = makeState(parentConfig.name, 'running', 2);
+    const state = makeState(parentConfig.name, 'running', 2, step.name);
     const childState = makeState(childConfig.name, 'completed', 3);
     childState.lastOutput = makeResponse({ content: 'child complete' });
 

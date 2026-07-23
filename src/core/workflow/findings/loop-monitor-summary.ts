@@ -23,7 +23,7 @@ export interface LoopMonitorFindingsSummaryData {
   activeConflictCount: number;
   roundsCompleted: number;
   maxRounds: number;
-  reviewerAnomalies: FindingsRuleContext['reviewerAnomalies'];
+  reviewerAnomalies: Pick<FindingsRuleContext['reviewerAnomalies'], 'count' | 'budgetExhausted'>;
 }
 
 /**

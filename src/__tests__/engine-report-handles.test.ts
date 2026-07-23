@@ -41,7 +41,7 @@ import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import { resolveInheritedReviewReportNamesWithDiagnostics } from '../core/workflow/review-report-discovery.js';
 import type { WorkflowConfig, WorkflowResumePointEntry } from '../core/models/index.js';
-import { attachWorkflowOpaqueRef } from '../infra/config/loaders/workflowSourceMetadata.js';
+import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import {
   applyDefaultMocks,
   cleanupWorkflowEngine,
@@ -984,27 +984,45 @@ describe('WorkflowEngine report handle integration', () => {
 
   it('should traverse same-name workflows from distinct sources while discovering reports', () => {
     // Given
-    const secondWorkflow = attachWorkflowOpaqueRef({
-      name: 'shared-review',
-      subworkflow: { callable: true },
-      maxSteps: 1,
-      initialStep: 'review',
-      steps: [makeStep('review', {
-        outputContracts: [{ name: 'second-source-review.md', format: '# Second Source Review' }],
-        rules: [makeRule('approved', 'COMPLETE')],
-      })],
-    }, 'project:sha256:shared-review-b');
-    const firstWorkflow = attachWorkflowOpaqueRef({
-      name: 'shared-review',
-      subworkflow: { callable: true },
-      maxSteps: 1,
-      initialStep: 'delegate',
-      steps: [makeStep('delegate', {
-        kind: 'workflow_call',
-        call: 'second-source-review',
-        rules: [makeRule('COMPLETE', 'COMPLETE')],
-      })],
-    }, 'project:sha256:shared-review-a');
+    const workflowDir = join(projectCwd, '.takt', 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+    const firstSourceYaml = `name: shared-review
+subworkflow:
+  callable: true
+max_steps: 1
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: second-source-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`;
+    const secondSourceYaml = `name: shared-review
+subworkflow:
+  callable: true
+max_steps: 1
+initial_step: review
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review
+    output_contracts:
+      report:
+        - name: second-source-review.md
+          format: |
+            # Second Source Review
+    rules:
+      - condition: approved
+        next: COMPLETE
+`;
+    const firstPath = join(workflowDir, 'shared-review-a.yaml');
+    const secondPath = join(workflowDir, 'shared-review-b.yaml');
+    writeFileSync(firstPath, firstSourceYaml);
+    writeFileSync(secondPath, secondSourceYaml);
+    const secondWorkflow = loadWorkflowFromFile(secondPath, projectCwd);
+    const firstWorkflow = loadWorkflowFromFile(firstPath, projectCwd);
     const config: WorkflowConfig = {
       name: 'same-name-workflow-parent',
       maxSteps: 2,

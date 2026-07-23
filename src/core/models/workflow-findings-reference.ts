@@ -104,6 +104,8 @@ const FINDINGS_RULE_CONTEXT_SHAPE = freezeFindingsDescriptor({
       kind: 'object',
       properties: {
         count: { kind: 'number' },
+        outstanding: { kind: 'number' },
+        acknowledged: { kind: 'number' },
         budgetExhausted: { kind: 'boolean' },
       },
     },

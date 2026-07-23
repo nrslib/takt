@@ -111,6 +111,54 @@ const workflowCallForbiddenFieldCases = [
 ] as const;
 
 describe('workflow_call schema', () => {
+  it('finding-contract callable child に二段 reviewer anomaly attestation を宣言できる', () => {
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'shared/final-gate',
+      subworkflow: {
+        callable: true,
+        requires_finding_contract: true,
+        attestation: {
+          kind: 'reviewer_anomaly_acknowledgement',
+          approval_steps: ['merge-readiness-review', 'supervise'],
+        },
+      },
+      initial_step: 'merge-readiness-review',
+      steps: [
+        { name: 'merge-readiness-review' },
+        { name: 'supervise' },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('attestation を finding-contract child 以外や workflow_call step に付与できない', () => {
+    const withoutFindingContract = WorkflowConfigRawSchema.safeParse({
+      name: 'shared/final-gate',
+      subworkflow: {
+        callable: true,
+        attestation: {
+          kind: 'reviewer_anomaly_acknowledgement',
+          approval_steps: ['merge-readiness-review', 'supervise'],
+        },
+      },
+      initial_step: 'merge-readiness-review',
+      steps: [
+        { name: 'merge-readiness-review' },
+        { name: 'supervise' },
+      ],
+    });
+    const onWorkflowCallStep = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+      attestation: {
+        kind: 'reviewer_anomaly_acknowledgement',
+        approval_steps: ['merge-readiness-review', 'supervise'],
+      },
+    }));
+
+    expect(withoutFindingContract.success).toBe(false);
+    expect(onWorkflowCallStep.success).toBe(false);
+  });
+
   it('workflow_call v2 DSL を保持できる', () => {
     const callableResult = WorkflowConfigRawSchema.safeParse({
       name: 'shared/review-loop',

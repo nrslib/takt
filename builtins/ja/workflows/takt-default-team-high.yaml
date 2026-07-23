@@ -261,7 +261,7 @@ steps:
         next: replan
       - condition: all("approved", "AI特有の問題なし", "approved", "approved", "approved", "approved") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
         next: final-gate
-      - condition: any("approved", "needs_fix", "AI特有の問題なし", "AI特有の問題あり") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+      - condition: any("approved", "needs_fix", "AI特有の問題なし", "AI特有の問題あり") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.outstanding > 0)
         next: final-gate
       - condition: any("needs_fix", "AI特有の問題あり") && when(findings.conflicts.count == 0)
         next: fix

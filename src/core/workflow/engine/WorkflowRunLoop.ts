@@ -96,7 +96,8 @@ interface WorkflowRunLoopDeps {
    * 選ばず fail-fast」と同じ扱い）。violation.reason には provisional の
    * id / kind / reason と修正ガイダンスを含める。
    */
-  checkCompletionGate: () => { ok: true } | { ok: false; reason: string };
+  checkCompletionGate: () => { ok: true } | { ok: false; reason: string }
+    | Promise<{ ok: true } | { ok: false; reason: string }>;
   /**
    * returnValue 終端（`return: X`）の gate。自前の Finding Contract を持つ
    * workflow では review-integrity を検証する。親から契約を継承した callable
@@ -384,10 +385,10 @@ function buildInterruptedIterationResult(
  *   - returnValue 終端 → checkReturnValueGate（自前契約なら review-integrity を検証し、
  *     継承契約なら契約所有者への制御返却として許可する）
  */
-function finalizeCompletionOrAbort(
+async function finalizeCompletionOrAbort(
   deps: WorkflowRunLoopDeps,
   gate: { ok: true } | { ok: false; reason: string },
-): WorkflowAbortResult | undefined {
+): Promise<WorkflowAbortResult | undefined> {
   if (!gate.ok) {
     return abortWorkflow(deps, 'provisional_findings', gate.reason);
   }
@@ -403,12 +404,12 @@ type TerminalTransitionResult =
       abort?: WorkflowAbortResult;
     };
 
-function handleTerminalTransition(
+async function handleTerminalTransition(
   deps: WorkflowRunLoopDeps,
   nextStep: string,
-): TerminalTransitionResult {
+): Promise<TerminalTransitionResult> {
   if (nextStep === COMPLETE_STEP) {
-    const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
+    const gateAbort = await finalizeCompletionOrAbort(deps, await deps.checkCompletionGate());
     if (gateAbort) {
       return { handled: true, transitionAccepted: false, abort: gateAbort };
     }
@@ -738,7 +739,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
 
       if (transition.returnValue !== undefined) {
-        const gateAbort = finalizeCompletionOrAbort(deps, deps.checkReturnValueGate());
+        const gateAbort = await finalizeCompletionOrAbort(deps, deps.checkReturnValueGate());
         if (gateAbort) {
           abort = gateAbort;
           break;
@@ -760,7 +761,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         nextStep,
       });
 
-      const naturalTerminal = handleTerminalTransition(deps, nextStep);
+      const naturalTerminal = await handleTerminalTransition(deps, nextStep);
       if (naturalTerminal.handled) {
         if (naturalTerminal.transitionAccepted) {
           result.commitTransition?.({ kind: 'next_step', nextStep });
@@ -780,7 +781,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         nextStep = await deps.runLoopMonitorJudge(cycleCheck.monitor, cycleCheck.cycleCount, step, stepRuntime, nextStep);
       }
 
-      const monitoredTerminal = handleTerminalTransition(deps, nextStep);
+      const monitoredTerminal = await handleTerminalTransition(deps, nextStep);
       if (monitoredTerminal.handled) {
         if (monitoredTerminal.transitionAccepted) {
           result.commitTransition?.({ kind: 'next_step', nextStep });
@@ -1023,7 +1024,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
 
   if (transition.returnValue !== undefined) {
-    const gateAbort = finalizeCompletionOrAbort(deps, deps.checkReturnValueGate());
+    const gateAbort = await finalizeCompletionOrAbort(deps, deps.checkReturnValueGate());
     if (gateAbort) {
       return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort: gateAbort };
     }
@@ -1047,7 +1048,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     result.commitTransition?.({ kind: 'next_step', nextStep });
     advanceActiveStep(deps, nextStep, deps.state.iteration);
   } else if (nextStep === COMPLETE_STEP) {
-    const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
+    const gateAbort = await finalizeCompletionOrAbort(deps, await deps.checkCompletionGate());
     if (gateAbort) {
       return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort: gateAbort };
     }

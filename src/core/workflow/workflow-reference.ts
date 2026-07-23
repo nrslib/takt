@@ -1,13 +1,8 @@
 import type { WorkflowConfig, WorkflowResumePointEntry, WorkflowStepKind } from '../models/types.js';
-
-const WORKFLOW_OPAQUE_REF = Symbol.for('takt.workflowOpaqueRef');
-
-type WorkflowConfigWithOpaqueRef = WorkflowConfig & {
-  [WORKFLOW_OPAQUE_REF]?: string;
-};
+import { getWorkflowOpaqueRef } from './reviewer-anomaly-capability.js';
 
 export function getWorkflowReference(workflow: WorkflowConfig): string {
-  return (workflow as WorkflowConfigWithOpaqueRef)[WORKFLOW_OPAQUE_REF] ?? workflow.name;
+  return getWorkflowOpaqueRef(workflow) ?? workflow.name;
 }
 
 export function buildWorkflowResumePointEntry(

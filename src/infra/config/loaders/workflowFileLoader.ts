@@ -1,5 +1,5 @@
 import { dirname } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import { getRepertoireDir } from '../paths.js';
@@ -17,9 +17,13 @@ import {
 import {
   attachWorkflowSourcePath,
   attachWorkflowTrustInfo,
-  attachWorkflowOpaqueRef,
   buildOpaqueWorkflowRef,
 } from './workflowSourceMetadata.js';
+import { isBuiltinWorkflowPath } from '../paths.js';
+import {
+  issueReviewerAnomalyDefinitionCapability as storeReviewerAnomalyDefinitionCapability,
+  issueWorkflowOpaqueRef,
+} from '../../../core/workflow/reviewer-anomaly-capability-storage.js';
 import type { WorkflowCallArgResolutionPolicy } from './workflowCallableArgResolver.js';
 import { resolveWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
 
@@ -30,6 +34,38 @@ interface LoadWorkflowFromFileOptions {
 }
 
 type WorkflowLoadMode = 'runtime' | 'discovery';
+
+function issueReviewerAnomalyDefinitionCapability(
+  config: WorkflowConfig,
+  filePath: string,
+  trustInfo: WorkflowTrustInfo,
+  opaqueRef: string,
+): void {
+  const attestation = config.subworkflow?.attestation;
+  if (attestation === undefined) {
+    return;
+  }
+  if (trustInfo.source !== 'builtin') {
+    throw new Error(
+      `Workflow "${config.name}" requests reviewer anomaly acknowledgement attestation from untrusted source "${trustInfo.source}"`,
+    );
+  }
+  if (trustInfo.sourcePath === undefined) {
+    throw new Error(`Builtin workflow "${config.name}" is missing trusted sourcePath metadata`);
+  }
+  const realFilePath = realpathSync(filePath);
+  const realTrustSourcePath = realpathSync(trustInfo.sourcePath);
+  if (realFilePath !== realTrustSourcePath || !isBuiltinWorkflowPath(realFilePath)) {
+    throw new Error(
+      `Builtin workflow "${config.name}" attestation source does not match a real builtin workflow file`,
+    );
+  }
+  storeReviewerAnomalyDefinitionCapability(config, {
+    kind: attestation.kind,
+    approvalSteps: attestation.approvalSteps,
+    workflowRef: opaqueRef,
+  });
+}
 
 function loadWorkflowFromFileInternal(
   filePath: string,
@@ -71,9 +107,11 @@ function loadWorkflowFromFileInternal(
     loadMode,
     resolveWorkflowCommandGatesPolicy(globalConfig.workflowCommandGates, projectConfig.workflowCommandGates),
   );
-  attachWorkflowOpaqueRef(config, buildOpaqueWorkflowRef(filePath, trustInfo));
+  const opaqueRef = buildOpaqueWorkflowRef(filePath, trustInfo);
+  issueWorkflowOpaqueRef(config, opaqueRef);
   attachWorkflowSourcePath(config, filePath);
   attachWorkflowTrustInfo(config, trustInfo);
+  issueReviewerAnomalyDefinitionCapability(config, filePath, trustInfo, opaqueRef);
   return config;
 }
 

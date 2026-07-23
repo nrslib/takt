@@ -17,9 +17,15 @@ import {
   findSemanticAppendixConflicts,
   hasAggregateCondition,
   hasFindingsReference,
+  semanticLabelsOf,
 } from '../../models/workflow-rule-condition.js';
 import { buildFindingInterpretationStep, buildFindingManagerStep } from '../findings/manager-step.js';
 import { findingContractFormatRef, hasFindingContractFormat } from '../findings/finding-contract-format.js';
+import {
+  getReviewerAnomalyCallCapability,
+  getReviewerAnomalyDefinitionCapability,
+  getWorkflowOpaqueRef,
+} from '../reviewer-anomaly-capability.js';
 import {
   matchAutoRoutingRules,
   resolveAutoRoutingCandidateProviderInfo,
@@ -442,6 +448,105 @@ function validateParallelSubStepNamesUnique(config: WorkflowConfig): void {
   }
 }
 
+function validateReviewerAnomalyAttestation(
+  config: WorkflowConfig,
+  options: WorkflowEngineOptions,
+): void {
+  const attestation = config.subworkflow?.attestation;
+  const definitionCapability = getReviewerAnomalyDefinitionCapability(config);
+  const callCapability = getReviewerAnomalyCallCapability(options);
+  if (attestation === undefined) {
+    if (definitionCapability !== undefined || callCapability !== undefined) {
+      throw new Error('Configuration error: reviewer anomaly capability does not match a workflow attestation request');
+    }
+    return;
+  }
+  if (definitionCapability === undefined) {
+    throw new Error(
+      'Configuration error: reviewer anomaly acknowledgement attestation was not authorized by the workflow resolver',
+    );
+  }
+  const resolvedWorkflowRef = getWorkflowOpaqueRef(config);
+  if (
+    definitionCapability.kind !== attestation.kind
+    || definitionCapability.approvalSteps[0] !== attestation.approvalSteps[0]
+    || definitionCapability.approvalSteps[1] !== attestation.approvalSteps[1]
+    || resolvedWorkflowRef === undefined
+    || definitionCapability.workflowRef !== resolvedWorkflowRef
+  ) {
+    throw new Error(
+      'Configuration error: reviewer anomaly definition capability does not match the resolved workflow identity',
+    );
+  }
+  if (callCapability !== undefined) {
+    if (
+      callCapability.kind !== definitionCapability.kind
+      || callCapability.approvalSteps[0] !== definitionCapability.approvalSteps[0]
+      || callCapability.approvalSteps[1] !== definitionCapability.approvalSteps[1]
+      || callCapability.workflowRef !== definitionCapability.workflowRef
+      || callCapability.gate.issuerWorkflowRef !== definitionCapability.workflowRef
+      || callCapability.gate.workflowName !== config.name
+      || options.inheritedFindingContract === undefined
+    ) {
+      throw new Error(
+        'Configuration error: reviewer anomaly call capability does not match the authenticated workflow_call invocation',
+      );
+    }
+  }
+  if (config.subworkflow?.callable !== true || config.subworkflow.requiresFindingContract !== true) {
+    throw new Error(
+      'Configuration error: reviewer anomaly acknowledgement attestation requires a callable subworkflow that inherits finding_contract',
+    );
+  }
+
+  const [firstStepName, secondStepName] = attestation.approvalSteps;
+  if (config.initialStep !== firstStepName) {
+    throw new Error(
+      `Configuration error: reviewer anomaly attestation must start at approval step "${firstStepName}"`,
+    );
+  }
+  const firstStep = config.steps.find((step) => step.name === firstStepName);
+  const secondStep = config.steps.find((step) => step.name === secondStepName);
+  for (const [stepName, step] of [[firstStepName, firstStep], [secondStepName, secondStep]] as const) {
+    if (
+      step === undefined
+      || getWorkflowStepKind(step) !== 'agent'
+      || step.parallel !== undefined
+      || step.arpeggio !== undefined
+      || step.teamLeader !== undefined
+      || !hasFindingContractFormat(step)
+    ) {
+      throw new Error(
+        `Configuration error: attestation approval step "${stepName}" must be a normal finding-contract agent step`,
+      );
+    }
+  }
+
+  const firstApprovalRules = firstStep!.rules?.filter(
+    (rule) => semanticLabelsOf(rule.condition).includes('approved'),
+  ) ?? [];
+  const secondApprovalRules = secondStep!.rules?.filter(
+    (rule) => semanticLabelsOf(rule.condition).includes('approved'),
+  ) ?? [];
+  if (firstApprovalRules.length !== 1 || secondApprovalRules.length !== 1) {
+    throw new Error(
+      'Configuration error: each attestation approval step must define exactly one approved rule',
+    );
+  }
+  const firstApproval = firstApprovalRules[0]!;
+  const secondApproval = secondApprovalRules[0]!;
+  if (firstApproval.next !== secondStepName) {
+    throw new Error(
+      `Configuration error: attestation approval step "${firstStepName}" must route approved to "${secondStepName}"`,
+    );
+  }
+  if (secondApproval.next !== COMPLETE_STEP) {
+    throw new Error(
+      `Configuration error: attestation approval step "${secondStepName}" must route approved to COMPLETE`,
+    );
+  }
+}
+
 function workflowContainsWorkflowCall(config: WorkflowConfig): boolean {
   const stepContainsWorkflowCall = (step: WorkflowConfig['steps'][number]): boolean =>
     isWorkflowCallStep(step) || (step.parallel ?? []).some(stepContainsWorkflowCall);
@@ -465,6 +570,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   validateFindingContractManagerProviderModel(config, options);
   validateFindingConflictAdjudicationReservedName(config);
   validateParallelSubStepNamesUnique(config);
+  validateReviewerAnomalyAttestation(config, options);
   validateRequiredInheritedFindingContract(config, options);
   validateFindingContractInheritanceConflict(config, options);
   validateFindingContractOutputFormatRequiresContract(config, findingContractEnabled);

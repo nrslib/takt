@@ -8,6 +8,11 @@ import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
 import { OperationRecoveryError } from '../../../core/workflow/operations/operation-recovery-error.js';
 import type { WorkflowOperationJournalContext } from '../../../core/workflow/types.js';
 import {
+  getWorkflowCallContinuationInvocationRunId,
+  resolveWorkflowCallContinuation,
+  type WorkflowCallContinuation,
+} from '../../../core/workflow/run/resume-point.js';
+import {
   inheritResumeReportSnapshot,
   RESUME_ARTIFACTS_FILE_NAME,
   ResumeReportSnapshotSourceError,
@@ -43,6 +48,8 @@ import { PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX } from '../../../core/logging/contra
 import {
   resolveEffectiveAutoRouting,
 } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
+import { transferReviewerAnomalyDefinitionCapability } from '../../../core/workflow/reviewer-anomaly-capability.js';
+import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-reference.js';
 import { initAnalyticsWriter } from '../../analytics/index.js';
 import { ensureWorktreeTaktRuntimeProtection } from '../../../infra/task/projectLocalTaktSync.js';
 import { createOperationJournalStore } from '../../../infra/workflow/operation-journal-store.js';
@@ -69,6 +76,7 @@ export interface WorkflowExecutionBootstrap {
   isRetry: boolean;
   isWorktree: boolean;
   runSlug: string;
+  workflowCallContinuation?: WorkflowCallContinuation;
   runPaths: ReturnType<typeof buildRunPaths>;
   runMetaManager: RunMetaManager;
   traceDiscovery?: WorkflowTraceDiscovery;
@@ -340,6 +348,37 @@ export async function createWorkflowExecutionBootstrap(
     runtime: resolveRuntimeConfig(globalConfig.runtime, workflowConfig.runtime),
     ...(options.maxStepsOverride !== undefined ? { maxSteps: options.maxStepsOverride } : {}),
   };
+  transferReviewerAnomalyDefinitionCapability(workflowConfig, effectiveWorkflowConfig);
+  const workflowCallResolver = options.workflowCallResolver;
+  const rootResumeEntry = options.resumePoint?.stack[0];
+  const startStep = options.startStep ?? effectiveWorkflowConfig.initialStep;
+  const workflowCallContinuation = workflowCallResolver === undefined
+    || rootResumeEntry === undefined
+    || rootResumeEntry.step !== startStep
+    || !workflowEntryMatchesWorkflow(rootResumeEntry, effectiveWorkflowConfig)
+    ? undefined
+    : resolveWorkflowCallContinuation({
+        workflow: effectiveWorkflowConfig,
+        resumePoint: options.resumePoint,
+        invocationRunId: sourceRunSlug === undefined ? runSlug : sourceRunSlug,
+        resolveWorkflowCall: (parentWorkflow, step) => workflowCallResolver({
+          parentWorkflow,
+          step,
+          projectCwd,
+          lookupCwd: cwd,
+        }),
+      });
+  const continuationInvocationRunId = workflowCallContinuation === undefined
+    ? undefined
+    : getWorkflowCallContinuationInvocationRunId(workflowCallContinuation);
+  if (
+    continuationInvocationRunId !== undefined
+    && !isValidReportDirName(continuationInvocationRunId)
+  ) {
+    throw new Error(
+      `Invalid workflow_call continuation run ID: ${continuationInvocationRunId}`,
+    );
+  }
   const providerEventLogger = createProviderEventLogger({
     logsDir: runPaths.logsAbs,
     sessionId: workflowSessionId,
@@ -441,6 +480,7 @@ export async function createWorkflowExecutionBootstrap(
     isRetry,
     isWorktree,
     runSlug,
+    workflowCallContinuation,
     runPaths,
     runMetaManager,
     traceDiscovery,

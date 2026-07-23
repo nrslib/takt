@@ -269,7 +269,7 @@ function createReviewerAnomalyValidationState(count: number, budgetExhausted: bo
       open: { count: 0 },
       provisional: { count: 0, fixpoint: false },
       rounds: { budgetExhausted: false },
-      reviewerAnomalies: { count, budgetExhausted },
+      reviewerAnomalies: { count, outstanding: count, acknowledged: 0, budgetExhausted },
       conflicts: { count: 0, unadjudicated: { count: 0 } },
     },
   } as WorkflowState;

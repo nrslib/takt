@@ -22,7 +22,7 @@ function stateWithFindings(overrides: Record<string, unknown> = {}): WorkflowSta
       superseded: { count: 0 },
       provisional: { count: 0, fixpoint: false, items: [] },
       rounds: { budgetExhausted: false },
-      reviewerAnomalies: { count: 0, budgetExhausted: false },
+      reviewerAnomalies: { count: 0, outstanding: 0, acknowledged: 0, budgetExhausted: false },
       conflicts: { count: 0, items: [], unadjudicated: { count: 0 } },
       ...overrides,
     },

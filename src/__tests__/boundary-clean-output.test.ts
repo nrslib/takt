@@ -174,6 +174,7 @@ describe('boundary clean output assertions', () => {
       '## Result: REJECT [1 issue]',
       '## Result: REJECT (blocking defect remains)',
       '## Result: REJECT — unresolved boundary defect',
+      '## 結果: REJECT\n## サマリー\nfoo',
       '| Result | REJECT (1 issue) |',
       '| Result | REJECT (blocking defect remains) |',
       '| 結果 | REJECT（1件） |',

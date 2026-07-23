@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { hashCanonicalJson } from '../../../shared/utils/canonical-json.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import {
   renderFencedJsonBlock,
@@ -65,37 +66,15 @@ function selectLedgerEvidence(
   });
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => (
-      item === undefined || typeof item === 'function' || typeof item === 'symbol'
-        ? 'null'
-        : canonicalJson(item)
-    )).join(',')}]`;
-  }
-  if (value !== null && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .filter(([, item]) => item !== undefined && typeof item !== 'function' && typeof item !== 'symbol')
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
-      .join(',')}}`;
-  }
-  const serialized = JSON.stringify(value);
-  if (serialized === undefined) {
-    throw new Error('Adjudication evidence contains a non-serializable value');
-  }
-  return serialized;
-}
-
 export function computeAdjudicationEvidenceHash(
   snapshot: Pick<AdjudicationEvidenceSnapshot, 'conflict' | 'findings' | 'rawFindings' | 'reviewScopeSnapshotId'>,
 ): string {
-  return createHash('sha256').update(canonicalJson({
+  return hashCanonicalJson({
     conflict: snapshot.conflict,
     findings: snapshot.findings,
     rawFindings: snapshot.rawFindings,
     reviewScopeSnapshotId: snapshot.reviewScopeSnapshotId,
-  })).digest('hex');
+  });
 }
 
 export function computeConflictEvidenceHash(

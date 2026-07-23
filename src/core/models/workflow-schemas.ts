@@ -358,6 +358,7 @@ const AgentParallelSubStepRawSchema = z.object({
   output_contracts: OutputContractsFieldSchema,
   quality_gates: QualityGatesSchema,
   pass_previous_response: z.boolean().optional(),
+  attestation: z.never().optional(),
 }).superRefine((data, ctx) => {
   validateParallelSubStepRules(data.rules, ctx);
   data.rules?.forEach((rule, index) => {
@@ -401,6 +402,7 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   output_contracts: z.never().optional(),
   quality_gates: z.never().optional(),
   pass_previous_response: z.never().optional(),
+  attestation: z.never().optional(),
 }).superRefine((data, ctx) => {
   validateParallelSubStepRules(data.rules, ctx);
   validateWorkflowCallRules(data.rules, ctx, { allowExtendedConditions: true });
@@ -418,7 +420,34 @@ const WorkflowSubworkflowRawSchema = z.object({
   requires_finding_contract: z.literal(true).optional(),
   returns: z.array(WorkflowResultLabelSchema).optional(),
   params: z.record(z.string().min(1), WorkflowParamDeclarationRawSchema).optional(),
+  attestation: z.object({
+    kind: z.literal('reviewer_anomaly_acknowledgement'),
+    approval_steps: z.tuple([WorkflowStepNameSchema, WorkflowStepNameSchema]),
+  }).strict().optional(),
 }).strict().superRefine((data, ctx) => {
+  if (data.attestation !== undefined) {
+    if (data.callable !== true) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['attestation'],
+        message: 'subworkflow.attestation requires callable: true',
+      });
+    }
+    if (data.requires_finding_contract !== true) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['attestation'],
+        message: 'subworkflow.attestation requires requires_finding_contract: true',
+      });
+    }
+    if (data.attestation.approval_steps[0] === data.attestation.approval_steps[1]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['attestation', 'approval_steps'],
+        message: 'subworkflow.attestation approval_steps must contain two distinct steps',
+      });
+    }
+  }
   if (data.callable === true) {
     data.returns?.forEach((value, index) => {
       if (RESERVED_WORKFLOW_CALL_RESULTS.includes(value as typeof RESERVED_WORKFLOW_CALL_RESULTS[number])) {
@@ -440,7 +469,7 @@ const WorkflowSubworkflowRawSchema = z.object({
     return;
   }
 
-  for (const field of ['visibility', 'requires_finding_contract', 'returns', 'params'] as const) {
+  for (const field of ['visibility', 'requires_finding_contract', 'returns', 'params', 'attestation'] as const) {
     if (data[field] !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -492,6 +521,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     concurrency: z.number().int().min(1).optional(),
     arpeggio: ArpeggioConfigRawSchema.optional(),
     team_leader: TeamLeaderConfigRawSchema.optional(),
+    attestation: z.never().optional(),
   }).refine(
     (data) => [data.parallel, data.arpeggio, data.team_leader].filter((value) => value != null).length <= 1,
     {

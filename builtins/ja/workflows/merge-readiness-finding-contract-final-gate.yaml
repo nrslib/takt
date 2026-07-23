@@ -4,6 +4,11 @@ subworkflow:
   callable: true
   visibility: internal
   requires_finding_contract: true
+  attestation:
+    kind: reviewer_anomaly_acknowledgement
+    approval_steps:
+      - merge-readiness-review
+      - supervise
   returns:
     - needs_review
     - need_replan
@@ -43,10 +48,6 @@ steps:
         return: need_replan
       - condition: when(findings.provisional.count > 0)
         return: need_replan
-      - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
-        return: need_replan
-      - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0)
-        return: needs_review
       - condition: needs_fix
         return: needs_fix
       - condition: when(findings.open.count > 0)
@@ -78,10 +79,6 @@ steps:
         return: need_replan
       - condition: when(findings.provisional.count > 0)
         return: need_replan
-      - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
-        return: need_replan
-      - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0)
-        return: needs_review
       - condition: needs_fix
         return: needs_fix
       - condition: need_replan
