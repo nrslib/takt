@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   buildFindingContractPartIndexEntry,
+  createFindingContractDecompositionJsonSchema,
+  createFindingContractFeedbackJsonSchema,
+  createFindingContractPartCompletionJsonSchema,
   parseFindingContractPartCompletionClaim,
   parseFindingContractPartDefinition,
   buildLatestFindingContractDigests,
@@ -18,6 +21,7 @@ import type { PartDefinition, PartResult } from '../core/models/types.js';
 import { buildMorePartsPrompt } from '../agents/team-leader-structured-output.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { writeTeamLeaderPartArtifact } from '../core/workflow/engine/team-leader-artifacts.js';
+import { validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 
 function makePart(
   id: string,
@@ -70,16 +74,16 @@ describe('Finding Contract Team Leader contract', () => {
       findingContract: {
         findingIds: ['F-0001'],
         role: 'repair',
-        writePaths: ['./src\\api.ts'],
-        readPaths: ['src/types.ts'],
+        writePaths: ['./src\\app\\[slug]\\page.tsx'],
+        readPaths: ['src/{draft}.ts'],
       },
     }, 0);
 
     expect(part.findingContract).toEqual({
       findingIds: ['F-0001'],
       role: 'repair',
-      writePaths: ['src/api.ts'],
-      readPaths: ['src/types.ts'],
+      writePaths: ['src/app/[slug]/page.tsx'],
+      readPaths: ['src/{draft}.ts'],
     });
 
     const directoryPart = makePart('directory', ['F-0001'], 'repair', ['src/api/']);
@@ -111,6 +115,77 @@ describe('Finding Contract Team Leader contract', () => {
         readPaths: [],
       },
     }, 0)).toThrow(/unknown property "unexpected"/);
+  });
+
+  it.each([
+    'src/__tests__/**/*Arpeggio*.test.ts',
+    'src/file?.ts',
+  ])('rejects glob write and read paths before parts execute: %s', (path) => {
+    const makeDefinition = (writePaths: string[], readPaths: string[]) => ({
+      id: 'repair',
+      title: 'Repair',
+      instruction: 'repair',
+      findingContract: {
+        findingIds: ['F-0001'],
+        role: 'repair',
+        writePaths,
+        readPaths,
+      },
+    });
+
+    expect(() => parseFindingContractPartDefinition(
+      makeDefinition([path], []),
+      0,
+    )).toThrow(/wildcard characters/);
+    expect(() => parseFindingContractPartDefinition(
+      makeDefinition(['src/a.ts'], [path]),
+      0,
+    )).toThrow(/wildcard characters/);
+  });
+
+  it('rejects glob paths in provider-facing Finding Contract schemas', () => {
+    expect(() => validateStructuredOutputAgainstSchema({
+      parts: [{
+        id: 'repair',
+        title: 'Repair',
+        instruction: 'repair',
+        findingContract: {
+          findingIds: ['F-0001'],
+          role: 'repair',
+          writePaths: ['src/**/*.ts'],
+          readPaths: [],
+        },
+      }],
+    }, createFindingContractDecompositionJsonSchema())).toThrow(/must match pattern/);
+
+    expect(() => validateStructuredOutputAgainstSchema({
+      decision: 'continue',
+      reasoning: 'continue repair',
+      parts: [{
+        id: 'repair',
+        title: 'Repair',
+        instruction: 'repair',
+        findingContract: {
+          findingIds: ['F-0001'],
+          role: 'repair',
+          writePaths: ['src/**/*.ts'],
+          readPaths: [],
+        },
+      }],
+      fixCoverage: [],
+      blockers: [],
+    }, createFindingContractFeedbackJsonSchema())).toThrow(/must match pattern/);
+
+    expect(() => validateStructuredOutputAgainstSchema({
+      findingOutcomes: [{
+        findingId: 'F-0001',
+        outcome: 'addressed',
+        evidence: ['src/a.ts:1'],
+      }],
+      changedPaths: ['src/**/*.ts'],
+      checks: [],
+      summary: 'done',
+    }, createFindingContractPartCompletionJsonSchema())).toThrow(/must match pattern/);
   });
 
   it('rejects unknown findings, duplicate repair ownership, and overlapping write paths', () => {
@@ -198,6 +273,16 @@ describe('Finding Contract Team Leader contract', () => {
       changedPaths: ['src/other.ts'],
     }, repair)).toThrow(/outside its writePaths assignment/);
 
+    expect(() => parseFindingContractPartCompletionClaim({
+      ...claim,
+      changedPaths: ['src/owned/**/*.ts'],
+    }, repair)).toThrow(/wildcard characters/);
+
+    const dynamicRoute = makePart('dynamic-route', ['F-0001'], 'repair', ['src/app']);
+    expect(() => parseFindingContractPartCompletionClaim({
+      ...claim,
+      changedPaths: ['src/app/[slug]/page.tsx'],
+    }, dynamicRoute)).not.toThrow();
   });
 
   it('treats the repository root as containing every relative changed path', () => {
@@ -489,7 +574,7 @@ describe('Finding Contract Team Leader contract', () => {
         attemptId: '0001-test-attempt',
         batchNumber: 1,
         partIndex,
-        result: makeResult(makePart(id, ['F-0001'])),
+        result: makeResult(makePart(id, ['F-0001'], 'repair', ['src/artifact.ts'])),
       }));
 
       expect(new Set(references.map((reference) => reference.path))).toHaveLength(2);

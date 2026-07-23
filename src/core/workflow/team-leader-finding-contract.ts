@@ -332,11 +332,13 @@ export function appendFindingContractPartAssignmentInstruction(
     ? [
         'これは並列作業の協調契約であり、filesystem sandbox ではありません。',
         '`findingIds` の範囲だけを扱い、変更は `writePaths` の内側に限定してください。',
+        '`writePaths`、`readPaths`、`changedPaths` はリテラルなパスです。ワイルドカードの `*` と `?` は使えません。',
         '`readPaths` は調査対象の目安であり、必要な依存関係の読み取りを禁止するものではありません。',
       ]
     : [
         'This is a parallel-work coordination contract, not a filesystem sandbox.',
         'Handle only the assigned findingIds and keep changes within writePaths.',
+        'writePaths, readPaths, and changedPaths are literal paths; wildcard characters * and ? are not allowed.',
         'readPaths guide inspection but do not prohibit reading required dependencies.',
       ];
   return [
