@@ -67,7 +67,7 @@ async function terminateActiveChildProcesses(): Promise<void> {
 function runTypeScriptProcess(script: string): ManagedChildProcess {
   const child = spawn(
     process.execPath,
-    ['--import', 'tsx/esm', '--eval', script],
+    ['--import', 'tsx/esm', '--input-type=module', '--eval', script],
     { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] },
   );
   activeChildProcesses.add(child);
@@ -157,32 +157,32 @@ function runStoreProcess(
   );
   const script = `
     import { createOperationJournalStore } from ${JSON.stringify(storeModule)};
-    const waitForParentMessage = (expected: string): Promise<void> =>
+    const waitForParentMessage = (expected) =>
       new Promise((resolveMessage, rejectMessage) => {
-        const onMessage = (message: unknown): void => {
+        const onMessage = (message) => {
           if (
             message !== null
             && typeof message === 'object'
-            && (message as { type?: unknown }).type === expected
+            && message.type === expected
           ) {
             process.off('message', onMessage);
             process.off('disconnect', onDisconnect);
             resolveMessage();
           }
         };
-        const onDisconnect = (): void => {
+        const onDisconnect = () => {
           process.off('message', onMessage);
           rejectMessage(new Error('Parent disconnected before message: ' + expected));
         };
         process.on('message', onMessage);
         process.once('disconnect', onDisconnect);
       });
-    const sendToParent = (type: string): void => {
+    const sendToParent = (type) => {
       if (process.send === undefined) throw new Error('IPC channel is unavailable');
       process.send({ type });
     };
     const store = createOperationJournalStore(${JSON.stringify(journalPath)});
-    const main = async (): Promise<void> => {
+    const main = async () => {
       try {
         sendToParent('ready');
         await waitForParentMessage('start');
@@ -210,37 +210,37 @@ function runInternalStoreProcess(journalPath: string, body: string): ManagedChil
   const script = `
     import { existsSync } from 'node:fs';
     import { createOperationJournalStore } from ${JSON.stringify(storeModule)};
-    const waitForFile = (path: string): void => {
+    const waitForFile = (path) => {
       while (!existsSync(path)) {
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
       }
     };
-    const waitForParentMessage = (expected: string): Promise<void> =>
+    const waitForParentMessage = (expected) =>
       new Promise((resolveMessage, rejectMessage) => {
-        const onMessage = (message: unknown): void => {
+        const onMessage = (message) => {
           if (
             message !== null
             && typeof message === 'object'
-            && (message as { type?: unknown }).type === expected
+            && message.type === expected
           ) {
             process.off('message', onMessage);
             process.off('disconnect', onDisconnect);
             resolveMessage();
           }
         };
-        const onDisconnect = (): void => {
+        const onDisconnect = () => {
           process.off('message', onMessage);
           rejectMessage(new Error('Parent disconnected before message: ' + expected));
         };
         process.on('message', onMessage);
         process.once('disconnect', onDisconnect);
       });
-    const sendToParent = (type: string): void => {
+    const sendToParent = (type) => {
       if (process.send === undefined) throw new Error('IPC channel is unavailable');
       process.send({ type });
     };
     const store = createOperationJournalStore(${JSON.stringify(journalPath)});
-    const main = async (): Promise<void> => {
+    const main = async () => {
       try {
         ${body}
       } catch (error) {
@@ -821,12 +821,8 @@ describe('operation journal store', () => {
       { mode: 0o600 },
     );
     const ownerReleasePath = join(tempDir, 'new-owner-release');
-    const internalType = `{
-      readLockSnapshot(path: string): object | undefined;
-      recoverFileLock(snapshot: object, deadline: number): void;
-    }`;
     const recoveryA = runInternalStoreProcess(journalPath, `
-      const internal = store as unknown as ${internalType};
+      const internal = store;
       const snapshot = internal.readLockSnapshot(${JSON.stringify(lockPath)});
       if (snapshot === undefined) throw new Error('stale lock snapshot A is missing');
       sendToParent('ready');
@@ -835,7 +831,7 @@ describe('operation journal store', () => {
       sendToParent('done');
     `);
     const recoveryB = runInternalStoreProcess(journalPath, `
-      const internal = store as unknown as ${internalType};
+      const internal = store;
       const snapshot = internal.readLockSnapshot(${JSON.stringify(lockPath)});
       if (snapshot === undefined) throw new Error('stale lock snapshot B is missing');
       sendToParent('ready');
@@ -852,9 +848,7 @@ describe('operation journal store', () => {
     await recoveryA.waitForMessage('done');
 
     const newOwner = runInternalStoreProcess(journalPath, `
-      const internal = store as unknown as {
-        withLock<Result>(action: () => Result): Result;
-      };
+      const internal = store;
       internal.withLock(() => {
         sendToParent('held');
         waitForFile(${JSON.stringify(ownerReleasePath)});
@@ -886,17 +880,7 @@ describe('operation journal store', () => {
       { mode: 0o600 },
     );
     const leader = runInternalStoreProcess(journalPath, `
-      const internal = store as unknown as {
-        readLockSnapshot(path: string): object | undefined;
-        createRecoveryLockKey(snapshot: object): string;
-        appendRecoveryElectionRecord(record: {
-          version: 1;
-          kind: 'claim';
-          lockKey: string;
-          pid: number;
-          token: string;
-        }): void;
-      };
+      const internal = store;
       const snapshot = internal.readLockSnapshot(${JSON.stringify(lockPath)});
       if (snapshot === undefined) throw new Error('stale lock snapshot is missing');
       internal.appendRecoveryElectionRecord({
