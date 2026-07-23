@@ -2,7 +2,7 @@ Decompose the Finding Contract's actionable open findings into non-conflicting r
 
 **Decomposition and decision requirements:**
 - Set `findingIds`, `role`, `writePaths`, and `readPaths` in every part's `findingContract`
-- Keep `writePaths` to the narrowest literal file paths that will actually change. Create a diagnose part first when the write targets are unknown
+- Specify `writePaths` and `readPaths` as literal paths relative to the working directory. Keep `writePaths` to the narrowest files that will actually change, and create a diagnose part first when the write targets are unknown
 - Do not use the `*` or `?` wildcard characters in `writePaths` or `readPaths`
 - Do not assign one finding to multiple repair parts or overlap write paths within a batch
 - State the direct work and completion criteria in every part instruction
