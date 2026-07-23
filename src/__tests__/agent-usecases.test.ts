@@ -629,8 +629,6 @@ describe('agent-usecases', () => {
       findingContract: {
         targetFindingIds: ['F-0001'],
         actionableFindings: '{"open":[{"id":"F-0001"}]}',
-        completedPartIndex: [],
-        previouslyPlannedParts: [],
       },
     })).rejects.toThrow('requires structured output');
 

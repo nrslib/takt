@@ -22,6 +22,20 @@ export function createTeamLeaderArtifactAttemptId(stepIteration: number): string
   return `${String(stepIteration).padStart(4, '0')}-${randomUUID()}`;
 }
 
+export function buildTeamLeaderAttemptArtifactDirectory(input: {
+  runPaths: RunPaths;
+  stepName: string;
+  attemptId: string;
+}): { relativeDirectory: string; absoluteDirectory: string } {
+  const stepSegment = safeSegment(input.stepName);
+  const attemptSegment = `attempt-${safeSegment(input.attemptId)}`;
+  const relativeDirectory = join('team_leader', stepSegment, attemptSegment);
+  return {
+    relativeDirectory,
+    absoluteDirectory: join(input.runPaths.contextAbs, relativeDirectory),
+  };
+}
+
 export function writeTeamLeaderPartArtifact(input: {
   runPaths: RunPaths;
   stepName: string;
@@ -30,11 +44,10 @@ export function writeTeamLeaderPartArtifact(input: {
   partIndex: number;
   result: PartResult;
 }): TeamLeaderArtifactReference {
-  const stepSegment = safeSegment(input.stepName);
-  const attemptSegment = `attempt-${safeSegment(input.attemptId)}`;
+  const attemptDirectory = buildTeamLeaderAttemptArtifactDirectory(input);
   const batchSegment = `batch-${String(input.batchNumber).padStart(4, '0')}`;
-  const relativeDirectory = join('team_leader', stepSegment, attemptSegment, batchSegment);
-  const absoluteDirectory = join(input.runPaths.contextAbs, relativeDirectory);
+  const relativeDirectory = join(attemptDirectory.relativeDirectory, batchSegment);
+  const absoluteDirectory = join(attemptDirectory.absoluteDirectory, batchSegment);
   ensurePrivateDirectory(absoluteDirectory);
 
   const idHash = createHash('sha256').update(input.result.part.id).digest('hex').slice(0, 8);

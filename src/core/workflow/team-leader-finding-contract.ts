@@ -11,13 +11,14 @@ import {
   renderCompactActionableFindingLedgerInstructionSummary,
   selectActionableFindingEntries,
 } from './findings/context.js';
-import { ensureUniquePartIds, parsePartDefinitionEntry } from './part-definition-validator.js';
+import { parsePartDefinitionEntry } from './part-definition-validator.js';
 export {
   createFindingContractDecompositionJsonSchema,
   createFindingContractFeedbackJsonSchema,
   createFindingContractPartCompletionJsonSchema,
 } from './team-leader-finding-contract-schema.js';
 import {
+  FindingContractInputValidationError,
   findingContractPathIsWithin,
   findingContractPathsOverlap,
   normalizeFindingContractPath,
@@ -27,6 +28,17 @@ import {
   requireObject,
   requireStringArray,
 } from './team-leader-finding-contract-validation.js';
+
+export interface FindingContractPartBatchValidationIssue {
+  readonly code:
+    | 'missing_assignment'
+    | 'unknown_finding'
+    | 'duplicate_repair_assignment'
+    | 'overlapping_write_path';
+  readonly message: string;
+  readonly partId?: string;
+  readonly findingId?: string;
+}
 
 export interface FindingContractPartIndexEntry {
   id: string;
@@ -81,7 +93,7 @@ export function parseFindingContractPartDefinition(entry: unknown, index: number
   );
   const role = requireNonEmptyString(assignment.role, `Part[${index}] "findingContract.role"`);
   if (role !== 'diagnose' && role !== 'repair' && role !== 'verify') {
-    throw new Error(`Part[${index}] "findingContract.role" is invalid: ${role}`);
+    throw new FindingContractInputValidationError(`Part[${index}] "findingContract.role" is invalid: ${role}`);
   }
   const writePaths = requireStringArray(
     assignment.writePaths,
@@ -110,38 +122,67 @@ export function validateFindingContractPartBatch(
   parts: PartDefinition[],
   targetFindingIds: readonly string[],
 ): void {
-  ensureUniquePartIds(parts);
+  const issues = collectFindingContractPartBatchValidationIssues(parts, targetFindingIds);
+  if (issues.length > 0) {
+    throw new FindingContractInputValidationError(issues.map((issue) => issue.message).join('; '));
+  }
+}
+
+export function collectFindingContractPartBatchValidationIssues(
+  parts: readonly PartDefinition[],
+  targetFindingIds: readonly string[],
+): FindingContractPartBatchValidationIssue[] {
   const targetIds = new Set(targetFindingIds);
   const repairOwners = new Map<string, string>();
-
+  const issues: FindingContractPartBatchValidationIssue[] = [];
   const writeOwners: Array<{ path: string; partId: string }> = [];
   for (const part of parts) {
     const assignment = part.findingContract;
     if (!assignment) {
-      throw new Error(`Part "${part.id}" is missing findingContract assignment`);
+      issues.push({
+        code: 'missing_assignment',
+        partId: part.id,
+        message: `Part "${part.id}" is missing findingContract assignment`,
+      });
+      continue;
     }
     for (const findingId of assignment.findingIds) {
       if (!targetIds.has(findingId)) {
-        throw new Error(`Part "${part.id}" references unknown actionable finding "${findingId}"`);
+        issues.push({
+          code: 'unknown_finding',
+          partId: part.id,
+          findingId,
+          message: `Part "${part.id}" references unknown actionable finding "${findingId}"`,
+        });
       }
       if (assignment.role === 'repair') {
         const owner = repairOwners.get(findingId);
         if (owner !== undefined) {
-          throw new Error(`Finding "${findingId}" is assigned to multiple repair parts: "${owner}" and "${part.id}"`);
+          issues.push({
+            code: 'duplicate_repair_assignment',
+            partId: part.id,
+            findingId,
+            message: `Finding "${findingId}" is assigned to multiple repair parts: "${owner}" and "${part.id}"`,
+          });
+        } else {
+          repairOwners.set(findingId, part.id);
         }
-        repairOwners.set(findingId, part.id);
       }
     }
     for (const path of assignment.writePaths) {
-      const conflict = writeOwners.find((entry) => findingContractPathsOverlap(entry.path, path));
-      if (conflict !== undefined) {
-        throw new Error(
-          `Finding Contract part write paths overlap in one batch: "${conflict.partId}:${conflict.path}" and "${part.id}:${path}"`,
-        );
+      const conflicts = writeOwners.filter((entry) => findingContractPathsOverlap(entry.path, path));
+      for (const conflict of conflicts) {
+        issues.push({
+          code: 'overlapping_write_path',
+          partId: part.id,
+          message: `Finding Contract part write paths overlap in one batch: `
+            + `"${conflict.partId}:${conflict.path}" and "${part.id}:${path}"`,
+        });
       }
       writeOwners.push({ path, partId: part.id });
     }
   }
+  return issues;
 }
 
 export function parseFindingContractPartCompletionClaim(
@@ -156,10 +197,10 @@ export function parseFindingContractPartCompletionClaim(
     'summary',
   ]);
   if (!part.findingContract) {
-    throw new Error(`Part "${part.id}" is missing findingContract assignment`);
+    throw new FindingContractInputValidationError(`Part "${part.id}" is missing findingContract assignment`);
   }
   if (!Array.isArray(payload.findingOutcomes)) {
-    throw new Error(`Part "${part.id}" findingOutcomes must be an array`);
+    throw new FindingContractInputValidationError(`Part "${part.id}" findingOutcomes must be an array`);
   }
   const assignedIds = new Set(part.findingContract.findingIds);
   const seenIds = new Set<string>();
@@ -172,15 +213,19 @@ export function parseFindingContractPartCompletionClaim(
     ]);
     const findingId = requireNonEmptyString(outcome.findingId, `Part "${part.id}" findingOutcomes[${index}].findingId`);
     if (!assignedIds.has(findingId)) {
-      throw new Error(`Part "${part.id}" returned an outcome for unassigned finding "${findingId}"`);
+      throw new FindingContractInputValidationError(
+        `Part "${part.id}" returned an outcome for unassigned finding "${findingId}"`,
+      );
     }
     if (seenIds.has(findingId)) {
-      throw new Error(`Part "${part.id}" returned duplicate outcomes for finding "${findingId}"`);
+      throw new FindingContractInputValidationError(
+        `Part "${part.id}" returned duplicate outcomes for finding "${findingId}"`,
+      );
     }
     seenIds.add(findingId);
     const disposition = requireNonEmptyString(outcome.outcome, `Part "${part.id}" findingOutcomes[${index}].outcome`);
     if (disposition !== 'addressed' && disposition !== 'disputed' && disposition !== 'blocked') {
-      throw new Error(`Part "${part.id}" returned invalid outcome "${disposition}"`);
+      throw new FindingContractInputValidationError(`Part "${part.id}" returned invalid outcome "${disposition}"`);
     }
     const parsedOutcome: 'addressed' | 'disputed' | 'blocked' = disposition;
     const evidence = requireStringArray(
@@ -189,7 +234,9 @@ export function parseFindingContractPartCompletionClaim(
       { nonEmpty: true, maxItems: 20, maxItemLength: 1000 },
     );
     if (parsedOutcome === 'disputed' && !evidence.some((entry) => FILE_LINE_EVIDENCE_PATTERN.test(entry))) {
-      throw new Error(`Part "${part.id}" disputed finding "${findingId}" without file:line evidence`);
+      throw new FindingContractInputValidationError(
+        `Part "${part.id}" disputed finding "${findingId}" without file:line evidence`,
+      );
     }
     return {
       findingId,
@@ -199,18 +246,20 @@ export function parseFindingContractPartCompletionClaim(
   });
   for (const findingId of assignedIds) {
     if (!seenIds.has(findingId)) {
-      throw new Error(`Part "${part.id}" omitted an outcome for assigned finding "${findingId}"`);
+      throw new FindingContractInputValidationError(
+        `Part "${part.id}" omitted an outcome for assigned finding "${findingId}"`,
+      );
     }
   }
   if (!Array.isArray(payload.checks)) {
-    throw new Error(`Part "${part.id}" checks must be an array`);
+    throw new FindingContractInputValidationError(`Part "${part.id}" checks must be an array`);
   }
   const checks = payload.checks.map((entry, index) => {
     const check = requireObject(entry, `Part "${part.id}" checks[${index}]`);
     requireExactKeys(check, `Part "${part.id}" checks[${index}]`, ['command', 'status']);
     const status = requireNonEmptyString(check.status, `Part "${part.id}" checks[${index}].status`);
     if (status !== 'passed' && status !== 'failed' && status !== 'not_run') {
-      throw new Error(`Part "${part.id}" returned invalid check status "${status}"`);
+      throw new FindingContractInputValidationError(`Part "${part.id}" returned invalid check status "${status}"`);
     }
     const parsedStatus: 'passed' | 'failed' | 'not_run' = status;
     return {
@@ -222,7 +271,9 @@ export function parseFindingContractPartCompletionClaim(
     .map((path, index) => normalizeFindingContractPath(path, `Part "${part.id}" changedPaths[${index}]`));
   for (const path of changedPaths) {
     if (!part.findingContract.writePaths.some((writePath) => findingContractPathIsWithin(path, writePath))) {
-      throw new Error(`Part "${part.id}" changed path is outside its writePaths assignment: ${path}`);
+      throw new FindingContractInputValidationError(
+        `Part "${part.id}" changed path is outside its writePaths assignment: ${path}`,
+      );
     }
   }
   return {
