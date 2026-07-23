@@ -34,6 +34,7 @@ export interface ProviderCallOptions {
   copilotGithubToken?: string;
   kiroApiKey?: string;
   outputSchema?: Record<string, unknown>;
+  structuredOutputRetryCount?: number;
   language?: Language;
   imageAttachments?: ProviderImageAttachment[];
   childProcessEnv?: Readonly<Record<string, string>>;

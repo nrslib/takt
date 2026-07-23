@@ -497,63 +497,37 @@ describe('PromptBasedStructuredCaller', () => {
     expect(mockRunAgent).toHaveBeenCalledTimes(3);
   });
 
-  it('should retry decomposeTask when first response status is error and succeed on second attempt', async () => {
-    mockRunAgent
-      .mockResolvedValueOnce({
-        persona: 'leader',
-        status: 'error',
-        content: '',
-        error: 'provider failed',
-        timestamp: new Date(),
-      })
-      .mockResolvedValueOnce({
-        persona: 'leader',
-        status: 'done',
-        content: [
-          '```json',
-          JSON.stringify([
-            { id: 'p1', title: 'Recovered', instruction: 'Do it' },
-          ]),
-          '```',
-        ].join('\n'),
-        timestamp: new Date(),
-      });
+  it('should not retry decomposeTask when the provider returns an error status', async () => {
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'error',
+      content: '',
+      error: 'provider failed',
+      timestamp: new Date(),
+    });
 
     const caller = new PromptBasedStructuredCaller();
-    const promise = caller.decomposeTask('break down the work', 3, {
+    await expect(caller.decomposeTask('break down the work', 3, {
       cwd: '/tmp/project',
       provider: 'cursor',
       persona: 'team-leader',
-    });
-    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
-    const result = await promise;
+    })).rejects.toThrow('Team leader failed: provider failed');
 
-    expect(mockRunAgent).toHaveBeenCalledTimes(2);
-    expect(result.parts).toEqual([
-      { id: 'p1', title: 'Recovered', instruction: 'Do it' },
-    ]);
+    expect(mockRunAgent).toHaveBeenCalledOnce();
   });
 
-  it('should report every decomposition provider response and rejection at attempt boundaries', async () => {
+  it('should report every invalid decomposition response before recovery', async () => {
     mockRunAgent
       .mockResolvedValueOnce({
         persona: 'leader',
-        status: 'error',
-        content: '',
-        error: 'first failed',
+        status: 'done',
+        content: 'no json',
         timestamp: new Date(),
       })
-      .mockRejectedValueOnce(new Error('second rejected'))
       .mockResolvedValueOnce({
         persona: 'leader',
         status: 'done',
-        content: [
-          '```json',
-          JSON.stringify([
-            { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
-          ]),
-          '```',
-        ].join('\n'),
+        content: '```json\n[{"id":"p1","title":"First task","instruction":"Do the first thing"}]\n```',
         timestamp: new Date(),
       });
     const onAgentResponse = vi.fn();
@@ -566,17 +540,13 @@ describe('PromptBasedStructuredCaller', () => {
       onAgentResponse,
       onAgentError,
     });
-    const result = expect(promise).resolves.toMatchObject({ parts: [{ id: 'p1' }] });
-    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 2);
-
-    await result;
-    expect(mockRunAgent).toHaveBeenCalledTimes(3);
+    await expect(promise).resolves.toMatchObject({ parts: [{ id: 'p1' }] });
+    expect(mockRunAgent).toHaveBeenCalledTimes(2);
     expect(onAgentResponse).toHaveBeenCalledTimes(2);
-    expect(onAgentError).toHaveBeenCalledTimes(1);
-    expect(onAgentError).toHaveBeenCalledWith(expect.objectContaining({ message: 'second rejected' }));
+    expect(onAgentError).not.toHaveBeenCalled();
   });
 
-  it('should throw decomposeTask after three consecutive status:error responses with original detail', async () => {
+  it('should throw decomposeTask after the first status:error response with original detail', async () => {
     const failingResponse = {
       persona: 'leader',
       status: 'error',
@@ -584,22 +554,16 @@ describe('PromptBasedStructuredCaller', () => {
       error: 'provider blew up',
       timestamp: new Date(),
     };
-    mockRunAgent
-      .mockResolvedValueOnce(failingResponse)
-      .mockResolvedValueOnce(failingResponse)
-      .mockResolvedValueOnce(failingResponse);
+    mockRunAgent.mockResolvedValue(failingResponse);
 
     const caller = new PromptBasedStructuredCaller();
-    const promise = caller.decomposeTask('break down the work', 3, {
+    await expect(caller.decomposeTask('break down the work', 3, {
       cwd: '/tmp/project',
       provider: 'cursor',
       persona: 'team-leader',
-    });
-    const assertion = expect(promise).rejects.toThrow(/Team leader failed: provider blew up/);
-    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 2);
-    await assertion;
+    })).rejects.toThrow(/Team leader failed: provider blew up/);
 
-    expect(mockRunAgent).toHaveBeenCalledTimes(3);
+    expect(mockRunAgent).toHaveBeenCalledOnce();
   });
 
   it('should stop decomposeTask retries immediately after cancellation', async () => {
@@ -625,6 +589,33 @@ describe('PromptBasedStructuredCaller', () => {
 
     expect(mockRunAgent).toHaveBeenCalledOnce();
     expect(infoMock).not.toHaveBeenCalled();
+  });
+
+  it('should not report a delayed provider error after decomposeTask cancellation', async () => {
+    const abortController = new AbortController();
+    const onAgentError = vi.fn();
+    let rejectRunAgent: ((error: Error) => void) | undefined;
+    mockRunAgent.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectRunAgent = reject;
+    }));
+    const caller = new PromptBasedStructuredCaller();
+    const result = caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+      abortSignal: abortController.signal,
+      onAgentError,
+    });
+    await vi.waitFor(() => expect(mockRunAgent).toHaveBeenCalledOnce());
+
+    abortController.abort(new Error('cancelled while waiting'));
+    await expect(result).rejects.toThrow('cancelled while waiting');
+
+    rejectRunAgent?.(new Error('late provider cleanup failure'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onAgentError).not.toHaveBeenCalled();
   });
 
   it('should succeed decomposeTask on the third attempt (boundary case)', async () => {
@@ -695,11 +686,11 @@ describe('PromptBasedStructuredCaller', () => {
 
     expect(infoMock).toHaveBeenCalledTimes(1);
     expect(infoMock).toHaveBeenCalledWith(
-      'Structured call failed, retrying',
+      'Team Leader decomposition failed validation; regenerating',
       expect.objectContaining({
         attempt: 1,
         maxAttempts: 3,
-        error: expect.stringContaining('```json ... ``` block'),
+        issueCodes: ['decomposition.parts_invalid'],
       }),
     );
   });

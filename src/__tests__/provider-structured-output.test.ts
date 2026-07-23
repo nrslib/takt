@@ -382,6 +382,21 @@ describe('OpenCodeProvider — structured output', () => {
     expect(opts).toHaveProperty('outputSchema', SCHEMA);
   });
 
+  it('structured output の retry 上限を callOpenCode に渡す', async () => {
+    mockCallOpenCode.mockResolvedValue(doneResponse('coder'));
+
+    const agent = new OpenCodeProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      model: 'openai/gpt-4',
+      outputSchema: SCHEMA,
+      structuredOutputRetryCount: 0,
+    });
+
+    const opts = mockCallOpenCode.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('structuredOutputRetryCount', 0);
+  });
+
   it('provider_options.opencode.variant を callOpenCode に渡す', async () => {
     mockCallOpenCode.mockResolvedValue(doneResponse('coder'));
 

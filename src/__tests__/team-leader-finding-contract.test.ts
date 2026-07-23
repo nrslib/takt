@@ -318,6 +318,37 @@ describe('Finding Contract Team Leader contract', () => {
     }, createFindingContractPartCompletionJsonSchema())).toThrow(/must match pattern/);
   });
 
+  it('keeps provider-facing finding ID schema native-compatible and validates semantics at runtime', () => {
+    const makePayload = (findingIds: string[]) => ({
+      parts: [{
+        id: 'repair',
+        title: 'Repair',
+        instruction: 'repair',
+        findingContract: {
+          findingIds,
+          role: 'repair',
+          writePaths: ['src/a.ts'],
+          readPaths: [],
+        },
+      }],
+    });
+
+    expect(() => validateStructuredOutputAgainstSchema(
+      makePayload([]),
+      createFindingContractDecompositionJsonSchema(),
+    )).not.toThrow();
+    expect(() => validateStructuredOutputAgainstSchema(
+      makePayload(['F-0001', 'F-0001']),
+      createFindingContractDecompositionJsonSchema(),
+    )).not.toThrow();
+    expect(() => parseFindingContractPartDefinition(makePayload([]).parts[0], 0))
+      .toThrow(/must not be empty/);
+    expect(() => parseFindingContractPartDefinition(
+      makePayload(['F-0001', 'F-0001']).parts[0],
+      0,
+    )).toThrow(/must not contain duplicates/);
+  });
+
   it('rejects unknown findings, duplicate repair ownership, and overlapping write paths', () => {
     expect(() => validateFindingContractPartBatch(
       [makePart('unknown', ['F-9999'])],

@@ -582,6 +582,7 @@ describe('agent-usecases', () => {
       allowedTools: [],
       permissionMode: 'readonly',
       outputSchema: { type: 'decomposition', maxInitialParts: 3 },
+      structuredOutputRetryCount: 0,
     }));
     const [, , callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
     expect(callOptions).not.toHaveProperty('maxTurns');
@@ -633,6 +634,99 @@ describe('agent-usecases', () => {
     })).rejects.toThrow('requires structured output');
 
     expect(parseParts).not.toHaveBeenCalled();
+    expect(runAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it('Finding Contract decomposition は無効な初回分解を検証feedback付きで再生成する', async () => {
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce(doneResponse('invalid', {
+        parts: [{
+          id: 'invalid',
+          title: 'Invalid',
+          instruction: 'Invalid',
+          findingContract: {
+            findingIds: [],
+            role: 'repair',
+            writePaths: ['src/a.ts'],
+            readPaths: [],
+          },
+        }],
+      }))
+      .mockResolvedValueOnce(doneResponse('valid', {
+        parts: [{
+          id: 'repair',
+          title: 'Repair',
+          instruction: 'Repair F-0001',
+          findingContract: {
+            findingIds: ['F-0001'],
+            role: 'repair',
+            writePaths: ['src/a.ts'],
+            readPaths: [],
+          },
+        }],
+      }));
+
+    const result = await decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      findingContract: {
+        targetFindingIds: ['F-0001'],
+        actionableFindings: '{"open":[{"id":"F-0001"}]}',
+      },
+    });
+
+    expect(result.parts).toHaveLength(1);
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    const secondPrompt = vi.mocked(runAgent).mock.calls[1]?.[1];
+    expect(secondPrompt).toContain('Previously rejected decomposition');
+    expect(secondPrompt).toContain('decomposition.parts_invalid');
+    expect(secondPrompt).not.toContain('"content"');
+  });
+
+  it('Finding Contract decomposition は repair 所有重複も part 実行前に再生成する', async () => {
+    const makePart = (id: string, findingId: string) => ({
+      id,
+      title: id,
+      instruction: id,
+      findingContract: {
+        findingIds: [findingId],
+        role: 'repair',
+        writePaths: [`src/${id}.ts`],
+        readPaths: [],
+      },
+    });
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce(doneResponse('duplicate', {
+        parts: [makePart('first', 'F-0001'), makePart('second', 'F-0001')],
+      }))
+      .mockResolvedValueOnce(doneResponse('valid', {
+        parts: [makePart('repair', 'F-0001')],
+      }));
+
+    const result = await decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      findingContract: {
+        targetFindingIds: ['F-0001'],
+        actionableFindings: '{"open":[{"id":"F-0001"}]}',
+      },
+    });
+
+    expect(result.parts.map((part) => part.id)).toEqual(['repair']);
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runAgent).mock.calls[1]?.[1]).toContain('multiple repair parts');
+  });
+
+  it('decomposeTask は provider 例外を再試行しない', async () => {
+    const providerError = new Error('network unavailable');
+    vi.mocked(runAgent).mockRejectedValue(providerError);
+    const onAgentError = vi.fn();
+
+    await expect(decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      onAgentError,
+    })).rejects.toBe(providerError);
+
+    expect(runAgent).toHaveBeenCalledOnce();
+    expect(onAgentError).toHaveBeenCalledWith(providerError);
   });
 
   it('decomposeTask は done 以外をエラーにする', async () => {
@@ -697,6 +791,58 @@ describe('agent-usecases', () => {
     );
     expect(onAgentResponse).toHaveBeenCalledWith(response);
     expect(result.providerUsage).toEqual(providerUsage);
+  });
+
+  it('decomposeTask は応答待ち中の中断後に成功 callback を通知しない', async () => {
+    const abortController = new AbortController();
+    const onAgentResponse = vi.fn();
+    let resolveRunAgent: ((response: ReturnType<typeof doneResponse>) => void) | undefined;
+    vi.mocked(runAgent).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRunAgent = resolve;
+    }));
+
+    const result = decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      abortSignal: abortController.signal,
+      onAgentResponse,
+    });
+    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledOnce());
+
+    abortController.abort(new Error('cancelled while waiting'));
+    await expect(result).rejects.toThrow('cancelled while waiting');
+
+    resolveRunAgent?.(doneResponse('x', {
+      parts: [{ id: 'p1', title: 'Part 1', instruction: 'Do 1' }],
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onAgentResponse).not.toHaveBeenCalled();
+  });
+
+  it('decomposeTask は中断後に遅延した provider error を通知しない', async () => {
+    const abortController = new AbortController();
+    const onAgentError = vi.fn();
+    let rejectRunAgent: ((error: Error) => void) | undefined;
+    vi.mocked(runAgent).mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectRunAgent = reject;
+    }));
+
+    const result = decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      abortSignal: abortController.signal,
+      onAgentError,
+    });
+    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledOnce());
+
+    abortController.abort(new Error('cancelled while waiting'));
+    await expect(result).rejects.toThrow('cancelled while waiting');
+
+    rejectRunAgent?.(new Error('late provider cleanup failure'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onAgentError).not.toHaveBeenCalled();
   });
 
   it('decomposeTask は workflowMeta を runAgent に伝搬する', async () => {

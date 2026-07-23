@@ -440,6 +440,8 @@ export interface OpenCodeCallOptions {
   childProcessEnv?: Readonly<Record<string, string>>;
   /** JSON schema for native structured output (OpenCode format: json_schema). */
   outputSchema?: Record<string, unknown>;
+  /** Number of provider-side retries for native structured output validation. */
+  structuredOutputRetryCount?: number;
   language?: Language;
 }
 

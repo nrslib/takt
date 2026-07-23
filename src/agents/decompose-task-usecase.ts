@@ -27,6 +27,13 @@ import type { FindingContractDecisionEvidenceSnapshot } from '../core/workflow/t
 import type {
   FindingContractDecisionRecoveryPromptContext,
 } from '../core/workflow/engine/team-leader-finding-contract-decision-retry.js';
+import {
+  createTeamLeaderDecompositionValidationError,
+  requestValidTeamLeaderDecomposition,
+} from './team-leader-decomposition-retry.js';
+import { createLogger } from '../shared/utils/index.js';
+
+const log = createLogger('decompose-task-usecase');
 
 export interface FindingContractDecompositionContext {
   readonly targetFindingIds: readonly string[];
@@ -101,65 +108,104 @@ export async function decomposeTask(
   maxInitialParts: number | undefined,
   options: DecomposeTaskOptions,
 ): Promise<DecomposeTaskResponse> {
-  let response: AgentResponse;
-  try {
-    response = await runAgent(options.persona, buildDecomposePrompt(
-      instruction,
-      maxInitialParts,
-      options.language,
-      options.inspectTools,
-      options.findingContract,
-    ), {
-      cwd: options.cwd,
-      personaPath: options.personaPath,
-      language: options.language,
-      model: options.model,
-      provider: options.provider,
-      resolvedModel: options.resolvedModel,
-      resolvedProvider: options.resolvedProvider,
-      allowedTools: options.inspectTools ?? [],
-      mcpServers: options.mcpServers,
-      permissionMode: 'readonly',
-      outputSchema: options.findingContract === undefined
-        ? loadDecompositionSchema(maxInitialParts)
-        : withMaxInitialParts(createFindingContractDecompositionJsonSchema(), maxInitialParts),
-      onStream: options.onStream,
-      workflowMeta: options.workflowMeta,
-      childProcessEnv: options.childProcessEnv,
-      abortSignal: options.abortSignal,
-      onPromptResolved: options.onPromptResolved,
-    });
-  } catch (error) {
-    options.onAgentError?.(error);
-    throw error;
-  }
-  options.onAgentResponse?.(response);
+  return requestValidTeamLeaderDecomposition({
+    abortSignal: options.abortSignal,
+    request: async (rejectedDecomposition) => {
+      let response: AgentResponse;
+      try {
+        response = await runAgent(options.persona, buildDecomposePrompt(
+          instruction,
+          maxInitialParts,
+          options.language,
+          options.inspectTools,
+          options.findingContract,
+          rejectedDecomposition,
+        ), {
+          cwd: options.cwd,
+          personaPath: options.personaPath,
+          language: options.language,
+          model: options.model,
+          provider: options.provider,
+          resolvedModel: options.resolvedModel,
+          resolvedProvider: options.resolvedProvider,
+          allowedTools: options.inspectTools ?? [],
+          mcpServers: options.mcpServers,
+          permissionMode: 'readonly',
+          outputSchema: options.findingContract === undefined
+            ? loadDecompositionSchema(maxInitialParts)
+            : withMaxInitialParts(createFindingContractDecompositionJsonSchema(), maxInitialParts),
+          structuredOutputRetryCount: 0,
+          onStream: options.onStream,
+          workflowMeta: options.workflowMeta,
+          childProcessEnv: options.childProcessEnv,
+          abortSignal: options.abortSignal,
+          onPromptResolved: options.onPromptResolved,
+        });
+      } catch (error) {
+        options.abortSignal?.throwIfAborted();
+        options.onAgentError?.(error);
+        throw error;
+      }
+      options.abortSignal?.throwIfAborted();
+      options.onAgentResponse?.(response);
 
-  if (response.status !== 'done') {
-    const detail = response.error || response.content || response.status;
-    throw new Error(`Team leader failed: ${detail}`);
-  }
+      if (response.status !== 'done') {
+        const detail = response.error || response.content || response.status;
+        throw new Error(`Team leader failed: ${detail}`);
+      }
 
-  const parts = response.structuredOutput?.parts;
-  if (parts != null) {
-    const parsedParts = toPartDefinitions(parts, maxInitialParts, options.findingContract !== undefined);
-    if (options.findingContract !== undefined) {
-      validateFindingContractPartBatch(parsedParts, options.findingContract.targetFindingIds);
-    }
-    return {
-      parts: parsedParts,
-      ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
-    };
-  }
+      const rawParts = response.structuredOutput?.parts;
+      if (rawParts != null) {
+        let parts: PartDefinition[];
+        try {
+          parts = toPartDefinitions(rawParts, maxInitialParts, options.findingContract !== undefined);
+          if (options.findingContract !== undefined) {
+            validateFindingContractPartBatch(parts, options.findingContract.targetFindingIds);
+          }
+        } catch (error) {
+          throw createTeamLeaderDecompositionValidationError(
+            'decomposition.parts_invalid',
+            '$.parts',
+            error,
+          );
+        }
+        return {
+          parts,
+          ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
+        };
+      }
 
-  if (options.findingContract !== undefined) {
-    throw new Error('Finding Contract Team Leader decomposition requires structured output');
-  }
+      if (options.findingContract !== undefined) {
+        throw createTeamLeaderDecompositionValidationError(
+          'decomposition.structured_output_missing',
+          '$.parts',
+          new Error('Finding Contract Team Leader decomposition requires structured output'),
+        );
+      }
 
-  return {
-    parts: parseParts(response.content, maxInitialParts),
-    ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
-  };
+      let parts: PartDefinition[];
+      try {
+        parts = parseParts(response.content, maxInitialParts);
+      } catch (error) {
+        throw createTeamLeaderDecompositionValidationError(
+          'decomposition.parts_invalid',
+          '$',
+          error,
+        );
+      }
+      return {
+        parts,
+        ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
+      };
+    },
+    onRejected: (rejectedDecomposition) => {
+      log.info('Team Leader decomposition failed validation; regenerating', {
+        attempt: rejectedDecomposition.attempt,
+        maxAttempts: rejectedDecomposition.maxAttempts,
+        issueCodes: rejectedDecomposition.issues.map((issue) => issue.code),
+      });
+    },
+  });
 }
 
 export async function requestMoreParts(

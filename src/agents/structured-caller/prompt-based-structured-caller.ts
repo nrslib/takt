@@ -38,6 +38,10 @@ import {
   createFindingContractTeamLeaderDecisionValidationError,
 } from '../../core/workflow/team-leader-finding-contract-decision-validation.js';
 import { parseFindingContractTeamLeaderDecision } from '../../core/workflow/team-leader-finding-contract-decision.js';
+import {
+  createTeamLeaderDecompositionValidationError,
+  requestValidTeamLeaderDecomposition,
+} from '../team-leader-decomposition-retry.js';
 
 const log = createLogger('prompt-based-structured-caller');
 
@@ -171,60 +175,81 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     maxInitialParts: number | undefined,
     options: DecomposeTaskOptions,
   ): Promise<DecomposeTaskResponse> {
-    const prompt = buildPromptBasedDecomposePrompt(
-      instruction,
-      maxInitialParts,
-      options.language,
-      options.inspectTools,
-      options.findingContract,
-    );
+    return requestValidTeamLeaderDecomposition({
+      abortSignal: options.abortSignal,
+      request: async (rejectedDecomposition) => {
+        const prompt = buildPromptBasedDecomposePrompt(
+          instruction,
+          maxInitialParts,
+          options.language,
+          options.inspectTools,
+          options.findingContract,
+          rejectedDecomposition,
+        );
+        let response: AgentResponse;
+        try {
+          response = await runAgent(options.persona, prompt, {
+            cwd: options.cwd,
+            personaPath: options.personaPath,
+            language: options.language,
+            model: options.model,
+            provider: options.provider,
+            resolvedModel: options.resolvedModel,
+            resolvedProvider: options.resolvedProvider,
+            allowedTools: options.inspectTools ?? [],
+            mcpServers: options.mcpServers,
+            permissionMode: 'readonly',
+            onStream: options.onStream,
+            workflowMeta: options.workflowMeta,
+            childProcessEnv: options.childProcessEnv,
+            abortSignal: options.abortSignal,
+            onPromptResolved: options.onPromptResolved,
+          });
+        } catch (error) {
+          options.abortSignal?.throwIfAborted();
+          options.onAgentError?.(error);
+          throw error;
+        }
+        options.abortSignal?.throwIfAborted();
+        options.onAgentResponse?.(response);
 
-    return withRetry(async () => {
-      let response: AgentResponse;
-      try {
-        response = await runAgent(options.persona, prompt, {
-          cwd: options.cwd,
-          personaPath: options.personaPath,
-          language: options.language,
-          model: options.model,
-          provider: options.provider,
-          resolvedModel: options.resolvedModel,
-          resolvedProvider: options.resolvedProvider,
-          allowedTools: options.inspectTools ?? [],
-          mcpServers: options.mcpServers,
-          permissionMode: 'readonly',
-          onStream: options.onStream,
-          workflowMeta: options.workflowMeta,
-          childProcessEnv: options.childProcessEnv,
-          abortSignal: options.abortSignal,
-          onPromptResolved: options.onPromptResolved,
-        });
-      } catch (error) {
-        options.onAgentError?.(error);
-        throw error;
-      }
-      options.onAgentResponse?.(response);
+        if (response.status !== 'done') {
+          const detail = response.error || response.content || response.status;
+          throw new Error(`Team leader failed: ${detail}`);
+        }
 
-      if (response.status !== 'done') {
-        const detail = response.error || response.content || response.status;
-        throw new Error(`Team leader failed: ${detail}`);
-      }
-
-      const parts = options.findingContract === undefined
-        ? parseParts(response.content, maxInitialParts)
-        : toPartDefinitions(
-            parseLastJsonBlock(response.content),
-            maxInitialParts,
-            true,
+        let parts;
+        try {
+          parts = options.findingContract === undefined
+            ? parseParts(response.content, maxInitialParts)
+            : toPartDefinitions(
+                parseLastJsonBlock(response.content),
+                maxInitialParts,
+                true,
+              );
+          if (options.findingContract !== undefined) {
+            validateFindingContractPartBatch(parts, options.findingContract.targetFindingIds);
+          }
+        } catch (error) {
+          throw createTeamLeaderDecompositionValidationError(
+            'decomposition.parts_invalid',
+            '$',
+            error,
           );
-      if (options.findingContract !== undefined) {
-        validateFindingContractPartBatch(parts, options.findingContract.targetFindingIds);
-      }
-      return {
-        parts,
-        ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
-      };
-    }, options.abortSignal);
+        }
+        return {
+          parts,
+          ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
+        };
+      },
+      onRejected: (rejectedDecomposition) => {
+        log.info('Team Leader decomposition failed validation; regenerating', {
+          attempt: rejectedDecomposition.attempt,
+          maxAttempts: rejectedDecomposition.maxAttempts,
+          issueCodes: rejectedDecomposition.issues.map((issue) => issue.code),
+        });
+      },
+    });
   }
 
   async requestMoreParts(
