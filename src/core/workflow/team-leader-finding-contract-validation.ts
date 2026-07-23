@@ -1,13 +1,28 @@
 import { isAbsolute, posix } from 'node:path';
 
 export const FINDING_CONTRACT_LITERAL_PATH_PATTERN = String.raw`^[^*?]+$`;
+export const FINDING_CONTRACT_CHANGED_PATHS_LIMITS = Object.freeze({
+  maxItems: 20,
+  maxItemLength: 1000,
+});
+export const FINDING_CONTRACT_CHANGED_PATH_OUTSIDE_ASSIGNMENT_REASON =
+  'Changed path is outside the part writePaths assignment';
+
+export interface FindingContractInputValidationClassification {
+  readonly code: 'changed_path_outside_assignment';
+  readonly fieldPath: `changedPaths[${number}]`;
+  readonly reason: typeof FINDING_CONTRACT_CHANGED_PATH_OUTSIDE_ASSIGNMENT_REASON;
+}
 
 const findingContractLiteralPathPattern = new RegExp(FINDING_CONTRACT_LITERAL_PATH_PATTERN);
 
 export class FindingContractInputValidationError extends Error {
-  constructor(message: string) {
+  readonly classification?: FindingContractInputValidationClassification;
+
+  constructor(message: string, classification?: FindingContractInputValidationClassification) {
     super(message);
     this.name = 'FindingContractInputValidationError';
+    this.classification = classification;
   }
 }
 
@@ -35,10 +50,20 @@ export function requireNonEmptyString(value: unknown, label: string): string {
 
 export function requireBoundedString(value: unknown, label: string, maxLength: number): string {
   const parsed = requireNonEmptyString(value, label);
-  if (parsed.length > maxLength) {
+  if (hasMoreUnicodeCodePointsThan(parsed, maxLength)) {
     throw new FindingContractInputValidationError(`${label} exceeds ${maxLength} characters`);
   }
   return parsed;
+}
+
+function hasMoreUnicodeCodePointsThan(value: string, maxLength: number): boolean {
+  let length = 0;
+  const characters = value[Symbol.iterator]();
+  while (!characters.next().done) {
+    length += 1;
+    if (length > maxLength) return true;
+  }
+  return false;
 }
 
 export function requireStringArray(

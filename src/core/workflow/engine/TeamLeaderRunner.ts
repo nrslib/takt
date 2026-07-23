@@ -18,7 +18,13 @@ import {
   buildTeamLeaderAggregatedContent,
   type TeamLeaderArtifactReference,
 } from './team-leader-aggregation.js';
-import { createPartStep, createTeamLeaderPlanningStep, resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
+import {
+  buildTeamLeaderPartFeedbackResult,
+  createPartStep,
+  createTeamLeaderPlanningStep,
+  resolvePartErrorDetail,
+  summarizeParts,
+} from './team-leader-common.js';
 import { buildTeamLeaderParallelLoggerOptions, emitTeamLeaderProgressHint } from './team-leader-streaming.js';
 import {
   collectUncoveredPartTimeoutIds,
@@ -361,17 +367,12 @@ export class TeamLeaderRunner {
               return leftIndex - rightIndex;
             })
           : currentResults;
-        const feedbackResults = feedbackPartResults.map((result) => ({
-          id: result.part.id,
-          title: result.part.title,
-          status: result.response.status,
-          content: result.response.status === 'error'
-            ? `[ERROR] ${resolvePartErrorDetail(result)}`
-            : result.response.content,
-          ...(findingContractMode
-            ? { findingContractClaim: buildFindingContractPartIndexEntry(result) }
-            : {}),
-        }));
+        const feedbackResults = feedbackPartResults.map((result) => {
+          const findingContractClaim = findingContractMode
+            ? buildFindingContractPartIndexEntry(result)
+            : undefined;
+          return buildTeamLeaderPartFeedbackResult(result, findingContractClaim);
+        });
         const findingContractContext = findingContractExecution === undefined
           ? undefined
           : {
