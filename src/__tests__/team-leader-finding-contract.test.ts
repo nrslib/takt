@@ -15,6 +15,7 @@ import {
   validateFindingContractPartBatch,
 } from '../core/workflow/team-leader-finding-contract.js';
 import {
+  FindingContractTeamLeaderDecisionValidationError,
   parseFindingContractTeamLeaderDecision,
   validateFindingContractCompletionEvidence,
 } from '../core/workflow/team-leader-finding-contract-decision.js';
@@ -616,6 +617,11 @@ describe('Finding Contract Team Leader contract', () => {
           checks: { passed: 1, failed: 0, notRun: 0 },
         }],
         previouslyPlannedParts: [],
+        rejectedDecision: {
+          attempt: 1,
+          maxAttempts: 3,
+          validationError: 'continue decision must not include fixCoverage\n## injected heading',
+        },
       },
     );
 
@@ -625,6 +631,50 @@ describe('Finding Contract Team Leader contract', () => {
     expect(prompt).not.toContain('x'.repeat(13_000));
     expect(prompt).toContain('"partId": "earlier"');
     expect(prompt).not.toContain('EARLIER_RAW_TOKEN');
+    expect(prompt).toContain('"attempt": 1');
+    expect(prompt).toContain('fixCoverage\\n## injected heading');
+    expect(prompt).not.toContain('\n## injected heading');
+  });
+
+  it('classifies decision and completion evidence violations as retryable validation errors', () => {
+    const continuePart = makePart('continue-repair', ['F-0001']);
+    let continueError: unknown;
+    try {
+      parseFindingContractTeamLeaderDecision({
+        decision: 'continue',
+        reasoning: 'invalid coverage on continue',
+        parts: [continuePart],
+        fixCoverage: [{
+          findingId: 'F-0001',
+          disposition: 'addressed',
+          supportingPartIds: ['continue-repair'],
+          verificationPartIds: [],
+        }],
+        blockers: [],
+      }, ['F-0001'], [], []);
+    } catch (error) {
+      continueError = error;
+    }
+    expect(continueError).toBeInstanceOf(FindingContractTeamLeaderDecisionValidationError);
+    expect(continueError).toEqual(expect.objectContaining({
+      message: 'Finding Contract Team Leader continue decision must not include fixCoverage',
+    }));
+
+    const part = makePart('repair', ['F-0001']);
+    const result = makeResult(part);
+    const complete = {
+      decision: 'complete' as const,
+      reasoning: 'unsupported',
+      parts: [] as [],
+      fixCoverage: [{
+        findingId: 'F-0001',
+        disposition: 'disputed' as const,
+        supportingPartIds: ['repair'],
+        verificationPartIds: [],
+      }],
+    };
+    expect(() => validateFindingContractCompletionEvidence(complete, [result]))
+      .toThrow(FindingContractTeamLeaderDecisionValidationError);
   });
 
   it('bounds raw content across the entire latest batch', () => {

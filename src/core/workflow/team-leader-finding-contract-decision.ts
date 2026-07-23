@@ -18,6 +18,23 @@ import {
   requireStringArray,
 } from './team-leader-finding-contract-validation.js';
 
+export class FindingContractTeamLeaderDecisionValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FindingContractTeamLeaderDecisionValidationError';
+  }
+}
+
+export function toFindingContractTeamLeaderDecisionValidationError(
+  error: unknown,
+): FindingContractTeamLeaderDecisionValidationError {
+  if (error instanceof FindingContractTeamLeaderDecisionValidationError) {
+    return error;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return new FindingContractTeamLeaderDecisionValidationError(message);
+}
+
 function parseFixCoverage(
   raw: unknown,
   targetFindingIds: readonly string[],
@@ -73,6 +90,24 @@ export function parseFindingContractTeamLeaderDecision(
   existingIds: readonly string[],
   previouslyPlannedParts: readonly PartDefinition[],
 ): FindingContractTeamLeaderDecision {
+  try {
+    return parseFindingContractTeamLeaderDecisionUnchecked(
+      raw,
+      targetFindingIds,
+      existingIds,
+      previouslyPlannedParts,
+    );
+  } catch (error) {
+    throw toFindingContractTeamLeaderDecisionValidationError(error);
+  }
+}
+
+function parseFindingContractTeamLeaderDecisionUnchecked(
+  raw: unknown,
+  targetFindingIds: readonly string[],
+  existingIds: readonly string[],
+  previouslyPlannedParts: readonly PartDefinition[],
+): FindingContractTeamLeaderDecision {
   const payload = requireObject(raw, 'Finding Contract Team Leader feedback');
   requireExactKeys(payload, 'Finding Contract Team Leader feedback', [
     'decision', 'reasoning', 'parts', 'fixCoverage', 'blockers',
@@ -122,6 +157,17 @@ export function parseFindingContractTeamLeaderDecision(
 }
 
 export function validateFindingContractCompletionEvidence(
+  decision: Exclude<FindingContractTeamLeaderDecision, { decision: 'continue' | 'replan' }>,
+  partResults: readonly PartResult[],
+): void {
+  try {
+    validateFindingContractCompletionEvidenceUnchecked(decision, partResults);
+  } catch (error) {
+    throw toFindingContractTeamLeaderDecisionValidationError(error);
+  }
+}
+
+function validateFindingContractCompletionEvidenceUnchecked(
   decision: Exclude<FindingContractTeamLeaderDecision, { decision: 'continue' | 'replan' }>,
   partResults: readonly PartResult[],
 ): void {
