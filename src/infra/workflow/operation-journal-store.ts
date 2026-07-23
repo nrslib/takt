@@ -775,24 +775,25 @@ class FileOperationJournalStore implements OperationJournalStore {
   }
 
   private acquireFileLock(): LockSnapshot {
-    const deadline = Date.now() + LOCK_TIMEOUT_MS;
-    while (true) {
-      const acquired = this.tryAcquireLock(this.lockPath);
-      if (acquired !== undefined) {
-        return acquired;
-      }
-      const existing = this.readLockSnapshot(this.lockPath);
-      if (existing !== undefined && this.isLockRecoverable(existing)) {
-        this.recoverFileLock(existing, deadline);
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(`Operation journal timed out waiting for lock: ${this.lockPath}`);
-      }
-      waitForLockRetry();
-    }
+    return this.acquireFileLockWithRecovery(
+      this.lockPath,
+      (existing, deadline) => this.recoverFileLock(existing, deadline),
+    );
   }
 
   private acquireIndependentFileLock(lockPath: string): LockSnapshot {
+    return this.acquireFileLockWithRecovery(
+      lockPath,
+      (existing) => {
+        this.removeLockFileIfUnchanged(lockPath, existing);
+      },
+    );
+  }
+
+  private acquireFileLockWithRecovery(
+    lockPath: string,
+    recover: (existing: LockSnapshot, deadline: number) => void,
+  ): LockSnapshot {
     const deadline = Date.now() + LOCK_TIMEOUT_MS;
     while (true) {
       const acquired = this.tryAcquireLock(lockPath);
@@ -801,7 +802,7 @@ class FileOperationJournalStore implements OperationJournalStore {
       }
       const existing = this.readLockSnapshot(lockPath);
       if (existing !== undefined && this.isLockRecoverable(existing)) {
-        this.removeLockFileIfUnchanged(lockPath, existing);
+        recover(existing, deadline);
       }
       if (Date.now() >= deadline) {
         throw new Error(`Operation journal timed out waiting for lock: ${lockPath}`);
