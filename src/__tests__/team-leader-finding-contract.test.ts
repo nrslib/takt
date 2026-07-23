@@ -143,7 +143,10 @@ describe('Finding Contract Team Leader contract', () => {
     )).toThrow(/wildcard characters/);
   });
 
-  it('rejects glob paths in provider-facing Finding Contract schemas', () => {
+  it.each([
+    'src/**/*.ts',
+    'src/file?.ts',
+  ])('rejects wildcard paths in provider-facing Finding Contract schemas: %s', (path) => {
     expect(() => validateStructuredOutputAgainstSchema({
       parts: [{
         id: 'repair',
@@ -152,7 +155,7 @@ describe('Finding Contract Team Leader contract', () => {
         findingContract: {
           findingIds: ['F-0001'],
           role: 'repair',
-          writePaths: ['src/**/*.ts'],
+          writePaths: [path],
           readPaths: [],
         },
       }],
@@ -168,7 +171,7 @@ describe('Finding Contract Team Leader contract', () => {
         findingContract: {
           findingIds: ['F-0001'],
           role: 'repair',
-          writePaths: ['src/**/*.ts'],
+          writePaths: [path],
           readPaths: [],
         },
       }],
@@ -182,7 +185,7 @@ describe('Finding Contract Team Leader contract', () => {
         outcome: 'addressed',
         evidence: ['src/a.ts:1'],
       }],
-      changedPaths: ['src/**/*.ts'],
+      changedPaths: [path],
       checks: [],
       summary: 'done',
     }, createFindingContractPartCompletionJsonSchema())).toThrow(/must match pattern/);
