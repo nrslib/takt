@@ -13,6 +13,7 @@ import type {
 } from '../core/models/types.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { evaluateWhenExpression } from '../core/workflow/evaluation/when-evaluator.js';
+import { FindingContractTeamLeaderDecisionValidationError } from '../core/workflow/team-leader-finding-contract-decision.js';
 
 const { executeAgentMock } = vi.hoisted(() => ({ executeAgentMock: vi.fn() }));
 
@@ -61,7 +62,28 @@ function makeLedger(): FindingLedger {
         observations: [],
       },
     ],
-    rawFindings: [],
+    rawFindings: [
+      {
+        rawFindingId: 'R-0001',
+        stepName: 'reviewers',
+        reviewer: 'reviewer',
+        familyTag: 'first-family',
+        severity: 'high',
+        title: 'First defect',
+        description: 'first description',
+        relation: 'new',
+      },
+      {
+        rawFindingId: 'R-0002',
+        stepName: 'reviewers',
+        reviewer: 'reviewer',
+        familyTag: 'second-family',
+        severity: 'medium',
+        title: 'Second defect',
+        description: 'second description',
+        relation: 'new',
+      },
+    ],
     conflicts: [],
     reviewerAnomalies: [],
   } as unknown as FindingLedger;
@@ -154,6 +176,21 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
         },
         timestamp: new Date(),
       });
+    const completeDecision = {
+      decision: 'complete' as const,
+      reasoning: 'all covered',
+      parts: [] as [],
+      fixCoverage: parts.map((part) => {
+        const findingId = part.findingContract.findingIds[0];
+        if (!findingId) throw new Error(`Missing finding assignment: ${part.id}`);
+        return {
+          findingId,
+          disposition: 'addressed' as const,
+          supportingPartIds: [part.id],
+          verificationPartIds: [],
+        };
+      }),
+    };
     const structuredCaller = {
       judgeStatus: vi.fn(),
       evaluateCondition: vi.fn(),
@@ -161,26 +198,29 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
         options.onPromptResolved?.({ systemPrompt: 'system', userInstruction: 'leader instruction' });
         return { parts };
       }),
-      requestMoreParts: vi.fn(async () => ({
-        done: true,
-        reasoning: 'all covered',
-        parts: [],
-        findingContractDecision: {
-          decision: 'complete' as const,
+      requestMoreParts: vi.fn()
+        .mockRejectedValueOnce(new FindingContractTeamLeaderDecisionValidationError(
+          'Finding Contract Team Leader continue decision must not include fixCoverage',
+        ))
+        .mockResolvedValueOnce({
+          done: true,
+          reasoning: 'unsupported disposition',
+          parts: [],
+          findingContractDecision: {
+            ...completeDecision,
+            reasoning: 'unsupported disposition',
+            fixCoverage: completeDecision.fixCoverage.map((coverage, index) => ({
+              ...coverage,
+              disposition: index === 0 ? 'disputed' as const : coverage.disposition,
+            })),
+          },
+        })
+        .mockResolvedValueOnce({
+          done: true,
           reasoning: 'all covered',
-          parts: [] as [],
-          fixCoverage: parts.map((part) => {
-            const findingId = part.findingContract.findingIds[0];
-            if (!findingId) throw new Error(`Missing finding assignment: ${part.id}`);
-            return {
-              findingId,
-              disposition: 'addressed' as const,
-              supportingPartIds: [part.id],
-              verificationPartIds: [],
-            };
-          }),
-        },
-      })),
+          parts: [],
+          findingContractDecision: completeDecision,
+        }),
     };
     let leaderContext: unknown;
     let completeRuleMatched = false;
@@ -251,18 +291,39 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     const decompositionOptions = structuredCaller.decomposeTask.mock.calls[0]?.[2];
     expect(decompositionOptions?.findingContract.actionableFindings).toContain('F-0001');
     expect(decompositionOptions?.findingContract.actionableFindings).toContain('F-0002');
+    expect(decompositionOptions?.findingContract.actionableFindings).not.toContain('R-0001');
+    expect(decompositionOptions?.findingContract.actionableFindings).not.toContain('R-0002');
     const firstWorkerInstruction = executeAgentMock.mock.calls[0]?.[1] as string;
     const secondWorkerInstruction = executeAgentMock.mock.calls[1]?.[1] as string;
     expect(firstWorkerInstruction).toContain('## Finding Contract Part Assignment');
     expect(firstWorkerInstruction).toContain('src/first.ts');
     expect(firstWorkerInstruction).not.toContain('src/second.ts');
     expect(firstWorkerInstruction).toContain('F-0001');
+    expect(firstWorkerInstruction).toContain('R-0001');
     expect(firstWorkerInstruction).not.toContain('F-0002');
+    expect(firstWorkerInstruction).not.toContain('R-0002');
     expect(secondWorkerInstruction).toContain('src/second.ts');
     expect(secondWorkerInstruction).toContain('F-0002');
+    expect(secondWorkerInstruction).toContain('R-0002');
     expect(secondWorkerInstruction).not.toContain('F-0001');
+    expect(secondWorkerInstruction).not.toContain('R-0001');
     expect(firstWorkerInstruction).not.toContain('.takt/finding-ledger.json');
-    const feedbackOptions = structuredCaller.requestMoreParts.mock.calls[0]?.[3];
-    expect(feedbackOptions?.findingContract.completedPartIndex).toEqual([]);
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+    expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(3);
+    const firstFeedbackOptions = structuredCaller.requestMoreParts.mock.calls[0]?.[3];
+    const secondFeedbackOptions = structuredCaller.requestMoreParts.mock.calls[1]?.[3];
+    const thirdFeedbackOptions = structuredCaller.requestMoreParts.mock.calls[2]?.[3];
+    expect(firstFeedbackOptions?.findingContract.completedPartIndex).toEqual([]);
+    expect(firstFeedbackOptions?.findingContract.rejectedDecision).toBeUndefined();
+    expect(secondFeedbackOptions?.findingContract.rejectedDecision).toEqual({
+      attempt: 1,
+      maxAttempts: 3,
+      validationError: 'Finding Contract Team Leader continue decision must not include fixCoverage',
+    });
+    expect(thirdFeedbackOptions?.findingContract.rejectedDecision).toEqual({
+      attempt: 2,
+      maxAttempts: 3,
+      validationError: expect.stringContaining('has no supporting part claim'),
+    });
   });
 });

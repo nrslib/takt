@@ -33,6 +33,11 @@ export interface FindingContractTeamLeaderContext {
     decision: 'continue';
     reasoning: string;
   };
+  rejectedDecision?: {
+    attempt: number;
+    maxAttempts: number;
+    validationError: string;
+  };
 }
 
 export interface TeamLeaderPartFeedbackResult {

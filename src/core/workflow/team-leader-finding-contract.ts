@@ -8,6 +8,7 @@ import type { FindingLedger } from './findings/types.js';
 import { FILE_LINE_EVIDENCE_PATTERN } from './findings/evidence.js';
 import {
   renderActionableFindingLedgerInstructionSummary,
+  renderCompactActionableFindingLedgerInstructionSummary,
   selectActionableFindingEntries,
 } from './findings/context.js';
 import { ensureUniquePartIds, parsePartDefinitionEntry } from './part-definition-validator.js';
@@ -313,6 +314,13 @@ export function renderActionableFindingContractSummary(
   findingIds?: readonly string[],
 ): string {
   return renderActionableFindingLedgerInstructionSummary(ledger, findingIds);
+}
+
+export function renderCompactActionableFindingContractSummary(
+  ledger: FindingLedger,
+  findingIds?: readonly string[],
+): string {
+  return renderCompactActionableFindingLedgerInstructionSummary(ledger, findingIds);
 }
 
 export function collectActionableFindingIds(ledger: FindingLedger): string[] {

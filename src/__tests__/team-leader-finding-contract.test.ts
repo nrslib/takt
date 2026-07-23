@@ -10,14 +10,17 @@ import {
   parseFindingContractPartCompletionClaim,
   parseFindingContractPartDefinition,
   buildLatestFindingContractDigests,
+  renderActionableFindingContractSummary,
+  renderCompactActionableFindingContractSummary,
   validateFindingContractPartBatch,
 } from '../core/workflow/team-leader-finding-contract.js';
 import {
+  FindingContractTeamLeaderDecisionValidationError,
   parseFindingContractTeamLeaderDecision,
   validateFindingContractCompletionEvidence,
 } from '../core/workflow/team-leader-finding-contract-decision.js';
 import { buildFindingContractTeamLeaderAggregatedContent } from '../core/workflow/engine/team-leader-aggregation.js';
-import type { PartDefinition, PartResult } from '../core/models/types.js';
+import type { FindingLedger, PartDefinition, PartResult } from '../core/models/types.js';
 import { buildMorePartsPrompt } from '../agents/team-leader-structured-output.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { writeTeamLeaderPartArtifact } from '../core/workflow/engine/team-leader-artifacts.js';
@@ -66,6 +69,83 @@ function makeResult(part: PartDefinition, summary = `completed ${part.id}`): Par
 }
 
 describe('Finding Contract Team Leader contract', () => {
+  it('keeps actionable context while omitting raw finding IDs from the Team Leader summary', () => {
+    const observedAt = {
+      runId: 'run-1',
+      stepName: 'reviewers',
+      timestamp: '2026-07-23T00:00:00.000Z',
+    };
+    const ledger: FindingLedger = {
+      version: 1,
+      workflowName: 'workflow',
+      nextId: 2,
+      updatedAt: observedAt.timestamp,
+      findings: [{
+        id: 'F-0001',
+        status: 'open',
+        lifecycle: 'persists',
+        severity: 'high',
+        title: 'Defect',
+        location: 'src/defect.ts:10',
+        description: 'The defect persists.',
+        suggestion: 'Repair the defect class.',
+        reviewers: ['architecture-review', 'testing-review'],
+        rawFindingIds: ['raw-architecture', 'raw-testing'],
+        firstSeen: observedAt,
+        lastSeen: observedAt,
+      }],
+      rawFindings: [
+        {
+          rawFindingId: 'raw-architecture',
+          stepName: 'reviewers',
+          reviewer: 'architecture-review',
+          familyTag: 'architecture',
+          severity: 'high',
+          title: 'Defect',
+          location: 'src/defect.ts:10',
+          description: 'The defect persists.',
+          suggestion: 'Repair the defect class.',
+          relation: 'new',
+        },
+        {
+          rawFindingId: 'raw-testing',
+          stepName: 'reviewers',
+          reviewer: 'testing-review',
+          familyTag: 'testing',
+          severity: 'high',
+          title: 'Defect',
+          location: 'src/defect.ts:10',
+          description: 'The defect persists.',
+          suggestion: 'Repair the defect class.',
+          relation: 'new',
+        },
+      ],
+      conflicts: [],
+    };
+
+    const summary = JSON.parse(renderCompactActionableFindingContractSummary(ledger)) as {
+      open: Array<Record<string, unknown>>;
+    };
+    const assignedSummary = JSON.parse(renderActionableFindingContractSummary(ledger)) as {
+      open: Array<Record<string, unknown>>;
+    };
+
+    expect(summary.open[0]).toMatchObject({
+      id: 'F-0001',
+      lifecycle: 'persists',
+      severity: 'high',
+      location: 'src/defect.ts:10',
+      description: 'The defect persists.',
+      suggestion: 'Repair the defect class.',
+      familyTags: ['architecture', 'testing'],
+    });
+    expect(summary.open[0]).not.toHaveProperty('rawFindingIds');
+    expect(assignedSummary.open[0]).toHaveProperty(
+      'rawFindingIds',
+      ['raw-architecture', 'raw-testing'],
+    );
+  });
+
   it('parses a scoped assignment and normalizes portable paths', () => {
     const part = parseFindingContractPartDefinition({
       id: 'repair-api',
@@ -537,6 +617,11 @@ describe('Finding Contract Team Leader contract', () => {
           checks: { passed: 1, failed: 0, notRun: 0 },
         }],
         previouslyPlannedParts: [],
+        rejectedDecision: {
+          attempt: 1,
+          maxAttempts: 3,
+          validationError: 'continue decision must not include fixCoverage\n## injected heading',
+        },
       },
     );
 
@@ -546,6 +631,50 @@ describe('Finding Contract Team Leader contract', () => {
     expect(prompt).not.toContain('x'.repeat(13_000));
     expect(prompt).toContain('"partId": "earlier"');
     expect(prompt).not.toContain('EARLIER_RAW_TOKEN');
+    expect(prompt).toContain('"attempt": 1');
+    expect(prompt).toContain('fixCoverage\\n## injected heading');
+    expect(prompt).not.toContain('\n## injected heading');
+  });
+
+  it('classifies decision and completion evidence violations as retryable validation errors', () => {
+    const continuePart = makePart('continue-repair', ['F-0001']);
+    let continueError: unknown;
+    try {
+      parseFindingContractTeamLeaderDecision({
+        decision: 'continue',
+        reasoning: 'invalid coverage on continue',
+        parts: [continuePart],
+        fixCoverage: [{
+          findingId: 'F-0001',
+          disposition: 'addressed',
+          supportingPartIds: ['continue-repair'],
+          verificationPartIds: [],
+        }],
+        blockers: [],
+      }, ['F-0001'], [], []);
+    } catch (error) {
+      continueError = error;
+    }
+    expect(continueError).toBeInstanceOf(FindingContractTeamLeaderDecisionValidationError);
+    expect(continueError).toEqual(expect.objectContaining({
+      message: 'Finding Contract Team Leader continue decision must not include fixCoverage',
+    }));
+
+    const part = makePart('repair', ['F-0001']);
+    const result = makeResult(part);
+    const complete = {
+      decision: 'complete' as const,
+      reasoning: 'unsupported',
+      parts: [] as [],
+      fixCoverage: [{
+        findingId: 'F-0001',
+        disposition: 'disputed' as const,
+        supportingPartIds: ['repair'],
+        verificationPartIds: [],
+      }],
+    };
+    expect(() => validateFindingContractCompletionEvidence(complete, [result]))
+      .toThrow(FindingContractTeamLeaderDecisionValidationError);
   });
 
   it('bounds raw content across the entire latest batch', () => {

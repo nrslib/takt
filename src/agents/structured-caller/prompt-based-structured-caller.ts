@@ -33,7 +33,10 @@ import { parseParts } from '../../core/workflow/engine/task-decomposer.js';
 import { createLogger, delay, getErrorMessage } from '../../shared/utils/index.js';
 import { buildMaxTurnsOption } from '../provider-call-options.js';
 import { validateFindingContractPartBatch } from '../../core/workflow/team-leader-finding-contract.js';
-import { parseFindingContractTeamLeaderDecision } from '../../core/workflow/team-leader-finding-contract-decision.js';
+import {
+  parseFindingContractTeamLeaderDecision,
+  toFindingContractTeamLeaderDecisionValidationError,
+} from '../../core/workflow/team-leader-finding-contract-decision.js';
 
 const log = createLogger('prompt-based-structured-caller');
 
@@ -267,7 +270,14 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         throw new Error(`Team leader feedback failed: ${detail}`);
       }
 
-      const raw = parseLastJsonBlock(response.content);
+      let raw: unknown;
+      try {
+        raw = parseLastJsonBlock(response.content);
+      } catch (error) {
+        throw options.findingContract === undefined
+          ? error
+          : toFindingContractTeamLeaderDecisionValidationError(error);
+      }
       const findingContractDecision = options.findingContract === undefined
         ? undefined
         : parseFindingContractTeamLeaderDecision(
@@ -287,7 +297,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
             }),
         ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
       };
-    }, options.abortSignal);
+    }, options.abortSignal, () => options.findingContract === undefined);
   }
 }
 
@@ -317,7 +327,11 @@ async function delayWithAbort(milliseconds: number, signal: AbortSignal | undefi
   });
 }
 
-async function withRetry<T>(runOnce: () => Promise<T>, abortSignal: AbortSignal | undefined): Promise<T> {
+async function withRetry<T>(
+  runOnce: () => Promise<T>,
+  abortSignal: AbortSignal | undefined,
+  shouldRetry: (error: unknown) => boolean = () => true,
+): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
     throwIfAborted(abortSignal);
@@ -326,6 +340,9 @@ async function withRetry<T>(runOnce: () => Promise<T>, abortSignal: AbortSignal 
     } catch (error) {
       lastError = error;
       throwIfAborted(abortSignal);
+      if (!shouldRetry(error)) {
+        throw error;
+      }
       if (attempt < RETRY_MAX_ATTEMPTS) {
         log.info('Structured call failed, retrying', {
           attempt,
