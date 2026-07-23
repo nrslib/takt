@@ -20,6 +20,7 @@ function makeDeps(nextStep: string) {
   };
   const state: WorkflowState = createInitialState(config, { projectCwd: '/worktree' });
   const response: AgentResponse = makeResponse({ persona: step.name, status: 'done', content: 'done' });
+  const commitTransition = vi.fn();
   return {
     state,
     options: {},
@@ -35,7 +36,11 @@ function makeDeps(nextStep: string) {
     cycleDetectorRecordAndCheck: vi.fn(() => ({ triggered: true, cycleCount: 1, monitor })),
     resolveDoneTransition: vi.fn(() => ({ nextStep })),
     runLoopMonitorJudge: vi.fn(async () => 'ABORT'),
-    runStep: vi.fn(async (_step: WorkflowStep, instruction: string) => ({ response, instruction })),
+    runStep: vi.fn(async (_step: WorkflowStep, instruction: string) => ({
+      response,
+      instruction,
+      commitTransition,
+    })),
     runQualityGates: vi.fn(async () => ({ ok: true as const })),
     persistPreviousResponseSnapshot: vi.fn(),
     buildInstruction: vi.fn(() => 'instruction'),
@@ -50,6 +55,7 @@ function makeDeps(nextStep: string) {
     updateMaxSteps: vi.fn(),
     checkCompletionGate: vi.fn(() => ({ ok: true as const })),
     checkReturnValueGate: vi.fn(() => ({ ok: true as const })),
+    commitTransition,
   };
 }
 
@@ -70,7 +76,38 @@ describe('WorkflowRunLoop loop monitor ordering', () => {
     const result = await runWorkflowToCompletion(deps);
 
     expect(result.abort?.kind).toBe('step_transition');
+    expect(deps.commitTransition).toHaveBeenCalledWith({
+      kind: 'next_step',
+      nextStep: 'ABORT',
+    });
     expect(deps.cycleDetectorRecordAndCheck).not.toHaveBeenCalled();
     expect(deps.runLoopMonitorJudge).not.toHaveBeenCalled();
+  });
+
+  it('does not commit a natural COMPLETE transition rejected by the completion gate', async () => {
+    const deps = makeDeps('COMPLETE');
+    deps.checkCompletionGate.mockReturnValue({
+      ok: false,
+      reason: 'provisional findings remain',
+    });
+
+    const result = await runWorkflowToCompletion(deps);
+
+    expect(result.abort?.kind).toBe('provisional_findings');
+    expect(deps.commitTransition).not.toHaveBeenCalled();
+  });
+
+  it('does not commit a monitored COMPLETE transition rejected by the completion gate', async () => {
+    const deps = makeDeps('reviewers');
+    deps.runLoopMonitorJudge.mockResolvedValue('COMPLETE');
+    deps.checkCompletionGate.mockReturnValue({
+      ok: false,
+      reason: 'provisional findings remain',
+    });
+
+    const result = await runWorkflowToCompletion(deps);
+
+    expect(result.abort?.kind).toBe('provisional_findings');
+    expect(deps.commitTransition).not.toHaveBeenCalled();
   });
 });

@@ -364,27 +364,10 @@ export function buildFindingContractPartIndexEntry(result: PartResult): FindingC
       checks: { passed: 0, failed: 0, notRun: 0 },
     };
   }
-  const assessment = assessFindingContractPartCompletionClaim(
-    result.response.structuredOutput,
-    result.part,
-  );
-  if (assessment.status === 'invalid') {
-    return {
-      id: result.part.id,
-      title: result.part.title,
-      role: result.part.findingContract.role,
-      findingIds: [...result.part.findingContract.findingIds],
-      status: result.response.status,
-      summary: 'Invalid completion claim',
-      claimAssessment: {
-        status: 'invalid',
-        validation: assessment.validation,
-      },
-      outcomes: [],
-      checks: { passed: 0, failed: 0, notRun: 0 },
-    };
+  const claim = result.findingContractClaim;
+  if (claim === undefined) {
+    throw new Error(`Part "${result.part.id}" is missing its validated Finding Contract completion claim`);
   }
-  const claim = assessment.claim;
   return {
     id: result.part.id,
     title: result.part.title,

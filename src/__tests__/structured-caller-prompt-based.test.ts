@@ -436,6 +436,33 @@ describe('PromptBasedStructuredCaller', () => {
     ]);
   });
 
+  it('retries prompt-only raw decomposition transport failures without parsing the response', async () => {
+    const rawResponse = {
+      persona: 'leader',
+      status: 'done' as const,
+      content: 'not parsed by the raw boundary',
+      timestamp: new Date(),
+    };
+    mockRunAgent
+      .mockRejectedValueOnce(new Error('transport failed'))
+      .mockResolvedValueOnce(rawResponse);
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.requestDecompositionRawResponse(
+      'break down the work',
+      3,
+      {
+        cwd: '/tmp/project',
+        provider: 'cursor',
+        persona: 'team-leader',
+      },
+    );
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+
+    await expect(promise).resolves.toBe(rawResponse);
+    expect(mockRunAgent).toHaveBeenCalledTimes(2);
+  });
+
   it('should retry decomposeTask when first response is an empty array and succeed on second attempt', async () => {
     mockRunAgent
       .mockResolvedValueOnce({

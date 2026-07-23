@@ -38,6 +38,8 @@ import {
   assertProviderResolvedForCapabilitySensitiveOptions,
 } from './engine-provider-options.js';
 import {
+  StructuredOutputSchemaError,
+  StructuredOutputValueValidationError,
   validateStructuredOutputAgainstSchema,
 } from './structured-output-schema-validator.js';
 import { providerSupportsStructuredOutput } from '../../../infra/providers/provider-capabilities.js';
@@ -414,7 +416,16 @@ export class StepExecutor {
     step: WorkflowStep,
     response: AgentResponse,
     runtime?: RuntimeStepResolution,
-  ): { response: AgentResponse; invalidDetail?: string } {
+  ): {
+    response: AgentResponse;
+    invalidDetail?: string;
+    invalidKind?: 'model_output' | 'schema_config';
+    invalidIssues?: readonly {
+      readonly path: string;
+      readonly keyword: string;
+      readonly message: string;
+    }[];
+  } {
     if (!step.structuredOutput) {
       return { response };
     }
@@ -494,7 +505,16 @@ export class StepExecutor {
         supportsStructuredOutput !== false && response.structuredOutput === undefined ? 'missing' : 'schema_error',
         detail,
       );
-      return { response, invalidDetail: detail };
+      return {
+        response,
+        invalidDetail: detail,
+        invalidKind: error instanceof StructuredOutputSchemaError
+          ? 'schema_config'
+          : 'model_output',
+        ...(error instanceof StructuredOutputValueValidationError
+          ? { invalidIssues: error.issues }
+          : {}),
+      };
     }
   }
 

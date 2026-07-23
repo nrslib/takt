@@ -20,16 +20,25 @@ import {
   createFindingContractFeedbackJsonSchema,
   type FindingContractFindingDigest,
   type FindingContractPartIndexEntry,
-  validateFindingContractPartBatch,
 } from '../core/workflow/team-leader-finding-contract.js';
 import { parseFindingContractTeamLeaderDecision } from '../core/workflow/team-leader-finding-contract-decision.js';
 import type { FindingContractDecisionEvidenceSnapshot } from '../core/workflow/team-leader-finding-contract-evidence.js';
 import type {
-  FindingContractDecisionRecoveryPromptContext,
-} from '../core/workflow/engine/team-leader-finding-contract-decision-retry.js';
+  FindingContractRecoveryPromptContext,
+} from '../core/workflow/engine/team-leader-finding-contract-recovery.js';
+import type {
+  FindingContractRejectedDecisionDigest,
+} from '../core/workflow/team-leader-finding-contract-decision-validation.js';
+import type {
+  FindingContractRejectedDecompositionDigest,
+} from '../core/workflow/team-leader-finding-contract-decomposition-validation.js';
+import {
+  validateFindingContractDecomposition,
+} from '../core/workflow/team-leader-finding-contract-decomposition-validation.js';
 import {
   createTeamLeaderDecompositionValidationError,
   requestValidTeamLeaderDecomposition,
+  type RejectedTeamLeaderDecomposition,
 } from './team-leader-decomposition-retry.js';
 import { createLogger } from '../shared/utils/index.js';
 
@@ -38,6 +47,7 @@ const log = createLogger('decompose-task-usecase');
 export interface FindingContractDecompositionContext {
   readonly targetFindingIds: readonly string[];
   readonly actionableFindings: string;
+  readonly recovery?: FindingContractRecoveryPromptContext<FindingContractRejectedDecompositionDigest>;
 }
 
 export interface FindingContractFeedbackContext extends FindingContractDecompositionContext {
@@ -48,7 +58,7 @@ export interface FindingContractFeedbackContext extends FindingContractDecomposi
     readonly decision: 'continue';
     readonly reasoning: string;
   };
-  readonly recovery?: FindingContractDecisionRecoveryPromptContext;
+  readonly recovery?: FindingContractRecoveryPromptContext<FindingContractRejectedDecisionDigest>;
 }
 
 export interface TeamLeaderPartFeedbackResult {
@@ -103,6 +113,20 @@ export interface DecomposeTaskResponse {
   providerUsage?: ProviderUsageSnapshot;
 }
 
+export async function requestDecompositionRawResponse(
+  instruction: string,
+  maxInitialParts: number | undefined,
+  options: DecomposeTaskOptions,
+): Promise<AgentResponse> {
+  return requestDecompositionOnce(
+    instruction,
+    maxInitialParts,
+    options,
+    undefined,
+    false,
+  );
+}
+
 export async function decomposeTask(
   instruction: string,
   maxInitialParts: number | undefined,
@@ -111,43 +135,13 @@ export async function decomposeTask(
   return requestValidTeamLeaderDecomposition({
     abortSignal: options.abortSignal,
     request: async (rejectedDecomposition) => {
-      let response: AgentResponse;
-      try {
-        response = await runAgent(options.persona, buildDecomposePrompt(
-          instruction,
-          maxInitialParts,
-          options.language,
-          options.inspectTools,
-          options.findingContract,
-          rejectedDecomposition,
-        ), {
-          cwd: options.cwd,
-          personaPath: options.personaPath,
-          language: options.language,
-          model: options.model,
-          provider: options.provider,
-          resolvedModel: options.resolvedModel,
-          resolvedProvider: options.resolvedProvider,
-          allowedTools: options.inspectTools ?? [],
-          mcpServers: options.mcpServers,
-          permissionMode: 'readonly',
-          outputSchema: options.findingContract === undefined
-            ? loadDecompositionSchema(maxInitialParts)
-            : withMaxInitialParts(createFindingContractDecompositionJsonSchema(), maxInitialParts),
-          structuredOutputRetryCount: 0,
-          onStream: options.onStream,
-          workflowMeta: options.workflowMeta,
-          childProcessEnv: options.childProcessEnv,
-          abortSignal: options.abortSignal,
-          onPromptResolved: options.onPromptResolved,
-        });
-      } catch (error) {
-        options.abortSignal?.throwIfAborted();
-        options.onAgentError?.(error);
-        throw error;
-      }
-      options.abortSignal?.throwIfAborted();
-      options.onAgentResponse?.(response);
+      const response = await requestDecompositionOnce(
+        instruction,
+        maxInitialParts,
+        options,
+        rejectedDecomposition,
+        true,
+      );
 
       if (response.status !== 'done') {
         const detail = response.error || response.content || response.status;
@@ -158,10 +152,13 @@ export async function decomposeTask(
       if (rawParts != null) {
         let parts: PartDefinition[];
         try {
-          parts = toPartDefinitions(rawParts, maxInitialParts, options.findingContract !== undefined);
-          if (options.findingContract !== undefined) {
-            validateFindingContractPartBatch(parts, options.findingContract.targetFindingIds);
-          }
+          parts = options.findingContract === undefined
+            ? toPartDefinitions(rawParts, maxInitialParts, false)
+            : validateFindingContractDecomposition(
+                rawParts,
+                maxInitialParts,
+                options.findingContract.targetFindingIds,
+              );
         } catch (error) {
           throw createTeamLeaderDecompositionValidationError(
             'decomposition.parts_invalid',
@@ -208,12 +205,59 @@ export async function decomposeTask(
   });
 }
 
-export async function requestMoreParts(
+async function requestDecompositionOnce(
+  instruction: string,
+  maxInitialParts: number | undefined,
+  options: DecomposeTaskOptions,
+  rejectedDecomposition: RejectedTeamLeaderDecomposition | undefined,
+  disableStructuredOutputRetry: boolean,
+): Promise<AgentResponse> {
+  let response: AgentResponse;
+  try {
+    response = await runAgent(options.persona, buildDecomposePrompt(
+      instruction,
+      maxInitialParts,
+      options.language,
+      options.inspectTools,
+      options.findingContract,
+      rejectedDecomposition,
+    ), {
+      cwd: options.cwd,
+      personaPath: options.personaPath,
+      language: options.language,
+      model: options.model,
+      provider: options.provider,
+      resolvedModel: options.resolvedModel,
+      resolvedProvider: options.resolvedProvider,
+      allowedTools: options.inspectTools ?? [],
+      mcpServers: options.mcpServers,
+      permissionMode: 'readonly',
+      outputSchema: options.findingContract === undefined
+        ? loadDecompositionSchema(maxInitialParts)
+        : withMaxInitialParts(createFindingContractDecompositionJsonSchema(), maxInitialParts),
+      ...(disableStructuredOutputRetry ? { structuredOutputRetryCount: 0 } : {}),
+      onStream: options.onStream,
+      workflowMeta: options.workflowMeta,
+      childProcessEnv: options.childProcessEnv,
+      abortSignal: options.abortSignal,
+      onPromptResolved: options.onPromptResolved,
+    });
+  } catch (error) {
+    options.abortSignal?.throwIfAborted();
+    options.onAgentError?.(error);
+    throw error;
+  }
+  options.abortSignal?.throwIfAborted();
+  options.onAgentResponse?.(response);
+  return response;
+}
+
+export async function requestMorePartsRawResponse(
   originalInstruction: string,
   allResults: TeamLeaderPartFeedbackResult[],
   existingIds: string[],
   options: MorePartsOptions,
-): Promise<MorePartsResponse> {
+): Promise<AgentResponse> {
   const prompt = buildMorePartsPrompt(
     originalInstruction,
     allResults,
@@ -248,6 +292,21 @@ export async function requestMoreParts(
     throw error;
   }
   options.onAgentResponse?.(response);
+  return response;
+}
+
+export async function requestMoreParts(
+  originalInstruction: string,
+  allResults: TeamLeaderPartFeedbackResult[],
+  existingIds: string[],
+  options: MorePartsOptions,
+): Promise<MorePartsResponse> {
+  const response = await requestMorePartsRawResponse(
+    originalInstruction,
+    allResults,
+    existingIds,
+    options,
+  );
 
   if (response.status !== 'done') {
     const detail = response.error || response.content || response.status;

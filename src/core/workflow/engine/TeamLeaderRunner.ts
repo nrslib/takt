@@ -7,7 +7,6 @@ import type {
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
   FindingContractConfig,
-  FindingLedger,
 } from '../../models/types.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { incrementStepIteration } from './state-manager.js';
@@ -32,11 +31,23 @@ import {
   hasFailedTimeoutContinuationResult,
 } from './team-leader-timeout-fallback.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
+import type {
+  MorePartsResponse,
+} from '../../../agents/decompose-task-usecase.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
-import type { WorkflowEngineOptions, PhaseName, PhasePromptParts } from '../types.js';
+import type {
+  WorkflowEngineOptions,
+  WorkflowOperationJournalContext,
+  PhaseName,
+  PhasePromptParts,
+} from '../types.js';
 import type { RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
-import { buildTeamLeaderErrorPartResult, runTeamLeaderPart } from './team-leader-part-runner.js';
+import {
+  buildPartScopedSessionKey,
+  buildTeamLeaderErrorPartResult,
+  runTeamLeaderPart,
+} from './team-leader-part-runner.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { resolveInspectToolsForProvider } from './engine-provider-options.js';
@@ -48,22 +59,32 @@ import type { RunPaths } from '../run/run-paths.js';
 import {
   buildFindingContractPartIndexEntry,
   appendFindingContractPartAssignmentInstruction,
-  collectActionableFindingIds,
-  renderActionableFindingContractSummary,
-  renderCompactActionableFindingContractSummary,
   buildLatestFindingContractDigests,
 } from '../team-leader-finding-contract.js';
 import {
-  requestValidFindingContractDecision,
-  type FindingContractDecisionAttemptEvent,
-  type FindingContractDecisionRecoveryPromptContext,
-} from './team-leader-finding-contract-decision-retry.js';
+  type FindingContractRecoveryAttemptEvent,
+  type FindingContractRecoveryPromptContext,
+} from './team-leader-finding-contract-recovery.js';
+import type {
+  FindingContractRejectedDecisionDigest,
+} from '../team-leader-finding-contract-decision-validation.js';
+import type {
+  FindingContractRejectedPartCompletionDigest,
+} from '../team-leader-finding-contract-part-completion-validation.js';
+import type {
+  FindingContractRejectedDecompositionDigest,
+} from '../team-leader-finding-contract-decomposition-validation.js';
 import { buildFindingContractDecisionEvidenceSnapshot } from '../team-leader-finding-contract-evidence.js';
 import {
-  createTeamLeaderArtifactAttemptId,
-  writeTeamLeaderPartArtifact,
-} from './team-leader-artifacts.js';
-import { recordFindingContractDecisionAttempt } from './team-leader-finding-contract-decision-recorder.js';
+  type FindingContractOperationBoundary,
+} from './team-leader-finding-contract-operation-journal.js';
+import type {
+  TeamLeaderExecutionPublicationFence,
+} from './team-leader-execution-terminal.js';
+import {
+  validateOrRecoverFindingContractPartCompletion,
+} from './team-leader-finding-contract-part-completion-recovery.js';
+import { FindingContractTeamLeaderCoordinator } from './team-leader-finding-contract-coordinator.js';
 
 const log = createLogger('team-leader-runner');
 
@@ -77,6 +98,7 @@ export interface TeamLeaderRunnerDeps {
   readonly getRunPaths: () => RunPaths;
   readonly findingContract?: FindingContractConfig;
   readonly findingLedgerStore?: FindingLedgerStore;
+  readonly operationJournal?: WorkflowOperationJournalContext;
   readonly observabilityEnabled: boolean;
   readonly observabilityRunId?: string;
   readonly sanitizeObservabilityText?: (text: string) => string;
@@ -132,14 +154,21 @@ export class TeamLeaderRunner {
     }
     const teamLeaderConfig = step.teamLeader;
     const findingContractMode = teamLeaderConfig.mode === 'finding_contract_fix';
-    const findingContractExecution = findingContractMode
-      ? this.buildFindingContractExecutionContext()
-      : undefined;
     const parentIteration = state.iteration;
     const attemptState = captureTeamLeaderAttemptState(state, step.name, activeStepIteration);
     const instructionTransaction = new InstructionBuildTransaction();
 
     const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
+    const findingContractCoordinator = findingContractMode
+      ? new FindingContractTeamLeaderCoordinator(this.deps, step, stepIteration)
+      : undefined;
+    const findingContractExecution = findingContractCoordinator?.execution;
+    const replayedStepResult = findingContractCoordinator?.readPreparedStepResult();
+    if (replayedStepResult !== undefined) {
+      state.stepOutputs.set(step.name, replayedStepResult.response);
+      state.lastOutput = replayedStepResult.response;
+      return replayedStepResult;
+    }
     const leaderStep = createTeamLeaderPlanningStep(step);
     const instruction = this.deps.stepExecutor.buildInstruction(
       leaderStep,
@@ -170,11 +199,111 @@ export class TeamLeaderRunner {
       phase: 1,
       sequence: 1,
     });
+    const emitReplayedDecompositionPhaseStart = (): void => {
+      if (didEmitPhaseStart) return;
+      const promptParts: PhasePromptParts = {
+        systemPrompt: '',
+        userInstruction: instruction,
+      };
+      resolvedPromptParts = promptParts;
+      this.deps.onPhaseStart?.(
+        leaderStep,
+        1,
+        'execute',
+        instruction,
+        promptParts,
+        phaseExecutionId,
+        parentIteration,
+      );
+      didEmitPhaseStart = true;
+    };
     const structuredCaller = this.deps.engineOptions.structuredCaller;
     if (!structuredCaller) {
       throw new Error('structuredCaller is required for team leader execution');
     }
     const leaderStartedAt = Date.now();
+    const buildDecompositionOptions = (
+      recoveryRequest?: {
+        recoveryContext: FindingContractRecoveryPromptContext<FindingContractRejectedDecompositionDigest>;
+        abortSignal: AbortSignal;
+      },
+    ) => ({
+      cwd: this.deps.getCwd(),
+      persona: leaderStep.persona,
+      personaPath: leaderStep.personaPath,
+      model: leaderModel,
+      provider: leaderProvider,
+      resolvedModel: leaderModel,
+      resolvedProvider: leaderProvider,
+      language: this.deps.engineOptions.language,
+      inspectTools,
+      mcpServers: leaderMcpServers,
+      workflowMeta: leaderWorkflowMeta,
+      childProcessEnv: this.deps.engineOptions.childProcessEnv,
+      abortSignal: recoveryRequest?.abortSignal ?? leaderBaseOptions.abortSignal,
+      onStream: leaderBaseOptions.onStream,
+      onAgentResponse: (response: AgentResponse) => {
+        this.recordUsage(
+          leaderStep.name,
+          leaderProviderInfo,
+          response.status === 'done'
+            && (recoveryRequest?.abortSignal ?? leaderBaseOptions.abortSignal)?.aborted !== true,
+          response.providerUsage,
+        );
+      },
+      onAgentError: () => {
+        this.recordUsage(leaderStep.name, leaderProviderInfo, false);
+      },
+      onPromptResolved: (promptParts: PhasePromptParts) => {
+        if (didEmitPhaseStart) return;
+        resolvedPromptParts = promptParts;
+        this.deps.onPhaseStart?.(
+          leaderStep,
+          1,
+          'execute',
+          promptParts.userInstruction,
+          promptParts,
+          phaseExecutionId,
+          parentIteration,
+        );
+        didEmitPhaseStart = true;
+      },
+      ...(findingContractExecution === undefined
+        ? {}
+        : {
+            findingContract: {
+              targetFindingIds: findingContractExecution.targetFindingIds,
+              actionableFindings: findingContractExecution.actionableFindings,
+              ...(recoveryRequest === undefined
+                ? {}
+                : { recovery: recoveryRequest.recoveryContext }),
+            },
+          }),
+    });
+    const requestDecomposition = (
+      recoveryRequest?: {
+        recoveryContext: FindingContractRecoveryPromptContext<FindingContractRejectedDecompositionDigest>;
+        abortSignal: AbortSignal;
+      },
+    ) => {
+      return structuredCaller.decomposeTask(
+        instruction,
+        teamLeaderConfig.initialMaxParts,
+        buildDecompositionOptions(recoveryRequest),
+      );
+    };
+    const requestRawDecomposition = (
+      recoveryRequest: {
+        recoveryContext: FindingContractRecoveryPromptContext<FindingContractRejectedDecompositionDigest>;
+        abortSignal: AbortSignal;
+      },
+    ) => {
+      return structuredCaller.requestDecompositionRawResponse(
+        instruction,
+        teamLeaderConfig.initialMaxParts,
+        buildDecompositionOptions(recoveryRequest),
+      );
+    };
     const decomposition = await runWithPhaseSpan(
       {
         enabled: this.deps.observabilityEnabled,
@@ -191,55 +320,31 @@ export class TeamLeaderRunner {
         providerInfo: leaderProviderInfo,
         getPromptParts: () => resolvedPromptParts,
       },
-      () => structuredCaller.decomposeTask(
-        instruction,
-        teamLeaderConfig.initialMaxParts,
-        {
-          cwd: this.deps.getCwd(),
-          persona: leaderStep.persona,
-          personaPath: leaderStep.personaPath,
-          model: leaderModel,
-          provider: leaderProvider,
-          resolvedModel: leaderModel,
-          resolvedProvider: leaderProvider,
-          language: this.deps.engineOptions.language,
-          inspectTools,
-          mcpServers: leaderMcpServers,
-          workflowMeta: leaderWorkflowMeta,
-          childProcessEnv: this.deps.engineOptions.childProcessEnv,
+      async () => {
+        if (!findingContractMode) return requestDecomposition();
+        if (findingContractCoordinator === undefined) {
+          throw new Error('Finding Contract coordinator is missing');
+        }
+        return findingContractCoordinator.recoverDecomposition({
+          maxInitialParts: teamLeaderConfig.initialMaxParts,
           abortSignal: leaderBaseOptions.abortSignal,
-          onStream: leaderBaseOptions.onStream,
-          onAgentResponse: (response) => {
-            this.recordUsage(
-              leaderStep.name,
-              leaderProviderInfo,
-              response.status === 'done',
-              response.providerUsage,
-            );
-          },
-          onAgentError: () => {
-            this.recordUsage(leaderStep.name, leaderProviderInfo, false);
-          },
-          onPromptResolved: (promptParts) => {
-            if (didEmitPhaseStart) return;
-            resolvedPromptParts = promptParts;
-            this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, phaseExecutionId, parentIteration);
-            didEmitPhaseStart = true;
-          },
-          ...(findingContractExecution !== undefined
-            ? {
-                findingContract: {
-                  targetFindingIds: findingContractExecution.targetFindingIds,
-                  actionableFindings: findingContractExecution.actionableFindings,
-                },
-              }
-            : {}),
-        },
-      ), (result) => ({
+          requestRaw: ({ recoveryContext, abortSignal }) => (
+            requestRawDecomposition({
+              recoveryContext,
+              abortSignal,
+            })
+          ),
+          onReplay: emitReplayedDecompositionPhaseStart,
+        });
+      },
+      (result) => ({
         status: 'done',
         content: JSON.stringify({ parts: result.parts }, null, 2),
       }),
-    );
+    ).catch((error) => {
+      findingContractCoordinator?.terminate(error);
+      throw error;
+    });
     const parts = decomposition.parts;
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${leaderStep.name}:1`);
@@ -286,16 +391,23 @@ export class TeamLeaderRunner {
     let currentBatchNumber = 1;
     const batchNumberByPartId = new Map(parts.map((part) => [part.id, currentBatchNumber]));
     const partIndexById = new Map<string, number>();
-    const artifactAttemptId = findingContractMode
-      ? createTeamLeaderArtifactAttemptId(stepIteration)
-      : undefined;
     let previousFindingContractDecision: { decision: 'continue'; reasoning: string } | undefined;
     const artifactReferences: TeamLeaderArtifactReference[] = [];
-    const executionResult = await runTeamLeaderExecution({
-      initialParts: parts,
-      maxConcurrency: teamLeaderConfig.maxConcurrency,
-      findingContractMode,
-      abortSignal: leaderBaseOptions.abortSignal,
+    const executionAbortScope = createTeamLeaderExecutionAbortScope(leaderBaseOptions.abortSignal);
+    let executionResult: Awaited<ReturnType<typeof runTeamLeaderExecution>>;
+    try {
+      executionResult = await runTeamLeaderExecution({
+        initialParts: parts,
+        maxConcurrency: teamLeaderConfig.maxConcurrency,
+        findingContractMode,
+        abortSignal: executionAbortScope.signal,
+        onTerminalError: (error) => {
+          try {
+            findingContractCoordinator?.beginTermination(error);
+          } finally {
+            executionAbortScope.abort(error);
+          }
+        },
       onPartQueued: (part, partIndex) => {
         partIndexById.set(part.id, partIndex);
         parallelLogger?.addSubStep(part.id);
@@ -305,17 +417,18 @@ export class TeamLeaderRunner {
         if (findingContractMode) {
           const partIndex = partIndexById.get(result.part.id);
           const partBatchNumber = batchNumberByPartId.get(result.part.id);
-          if (artifactAttemptId === undefined || partIndex === undefined || partBatchNumber === undefined) {
+          if (
+            findingContractCoordinator === undefined
+            || partIndex === undefined
+            || partBatchNumber === undefined
+          ) {
             throw new Error(`Finding Contract artifact metadata is missing for part "${result.part.id}"`);
           }
-          artifactReferences.push(writeTeamLeaderPartArtifact({
-            runPaths: this.deps.getRunPaths(),
-            stepName: step.name,
-            attemptId: artifactAttemptId,
-            batchNumber: partBatchNumber,
+          artifactReferences.push(findingContractCoordinator.writeAcceptedPartArtifact(
+            partBatchNumber,
             partIndex,
             result,
-          }));
+          ));
         }
       },
       onPlanningDone: ({ reason, plannedParts: plannedCount, completedParts }) => {
@@ -404,88 +517,108 @@ export class TeamLeaderRunner {
                 : {}),
             };
         try {
-          let currentDecisionAttemptUsage: AgentResponse['providerUsage'] | undefined;
-          const requestFeedback = async (
+          const buildFeedbackOptions = (
             decisionRequest?: {
-              recoveryContext: FindingContractDecisionRecoveryPromptContext;
+              recoveryContext: FindingContractRecoveryPromptContext<FindingContractRejectedDecisionDigest>;
               abortSignal: AbortSignal;
             },
-          ) => {
-            currentDecisionAttemptUsage = undefined;
-            return structuredCaller.requestMoreParts(
-              findingContractMode
-                ? `${step.instruction}\n\n## Original Task\n${task}`
-                : instruction,
-              feedbackResults,
-              scheduledIds,
-              {
-                cwd: this.deps.getCwd(),
-                persona: leaderStep.persona,
-                personaPath: leaderStep.personaPath,
-                language: this.deps.engineOptions.language,
-                model: leaderModel,
-                provider: leaderProvider,
-                resolvedModel: leaderModel,
-                resolvedProvider: leaderProvider,
-                mcpServers: leaderMcpServers,
-                workflowMeta: leaderWorkflowMeta,
-                childProcessEnv: this.deps.engineOptions.childProcessEnv,
-                abortSignal: decisionRequest?.abortSignal ?? leaderBaseOptions.abortSignal,
-                onStream: leaderBaseOptions.onStream,
-                onAgentResponse: (response) => {
-                  currentDecisionAttemptUsage = response.providerUsage;
-                  this.recordUsage(
-                    leaderStep.name,
-                    leaderProviderInfo,
-                    response.status === 'done',
-                    response.providerUsage,
-                  );
-                },
-                onAgentError: () => {
-                  this.recordUsage(leaderStep.name, leaderProviderInfo, false);
-                },
-                ...(findingContractContext === undefined
-                  ? {}
-                  : {
-                      findingContract: {
-                        ...findingContractContext,
-                        ...(decisionRequest === undefined
-                          ? {}
-                          : { recovery: decisionRequest.recoveryContext }),
-                      },
-                    }),
+          ) => ({
+            cwd: this.deps.getCwd(),
+            persona: leaderStep.persona,
+            personaPath: leaderStep.personaPath,
+            language: this.deps.engineOptions.language,
+            model: leaderModel,
+            provider: leaderProvider,
+            resolvedModel: leaderModel,
+            resolvedProvider: leaderProvider,
+            mcpServers: leaderMcpServers,
+            workflowMeta: leaderWorkflowMeta,
+            childProcessEnv: this.deps.engineOptions.childProcessEnv,
+            abortSignal: decisionRequest?.abortSignal ?? leaderBaseOptions.abortSignal,
+            onStream: leaderBaseOptions.onStream,
+            onAgentResponse: (response: AgentResponse) => {
+              this.recordUsage(
+                leaderStep.name,
+                leaderProviderInfo,
+                response.status === 'done'
+                  && (decisionRequest?.abortSignal ?? leaderBaseOptions.abortSignal)?.aborted !== true,
+                response.providerUsage,
+              );
+            },
+            onAgentError: () => {
+              this.recordUsage(leaderStep.name, leaderProviderInfo, false);
+            },
+            ...(findingContractContext === undefined
+              ? {}
+              : {
+                  findingContract: {
+                    ...findingContractContext,
+                    ...(decisionRequest === undefined
+                      ? {}
+                      : { recovery: decisionRequest.recoveryContext }),
+                  },
+                }),
+          });
+          const feedbackInstruction = findingContractMode
+            ? `${step.instruction}\n\n## Original Task\n${task}`
+            : instruction;
+          const requestFeedback = async (
+            decisionRequest?: {
+              recoveryContext: FindingContractRecoveryPromptContext<FindingContractRejectedDecisionDigest>;
+              abortSignal: AbortSignal;
+            },
+          ) => structuredCaller.requestMoreParts(
+            feedbackInstruction,
+            feedbackResults,
+            scheduledIds,
+            buildFeedbackOptions(decisionRequest),
+          );
+          const requestRawFeedback = async (
+            decisionRequest: {
+              recoveryContext: FindingContractRecoveryPromptContext<FindingContractRejectedDecisionDigest>;
+              abortSignal: AbortSignal;
+            },
+          ) => structuredCaller.requestMorePartsRawResponse(
+            feedbackInstruction,
+            feedbackResults,
+            scheduledIds,
+            buildFeedbackOptions(decisionRequest),
+          );
+          let moreParts: MorePartsResponse;
+          if (!findingContractMode) {
+            moreParts = await requestFeedback();
+          } else {
+            if (
+              findingContractCoordinator === undefined
+              || findingContractContext === undefined
+            ) {
+              throw new Error('Finding Contract feedback coordinator is missing');
+            }
+            moreParts = await findingContractCoordinator.recoverDecision({
+              batchNumber: currentBatchNumber,
+              abortSignal: leaderBaseOptions.abortSignal,
+              validationContext: {
+                targetFindingIds: findingContractContext.targetFindingIds,
+                plannedParts: findingContractContext.plannedParts,
+                evidence: findingContractContext.evidence,
               },
-            );
-          };
-          const moreParts = findingContractMode
-            ? await requestValidFindingContractDecision({
-                abortSignal: leaderBaseOptions.abortSignal,
-                request: requestFeedback,
-                onAttempt: (event) => {
-                  if (artifactAttemptId === undefined) {
-                    throw new Error('Finding Contract decision recovery artifact attempt is missing');
-                  }
-                  this.recordFindingContractDecisionAttemptEvent(
-                    step.name,
-                    artifactAttemptId,
-                    `${artifactAttemptId}:feedback:${currentBatchNumber}`,
-                    event,
-                    event.type === 'started' ? undefined : currentDecisionAttemptUsage,
-                  );
-                  if (event.type === 'rejected') {
-                    log.info('Finding Contract Team Leader decision failed validation; regenerating', {
-                      step: step.name,
-                      attempt: event.attempt,
-                      mode: event.mode,
-                      strictReason: event.strictReason,
-                      issueCodes: event.rejectedDecision?.issues.map((issue) => issue.code),
-                      issueFingerprint: event.rejectedDecision?.issueFingerprint,
-                      decisionDigest: event.rejectedDecision?.decisionDigest.hash,
-                    });
-                  }
-                },
-              })
-            : await requestFeedback();
+              requestRaw: ({ recoveryContext, abortSignal }) => requestRawFeedback({
+                recoveryContext,
+                abortSignal,
+              }),
+              onRejected: (event) => {
+                log.info('Finding Contract Team Leader decision failed validation; regenerating', {
+                  step: step.name,
+                  attempt: event.attempt,
+                  mode: event.mode,
+                  strictReason: event.strictReason,
+                  issueCodes: event.rejectedOutput?.issues.map((issue) => issue.code),
+                  issueFingerprint: event.rejectedOutput?.issueFingerprint,
+                  decisionDigest: event.rejectedOutput?.outputDigest.hash,
+                });
+              },
+            });
+          }
           if (moreParts.findingContractDecision?.decision === 'continue') {
             previousFindingContractDecision = {
               decision: 'continue',
@@ -528,7 +661,7 @@ export class TeamLeaderRunner {
           throw error;
         }
       },
-      runPart: async (part, partIndex) => this.runSinglePart(
+        runPart: async (part, partIndex, publicationFence) => this.runSinglePart(
         step,
         leaderWorkflowMeta,
         part,
@@ -544,9 +677,35 @@ export class TeamLeaderRunner {
         instructionTransaction,
         findingContractExecution === undefined
           ? undefined
-          : this.buildFindingContractPartSummary(part, findingContractExecution.ledger),
-      ).catch((error) => buildTeamLeaderErrorPartResult(step, part, error)),
-    });
+          : findingContractCoordinator?.partSummary(part),
+        findingContractCoordinator?.boundary(
+          `part:${part.id}:completion`,
+          'finding_contract_part_completion',
+        ),
+        findingContractExecution === undefined
+          ? undefined
+          : (event) => {
+              if (findingContractCoordinator === undefined) {
+                throw new Error('Finding Contract recovery artifact attempt is missing');
+              }
+              findingContractCoordinator.recordAttempt(
+                `part:${part.id}:completion`,
+                event,
+              );
+            },
+        executionAbortScope.signal,
+        publicationFence,
+        ).catch((error) => {
+          if (findingContractMode) throw error;
+          return buildTeamLeaderErrorPartResult(step, part, error);
+        }),
+      });
+    } catch (error) {
+      findingContractCoordinator?.terminate(error);
+      throw error;
+    } finally {
+      executionAbortScope.dispose();
+    }
     const { plannedParts, partResults, findingContractDecision } = executionResult;
     this.emitPartRoutingDecisionEvents(step, partResults, routedProviderInfoByPart, parentIteration);
 
@@ -659,7 +818,8 @@ export class TeamLeaderRunner {
     );
     this.deps.stepExecutor.emitStepReports(step);
 
-    return { response: aggregatedResponse, instruction, providerInfo: leaderProviderInfo };
+    const result = { response: aggregatedResponse, instruction, providerInfo: leaderProviderInfo };
+    return findingContractCoordinator?.prepareStepResult(result) ?? result;
   }
 
   private async resolveLeaderAutoRouting(
@@ -707,96 +867,161 @@ export class TeamLeaderRunner {
     runtime?: RuntimeStepResolution,
     instructionTransaction?: InstructionBuildTransaction,
     findingContractSummary?: string,
+    operationBoundary?: FindingContractOperationBoundary,
+    onFindingContractRecoveryAttempt?: (
+      event: FindingContractRecoveryAttemptEvent<FindingContractRejectedPartCompletionDigest>,
+    ) => void,
+    executionAbortSignal?: AbortSignal,
+    publicationFence?: TeamLeaderExecutionPublicationFence,
   ): Promise<PartResult> {
     const startedAt = Date.now();
-    const result = await runTeamLeaderPart(
-      this.deps.optionsBuilder,
-      step,
-      leaderWorkflowMeta,
-      part,
-      partIndex,
-      defaultTimeoutMs,
-      updatePersonaSession,
-      parallelLogger,
-      {
-        enabled: this.deps.observabilityEnabled,
-        runId: this.deps.observabilityRunId,
-        workflowName: this.deps.getWorkflowName(),
-        iteration: parentIteration,
-        workflowStack: this.deps.getCurrentWorkflowStack?.(),
-        sanitizeText: this.deps.sanitizeObservabilityText,
-      },
-      (partStep) => {
-        const partIteration = incrementStepIteration(state, partStep.name);
-        const builtInstruction = this.deps.stepExecutor.buildInstruction(
-          partStep,
-          partIteration,
-          state,
-          task,
-          maxSteps,
-          runtime?.fallback,
-          findingContractSummary === undefined ? undefined : { mode: 'omit' },
-          instructionTransaction,
-        );
-        if (findingContractSummary === undefined) return builtInstruction;
-        const assignedInstruction = appendFindingContractPartAssignmentInstruction(
-          builtInstruction,
-          part,
-          this.deps.engineOptions.language,
-          findingContractSummary,
-        );
-        return this.deps.stepExecutor.buildPhase1Instruction(assignedInstruction, partStep, runtime);
-      },
-      runtime,
-    );
-    const normalizedResponse = findingContractSummary === undefined
-      ? result.response
-      : this.deps.stepExecutor.normalizeStructuredOutput(
-          createPartStep(step, part),
-          result.response,
-          runtime,
-        );
-    if (result.providerInfo) {
+    let pendingSessionPublication: {
+      readonly key: string;
+      readonly sessionId: string;
+    } | undefined;
+    publicationFence?.assertRunning('part.replay');
+    const completed = operationBoundary?.readCompleted<PartResult>();
+    if (completed !== undefined) {
+      return hydratePartResult(completed);
+    }
+    const applied = operationBoundary?.readApplied<PartResult>();
+    let replayedWorker = false;
+    let result: PartResult;
+    if (applied !== undefined) {
+      publicationFence?.assertRunning('part.applied_replay');
+      result = hydratePartResult(applied);
+      replayedWorker = true;
+      if (result.response.sessionId !== undefined) {
+        pendingSessionPublication = {
+          key: buildPartScopedSessionKey(
+            createPartStep(step, part),
+            result.providerInfo?.provider,
+          ),
+          sessionId: result.response.sessionId,
+        };
+      }
+    } else {
+      publicationFence?.assertRunning('part.worker_start');
+      operationBoundary?.assertWorkerCanStart();
+      operationBoundary?.markWorkerStarted();
+      publicationFence?.assertRunning('part.provider_call');
+      result = await runTeamLeaderPart(
+        this.deps.optionsBuilder,
+        step,
+        leaderWorkflowMeta,
+        part,
+        partIndex,
+        defaultTimeoutMs,
+        (key, sessionId) => {
+          if (sessionId !== undefined) {
+            pendingSessionPublication = { key, sessionId };
+          }
+        },
+        parallelLogger,
+        {
+          enabled: this.deps.observabilityEnabled,
+          runId: this.deps.observabilityRunId,
+          workflowName: this.deps.getWorkflowName(),
+          iteration: parentIteration,
+          workflowStack: this.deps.getCurrentWorkflowStack?.(),
+          sanitizeText: this.deps.sanitizeObservabilityText,
+        },
+        (partStep) => {
+          const partIteration = incrementStepIteration(state, partStep.name);
+          const builtInstruction = this.deps.stepExecutor.buildInstruction(
+            partStep,
+            partIteration,
+            state,
+            task,
+            maxSteps,
+            runtime?.fallback,
+            findingContractSummary === undefined ? undefined : { mode: 'omit' },
+            instructionTransaction,
+          );
+          if (findingContractSummary === undefined) return builtInstruction;
+          const assignedInstruction = appendFindingContractPartAssignmentInstruction(
+            builtInstruction,
+            part,
+            this.deps.engineOptions.language,
+            findingContractSummary,
+          );
+          return this.deps.stepExecutor.buildPhase1Instruction(assignedInstruction, partStep, runtime);
+        },
+        runtime,
+        executionAbortSignal,
+      );
+      result = {
+        ...result,
+        durationMs: Math.max(0, result.response.timestamp.getTime() - startedAt),
+      };
+      if (
+        result.response.status === 'rate_limited'
+        && publicationFence?.state !== 'terminating'
+        && publicationFence?.state !== 'terminated'
+      ) {
+        operationBoundary?.markProviderFallbackPending(result);
+      } else {
+        operationBoundary?.markApplied(result);
+      }
+    }
+    if (result.providerInfo && !replayedWorker) {
       this.recordUsage(
         `${step.name}.${part.id}`,
         result.providerInfo,
-        normalizedResponse.status === 'done',
-        normalizedResponse.providerUsage,
+        result.response.status === 'done',
+        result.response.providerUsage,
       );
     }
-    return {
+    if (
+      findingContractSummary !== undefined
+      && result.response.status !== 'done'
+      && result.response.status !== 'rate_limited'
+    ) {
+      throw new Error(result.response.error ?? result.response.content);
+    }
+    publicationFence?.assertRunning('part.session');
+    if (pendingSessionPublication !== undefined) {
+      updatePersonaSession(
+        pendingSessionPublication.key,
+        pendingSessionPublication.sessionId,
+      );
+    }
+    const recovered = findingContractSummary === undefined || result.response.status !== 'done'
+      ? { response: result.response }
+      : await validateOrRecoverFindingContractPartCompletion(
+          {
+            optionsBuilder: this.deps.optionsBuilder,
+            stepExecutor: this.deps.stepExecutor,
+            language: this.deps.engineOptions.language,
+            recordUsage: (partStep, providerInfo, success, usage) => {
+              this.recordUsage(partStep, providerInfo, success, usage);
+            },
+          },
+          {
+            step,
+            part,
+            response: result.response,
+            runtime,
+            updatePersonaSession,
+            onAttempt: onFindingContractRecoveryAttempt,
+            operationBoundary,
+            abortSignal: executionAbortSignal,
+            publicationFence,
+          },
+        );
+    const finalResult = {
       ...result,
-      response: normalizedResponse,
-      durationMs: Math.max(0, result.response.timestamp.getTime() - startedAt),
+      response: recovered.response,
+      ...('claim' in recovered ? { findingContractClaim: recovered.claim } : {}),
+      durationMs: result.durationMs
+        ?? Math.max(0, result.response.timestamp.getTime() - startedAt),
     };
-  }
-
-  private buildFindingContractExecutionContext(): {
-    targetFindingIds: string[];
-    actionableFindings: string;
-    ledger: FindingLedger;
-  } {
-    if (this.deps.findingContract === undefined || this.deps.findingLedgerStore === undefined) {
-      throw new Error('team_leader.mode "finding_contract_fix" requires an active finding_contract');
+    if (finalResult.response.status === 'rate_limited') {
+      return finalResult;
     }
-    const ledger = this.deps.findingLedgerStore.loadLedger();
-    const targetFindingIds = collectActionableFindingIds(ledger);
-    if (targetFindingIds.length === 0) {
-      throw new Error('team_leader.mode "finding_contract_fix" requires at least one actionable open finding');
-    }
-    const actionableFindings = renderCompactActionableFindingContractSummary(ledger, targetFindingIds);
-    return {
-      targetFindingIds,
-      actionableFindings,
-      ledger,
-    };
-  }
-
-  private buildFindingContractPartSummary(part: PartDefinition, ledger: FindingLedger): string {
-    if (part.findingContract === undefined) {
-      throw new Error(`Part "${part.id}" cannot build a scoped Finding Contract summary`);
-    }
-    return renderActionableFindingContractSummary(ledger, part.findingContract.findingIds);
+    publicationFence?.assertRunning('part.journal_completed');
+    operationBoundary?.complete(finalResult);
+    return finalResult;
   }
 
   private recordUsage(
@@ -813,23 +1038,6 @@ export class TeamLeaderRunner {
       success,
       usage,
     );
-  }
-
-  private recordFindingContractDecisionAttemptEvent(
-    stepName: string,
-    attemptId: string,
-    boundaryId: string,
-    event: FindingContractDecisionAttemptEvent,
-    providerUsage: AgentResponse['providerUsage'] | undefined,
-  ): void {
-    recordFindingContractDecisionAttempt({
-      runPaths: this.deps.getRunPaths(),
-      stepName,
-      attemptId,
-      boundaryId,
-      event,
-      ...(providerUsage === undefined ? {} : { providerUsage }),
-    });
   }
 
   private emitPartRoutingDecisionEvents(
@@ -1063,4 +1271,37 @@ function collectRollbackError(errors: Error[], stage: string, operation: () => v
   } catch (error) {
     errors.push(new Error(`Team leader attempt rollback failed during ${stage}`, { cause: error }));
   }
+}
+
+function hydratePartResult(result: PartResult): PartResult {
+  return {
+    ...result,
+    response: hydrateAgentResponse(result.response),
+  };
+}
+
+function hydrateAgentResponse(response: AgentResponse): AgentResponse {
+  const timestamp: unknown = response.timestamp;
+  return {
+    ...response,
+    timestamp: timestamp instanceof Date ? timestamp : new Date(String(timestamp)),
+  };
+}
+
+function createTeamLeaderExecutionAbortScope(parentSignal: AbortSignal | undefined): {
+  readonly signal: AbortSignal;
+  readonly abort: (reason: unknown) => void;
+  readonly dispose: () => void;
+} {
+  const controller = new AbortController();
+  const onParentAbort = (): void => controller.abort(parentSignal?.reason);
+  parentSignal?.addEventListener('abort', onParentAbort, { once: true });
+  if (parentSignal?.aborted === true) {
+    controller.abort(parentSignal.reason);
+  }
+  return {
+    signal: controller.signal,
+    abort: (reason) => controller.abort(reason),
+    dispose: () => parentSignal?.removeEventListener('abort', onParentAbort),
+  };
 }

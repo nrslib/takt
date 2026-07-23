@@ -1,8 +1,11 @@
 import type { Language } from '../core/models/types.js';
 import type { FindingContractDecisionEvidenceSnapshot } from '../core/workflow/team-leader-finding-contract-evidence.js';
 import type {
-  FindingContractDecisionRecoveryPromptContext,
-} from '../core/workflow/engine/team-leader-finding-contract-decision-retry.js';
+  FindingContractRecoveryPromptContext,
+} from '../core/workflow/engine/team-leader-finding-contract-recovery.js';
+import type {
+  FindingContractRejectedDecisionDigest,
+} from '../core/workflow/team-leader-finding-contract-decision-validation.js';
 
 const EVIDENCE_IDS_PER_DISPOSITION_LIMIT = 20;
 const EVIDENCE_FINDINGS_LIMIT = 30;
@@ -17,7 +20,7 @@ const RECOVERY_PROMPT_JSON_MAX_LENGTH = 64_000;
 
 export function buildFindingContractRecoveryPromptSections(
   language: Language | undefined,
-  recovery: FindingContractDecisionRecoveryPromptContext | undefined,
+  recovery: FindingContractRecoveryPromptContext<FindingContractRejectedDecisionDigest> | undefined,
   evidence: FindingContractDecisionEvidenceSnapshot,
 ): string[] {
   if (recovery === undefined || recovery.latestRejection === undefined) {
@@ -40,7 +43,7 @@ export function buildFindingContractRecoveryPromptSections(
 }
 
 export function buildRecoveryPromptView(
-  recovery: FindingContractDecisionRecoveryPromptContext,
+  recovery: FindingContractRecoveryPromptContext<FindingContractRejectedDecisionDigest>,
   evidence: FindingContractDecisionEvidenceSnapshot,
 ): Record<string, unknown> {
   const latestIssues = projectIssues(recovery.latestRejection?.issues ?? []);
@@ -54,7 +57,7 @@ export function buildRecoveryPromptView(
       : {
           attempt: recovery.latestRejection.attempt,
           issueFingerprint: boundText(recovery.latestRejection.issueFingerprint, RECOVERY_FIELD_MAX_LENGTH),
-          decisionDigest: projectDecisionDigest(recovery.latestRejection.decisionDigest),
+          decisionDigest: projectDecisionDigest(recovery.latestRejection.outputDigest),
           repeatCount: recovery.latestRejection.repeatCount,
           issues: latestIssues,
           omittedIssueCount: Math.max(0, recovery.latestRejection.issues.length - latestIssues.length),
@@ -73,7 +76,7 @@ export function buildRecoveryPromptView(
       'replan: parts and fixCoverage are empty; blockers is non-empty',
       'use exact finding IDs and part IDs from the supplied data',
     ],
-    recentRejectedDecisions: recovery.recentRejectedDecisions.map(projectDecisionDigest),
+    recentRejectedDecisions: recovery.recentRejectedOutputs.map(projectDecisionDigest),
     issueHistory: visibleHistory.map((entry) => {
       const projectedIssues = projectIssues(entry.issues);
       return {
@@ -177,7 +180,7 @@ function projectIssues(issues: readonly {
 }
 
 function projectDecisionDigest(
-  digest: FindingContractDecisionRecoveryPromptContext['recentRejectedDecisions'][number],
+  digest: FindingContractRejectedDecisionDigest,
 ): Record<string, unknown> {
   return {
     hash: boundText(digest.hash, RECOVERY_FIELD_MAX_LENGTH),

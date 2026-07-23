@@ -245,6 +245,7 @@ async function executeWorkflowInternal(
       retryNote: options.retryNote,
       resumePoint: options.resumePoint,
       resumeSource: options.resumeSource,
+      operationJournal: bootstrap.operationJournal,
       reportDirName: bootstrap.runSlug,
       taskPrefix: options.taskPrefix,
       taskColorIndex: options.taskColorIndex,

@@ -13,6 +13,8 @@ export interface RunPaths {
   readonly contextPolicyRel: string;
   readonly contextPreviousResponsesRel: string;
   readonly logsRel: string;
+  readonly operationsRel: string;
+  readonly operationJournalRel: string;
   readonly metaRel: string;
   readonly runRootAbs: string;
   readonly reportsAbs: string;
@@ -24,6 +26,8 @@ export interface RunPaths {
   readonly contextPolicyAbs: string;
   readonly contextPreviousResponsesAbs: string;
   readonly logsAbs: string;
+  readonly operationsAbs: string;
+  readonly operationJournalAbs: string;
   readonly metaAbs: string;
 }
 
@@ -44,6 +48,8 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
   const contextPolicyRel = join(contextRel, 'policy');
   const contextPreviousResponsesRel = join(contextRel, 'previous_responses');
   const logsRel = `${runRootRel}/logs`;
+  const operationsRel = `${runRootRel}/operations`;
+  const operationJournalRel = `${operationsRel}/journal.json`;
   const metaRel = `${runRootRel}/meta.json`;
 
   return {
@@ -58,6 +64,8 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     contextPolicyRel,
     contextPreviousResponsesRel,
     logsRel,
+    operationsRel,
+    operationJournalRel,
     metaRel,
     runRootAbs: join(cwd, runRootRel),
     reportsAbs: join(cwd, reportsRel),
@@ -69,6 +77,8 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     contextPolicyAbs: join(cwd, contextPolicyRel),
     contextPreviousResponsesAbs: join(cwd, contextPreviousResponsesRel),
     logsAbs: join(cwd, logsRel),
+    operationsAbs: join(cwd, operationsRel),
+    operationJournalAbs: join(cwd, operationJournalRel),
     metaAbs: join(cwd, metaRel),
   };
 }

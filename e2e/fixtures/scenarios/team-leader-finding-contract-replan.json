@@ -31,9 +31,18 @@
   },
   {
     "persona": "agents/test-finding-contract-worker",
-    "status": "error",
-    "content": "repair failed",
-    "error": "repair failed"
+    "status": "done",
+    "content": "repair blocked",
+    "structured_output": {
+      "findingOutcomes": [{
+        "findingId": "F-0001",
+        "outcome": "blocked",
+        "evidence": ["The current repair approach is unavailable."]
+      }],
+      "changedPaths": [],
+      "checks": [],
+      "summary": "The current repair approach is blocked."
+    }
   },
   {
     "persona": "agents/test-finding-contract-replanner",
