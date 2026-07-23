@@ -1,4 +1,5 @@
 import type { SemanticRuleCandidate } from '../../core/models/workflow-rule-condition.js';
+import type { AgentResponse } from '../../core/models/types.js';
 import type { JudgeStatusOptions, JudgeStatusResult, EvaluateConditionOptions } from '../judge-status-usecase.js';
 import type {
   DecomposeTaskOptions,
@@ -28,10 +29,23 @@ export interface StructuredCaller {
     options: DecomposeTaskOptions,
   ): Promise<DecomposeTaskResponse>;
 
+  requestDecompositionRawResponse(
+    instruction: string,
+    maxInitialParts: number | undefined,
+    options: DecomposeTaskOptions,
+  ): Promise<AgentResponse>;
+
   requestMoreParts(
     originalInstruction: string,
     allResults: TeamLeaderPartFeedbackResult[],
     existingIds: string[],
     options: MorePartsOptions,
   ): Promise<MorePartsResponse>;
+
+  requestMorePartsRawResponse(
+    originalInstruction: string,
+    allResults: TeamLeaderPartFeedbackResult[],
+    existingIds: string[],
+    options: MorePartsOptions,
+  ): Promise<AgentResponse>;
 }

@@ -40,6 +40,8 @@ export interface RunMeta {
   resumeMode?: RunResumeSource['resumeMode'];
   /** resume-artifacts.json（継承 manifest）への相対パス。SSOT は manifest 側。 */
   resumeArtifacts?: string;
+  operationJournalRunSlug?: string;
+  operationClaimToken?: string;
 }
 
 interface RawRunMeta extends RunMeta {
@@ -47,6 +49,8 @@ interface RawRunMeta extends RunMeta {
   source_run_slug?: string;
   resume_mode?: RunResumeMode;
   resume_artifacts?: string;
+  operation_journal_run_slug?: string;
+  operation_claim_token?: string;
 }
 
 export type RunMetaWarningHandler = (warning: string) => void;
@@ -58,6 +62,8 @@ function normalizeRunMeta(raw: RawRunMeta): RunMeta {
     sourceRunSlug: raw.sourceRunSlug ?? raw.source_run_slug,
     resumeMode: raw.resumeMode ?? raw.resume_mode,
     resumeArtifacts: raw.resumeArtifacts ?? raw.resume_artifacts,
+    operationJournalRunSlug: raw.operationJournalRunSlug ?? raw.operation_journal_run_slug,
+    operationClaimToken: raw.operationClaimToken ?? raw.operation_claim_token,
   };
 }
 

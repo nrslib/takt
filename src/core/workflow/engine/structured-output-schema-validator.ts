@@ -1,7 +1,7 @@
 import Ajv, { type ErrorObject, type ValidateFunction } from 'ajv';
 
 const ajv = new Ajv({
-  allErrors: false,
+  allErrors: true,
   schemaId: 'auto',
   unknownFormats: 'ignore',
 });
@@ -16,10 +16,18 @@ export class StructuredOutputSchemaError extends Error {
 }
 
 export class StructuredOutputValueValidationError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(
+    readonly issues: readonly StructuredOutputValueValidationIssue[],
+  ) {
+    super(issues.map((issue) => issue.message).join('; '));
     this.name = 'StructuredOutputValueValidationError';
   }
+}
+
+export interface StructuredOutputValueValidationIssue {
+  readonly path: string;
+  readonly keyword: string;
+  readonly message: string;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -52,21 +60,33 @@ function formatInstancePath(error: ErrorObject): string {
   return basePath;
 }
 
-function formatValidationError(error: ErrorObject | null | undefined): string {
+function formatValidationError(error: ErrorObject | null | undefined): StructuredOutputValueValidationIssue {
   if (!error) {
-    return 'Structured output does not satisfy the schema';
+    return {
+      path: '$',
+      keyword: 'schema',
+      message: 'Structured output does not satisfy the schema',
+    };
   }
 
   const path = formatInstancePath(error);
   if (error.keyword === 'required') {
-    return `${path} is required`;
+    return { path, keyword: error.keyword, message: `${path} is required` };
   }
   if (error.keyword === 'additionalProperties') {
-    return `${path} is not allowed by the schema`;
+    return {
+      path,
+      keyword: error.keyword,
+      message: `${path} is not allowed by the schema`,
+    };
   }
 
   const message = error.message?.replace(/^should\b/, 'must');
-  return message ? `${path} ${message}` : path;
+  return {
+    path,
+    keyword: error.keyword,
+    message: message ? `${path} ${message}` : path,
+  };
 }
 
 function getValidator(schema: Record<string, unknown>): ValidateFunction {
@@ -103,5 +123,7 @@ export function validateStructuredOutputAgainstSchema(
     return;
   }
 
-  throw new StructuredOutputValueValidationError(formatValidationError(validate.errors?.[0]));
+  throw new StructuredOutputValueValidationError(
+    (validate.errors ?? [undefined]).map(formatValidationError),
+  );
 }

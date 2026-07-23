@@ -82,6 +82,7 @@ vi.mock('../shared/utils/index.js', () => ({
   })),
   generateReportDir: vi.fn(() => 'generated-run'),
   getDebugPromptsLogFile: vi.fn(() => undefined),
+  isPathInside: vi.fn(() => true),
   isValidReportDirName: mockIsValidReportDirName,
   preventSleep: vi.fn(),
 }));

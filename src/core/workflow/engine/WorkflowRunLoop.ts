@@ -738,6 +738,10 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
           abort = gateAbort;
           break;
         }
+        result.commitTransition?.({
+          kind: 'return',
+          returnValue: transition.returnValue,
+        });
         returnValue = transition.returnValue;
         deps.emit('workflow:complete', deps.state);
         break;
@@ -753,6 +757,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
 
       const naturalTerminal = handleTerminalTransition(deps, nextStep);
       if (naturalTerminal.handled) {
+        result.commitTransition?.({ kind: 'next_step', nextStep });
         abort = naturalTerminal.abort;
         break;
       }
@@ -769,6 +774,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
 
       const monitoredTerminal = handleTerminalTransition(deps, nextStep);
+      result.commitTransition?.({ kind: 'next_step', nextStep });
       if (monitoredTerminal.handled) {
         abort = monitoredTerminal.abort;
         break;
@@ -1011,6 +1017,10 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     if (gateAbort) {
       return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort: gateAbort };
     }
+    result.commitTransition?.({
+      kind: 'return',
+      returnValue: transition.returnValue,
+    });
     return {
       response,
       nextStep: COMPLETE_STEP,
@@ -1024,12 +1034,16 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   const isComplete = nextStep === COMPLETE_STEP || nextStep === ABORT_STEP;
 
   if (!isComplete) {
+    result.commitTransition?.({ kind: 'next_step', nextStep });
     advanceActiveStep(deps, nextStep, deps.state.iteration);
   } else if (nextStep === COMPLETE_STEP) {
     const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
     if (gateAbort) {
       return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort: gateAbort };
     }
+    result.commitTransition?.({ kind: 'next_step', nextStep });
+  } else {
+    result.commitTransition?.({ kind: 'next_step', nextStep });
   }
 
   if (nextStep === ABORT_STEP) {

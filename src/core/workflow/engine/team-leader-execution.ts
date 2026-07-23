@@ -4,13 +4,21 @@ import type {
   PartDefinition,
   PartResult,
 } from '../../models/types.js';
+import {
+  TeamLeaderExecutionTerminalGate,
+  type TeamLeaderExecutionPublicationFence,
+} from './team-leader-execution-terminal.js';
 
 export interface TeamLeaderExecutionOptions {
   initialParts: PartDefinition[];
   maxConcurrency: number;
   findingContractMode?: boolean;
   abortSignal?: AbortSignal;
-  runPart: (part: PartDefinition, partIndex: number) => Promise<PartResult>;
+  runPart: (
+    part: PartDefinition,
+    partIndex: number,
+    publicationFence: TeamLeaderExecutionPublicationFence,
+  ) => Promise<PartResult>;
   requestMoreParts: (
     args: {
       partResults: PartResult[];
@@ -26,6 +34,7 @@ export interface TeamLeaderExecutionOptions {
   onPlanningNoNewParts?: (feedback: { reason: string; plannedParts: number; completedParts: number }) => void;
   onPartsAdded?: (feedback: { parts: PartDefinition[]; reason: string; totalPlanned: number }) => void;
   onPlanningError?: (error: unknown) => void;
+  onTerminalError?: (error: unknown) => void;
 }
 
 interface RunningPart {
@@ -48,12 +57,14 @@ export async function runTeamLeaderExecution(
   const partResults: PartResult[] = [];
   const running = new Map<string, Promise<RunningPart>>();
   const scheduledIds = new Set(options.initialParts.map((part) => part.id));
+  const terminalGate = new TeamLeaderExecutionTerminalGate(options.onTerminalError);
 
   let nextPartIndex = 0;
   let leaderDone = false;
   let latestBatchStart = 0;
   let findingContractDecision: Exclude<FindingContractTeamLeaderDecision, { decision: 'continue' }> | undefined;
   const tryPlanMoreParts = async (): Promise<void> => {
+    terminalGate.assertRunning('feedback.dequeue');
     options.abortSignal?.throwIfAborted();
     if (leaderDone) {
       return;
@@ -72,6 +83,7 @@ export async function runTeamLeaderExecution(
         plannedParts: [...plannedParts],
         scheduledIds: [...scheduledIds],
       });
+      terminalGate.assertRunning('feedback.provider_result');
       options.abortSignal?.throwIfAborted();
 
       if (options.findingContractMode === true) {
@@ -81,6 +93,7 @@ export async function runTeamLeaderExecution(
         }
         if (decision.decision === 'complete' || decision.decision === 'replan') {
           findingContractDecision = decision;
+          terminalGate.assertRunning('feedback.planning_done');
           options.onPlanningDone?.({
             reason: decision.reasoning,
             plannedParts: plannedParts.length,
@@ -92,6 +105,7 @@ export async function runTeamLeaderExecution(
       }
 
       if (feedback.done) {
+        terminalGate.assertRunning('feedback.planning_done');
         options.onPlanningDone?.({
           reason: feedback.reasoning,
           plannedParts: plannedParts.length,
@@ -123,6 +137,7 @@ export async function runTeamLeaderExecution(
         return;
       }
 
+      terminalGate.assertRunning('feedback.parts_added');
       plannedParts.push(...newParts);
       queue.push(...newParts);
       options.onPartsAdded?.({
@@ -143,45 +158,59 @@ export async function runTeamLeaderExecution(
     }
   };
 
-  while (queue.length > 0 || running.size > 0 || !leaderDone) {
-    while (queue.length > 0 && running.size < options.maxConcurrency) {
-      options.abortSignal?.throwIfAborted();
-      const part = queue.shift();
-      if (!part) {
-        break;
-      }
-      const partIndex = nextPartIndex;
-      nextPartIndex += 1;
-      options.onPartQueued?.(part, partIndex);
-      options.abortSignal?.throwIfAborted();
-      const runningPart = options.runPart(part, partIndex).then((result) => ({ partId: part.id, result }));
-      running.set(part.id, runningPart);
-    }
-
-    if (running.size > 0) {
-      const completed = await Promise.race(running.values());
-      running.delete(completed.partId);
-      partResults.push(completed.result);
-      options.onPartCompleted?.(completed.result);
-      if (options.abortSignal?.aborted) {
-        if (queue.length > 0 || running.size > 0) {
-          options.abortSignal.throwIfAborted();
+  try {
+    while (queue.length > 0 || running.size > 0 || !leaderDone) {
+      while (queue.length > 0 && running.size < options.maxConcurrency) {
+        terminalGate.assertRunning('part.dequeue');
+        options.abortSignal?.throwIfAborted();
+        const part = queue.shift();
+        if (!part) {
+          break;
         }
-        leaderDone = true;
+        const partIndex = nextPartIndex;
+        nextPartIndex += 1;
+        terminalGate.assertRunning('part.queued');
+        options.onPartQueued?.(part, partIndex);
+        options.abortSignal?.throwIfAborted();
+        const runningPart = options.runPart(part, partIndex, terminalGate)
+          .then((result) => ({ partId: part.id, result }))
+          .catch((error) => {
+            throw terminalGate.latch(error);
+          });
+        running.set(part.id, runningPart);
+      }
+
+      if (running.size > 0) {
+        const completed = await Promise.race(running.values());
+        terminalGate.assertRunning('part.settlement');
+        running.delete(completed.partId);
+        partResults.push(completed.result);
+        terminalGate.assertRunning('part.completed');
+        options.onPartCompleted?.(completed.result);
+        if (options.abortSignal?.aborted) {
+          if (queue.length > 0 || running.size > 0) {
+            options.abortSignal.throwIfAborted();
+          }
+          leaderDone = true;
+          continue;
+        }
+
+        if (queue.length === 0 && running.size === 0) {
+          await tryPlanMoreParts();
+        }
         continue;
       }
 
-      if (queue.length === 0 && running.size === 0) {
-        await tryPlanMoreParts();
+      if (leaderDone) {
+        break;
       }
-      continue;
-    }
 
-    if (leaderDone) {
-      break;
+      await tryPlanMoreParts();
     }
-
-    await tryPlanMoreParts();
+  } catch (error) {
+    const terminalError = terminalGate.latch(error);
+    await Promise.allSettled(running.values());
+    throw terminalError;
   }
 
   return {

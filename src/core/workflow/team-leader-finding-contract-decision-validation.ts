@@ -1,4 +1,9 @@
 import { createHash } from 'node:crypto';
+import {
+  FindingContractControlValidationError,
+  hasFindingContractEvidenceOrReferenceIssue as hasControlEvidenceOrReferenceIssue,
+  type FindingContractControlValidationIssue,
+} from './team-leader-finding-contract-control-validation.js';
 
 export type FindingContractDecisionValidationCategory =
   | 'shape'
@@ -11,6 +16,7 @@ export interface FindingContractDecisionValidationIssue {
   readonly category: FindingContractDecisionValidationCategory;
   readonly path: string;
   readonly message: string;
+  readonly retryability?: FindingContractControlValidationIssue['retryability'];
   readonly findingId?: string;
   readonly partId?: string;
 }
@@ -37,22 +43,22 @@ const DECISION_DIGEST_MAX_ITEMS = 100;
 const DECISION_DIGEST_MAX_STRING_LENGTH = 500;
 const VALIDATION_ISSUE_MESSAGE_MAX_LENGTH = 2_000;
 
-export class FindingContractTeamLeaderDecisionValidationError extends Error {
-  readonly issues: readonly FindingContractDecisionValidationIssue[];
-  readonly issueFingerprint: string;
+export class FindingContractTeamLeaderDecisionValidationError
+  extends FindingContractControlValidationError<FindingContractRejectedDecisionDigest> {
   readonly decisionDigest: FindingContractRejectedDecisionDigest;
 
   constructor(
     issues: readonly FindingContractDecisionValidationIssue[],
     decisionDigest: FindingContractRejectedDecisionDigest,
   ) {
-    const sortedIssues = deduplicateValidationIssues(sortFindingContractDecisionValidationIssues(
-      issues.map(createFindingContractDecisionValidationIssue),
-    ));
-    super(sortedIssues.map((issue) => issue.message).join('; '));
+    const controlIssues = issues.map((issue): FindingContractControlValidationIssue => ({
+      ...issue,
+      boundaryKind: 'decision',
+      category: issue.category,
+      retryability: issue.retryability ?? 'corrective_retry',
+    }));
+    super(controlIssues, decisionDigest);
     this.name = 'FindingContractTeamLeaderDecisionValidationError';
-    this.issues = sortedIssues;
-    this.issueFingerprint = fingerprintFindingContractDecisionValidationIssues(sortedIssues);
     this.decisionDigest = decisionDigest;
   }
 }
@@ -100,7 +106,12 @@ export function fingerprintFindingContractDecisionValidationIssues(
 export function hasFindingContractEvidenceOrReferenceIssue(
   issues: readonly FindingContractDecisionValidationIssue[],
 ): boolean {
-  return issues.some((issue) => issue.category === 'evidence' || issue.category === 'reference');
+  return hasControlEvidenceOrReferenceIssue(issues.map((issue) => ({
+    ...issue,
+    boundaryKind: 'decision',
+    category: issue.category,
+    retryability: 'corrective_retry',
+  })));
 }
 
 export function createFindingContractRejectedDecisionDigest(
@@ -207,18 +218,6 @@ function readObjectArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
     ? value.filter(isRecord)
     : [];
-}
-
-function deduplicateValidationIssues(
-  issues: readonly FindingContractDecisionValidationIssue[],
-): FindingContractDecisionValidationIssue[] {
-  const seen = new Set<string>();
-  return issues.filter((issue) => {
-    const identity = `${validationIssueIdentity(issue)}:${issue.message}`;
-    if (seen.has(identity)) return false;
-    seen.add(identity);
-    return true;
-  });
 }
 
 function boundText(value: string, maxLength: number): string {

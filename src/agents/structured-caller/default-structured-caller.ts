@@ -8,13 +8,16 @@ import {
 } from '../judge-status-usecase.js';
 import {
   decomposeTask,
+  requestDecompositionRawResponse,
   requestMoreParts,
+  requestMorePartsRawResponse,
   type DecomposeTaskOptions,
   type DecomposeTaskResponse,
   type MorePartsOptions,
   type MorePartsResponse,
   type TeamLeaderPartFeedbackResult,
 } from '../decompose-task-usecase.js';
+import type { AgentResponse } from '../../core/models/types.js';
 import type { StructuredCaller } from './contracts.js';
 
 export class DefaultStructuredCaller implements StructuredCaller {
@@ -52,6 +55,14 @@ export class DefaultStructuredCaller implements StructuredCaller {
     return decomposeTask(instruction, maxInitialParts, options);
   }
 
+  async requestDecompositionRawResponse(
+    instruction: string,
+    maxInitialParts: number | undefined,
+    options: DecomposeTaskOptions,
+  ): Promise<AgentResponse> {
+    return requestDecompositionRawResponse(instruction, maxInitialParts, options);
+  }
+
   async requestMoreParts(
     originalInstruction: string,
     allResults: TeamLeaderPartFeedbackResult[],
@@ -59,6 +70,20 @@ export class DefaultStructuredCaller implements StructuredCaller {
     options: MorePartsOptions,
   ): Promise<MorePartsResponse> {
     return requestMoreParts(
+      originalInstruction,
+      allResults,
+      existingIds,
+      options,
+    );
+  }
+
+  async requestMorePartsRawResponse(
+    originalInstruction: string,
+    allResults: TeamLeaderPartFeedbackResult[],
+    existingIds: string[],
+    options: MorePartsOptions,
+  ): Promise<AgentResponse> {
+    return requestMorePartsRawResponse(
       originalInstruction,
       allResults,
       existingIds,

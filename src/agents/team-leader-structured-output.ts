@@ -11,6 +11,9 @@ import {
   parseFindingContractPartDefinition,
 } from '../core/workflow/team-leader-finding-contract.js';
 import { buildFindingContractRecoveryPromptSections } from './team-leader-finding-contract-recovery-prompt.js';
+import {
+  buildFindingContractDecompositionRecoveryPromptSections,
+} from './team-leader-decomposition-recovery-prompt.js';
 
 const LATEST_RAW_CONTENT_MAX_LENGTH = 12_000;
 const LATEST_BATCH_RAW_TOTAL_MAX_LENGTH = 24_000;
@@ -156,6 +159,10 @@ function buildDecomposeBasePrompt(
             '',
             '## Actionable Finding Contract',
             findingContract.actionableFindings,
+            ...buildFindingContractDecompositionRecoveryPromptSections(
+              findingContract.recovery,
+              language,
+            ),
           ]),
       '',
       '## 元タスク',
@@ -189,6 +196,10 @@ function buildDecomposeBasePrompt(
           '',
           '## Actionable Finding Contract',
           findingContract.actionableFindings,
+          ...buildFindingContractDecompositionRecoveryPromptSections(
+            findingContract.recovery,
+            language,
+          ),
         ]),
     '',
     '## Original Task',

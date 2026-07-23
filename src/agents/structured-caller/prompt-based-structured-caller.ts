@@ -3,7 +3,6 @@ import type { SemanticRuleCandidate } from '../../core/models/workflow-rule-cond
 import {
   buildPromptBasedDecomposePrompt,
   buildPromptBasedMorePartsPrompt,
-  toPartDefinitions,
   toMorePartsResponse,
 } from '../team-leader-structured-output.js';
 import { buildJudgePrompt, detectJudgeIndex } from '../judge-utils.js';
@@ -32,7 +31,14 @@ import {
 import { parseParts } from '../../core/workflow/engine/task-decomposer.js';
 import { createLogger, delay, getErrorMessage } from '../../shared/utils/index.js';
 import { buildMaxTurnsOption } from '../provider-call-options.js';
-import { validateFindingContractPartBatch } from '../../core/workflow/team-leader-finding-contract.js';
+import {
+  FindingContractDecompositionValidationError,
+  validateFindingContractDecomposition,
+} from '../../core/workflow/team-leader-finding-contract-decomposition-validation.js';
+import {
+  FindingContractControlValidationError,
+  createFindingContractControlValidationIssue,
+} from '../../core/workflow/team-leader-finding-contract-control-validation.js';
 import {
   createFindingContractDecisionValidationIssue,
   createFindingContractTeamLeaderDecisionValidationError,
@@ -180,51 +186,65 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     );
 
     return withRetry(async () => {
-      let response: AgentResponse;
-      try {
-        response = await runAgent(options.persona, prompt, {
-          cwd: options.cwd,
-          personaPath: options.personaPath,
-          language: options.language,
-          model: options.model,
-          provider: options.provider,
-          resolvedModel: options.resolvedModel,
-          resolvedProvider: options.resolvedProvider,
-          allowedTools: options.inspectTools ?? [],
-          mcpServers: options.mcpServers,
-          permissionMode: 'readonly',
-          onStream: options.onStream,
-          workflowMeta: options.workflowMeta,
-          childProcessEnv: options.childProcessEnv,
-          abortSignal: options.abortSignal,
-          onPromptResolved: options.onPromptResolved,
-        });
-      } catch (error) {
-        options.onAgentError?.(error);
-        throw error;
-      }
-      options.onAgentResponse?.(response);
+      const response = await this.requestPromptBasedRawResponse(prompt, options, options.inspectTools ?? []);
 
       if (response.status !== 'done') {
         const detail = response.error || response.content || response.status;
         throw new Error(`Team leader failed: ${detail}`);
       }
 
-      const parts = options.findingContract === undefined
-        ? parseParts(response.content, maxInitialParts)
-        : toPartDefinitions(
-            parseLastJsonBlock(response.content),
-            maxInitialParts,
-            true,
-          );
-      if (options.findingContract !== undefined) {
-        validateFindingContractPartBatch(parts, options.findingContract.targetFindingIds);
+      if (options.findingContract === undefined) {
+        return {
+          parts: parseParts(response.content, maxInitialParts),
+          ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
+        };
       }
+      let rawParts: unknown;
+      try {
+        rawParts = parseLastJsonBlock(response.content);
+      } catch (error) {
+        throw new FindingContractDecompositionValidationError([
+          createFindingContractControlValidationIssue({
+            boundaryKind: 'decomposition',
+            code: 'shape.json_block',
+            category: 'shape',
+            path: '$',
+            message: error instanceof Error ? error.message : String(error),
+            retryability: 'corrective_retry',
+          }),
+        ], response.content);
+      }
+      const parts = validateFindingContractDecomposition(
+        rawParts,
+        maxInitialParts,
+        options.findingContract.targetFindingIds,
+      );
       return {
         parts,
         ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
       };
-    }, options.abortSignal);
+    }, options.abortSignal, (error) => (
+      options.findingContract === undefined
+      || !(error instanceof FindingContractControlValidationError)
+    ));
+  }
+
+  async requestDecompositionRawResponse(
+    instruction: string,
+    maxInitialParts: number | undefined,
+    options: DecomposeTaskOptions,
+  ): Promise<AgentResponse> {
+    const prompt = buildPromptBasedDecomposePrompt(
+      instruction,
+      maxInitialParts,
+      options.language,
+      options.inspectTools,
+      options.findingContract,
+    );
+    return withRetry(
+      () => this.requestPromptBasedRawResponse(prompt, options, options.inspectTools ?? []),
+      options.abortSignal,
+    );
   }
 
   async requestMoreParts(
@@ -242,29 +262,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     );
 
     return withRetry(async () => {
-      let response: AgentResponse;
-      try {
-        response = await runAgent(options.persona, prompt, {
-          cwd: options.cwd,
-          personaPath: options.personaPath,
-          language: options.language,
-          model: options.model,
-          provider: options.provider,
-          resolvedModel: options.resolvedModel,
-          resolvedProvider: options.resolvedProvider,
-          allowedTools: [],
-          mcpServers: options.mcpServers,
-          permissionMode: 'readonly',
-          onStream: options.onStream,
-          workflowMeta: options.workflowMeta,
-          childProcessEnv: options.childProcessEnv,
-          abortSignal: options.abortSignal,
-        });
-      } catch (error) {
-        options.onAgentError?.(error);
-        throw error;
-      }
-      options.onAgentResponse?.(response);
+      const response = await this.requestPromptBasedRawResponse(prompt, options, []);
 
       if (response.status !== 'done') {
         const detail = response.error || response.content || response.status;
@@ -309,7 +307,63 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
             }),
         ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
       };
-    }, options.abortSignal, () => options.findingContract === undefined);
+    }, options.abortSignal, (error) => (
+      options.findingContract === undefined
+      || !(error instanceof FindingContractControlValidationError)
+    ));
+  }
+
+  async requestMorePartsRawResponse(
+    originalInstruction: string,
+    allResults: TeamLeaderPartFeedbackResult[],
+    existingIds: string[],
+    options: MorePartsOptions,
+  ): Promise<AgentResponse> {
+    const prompt = buildPromptBasedMorePartsPrompt(
+      originalInstruction,
+      allResults,
+      existingIds,
+      options.language,
+      options.findingContract,
+    );
+    return withRetry(
+      () => this.requestPromptBasedRawResponse(prompt, options, []),
+      options.abortSignal,
+    );
+  }
+
+  private async requestPromptBasedRawResponse(
+    prompt: string,
+    options: DecomposeTaskOptions | MorePartsOptions,
+    allowedTools: string[],
+  ): Promise<AgentResponse> {
+    let response: AgentResponse;
+    try {
+      response = await runAgent(options.persona, prompt, {
+        cwd: options.cwd,
+        personaPath: options.personaPath,
+        language: options.language,
+        model: options.model,
+        provider: options.provider,
+        resolvedModel: options.resolvedModel,
+        resolvedProvider: options.resolvedProvider,
+        allowedTools,
+        mcpServers: options.mcpServers,
+        permissionMode: 'readonly',
+        onStream: options.onStream,
+        workflowMeta: options.workflowMeta,
+        childProcessEnv: options.childProcessEnv,
+        abortSignal: options.abortSignal,
+        ...('onPromptResolved' in options
+          ? { onPromptResolved: options.onPromptResolved }
+          : {}),
+      });
+    } catch (error) {
+      options.onAgentError?.(error);
+      throw error;
+    }
+    options.onAgentResponse?.(response);
+    return response;
   }
 }
 

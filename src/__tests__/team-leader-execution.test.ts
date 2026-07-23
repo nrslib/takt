@@ -236,6 +236,112 @@ describe('runTeamLeaderExecution', () => {
     })).rejects.toThrow('feedback failed');
   });
 
+  it('latches a terminal part failure, aborts siblings, and waits for their settlement', async () => {
+    const controller = new AbortController();
+    const started: string[] = [];
+    const settled: string[] = [];
+    const terminal = new Error('terminal contract violation');
+    const runPart = vi.fn(async (part: PartDefinition) => {
+      started.push(part.id);
+      if (part.id === 'p1') throw terminal;
+      await new Promise<void>((resolve) => {
+        controller.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      settled.push(part.id);
+      return makeResult(part);
+    });
+
+    await expect(runTeamLeaderExecution({
+      initialParts: ['p1', 'p2', 'p3'].map(makePart),
+      maxConcurrency: 2,
+      findingContractMode: true,
+      abortSignal: controller.signal,
+      onTerminalError: (error) => controller.abort(error),
+      runPart,
+      requestMoreParts: vi.fn(),
+    })).rejects.toBe(terminal);
+
+    expect(started).toEqual(['p1', 'p2']);
+    expect(settled).toEqual(['p2']);
+    expect(controller.signal.reason).toBe(terminal);
+  });
+
+  it('fences sibling publication at settlement before terminal allSettled completes', async () => {
+    const controller = new AbortController();
+    const terminal = new Error('terminal contract violation');
+    const publicationAttempts: string[] = [];
+    const onPartCompleted = vi.fn();
+
+    await expect(runTeamLeaderExecution({
+      initialParts: ['p1', 'p2'].map(makePart),
+      maxConcurrency: 2,
+      findingContractMode: true,
+      abortSignal: controller.signal,
+      onTerminalError: (error) => controller.abort(error),
+      runPart: async (part, _partIndex, publicationFence) => {
+        if (part.id === 'p1') throw terminal;
+        await new Promise<void>((resolve) => {
+          controller.signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        publicationAttempts.push('provider_settled');
+        publicationFence.assertRunning('journal.accepted');
+        publicationAttempts.push('journal.accepted');
+        return makeResult(part);
+      },
+      requestMoreParts: vi.fn(),
+      onPartCompleted,
+    })).rejects.toBe(terminal);
+
+    expect(publicationAttempts).toEqual(['provider_settled']);
+    expect(onPartCompleted).not.toHaveBeenCalled();
+  });
+
+  it('keeps the parent terminating until a late sibling journals raw usage, without publishing session', async () => {
+    const controller = new AbortController();
+    const terminal = new Error('terminal contract violation');
+    const events: string[] = [];
+    let parentStage: 'running' | 'terminating' | 'terminated' = 'running';
+
+    try {
+      await runTeamLeaderExecution({
+        initialParts: ['p1', 'p2'].map(makePart),
+        maxConcurrency: 2,
+        findingContractMode: true,
+        abortSignal: controller.signal,
+        onTerminalError: (error) => {
+          parentStage = 'terminating';
+          events.push('parent.terminating');
+          controller.abort(error);
+        },
+        runPart: async (part, _partIndex, publicationFence) => {
+          if (part.id === 'p1') throw terminal;
+          await new Promise<void>((resolve) => {
+            controller.signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+          expect(parentStage).toBe('terminating');
+          events.push('child.applied');
+          events.push('usage');
+          publicationFence.assertRunning('part.session');
+          events.push('session');
+          return makeResult(part);
+        },
+        requestMoreParts: vi.fn(),
+      });
+    } catch (error) {
+      parentStage = 'terminated';
+      events.push('parent.terminated');
+      expect(error).toBe(terminal);
+    }
+
+    expect(events).toEqual([
+      'parent.terminating',
+      'child.applied',
+      'usage',
+      'parent.terminated',
+    ]);
+    expect(parentStage).toBe('terminated');
+  });
+
   it('Finding Contract mode propagates an explicit replan decision', async () => {
     const part = makePart('p1');
     const result = await runTeamLeaderExecution({

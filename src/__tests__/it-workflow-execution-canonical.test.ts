@@ -109,6 +109,7 @@ vi.mock('../core/workflow/run/run-paths.js', () => ({
     contextPreviousResponsesRel: '.takt/runs/test-report-dir/context/previous_responses',
     logsRel: '.takt/runs/test-report-dir/logs',
     metaRel: '.takt/runs/test-report-dir/meta.json',
+    operationJournalRel: '.takt/runs/test-report-dir/operation-journal.json',
     logsAbs: '/tmp/logs',
     reportsAbs: '/tmp/reports',
     reportsRel: '.takt/runs/test-report-dir/reports',
@@ -117,6 +118,7 @@ vi.mock('../core/workflow/run/run-paths.js', () => ({
     contextPolicyAbs: '/tmp/context/policy',
     contextPreviousResponsesAbs: '/tmp/context/previous_responses',
     metaAbs: '/tmp/meta.json',
+    operationJournalAbs: '/tmp/operation-journal.json',
   })),
 }));
 

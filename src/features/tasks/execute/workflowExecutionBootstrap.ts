@@ -1,8 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { CapabilityAwareStructuredCaller } from '../../../agents/structured-caller.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type { ResolvedObservabilityConfig } from '../../../core/models/config-types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
+import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
+import { createOperationJournalStore } from '../../../core/workflow/operations/operation-journal-store.js';
+import { OperationRecoveryError } from '../../../core/workflow/operations/operation-recovery-error.js';
+import type { WorkflowOperationJournalContext } from '../../../core/workflow/types.js';
 import {
   inheritResumeReportSnapshot,
   RESUME_ARTIFACTS_FILE_NAME,
@@ -92,6 +97,7 @@ export interface WorkflowExecutionBootstrap {
   savedSessions: Record<string, string>;
   sessionUpdateHandler: (persona: string, sessionId: string | undefined) => void;
   writeTraceReportOnce: ReturnType<typeof createTraceReportWriter>;
+  operationJournal: WorkflowOperationJournalContext;
 }
 
 class AutoRoutingReachTracker {
@@ -167,6 +173,36 @@ export async function createWorkflowExecutionBootstrap(
   // fix 側の選択的な best-effort 継承へ委ね、target の不整合や公開競合は
   // ここで失敗させる。
   const sourceRunSlug = options.resumeSource?.sourceRunSlug;
+  const operationClaimToken = randomUUID();
+  let operationJournalRunSlug = runSlug;
+  let sourceOperationClaimToken: string | undefined;
+  if (sourceRunSlug !== undefined) {
+    const sourceMeta = readRunMetaBySlug(cwd, sourceRunSlug);
+    if (
+      (sourceMeta?.operationJournalRunSlug === undefined)
+      !== (sourceMeta?.operationClaimToken === undefined)
+    ) {
+      throw new OperationRecoveryError(
+        `Source run "${sourceRunSlug}" has incomplete operation journal ownership metadata`,
+      );
+    }
+    if (
+      sourceMeta?.operationJournalRunSlug !== undefined
+      && sourceMeta.operationClaimToken !== undefined
+    ) {
+      operationJournalRunSlug = sourceMeta.operationJournalRunSlug;
+      sourceOperationClaimToken = sourceMeta.operationClaimToken;
+    }
+  }
+  const operationJournalPaths = buildRunPaths(cwd, operationJournalRunSlug);
+  const operationJournal: WorkflowOperationJournalContext = {
+    store: createOperationJournalStore(operationJournalPaths.operationJournalAbs),
+    journalRunSlug: operationJournalRunSlug,
+    claimToken: operationClaimToken,
+    ...(sourceOperationClaimToken === undefined
+      ? {}
+      : { sourceClaimToken: sourceOperationClaimToken }),
+  };
   let resumeArtifactsManifest: ReturnType<typeof inheritResumeReportSnapshot> | undefined;
   if (sourceRunSlug && sourceRunSlug !== runSlug) {
     try {
@@ -234,6 +270,8 @@ export async function createWorkflowExecutionBootstrap(
       ...(resumeArtifactsManifest
         ? { resumeArtifactsRel: `${runPaths.reportsRel}/${RESUME_ARTIFACTS_FILE_NAME}` }
         : {}),
+      operationJournalRunSlug,
+      operationClaimToken,
     },
   );
   const workflowSessionId = generateSessionId();
@@ -423,6 +461,7 @@ export async function createWorkflowExecutionBootstrap(
     savedSessions,
     sessionUpdateHandler,
     writeTraceReportOnce,
+    operationJournal,
   };
 }
 

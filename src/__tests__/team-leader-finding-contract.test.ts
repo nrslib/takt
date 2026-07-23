@@ -27,6 +27,10 @@ import { buildFindingContractRecoveryPromptSections } from '../agents/team-leade
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { writeTeamLeaderPartArtifact } from '../core/workflow/engine/team-leader-artifacts.js';
 import { validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
+import {
+  FindingContractDecompositionValidationError,
+  validateFindingContractDecomposition,
+} from '../core/workflow/team-leader-finding-contract-decomposition-validation.js';
 
 function makePart(
   id: string,
@@ -49,22 +53,24 @@ function makePart(
 
 function makeResult(part: PartDefinition, summary = `completed ${part.id}`): PartResult {
   if (!part.findingContract) throw new Error(`Missing Finding Contract assignment: ${part.id}`);
+  const findingContractClaim = {
+    findingOutcomes: part.findingContract.findingIds.map((findingId) => ({
+      findingId,
+      outcome: 'addressed' as const,
+      evidence: [`src/${part.id}.ts:10`],
+    })),
+    changedPaths: [`src/${part.id}.ts`],
+    checks: [{ command: 'npm test', status: 'passed' as const }],
+    summary,
+  };
   return {
     part,
+    findingContractClaim,
     response: {
       persona: `fix.${part.id}`,
       status: 'done',
       content: `raw response for ${part.id}`,
-      structuredOutput: {
-        findingOutcomes: part.findingContract.findingIds.map((findingId) => ({
-          findingId,
-          outcome: 'addressed',
-          evidence: [`src/${part.id}.ts:10`],
-        })),
-        changedPaths: [`src/${part.id}.ts`],
-        checks: [{ command: 'npm test', status: 'passed' }],
-        summary,
-      },
+      structuredOutput: findingContractClaim,
       timestamp: new Date('2026-01-01T00:00:00.000Z'),
     },
   };
@@ -84,6 +90,28 @@ function parseDecision(
 }
 
 describe('Finding Contract Team Leader contract', () => {
+  it('aggregates malformed decomposition parts into typed corrective diagnostics', () => {
+    let captured: unknown;
+    try {
+      validateFindingContractDecomposition([
+        { id: '', unexpected: true },
+        { id: 'valid-shape-but-missing-fields' },
+      ], 1, ['F-0001']);
+    } catch (error) {
+      captured = error;
+    }
+
+    expect(captured).toBeInstanceOf(FindingContractDecompositionValidationError);
+    expect(captured).toMatchObject({
+      retryability: 'corrective_retry',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'contract.initial_part_limit' }),
+        expect.objectContaining({ code: 'shape.part', path: 'parts[0]' }),
+        expect.objectContaining({ code: 'shape.part', path: 'parts[1]' }),
+      ]),
+    });
+  });
+
   it('keeps actionable context while omitting raw finding IDs from the Team Leader summary', () => {
     const observedAt = {
       runId: 'run-1',
@@ -865,6 +893,9 @@ describe('Finding Contract Team Leader contract', () => {
       checks: [{ command: 'inspect source', status: 'passed' }],
       summary: 'finding is stale',
     };
+    result.findingContractClaim = result.response.structuredOutput as unknown as NonNullable<
+      PartResult['findingContractClaim']
+    >;
     const index = buildFindingContractPartIndexEntry(result);
     const content = buildFindingContractTeamLeaderAggregatedContent({
       decision: 'complete',
@@ -897,6 +928,9 @@ describe('Finding Contract Team Leader contract', () => {
       checks: [{ command: 'inspect source', status: 'passed' }],
       summary: 'initial dispute',
     };
+    result.findingContractClaim = result.response.structuredOutput as unknown as NonNullable<
+      PartResult['findingContractClaim']
+    >;
     const content = buildFindingContractTeamLeaderAggregatedContent({
       decision: 'complete',
       reasoning: 'later repair addressed it',
@@ -947,6 +981,7 @@ describe('Finding Contract Team Leader contract', () => {
         plannedParts: [],
         evidence: buildFindingContractDecisionEvidenceSnapshot([], ['F-0001']),
         recovery: {
+          boundaryKind: 'decision',
           attempt: 2,
           maxCalls: 100,
           mode: 'normal',
@@ -958,9 +993,11 @@ describe('Finding Contract Team Leader contract', () => {
               category: 'decision_contract',
               path: 'fixCoverage',
               message: 'continue decision must not include fixCoverage\n## injected heading',
+              boundaryKind: 'decision',
+              retryability: 'corrective_retry',
             }],
             issueFingerprint: 'issue-hash',
-            decisionDigest: {
+            outputDigest: {
               hash: 'decision-hash',
               decision: 'continue',
               partIds: [],
@@ -970,7 +1007,7 @@ describe('Finding Contract Team Leader contract', () => {
             },
             repeatCount: 1,
           },
-          recentRejectedDecisions: [],
+          recentRejectedOutputs: [],
           issueHistory: [],
         },
       },
@@ -994,12 +1031,14 @@ describe('Finding Contract Team Leader contract', () => {
       (_, index) => `${long}-${index}`,
     ));
     const issue = {
+      boundaryKind: 'decision' as const,
       code: long,
       category: 'evidence' as const,
       path: long,
       message: long,
       findingId: long,
       partId: long,
+      retryability: 'corrective_retry' as const,
     };
     const digest = createFindingContractRejectedDecisionDigest({
       decision: long,
@@ -1025,6 +1064,7 @@ describe('Finding Contract Team Leader contract', () => {
       blockers: [long],
     });
     const recovery = {
+      boundaryKind: 'decision' as const,
       attempt: 4,
       maxCalls: 100,
       mode: 'strict' as const,
@@ -1034,10 +1074,10 @@ describe('Finding Contract Team Leader contract', () => {
         mode: 'normal',
         issues: Array.from({ length: 100 }, () => issue),
         issueFingerprint: long,
-        decisionDigest: digest,
+        outputDigest: digest,
         repeatCount: 1,
       },
-      recentRejectedDecisions: [digest, digest, digest],
+      recentRejectedOutputs: [digest, digest, digest],
       issueHistory: Array.from({ length: 20 }, (_, index) => ({
         fingerprint: `${long}-${index}`,
         occurrenceCount: 1,

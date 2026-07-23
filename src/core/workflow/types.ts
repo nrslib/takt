@@ -32,8 +32,16 @@ import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderReso
 import type { FindingContractConfig, FindingLedger } from '../models/finding-types.js';
 import type { RunResumeSource } from './run/run-meta.js';
 import type { FindingLedgerStore } from './findings/store.js';
+import type { OperationJournalStore } from './operations/operation-journal-types.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
+
+export interface WorkflowOperationJournalContext {
+  readonly store: OperationJournalStore;
+  readonly journalRunSlug: string;
+  readonly claimToken: string;
+  readonly sourceClaimToken?: string;
+}
 export type {
   ProviderType,
   StreamEvent,
@@ -131,7 +139,12 @@ export interface StepRunResult {
     response: AgentResponse;
     stepIteration: number;
   };
+  commitTransition?: (receipt: StepTransitionReceipt) => void;
 }
+
+export type StepTransitionReceipt =
+  | { readonly kind: 'next_step'; readonly nextStep: string }
+  | { readonly kind: 'return'; readonly returnValue: string };
 
 export interface TeamLeaderPartRuntimeResolution {
   partAllowedTools?: string[];
@@ -374,6 +387,7 @@ export interface WorkflowEngineOptions {
   /** Resume point for workflow_call-aware retries */
   resumePoint?: WorkflowResumePoint;
   resumeSource?: RunResumeSource;
+  operationJournal?: WorkflowOperationJournalContext;
   /** Override report directory name (without parent path). */
   reportDirName?: string;
   /** Namespace appended under the shared run directories for nested workflow execution. */
