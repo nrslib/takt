@@ -1,0 +1,618 @@
+name: takt-default-localllm
+description: ローカルLLMを通常レビューに使い、高信頼モデルへ配線・資源所有権・失敗境界の再検査を割り当てられる Team Leader 版 workflow。provider/model 自体はタグで設定する。
+finding_contract:
+  ledger_path: .takt/findings/takt-default-localllm.json
+  raw_findings_path: .takt/findings/takt-default-localllm/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+max_steps: 50
+initial_step: plan
+
+loop_monitors:
+  - cycle: [replan, implement]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 要件と受入条件を変えずに実装方針を再定義できる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 要件と受入条件を変えずに実装方針を再定義できる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, boundary-reviewers]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 要件と受入条件を変えずに実装方針を再定義できる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, boundary-reviewers, final-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 要件と受入条件を変えずに実装方針を再定義できる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 再計画により blocker の解消が進んでいる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, boundary-reviewers, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 再計画により blocker の解消が進んでいる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, boundary-reviewers, final-gate, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 再計画により blocker の解消が進んでいる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 要件と受入条件を変えずに実装方針を再定義できる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate, boundary-reviewers]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 要件と受入条件を変えずに実装方針を再定義できる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate, boundary-reviewers, final-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 要件と受入条件を変えずに実装方針を再定義できる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 再計画により blocker の解消が進んでいる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate, boundary-reviewers, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 再計画により blocker の解消が進んでいる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate, boundary-reviewers, final-gate, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 再計画により blocker の解消が進んでいる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [reviewers, local-review-integrity-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-gate-needs-review
+      rules:
+        - condition: 不足証拠を具体的に補完でき、同じ通常レビューをもう一度実行する価値がある
+          next: reviewers
+        - condition: 完了ゲートが示した問題を具体的な実装修正で解消できる
+          next: fix
+        - condition: 要件と受入条件を変えずに実装方針またはテスト方針を再定義できる
+          next: replan
+        - condition: 試行済みのレビューと再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [boundary-reviewers, final-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-gate-needs-review
+      rules:
+        - condition: 不足証拠を具体的に補完でき、同じ境界レビューをもう一度実行する価値がある
+          next: boundary-reviewers
+        - condition: 完了ゲートが示した問題を具体的な実装修正で解消できる
+          next: fix
+        - condition: 要件と受入条件を変えずに実装方針またはテスト方針を再定義できる
+          next: replan
+        - condition: 試行済みのレビューと再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, boundary-reviewers, final-gate, boundary-reviewers, final-gate]
+    threshold: 1
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 要件と受入条件を変えずに実装方針を再定義できる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate, reviewers, local-review-integrity-gate]
+    threshold: 1
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 要件と受入条件を変えずに実装方針を再定義できる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [fix, reviewers]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: 修正後レビューで進捗が確認され、次の修正が実行可能である
+          next: fix
+        - condition: 同じ指摘が繰り返されるが再計画で解消できる見込みがある
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [fix, reviewers, boundary-reviewers]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: 修正後レビューで進捗が確認され、次の修正が実行可能である
+          next: fix
+        - condition: 同じ指摘が繰り返されるが再計画で解消できる見込みがある
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [fix, reviewers, boundary-reviewers, final-gate]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: 修正後レビューで進捗が確認され、次の修正が実行可能である
+          next: fix
+        - condition: 同じ指摘が繰り返されるが再計画で解消できる見込みがある
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [fix, reviewers, local-review-integrity-gate]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: 修正後レビューで進捗が確認され、次の修正が実行可能である
+          next: fix
+        - condition: 同じ指摘が繰り返されるが再計画で解消できる見込みがある
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [fix, reviewers, local-review-integrity-gate, boundary-reviewers]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: 修正後レビューで進捗が確認され、次の修正が実行可能である
+          next: fix
+        - condition: 同じ指摘が繰り返されるが再計画で解消できる見込みがある
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [fix, reviewers, local-review-integrity-gate, boundary-reviewers, final-gate]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: 修正後レビューで進捗が確認され、次の修正が実行可能である
+          next: fix
+        - condition: 同じ指摘が繰り返されるが再計画で解消できる見込みがある
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [fix, reviewers, boundary-reviewers, final-gate, boundary-reviewers, final-gate]
+    threshold: 1
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: 修正後レビューで進捗が確認され、次の修正が実行可能である
+          next: fix
+        - condition: 同じ指摘が繰り返されるが再計画で解消できる見込みがある
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [fix, reviewers, local-review-integrity-gate, reviewers, local-review-integrity-gate]
+    threshold: 1
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: 修正後レビューで進捗が確認され、次の修正が実行可能である
+          next: fix
+        - condition: 同じ指摘が繰り返されるが再計画で解消できる見込みがある
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+steps:
+  - name: plan
+    tags: [plan]
+    edit: false
+    persona: planner
+    knowledge: architecture
+    instruction: plan
+    rules:
+      - condition: タスク分析と計画が完了した
+        next: write_tests
+      - condition: ユーザーが質問をしている（実装タスクではない）
+        next: COMPLETE
+      - condition: 要件が不明確で計画を立てられない
+        next: ABORT
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+
+  - name: replan
+    tags: [plan]
+    edit: false
+    persona: planner
+    knowledge: architecture
+    instruction: replan-implementation
+    rules:
+      - condition: プロジェクト内で実行可能な未試行の変更または原因調査と、その検証手順を具体化した
+        next: implement
+      - condition: 確認済みの根拠により、プロジェクト内の変更や調査では解消できず、外部操作だけが残るか要件が両立不能である
+        next: ABORT
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+
+  - name: write_tests
+    tags: [coding, test-planning]
+    edit: true
+    persona: coder
+    policy: [coding, testing]
+    knowledge: [takt, architecture, unit-testing, e2e-testing, implementation-semantics]
+    required_permission_mode: edit
+    instruction: write-tests-first
+    rules:
+      - condition: テスト作成が完了した
+        next: implement
+      - condition: 実装対象が未実装のためテスト作成をスキップ
+        next: implement
+      - condition: テスト作成を進行できない
+        next: plan
+      - condition: ユーザー入力が必要
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - name: test-report.md
+          format: test-report
+
+  - name: implement
+    tags: [leader]
+    edit: true
+    persona: coder
+    policy: coding
+    knowledge: [takt, architecture, implementation-semantics]
+    required_permission_mode: edit
+    pass_previous_response: true
+    team_leader:
+      max_concurrency: 2
+      initial_max_parts: 2
+      fail_on_part_error: false
+      part_tags: [coding]
+      part_persona: coder
+      part_edit: true
+      part_permission_mode: edit
+    instruction: team-leader-implement
+    rules:
+      - condition: 実装完了
+        next: reviewers
+      - condition: 実装を進められない
+        next: replan
+
+  - name: reviewers
+    tags: [review]
+    parallel:
+      - name: arch-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: architecture-reviewer
+        policy: review
+        knowledge: architecture
+        instruction: review-arch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: architect-review.md
+              format: architecture-review-finding-contract
+      - name: ai-antipattern-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: ai-antipattern-reviewer
+        policy: [review, ai-antipattern]
+        instruction: ai-antipattern-review
+        rules:
+          - condition: AI特有の問題なし
+          - condition: AI特有の問題あり
+        output_contracts:
+          report:
+            - name: ai-antipattern-review.md
+              format: ai-antipattern-review-finding-contract
+      - name: coding-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: coding-reviewer
+        policy: [review, coding]
+        instruction: review-coding
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review-finding-contract
+      - name: implementation-semantics-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: implementation-semantics-reviewer
+        policy: review
+        knowledge: implementation-semantics
+        instruction: review-implementation-semantics
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: implementation-semantics-review.md
+              format: implementation-semantics-review-finding-contract
+      - name: contract-lifecycle-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: contract-lifecycle-reviewer
+        policy: review
+        knowledge: contract-lifecycle
+        instruction: contract-lifecycle-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: contract-lifecycle-review.md
+              format: contract-lifecycle-review-finding-contract
+      - name: robustness-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: robustness-reviewer
+        policy: review
+        knowledge: robustness
+        instruction: robustness-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: robustness-review.md
+              format: robustness-review-finding-contract
+    rules:
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: replan
+      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: replan
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: replan
+      - condition: all("approved", "AI特有の問題なし", "approved", "approved", "approved", "approved") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count == 0)
+        next: boundary-reviewers
+      - condition: any("approved", "needs_fix", "AI特有の問題なし", "AI特有の問題あり") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        next: local-review-integrity-gate
+      - condition: any("needs_fix", "AI特有の問題あり") && when(findings.conflicts.count == 0)
+        next: fix
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
+        next: fix
+
+  - name: local-review-integrity-gate
+    kind: workflow_call
+    call: merge-readiness-finding-contract-final-gate
+    args:
+      supervise_knowledge:
+        - architecture
+        - takt
+    rules:
+      - condition: COMPLETE
+        next: boundary-reviewers
+      - condition: needs_review
+        next: reviewers
+      - condition: need_replan
+        next: replan
+      - condition: needs_fix
+        next: fix
+      - condition: needs_conflict_adjudication
+        next: finding-conflict-adjudication
+      - condition: ABORT
+        next: ABORT
+
+  - name: boundary-reviewers
+    tags: [review, boundary-review]
+    parallel:
+      - name: contract-wiring-review
+        session_key: contract-wiring-review
+        tags: [review, boundary-review]
+        edit: false
+        session: compact
+        pass_previous_response: false
+        persona: contract-lifecycle-reviewer
+        policy: review
+        knowledge: contract-lifecycle
+        instruction: review-contract-wiring
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: contract-wiring-review.md
+              format: contract-wiring-review-finding-contract
+      - name: resource-ownership-review
+        session_key: resource-ownership-review
+        tags: [review, boundary-review]
+        edit: false
+        session: compact
+        pass_previous_response: false
+        persona: resource-ownership-reviewer
+        policy: review
+        knowledge: resource-ownership
+        instruction: review-resource-ownership
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: resource-ownership-review.md
+              format: resource-ownership-review-finding-contract
+      - name: failure-boundary-review
+        session_key: failure-boundary-review
+        tags: [review, boundary-review]
+        edit: false
+        session: compact
+        pass_previous_response: false
+        persona: failure-boundary-reviewer
+        policy: review
+        knowledge: failure-boundary
+        instruction: review-failure-boundary
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: failure-boundary-review.md
+              format: failure-boundary-review-finding-contract
+    rules:
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: replan
+      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: replan
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: replan
+      - condition: all("approved", "approved", "approved") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count == 0)
+        next: final-gate
+      - condition: any("approved", "needs_fix") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        next: final-gate
+      - condition: any("needs_fix") && when(findings.conflicts.count == 0)
+        next: fix
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
+        next: fix
+
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-finding-contract-final-gate
+    args:
+      supervise_knowledge:
+        - architecture
+        - takt
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: needs_review
+        next: boundary-reviewers
+      - condition: need_replan
+        next: replan
+      - condition: needs_fix
+        next: fix
+      - condition: needs_conflict_adjudication
+        next: finding-conflict-adjudication
+      - condition: ABORT
+        next: ABORT
+
+  - name: fix
+    tags: [leader]
+    edit: true
+    persona: coder
+    policy: [coding, testing]
+    knowledge: [takt, architecture, implementation-semantics]
+    required_permission_mode: edit
+    team_leader:
+      mode: finding_contract_fix
+      max_concurrency: 2
+      initial_max_parts: 2
+      fail_on_part_error: false
+      part_tags: [coding]
+      part_persona: coder
+      part_edit: true
+      part_permission_mode: edit
+    instruction: team-leader-finding-contract-fix
+    rules:
+      - condition: when(structured.fix.decision == "complete")
+        next: reviewers
+      - condition: when(structured.fix.decision == "replan")
+        next: replan
