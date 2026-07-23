@@ -12,16 +12,20 @@ import {
   ensurePrivateDirectory,
   readRegularFileNoFollow,
   writePrivateFileWithMode,
-} from '../../../shared/utils/private-file.js';
+} from '../../shared/utils/private-file.js';
 import {
   assertAncestorIdentities,
   hasMatchingIdentity,
   inspectPrivateArtifactPath,
   lstatOrUndefined,
   type DirectoryIdentity,
-} from '../../../shared/utils/private-path-identity.js';
-import { OperationJournalConflictError } from './operation-recovery-error.js';
-import { parseOperationJournalDocument } from './operation-journal-schemas.js';
+} from '../../shared/utils/private-path-identity.js';
+import {
+  OperationJournalConflictError,
+} from '../../core/workflow/operations/operation-recovery-error.js';
+import {
+  parseOperationJournalDocument,
+} from '../../core/workflow/operations/operation-journal-schemas.js';
 import {
   OPERATION_JOURNAL_STAGE_ORDER,
   type AppendOperationAttemptInput,
@@ -36,12 +40,14 @@ import {
   type OperationJournalStage,
   type OperationJournalStore,
   type OperationOwner,
-} from './operation-journal-types.js';
+} from '../../core/workflow/operations/operation-journal-types.js';
 
 const PRIVATE_FILE_MODE = 0o600;
 const LOCK_RETRY_DELAY_MS = 25;
 const LOCK_TIMEOUT_MS = 5_000;
 const MALFORMED_LOCK_GRACE_MS = 250;
+const RECOVERY_ELECTION_RECORD_LIMIT = 256;
+const RECOVERY_ELECTION_LOG_BYTE_LIMIT = 256 * 1024;
 const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
 const LOCK_PUBLICATION_SCRIPT = String.raw`
 const fs = require('node:fs');
@@ -236,6 +242,25 @@ function parseRecoveryElectionLog(content: string): readonly RecoveryElectionRec
     });
 }
 
+function compactRecoveryElectionRecords(
+  records: readonly RecoveryElectionRecord[],
+): readonly RecoveryElectionRecord[] {
+  const releasedClaims = new Set(
+    records
+      .filter((record) => record.kind === 'release')
+      .map((record) => `${record.lockKey}\0${record.token}`),
+  );
+  const retainedClaims = new Map<string, RecoveryElectionRecord>();
+  for (const record of records) {
+    if (record.kind !== 'claim') continue;
+    const claimKey = `${record.lockKey}\0${record.token}`;
+    if (!releasedClaims.has(claimKey) && isProcessAlive(record.pid)) {
+      retainedClaims.set(claimKey, record);
+    }
+  }
+  return [...retainedClaims.values()];
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -428,12 +453,14 @@ class FileOperationJournalStore implements OperationJournalStore {
   private readonly journalPath: string;
   private readonly lockPath: string;
   private readonly recoveryElectionPath: string;
+  private readonly recoveryElectionMutexPath: string;
   private locked = false;
 
   constructor(journalPath: string) {
     this.journalPath = resolve(journalPath);
     this.lockPath = `${this.journalPath}.lock`;
     this.recoveryElectionPath = `${this.lockPath}.recovery`;
+    this.recoveryElectionMutexPath = `${this.recoveryElectionPath}.mutex`;
   }
 
   createParent(input: CreateOperationParentInput): OperationJournalParent {
@@ -765,6 +792,24 @@ class FileOperationJournalStore implements OperationJournalStore {
     }
   }
 
+  private acquireIndependentFileLock(lockPath: string): LockSnapshot {
+    const deadline = Date.now() + LOCK_TIMEOUT_MS;
+    while (true) {
+      const acquired = this.tryAcquireLock(lockPath);
+      if (acquired !== undefined) {
+        return acquired;
+      }
+      const existing = this.readLockSnapshot(lockPath);
+      if (existing !== undefined && this.isLockRecoverable(existing)) {
+        this.removeLockFileIfUnchanged(lockPath, existing);
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Operation journal timed out waiting for lock: ${lockPath}`);
+      }
+      waitForLockRetry();
+    }
+  }
+
   private tryAcquireLock(lockPath: string): LockSnapshot | undefined {
     if (this.readLockSnapshot(lockPath) !== undefined) {
       return undefined;
@@ -906,7 +951,54 @@ class FileOperationJournalStore implements OperationJournalStore {
   }
 
   private appendRecoveryElectionRecord(record: RecoveryElectionRecord): void {
-    appendPrivateFile(this.recoveryElectionPath, `${JSON.stringify(record)}\n`);
+    const mutex = this.acquireIndependentFileLock(this.recoveryElectionMutexPath);
+    let appendFailed = false;
+    let appendError: unknown;
+    try {
+      appendPrivateFile(this.recoveryElectionPath, `${JSON.stringify(record)}\n`);
+      this.compactRecoveryElectionLog();
+    } catch (error) {
+      appendFailed = true;
+      appendError = error;
+    }
+    let releaseFailed = false;
+    let releaseError: unknown;
+    try {
+      this.releaseFileLock(mutex, this.recoveryElectionMutexPath);
+    } catch (error) {
+      releaseFailed = true;
+      releaseError = error;
+    }
+    if (appendFailed && releaseFailed) {
+      throw new AggregateError(
+        [appendError, releaseError],
+        `Operation journal recovery election update and lock release both failed: ${this.recoveryElectionPath}`,
+      );
+    }
+    if (appendFailed) throw appendError;
+    if (releaseFailed) throw releaseError;
+  }
+
+  private compactRecoveryElectionLog(): void {
+    const snapshot = this.readLockSnapshot(this.recoveryElectionPath);
+    if (
+      snapshot === undefined
+      || (
+        snapshot.content.length <= RECOVERY_ELECTION_LOG_BYTE_LIMIT
+        && snapshot.content.split('\n').length - 1 <= RECOVERY_ELECTION_RECORD_LIMIT
+      )
+    ) {
+      return;
+    }
+    const retained = compactRecoveryElectionRecords(
+      parseRecoveryElectionLog(snapshot.content),
+    );
+    const content = retained.map((record) => JSON.stringify(record)).join('\n');
+    writePrivateFileWithMode(
+      this.recoveryElectionPath,
+      content.length === 0 ? '' : `${content}\n`,
+      PRIVATE_FILE_MODE,
+    );
   }
 
   private isRecoveryLeader(claim: RecoveryElectionRecord): boolean {
@@ -976,15 +1068,18 @@ class FileOperationJournalStore implements OperationJournalStore {
     }
   }
 
-  private releaseFileLock(expected: LockSnapshot): void {
+  private releaseFileLock(
+    expected: LockSnapshot,
+    lockPath = this.lockPath,
+  ): void {
     const holder = parseLockHolder(expected.content);
     if (
       holder === undefined
       || holder.pid !== process.pid
-      || !this.removeLockFileIfUnchanged(this.lockPath, expected)
+      || !this.removeLockFileIfUnchanged(lockPath, expected)
     ) {
       throw new OperationJournalConflictError(
-        `Operation journal lock ownership changed before release: ${this.lockPath}`,
+        `Operation journal lock ownership changed before release: ${lockPath}`,
       );
     }
   }

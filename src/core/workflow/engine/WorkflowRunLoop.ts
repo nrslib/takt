@@ -397,7 +397,11 @@ function finalizeCompletionOrAbort(
 
 type TerminalTransitionResult =
   | { handled: false }
-  | { handled: true; abort?: WorkflowAbortResult };
+  | {
+      handled: true;
+      transitionAccepted: boolean;
+      abort?: WorkflowAbortResult;
+    };
 
 function handleTerminalTransition(
   deps: WorkflowRunLoopDeps,
@@ -406,14 +410,15 @@ function handleTerminalTransition(
   if (nextStep === COMPLETE_STEP) {
     const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
     if (gateAbort) {
-      return { handled: true, abort: gateAbort };
+      return { handled: true, transitionAccepted: false, abort: gateAbort };
     }
     deps.emit('workflow:complete', deps.state);
-    return { handled: true };
+    return { handled: true, transitionAccepted: true };
   }
   if (nextStep === ABORT_STEP) {
     return {
       handled: true,
+      transitionAccepted: true,
       abort: abortWorkflow(deps, 'step_transition', 'Workflow aborted by step transition'),
     };
   }
@@ -757,7 +762,9 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
 
       const naturalTerminal = handleTerminalTransition(deps, nextStep);
       if (naturalTerminal.handled) {
-        result.commitTransition?.({ kind: 'next_step', nextStep });
+        if (naturalTerminal.transitionAccepted) {
+          result.commitTransition?.({ kind: 'next_step', nextStep });
+        }
         abort = naturalTerminal.abort;
         break;
       }
@@ -774,11 +781,14 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
 
       const monitoredTerminal = handleTerminalTransition(deps, nextStep);
-      result.commitTransition?.({ kind: 'next_step', nextStep });
       if (monitoredTerminal.handled) {
+        if (monitoredTerminal.transitionAccepted) {
+          result.commitTransition?.({ kind: 'next_step', nextStep });
+        }
         abort = monitoredTerminal.abort;
         break;
       }
+      result.commitTransition?.({ kind: 'next_step', nextStep });
       advanceActiveStep(deps, nextStep, deps.state.iteration);
     } catch (error) {
       abort = abortWorkflowRuntimeError(deps, error);

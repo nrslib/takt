@@ -23,7 +23,7 @@ vi.mock('../shared/utils/private-file.js', async (importOriginal) => ({
 }));
 
 import { OperationJournalConflictError } from '../core/workflow/operations/operation-recovery-error.js';
-import { createOperationJournalStore } from '../core/workflow/operations/operation-journal-store.js';
+import { createOperationJournalStore } from '../infra/workflow/operation-journal-store.js';
 import {
   OPERATION_ATTEMPT_STATUSES,
   OPERATION_JOURNAL_STAGE_ORDER,
@@ -153,7 +153,7 @@ function runStoreProcess(
   operation: string,
 ): ManagedChildProcess {
   const storeModule = resolve(
-    'src/core/workflow/operations/operation-journal-store.ts',
+    'src/infra/workflow/operation-journal-store.ts',
   );
   const script = `
     import { createOperationJournalStore } from ${JSON.stringify(storeModule)};
@@ -205,13 +205,17 @@ function runStoreProcess(
 
 function runInternalStoreProcess(journalPath: string, body: string): ManagedChildProcess {
   const storeModule = resolve(
-    'src/core/workflow/operations/operation-journal-store.ts',
+    'src/infra/workflow/operation-journal-store.ts',
   );
   const script = `
     import { existsSync } from 'node:fs';
     import { createOperationJournalStore } from ${JSON.stringify(storeModule)};
-    const waitForFile = (path) => {
+    const waitForFile = (path, timeoutMs = 5_000) => {
+      const deadline = Date.now() + timeoutMs;
       while (!existsSync(path)) {
+        if (Date.now() >= deadline) {
+          throw new Error('Timed out waiting for file: ' + path);
+        }
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
       }
     };
@@ -810,6 +814,51 @@ describe('operation journal store', () => {
     expect(existsSync(`${journalPath}.lock`)).toBe(false);
     expect(readFileSync(journalPath, 'utf-8')).toContain('"recovered-parent"');
     expect(statSync(stateDir).isDirectory()).toBe(true);
+  });
+
+  it('compacts obsolete recovery election records while retaining the current election', () => {
+    createParent();
+    const lockPath = `${journalPath}.lock`;
+    const recoveryPath = `${lockPath}.recovery`;
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({ version: 1, pid: 2147483647, token: 'stale-owner' })}\n`,
+      { mode: 0o600 },
+    );
+    const obsoleteRecords = Array.from({ length: 300 }, (_, index) => {
+      const claim = {
+        version: 1,
+        kind: 'claim',
+        lockKey: 'obsolete-lock',
+        pid: 2147483647,
+        token: `obsolete-${index}`,
+      };
+      return `${JSON.stringify(claim)}\n${JSON.stringify({ ...claim, kind: 'release' })}\n`;
+    }).join('');
+    writeFileSync(recoveryPath, obsoleteRecords, { mode: 0o600 });
+
+    expect(store.getParent('parent-1').id).toBe('parent-1');
+
+    const retainedLines = readFileSync(recoveryPath, 'utf-8')
+      .split('\n')
+      .filter((line) => line.length > 0);
+    expect(retainedLines).toHaveLength(2);
+    expect(retainedLines.every((line) => !line.includes('obsolete-lock'))).toBe(true);
+  });
+
+  it('bounds child-process waits for recovery test barriers', async () => {
+    const missingPath = join(tempDir, 'missing-recovery-barrier');
+    const child = runInternalStoreProcess(
+      journalPath,
+      `waitForFile(${JSON.stringify(missingPath)}, 50);`,
+    );
+
+    const result = await child.result;
+
+    expect(result.exitCode).toBe(2);
+    expect(parseChildError(result).message).toBe(
+      `Timed out waiting for file: ${missingPath}`,
+    );
   });
 
   it('serializes two stale-lock recoverers without removing a newly acquired owner lock', async () => {

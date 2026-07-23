@@ -408,11 +408,13 @@ export class FindingContractOperationBoundary {
         completedCalls,
         mode: event.mode,
         ...(event.strictReason === undefined ? {} : { strictReason: event.strictReason }),
-        ...(event.envelope?.sessionId === undefined
+        ...(event.envelope === undefined
           ? episode.latestSessionId === undefined
             ? {}
             : { latestSessionId: episode.latestSessionId }
-          : { latestSessionId: event.envelope.sessionId }),
+          : event.envelope.sessionId === undefined
+            ? {}
+            : { latestSessionId: event.envelope.sessionId }),
       },
       ...(event.type === 'accepted' && event.acceptedValue !== undefined
         ? { accepted: event.acceptedValue }

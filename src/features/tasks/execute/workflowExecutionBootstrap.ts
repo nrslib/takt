@@ -5,7 +5,6 @@ import type { WorkflowConfig } from '../../../core/models/index.js';
 import type { ResolvedObservabilityConfig } from '../../../core/models/config-types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
-import { createOperationJournalStore } from '../../../core/workflow/operations/operation-journal-store.js';
 import { OperationRecoveryError } from '../../../core/workflow/operations/operation-recovery-error.js';
 import type { WorkflowOperationJournalContext } from '../../../core/workflow/types.js';
 import {
@@ -46,6 +45,7 @@ import {
 } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import { initAnalyticsWriter } from '../../analytics/index.js';
 import { ensureWorktreeTaktRuntimeProtection } from '../../../infra/task/projectLocalTaktSync.js';
+import { createOperationJournalStore } from '../../../infra/workflow/operation-journal-store.js';
 import { AnalyticsEmitter } from './analyticsEmitter.js';
 import { createOutputFns, createPrefixedStreamHandler } from './outputFns.js';
 import { RunMetaManager } from './runMeta.js';
@@ -184,6 +184,14 @@ export async function createWorkflowExecutionBootstrap(
     ) {
       throw new OperationRecoveryError(
         `Source run "${sourceRunSlug}" has incomplete operation journal ownership metadata`,
+      );
+    }
+    if (
+      sourceMeta?.operationJournalRunSlug !== undefined
+      && !isValidReportDirName(sourceMeta.operationJournalRunSlug)
+    ) {
+      throw new OperationRecoveryError(
+        `Source run "${sourceRunSlug}" has an invalid operation journal run slug`,
       );
     }
     if (

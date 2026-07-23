@@ -136,7 +136,7 @@ function createRecoveryDependencies(cwd: string, provider: 'claude-sdk' | 'codex
 
 describe('sessionless part completion inspection', () => {
   it.each(['claude-sdk', 'mock'] as const)(
-    'builds deduplicated path-scoped Read rules for %s',
+    'requires every Read request to pass path validation for %s',
     (provider) => {
       const options = buildSessionlessPartCompletionInspectionOptions(
         part,
@@ -145,14 +145,8 @@ describe('sessionless part completion inspection', () => {
         [fileLineIssue],
       );
 
-      expect(options.allowedTools).toEqual([
-        'Read(src/shared)',
-        'Read(src/shared/**)',
-        'Read(src/exact.ts)',
-        'Read(src/exact.ts/**)',
-        'Read(src/repair)',
-        'Read(src/repair/**)',
-      ]);
+      expect(options.allowedTools).toEqual([]);
+      expect(options.onPermissionRequest).toBeTypeOf('function');
     },
   );
 
@@ -281,10 +275,7 @@ describe('sessionless part completion inspection', () => {
     const sessionlessOptions = executeAgentMock.mock.calls[0]?.[2];
     expect(sessionlessOptions).toEqual(expect.objectContaining({
       permissionMode: 'readonly',
-      allowedTools: expect.arrayContaining([
-        'Read(src/shared)',
-        'Read(src/repair/**)',
-      ]),
+      allowedTools: [],
       onPermissionRequest: expect.any(Function),
     }));
 

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
-import { createOperationJournalStore } from '../core/workflow/operations/operation-journal-store.js';
+import { createOperationJournalStore } from '../infra/workflow/operation-journal-store.js';
 import {
   FindingContractOperationJournal,
 } from '../core/workflow/engine/team-leader-finding-contract-operation-journal.js';
@@ -258,6 +258,20 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       latestSessionId: 'session-c',
       completedCalls: 2,
     });
+  });
+
+  it('clears a stale durable session when a new recovery response has no session ID', () => {
+    const { context } = createContext('claim-a');
+    const boundary = open(context).boundary(
+      'part:p1:completion',
+      'finding_contract_part_completion',
+    );
+    boundary.recordAttempt(attemptEvent('started'));
+    boundary.recordAttempt(attemptEvent('rejected', { sessionId: 'session-b' }));
+    boundary.recordAttempt(attemptEvent('started', { attempt: 2 }));
+    boundary.recordAttempt(attemptEvent('rejected', { attempt: 2 }));
+
+    expect(boundary.recoveryResumeState()).not.toHaveProperty('latestSessionId');
   });
 
   it('replays a result-ready parent until a transition receipt is durably authored', () => {

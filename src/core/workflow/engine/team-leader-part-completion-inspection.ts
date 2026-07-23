@@ -40,15 +40,6 @@ function collectInspectionPaths(part: PartDefinition): string[] {
   })));
 }
 
-function buildClaudeReadRules(paths: readonly string[]): string[] {
-  return paths.flatMap((path) => {
-    if (path === '.') {
-      return ['Read(**)'];
-    }
-    return [`Read(${path})`, `Read(${path}/**)`];
-  });
-}
-
 function isAllowedReadPath(
   cwd: string,
   allowedRoots: readonly string[],
@@ -68,7 +59,7 @@ function buildClaudeInspectionOptions(
 ): SessionlessInspectionOptions {
   const allowedRoots = paths.map((path) => resolve(cwd, path));
   return {
-    allowedTools: buildClaudeReadRules(paths),
+    allowedTools: [],
     onPermissionRequest: async (request) => {
       if (
         request.toolName === 'Read'

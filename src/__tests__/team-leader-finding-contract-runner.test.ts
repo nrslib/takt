@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TeamLeaderRunner } from '../core/workflow/engine/TeamLeaderRunner.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
-import { createOperationJournalStore } from '../core/workflow/operations/operation-journal-store.js';
+import { createOperationJournalStore } from '../infra/workflow/operation-journal-store.js';
 import type {
   AgentResponse,
   FindingContractConfig,
