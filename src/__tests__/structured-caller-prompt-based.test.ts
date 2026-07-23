@@ -621,7 +621,7 @@ describe('PromptBasedStructuredCaller', () => {
       provider: 'cursor',
       persona: 'team-leader',
       abortSignal: abortController.signal,
-    })).rejects.toThrow('Structured call aborted');
+    })).rejects.toMatchObject({ name: 'AbortError' });
 
     expect(mockRunAgent).toHaveBeenCalledOnce();
     expect(infoMock).not.toHaveBeenCalled();
@@ -777,7 +777,16 @@ describe('PromptBasedStructuredCaller', () => {
           targetFindingIds: ['F-0001'],
           actionableFindings: '{"open":[{"id":"F-0001"}]}',
           completedPartIndex: [],
-          previouslyPlannedParts: [],
+          plannedParts: [],
+          evidence: {
+            entries: [],
+            findings: [{
+              findingId: 'F-0001',
+              eligibleSupportingPartIds: { addressed: [], disputed: [] },
+              eligibleVerificationPartIds: [],
+              completeFeasible: false,
+            }],
+          },
         },
       },
     )).rejects.toBeInstanceOf(FindingContractTeamLeaderDecisionValidationError);
@@ -1199,7 +1208,7 @@ describe('PromptBasedStructuredCaller', () => {
         provider: 'cursor',
         abortSignal: abortController.signal,
       },
-    )).rejects.toThrow('Structured call aborted');
+    )).rejects.toMatchObject({ name: 'AbortError' });
 
     expect(mockRunAgent).toHaveBeenCalledOnce();
     expect(infoMock).not.toHaveBeenCalled();

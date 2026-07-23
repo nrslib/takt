@@ -47,15 +47,17 @@ import {
   renderCompactActionableFindingContractSummary,
   buildLatestFindingContractDigests,
 } from '../team-leader-finding-contract.js';
-import { validateFindingContractCompletionEvidence } from '../team-leader-finding-contract-decision.js';
 import {
   requestValidFindingContractDecision,
-  type FindingContractRejectedDecision,
+  type FindingContractDecisionAttemptEvent,
+  type FindingContractDecisionRecoveryPromptContext,
 } from './team-leader-finding-contract-decision-retry.js';
+import { buildFindingContractDecisionEvidenceSnapshot } from '../team-leader-finding-contract-evidence.js';
 import {
   createTeamLeaderArtifactAttemptId,
   writeTeamLeaderPartArtifact,
 } from './team-leader-artifacts.js';
+import { recordFindingContractDecisionAttempt } from './team-leader-finding-contract-decision-recorder.js';
 
 const log = createLogger('team-leader-runner');
 
@@ -223,8 +225,6 @@ export class TeamLeaderRunner {
                 findingContract: {
                   targetFindingIds: findingContractExecution.targetFindingIds,
                   actionableFindings: findingContractExecution.actionableFindings,
-                  completedPartIndex: [],
-                  previouslyPlannedParts: [],
                 },
               }
             : {}),
@@ -375,7 +375,7 @@ export class TeamLeaderRunner {
         const findingContractContext = findingContractExecution === undefined
           ? undefined
           : {
-              targetFindingIds: findingContractExecution.targetFindingIds,
+              targetFindingIds: [...findingContractExecution.targetFindingIds],
               actionableFindings: findingContractExecution.actionableFindings,
               completedPartIndex: buildLatestFindingContractDigests(
                 completedPartResults
@@ -393,74 +393,95 @@ export class TeamLeaderRunner {
                     };
                   }),
               ),
-              previouslyPlannedParts: currentPlannedParts,
+              plannedParts: structuredClone(currentPlannedParts),
+              evidence: buildFindingContractDecisionEvidenceSnapshot(
+                currentResults,
+                findingContractExecution.targetFindingIds,
+              ),
               ...(previousFindingContractDecision !== undefined
                 ? { previousDecision: previousFindingContractDecision }
                 : {}),
             };
         try {
+          let currentDecisionAttemptUsage: AgentResponse['providerUsage'] | undefined;
           const requestFeedback = async (
-            rejectedDecision?: FindingContractRejectedDecision,
-          ) => structuredCaller.requestMoreParts(
-            findingContractMode
-              ? `${step.instruction}\n\n## Original Task\n${task}`
-              : instruction,
-            feedbackResults,
-            scheduledIds,
-            {
-              cwd: this.deps.getCwd(),
-              persona: leaderStep.persona,
-              personaPath: leaderStep.personaPath,
-              language: this.deps.engineOptions.language,
-              model: leaderModel,
-              provider: leaderProvider,
-              resolvedModel: leaderModel,
-              resolvedProvider: leaderProvider,
-              mcpServers: leaderMcpServers,
-              workflowMeta: leaderWorkflowMeta,
-              childProcessEnv: this.deps.engineOptions.childProcessEnv,
-              abortSignal: leaderBaseOptions.abortSignal,
-              onStream: leaderBaseOptions.onStream,
-              onAgentResponse: (response) => {
-                this.recordUsage(
-                  leaderStep.name,
-                  leaderProviderInfo,
-                  response.status === 'done',
-                  response.providerUsage,
-                );
-              },
-              onAgentError: () => {
-                this.recordUsage(leaderStep.name, leaderProviderInfo, false);
-              },
-              ...(findingContractContext === undefined
-                ? {}
-                : {
-                    findingContract: {
-                      ...findingContractContext,
-                      ...(rejectedDecision === undefined ? {} : { rejectedDecision }),
-                    },
-                  }),
+            decisionRequest?: {
+              recoveryContext: FindingContractDecisionRecoveryPromptContext;
+              abortSignal: AbortSignal;
             },
-          );
+          ) => {
+            currentDecisionAttemptUsage = undefined;
+            return structuredCaller.requestMoreParts(
+              findingContractMode
+                ? `${step.instruction}\n\n## Original Task\n${task}`
+                : instruction,
+              feedbackResults,
+              scheduledIds,
+              {
+                cwd: this.deps.getCwd(),
+                persona: leaderStep.persona,
+                personaPath: leaderStep.personaPath,
+                language: this.deps.engineOptions.language,
+                model: leaderModel,
+                provider: leaderProvider,
+                resolvedModel: leaderModel,
+                resolvedProvider: leaderProvider,
+                mcpServers: leaderMcpServers,
+                workflowMeta: leaderWorkflowMeta,
+                childProcessEnv: this.deps.engineOptions.childProcessEnv,
+                abortSignal: decisionRequest?.abortSignal ?? leaderBaseOptions.abortSignal,
+                onStream: leaderBaseOptions.onStream,
+                onAgentResponse: (response) => {
+                  currentDecisionAttemptUsage = response.providerUsage;
+                  this.recordUsage(
+                    leaderStep.name,
+                    leaderProviderInfo,
+                    response.status === 'done',
+                    response.providerUsage,
+                  );
+                },
+                onAgentError: () => {
+                  this.recordUsage(leaderStep.name, leaderProviderInfo, false);
+                },
+                ...(findingContractContext === undefined
+                  ? {}
+                  : {
+                      findingContract: {
+                        ...findingContractContext,
+                        ...(decisionRequest === undefined
+                          ? {}
+                          : { recovery: decisionRequest.recoveryContext }),
+                      },
+                    }),
+              },
+            );
+          };
           const moreParts = findingContractMode
             ? await requestValidFindingContractDecision({
                 abortSignal: leaderBaseOptions.abortSignal,
                 request: requestFeedback,
-                validate: (feedback) => {
-                  if (feedback.findingContractDecision?.decision === 'complete') {
-                    validateFindingContractCompletionEvidence(
-                      feedback.findingContractDecision,
-                      currentResults,
-                    );
+                onAttempt: (event) => {
+                  if (artifactAttemptId === undefined) {
+                    throw new Error('Finding Contract decision recovery artifact attempt is missing');
                   }
-                },
-                onRejected: (rejectedDecision) => {
-                  log.info('Finding Contract Team Leader decision failed validation; regenerating', {
-                    step: step.name,
-                    attempt: rejectedDecision.attempt,
-                    maxAttempts: rejectedDecision.maxAttempts,
-                    detail: rejectedDecision.validationError,
-                  });
+                  this.recordFindingContractDecisionAttemptEvent(
+                    step.name,
+                    artifactAttemptId,
+                    `${artifactAttemptId}:feedback:${currentBatchNumber}`,
+                    event,
+                    event.type === 'started' ? undefined : currentDecisionAttemptUsage,
+                  );
+                  if (event.type === 'rejected') {
+                    log.info('Finding Contract Team Leader decision failed validation; regenerating', {
+                      step: step.name,
+                      attempt: event.attempt,
+                      mode: event.mode,
+                      strictReason: event.strictReason,
+                      issueCodes: event.rejectedDecision?.issues.map((issue) => issue.code),
+                      issueFingerprint: event.rejectedDecision?.issueFingerprint,
+                      decisionDigest: event.rejectedDecision?.decisionDigest.hash,
+                    });
+                  }
                 },
               })
             : await requestFeedback();
@@ -791,6 +812,23 @@ export class TeamLeaderRunner {
       success,
       usage,
     );
+  }
+
+  private recordFindingContractDecisionAttemptEvent(
+    stepName: string,
+    attemptId: string,
+    boundaryId: string,
+    event: FindingContractDecisionAttemptEvent,
+    providerUsage: AgentResponse['providerUsage'] | undefined,
+  ): void {
+    recordFindingContractDecisionAttempt({
+      runPaths: this.deps.getRunPaths(),
+      stepName,
+      attemptId,
+      boundaryId,
+      event,
+      ...(providerUsage === undefined ? {} : { providerUsage }),
+    });
   }
 
   private emitPartRoutingDecisionEvents(
