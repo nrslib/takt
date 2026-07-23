@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+
+description: 'TAKT facet eval: contract lifecycle precision on complete wiring'
+
+prompts:
+  - file://prompts/boundary-contract-clean.phase1.md
+
+providers:
+  - id: 'exec: bash providers/opencode-review.sh ollama-cloud/gemma4:31b fixtures/review-boundaries-clean --phase2=prompts/boundary-contract-clean.phase2.md'
+    label: gemma4-31b
+
+tests:
+  - description: 'precision: equivalent entry points preserve previews'
+    vars:
+      task: file://cases/review-boundaries-clean.md
+      previous_response: file://cases/prev-review-boundaries.md
+    assert:
+      - type: javascript
+        metric: precision/verified-clean-contract
+        value: file://asserts/boundary-contract-clean.mjs

@@ -5,10 +5,12 @@
  *
  * Usage: node eval/scripts/run-evals.mjs [suite...] [--promptfoo-flags...]
  * Suites: coding, arch, antipattern, frontend, cqrs, rescan, rescan-coding,
- *         rescan-semantics, rescan-precision, loop-monitor-fc, frontend-coder,
- *         cqrs-coder
- *         (default: all except rescan suites,
- *         which need opencode auth)
+ *         rescan-semantics, rescan-precision, boundary-contract,
+ *         boundary-contract-precision, boundary-resource,
+ *         boundary-resource-precision, boundary-robustness,
+ *         boundary-robustness-precision, loop-monitor-fc, frontend-coder, cqrs-coder
+ *         (default: all except rescan and boundary suites,
+ *         which include local-model measurements and need opencode auth)
  * Example: npm run eval:prompts -- arch --repeat 3
  */
 import { spawnSync } from 'node:child_process';
@@ -25,6 +27,12 @@ const SUITES = {
   'rescan-coding': 'promptfooconfig.rescan-coding.yaml',
   'rescan-semantics': 'promptfooconfig.rescan-semantics.yaml',
   'rescan-precision': 'promptfooconfig.rescan-precision.yaml',
+  'boundary-contract': 'promptfooconfig.boundary-contract.yaml',
+  'boundary-contract-precision': 'promptfooconfig.boundary-contract-precision.yaml',
+  'boundary-resource': 'promptfooconfig.boundary-resource.yaml',
+  'boundary-resource-precision': 'promptfooconfig.boundary-resource-precision.yaml',
+  'boundary-robustness': 'promptfooconfig.boundary-robustness.yaml',
+  'boundary-robustness-precision': 'promptfooconfig.boundary-robustness-precision.yaml',
   'loop-monitor-fc': 'promptfooconfig.loop-monitor-fc.yaml',
   'frontend-coder': 'promptfooconfig.frontend-coder.yaml',
   'cqrs-coder': 'promptfooconfig.cqrs-coder.yaml',
@@ -43,9 +51,20 @@ for (const name of names) {
     throw new Error(`Unknown suite "${name}". Available: ${Object.keys(SUITES).join(', ')}`);
   }
 }
-// rescan 系はローカルモデル（要 opencode 認証）を含む測定用スイートで、
-// 弱いモデルの行は常に部分失敗するため、デフォルトのゲート実行からは除外する。
-const DEFAULT_EXCLUDED = new Set(['rescan', 'rescan-coding', 'rescan-semantics', 'rescan-precision']);
+// rescan / boundary 系は opencode 認証が必要なローカルモデル測定を含み、
+// 部分失敗を含みうるため、デフォルトのゲート実行からは除外する。
+const DEFAULT_EXCLUDED = new Set([
+  'rescan',
+  'rescan-coding',
+  'rescan-semantics',
+  'rescan-precision',
+  'boundary-contract',
+  'boundary-contract-precision',
+  'boundary-resource',
+  'boundary-resource-precision',
+  'boundary-robustness',
+  'boundary-robustness-precision',
+]);
 const selected = names.length > 0 ? names : Object.keys(SUITES).filter((s) => !DEFAULT_EXCLUDED.has(s));
 
 const summary = [];

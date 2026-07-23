@@ -49,6 +49,12 @@ const TARGETS = [
   { id: 'rescan-semantics', workflow: 'takt-default-high', step: 'implementation-semantics-review', fixture: 'eval/fixtures/inventory-es' },
   // 精度（偽陽性）測定: hasOwn 防御済み Record を指摘しないこと
   { id: 'rescan-precision', workflow: 'takt-default-high', step: 'implementation-semantics-review', fixture: 'eval/fixtures/inventory-es-guarded' },
+  { id: 'boundary-contract-buggy', workflow: 'takt-default-localllm', step: 'contract-wiring-review', fixture: 'eval/fixtures/review-boundaries-buggy', twoPhaseReport: true },
+  { id: 'boundary-contract-clean', workflow: 'takt-default-localllm', step: 'contract-wiring-review', fixture: 'eval/fixtures/review-boundaries-clean', twoPhaseReport: true },
+  { id: 'boundary-resource-buggy', workflow: 'takt-default-localllm', step: 'resource-ownership-review', fixture: 'eval/fixtures/review-boundaries-buggy', twoPhaseReport: true },
+  { id: 'boundary-resource-clean', workflow: 'takt-default-localllm', step: 'resource-ownership-review', fixture: 'eval/fixtures/review-boundaries-clean', twoPhaseReport: true },
+  { id: 'boundary-robustness-buggy', workflow: 'takt-default-localllm', step: 'failure-boundary-review', fixture: 'eval/fixtures/review-boundaries-buggy', twoPhaseReport: true },
+  { id: 'boundary-robustness-clean', workflow: 'takt-default-localllm', step: 'failure-boundary-review', fixture: 'eval/fixtures/review-boundaries-clean', twoPhaseReport: true },
   { id: 'loop-monitor-reviewers-fix-fc', workflow: 'takt-default-high', monitorCycle: ['fix', 'reviewers'], fixture: 'eval/fixtures/sample-project' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
@@ -66,6 +72,30 @@ const { InstructionBuilder } = await import(
 const { StatusJudgmentBuilder } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/workflow/instruction/StatusJudgmentBuilder.js')).href
 );
+const { ReportInstructionBuilder } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/workflow/instruction/ReportInstructionBuilder.js')).href
+);
+const { getReportFiles } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/workflow/output-contract-files.js')).href
+);
+const { createFindingLedgerStore } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/workflow/findings/store.js')).href
+);
+const {
+  renderFindingLedgerInstructionSummary,
+  renderFindingLedgerReportSummary,
+  ledgerHasOpenFindings,
+  ledgerHasWaivedFindings,
+  ledgerHasDismissedFindings,
+} = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/workflow/findings/context.js')).href
+);
+const { computeReviewScopeSnapshotId } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/workflow/findings/snapshot.js')).href
+);
+const { createRawFindingsStructuredOutput } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/workflow/findings/manager-agent.js')).href
+);
 
 const requested = process.argv.slice(2);
 for (const id of requested) {
@@ -77,8 +107,17 @@ const targets = requested.length > 0 ? TARGETS.filter((t) => requested.includes(
 
 const language = resolveWorkflowConfigValue(repoRoot, 'language');
 const preparedDirs = new Set();
+const findingContractContexts = new Map();
 
-for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, mutable } of targets) {
+for (const {
+  id,
+  workflow: workflowName,
+  step: stepName,
+  monitorCycle,
+  fixture,
+  mutable,
+  twoPhaseReport,
+} of targets) {
   const fixtureDir = resolve(repoRoot, fixture);
 
   // Mutable (coder) targets work on a disposable copy.
@@ -144,6 +183,10 @@ for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, 
     mkdirSync(snapshotDir, { recursive: true });
     rmSync(reportDir, { recursive: true, force: true });
     mkdirSync(reportDir, { recursive: true });
+    if (twoPhaseReport && config.findingContract) {
+      rmSync(resolve(runDir, config.findingContract.ledgerPath), { force: true });
+      rmSync(resolve(runDir, config.findingContract.rawFindingsPath), { recursive: true, force: true });
+    }
     const seedDir = join(runDir, 'reports-seed');
     if (existsSync(seedDir)) {
       cpSync(seedDir, reportDir, { recursive: true });
@@ -160,6 +203,35 @@ for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, 
 
   const policySourcePath = writeFacetSnapshot('policies', target.policyContents);
   const knowledgeSourcePath = writeFacetSnapshot('knowledge', target.knowledgeContents);
+  let findingContract;
+  if (twoPhaseReport) {
+    if (!config.findingContract) {
+      throw new Error(`Two-phase target "${id}" requires a finding_contract`);
+    }
+    findingContract = findingContractContexts.get(runDir);
+    if (!findingContract) {
+      const store = createFindingLedgerStore({
+        projectCwd: runDir,
+        reportDir,
+        workflowName: config.name,
+        ledgerPath: config.findingContract.ledgerPath,
+        rawFindingsPath: config.findingContract.rawFindingsPath,
+      });
+      const ledger = store.loadLedger();
+      const reviewScopeSnapshotId = computeReviewScopeSnapshotId(runDir);
+      findingContract = {
+        ledgerCopyPath: store.createRunCopy(),
+        ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
+        reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
+        hasOpenFindings: ledgerHasOpenFindings(ledger),
+        hasWaivedFindings: ledgerHasWaivedFindings(ledger),
+        hasDismissedFindings: ledgerHasDismissedFindings(ledger),
+        rawFindingsStructuredOutput: createRawFindingsStructuredOutput(reviewScopeSnapshotId),
+        reviewScopeSnapshotId,
+      };
+      findingContractContexts.set(runDir, findingContract);
+    }
+  }
 
   // --- Render the assembled Phase 1 prompt ---------------------------------
   const context = {
@@ -177,6 +249,7 @@ for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, 
     policySourcePath,
     knowledgeSourcePath,
     language,
+    findingContract,
   };
 
   const instruction = monitorCycle
@@ -201,6 +274,26 @@ for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, 
   const phase = monitorCycle ? 'phase3' : 'phase1';
   const outPath = join(outDir, `${id}.${phase}.md`);
   writeFileSync(outPath, assembled);
+  let phase2Path;
+  if (twoPhaseReport) {
+    const reportFiles = getReportFiles(target.outputContracts);
+    if (reportFiles.length !== 1 || !reportFiles[0]) {
+      throw new Error(`Two-phase target "${id}" must define exactly one report file`);
+    }
+    const reportInstruction = new ReportInstructionBuilder(target, {
+      cwd: runDir,
+      reportDir,
+      stepIteration: 1,
+      language,
+      targetFile: reportFiles[0],
+      findingContract,
+    }).build();
+    const phase2Assembled = persona
+      ? `${persona}\n\n${reportInstruction}`
+      : reportInstruction;
+    phase2Path = join(outDir, `${id}.phase2.md`);
+    writeFileSync(phase2Path, phase2Assembled);
+  }
 
   const targetName = monitorCycle ? `[${monitorCycle.join(' -> ')}] monitor` : stepName;
   console.log(`[${id}] ${workflowName}/${targetName}${mutable ? ' (mutable copy)' : ''}`);
@@ -208,4 +301,7 @@ for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, 
   console.log(`  Run dir:            ${runDir}`);
   console.log(`  Policy snapshot:    ${policySourcePath ?? '(none)'}`);
   console.log(`  Knowledge snapshot: ${knowledgeSourcePath ?? '(none)'}`);
+  if (phase2Path) {
+    console.log(`  Report prompt:      ${phase2Path}`);
+  }
 }

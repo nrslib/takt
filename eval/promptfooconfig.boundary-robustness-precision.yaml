@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+
+description: 'TAKT facet eval: robustness precision on isolated optional failure'
+
+prompts:
+  - file://prompts/boundary-robustness-clean.phase1.md
+
+providers:
+  - id: 'exec: bash providers/opencode-review.sh ollama-cloud/gemma4:31b fixtures/review-boundaries-clean --phase2=prompts/boundary-robustness-clean.phase2.md'
+    label: gemma4-31b
+
+tests:
+  - description: 'precision: optional failure and cleanup contracts are preserved'
+    vars:
+      task: file://cases/review-boundaries-clean.md
+      previous_response: file://cases/prev-review-boundaries.md
+    assert:
+      - type: javascript
+        metric: precision/verified-clean-robustness
+        value: file://asserts/boundary-robustness-clean.mjs

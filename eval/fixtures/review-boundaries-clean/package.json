@@ -1,0 +1,9 @@
+{
+  "name": "review-boundaries-clean",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18.19.0"
+  }
+}

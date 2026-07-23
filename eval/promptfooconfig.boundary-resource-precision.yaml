@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+
+description: 'TAKT facet eval: resource ownership precision on complete cleanup'
+
+prompts:
+  - file://prompts/boundary-resource-clean.phase1.md
+
+providers:
+  - id: 'exec: bash providers/opencode-review.sh ollama-cloud/gemma4:31b fixtures/review-boundaries-clean --phase2=prompts/boundary-resource-clean.phase2.md'
+    label: gemma4-31b
+
+tests:
+  - description: 'scope precision: acquired previews are released on every exit'
+    vars:
+      task: file://cases/review-boundaries-clean.md
+      previous_response: file://cases/prev-review-boundaries.md
+    assert:
+      - type: javascript
+        metric: precision/verified-clean-resource
+        value: file://asserts/boundary-resource-clean.mjs
