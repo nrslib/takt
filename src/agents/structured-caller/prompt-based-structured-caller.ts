@@ -34,9 +34,10 @@ import { createLogger, delay, getErrorMessage } from '../../shared/utils/index.j
 import { buildMaxTurnsOption } from '../provider-call-options.js';
 import { validateFindingContractPartBatch } from '../../core/workflow/team-leader-finding-contract.js';
 import {
-  parseFindingContractTeamLeaderDecision,
-  toFindingContractTeamLeaderDecisionValidationError,
-} from '../../core/workflow/team-leader-finding-contract-decision.js';
+  createFindingContractDecisionValidationIssue,
+  createFindingContractTeamLeaderDecisionValidationError,
+} from '../../core/workflow/team-leader-finding-contract-decision-validation.js';
+import { parseFindingContractTeamLeaderDecision } from '../../core/workflow/team-leader-finding-contract-decision.js';
 
 const log = createLogger('prompt-based-structured-caller');
 
@@ -274,17 +275,28 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       try {
         raw = parseLastJsonBlock(response.content);
       } catch (error) {
-        throw options.findingContract === undefined
-          ? error
-          : toFindingContractTeamLeaderDecisionValidationError(error);
+        if (options.findingContract === undefined) {
+          throw error;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        throw createFindingContractTeamLeaderDecisionValidationError(response.content, [
+          createFindingContractDecisionValidationIssue({
+            code: 'shape.json_block',
+            category: 'shape',
+            path: '$',
+            message,
+          }),
+        ]);
       }
       const findingContractDecision = options.findingContract === undefined
         ? undefined
         : parseFindingContractTeamLeaderDecision(
             raw,
-            options.findingContract.targetFindingIds,
-            existingIds,
-            options.findingContract.previouslyPlannedParts,
+            {
+              targetFindingIds: options.findingContract.targetFindingIds,
+              plannedParts: options.findingContract.plannedParts,
+              evidence: options.findingContract.evidence,
+            },
           );
       return {
         ...(findingContractDecision === undefined
@@ -302,9 +314,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) {
-    throw new Error('Structured call aborted');
-  }
+  signal?.throwIfAborted();
 }
 
 async function delayWithAbort(milliseconds: number, signal: AbortSignal | undefined): Promise<void> {
@@ -321,7 +331,7 @@ async function delayWithAbort(milliseconds: number, signal: AbortSignal | undefi
     const onAbort = (): void => {
       clearTimeout(timeout);
       signal.removeEventListener('abort', onAbort);
-      reject(new Error('Structured call aborted'));
+      reject(signal.reason);
     };
     signal.addEventListener('abort', onAbort, { once: true });
   });

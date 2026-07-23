@@ -17,11 +17,13 @@ import {
 import {
   FindingContractTeamLeaderDecisionValidationError,
   parseFindingContractTeamLeaderDecision,
-  validateFindingContractCompletionEvidence,
 } from '../core/workflow/team-leader-finding-contract-decision.js';
+import { buildFindingContractDecisionEvidenceSnapshot } from '../core/workflow/team-leader-finding-contract-evidence.js';
+import { createFindingContractRejectedDecisionDigest } from '../core/workflow/team-leader-finding-contract-decision-validation.js';
 import { buildFindingContractTeamLeaderAggregatedContent } from '../core/workflow/engine/team-leader-aggregation.js';
 import type { FindingLedger, PartDefinition, PartResult } from '../core/models/types.js';
 import { buildMorePartsPrompt } from '../agents/team-leader-structured-output.js';
+import { buildFindingContractRecoveryPromptSections } from '../agents/team-leader-finding-contract-recovery-prompt.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { writeTeamLeaderPartArtifact } from '../core/workflow/engine/team-leader-artifacts.js';
 import { validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
@@ -66,6 +68,19 @@ function makeResult(part: PartDefinition, summary = `completed ${part.id}`): Par
       timestamp: new Date('2026-01-01T00:00:00.000Z'),
     },
   };
+}
+
+function parseDecision(
+  raw: unknown,
+  targetFindingIds: readonly string[],
+  plannedParts: readonly PartDefinition[],
+  partResults: readonly PartResult[] = plannedParts.map((part) => makeResult(part)),
+) {
+  return parseFindingContractTeamLeaderDecision(raw, {
+    targetFindingIds,
+    plannedParts,
+    evidence: buildFindingContractDecisionEvidenceSnapshot(partResults, targetFindingIds),
+  });
 }
 
 describe('Finding Contract Team Leader contract', () => {
@@ -331,13 +346,13 @@ describe('Finding Contract Team Leader contract', () => {
   });
 
   it('allows a later batch to repair a finding again after an earlier claim was blocked', () => {
-    expect(() => parseFindingContractTeamLeaderDecision({
+    expect(() => parseDecision({
       decision: 'continue',
       reasoning: 'retry after blocked claim',
       parts: [makePart('retry', ['F-0001'])],
       fixCoverage: [],
       blockers: [],
-    }, ['F-0001'], ['first'], [makePart('first', ['F-0001'])])).not.toThrow();
+    }, ['F-0001'], [makePart('first', ['F-0001'])])).not.toThrow();
   });
 
   it('keeps only the latest compact digest for each finding', () => {
@@ -356,13 +371,14 @@ describe('Finding Contract Team Leader contract', () => {
   });
 
   it('rejects a continue decision that reuses any existing part ID', () => {
-    expect(() => parseFindingContractTeamLeaderDecision({
+    expect(() => parseDecision({
       decision: 'continue',
       reasoning: 'mixed IDs',
       parts: [makePart('existing', ['F-0001']), makePart('new', ['F-0002'])],
       fixCoverage: [],
       blockers: [],
-    }, ['F-0001', 'F-0002'], ['existing'], [])).toThrow(/reuses existing part ID "existing"/);
+    }, ['F-0001', 'F-0002'], [makePart('existing', ['F-0001'])]))
+      .toThrow(/reuses existing part ID "existing"/);
   });
 
   it('requires a completion claim for exactly the assigned findings', () => {
@@ -413,7 +429,7 @@ describe('Finding Contract Team Leader contract', () => {
 
   it('accepts complete only when coverage contains every actionable finding exactly once', () => {
     const part = makePart('repair', ['F-0001', 'F-0002']);
-    expect(() => parseFindingContractTeamLeaderDecision({
+    expect(() => parseDecision({
       decision: 'complete',
       reasoning: 'all fixed',
       parts: [],
@@ -424,9 +440,9 @@ describe('Finding Contract Team Leader contract', () => {
         verificationPartIds: [],
       }],
       blockers: [],
-    }, ['F-0001', 'F-0002'], ['repair'], [part])).toThrow(/does not cover actionable finding "F-0002"/);
+    }, ['F-0001', 'F-0002'], [part])).toThrow(/does not cover actionable finding "F-0002"/);
 
-    expect(() => parseFindingContractTeamLeaderDecision({
+    expect(() => parseDecision({
       decision: 'complete',
       reasoning: 'duplicate coverage',
       parts: [],
@@ -437,9 +453,9 @@ describe('Finding Contract Team Leader contract', () => {
         verificationPartIds: [],
       })),
       blockers: [],
-    }, ['F-0001'], ['repair'], [part])).toThrow(/fixCoverage contains duplicate finding "F-0001"/);
+    }, ['F-0001'], [part])).toThrow(/fixCoverage contains duplicate finding "F-0001"/);
 
-    const decision = parseFindingContractTeamLeaderDecision({
+    const decision = parseDecision({
       decision: 'complete',
       reasoning: 'all fixed',
       parts: [],
@@ -450,7 +466,7 @@ describe('Finding Contract Team Leader contract', () => {
         verificationPartIds: [],
       })),
       blockers: [],
-    }, ['F-0001', 'F-0002'], ['repair'], [part]);
+    }, ['F-0001', 'F-0002'], [part]);
 
     expect(decision.decision).toBe('complete');
   });
@@ -468,10 +484,11 @@ describe('Finding Contract Team Leader contract', () => {
         supportingPartIds: ['repair'],
         verificationPartIds: [],
       }],
+      blockers: [] as string[],
     };
 
-    expect(() => validateFindingContractCompletionEvidence(complete, [result]))
-      .toThrow(/no supporting part claim/);
+    expect(() => parseDecision(complete, ['F-0001'], [part], [result]))
+      .toThrow(/is not eligible for disposition/);
 
     const addressed = {
       ...complete,
@@ -484,14 +501,326 @@ describe('Finding Contract Team Leader contract', () => {
       ...(result.response.structuredOutput as Record<string, unknown>),
       checks: [{ command: 'npm test', status: 'failed' }],
     };
-    expect(() => validateFindingContractCompletionEvidence(addressed, [result]))
+    expect(() => parseDecision(addressed, ['F-0001'], [part], [result]))
       .toThrow(/contains a failed check/);
     result.response.structuredOutput = {
       ...(result.response.structuredOutput as Record<string, unknown>),
       checks: [],
     };
-    expect(() => validateFindingContractCompletionEvidence(addressed, [result]))
+    expect(() => parseDecision(addressed, ['F-0001'], [part], [result]))
       .toThrow(/no passed verification check/);
+  });
+
+  it('collects independent completion evidence issues in one validation result', () => {
+    const mismatchPart = makePart('mismatch', ['F-0001']);
+    const failedPart = makePart('failed', ['F-0002']);
+    const unverifiedPart = makePart('unverified', ['F-0003']);
+    const mismatchResult = makeResult(mismatchPart);
+    const failedResult = makeResult(failedPart);
+    const unverifiedResult = makeResult(unverifiedPart);
+    failedResult.response.structuredOutput = {
+      ...(failedResult.response.structuredOutput as Record<string, unknown>),
+      checks: [
+        { command: 'npm test', status: 'passed' },
+        { command: 'npm run lint', status: 'failed' },
+      ],
+    };
+    unverifiedResult.response.structuredOutput = {
+      ...(unverifiedResult.response.structuredOutput as Record<string, unknown>),
+      checks: [{ command: 'npm test', status: 'not_run' }],
+    };
+    let validationError: FindingContractTeamLeaderDecisionValidationError | undefined;
+    try {
+      parseDecision({
+        decision: 'complete',
+        reasoning: 'invalid independent evidence',
+        parts: [],
+        fixCoverage: [
+          {
+            findingId: 'F-0001',
+            disposition: 'disputed',
+            supportingPartIds: ['mismatch'],
+            verificationPartIds: ['mismatch'],
+          },
+          {
+            findingId: 'F-0002',
+            disposition: 'addressed',
+            supportingPartIds: ['failed'],
+            verificationPartIds: ['failed'],
+          },
+          {
+            findingId: 'F-0003',
+            disposition: 'addressed',
+            supportingPartIds: ['unverified'],
+            verificationPartIds: ['unverified'],
+          },
+        ],
+        blockers: [],
+      }, ['F-0001', 'F-0002', 'F-0003'], [mismatchPart, failedPart, unverifiedPart], [
+        mismatchResult,
+        failedResult,
+        unverifiedResult,
+      ]);
+    } catch (error) {
+      if (error instanceof FindingContractTeamLeaderDecisionValidationError) {
+        validationError = error;
+      } else {
+        throw error;
+      }
+    }
+
+    expect(validationError?.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining([
+      'evidence.unsupported_disposition',
+      'evidence.failed_check',
+      'evidence.missing_passed_verification',
+      'evidence.ineligible_verification',
+    ]));
+  });
+
+  it('builds decision digests independent of reasoning and semantic array order', () => {
+    const left = createFindingContractRejectedDecisionDigest({
+      decision: 'complete',
+      reasoning: 'first wording',
+      parts: [],
+      fixCoverage: [
+        {
+          findingId: 'F-0002',
+          disposition: 'addressed',
+          supportingPartIds: ['b', 'a'],
+          verificationPartIds: ['v2', 'v1'],
+        },
+        {
+          findingId: 'F-0001',
+          disposition: 'disputed',
+          supportingPartIds: ['d'],
+          verificationPartIds: ['d'],
+        },
+      ],
+      blockers: [],
+    });
+    const right = createFindingContractRejectedDecisionDigest({
+      blockers: [],
+      fixCoverage: [
+        {
+          verificationPartIds: ['d'],
+          supportingPartIds: ['d'],
+          disposition: 'disputed',
+          findingId: 'F-0001',
+        },
+        {
+          verificationPartIds: ['v1', 'v2'],
+          supportingPartIds: ['a', 'b'],
+          disposition: 'addressed',
+          findingId: 'F-0002',
+        },
+      ],
+      parts: [],
+      reasoning: 'different wording',
+      decision: 'complete',
+    });
+
+    expect(right.hash).toBe(left.hash);
+  });
+
+  it('keeps decision digest hashes canonical beyond the visible summary limit', () => {
+    const parts = Array.from({ length: 101 }, (_, index) => ({
+      id: `part-${String(index).padStart(3, '0')}`,
+      findingContract: {
+        findingIds: [`F-${String(index).padStart(4, '0')}`],
+        role: 'repair',
+      },
+    }));
+    const reordered = [...parts].reverse();
+    const left = createFindingContractRejectedDecisionDigest({
+      decision: 'continue',
+      parts,
+      fixCoverage: [],
+      blockers: [],
+    });
+    const right = createFindingContractRejectedDecisionDigest({
+      decision: 'continue',
+      parts: reordered,
+      fixCoverage: [],
+      blockers: [],
+    });
+    const changed = createFindingContractRejectedDecisionDigest({
+      decision: 'continue',
+      parts: parts.map((part, index) => (
+        index === 100 ? { ...part, id: 'part-changed-after-visible-limit' } : part
+      )),
+      fixCoverage: [],
+      blockers: [],
+    });
+
+    expect(right.hash).toBe(left.hash);
+    expect(changed.hash).not.toBe(left.hash);
+    expect(left.assignments).toHaveLength(100);
+  });
+
+  it('does not collapse distinct long decision values in canonical digest hashes', () => {
+    const prefix = 'x'.repeat(600);
+    const left = createFindingContractRejectedDecisionDigest({
+      decision: 'replan',
+      parts: [],
+      fixCoverage: [],
+      blockers: [`${prefix}A`],
+    });
+    const right = createFindingContractRejectedDecisionDigest({
+      decision: 'replan',
+      parts: [],
+      fixCoverage: [],
+      blockers: [`${prefix}B`],
+    });
+
+    expect(right.hash).not.toBe(left.hash);
+    expect(left.blockers[0]?.length).toBe(500);
+  });
+
+  it('collects every independent continue part-batch violation', () => {
+    const first = makePart('first-invalid', ['F-9999']);
+    const second = makePart('second-invalid', ['F-9999'], 'repair', ['src/first-invalid.ts']);
+    const root = makePart('root-invalid', ['F-9999'], 'repair', ['src']);
+    let validationError: FindingContractTeamLeaderDecisionValidationError | undefined;
+    try {
+      parseDecision({
+        decision: 'continue',
+        reasoning: 'contains several independent violations',
+        parts: [first, second, root],
+        fixCoverage: [],
+        blockers: [],
+      }, ['F-0001'], []);
+    } catch (error) {
+      if (error instanceof FindingContractTeamLeaderDecisionValidationError) {
+        validationError = error;
+      } else {
+        throw error;
+      }
+    }
+
+    expect(validationError?.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining([
+      'reference.unknown_finding',
+      'decision_contract.part_batch.duplicate_repair_assignment',
+      'decision_contract.part_batch.overlapping_write_path',
+    ]));
+    expect(validationError?.issues.filter((issue) => issue.code === 'reference.unknown_finding'))
+      .toHaveLength(3);
+    expect(validationError?.issues.filter(
+      (issue) => issue.code === 'decision_contract.part_batch.overlapping_write_path',
+    )).toHaveLength(3);
+  });
+
+  it('uses the same evidence classification for support and verification guidance', () => {
+    const eligiblePart = makePart('eligible', ['F-0001']);
+    const failedPart = makePart('failed-guidance', ['F-0001'], 'verify');
+    const eligibleResult = makeResult(eligiblePart);
+    const failedResult = makeResult(failedPart);
+    failedResult.response.structuredOutput = {
+      ...(failedResult.response.structuredOutput as Record<string, unknown>),
+      checks: [{ command: 'npm test', status: 'failed' }],
+    };
+
+    const evidence = buildFindingContractDecisionEvidenceSnapshot(
+      [eligibleResult, failedResult],
+      ['F-0001'],
+    );
+
+    expect(evidence.findings).toEqual([{
+      findingId: 'F-0001',
+      eligibleSupportingPartIds: {
+        addressed: ['eligible'],
+        disputed: [],
+      },
+      eligibleVerificationPartIds: ['eligible'],
+      completeFeasible: true,
+    }]);
+    expect(evidence.entries.find((entry) => entry.partId === 'failed-guidance'))
+      .toEqual(expect.objectContaining({
+        usableAsSupportFor: [],
+        usableAsVerification: false,
+        supportIneligibleReasons: expect.arrayContaining(['failed_check']),
+        verificationIneligibleReasons: expect.arrayContaining(['failed_check']),
+      }));
+  });
+
+  it('propagates unexpected evidence parser failures instead of classifying them as invalid claims', () => {
+    const part = makePart('unexpected-parser-failure', ['F-0001']);
+    const result = makeResult(part);
+    Object.defineProperty(result.response, 'structuredOutput', {
+      get: () => {
+        throw new TypeError('unexpected parser bug');
+      },
+    });
+
+    expect(() => buildFindingContractDecisionEvidenceSnapshot([result], ['F-0001']))
+      .toThrow(new TypeError('unexpected parser bug'));
+  });
+
+  it('rejects non-done support and verification evidence', () => {
+    const part = makePart('errored', ['F-0001']);
+    const result = makeResult(part);
+    result.response.status = 'error';
+    result.response.structuredOutput = undefined;
+    result.response.error = 'worker failed';
+
+    let validationError: FindingContractTeamLeaderDecisionValidationError | undefined;
+    try {
+      parseDecision({
+        decision: 'complete',
+        reasoning: 'incorrectly treating an errored part as evidence',
+        parts: [],
+        fixCoverage: [{
+          findingId: 'F-0001',
+          disposition: 'addressed',
+          supportingPartIds: ['errored'],
+          verificationPartIds: ['errored'],
+        }],
+        blockers: [],
+      }, ['F-0001'], [part], [result]);
+    } catch (error) {
+      if (error instanceof FindingContractTeamLeaderDecisionValidationError) {
+        validationError = error;
+      } else {
+        throw error;
+      }
+    }
+
+    expect(validationError?.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining([
+      'evidence.unsupported_disposition',
+      'evidence.ineligible_verification',
+      'evidence.missing_passed_verification',
+    ]));
+    expect(validationError?.issues.map((issue) => issue.message).join('\n'))
+      .toContain('part_status:error');
+  });
+
+  it('accepts no-pass support when a separate eligible verifier passed', () => {
+    const supportPart = makePart('support-only', ['F-0001']);
+    const verifierPart = makePart('verifier', ['F-0001'], 'verify', []);
+    const supportResult = makeResult(supportPart);
+    const verifierResult = makeResult(verifierPart);
+    supportResult.response.structuredOutput = {
+      ...(supportResult.response.structuredOutput as Record<string, unknown>),
+      checks: [],
+    };
+    verifierResult.response.structuredOutput = {
+      ...(verifierResult.response.structuredOutput as Record<string, unknown>),
+      changedPaths: [],
+    };
+
+    const decision = parseDecision({
+      decision: 'complete',
+      reasoning: 'support and verification are supplied by separate parts',
+      parts: [],
+      fixCoverage: [{
+        findingId: 'F-0001',
+        disposition: 'addressed',
+        supportingPartIds: ['support-only'],
+        verificationPartIds: ['verifier'],
+      }],
+      blockers: [],
+    }, ['F-0001'], [supportPart, verifierPart], [supportResult, verifierResult]);
+
+    expect(decision.decision).toBe('complete');
   });
 
   it('accepts disputed completion coverage backed by file evidence and a passed check', () => {
@@ -507,7 +836,7 @@ describe('Finding Contract Team Leader contract', () => {
       checks: [{ command: 'inspect source', status: 'passed' }],
       summary: 'The finding does not match the current source.',
     };
-    const decision = parseFindingContractTeamLeaderDecision({
+    const decision = parseDecision({
       decision: 'complete',
       reasoning: 'The finding is disproven by current source evidence.',
       parts: [],
@@ -518,10 +847,9 @@ describe('Finding Contract Team Leader contract', () => {
         verificationPartIds: ['diagnose'],
       }],
       blockers: [],
-    }, ['F-0001'], ['diagnose'], [part]);
+    }, ['F-0001'], [part], [result]);
 
     if (decision.decision !== 'complete') throw new Error('Expected complete decision');
-    expect(() => validateFindingContractCompletionEvidence(decision, [result])).not.toThrow();
   });
 
   it('builds a compact aggregate without raw part content and preserves disputes', () => {
@@ -616,11 +944,34 @@ describe('Finding Contract Team Leader contract', () => {
           status: 'done',
           checks: { passed: 1, failed: 0, notRun: 0 },
         }],
-        previouslyPlannedParts: [],
-        rejectedDecision: {
-          attempt: 1,
-          maxAttempts: 3,
-          validationError: 'continue decision must not include fixCoverage\n## injected heading',
+        plannedParts: [],
+        evidence: buildFindingContractDecisionEvidenceSnapshot([], ['F-0001']),
+        recovery: {
+          attempt: 2,
+          maxCalls: 100,
+          mode: 'normal',
+          latestRejection: {
+            attempt: 1,
+            mode: 'normal',
+            issues: [{
+              code: 'decision_contract.continue_fix_coverage',
+              category: 'decision_contract',
+              path: 'fixCoverage',
+              message: 'continue decision must not include fixCoverage\n## injected heading',
+            }],
+            issueFingerprint: 'issue-hash',
+            decisionDigest: {
+              hash: 'decision-hash',
+              decision: 'continue',
+              partIds: [],
+              assignments: [],
+              fixCoverage: [],
+              blockers: [],
+            },
+            repeatCount: 1,
+          },
+          recentRejectedDecisions: [],
+          issueHistory: [],
         },
       },
     );
@@ -636,11 +987,86 @@ describe('Finding Contract Team Leader contract', () => {
     expect(prompt).not.toContain('\n## injected heading');
   });
 
+  it('keeps strict recovery guidance bounded and preserves continue as the repairable path', () => {
+    const long = '\\"'.repeat(5_000);
+    const evidence = buildFindingContractDecisionEvidenceSnapshot([], Array.from(
+      { length: 100 },
+      (_, index) => `${long}-${index}`,
+    ));
+    const issue = {
+      code: long,
+      category: 'evidence' as const,
+      path: long,
+      message: long,
+      findingId: long,
+      partId: long,
+    };
+    const digest = createFindingContractRejectedDecisionDigest({
+      decision: long,
+      parts: Array.from({ length: 101 }, (_, index) => ({
+        id: `${long}-${index}`,
+        findingContract: {
+          findingIds: Array.from({ length: 20 }, (_, findingIndex) => (
+            `${long}-${index}-${findingIndex}`
+          )),
+          role: long,
+        },
+      })),
+      fixCoverage: Array.from({ length: 20 }, (_, index) => ({
+        findingId: `${long}-${index}`,
+        disposition: 'addressed',
+        supportingPartIds: Array.from({ length: 20 }, (_, partIndex) => (
+          `${long}-support-${index}-${partIndex}`
+        )),
+        verificationPartIds: Array.from({ length: 20 }, (_, partIndex) => (
+          `${long}-verify-${index}-${partIndex}`
+        )),
+      })),
+      blockers: [long],
+    });
+    const recovery = {
+      attempt: 4,
+      maxCalls: 100,
+      mode: 'strict' as const,
+      strictReason: 'normal_attempts_exhausted' as const,
+      latestRejection: {
+        attempt: 3,
+        mode: 'normal',
+        issues: Array.from({ length: 100 }, () => issue),
+        issueFingerprint: long,
+        decisionDigest: digest,
+        repeatCount: 1,
+      },
+      recentRejectedDecisions: [digest, digest, digest],
+      issueHistory: Array.from({ length: 20 }, (_, index) => ({
+        fingerprint: `${long}-${index}`,
+        occurrenceCount: 1,
+        firstAttempt: index + 1,
+        lastAttempt: index + 1,
+        issues: Array.from({ length: 100 }, () => issue),
+      })),
+    };
+    const sections = buildFindingContractRecoveryPromptSections('ja', recovery, evidence);
+    const { strictReason: _strictReason, ...recoveryWithoutStrictReason } = recovery;
+    const normalSections = buildFindingContractRecoveryPromptSections('ja', {
+      ...recoveryWithoutStrictReason,
+      mode: 'normal',
+    }, evidence);
+    const serialized = sections.join('\n');
+
+    expect(serialized.length).toBeLessThan(70_000);
+    expect(normalSections.join('\n').length).toBeLessThan(70_000);
+    expect(serialized).toContain('追加作業で解消可能なら');
+    expect(serialized).toContain('continue');
+    expect(serialized).toContain('実際のblockerがある場合だけreplan');
+    expect(serialized).not.toContain(long);
+  });
+
   it('classifies decision and completion evidence violations as retryable validation errors', () => {
     const continuePart = makePart('continue-repair', ['F-0001']);
     let continueError: unknown;
     try {
-      parseFindingContractTeamLeaderDecision({
+      parseDecision({
         decision: 'continue',
         reasoning: 'invalid coverage on continue',
         parts: [continuePart],
@@ -651,7 +1077,7 @@ describe('Finding Contract Team Leader contract', () => {
           verificationPartIds: [],
         }],
         blockers: [],
-      }, ['F-0001'], [], []);
+      }, ['F-0001'], []);
     } catch (error) {
       continueError = error;
     }
@@ -672,8 +1098,9 @@ describe('Finding Contract Team Leader contract', () => {
         supportingPartIds: ['repair'],
         verificationPartIds: [],
       }],
+      blockers: [] as string[],
     };
-    expect(() => validateFindingContractCompletionEvidence(complete, [result]))
+    expect(() => parseDecision(complete, ['F-0001'], [part], [result]))
       .toThrow(FindingContractTeamLeaderDecisionValidationError);
   });
 
@@ -692,7 +1119,8 @@ describe('Finding Contract Team Leader contract', () => {
       targetFindingIds: ['F-0001', 'F-0002', 'F-0003'],
       actionableFindings: '{"open":[]}',
       completedPartIndex: [],
-      previouslyPlannedParts: [],
+      plannedParts: [],
+      evidence: buildFindingContractDecisionEvidenceSnapshot([], ['F-0001', 'F-0002', 'F-0003']),
     });
 
     expect(prompt).toContain('A_RAW_TOKEN');

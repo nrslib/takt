@@ -23,21 +23,25 @@ import {
   validateFindingContractPartBatch,
 } from '../core/workflow/team-leader-finding-contract.js';
 import { parseFindingContractTeamLeaderDecision } from '../core/workflow/team-leader-finding-contract-decision.js';
+import type { FindingContractDecisionEvidenceSnapshot } from '../core/workflow/team-leader-finding-contract-evidence.js';
+import type {
+  FindingContractDecisionRecoveryPromptContext,
+} from '../core/workflow/engine/team-leader-finding-contract-decision-retry.js';
 
-export interface FindingContractTeamLeaderContext {
-  targetFindingIds: string[];
-  actionableFindings: string;
-  completedPartIndex: FindingContractFindingDigest[];
-  previouslyPlannedParts: PartDefinition[];
+export interface FindingContractDecompositionContext {
+  readonly targetFindingIds: readonly string[];
+  readonly actionableFindings: string;
+}
+
+export interface FindingContractFeedbackContext extends FindingContractDecompositionContext {
+  readonly completedPartIndex: readonly FindingContractFindingDigest[];
+  readonly plannedParts: readonly PartDefinition[];
+  readonly evidence: FindingContractDecisionEvidenceSnapshot;
   previousDecision?: {
-    decision: 'continue';
-    reasoning: string;
+    readonly decision: 'continue';
+    readonly reasoning: string;
   };
-  rejectedDecision?: {
-    attempt: number;
-    maxAttempts: number;
-    validationError: string;
-  };
+  readonly recovery?: FindingContractDecisionRecoveryPromptContext;
 }
 
 export interface TeamLeaderPartFeedbackResult {
@@ -69,10 +73,15 @@ export interface DecomposeTaskOptions {
   }) => void;
   onAgentResponse?: (response: AgentResponse) => void;
   onAgentError?: (error: unknown) => void;
-  findingContract?: FindingContractTeamLeaderContext;
+  findingContract?: FindingContractDecompositionContext;
 }
 
-export type MorePartsOptions = Omit<DecomposeTaskOptions, 'inspectTools' | 'onPromptResolved'>;
+export type MorePartsOptions = Omit<
+  DecomposeTaskOptions,
+  'inspectTools' | 'onPromptResolved' | 'findingContract'
+> & {
+  findingContract?: FindingContractFeedbackContext;
+};
 
 export interface MorePartsResponse {
   done: boolean;
@@ -203,9 +212,11 @@ export async function requestMoreParts(
     ? undefined
     : parseFindingContractTeamLeaderDecision(
         response.structuredOutput,
-        options.findingContract.targetFindingIds,
-        existingIds,
-        options.findingContract.previouslyPlannedParts,
+        {
+          targetFindingIds: options.findingContract.targetFindingIds,
+          plannedParts: options.findingContract.plannedParts,
+          evidence: options.findingContract.evidence,
+        },
       );
   return {
     ...(findingContractDecision === undefined

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -13,7 +13,10 @@ import type {
 } from '../core/models/types.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { evaluateWhenExpression } from '../core/workflow/evaluation/when-evaluator.js';
-import { FindingContractTeamLeaderDecisionValidationError } from '../core/workflow/team-leader-finding-contract-decision.js';
+import {
+  createFindingContractDecisionValidationIssue,
+  createFindingContractTeamLeaderDecisionValidationError,
+} from '../core/workflow/team-leader-finding-contract-decision-validation.js';
 
 const { executeAgentMock } = vi.hoisted(() => ({ executeAgentMock: vi.fn() }));
 
@@ -22,6 +25,23 @@ vi.mock('../agents/agent-usecases.js', () => ({
 }));
 
 const temporaryDirectories: string[] = [];
+
+function decisionValidationError(
+  code: string,
+  category: 'decision_contract' | 'evidence',
+) {
+  return createFindingContractTeamLeaderDecisionValidationError({
+    decision: code,
+    parts: [],
+    fixCoverage: [],
+    blockers: [],
+  }, [createFindingContractDecisionValidationIssue({
+    code,
+    category,
+    path: code,
+    message: code,
+  })]);
+}
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -151,6 +171,17 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
         },
       },
     ];
+    const verificationPart = {
+      id: 'verify-first',
+      title: 'Verify first',
+      instruction: 'verify first',
+      findingContract: {
+        findingIds: ['F-0001'],
+        role: 'verify' as const,
+        writePaths: [],
+        readPaths: ['src/first.ts'],
+      },
+    };
     executeAgentMock
       .mockResolvedValueOnce({
         persona: 'coder',
@@ -173,6 +204,18 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
           changedPaths: ['src/second.ts'],
           checks: [{ command: 'npm test', status: 'passed' }],
           summary: 'second fixed',
+        },
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'coder',
+        status: 'done',
+        content: 'VERIFY_RAW',
+        structuredOutput: {
+          findingOutcomes: [{ findingId: 'F-0001', outcome: 'addressed', evidence: ['src/first.ts:10'] }],
+          changedPaths: [],
+          checks: [{ command: 'npm test', status: 'passed' }],
+          summary: 'first verified',
         },
         timestamp: new Date(),
       });
@@ -199,20 +242,22 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
         return { parts };
       }),
       requestMoreParts: vi.fn()
-        .mockRejectedValueOnce(new FindingContractTeamLeaderDecisionValidationError(
-          'Finding Contract Team Leader continue decision must not include fixCoverage',
+        .mockRejectedValueOnce(decisionValidationError(
+          'decision_contract.continue_fix_coverage',
+          'decision_contract',
+        ))
+        .mockRejectedValueOnce(decisionValidationError(
+          'evidence.unsupported_disposition',
+          'evidence',
         ))
         .mockResolvedValueOnce({
-          done: true,
-          reasoning: 'unsupported disposition',
-          parts: [],
+          done: false,
+          reasoning: 'verify first',
+          parts: [verificationPart],
           findingContractDecision: {
-            ...completeDecision,
-            reasoning: 'unsupported disposition',
-            fixCoverage: completeDecision.fixCoverage.map((coverage, index) => ({
-              ...coverage,
-              disposition: index === 0 ? 'disputed' as const : coverage.disposition,
-            })),
+            decision: 'continue',
+            reasoning: 'verify first',
+            parts: [verificationPart],
           },
         })
         .mockResolvedValueOnce({
@@ -308,22 +353,59 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     expect(secondWorkerInstruction).not.toContain('F-0001');
     expect(secondWorkerInstruction).not.toContain('R-0001');
     expect(firstWorkerInstruction).not.toContain('.takt/finding-ledger.json');
-    expect(executeAgentMock).toHaveBeenCalledTimes(2);
-    expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(3);
+    expect(executeAgentMock).toHaveBeenCalledTimes(3);
+    expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(4);
     const firstFeedbackOptions = structuredCaller.requestMoreParts.mock.calls[0]?.[3];
     const secondFeedbackOptions = structuredCaller.requestMoreParts.mock.calls[1]?.[3];
     const thirdFeedbackOptions = structuredCaller.requestMoreParts.mock.calls[2]?.[3];
+    const fourthFeedbackOptions = structuredCaller.requestMoreParts.mock.calls[3]?.[3];
     expect(firstFeedbackOptions?.findingContract.completedPartIndex).toEqual([]);
-    expect(firstFeedbackOptions?.findingContract.rejectedDecision).toBeUndefined();
-    expect(secondFeedbackOptions?.findingContract.rejectedDecision).toEqual({
+    expect(firstFeedbackOptions?.findingContract.recovery).toEqual(expect.objectContaining({
       attempt: 1,
-      maxAttempts: 3,
-      validationError: 'Finding Contract Team Leader continue decision must not include fixCoverage',
-    });
-    expect(thirdFeedbackOptions?.findingContract.rejectedDecision).toEqual({
+      mode: 'normal',
+    }));
+    expect(secondFeedbackOptions?.findingContract.recovery).toEqual(expect.objectContaining({
       attempt: 2,
-      maxAttempts: 3,
-      validationError: expect.stringContaining('has no supporting part claim'),
+      mode: 'normal',
+      latestRejection: expect.objectContaining({
+        attempt: 1,
+        issueFingerprint: expect.any(String),
+      }),
+    }));
+    expect(thirdFeedbackOptions?.findingContract.recovery).toEqual(expect.objectContaining({
+      attempt: 3,
+      mode: 'strict',
+      strictReason: 'evidence_or_reference_issue',
+    }));
+    expect(fourthFeedbackOptions?.findingContract.recovery).toEqual(expect.objectContaining({
+      attempt: 1,
+      mode: 'normal',
+    }));
+    const attemptDirectory = readdirSync(join(runPaths.contextAbs, 'team_leader', 'fix'))
+      .find((entry) => entry.startsWith('attempt-'));
+    if (attemptDirectory === undefined) throw new Error('Missing Team Leader attempt directory');
+    const auditRecords = readFileSync(
+      join(runPaths.contextAbs, 'team_leader', 'fix', attemptDirectory, 'decision-recovery.jsonl'),
+      'utf8',
+    ).trim().split('\n').map((line) => JSON.parse(line) as {
+      type: string;
+      attempt: number;
+      mode: string;
+      boundaryId: string;
     });
+    expect(auditRecords.map((record) => [record.type, record.attempt, record.mode])).toEqual([
+      ['started', 1, 'normal'],
+      ['rejected', 1, 'normal'],
+      ['started', 2, 'normal'],
+      ['rejected', 2, 'normal'],
+      ['started', 3, 'strict'],
+      ['accepted', 3, 'strict'],
+      ['started', 1, 'normal'],
+      ['accepted', 1, 'normal'],
+    ]);
+    expect(new Set(auditRecords.map((record) => record.boundaryId))).toEqual(new Set([
+      `${attemptDirectory.slice('attempt-'.length)}:feedback:1`,
+      `${attemptDirectory.slice('attempt-'.length)}:feedback:2`,
+    ]));
   });
 });
