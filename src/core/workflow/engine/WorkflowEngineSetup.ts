@@ -299,6 +299,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getRunPaths: params.getRunPaths,
     findingContract: params.findingContract,
     findingLedgerStore: params.findingLedgerStore,
+    operationJournal: params.options.operationJournal,
     observabilityEnabled: params.options.observability?.enabled === true,
     observabilityRunId: params.options.observabilityRunId,
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,

@@ -82,6 +82,7 @@ vi.mock('../shared/utils/index.js', () => ({
   })),
   generateReportDir: vi.fn(() => 'generated-run'),
   getDebugPromptsLogFile: vi.fn(() => undefined),
+  isPathInside: vi.fn(() => true),
   isValidReportDirName: mockIsValidReportDirName,
   preventSleep: vi.fn(),
 }));
@@ -842,6 +843,41 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     };
     expect(meta.source_run_slug).toBe('20260524-source-run');
     expect(meta.resume_mode).toBe('retry');
+  });
+
+  it('rejects a restored operation journal slug that traverses outside the runs directory', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir);
+    writeFileSync(
+      join(projectDir, '.takt', 'runs', '20260524-source-run', 'meta.json'),
+      JSON.stringify({
+        operation_journal_run_slug: '../outside',
+        operation_claim_token: 'claim-a',
+      }),
+      'utf-8',
+    );
+    mockIsValidReportDirName.mockImplementation((slug: string) => slug !== '../outside');
+
+    await expect(createWorkflowExecutionBootstrap(
+      workflowConfig,
+      'Resume tampered operation journal',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'direct-resume',
+        resumeSource: {
+          sourceRunSlug: '20260524-source-run',
+          resumeMode: 'retry',
+        },
+      },
+    )).rejects.toThrow(
+      'Source run "20260524-source-run" has an invalid operation journal run slug',
+    );
+
+    expect(
+      existsSync(join(projectDir, '.takt', 'outside', 'operations', 'journal.json')),
+    ).toBe(false);
   });
 
   it('Given auto requeue reuses the source run slug, When bootstrap resumes, Then it skips snapshot inheritance', async () => {

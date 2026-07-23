@@ -70,6 +70,8 @@ export type FindingContractTeamLeaderDecision =
 export interface PartResult {
   part: PartDefinition;
   response: AgentResponse;
+  /** Validated Finding Contract claim. Present only after completion recovery accepts the output. */
+  findingContractClaim?: FindingContractPartCompletionClaim;
   providerInfo?: {
     provider: ProviderType | undefined;
     model: string | undefined;

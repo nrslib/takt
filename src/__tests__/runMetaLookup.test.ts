@@ -173,6 +173,28 @@ describe('run-meta lookup', () => {
     });
   });
 
+  it('should normalize operation journal ownership metadata at the read boundary', () => {
+    const metaPath = path.join(projectDir, '.takt', 'runs', '20260409-run-a', 'meta.json');
+    writeMeta(projectDir, '20260409-run-a', {
+      task: 'Resume durable operation',
+      workflow: 'default',
+      runSlug: '20260409-run-a',
+      runRoot: '.takt/runs/20260409-run-a',
+      reportDirectory: '.takt/runs/20260409-run-a/reports',
+      contextDirectory: '.takt/runs/20260409-run-a/context',
+      logsDirectory: '.takt/runs/20260409-run-a/logs',
+      status: 'running',
+      startTime: '2026-04-09T00:00:00.000Z',
+      operation_journal_run_slug: '20260409-original-run',
+      operation_claim_token: 'claim-b',
+    });
+
+    expect(readRunMeta(metaPath)).toMatchObject({
+      operationJournalRunSlug: '20260409-original-run',
+      operationClaimToken: 'claim-b',
+    });
+  });
+
   it('should return undefined when run slug is invalid', () => {
     writeMeta(projectDir, '20260409-run-z', {
       task: 'Force fail me\nwith full prompt',

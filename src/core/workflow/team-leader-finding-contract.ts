@@ -300,7 +300,10 @@ export function buildFindingContractPartIndexEntry(result: PartResult): FindingC
       checks: { passed: 0, failed: 0, notRun: 0 },
     };
   }
-  const claim = parseFindingContractPartCompletionClaim(result.response.structuredOutput, result.part);
+  const claim = result.findingContractClaim;
+  if (claim === undefined) {
+    throw new Error(`Part "${result.part.id}" is missing its validated Finding Contract completion claim`);
+  }
   return {
     id: result.part.id,
     title: result.part.title,

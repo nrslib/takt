@@ -30,6 +30,10 @@ function createRunPaths(): RunPaths {
     contextPreviousResponsesRel: '.takt/runs/20260409-force-fail-test/context/previous_responses',
     logsAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/logs',
     logsRel: '.takt/runs/20260409-force-fail-test/logs',
+    operationsAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/operations',
+    operationsRel: '.takt/runs/20260409-force-fail-test/operations',
+    operationJournalAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/operations/journal.json',
+    operationJournalRel: '.takt/runs/20260409-force-fail-test/operations/journal.json',
     metaAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/meta.json',
     metaRel: '.takt/runs/20260409-force-fail-test/meta.json',
   };
@@ -282,5 +286,29 @@ describe('RunMetaManager', () => {
     expect(finalizedMeta.resume_mode).toBe('retry');
     expect(finalizedMeta).not.toHaveProperty('sourceRunSlug');
     expect(finalizedMeta).not.toHaveProperty('resumeMode');
+  });
+
+  it('should persist operation journal ownership metadata through finalize', () => {
+    const manager = new RunMetaManager(
+      createRunPaths(),
+      'Force fail task',
+      'default',
+      undefined,
+      {
+        operationJournalRunSlug: '20260409-original-run',
+        operationClaimToken: 'claim-b',
+      },
+    );
+
+    manager.updateStep('fix', 4);
+    manager.finalize('completed', 4);
+
+    for (const call of vi.mocked(writeFileAtomic).mock.calls) {
+      const meta = JSON.parse(String(call[1])) as Record<string, unknown>;
+      expect(meta.operation_journal_run_slug).toBe('20260409-original-run');
+      expect(meta.operation_claim_token).toBe('claim-b');
+      expect(meta).not.toHaveProperty('operationJournalRunSlug');
+      expect(meta).not.toHaveProperty('operationClaimToken');
+    }
   });
 });

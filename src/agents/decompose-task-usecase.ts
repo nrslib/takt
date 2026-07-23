@@ -20,17 +20,30 @@ import {
   createFindingContractFeedbackJsonSchema,
   type FindingContractFindingDigest,
   type FindingContractPartIndexEntry,
-  validateFindingContractPartBatch,
 } from '../core/workflow/team-leader-finding-contract.js';
 import { parseFindingContractTeamLeaderDecision } from '../core/workflow/team-leader-finding-contract-decision.js';
 import type { FindingContractDecisionEvidenceSnapshot } from '../core/workflow/team-leader-finding-contract-evidence.js';
 import type {
-  FindingContractDecisionRecoveryPromptContext,
-} from '../core/workflow/engine/team-leader-finding-contract-decision-retry.js';
+  FindingContractRecoveryPromptContext,
+} from '../core/workflow/engine/team-leader-finding-contract-recovery.js';
+import type {
+  FindingContractRejectedDecisionDigest,
+} from '../core/workflow/team-leader-finding-contract-decision-validation.js';
+import type {
+  FindingContractRejectedDecompositionDigest,
+} from '../core/workflow/team-leader-finding-contract-decomposition-validation.js';
+import {
+  FindingContractDecompositionValidationError,
+  validateFindingContractDecomposition,
+} from '../core/workflow/team-leader-finding-contract-decomposition-validation.js';
+import {
+  createFindingContractControlValidationIssue,
+} from '../core/workflow/team-leader-finding-contract-control-validation.js';
 
 export interface FindingContractDecompositionContext {
   readonly targetFindingIds: readonly string[];
   readonly actionableFindings: string;
+  readonly recovery?: FindingContractRecoveryPromptContext<FindingContractRejectedDecompositionDigest>;
 }
 
 export interface FindingContractFeedbackContext extends FindingContractDecompositionContext {
@@ -41,7 +54,7 @@ export interface FindingContractFeedbackContext extends FindingContractDecomposi
     readonly decision: 'continue';
     readonly reasoning: string;
   };
-  readonly recovery?: FindingContractDecisionRecoveryPromptContext;
+  readonly recovery?: FindingContractRecoveryPromptContext<FindingContractRejectedDecisionDigest>;
 }
 
 export interface TeamLeaderPartFeedbackResult {
@@ -96,11 +109,11 @@ export interface DecomposeTaskResponse {
   providerUsage?: ProviderUsageSnapshot;
 }
 
-export async function decomposeTask(
+export async function requestDecompositionRawResponse(
   instruction: string,
   maxInitialParts: number | undefined,
   options: DecomposeTaskOptions,
-): Promise<DecomposeTaskResponse> {
+): Promise<AgentResponse> {
   let response: AgentResponse;
   try {
     response = await runAgent(options.persona, buildDecomposePrompt(
@@ -134,6 +147,15 @@ export async function decomposeTask(
     throw error;
   }
   options.onAgentResponse?.(response);
+  return response;
+}
+
+export async function decomposeTask(
+  instruction: string,
+  maxInitialParts: number | undefined,
+  options: DecomposeTaskOptions,
+): Promise<DecomposeTaskResponse> {
+  const response = await requestDecompositionRawResponse(instruction, maxInitialParts, options);
 
   if (response.status !== 'done') {
     const detail = response.error || response.content || response.status;
@@ -142,10 +164,13 @@ export async function decomposeTask(
 
   const parts = response.structuredOutput?.parts;
   if (parts != null) {
-    const parsedParts = toPartDefinitions(parts, maxInitialParts, options.findingContract !== undefined);
-    if (options.findingContract !== undefined) {
-      validateFindingContractPartBatch(parsedParts, options.findingContract.targetFindingIds);
-    }
+    const parsedParts = options.findingContract === undefined
+      ? toPartDefinitions(parts, maxInitialParts, false)
+      : validateFindingContractDecomposition(
+          parts,
+          maxInitialParts,
+          options.findingContract.targetFindingIds,
+        );
     return {
       parts: parsedParts,
       ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
@@ -153,7 +178,16 @@ export async function decomposeTask(
   }
 
   if (options.findingContract !== undefined) {
-    throw new Error('Finding Contract Team Leader decomposition requires structured output');
+    throw new FindingContractDecompositionValidationError([
+      createFindingContractControlValidationIssue({
+        boundaryKind: 'decomposition',
+        code: 'shape.structured_output',
+        category: 'shape',
+        path: '$',
+        message: 'Finding Contract Team Leader decomposition requires structured output',
+        retryability: 'corrective_retry',
+      }),
+    ], response.content);
   }
 
   return {
@@ -162,12 +196,12 @@ export async function decomposeTask(
   };
 }
 
-export async function requestMoreParts(
+export async function requestMorePartsRawResponse(
   originalInstruction: string,
   allResults: TeamLeaderPartFeedbackResult[],
   existingIds: string[],
   options: MorePartsOptions,
-): Promise<MorePartsResponse> {
+): Promise<AgentResponse> {
   const prompt = buildMorePartsPrompt(
     originalInstruction,
     allResults,
@@ -202,6 +236,21 @@ export async function requestMoreParts(
     throw error;
   }
   options.onAgentResponse?.(response);
+  return response;
+}
+
+export async function requestMoreParts(
+  originalInstruction: string,
+  allResults: TeamLeaderPartFeedbackResult[],
+  existingIds: string[],
+  options: MorePartsOptions,
+): Promise<MorePartsResponse> {
+  const response = await requestMorePartsRawResponse(
+    originalInstruction,
+    allResults,
+    existingIds,
+    options,
+  );
 
   if (response.status !== 'done') {
     const detail = response.error || response.content || response.status;
