@@ -23,9 +23,9 @@ describe('team_leader schema', () => {
     expect(invalid.success).toBe(false);
   });
 
-  it('default team high の fix は明示 decision だけで reviewers または replan へ遷移する', () => {
+  it.each(['ja', 'en'])('default team high (%s) の fix は明示 decision だけで reviewers または replan へ遷移する', (locale) => {
     const source = readFileSync(
-      join(process.cwd(), 'builtins', 'ja', 'workflows', 'takt-default-team-high.yaml'),
+      join(process.cwd(), 'builtins', locale, 'workflows', 'takt-default-team-high.yaml'),
       'utf-8',
     );
     const workflow = parseYaml(source) as {

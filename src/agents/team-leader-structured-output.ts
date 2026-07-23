@@ -213,9 +213,9 @@ function buildMorePartsBasePrompt(
       ].join('\n');
     }).join('\n\n');
     const latestClaimDigests = buildLatestFindingContractDigests(
-      allResults.flatMap((result) => result.findingContractClaim === undefined
+      allResults.flatMap((result, sequence) => result.findingContractClaim === undefined
         ? []
-        : [result.findingContractClaim]),
+        : [{ sequence, entry: result.findingContractClaim }]),
     );
     const sections = language === 'ja'
       ? [

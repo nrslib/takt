@@ -56,7 +56,8 @@ export function normalizeFindingContractPath(value: string, label: string): stri
   if (normalized === '..' || normalized.startsWith('../')) {
     throw new Error(`${label} must not leave the working directory: ${value}`);
   }
-  return normalized === '.' || normalized === './' ? '.' : normalized.replace(/^\.\//, '');
+  if (normalized === '.' || normalized === './') return '.';
+  return normalized.replace(/^\.\//, '').replace(/\/+$/, '');
 }
 
 export function findingContractPathsOverlap(left: string, right: string): boolean {

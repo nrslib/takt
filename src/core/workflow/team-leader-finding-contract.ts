@@ -59,6 +59,11 @@ export interface FindingContractFindingDigest {
   checks: FindingContractPartIndexEntry['checks'];
 }
 
+export interface SequencedFindingContractPartIndexEntry {
+  sequence: number;
+  entry: FindingContractPartIndexEntry;
+}
+
 const COMPACT_SUMMARY_MAX_LENGTH = 300;
 const COMPACT_EVIDENCE_MAX_ITEMS = 3;
 const COMPACT_EVIDENCE_MAX_LENGTH = 300;
@@ -266,10 +271,19 @@ export function buildFindingContractPartIndexEntry(result: PartResult): FindingC
 }
 
 export function buildLatestFindingContractDigests(
-  entries: readonly FindingContractPartIndexEntry[],
+  sequencedEntries: readonly SequencedFindingContractPartIndexEntry[],
 ): FindingContractFindingDigest[] {
   const latestByFindingId = new Map<string, FindingContractFindingDigest>();
-  for (const entry of entries) {
+  const seenSequences = new Set<number>();
+  const entries = [...sequencedEntries].sort((left, right) => left.sequence - right.sequence);
+  for (const { sequence, entry } of entries) {
+    if (!Number.isSafeInteger(sequence) || sequence < 0) {
+      throw new Error(`Finding Contract part sequence is invalid: ${sequence}`);
+    }
+    if (seenSequences.has(sequence)) {
+      throw new Error(`Finding Contract part sequence is duplicated: ${sequence}`);
+    }
+    seenSequences.add(sequence);
     for (const findingId of entry.findingIds) {
       const outcome = entry.outcomes.find((candidate) => candidate.findingId === findingId);
       latestByFindingId.set(findingId, {

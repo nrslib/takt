@@ -82,6 +82,9 @@ describe('Finding Contract Team Leader contract', () => {
       readPaths: ['src/types.ts'],
     });
 
+    const directoryPart = makePart('directory', ['F-0001'], 'repair', ['src/api/']);
+    expect(directoryPart.findingContract?.writePaths).toEqual(['src/api']);
+
     expect(() => parseFindingContractPartDefinition({
       id: 'unsafe',
       title: 'Unsafe',
@@ -127,6 +130,11 @@ describe('Finding Contract Team Leader contract', () => {
     ], ['F-0001', 'F-0002'])).toThrow(/write paths overlap/);
 
     expect(() => validateFindingContractPartBatch([
+      makePart('parent-slash', ['F-0001'], 'repair', ['src/api/']),
+      makePart('child', ['F-0002'], 'repair', ['src/api/client.ts']),
+    ], ['F-0001', 'F-0002'])).toThrow(/write paths overlap/);
+
+    expect(() => validateFindingContractPartBatch([
       makePart('root', ['F-0001'], 'repair', ['./']),
       makePart('nested', ['F-0002'], 'repair', ['src/api.ts']),
     ], ['F-0001', 'F-0002'])).toThrow(/write paths overlap/);
@@ -147,7 +155,11 @@ describe('Finding Contract Team Leader contract', () => {
     const shared = buildFindingContractPartIndexEntry(makeResult(makePart('shared', ['F-0001', 'F-0002'])));
     const latest = buildFindingContractPartIndexEntry(makeResult(makePart('latest', ['F-0001'])));
 
-    expect(buildLatestFindingContractDigests([first, shared, latest])).toEqual([
+    expect(buildLatestFindingContractDigests([
+      { sequence: 2, entry: latest },
+      { sequence: 0, entry: first },
+      { sequence: 1, entry: shared },
+    ])).toEqual([
       expect.objectContaining({ findingId: 'F-0001', partId: 'latest' }),
       expect.objectContaining({ findingId: 'F-0002', partId: 'shared' }),
     ]);
@@ -214,6 +226,19 @@ describe('Finding Contract Team Leader contract', () => {
       blockers: [],
     }, ['F-0001', 'F-0002'], ['repair'], [part])).toThrow(/does not cover actionable finding "F-0002"/);
 
+    expect(() => parseFindingContractTeamLeaderDecision({
+      decision: 'complete',
+      reasoning: 'duplicate coverage',
+      parts: [],
+      fixCoverage: ['F-0001', 'F-0001'].map((findingId) => ({
+        findingId,
+        disposition: 'addressed',
+        supportingPartIds: ['repair'],
+        verificationPartIds: [],
+      })),
+      blockers: [],
+    }, ['F-0001'], ['repair'], [part])).toThrow(/fixCoverage contains duplicate finding "F-0001"/);
+
     const decision = parseFindingContractTeamLeaderDecision({
       decision: 'complete',
       reasoning: 'all fixed',
@@ -267,6 +292,36 @@ describe('Finding Contract Team Leader contract', () => {
     };
     expect(() => validateFindingContractCompletionEvidence(addressed, [result]))
       .toThrow(/no passed verification check/);
+  });
+
+  it('accepts disputed completion coverage backed by file evidence and a passed check', () => {
+    const part = makePart('diagnose', ['F-0001'], 'diagnose', []);
+    const result = makeResult(part);
+    result.response.structuredOutput = {
+      findingOutcomes: [{
+        findingId: 'F-0001',
+        outcome: 'disputed',
+        evidence: ['src/current.ts:42'],
+      }],
+      changedPaths: [],
+      checks: [{ command: 'inspect source', status: 'passed' }],
+      summary: 'The finding does not match the current source.',
+    };
+    const decision = parseFindingContractTeamLeaderDecision({
+      decision: 'complete',
+      reasoning: 'The finding is disproven by current source evidence.',
+      parts: [],
+      fixCoverage: [{
+        findingId: 'F-0001',
+        disposition: 'disputed',
+        supportingPartIds: ['diagnose'],
+        verificationPartIds: ['diagnose'],
+      }],
+      blockers: [],
+    }, ['F-0001'], ['diagnose'], [part]);
+
+    if (decision.decision !== 'complete') throw new Error('Expected complete decision');
+    expect(() => validateFindingContractCompletionEvidence(decision, [result])).not.toThrow();
   });
 
   it('builds a compact aggregate without raw part content and preserves disputes', () => {

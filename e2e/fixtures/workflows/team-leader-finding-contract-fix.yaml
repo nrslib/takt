@@ -1,16 +1,5 @@
 name: e2e-team-leader-finding-contract-fix
 description: Verify Finding Contract Team Leader decision routing
-personas:
-  test-finding-contract-leader: |
-    Coordinate Finding Contract repair parts and return an explicit decision.
-  test-finding-contract-worker: |
-    Execute only the assigned Finding Contract repair.
-  test-finding-contract-reviewer: |
-    Confirm that the complete route reached reviewers.
-  test-finding-contract-replanner: |
-    Confirm that the replan route was selected.
-  test-findings-manager: |
-    Preserve the existing finding ledger for this routing test.
 instructions:
   findings-manager: Reconcile Finding Contract claims without inventing changes.
 report_formats:

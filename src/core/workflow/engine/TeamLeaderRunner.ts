@@ -409,8 +409,15 @@ export class TeamLeaderRunner {
                             result,
                             index: partIndexById.get(result.part.id),
                           }))
-                          .sort((left, right) => (left.index ?? 0) - (right.index ?? 0))
-                          .map(({ result }) => buildFindingContractPartIndexEntry(result)),
+                          .map(({ result, index }) => {
+                            if (index === undefined) {
+                              throw new Error(`Finding Contract part index is missing: ${result.part.id}`);
+                            }
+                            return {
+                              sequence: index,
+                              entry: buildFindingContractPartIndexEntry(result),
+                            };
+                          }),
                       ),
                       previouslyPlannedParts: currentPlannedParts,
                       ...(previousFindingContractDecision !== undefined
