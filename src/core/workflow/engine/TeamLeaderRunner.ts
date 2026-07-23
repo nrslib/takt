@@ -49,6 +49,10 @@ import {
 } from '../team-leader-finding-contract.js';
 import { validateFindingContractCompletionEvidence } from '../team-leader-finding-contract-decision.js';
 import {
+  requestValidFindingContractDecision,
+  type FindingContractRejectedDecision,
+} from './team-leader-finding-contract-decision-retry.js';
+import {
   createTeamLeaderArtifactAttemptId,
   writeTeamLeaderPartArtifact,
 } from './team-leader-artifacts.js';
@@ -357,22 +361,51 @@ export class TeamLeaderRunner {
               return leftIndex - rightIndex;
             })
           : currentResults;
+        const feedbackResults = feedbackPartResults.map((result) => ({
+          id: result.part.id,
+          title: result.part.title,
+          status: result.response.status,
+          content: result.response.status === 'error'
+            ? `[ERROR] ${resolvePartErrorDetail(result)}`
+            : result.response.content,
+          ...(findingContractMode
+            ? { findingContractClaim: buildFindingContractPartIndexEntry(result) }
+            : {}),
+        }));
+        const findingContractContext = findingContractExecution === undefined
+          ? undefined
+          : {
+              targetFindingIds: findingContractExecution.targetFindingIds,
+              actionableFindings: findingContractExecution.actionableFindings,
+              completedPartIndex: buildLatestFindingContractDigests(
+                completedPartResults
+                  .map((result) => ({
+                    result,
+                    index: partIndexById.get(result.part.id),
+                  }))
+                  .map(({ result, index }) => {
+                    if (index === undefined) {
+                      throw new Error(`Finding Contract part index is missing: ${result.part.id}`);
+                    }
+                    return {
+                      sequence: index,
+                      entry: buildFindingContractPartIndexEntry(result),
+                    };
+                  }),
+              ),
+              previouslyPlannedParts: currentPlannedParts,
+              ...(previousFindingContractDecision !== undefined
+                ? { previousDecision: previousFindingContractDecision }
+                : {}),
+            };
         try {
-          const moreParts = await structuredCaller.requestMoreParts(
+          const requestFeedback = async (
+            rejectedDecision?: FindingContractRejectedDecision,
+          ) => structuredCaller.requestMoreParts(
             findingContractMode
               ? `${step.instruction}\n\n## Original Task\n${task}`
               : instruction,
-            feedbackPartResults.map((result) => ({
-              id: result.part.id,
-              title: result.part.title,
-              status: result.response.status,
-              content: result.response.status === 'error'
-                ? `[ERROR] ${resolvePartErrorDetail(result)}`
-                : result.response.content,
-              ...(findingContractMode
-                ? { findingContractClaim: buildFindingContractPartIndexEntry(result) }
-                : {}),
-            })),
+            feedbackResults,
             scheduledIds,
             {
               cwd: this.deps.getCwd(),
@@ -399,36 +432,38 @@ export class TeamLeaderRunner {
               onAgentError: () => {
                 this.recordUsage(leaderStep.name, leaderProviderInfo, false);
               },
-              ...(findingContractExecution !== undefined
-                ? {
+              ...(findingContractContext === undefined
+                ? {}
+                : {
                     findingContract: {
-                      targetFindingIds: findingContractExecution.targetFindingIds,
-                      actionableFindings: findingContractExecution.actionableFindings,
-                      completedPartIndex: buildLatestFindingContractDigests(
-                        completedPartResults
-                          .map((result) => ({
-                            result,
-                            index: partIndexById.get(result.part.id),
-                          }))
-                          .map(({ result, index }) => {
-                            if (index === undefined) {
-                              throw new Error(`Finding Contract part index is missing: ${result.part.id}`);
-                            }
-                            return {
-                              sequence: index,
-                              entry: buildFindingContractPartIndexEntry(result),
-                            };
-                          }),
-                      ),
-                      previouslyPlannedParts: currentPlannedParts,
-                      ...(previousFindingContractDecision !== undefined
-                        ? { previousDecision: previousFindingContractDecision }
-                        : {}),
+                      ...findingContractContext,
+                      ...(rejectedDecision === undefined ? {} : { rejectedDecision }),
                     },
-                  }
-                : {}),
+                  }),
             },
           );
+          const moreParts = findingContractMode
+            ? await requestValidFindingContractDecision({
+                abortSignal: leaderBaseOptions.abortSignal,
+                request: requestFeedback,
+                validate: (feedback) => {
+                  if (feedback.findingContractDecision?.decision === 'complete') {
+                    validateFindingContractCompletionEvidence(
+                      feedback.findingContractDecision,
+                      currentResults,
+                    );
+                  }
+                },
+                onRejected: (rejectedDecision) => {
+                  log.info('Finding Contract Team Leader decision failed validation; regenerating', {
+                    step: step.name,
+                    attempt: rejectedDecision.attempt,
+                    maxAttempts: rejectedDecision.maxAttempts,
+                    detail: rejectedDecision.validationError,
+                  });
+                },
+              })
+            : await requestFeedback();
           if (moreParts.findingContractDecision?.decision === 'continue') {
             previousFindingContractDecision = {
               decision: 'continue',
@@ -491,9 +526,6 @@ export class TeamLeaderRunner {
       ).catch((error) => buildTeamLeaderErrorPartResult(step, part, error)),
     });
     const { plannedParts, partResults, findingContractDecision } = executionResult;
-    if (findingContractDecision?.decision === 'complete') {
-      validateFindingContractCompletionEvidence(findingContractDecision, partResults);
-    }
     this.emitPartRoutingDecisionEvents(step, partResults, routedProviderInfoByPart, parentIteration);
 
     const rateLimitedResult = partResults.find((result) => result.response.status === 'rate_limited');
