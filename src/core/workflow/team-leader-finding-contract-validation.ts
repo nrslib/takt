@@ -1,5 +1,9 @@
 import { isAbsolute, posix } from 'node:path';
 
+export const FINDING_CONTRACT_LITERAL_PATH_PATTERN = String.raw`^[^*?]+$`;
+
+const findingContractLiteralPathPattern = new RegExp(FINDING_CONTRACT_LITERAL_PATH_PATTERN);
+
 export function requireObject(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
@@ -48,6 +52,9 @@ export function requireStringArray(
 }
 
 export function normalizeFindingContractPath(value: string, label: string): string {
+  if (!findingContractLiteralPathPattern.test(value)) {
+    throw new Error(`${label} must not contain wildcard characters "*" or "?": ${value}`);
+  }
   const portable = value.replaceAll('\\', '/');
   if (isAbsolute(value) || posix.isAbsolute(portable) || /^[A-Za-z]:\//.test(portable)) {
     throw new Error(`${label} must be relative to the working directory: ${value}`);

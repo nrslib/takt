@@ -148,6 +148,7 @@ function buildDecomposeBasePrompt(
         : [
             '- 各 part に findingContract={findingIds,role,writePaths,readPaths} を必ず設定する',
             '- findingIds は下記の actionable finding ID だけを使う',
+            '- writePaths と readPaths はリテラルな相対パスで指定し、ワイルドカードの * と ? は使わない',
             '- 同じ finding を複数の repair part に割り当てない',
             '- 同じ batch の writePaths を重複・包含させない',
             '',
@@ -180,6 +181,7 @@ function buildDecomposeBasePrompt(
       : [
           '- Every part must include findingContract={findingIds,role,writePaths,readPaths}',
           '- Use only actionable finding IDs listed below',
+          '- Specify writePaths and readPaths as literal relative paths without the * or ? wildcard characters',
           '- Do not assign the same finding to multiple repair parts',
           '- Do not overlap or nest writePaths within one batch',
           '',
@@ -223,6 +225,7 @@ function buildMorePartsBasePrompt(
           ...buildInspectToolGuidance(language, undefined, { requireAtLeastOnePart: false }),
           '- worker の応答は未検証の claim として扱う',
           '- continue は新しい parts を1件以上返す',
+          '- continue の writePaths と readPaths はリテラルな相対パスで指定し、ワイルドカードの * と ? は使わない',
           '- complete は parts/blockers を空にし、全対象 finding の fixCoverage を返す',
           '- replan は parts/fixCoverage を空にし、blockers を1件以上返す',
           '- complete は各 finding の証拠と検証状況を確認できる場合だけ選ぶ',
@@ -253,6 +256,7 @@ function buildMorePartsBasePrompt(
           ...buildInspectToolGuidance(language, undefined, { requireAtLeastOnePart: false }),
           '- Treat worker responses as untrusted claims',
           '- continue requires at least one new part',
+          '- In continue parts, specify writePaths and readPaths as literal relative paths without the * or ? wildcard characters',
           '- complete requires empty parts/blockers and fixCoverage for every target finding',
           '- replan requires empty parts/fixCoverage and at least one blocker',
           '- Choose complete only when evidence and verification support every finding disposition',

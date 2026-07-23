@@ -1,15 +1,24 @@
+import { FINDING_CONTRACT_LITERAL_PATH_PATTERN } from './team-leader-finding-contract-validation.js';
+
 const nonEmptyStringSchema = { type: 'string', minLength: 1 } as const;
 const stringArraySchema = {
   type: 'array',
   items: nonEmptyStringSchema,
+} as const;
+const literalPathArraySchema = {
+  type: 'array',
+  items: {
+    ...nonEmptyStringSchema,
+    pattern: FINDING_CONTRACT_LITERAL_PATH_PATTERN,
+  },
 } as const;
 const findingContractAssignmentSchema = {
   type: 'object',
   properties: {
     findingIds: stringArraySchema,
     role: { type: 'string', enum: ['diagnose', 'repair', 'verify'] },
-    writePaths: stringArraySchema,
-    readPaths: stringArraySchema,
+    writePaths: literalPathArraySchema,
+    readPaths: literalPathArraySchema,
   },
   required: ['findingIds', 'role', 'writePaths', 'readPaths'],
   additionalProperties: false,
@@ -77,7 +86,7 @@ const findingContractPartCompletionJsonSchema: Record<string, unknown> = {
         additionalProperties: false,
       },
     },
-    changedPaths: stringArraySchema,
+    changedPaths: literalPathArraySchema,
     checks: {
       type: 'array',
       items: {

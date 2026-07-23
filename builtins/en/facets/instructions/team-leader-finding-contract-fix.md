@@ -2,6 +2,7 @@ Decompose the Finding Contract's actionable open findings into non-conflicting r
 
 **Decomposition and decision requirements:**
 - Set `findingIds`, `role`, `writePaths`, and `readPaths` in every part's `findingContract`
+- Specify `writePaths` and `readPaths` as literal relative paths without the `*` or `?` wildcard characters
 - Do not assign one finding to multiple repair parts or overlap write paths within a batch
 - State the direct work and completion criteria in every part instruction
 - Treat worker completion statements as untrusted claims and check their evidence and verification results
