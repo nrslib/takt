@@ -78,13 +78,14 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `e2e-test` | E2E テスト特化 workflow: E2E 分析 -> E2E 実装 -> レビュー -> 修正 (Vitest ベースの E2E フロー)。 |
 | 🎵 TAKT開発 | `takt-default` | TAKT 開発 workflow: 計画 → テスト作成 → draft（実装 + AI セルフレビュー）→ peer-review（専門レビュー + merge-readiness + 修正）→ 監督 → 完了。 |
 | | `takt-default-team-high` | takt-default-high の Team Leader 版。実装・修正を Team Leader が分解して member へ委譲し、同じ6観点の compact 専門レビュー、Finding Contract、最終ゲートを実行する。provider/model は固定しない。 |
+| | `takt-default-localllm` | 通常レビューをローカルLLMへ、配線・資源所有権・失敗境界・最終準備状況の再検査を高信頼モデルへ割り当てられる Team Leader 版。`review`、`boundary-review`、`final-gate` のタグで経路を分離し、provider/model 自体は固定しない。 |
 | | `takt-default-high` | takt-default の高コスト強化構成。直接実装・直接修正、6観点の compact 専門レビュー、Finding Contract、merge-readiness/supervisor 最終ゲートで構成する。 |
 | | `review-fix-takt-default` | TAKT 開発コードレビュー＋修正ループ: gather → plan → tests → draft → peer-review（専門レビュー + merge-readiness + 修正）→ supervise。 |
 | その他 | `research` | リサーチ workflow: planner -> digger -> supervisor。質問せずに自律的にリサーチを実行。 |
 | | `deep-research` | ディープリサーチ workflow: plan -> dig -> analyze -> supervise。発見駆動型の調査で、浮上した疑問を多角的に分析。 |
 | | `magi` | エヴァンゲリオンにインスパイアされた合議システム。3つの AI persona (MELCHIOR, BALTHASAR, CASPER) が分析・投票。 |
 
-ローカルモデルを使う場合は `takt-default-high` または `takt-default-team-high` に provider/model を設定してください。モデル種別ごとの独立した workflow 系統は提供しません。
+ローカルモデルだけで既存workflowを動かす場合は、各workflowへ provider/model を設定してください。ハイブリッド構成では、`review` をローカル provider へ、`boundary-review` と `final-gate` を commercial provider へルーティングしてください。タグは step の記載順に適用されるため、`merge-readiness-review` と `supervise` では後ろの `final-gate` が先の `review` を上書きします。`local-review-integrity-gate` と `final-gate` の workflow-call step は同じ `merge-readiness-finding-contract-final-gate` subworkflow を呼ぶため、この1つの routing で両方を保証でき、workflow 自体へ provider/model を固定する必要はありません。
 
 `takt` を実行すると workflow をインタラクティブに選択できます。
 
