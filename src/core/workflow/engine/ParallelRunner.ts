@@ -305,7 +305,9 @@ export class ParallelRunner {
             task,
             maxSteps,
             subRuntime?.fallback,
-            findingContractContext,
+            findingContractContext === undefined
+              ? undefined
+              : { mode: 'explicit', context: findingContractContext },
           );
           const phase1Instruction = rawFindingsStructuredOutput
             ? this.deps.stepExecutor.buildPhase1Instruction(subInstruction, executableSubStep, subRuntime)

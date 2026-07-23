@@ -572,6 +572,57 @@ describe('StepExecutor', () => {
     expect(instruction).toContain('LEDGER_SUMMARY: preserve this');
   });
 
+  it('明示nullでは既定の Finding Contract context を注入しない', () => {
+    const buildFindingContractInstructionContext = vi.fn().mockReturnValue({
+      ledgerCopyPath: '.takt/findings/full-ledger.json',
+      ledgerSummary: 'OUT_OF_SCOPE_FINDING',
+      reportLedgerSummary: {},
+      hasOpenFindings: true,
+      hasWaivedFindings: false,
+      hasDismissedFindings: false,
+    });
+    const step = makeStep({ name: 'fix.part', instruction: 'Scoped worker instruction' });
+    const deps: StepExecutorDeps = {
+      optionsBuilder: {
+        buildFindingContractInstructionContext,
+      } as unknown as StepExecutorDeps['optionsBuilder'],
+      getCwd: () => cwd,
+      getProjectCwd: () => cwd,
+      getReportDir: () => '.takt/reports',
+      getRunPaths: () => runPaths,
+      getLanguage: () => 'en',
+      getInteractive: () => false,
+      getWorkflowSteps: () => [{ name: 'fix.part' }],
+      getWorkflowDefinitionSteps: () => [step],
+      getWorkflowName: () => 'test-workflow',
+      getWorkflowDescription: () => undefined,
+      getInheritedPeerReportPaths: () => [],
+      getRetryNote: () => undefined,
+      structuredCaller: {
+        evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
+      },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+      refreshFindingsState: vi.fn(),
+      emitEvent: vi.fn(),
+      getRunId: () => 'run',
+      getFindingCallNamespace: () => '',
+    };
+
+    const instruction = new StepExecutor(deps).buildInstruction(
+      step,
+      1,
+      makeState(),
+      'task',
+      5,
+      undefined,
+      { mode: 'omit' },
+    );
+
+    expect(buildFindingContractInstructionContext).not.toHaveBeenCalled();
+    expect(instruction).not.toContain('OUT_OF_SCOPE_FINDING');
+    expect(instruction).not.toContain('full-ledger.json');
+  });
+
   it('非対応 provider の structured_output fallback で required 欠落を失敗にする', async () => {
     vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
       options?.onPromptResolved?.({

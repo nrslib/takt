@@ -136,6 +136,27 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(createWorkflow(), { projectCwd: process.cwd() })).not.toThrow();
   });
 
+  it('requires finding_contract when a Team Leader uses finding_contract_fix mode', () => {
+    const workflow = createWorkflow({
+      initialStep: 'fix',
+      steps: [{
+        name: 'fix',
+        persona: 'coder',
+        personaDisplayName: 'coder',
+        edit: true,
+        instruction: 'fix',
+        teamLeader: {
+          mode: 'finding_contract_fix',
+          maxConcurrency: 2,
+          timeoutMs: 1000,
+        },
+      }],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() }))
+      .toThrow(/finding_contract_fix.*requires finding_contract/);
+  });
+
   it('fails fast when the resolved opencode provider has no model', () => {
     expect(() => validateWorkflowConfig(createWorkflow(), {
       projectCwd: process.cwd(),

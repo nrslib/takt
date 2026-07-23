@@ -5,6 +5,8 @@ import type {
   FindingRecord,
   RawFinding,
 } from './types.js';
+import { FILE_LINE_EVIDENCE_PATTERN } from './evidence.js';
+export { FILE_LINE_EVIDENCE_PATTERN } from './evidence.js';
 import { validateFindingDecisionSets } from './decision-rules.js';
 
 export type FindingManagerValidationResult =
@@ -91,12 +93,6 @@ function validateFindingManagerOutputWithPolicy(
   return errors.length === 0 ? { ok: true } : { ok: false, errors };
 }
 
-
-/**
- * path-like token + 行番号（例: src/types.ts:94）。裸の「word:1」は通さない。
- * decision-assembly.ts の waive 項目単位チェックでも同じ粒度で使うため export する。
- */
-export const FILE_LINE_EVIDENCE_PATTERN = /[^\s:]+\.[A-Za-z0-9_]+:\d+/;
 
 /**
  * 直前ステップ応答から「Disputed Findings」見出し配下のブロックを抜き出し、

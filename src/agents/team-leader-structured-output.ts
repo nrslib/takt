@@ -1,8 +1,43 @@
 import type { Language, PartDefinition } from '../core/models/types.js';
 import { ensureUniquePartIds, parsePartDefinitionEntry } from '../core/workflow/part-definition-validator.js';
-import type { MorePartsResponse } from './decompose-task-usecase.js';
+import type {
+  FindingContractTeamLeaderContext,
+  MorePartsResponse,
+  TeamLeaderPartFeedbackResult,
+} from './decompose-task-usecase.js';
+import {
+  buildLatestFindingContractDigests,
+  parseFindingContractPartDefinition,
+} from '../core/workflow/team-leader-finding-contract.js';
 
-export function toPartDefinitions(raw: unknown, maxInitialParts?: number): PartDefinition[] {
+const LATEST_RAW_CONTENT_MAX_LENGTH = 12_000;
+const LATEST_BATCH_RAW_TOTAL_MAX_LENGTH = 24_000;
+const EXISTING_PART_IDS_MAX_ITEMS = 100;
+const EXISTING_PART_ID_MAX_LENGTH = 120;
+
+function boundLatestRawContent(content: string, remaining: number): string {
+  const maxLength = Math.min(LATEST_RAW_CONTENT_MAX_LENGTH, remaining);
+  if (content.length <= maxLength) return content;
+  if (maxLength === 0) return '[omitted from prompt; full response is in the audit artifact]';
+  return `${content.slice(0, maxLength)}\n[truncated; full response is in the audit artifact]`;
+}
+
+function formatExistingPartIds(existingIds: readonly string[]): string {
+  const visibleIds = existingIds.slice(-EXISTING_PART_IDS_MAX_ITEMS).map((id) => (
+    id.length <= EXISTING_PART_ID_MAX_LENGTH
+      ? id
+      : `${id.slice(0, EXISTING_PART_ID_MAX_LENGTH - 1)}…`
+  ));
+  const omitted = existingIds.length - visibleIds.length;
+  const prefix = omitted > 0 ? `[${omitted} older IDs omitted; all IDs remain mechanically validated]\n` : '';
+  return `${prefix}${visibleIds.join(', ') || '(none)'}`;
+}
+
+export function toPartDefinitions(
+  raw: unknown,
+  maxInitialParts?: number,
+  findingContract = false,
+): PartDefinition[] {
   if (!Array.isArray(raw)) {
     throw new Error('Structured output "parts" must be an array');
   }
@@ -13,7 +48,9 @@ export function toPartDefinitions(raw: unknown, maxInitialParts?: number): PartD
     throw new Error(`Structured output produced too many initial parts: ${raw.length} > initial_max_parts ${maxInitialParts}`);
   }
 
-  const parts = raw.map((entry, index) => parsePartDefinitionEntry(entry, index));
+  const parts = raw.map((entry, index) => findingContract
+    ? parseFindingContractPartDefinition(entry, index)
+    : parsePartDefinitionEntry(entry, index));
   ensureUniquePartIds(parts);
   return parts;
 }
@@ -90,6 +127,7 @@ function buildDecomposeBasePrompt(
   maxInitialParts?: number,
   language?: Language,
   inspectTools?: readonly string[],
+  findingContract?: FindingContractTeamLeaderContext,
 ): string {
   if (language === 'ja') {
     return [
@@ -105,6 +143,17 @@ function buildDecomposeBasePrompt(
       '- npm test / npm run test:e2e:mock を各実装 part に重複して持たせない',
       '- 共有契約が必要な作業は、依存 part に分けず1つの part にまとめる',
       '- parts.length === 1 になる場合も、独立に実行できる責務境界がないか先に検討する',
+      ...(findingContract === undefined
+        ? []
+        : [
+            '- 各 part に findingContract={findingIds,role,writePaths,readPaths} を必ず設定する',
+            '- findingIds は下記の actionable finding ID だけを使う',
+            '- 同じ finding を複数の repair part に割り当てない',
+            '- 同じ batch の writePaths を重複・包含させない',
+            '',
+            '## Actionable Finding Contract',
+            findingContract.actionableFindings,
+          ]),
       '',
       '## 元タスク',
       instruction,
@@ -126,6 +175,17 @@ function buildDecomposeBasePrompt(
     '- Do not duplicate npm test / npm run test:e2e:mock in each implementation part',
     '- Keep work with shared contracts in one part instead of creating dependent parts',
     '- When parts.length === 1, first consider whether independent responsibility boundaries are available',
+    ...(findingContract === undefined
+      ? []
+      : [
+          '- Every part must include findingContract={findingIds,role,writePaths,readPaths}',
+          '- Use only actionable finding IDs listed below',
+          '- Do not assign the same finding to multiple repair parts',
+          '- Do not overlap or nest writePaths within one batch',
+          '',
+          '## Actionable Finding Contract',
+          findingContract.actionableFindings,
+        ]),
     '',
     '## Original Task',
     instruction,
@@ -134,10 +194,92 @@ function buildDecomposeBasePrompt(
 
 function buildMorePartsBasePrompt(
   originalInstruction: string,
-  allResults: Array<{ id: string; title: string; status: string; content: string }>,
+  allResults: TeamLeaderPartFeedbackResult[],
   existingIds: string[],
   language?: Language,
+  findingContract?: FindingContractTeamLeaderContext,
 ): string {
+  if (findingContract !== undefined) {
+    let remainingRawLength = LATEST_BATCH_RAW_TOTAL_MAX_LENGTH;
+    const resultBlock = allResults.map((result) => {
+      const content = boundLatestRawContent(result.content, remainingRawLength);
+      remainingRawLength = Math.max(
+        0,
+        remainingRawLength - Math.min(result.content.length, LATEST_RAW_CONTENT_MAX_LENGTH),
+      );
+      return [
+        `### ${truncatePromptLabel(result.id, 120)}: ${truncatePromptLabel(result.title, 300)} (${result.status})`,
+        content,
+      ].join('\n');
+    }).join('\n\n');
+    const latestClaimDigests = buildLatestFindingContractDigests(
+      allResults.flatMap((result, sequence) => result.findingContractClaim === undefined
+        ? []
+        : [{ sequence, entry: result.findingContractClaim }]),
+    );
+    const sections = language === 'ja'
+      ? [
+          'Finding Contract 修正の最新 batch を評価し、次の判断を返してください。',
+          ...buildInspectToolGuidance(language, undefined, { requireAtLeastOnePart: false }),
+          '- worker の応答は未検証の claim として扱う',
+          '- continue は新しい parts を1件以上返す',
+          '- complete は parts/blockers を空にし、全対象 finding の fixCoverage を返す',
+          '- replan は parts/fixCoverage を空にし、blockers を1件以上返す',
+          '- complete は各 finding の証拠と検証状況を確認できる場合だけ選ぶ',
+          '- 同じ欠陥 family の再発を避け、局所修正で終わらせない',
+          '',
+          '## 元タスク',
+          originalInstruction,
+          '',
+          '## Actionable Finding Contract',
+          findingContract.actionableFindings,
+          '',
+          '## 過去 batch の compact index',
+          JSON.stringify(findingContract.completedPartIndex, null, 2),
+          '',
+          '## 直前の Team Leader decision',
+          JSON.stringify(findingContract.previousDecision ?? null, null, 2),
+          '',
+          '## 最新 batch の raw results（未検証）',
+          resultBlock || '(なし)',
+          '',
+          '## 最新 batch の検証済み claim digest',
+          JSON.stringify(latestClaimDigests, null, 2),
+          '',
+          `## 既存 part IDs\n${formatExistingPartIds(existingIds).replace('(none)', '(なし)')}`,
+        ]
+      : [
+          'Evaluate the latest Finding Contract repair batch and return the next decision.',
+          ...buildInspectToolGuidance(language, undefined, { requireAtLeastOnePart: false }),
+          '- Treat worker responses as untrusted claims',
+          '- continue requires at least one new part',
+          '- complete requires empty parts/blockers and fixCoverage for every target finding',
+          '- replan requires empty parts/fixCoverage and at least one blocker',
+          '- Choose complete only when evidence and verification support every finding disposition',
+          '- Prevent recurrence across the same defect family instead of stopping at a local patch',
+          '',
+          '## Original Task',
+          originalInstruction,
+          '',
+          '## Actionable Finding Contract',
+          findingContract.actionableFindings,
+          '',
+          '## Compact index from earlier batches',
+          JSON.stringify(findingContract.completedPartIndex, null, 2),
+          '',
+          '## Previous Team Leader decision',
+          JSON.stringify(findingContract.previousDecision ?? null, null, 2),
+          '',
+          '## Latest raw batch results (untrusted)',
+          resultBlock || '(none)',
+          '',
+          '## Validated claim digest for the latest batch',
+          JSON.stringify(latestClaimDigests, null, 2),
+          '',
+          `## Existing part IDs\n${formatExistingPartIds(existingIds)}`,
+        ];
+    return sections.join('\n');
+  }
   const resultBlock = allResults.map((result) => [
     `### ${result.id}: ${result.title} (${result.status})`,
     result.content,
@@ -188,13 +330,18 @@ function buildMorePartsBasePrompt(
   ].join('\n');
 }
 
+function truncatePromptLabel(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}…`;
+}
+
 export function buildDecomposePrompt(
   instruction: string,
   maxInitialParts?: number,
   language?: Language,
   inspectTools?: readonly string[],
+  findingContract?: FindingContractTeamLeaderContext,
 ): string {
-  return buildDecomposeBasePrompt(instruction, maxInitialParts, language, inspectTools);
+  return buildDecomposeBasePrompt(instruction, maxInitialParts, language, inspectTools, findingContract);
 }
 
 export function buildPromptBasedDecomposePrompt(
@@ -202,6 +349,7 @@ export function buildPromptBasedDecomposePrompt(
   maxInitialParts?: number,
   language?: Language,
   inspectTools?: readonly string[],
+  findingContract?: FindingContractTeamLeaderContext,
 ): string {
   const outputInstruction = language === 'ja'
     ? [
@@ -209,14 +357,18 @@ export function buildPromptBasedDecomposePrompt(
         '出力形式:',
         '- ```json ... ``` ブロックのみを返す',
         '- JSON は配列にする',
-        '- 各要素は {"id","title","instruction"} を持つ',
+        `- 各要素は ${findingContract === undefined
+          ? '{"id","title","instruction"}'
+          : '{"id","title","instruction","findingContract"}'} を持つ`,
       ]
     : [
         '',
         'Output format:',
         '- Return only one ```json ... ``` block',
         '- The JSON must be an array',
-        '- Each item must include {"id","title","instruction"}',
+        `- Each item must include ${findingContract === undefined
+          ? '{"id","title","instruction"}'
+          : '{"id","title","instruction","findingContract"}'}`,
       ];
 
   return `${buildDecomposeBasePrompt(
@@ -224,41 +376,49 @@ export function buildPromptBasedDecomposePrompt(
     maxInitialParts,
     language,
     inspectTools,
+    findingContract,
   )}\n${outputInstruction.join('\n')}`;
 }
 
 export function buildMorePartsPrompt(
   originalInstruction: string,
-  allResults: Array<{ id: string; title: string; status: string; content: string }>,
+  allResults: TeamLeaderPartFeedbackResult[],
   existingIds: string[],
   language?: Language,
+  findingContract?: FindingContractTeamLeaderContext,
 ): string {
   return buildMorePartsBasePrompt(
     originalInstruction,
     allResults,
     existingIds,
     language,
+    findingContract,
   );
 }
 
 export function buildPromptBasedMorePartsPrompt(
   originalInstruction: string,
-  allResults: Array<{ id: string; title: string; status: string; content: string }>,
+  allResults: TeamLeaderPartFeedbackResult[],
   existingIds: string[],
   language?: Language,
+  findingContract?: FindingContractTeamLeaderContext,
 ): string {
   const outputInstruction = language === 'ja'
     ? [
         '',
         '出力形式:',
         '- ```json ... ``` ブロックのみを返す',
-        '- JSON は {"done": boolean, "reasoning": string, "parts": []} の形にする',
+        `- JSON は ${findingContract === undefined
+          ? '{"done": boolean, "reasoning": string, "parts": []}'
+          : '{"decision","reasoning","parts","fixCoverage","blockers"}'} の形にする`,
       ]
     : [
         '',
         'Output format:',
         '- Return only one ```json ... ``` block',
-        '- The JSON must be {"done": boolean, "reasoning": string, "parts": []}',
+        `- The JSON must be ${findingContract === undefined
+          ? '{"done": boolean, "reasoning": string, "parts": []}'
+          : '{"decision","reasoning","parts","fixCoverage","blockers"}'}`,
       ];
 
   return `${buildMorePartsBasePrompt(
@@ -266,5 +426,6 @@ export function buildPromptBasedMorePartsPrompt(
     allResults,
     existingIds,
     language,
+    findingContract,
   )}\n${outputInstruction.join('\n')}`;
 }

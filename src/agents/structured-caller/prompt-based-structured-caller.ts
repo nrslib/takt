@@ -3,6 +3,7 @@ import type { SemanticRuleCandidate } from '../../core/models/workflow-rule-cond
 import {
   buildPromptBasedDecomposePrompt,
   buildPromptBasedMorePartsPrompt,
+  toPartDefinitions,
   toMorePartsResponse,
 } from '../team-leader-structured-output.js';
 import { buildJudgePrompt, detectJudgeIndex } from '../judge-utils.js';
@@ -19,6 +20,7 @@ import type {
   DecomposeTaskResponse,
   MorePartsOptions,
   MorePartsResponse,
+  TeamLeaderPartFeedbackResult,
 } from '../decompose-task-usecase.js';
 import type { StructuredCaller } from './contracts.js';
 import {
@@ -30,6 +32,8 @@ import {
 import { parseParts } from '../../core/workflow/engine/task-decomposer.js';
 import { createLogger, delay, getErrorMessage } from '../../shared/utils/index.js';
 import { buildMaxTurnsOption } from '../provider-call-options.js';
+import { validateFindingContractPartBatch } from '../../core/workflow/team-leader-finding-contract.js';
+import { parseFindingContractTeamLeaderDecision } from '../../core/workflow/team-leader-finding-contract-decision.js';
 
 const log = createLogger('prompt-based-structured-caller');
 
@@ -168,6 +172,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       maxInitialParts,
       options.language,
       options.inspectTools,
+      options.findingContract,
     );
 
     return withRetry(async () => {
@@ -201,8 +206,18 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         throw new Error(`Team leader failed: ${detail}`);
       }
 
+      const parts = options.findingContract === undefined
+        ? parseParts(response.content, maxInitialParts)
+        : toPartDefinitions(
+            parseLastJsonBlock(response.content),
+            maxInitialParts,
+            true,
+          );
+      if (options.findingContract !== undefined) {
+        validateFindingContractPartBatch(parts, options.findingContract.targetFindingIds);
+      }
       return {
-        parts: parseParts(response.content, maxInitialParts),
+        parts,
         ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
       };
     }, options.abortSignal);
@@ -210,7 +225,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
 
   async requestMoreParts(
     originalInstruction: string,
-    allResults: Array<{ id: string; title: string; status: string; content: string }>,
+    allResults: TeamLeaderPartFeedbackResult[],
     existingIds: string[],
     options: MorePartsOptions,
   ): Promise<MorePartsResponse> {
@@ -219,6 +234,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       allResults,
       existingIds,
       options.language,
+      options.findingContract,
     );
 
     return withRetry(async () => {
@@ -251,8 +267,24 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         throw new Error(`Team leader feedback failed: ${detail}`);
       }
 
+      const raw = parseLastJsonBlock(response.content);
+      const findingContractDecision = options.findingContract === undefined
+        ? undefined
+        : parseFindingContractTeamLeaderDecision(
+            raw,
+            options.findingContract.targetFindingIds,
+            existingIds,
+            options.findingContract.previouslyPlannedParts,
+          );
       return {
-        ...toMorePartsResponse(parseLastJsonBlock(response.content)),
+        ...(findingContractDecision === undefined
+          ? toMorePartsResponse(raw)
+          : {
+              done: findingContractDecision.decision !== 'continue',
+              reasoning: findingContractDecision.reasoning,
+              parts: findingContractDecision.parts,
+              findingContractDecision,
+            }),
         ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
       };
     }, options.abortSignal);

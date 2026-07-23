@@ -293,6 +293,8 @@ Useful for breaking one large task into independent units that can run in parall
 
 `inspect_tools` allows only read-only inspection tools (`read`, `glob`, `grep`) during the parent Team Leader task decomposition phase. Invalid tool names fail workflow loading. It does not affect generated child parts; child part tools remain controlled separately by `part_allowed_tools`. Inspection tools are supported by providers that expose `allowedTools`, including Claude-family providers and OpenCode. Providers that do not support Team Leader inspection tools fail at runtime with a clear error.
 
+For a Finding Contract repair step, set `team_leader.mode: finding_contract_fix`. This mode requires an active `finding_contract` and assigns every part to explicit actionable findings. Assignment `writePaths` are a coordination contract for parallel work, not a filesystem sandbox. The Team Leader does not accumulate old raw responses; it decides `continue`, `complete`, or `replan` from a batch-wide bounded raw excerpt and engine-validated finding-level claim digests for the latest batch plus the latest digest per finding from earlier batches. `complete` requires successful verification and `fixCoverage` for every actionable finding present at step start. This step-local decision means the work is ready for reviewers; only the Finding Manager updates finding lifecycle state in the ledger. Route the decision with a mechanical condition such as `when(structured.fix.decision == "complete")`.
+
 ### Workflow Call Step (subworkflow)
 
 A step invokes another workflow by name. The child workflow runs in the same run; its outcome routes back via the parent's `rules`:

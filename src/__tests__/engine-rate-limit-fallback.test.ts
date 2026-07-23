@@ -967,7 +967,6 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeResponse({ persona: 'team-leader', structuredOutput: { parts } }),
       makeRateLimitedResponse('claude', { persona: 'implement.part-1', sessionId: 'part-rate-limited-session' }),
       makeResponse({ persona: 'implement.part-2', content: '[STEP:1] done', sessionId: 'part-success-session' }),
-      makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
       makeResponse({ persona: 'team-leader', structuredOutput: { parts: fallbackParts } }),
       makeResponse({ persona: 'implement.part-3', content: '[STEP:1] done' }),
       makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
@@ -1003,7 +1002,6 @@ describe('WorkflowEngine rate limit fallback', () => {
       'claude',
       'claude',
       'claude',
-      'claude',
       'codex',
       'codex',
       'codex',
@@ -1012,16 +1010,16 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(prompts[0]).toContain(previousTail);
     expect(prompts[1]).not.toContain('Fallback Execution');
     expect(prompts[1]).toContain('Step Iteration: 1(times this step has run)');
-    expect(prompts[5]).toContain('Fallback Execution');
-    expect(prompts[5]).toContain('Previous provider/model: claude / claude-sonnet');
-    expect(prompts[5]).toContain('Current provider/model: codex / gpt-5');
-    expect(prompts[5]).toContain('Implement API with fallback');
-    expect(prompts[5]).toContain('Step Iteration: 1(times this step has run)');
-    expect(prompts[4]).toContain(previousTail);
+    expect(prompts[4]).toContain('Fallback Execution');
+    expect(prompts[4]).toContain('Previous provider/model: claude / claude-sonnet');
+    expect(prompts[4]).toContain('Current provider/model: codex / gpt-5');
+    expect(prompts[4]).toContain('Implement API with fallback');
+    expect(prompts[4]).toContain('Step Iteration: 1(times this step has run)');
+    expect(prompts[3]).toContain(previousTail);
     const policySnapshots = readdirSync(join(tmpDir, '.takt', 'runs', 'test-report-dir', 'context', 'policy'))
       .filter((file) => file.startsWith('implement-part-'));
     expect(policySnapshots).toEqual(['implement-part-3.1.20260620T010204Z.md']);
-    expect(runAgent).toHaveBeenCalledTimes(7);
+    expect(runAgent).toHaveBeenCalledTimes(6);
     expect(mockRuleEvaluation).toHaveBeenCalledOnce();
   });
 
@@ -1180,7 +1178,6 @@ describe('WorkflowEngine rate limit fallback', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'team-leader', structuredOutput: { parts } }),
       makeRateLimitedResponse('claude', { persona: 'implement.part-1' }),
-      makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
       makeResponse({ persona: 'team-leader', structuredOutput: { parts } }),
       makeResponse({ persona: 'implement.part-1', content: '[STEP:1] done' }),
       makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
@@ -1195,12 +1192,11 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(providerCalls().map((call) => call.resolvedProvider)).toEqual([
       'claude',
       'claude',
-      'claude',
       'codex',
       'codex',
       'codex',
     ]);
-    expect(providerCalls()[4]).toMatchObject({
+    expect(providerCalls()[3]).toMatchObject({
       resolvedProvider: 'codex',
       resolvedModel: 'gpt-5',
     });
@@ -1224,7 +1220,6 @@ describe('WorkflowEngine rate limit fallback', () => {
     mockRunAgentSequence([
       makeResponse({ persona: 'team-leader', structuredOutput: { parts } }),
       makeRateLimitedResponse('opencode', { persona: 'implement.part-1' }),
-      makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
       makeResponse({ persona: 'team-leader', structuredOutput: { parts } }),
       makeResponse({ persona: 'implement.part-1', content: '[STEP:1] done' }),
       makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
@@ -1239,13 +1234,12 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(providerCalls().map((call) => call.resolvedProvider)).toEqual([
       'claude',
       'opencode',
-      'claude',
       'codex',
       'codex',
       'codex',
     ]);
     const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
-    expect(prompts[4]).toContain('Previous provider/model: opencode / opencode/big-pickle');
-    expect(prompts[4]).toContain('Current provider/model: codex / gpt-5');
+    expect(prompts[3]).toContain('Previous provider/model: opencode / opencode/big-pickle');
+    expect(prompts[3]).toContain('Current provider/model: codex / gpt-5');
   });
 });

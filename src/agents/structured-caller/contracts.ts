@@ -1,6 +1,12 @@
 import type { SemanticRuleCandidate } from '../../core/models/workflow-rule-condition.js';
 import type { JudgeStatusOptions, JudgeStatusResult, EvaluateConditionOptions } from '../judge-status-usecase.js';
-import type { DecomposeTaskOptions, DecomposeTaskResponse, MorePartsOptions, MorePartsResponse } from '../decompose-task-usecase.js';
+import type {
+  DecomposeTaskOptions,
+  DecomposeTaskResponse,
+  MorePartsOptions,
+  MorePartsResponse,
+  TeamLeaderPartFeedbackResult,
+} from '../decompose-task-usecase.js';
 
 export interface StructuredCaller {
   judgeStatus(
@@ -24,7 +30,7 @@ export interface StructuredCaller {
 
   requestMoreParts(
     originalInstruction: string,
-    allResults: Array<{ id: string; title: string; status: string; content: string }>,
+    allResults: TeamLeaderPartFeedbackResult[],
     existingIds: string[],
     options: MorePartsOptions,
   ): Promise<MorePartsResponse>;

@@ -128,6 +128,7 @@ export function normalizeTeamLeader(
   });
 
   return {
+    ...(raw.mode !== undefined ? { mode: raw.mode } : {}),
     persona: personaSpec,
     personaPath,
     personaDisplayName,

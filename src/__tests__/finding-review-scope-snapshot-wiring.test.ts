@@ -21,7 +21,10 @@ import { join } from 'node:path';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import type { AgentResponse, FindingContractConfig, WorkflowState, WorkflowStep } from '../core/models/types.js';
-import type { FindingContractInstructionContext } from '../core/workflow/instruction/instruction-context.js';
+import type {
+  FindingContractInstructionContext,
+  FindingContractInstructionPolicy,
+} from '../core/workflow/instruction/instruction-context.js';
 import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import type { FindingManagerValidationReport } from '../core/workflow/findings/store.js';
@@ -266,14 +269,13 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     const buildInstructionCalls = vi.mocked(deps.stepExecutor.buildInstruction).mock.calls;
     expect(buildInstructionCalls).toHaveLength(2);
     for (const call of buildInstructionCalls) {
-      const findingContractArg = call[6] as FindingContractInstructionContext | undefined;
-      expect(findingContractArg).toBe(builtContext);
-      expect(findingContractArg?.reviewScopeSnapshotId).toBe('round-snapshot-abc123');
-      expect(findingContractArg?.ledgerCopyPath).toBe('.takt/runs/test/reports/findings-ledger.json');
-      if (!findingContractArg) {
-        throw new Error('Expected finding contract context');
-      }
-      expect(getSnapshotIdEnum(findingContractArg)).toEqual(['', 'round-snapshot-abc123']);
+      const findingContractPolicy = call[6] as FindingContractInstructionPolicy | undefined;
+      expect(findingContractPolicy?.mode).toBe('explicit');
+      if (findingContractPolicy?.mode !== 'explicit') throw new Error('Expected explicit Finding Contract context');
+      expect(findingContractPolicy.context).toBe(builtContext);
+      expect(findingContractPolicy.context.reviewScopeSnapshotId).toBe('round-snapshot-abc123');
+      expect(findingContractPolicy.context.ledgerCopyPath).toBe('.takt/runs/test/reports/findings-ledger.json');
+      expect(getSnapshotIdEnum(findingContractPolicy.context)).toEqual(['', 'round-snapshot-abc123']);
     }
 
     const outputContract = builtContext?.rawFindingsStructuredOutput;

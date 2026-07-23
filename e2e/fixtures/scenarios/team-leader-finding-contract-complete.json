@@ -1,0 +1,72 @@
+[
+  {
+    "persona": "agents/test-finding-contract-leader",
+    "status": "done",
+    "content": "decompose",
+    "structured_output": {
+      "parts": [{
+        "id": "repair-target",
+        "title": "Repair target",
+        "instruction": "Repair src/target.ts and verify the change.",
+        "findingContract": {
+          "findingIds": ["F-0001"],
+          "role": "repair",
+          "writePaths": ["src/target.ts"],
+          "readPaths": ["src/target.ts"]
+        }
+      }]
+    }
+  },
+  {
+    "persona": "agents/test-finding-contract-leader",
+    "status": "done",
+    "content": "complete",
+    "structured_output": {
+      "decision": "complete",
+      "reasoning": "The assigned repair has a passing verification.",
+      "parts": [],
+      "fixCoverage": [{
+        "findingId": "F-0001",
+        "disposition": "addressed",
+        "supportingPartIds": ["repair-target"],
+        "verificationPartIds": ["repair-target"]
+      }],
+      "blockers": []
+    }
+  },
+  {
+    "persona": "agents/test-finding-contract-worker",
+    "status": "done",
+    "content": "target repaired",
+    "structured_output": {
+      "findingOutcomes": [{
+        "findingId": "F-0001",
+        "outcome": "addressed",
+        "evidence": ["src/target.ts:1"]
+      }],
+      "changedPaths": ["src/target.ts"],
+      "checks": [{"command": "test -f src/target.ts", "status": "passed"}],
+      "summary": "Repaired and verified the target."
+    }
+  },
+  {
+    "persona": "agents/test-finding-contract-reviewer",
+    "status": "done",
+    "content": "review route confirmed"
+  },
+  {
+    "persona": "agents/test-findings-manager",
+    "status": "done",
+    "content": "ledger preserved",
+    "structured_output": {
+      "matches": [],
+      "newFindings": [],
+      "resolvedFindings": [],
+      "reopenedFindings": [],
+      "conflicts": [],
+      "resolvedConflicts": [],
+      "waivedFindings": [],
+      "disputeNotes": []
+    }
+  }
+]

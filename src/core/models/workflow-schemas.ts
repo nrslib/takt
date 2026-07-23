@@ -277,6 +277,7 @@ export const ArpeggioConfigRawSchema = z.object({
 
 /** Team leader configuration schema for dynamic part decomposition */
 export const TeamLeaderConfigRawSchema = z.object({
+  mode: z.literal('finding_contract_fix').optional(),
   persona: z.string().optional(),
   max_parts: z.number().int().positive().max(3).optional(),
   max_concurrency: z.number().int().positive().max(3).optional(),

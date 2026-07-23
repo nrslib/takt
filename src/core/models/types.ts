@@ -31,6 +31,12 @@ export type {
   PartDefinition,
   PartResult,
   TeamLeaderConfig,
+  TeamLeaderMode,
+  FindingContractPartAssignment,
+  FindingContractFindingOutcome,
+  FindingContractPartCompletionClaim,
+  FindingContractFixCoverage,
+  FindingContractTeamLeaderDecision,
 } from './part.js';
 
 // Workflow configuration and runtime state

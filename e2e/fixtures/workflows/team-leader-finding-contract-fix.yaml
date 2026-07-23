@@ -1,0 +1,46 @@
+name: e2e-team-leader-finding-contract-fix
+description: Verify Finding Contract Team Leader decision routing
+instructions:
+  findings-manager: Reconcile Finding Contract claims without inventing changes.
+report_formats:
+  findings-manager: Return the Finding Manager JSON contract.
+finding_contract:
+  ledger_path: .takt/findings/peer-review.json
+  raw_findings_path: .takt/findings/raw
+  manager:
+    persona: ./agents/test-findings-manager.md
+    instruction: findings-manager
+    output_contract: findings-manager
+max_steps: 4
+initial_step: fix
+steps:
+  - name: fix
+    persona: ./agents/test-finding-contract-worker.md
+    edit: true
+    required_permission_mode: edit
+    team_leader:
+      mode: finding_contract_fix
+      persona: ./agents/test-finding-contract-leader.md
+      max_concurrency: 1
+      initial_max_parts: 1
+      part_persona: ./agents/test-finding-contract-worker.md
+      part_edit: true
+      part_permission_mode: edit
+    instruction: Repair the actionable findings in the seeded ledger.
+    rules:
+      - condition: when(structured.fix.decision == "complete")
+        next: reviewers
+      - condition: when(structured.fix.decision == "replan")
+        next: replan
+  - name: reviewers
+    persona: ./agents/test-finding-contract-reviewer.md
+    instruction: Confirm the complete route.
+    rules:
+      - condition: Review route confirmed
+        next: COMPLETE
+  - name: replan
+    persona: ./agents/test-finding-contract-replanner.md
+    instruction: Confirm the replan route.
+    rules:
+      - condition: Replan route confirmed
+        next: COMPLETE

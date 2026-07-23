@@ -1,14 +1,22 @@
 import type { MorePartsResponse } from '../../../agents/agent-usecases.js';
-import type { PartDefinition, PartResult } from '../../models/types.js';
+import type {
+  FindingContractTeamLeaderDecision,
+  PartDefinition,
+  PartResult,
+} from '../../models/types.js';
 
 export interface TeamLeaderExecutionOptions {
   initialParts: PartDefinition[];
   maxConcurrency: number;
+  findingContractMode?: boolean;
   abortSignal?: AbortSignal;
   runPart: (part: PartDefinition, partIndex: number) => Promise<PartResult>;
   requestMoreParts: (
     args: {
       partResults: PartResult[];
+      latestBatchResults: PartResult[];
+      completedPartResults: PartResult[];
+      plannedParts: PartDefinition[];
       scheduledIds: string[];
     }
   ) => Promise<MorePartsResponse>;
@@ -28,6 +36,7 @@ interface RunningPart {
 export interface TeamLeaderExecutionResult {
   plannedParts: PartDefinition[];
   partResults: PartResult[];
+  findingContractDecision?: Exclude<FindingContractTeamLeaderDecision, { decision: 'continue' }>;
 }
 
 export async function runTeamLeaderExecution(
@@ -42,18 +51,45 @@ export async function runTeamLeaderExecution(
 
   let nextPartIndex = 0;
   let leaderDone = false;
+  let latestBatchStart = 0;
+  let findingContractDecision: Exclude<FindingContractTeamLeaderDecision, { decision: 'continue' }> | undefined;
   const tryPlanMoreParts = async (): Promise<void> => {
     options.abortSignal?.throwIfAborted();
     if (leaderDone) {
+      return;
+    }
+    const latestBatchResults = partResults.slice(latestBatchStart);
+    if (latestBatchResults.some((result) => result.response.status === 'rate_limited')) {
+      leaderDone = true;
       return;
     }
 
     try {
       const feedback = await options.requestMoreParts({
         partResults,
+        latestBatchResults,
+        completedPartResults: partResults.slice(0, latestBatchStart),
+        plannedParts: [...plannedParts],
         scheduledIds: [...scheduledIds],
       });
       options.abortSignal?.throwIfAborted();
+
+      if (options.findingContractMode === true) {
+        const decision = feedback.findingContractDecision;
+        if (decision === undefined) {
+          throw new Error('Finding Contract Team Leader feedback is missing an explicit decision');
+        }
+        if (decision.decision === 'complete' || decision.decision === 'replan') {
+          findingContractDecision = decision;
+          options.onPlanningDone?.({
+            reason: decision.reasoning,
+            plannedParts: plannedParts.length,
+            completedParts: partResults.length,
+          });
+          leaderDone = true;
+          return;
+        }
+      }
 
       if (feedback.done) {
         options.onPlanningDone?.({
@@ -75,6 +111,9 @@ export async function runTeamLeaderExecution(
       }
 
       if (newParts.length === 0) {
+        if (options.findingContractMode === true) {
+          throw new Error('Finding Contract Team Leader continue decision produced no new unique parts');
+        }
         options.onPlanningNoNewParts?.({
           reason: feedback.reasoning,
           plannedParts: plannedParts.length,
@@ -91,8 +130,12 @@ export async function runTeamLeaderExecution(
         reason: feedback.reasoning,
         totalPlanned: plannedParts.length,
       });
+      latestBatchStart = partResults.length;
     } catch (error) {
       if (options.abortSignal?.aborted) {
+        throw error;
+      }
+      if (options.findingContractMode === true) {
         throw error;
       }
       options.onPlanningError?.(error);
@@ -141,5 +184,9 @@ export async function runTeamLeaderExecution(
     await tryPlanMoreParts();
   }
 
-  return { plannedParts, partResults };
+  return {
+    plannedParts,
+    partResults,
+    ...(findingContractDecision !== undefined ? { findingContractDecision } : {}),
+  };
 }

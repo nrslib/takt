@@ -122,6 +122,12 @@ describe('runTeamLeaderExecution', () => {
         expect.objectContaining({ part: parts[0] }),
         expect.objectContaining({ part: parts[1] }),
       ]),
+      latestBatchResults: expect.arrayContaining([
+        expect.objectContaining({ part: parts[0] }),
+        expect.objectContaining({ part: parts[1] }),
+      ]),
+      completedPartResults: [],
+      plannedParts: parts,
       scheduledIds: ['p1', 'p2'],
     });
     expect(requestMoreParts).toHaveBeenCalledTimes(2);
@@ -167,5 +173,118 @@ describe('runTeamLeaderExecution', () => {
     expect(result.plannedParts.map((p) => p.id)).toEqual(['p1']);
     expect(result.partResults).toHaveLength(1);
     expect(onPlanningNoNewParts).toHaveBeenCalledTimes(1);
+  });
+
+  it('Finding Contract mode separates latest raw results from the prior compactable batch', async () => {
+    const p1 = makePart('p1');
+    const p2 = makePart('p2');
+    const requestMoreParts = vi.fn()
+      .mockResolvedValueOnce({
+        done: false,
+        reasoning: 'continue',
+        parts: [p2],
+        findingContractDecision: { decision: 'continue', reasoning: 'continue', parts: [p2] },
+      })
+      .mockResolvedValueOnce({
+        done: true,
+        reasoning: 'complete',
+        parts: [],
+        findingContractDecision: {
+          decision: 'complete',
+          reasoning: 'complete',
+          parts: [],
+          fixCoverage: [],
+        },
+      });
+
+    const result = await runTeamLeaderExecution({
+      initialParts: [p1],
+      maxConcurrency: 1,
+      findingContractMode: true,
+      runPart: async (part) => makeResult(part),
+      requestMoreParts,
+    });
+
+    expect(requestMoreParts).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      latestBatchResults: [expect.objectContaining({ part: p2 })],
+      completedPartResults: [expect.objectContaining({ part: p1 })],
+    }));
+    expect(result.findingContractDecision?.decision).toBe('complete');
+  });
+
+  it('Finding Contract mode does not convert duplicate parts or feedback errors into completion', async () => {
+    const part = makePart('p1');
+    await expect(runTeamLeaderExecution({
+      initialParts: [part],
+      maxConcurrency: 1,
+      findingContractMode: true,
+      runPart: async (current) => makeResult(current),
+      requestMoreParts: async () => ({
+        done: false,
+        reasoning: 'duplicate',
+        parts: [part],
+        findingContractDecision: { decision: 'continue', reasoning: 'duplicate', parts: [part] },
+      }),
+    })).rejects.toThrow(/no new unique parts/);
+
+    await expect(runTeamLeaderExecution({
+      initialParts: [part],
+      maxConcurrency: 1,
+      findingContractMode: true,
+      runPart: async (current) => makeResult(current),
+      requestMoreParts: async () => { throw new Error('feedback failed'); },
+    })).rejects.toThrow('feedback failed');
+  });
+
+  it('Finding Contract mode propagates an explicit replan decision', async () => {
+    const part = makePart('p1');
+    const result = await runTeamLeaderExecution({
+      initialParts: [part],
+      maxConcurrency: 1,
+      findingContractMode: true,
+      runPart: async (current) => makeResult(current),
+      requestMoreParts: async () => ({
+        done: true,
+        reasoning: 'architecture must change',
+        parts: [],
+        findingContractDecision: {
+          decision: 'replan',
+          reasoning: 'architecture must change',
+          parts: [],
+          blockers: ['shared contract is inconsistent'],
+        },
+      }),
+    });
+
+    expect(result.findingContractDecision).toEqual(expect.objectContaining({
+      decision: 'replan',
+      blockers: ['shared contract is inconsistent'],
+    }));
+  });
+
+  it('rate limited part bypasses Finding Contract feedback and returns the part result', async () => {
+    const part = makePart('p1');
+    const requestMoreParts = vi.fn(async () => {
+      throw new Error('feedback must not run after rate limit');
+    });
+
+    const result = await runTeamLeaderExecution({
+      initialParts: [part],
+      maxConcurrency: 1,
+      findingContractMode: true,
+      runPart: async (current) => ({
+        ...makeResult(current),
+        response: {
+          ...makeResult(current).response,
+          status: 'rate_limited',
+        },
+      }),
+      requestMoreParts,
+    });
+
+    expect(requestMoreParts).not.toHaveBeenCalled();
+    expect(result.partResults).toHaveLength(1);
+    expect(result.partResults[0]?.response.status).toBe('rate_limited');
+    expect(result.findingContractDecision).toBeUndefined();
   });
 });

@@ -172,7 +172,6 @@ describe('WorkflowEngine rate limit fallback report session continuity', () => {
     queueRunAgentResponses([
       makeResponse({ persona: 'team-leader', structuredOutput: { parts }, sessionId: 'leader-claude-session' }),
       makeRateLimitedResponse(),
-      makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback, sessionId: 'feedback-claude-session' }),
       makeResponse({ persona: 'team-leader', structuredOutput: { parts }, sessionId: 'leader-codex-session' }),
       makeResponse({ persona: 'coder', content: '[STEP:1] done', sessionId: 'part-codex-session' }),
       makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback, sessionId: 'feedback-codex-session' }),
@@ -185,7 +184,6 @@ describe('WorkflowEngine rate limit fallback report session continuity', () => {
     // Then
     expect(state.status).toBe('completed');
     expect(providerCalls()).toEqual([
-      { resolvedProvider: 'claude', sessionId: undefined },
       { resolvedProvider: 'claude', sessionId: undefined },
       { resolvedProvider: 'claude', sessionId: undefined },
       { resolvedProvider: 'codex', sessionId: undefined },

@@ -6,12 +6,18 @@ import type {
   PartResult,
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
+  FindingContractConfig,
+  FindingLedger,
 } from '../../models/types.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { incrementStepIteration } from './state-manager.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { runTeamLeaderExecution } from './team-leader-execution.js';
-import { buildTeamLeaderAggregatedContent } from './team-leader-aggregation.js';
+import {
+  buildFindingContractTeamLeaderAggregatedContent,
+  buildTeamLeaderAggregatedContent,
+  type TeamLeaderArtifactReference,
+} from './team-leader-aggregation.js';
 import { createPartStep, createTeamLeaderPlanningStep, resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
 import { buildTeamLeaderParallelLoggerOptions, emitTeamLeaderProgressHint } from './team-leader-streaming.js';
 import {
@@ -31,6 +37,20 @@ import { resolveInspectToolsForProvider } from './engine-provider-options.js';
 import { resolveAutoRoutingBatch, resolveAutoRoutingRuntime } from '../auto-routing/resolver.js';
 import { InstructionBuildTransaction } from './instruction-build-transaction.js';
 import { recordAgentUsageEvent } from './agent-usage-event.js';
+import type { FindingLedgerStore } from '../findings/store.js';
+import type { RunPaths } from '../run/run-paths.js';
+import {
+  buildFindingContractPartIndexEntry,
+  appendFindingContractPartAssignmentInstruction,
+  collectActionableFindingIds,
+  renderActionableFindingContractSummary,
+  buildLatestFindingContractDigests,
+} from '../team-leader-finding-contract.js';
+import { validateFindingContractCompletionEvidence } from '../team-leader-finding-contract-decision.js';
+import {
+  createTeamLeaderArtifactAttemptId,
+  writeTeamLeaderPartArtifact,
+} from './team-leader-artifacts.js';
 
 const log = createLogger('team-leader-runner');
 
@@ -41,6 +61,9 @@ export interface TeamLeaderRunnerDeps {
   readonly getCwd: () => string;
   readonly getWorkflowName: () => string;
   readonly getInteractive: () => boolean;
+  readonly getRunPaths: () => RunPaths;
+  readonly findingContract?: FindingContractConfig;
+  readonly findingLedgerStore?: FindingLedgerStore;
   readonly observabilityEnabled: boolean;
   readonly observabilityRunId?: string;
   readonly sanitizeObservabilityText?: (text: string) => string;
@@ -95,6 +118,10 @@ export class TeamLeaderRunner {
       throw new Error(`Step "${step.name}" has no teamLeader configuration`);
     }
     const teamLeaderConfig = step.teamLeader;
+    const findingContractMode = teamLeaderConfig.mode === 'finding_contract_fix';
+    const findingContractExecution = findingContractMode
+      ? this.buildFindingContractExecutionContext()
+      : undefined;
     const parentIteration = state.iteration;
     const attemptState = captureTeamLeaderAttemptState(state, step.name, activeStepIteration);
     const instructionTransaction = new InstructionBuildTransaction();
@@ -108,7 +135,7 @@ export class TeamLeaderRunner {
       task,
       maxSteps,
       undefined,
-      undefined,
+      findingContractMode ? { mode: 'omit' } : undefined,
       instructionTransaction,
     );
     const leaderRuntime = await this.resolveLeaderAutoRouting(leaderStep, runtime);
@@ -186,6 +213,16 @@ export class TeamLeaderRunner {
             this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, phaseExecutionId, parentIteration);
             didEmitPhaseStart = true;
           },
+          ...(findingContractExecution !== undefined
+            ? {
+                findingContract: {
+                  targetFindingIds: findingContractExecution.targetFindingIds,
+                  actionableFindings: findingContractExecution.actionableFindings,
+                  completedPartIndex: [],
+                  previouslyPlannedParts: [],
+                },
+              }
+            : {}),
         },
       ), (result) => ({
         status: 'done',
@@ -235,15 +272,40 @@ export class TeamLeaderRunner {
     const coveredTimedOutPartIds = new Set<string>();
     const routedProviderInfoByPart = await this.resolvePartAutoRouting(step, parts, runtime);
 
-    const { plannedParts, partResults } = await runTeamLeaderExecution({
+    let currentBatchNumber = 1;
+    const batchNumberByPartId = new Map(parts.map((part) => [part.id, currentBatchNumber]));
+    const partIndexById = new Map<string, number>();
+    const artifactAttemptId = findingContractMode
+      ? createTeamLeaderArtifactAttemptId(stepIteration)
+      : undefined;
+    let previousFindingContractDecision: { decision: 'continue'; reasoning: string } | undefined;
+    const artifactReferences: TeamLeaderArtifactReference[] = [];
+    const executionResult = await runTeamLeaderExecution({
       initialParts: parts,
       maxConcurrency: teamLeaderConfig.maxConcurrency,
+      findingContractMode,
       abortSignal: leaderBaseOptions.abortSignal,
-      onPartQueued: (part) => {
+      onPartQueued: (part, partIndex) => {
+        partIndexById.set(part.id, partIndex);
         parallelLogger?.addSubStep(part.id);
       },
       onPartCompleted: (result) => {
         state.stepOutputs.set(result.response.persona, result.response);
+        if (findingContractMode) {
+          const partIndex = partIndexById.get(result.part.id);
+          const partBatchNumber = batchNumberByPartId.get(result.part.id);
+          if (artifactAttemptId === undefined || partIndex === undefined || partBatchNumber === undefined) {
+            throw new Error(`Finding Contract artifact metadata is missing for part "${result.part.id}"`);
+          }
+          artifactReferences.push(writeTeamLeaderPartArtifact({
+            runPaths: this.deps.getRunPaths(),
+            stepName: step.name,
+            attemptId: artifactAttemptId,
+            batchNumber: partBatchNumber,
+            partIndex,
+            result,
+          }));
+        }
       },
       onPlanningDone: ({ reason, plannedParts: plannedCount, completedParts }) => {
         log.info('Team leader marked planning as done', {
@@ -278,19 +340,37 @@ export class TeamLeaderRunner {
       },
       requestMoreParts: async ({
         partResults: currentResults,
+        latestBatchResults,
+        completedPartResults,
+        plannedParts: currentPlannedParts,
         scheduledIds,
       }) => {
         emitTeamLeaderProgressHint(this.deps.engineOptions, 'feedback');
+        const feedbackPartResults = findingContractMode
+          ? [...latestBatchResults].sort((left, right) => {
+              const leftIndex = partIndexById.get(left.part.id);
+              const rightIndex = partIndexById.get(right.part.id);
+              if (leftIndex === undefined || rightIndex === undefined) {
+                throw new Error('Finding Contract feedback part index is missing');
+              }
+              return leftIndex - rightIndex;
+            })
+          : currentResults;
         try {
           const moreParts = await structuredCaller.requestMoreParts(
-            instruction,
-            currentResults.map((result) => ({
+            findingContractMode
+              ? `${step.instruction}\n\n## Original Task\n${task}`
+              : instruction,
+            feedbackPartResults.map((result) => ({
               id: result.part.id,
               title: result.part.title,
               status: result.response.status,
               content: result.response.status === 'error'
                 ? `[ERROR] ${resolvePartErrorDetail(result)}`
                 : result.response.content,
+              ...(findingContractMode
+                ? { findingContractClaim: buildFindingContractPartIndexEntry(result) }
+                : {}),
             })),
             scheduledIds,
             {
@@ -318,12 +398,53 @@ export class TeamLeaderRunner {
               onAgentError: () => {
                 this.recordUsage(leaderStep.name, leaderProviderInfo, false);
               },
+              ...(findingContractExecution !== undefined
+                ? {
+                    findingContract: {
+                      targetFindingIds: findingContractExecution.targetFindingIds,
+                      actionableFindings: findingContractExecution.actionableFindings,
+                      completedPartIndex: buildLatestFindingContractDigests(
+                        completedPartResults
+                          .map((result) => ({
+                            result,
+                            index: partIndexById.get(result.part.id),
+                          }))
+                          .map(({ result, index }) => {
+                            if (index === undefined) {
+                              throw new Error(`Finding Contract part index is missing: ${result.part.id}`);
+                            }
+                            return {
+                              sequence: index,
+                              entry: buildFindingContractPartIndexEntry(result),
+                            };
+                          }),
+                      ),
+                      previouslyPlannedParts: currentPlannedParts,
+                      ...(previousFindingContractDecision !== undefined
+                        ? { previousDecision: previousFindingContractDecision }
+                        : {}),
+                    },
+                  }
+                : {}),
             },
           );
+          if (moreParts.findingContractDecision?.decision === 'continue') {
+            previousFindingContractDecision = {
+              decision: 'continue',
+              reasoning: moreParts.findingContractDecision.reasoning,
+            };
+            currentBatchNumber += 1;
+            for (const part of moreParts.parts) {
+              batchNumberByPartId.set(part.id, currentBatchNumber);
+            }
+          }
           await this.addPartAutoRouting(routedProviderInfoByPart, step, moreParts.parts, runtime);
           return moreParts;
         } catch (error) {
           if (leaderBaseOptions.abortSignal?.aborted) {
+            throw error;
+          }
+          if (findingContractMode) {
             throw error;
           }
           const timeoutFallback = createTimeoutContinuationFeedback({
@@ -363,8 +484,15 @@ export class TeamLeaderRunner {
         parallelLogger,
         this.buildPartRuntime(runtime, routedProviderInfoByPart.get(part.id)),
         instructionTransaction,
+        findingContractExecution === undefined
+          ? undefined
+          : this.buildFindingContractPartSummary(part, findingContractExecution.ledger),
       ).catch((error) => buildTeamLeaderErrorPartResult(step, part, error)),
     });
+    const { plannedParts, partResults, findingContractDecision } = executionResult;
+    if (findingContractDecision?.decision === 'complete') {
+      validateFindingContractCompletionEvidence(findingContractDecision, partResults);
+    }
     this.emitPartRoutingDecisionEvents(step, partResults, routedProviderInfoByPart, parentIteration);
 
     const rateLimitedResult = partResults.find((result) => result.response.status === 'rate_limited');
@@ -386,7 +514,8 @@ export class TeamLeaderRunner {
     const allFailed = failedResults.length === partResults.length;
     const timeoutContinuationFailed = hasFailedTimeoutContinuationResult(partResults);
     const failClosedPartError = teamLeaderConfig.failOnPartError === true && failedResults.length > 0;
-    if (allFailed || timeoutContinuationFailed || failClosedPartError) {
+    const findingContractReplan = findingContractDecision?.decision === 'replan';
+    if (!findingContractReplan && (allFailed || timeoutContinuationFailed || failClosedPartError)) {
       const errors = failedResults.map((result) => `${result.part.id}: ${resolvePartErrorDetail(result)}`).join('; ');
       const errorMessage = allFailed
         ? `All team leader parts failed: ${errors}`
@@ -415,13 +544,33 @@ export class TeamLeaderRunner {
       );
     }
 
-    const aggregatedContent = buildTeamLeaderAggregatedContent(plannedParts, partResults);
+    if (findingContractMode && findingContractDecision === undefined) {
+      throw new Error('Finding Contract Team Leader execution completed without a final decision');
+    }
+    const aggregatedContent = findingContractDecision !== undefined
+      ? buildFindingContractTeamLeaderAggregatedContent(
+          findingContractDecision,
+          partResults.map(buildFindingContractPartIndexEntry),
+          artifactReferences,
+        )
+      : buildTeamLeaderAggregatedContent(plannedParts, partResults);
 
     let aggregatedResponse: AgentResponse = {
       persona: step.name,
       status: 'done',
       content: aggregatedContent,
       timestamp: new Date(),
+      ...(findingContractDecision !== undefined
+        ? {
+            structuredOutput: {
+              decision: findingContractDecision.decision,
+              reasoning: findingContractDecision.reasoning,
+              ...(findingContractDecision.decision === 'complete'
+                ? { fixCoverage: findingContractDecision.fixCoverage }
+                : { blockers: findingContractDecision.blockers }),
+            },
+          }
+        : {}),
     };
 
     aggregatedResponse = await this.deps.stepExecutor.applyPostExecutionPhases(
@@ -502,6 +651,7 @@ export class TeamLeaderRunner {
     parallelLogger: ParallelLogger | undefined,
     runtime?: RuntimeStepResolution,
     instructionTransaction?: InstructionBuildTransaction,
+    findingContractSummary?: string,
   ): Promise<PartResult> {
     const startedAt = Date.now();
     const result = await runTeamLeaderPart(
@@ -523,31 +673,75 @@ export class TeamLeaderRunner {
       },
       (partStep) => {
         const partIteration = incrementStepIteration(state, partStep.name);
-        return this.deps.stepExecutor.buildInstruction(
+        const builtInstruction = this.deps.stepExecutor.buildInstruction(
           partStep,
           partIteration,
           state,
           task,
           maxSteps,
           runtime?.fallback,
-          undefined,
+          findingContractSummary === undefined ? undefined : { mode: 'omit' },
           instructionTransaction,
         );
+        if (findingContractSummary === undefined) return builtInstruction;
+        const assignedInstruction = appendFindingContractPartAssignmentInstruction(
+          builtInstruction,
+          part,
+          this.deps.engineOptions.language,
+          findingContractSummary,
+        );
+        return this.deps.stepExecutor.buildPhase1Instruction(assignedInstruction, partStep, runtime);
       },
       runtime,
     );
+    const normalizedResponse = findingContractSummary === undefined
+      ? result.response
+      : this.deps.stepExecutor.normalizeStructuredOutput(
+          createPartStep(step, part),
+          result.response,
+          runtime,
+        );
     if (result.providerInfo) {
       this.recordUsage(
         `${step.name}.${part.id}`,
         result.providerInfo,
-        result.response.status === 'done',
-        result.response.providerUsage,
+        normalizedResponse.status === 'done',
+        normalizedResponse.providerUsage,
       );
     }
     return {
       ...result,
+      response: normalizedResponse,
       durationMs: Math.max(0, result.response.timestamp.getTime() - startedAt),
     };
+  }
+
+  private buildFindingContractExecutionContext(): {
+    targetFindingIds: string[];
+    actionableFindings: string;
+    ledger: FindingLedger;
+  } {
+    if (this.deps.findingContract === undefined || this.deps.findingLedgerStore === undefined) {
+      throw new Error('team_leader.mode "finding_contract_fix" requires an active finding_contract');
+    }
+    const ledger = this.deps.findingLedgerStore.loadLedger();
+    const targetFindingIds = collectActionableFindingIds(ledger);
+    if (targetFindingIds.length === 0) {
+      throw new Error('team_leader.mode "finding_contract_fix" requires at least one actionable open finding');
+    }
+    const actionableFindings = renderActionableFindingContractSummary(ledger, targetFindingIds);
+    return {
+      targetFindingIds,
+      actionableFindings,
+      ledger,
+    };
+  }
+
+  private buildFindingContractPartSummary(part: PartDefinition, ledger: FindingLedger): string {
+    if (part.findingContract === undefined) {
+      throw new Error(`Part "${part.id}" cannot build a scoped Finding Contract summary`);
+    }
+    return renderActionableFindingContractSummary(ledger, part.findingContract.findingIds);
   }
 
   private recordUsage(
