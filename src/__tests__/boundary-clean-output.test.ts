@@ -35,12 +35,16 @@ const ASSERTION_CASES = [
       'src/cli-import.ts:14 the defect claim is false; document.previews are persisted through store.save',
       'src/cli-import.ts:14 document.previews fail to persist through store.save',
       'src/cli-import.ts:14 document.previews are persisted through store.save on the success path only',
+      'src/cli-import.ts:14 document.previews are persisted through store.save only if enqueue succeeds',
+      'src/cli-import.ts:14 document.previews are persisted through store.save only when enqueue succeeds',
+      'src/cli-import.ts:14 document.previews are persisted through store.save only on the success path',
       'src/cli-import.ts:14 document.previews are persisted through store.save except when enqueue fails',
       'src/cli-import.ts:14 document.previews are persisted through store.save unless enqueue fails',
       'src/cli-import.ts:14 the document is persisted through store.save without previews',
       'src/cli-import.ts:14 指摘は誤りだが document.previews のプレビューは store.save へ保存される',
       'src/cli-import.ts:14 document.previews のプレビューは store.save への保存に失敗する',
       'src/cli-import.ts:14 成功経路のみ document.previews のプレビューは store.save へ保存される',
+      'src/cli-import.ts:14 成功した場合に限り document.previews のプレビューは store.save へ保存される',
       'src/cli-import.ts:14 失敗時を除き document.previews のプレビューは store.save へ保存される',
       'src/cli-import.ts:14 enqueue が失敗しない限り document.previews のプレビューは store.save へ保存される',
     ],
@@ -230,6 +234,13 @@ describe('boundary clean output assertions', () => {
         '|---|------------|----------|----------|--------|',
         '| F-7 | boundary | high | N/A | unresolved defect without a citation |',
       ].join('\n'),
+      [
+        '## Result: APPROVE',
+        '## Observed Findings',
+        '| # | family_tag | Severity | Location | Defect | Impact | Fix Direction |',
+        '|---|------------|----------|----------|--------|--------|---------------|',
+        '| F-8 | boundary | high | N/A | logical `a\\|b` remains broken | affected path | fix parser |',
+      ].join('\n'),
     ];
 
     for (const rejectedOutput of rejectedOutputs) {
@@ -283,6 +294,7 @@ describe('boundary clean output assertions', () => {
     expect(assertion(`${positive}\n## 結果: APPROVE / REJECT`)).toBe(true);
     expect(assertion(`${positive}\n## **Result:** **APPROVE / REJECT**`)).toBe(true);
     expect(assertion(`${positive}\n## Result: REJECT / APPROVE`)).toBe(true);
+    expect(assertion(`${positive}\n## Result: REJECT [nested[annotation]`)).toBe(true);
     expect(assertion(`${positive}\n| Result | APPROVE / REJECT |`)).toBe(true);
     expect(assertion([
       positive,
@@ -310,6 +322,18 @@ describe('boundary clean output assertions', () => {
       '| # | family_tag | Severity | Location | Defect |',
       '|---|------------|----------|----------|--------|',
       '| 1 | | | | |',
+    ].join('\n'))).toBe(true);
+    expect(assertion([
+      positive,
+      '## Observed Findings',
+      '| Row | family_tag | Severity | Location | Defect | Impact | Fix Direction |',
+      '|-----|------------|----------|----------|--------|--------|---------------|',
+    ].join('\n'))).toBe(true);
+    expect(assertion([
+      positive,
+      '## 観測した指摘',
+      '| 行 | family_tag | 重大度 | 場所 | 欠陥 | 影響 | 修正方針 |',
+      '|----|------------|--------|------|------|------|----------|',
     ].join('\n'))).toBe(true);
   });
 });

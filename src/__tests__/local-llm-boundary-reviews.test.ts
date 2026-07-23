@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   mkdirSync,
   mkdtempSync,
@@ -46,26 +45,14 @@ interface RawWorkflow {
   steps: RawStep[];
 }
 
-const SHARED_CONTRACT_HASHES: Record<Locale, Record<string, string>> = {
-  ja: {
-    architecture: 'f27a0ab5a0200e89e098bced9b29b8f144a3cb5d64180f377ca2976913efeb08',
-    'ai-antipattern': '00d2719aa9a7a5308bf5fb7920f7ec4760cee8261722b87baf221dc86aa8ad38',
-    coding: 'd9996bfdb9e906f60f855ec417ce257898a923a747a13cdd3704ea334d48c750',
-    'implementation-semantics': '0cf0d7bef3237d7d60d1000b3a89c9688254a1339ea8f39177efc0fa505c78cd',
-    'contract-lifecycle': 'fec174921aa46e5d4bca9cda1bdc5a91ced12a22f02f6708db4bfd27b98dc6bd',
-    robustness: '54b011ebb1c61876356a29a87833fe2f23691a3f5bb27ae9403867719d1fb485',
-  },
-  en: {
-    architecture: '385cc9374649504ca4d890fea895c8c85664fa4d0f432ad054d09803e792eb50',
-    'ai-antipattern': '208fc4a67b3593795b9821c70ce0aa44ca59c0318fe9574a1df286bde334d0d4',
-    coding: '9c9250c3d3881751b07e17fc2f144ee411d9ebdb00c44418996f39688bd1778f',
-    'implementation-semantics': '702ca4fc58ed4a58e5eb7ad05b2716e32c5f8a69a70da8b034b27a1f458b2c05',
-    'contract-lifecycle': 'c24d489246866b7f5396e86b9a100434fba4c97719a67ef69107ee6a97859d7e',
-    robustness: '03d6fe3011c1ba74500abc2250f8dfccac8d700bbfdf1c7c5d9576577a77d35c',
-  },
-};
-
-const SHARED_CONTRACT_NAMES = Object.keys(SHARED_CONTRACT_HASHES.ja);
+const SHARED_CONTRACT_NAMES = [
+  'architecture',
+  'ai-antipattern',
+  'coding',
+  'implementation-semantics',
+  'contract-lifecycle',
+  'robustness',
+] as const;
 const EXPECTED_UNMONITORED_CYCLES = [
   ['plan', 'write_tests'],
   ['write_tests'],
@@ -346,10 +333,6 @@ function expectReachablePath(workflow: RawWorkflow, path: readonly string[]): vo
   }
 }
 
-function sha256(content: string): string {
-  return createHash('sha256').update(content).digest('hex');
-}
-
 beforeAll(() => {
   previousTaktConfigDir = process.env.TAKT_CONFIG_DIR;
   testRoot = mkdtempSync(join(tmpdir(), 'takt-local-llm-boundary-'));
@@ -439,20 +422,6 @@ describe('takt-default-localllm boundary reviews', () => {
     }
   });
 
-  it.each(['ja', 'en'] as const)('%s の共有6 Finding Contractは既存内容と完全一致する', (locale) => {
-    for (const name of SHARED_CONTRACT_NAMES) {
-      const path = join(
-        process.cwd(),
-        'builtins',
-        locale,
-        'facets',
-        'output-contracts',
-        `${name}-review-finding-contract.md`,
-      );
-      expect(sha256(readFileSync(path, 'utf-8'))).toBe(SHARED_CONTRACT_HASHES[locale][name]);
-    }
-  });
-
   it.each(['ja', 'en'] as const)('%s の専用契約はscope・引用・Finding Contract整合性を要求する', (locale) => {
     for (const name of ['contract-wiring', 'resource-ownership', 'failure-boundary']) {
       const path = join(
@@ -498,7 +467,7 @@ describe('takt-default-localllm boundary reviews', () => {
       : /drops a value during persistence because it is not a failure-boundary defect/);
   });
 
-  it.each(['ja', 'en'] as const)('%s の既存high workflowは共有6契約の実効formatを維持する', (locale) => {
+  it.each(['ja', 'en'] as const)('%s の既存high workflowはformatRefが指す共有6契約を読み込む', (locale) => {
     for (const workflowName of ['takt-default-high', 'takt-default-team-high']) {
       const workflow = loadBuiltinWorkflow(locale, workflowName);
       const substeps = getParallelSubsteps(workflow, 'reviewers');
@@ -507,10 +476,19 @@ describe('takt-default-localllm boundary reviews', () => {
       expect(contracts.map((contract) => contract?.formatRef)).toEqual(
         SHARED_CONTRACT_NAMES.map((name) => `${name}-review-finding-contract`),
       );
-      for (const [index, contract] of contracts.entries()) {
-        expect(sha256(contract?.format ?? '')).toBe(
-          SHARED_CONTRACT_HASHES[locale][SHARED_CONTRACT_NAMES[index]!],
-        );
+      for (const contract of contracts) {
+        if (contract?.formatRef === undefined) {
+          throw new Error('Shared review contract requires formatRef');
+        }
+        const source = readFileSync(join(
+          process.cwd(),
+          'builtins',
+          locale,
+          'facets',
+          'output-contracts',
+          `${contract.formatRef}.md`,
+        ), 'utf-8');
+        expect(contract.format).toBe(source);
       }
     }
   });

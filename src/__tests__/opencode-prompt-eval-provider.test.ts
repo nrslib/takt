@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -18,6 +19,8 @@ describe('OpenCode prompt eval provider', () => {
   let fixtureDir: string;
   let phase2Prompt: string;
   let logPath: string;
+  let spawnOptionsLogPath: string;
+  let spawnPreload: string;
   let binDir: string;
 
   beforeEach(() => {
@@ -25,6 +28,7 @@ describe('OpenCode prompt eval provider', () => {
     fixtureDir = join(root, 'fixture');
     phase2Prompt = join(root, 'phase2.md');
     logPath = join(root, 'calls.jsonl');
+    spawnOptionsLogPath = join(root, 'spawn-options.jsonl');
     binDir = join(root, 'bin');
     mkdirSync(fixtureDir);
     mkdirSync(binDir);
@@ -59,6 +63,8 @@ if (!isPhase2) {
   emit({ type: 'tool_use', part: { type: 'tool' } });
 } else if (mode === 'error-event') {
   emit({ type: 'error', error: { name: 'ProviderError' } });
+} else if (mode === 'error-event-data') {
+  emit({ type: 'error', error: { name: 'ProviderError', data: { message: 'SDK detail' } } });
 } else if (mode !== 'empty') {
   emit({ type: 'text', part: { type: 'text', text: 'REPORT A' } });
   emit({ type: 'text', part: { type: 'text', text: 'REPORT B' } });
@@ -66,6 +72,17 @@ if (!isPhase2) {
 emit({ type: 'step_finish', part: { type: 'step-finish' } });
 `);
     chmodSync(fakeOpenCode, 0o755);
+    spawnPreload = join(root, 'observe-spawn-options.cjs');
+    writeFileSync(spawnPreload, `const fs = require('node:fs');
+const childProcess = require('node:child_process');
+const { syncBuiltinESMExports } = require('node:module');
+const originalSpawnSync = childProcess.spawnSync;
+childProcess.spawnSync = (command, args, options) => {
+  fs.appendFileSync(process.env.FAKE_SPAWN_OPTIONS_LOG, JSON.stringify(options) + '\\n');
+  return originalSpawnSync(command, args, options);
+};
+syncBuiltinESMExports();
+`);
   });
 
   afterEach(() => {
@@ -81,6 +98,11 @@ emit({ type: 'step_finish', part: { type: 'step-finish' } });
         PATH: `${binDir}:${process.env.PATH ?? ''}`,
         FAKE_OPENCODE_LOG: logPath,
         FAKE_OPENCODE_MODE: mode,
+        FAKE_SPAWN_OPTIONS_LOG: spawnOptionsLogPath,
+        NODE_OPTIONS: [
+          process.env.NODE_OPTIONS,
+          `--require=${spawnPreload}`,
+        ].filter(Boolean).join(' '),
       },
     });
   }
@@ -91,6 +113,34 @@ emit({ type: 'step_finish', part: { type: 'step-finish' } });
       .split('\n')
       .map((line) => JSON.parse(line) as { args: string[]; cwd: string });
   }
+
+  function spawnOptions(): Array<{ timeout: number; killSignal: string }> {
+    return readFileSync(spawnOptionsLogPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { timeout: number; killSignal: string });
+  }
+
+  it('documents the Phase 2 prompt as a path in Usage', () => {
+    const result = run(['provider/model', fixtureDir]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('--phase2=<phase2-prompt-path>');
+  });
+
+  it('rejects an unknown third-argument option before invoking OpenCode', () => {
+    const result = run([
+      'provider/model',
+      fixtureDir,
+      '--phase-2=phase2.md',
+      'PHASE 1 PROMPT',
+      '{"promptfoo":"context"}',
+    ]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Unrecognized option: --phase-2=phase2.md');
+    expect(existsSync(logPath)).toBe(false);
+  });
 
   it('keeps the existing single-phase invocation unchanged', () => {
     const result = run([
@@ -106,6 +156,10 @@ emit({ type: 'step_finish', part: { type: 'step-finish' } });
       args: ['run', '-m', 'provider/model', '--pure', 'PHASE 1 PROMPT'],
       cwd: fixtureDir,
     }]);
+    expect(spawnOptions()).toEqual([expect.objectContaining({
+      timeout: 10 * 60 * 1000,
+      killSignal: 'SIGKILL',
+    })]);
   });
 
   it('resumes Phase 1 for Phase 2 and emits only report text', () => {
@@ -138,6 +192,10 @@ emit({ type: 'step_finish', part: { type: 'step-finish' } });
       'session-1',
       'PHASE 2 PROMPT',
     ]);
+    expect(spawnOptions()).toHaveLength(2);
+    expect(spawnOptions().every((options) => (
+      options.timeout === 10 * 60 * 1000 && options.killSignal === 'SIGKILL'
+    ))).toBe(true);
   });
 
   it.each([
@@ -145,7 +203,8 @@ emit({ type: 'step_finish', part: { type: 'step-finish' } });
     ['nonzero', /status 7/],
     ['session-mismatch', /did not resume/],
     ['tool-use', /forbidden tool call/],
-    ['error-event', /error event/],
+    ['error-event', /error event: ProviderError/],
+    ['error-event-data', /error event: SDK detail/],
     ['empty', /no report text/],
   ])('fails fast for %s', (mode, expected) => {
     const result = run([

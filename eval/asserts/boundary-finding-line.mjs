@@ -1,3 +1,5 @@
+import { splitMarkdownTableCells } from './boundary-markdown-table.mjs';
+
 const FILE_CITATION = /\b[\w./-]+\.[a-z0-9]+:\d+\b/gi;
 const FINDING_CELL_NAMES = [
   'number',
@@ -12,18 +14,15 @@ const FINDING_TEXT_CELL_NAMES = ['defect', 'impact', 'fix'];
 const NEGATED_FIX_ACTION = /\b(?:do not|don't)\b/i;
 
 function markdownTableCells(line) {
-  const content = line.trim().replace(/^>\s*/, '');
-  if (!content.startsWith('|')) {
+  const cells = splitMarkdownTableCells(line);
+  if (cells === null) {
     return null;
   }
 
-  return content
-    .split('|')
-    .slice(1, content.endsWith('|') ? -1 : undefined)
-    .map((cell) => cell
-      .trim()
-      .replace(/(?:\*\*|__|`)/g, '')
-      .trim());
+  return cells.map((cell) => cell
+    .trim()
+    .replace(/(?:\*\*|__|`)/g, '')
+    .trim());
 }
 
 function testPattern(pattern, text) {

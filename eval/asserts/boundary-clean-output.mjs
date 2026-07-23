@@ -1,3 +1,5 @@
+import { splitMarkdownTableCells } from './boundary-markdown-table.mjs';
+
 function stripInlineMarkdown(text) {
   return text
     .replace(/(?:\*\*|__|`)/g, '')
@@ -16,15 +18,12 @@ function stripLightMarkdown(text) {
 }
 
 function markdownTableCells(line) {
-  const content = line.trim().replace(/^>\s*/, '');
-  if (!content.startsWith('|')) {
+  const cells = splitMarkdownTableCells(line);
+  if (cells === null) {
     return null;
   }
 
-  return content
-    .split('|')
-    .slice(1, content.endsWith('|') ? -1 : undefined)
-    .map(stripLightMarkdown);
+  return cells.map(stripLightMarkdown);
 }
 
 function isSelectedRejectValue(value) {
@@ -32,7 +31,7 @@ function isSelectedRejectValue(value) {
     return false;
   }
 
-  return /^REJECT(?:[.!。！？]*|\s*(?:\([^()\r\n]*\)|（[^（）\r\n]*）|\[[^\[\]\r\n]*\]|[-–—]\s*\S.*))$/i.test(value);
+  return /^REJECT(?:[.!。！？]*|\s*(?:\([^()\r\n]*\)|（[^（）\r\n]*）|\[[^[\]\r\n]*\]|[-–—]\s*\S.*))$/i.test(value);
 }
 
 function isSelectedRejectDecision(line) {
@@ -130,7 +129,7 @@ function isObservedFindingDataRow(line) {
     cell !== ''
     && !/^(?:[-—–]|\.{2,}|…|N\/A|none|なし|該当なし)$/i.test(cell)
     && !/^(?:\{[^{}]*\}|<[^<>]*>|\[[^\][]*])$/.test(cell)
-    && !/^(?:family_tag|Severity|重大度|Location|場所|Defect|欠陥|Fix Direction|修正方針)$/i.test(cell)
+    && !/^(?:family_tag|Severity|重大度|Location|場所|Defect|欠陥|Impact|影響|Fix Direction|修正方針)$/i.test(cell)
     && !/^(?:contract-wiring|resource-ownership|failure-boundary|boundary)$/i.test(cell)
     && !/^(?:high|medium|low)(?:\s*\/\s*(?:high|medium|low))*$/i.test(cell)
     && !/^`?file:line`?$/i.test(cell)

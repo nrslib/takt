@@ -42,6 +42,44 @@ describe('Team Leader decomposition retry', () => {
     expect(request).toHaveBeenCalledTimes(3);
   });
 
+  it('passes validation message length boundaries to the second request', async () => {
+    const exactMessage = 'a'.repeat(2_000);
+    const overlongMessage = 'b'.repeat(2_001);
+    const request = vi.fn()
+      .mockRejectedValueOnce(new TeamLeaderDecompositionValidationError([
+        {
+          code: 'decomposition.exact',
+          path: '$.exact',
+          message: exactMessage,
+        },
+        {
+          code: 'decomposition.overlong',
+          path: '$.overlong',
+          message: overlongMessage,
+        },
+      ]))
+      .mockResolvedValueOnce('valid');
+
+    await expect(requestValidTeamLeaderDecomposition({ request })).resolves.toBe('valid');
+
+    expect(request).toHaveBeenNthCalledWith(2, {
+      attempt: 1,
+      maxAttempts: 3,
+      issues: [
+        {
+          code: 'decomposition.exact',
+          path: '$.exact',
+          message: exactMessage,
+        },
+        {
+          code: 'decomposition.overlong',
+          path: '$.overlong',
+          message: `${'b'.repeat(1_999)}…`,
+        },
+      ],
+    });
+  });
+
   it('does not retry provider or engine failures', async () => {
     const error = new Error('provider unavailable');
     const request = vi.fn().mockRejectedValue(error);

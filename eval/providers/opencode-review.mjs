@@ -7,8 +7,11 @@ import { fileURLToPath } from 'node:url';
 const args = process.argv.slice(2);
 if (args.length < 3) {
   throw new Error(
-    'Usage: opencode-review.mjs <provider/model> <fixture-dir> [--phase2=<prompt>] <phase1-prompt>',
+    'Usage: opencode-review.mjs <provider/model> <fixture-dir> [--phase2=<phase2-prompt-path>] <phase1-prompt>',
   );
+}
+if (args[2]?.startsWith('--') && !args[2].startsWith('--phase2=')) {
+  throw new Error(`Unrecognized option: ${args[2]}`);
 }
 
 const [model, fixturePath] = args;
@@ -21,6 +24,7 @@ if (!phase1Prompt || phase2Path === '') {
 const providerDir = dirname(fileURLToPath(import.meta.url));
 const evalDir = resolve(providerDir, '..');
 const fixtureDir = resolve(evalDir, fixturePath);
+const OPENCODE_EVAL_TIMEOUT_MS = 10 * 60 * 1000;
 
 function runOpenCode(runArgs, phase) {
   const result = spawnSync('opencode', runArgs, {
@@ -28,6 +32,8 @@ function runOpenCode(runArgs, phase) {
     encoding: 'utf-8',
     maxBuffer: 64 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: OPENCODE_EVAL_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
   });
 
   if (result.error) {
@@ -66,7 +72,8 @@ function parseJsonEvents(stdout, phase, options = {}) {
     }
     sessionIds.add(event.sessionID);
     if (event.type === 'error') {
-      throw new Error(`${phase} emitted an error event`);
+      const detail = event.error?.data?.message ?? event.error?.name;
+      throw new Error(`${phase} emitted an error event${detail ? `: ${detail}` : ''}`);
     }
     if (options.forbidToolUse && event.type === 'tool_use') {
       throw new Error(`${phase} attempted a forbidden tool call`);

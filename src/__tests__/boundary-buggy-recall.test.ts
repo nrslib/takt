@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import assertBoundaryContractRecall from '../../eval/asserts/boundary-contract-recall.mjs';
+import { hasFindingLine } from '../../eval/asserts/boundary-finding-line.mjs';
 import assertBoundaryResourceRecall from '../../eval/asserts/boundary-resource-recall.mjs';
 import assertBoundaryRobustnessRecall from '../../eval/asserts/boundary-robustness-recall.mjs';
 
@@ -167,5 +168,27 @@ describe('boundary buggy recall assertions', () => {
     }
     const emptyFix = findingCells.map((cell, index) => (index === 6 ? '' : cell));
     expect(assertion(`| ${emptyFix.join(' | ')} |`)).toBe(false);
+  });
+
+  it('contract recall は同一節の反証だけを拒否する', () => {
+    const sameClauseRefutation = '| 1 | contract-wiring | high | src/system-enqueue.ts:12 | previews are dropped before store.save, but the defect claim is false | stored task receives empty previews | pass document.previews |';
+    const unrelatedFalseSentence = '| 1 | contract-wiring | high | src/system-enqueue.ts:12 | previews are dropped before store.save. The claim metadata follows. An unrelated flag is false | stored task receives empty previews | pass document.previews |';
+
+    expect(assertBoundaryContractRecall(sameClauseRefutation)).toBe(false);
+    expect(assertBoundaryContractRecall(unrelatedFalseSentence)).toBe(true);
+  });
+
+  it('finding table はescaped pipeをセル内へ戻し偶数backslash後のpipeを区切る', () => {
+    const output = '| 1 | boundary | high | src/example.ts:1 | expression a\\|b drops data | impact ends with \\\\| apply fix |';
+
+    expect(hasFindingLine(output, {
+      familyTag: 'boundary',
+      citation: /src\/example\.ts:1/,
+      required: {
+        defect: [/a\|b/, /drops data/],
+        impact: [/ends with \\\\/],
+        fix: [/apply fix/],
+      },
+    })).toBe(true);
   });
 });
