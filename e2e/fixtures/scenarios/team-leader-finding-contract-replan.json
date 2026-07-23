@@ -1,0 +1,58 @@
+[
+  {
+    "persona": "agents/test-finding-contract-leader",
+    "status": "done",
+    "content": "decompose",
+    "structured_output": {
+      "parts": [{
+        "id": "repair-target",
+        "title": "Repair target",
+        "instruction": "Attempt the assigned repair.",
+        "findingContract": {
+          "findingIds": ["F-0001"],
+          "role": "repair",
+          "writePaths": ["src/target.ts"],
+          "readPaths": ["src/target.ts"]
+        }
+      }]
+    }
+  },
+  {
+    "persona": "agents/test-finding-contract-leader",
+    "status": "done",
+    "content": "replan",
+    "structured_output": {
+      "decision": "replan",
+      "reasoning": "The worker could not execute the current repair approach.",
+      "parts": [],
+      "fixCoverage": [],
+      "blockers": ["The current implementation approach is not executable."]
+    }
+  },
+  {
+    "persona": "agents/test-finding-contract-worker",
+    "status": "error",
+    "content": "repair failed",
+    "error": "repair failed"
+  },
+  {
+    "persona": "agents/test-finding-contract-replanner",
+    "status": "done",
+    "content": "replan route confirmed"
+  },
+  {
+    "persona": "agents/test-findings-manager",
+    "status": "done",
+    "content": "ledger preserved",
+    "structured_output": {
+      "matches": [],
+      "newFindings": [],
+      "resolvedFindings": [],
+      "reopenedFindings": [],
+      "conflicts": [],
+      "resolvedConflicts": [],
+      "waivedFindings": [],
+      "disputeNotes": []
+    }
+  }
+]

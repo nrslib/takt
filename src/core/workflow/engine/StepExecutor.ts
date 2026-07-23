@@ -50,7 +50,10 @@ import type {
   StructuredOutputNormalizerRegistry,
 } from './structured-output-normalizer.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
-import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
+import type {
+  FindingContractInstructionContext,
+  FindingContractInstructionPolicy,
+} from '../instruction/instruction-context.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
 import type { FindingLedgerStore } from '../findings/store.js';
 import type { FindingManagerRunResult } from '../findings/manager-runner.js';
@@ -169,10 +172,13 @@ export class StepExecutor {
 
   private buildFindingContractInstructionContext(
     step: WorkflowStep,
-    explicitContext: FindingContractInstructionContext | undefined,
+    policy: FindingContractInstructionPolicy | undefined,
   ): FindingContractInstructionContext | undefined {
-    if (explicitContext !== undefined) {
-      return explicitContext;
+    if (policy?.mode === 'omit') {
+      return undefined;
+    }
+    if (policy?.mode === 'explicit') {
+      return policy.context;
     }
     return this.deps.optionsBuilder.buildFindingContractInstructionContext?.(
       step,
@@ -353,7 +359,9 @@ export class StepExecutor {
       task,
       maxSteps,
       undefined,
-      findingContractContext,
+      findingContractContext === undefined
+        ? undefined
+        : { mode: 'explicit', context: findingContractContext },
     );
 
     return {
@@ -548,7 +556,7 @@ export class StepExecutor {
     task: string,
     maxSteps: number | 'infinite',
     fallbackContext?: FallbackContext,
-    findingContract?: FindingContractInstructionContext,
+    findingContractPolicy?: FindingContractInstructionPolicy,
     transaction?: InstructionBuildTransaction,
   ): string {
     this.ensurePreviousResponseSnapshot(state, step.name, stepIteration, transaction);
@@ -608,7 +616,7 @@ export class StepExecutor {
       previousResponseSourcePath: state.previousResponseSourcePath,
       fallbackContext: fallbackContext ?? state.pendingFallback,
       workflowState: state,
-      findingContract: this.buildFindingContractInstructionContext(step, findingContract),
+      findingContract: this.buildFindingContractInstructionContext(step, findingContractPolicy),
     }).build();
     if (fallbackContext === undefined) {
       state.pendingFallback = undefined;

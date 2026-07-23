@@ -23,7 +23,8 @@ import type {
 import { FINDING_SEVERITIES } from '../../models/finding-types.js';
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import { normalizeFindingText, parseFindingLocation } from './location.js';
-import { FILE_LINE_EVIDENCE_PATTERN, hasDisputeClaimFor } from './manager-output-validation.js';
+import { hasDisputeClaimFor } from './manager-output-validation.js';
+import { FILE_LINE_EVIDENCE_PATTERN } from './evidence.js';
 import { effectiveRawFindingRelation, mergeFindingManagerOutputs } from './mechanical-classification.js';
 import { collectRegeneratedConflictIds, formatConflictId } from './conflict-identity.js';
 import { collectActiveConflictFindingIds, rejectConflictTouchedDuplicates } from './manager-plan-normalization.js';

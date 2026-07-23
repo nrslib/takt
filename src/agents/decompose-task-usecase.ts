@@ -1,4 +1,9 @@
-import type { AgentResponse, Language, PartDefinition } from '../core/models/types.js';
+import type {
+  AgentResponse,
+  FindingContractTeamLeaderDecision,
+  Language,
+  PartDefinition,
+} from '../core/models/types.js';
 import type { ProviderUsageSnapshot } from '../core/models/response.js';
 import type { ProviderType } from '../core/workflow/types.js';
 import { runAgent, type RunAgentOptions, type StreamCallback } from './runner.js';
@@ -10,6 +15,33 @@ import {
   toMorePartsResponse,
   toPartDefinitions,
 } from './team-leader-structured-output.js';
+import {
+  createFindingContractDecompositionJsonSchema,
+  createFindingContractFeedbackJsonSchema,
+  type FindingContractFindingDigest,
+  type FindingContractPartIndexEntry,
+  validateFindingContractPartBatch,
+} from '../core/workflow/team-leader-finding-contract.js';
+import { parseFindingContractTeamLeaderDecision } from '../core/workflow/team-leader-finding-contract-decision.js';
+
+export interface FindingContractTeamLeaderContext {
+  targetFindingIds: string[];
+  actionableFindings: string;
+  completedPartIndex: FindingContractFindingDigest[];
+  previouslyPlannedParts: PartDefinition[];
+  previousDecision?: {
+    decision: 'continue';
+    reasoning: string;
+  };
+}
+
+export interface TeamLeaderPartFeedbackResult {
+  id: string;
+  title: string;
+  status: string;
+  content: string;
+  findingContractClaim?: FindingContractPartIndexEntry;
+}
 
 export interface DecomposeTaskOptions {
   cwd: string;
@@ -32,6 +64,7 @@ export interface DecomposeTaskOptions {
   }) => void;
   onAgentResponse?: (response: AgentResponse) => void;
   onAgentError?: (error: unknown) => void;
+  findingContract?: FindingContractTeamLeaderContext;
 }
 
 export type MorePartsOptions = Omit<DecomposeTaskOptions, 'inspectTools' | 'onPromptResolved'>;
@@ -41,6 +74,7 @@ export interface MorePartsResponse {
   reasoning: string;
   parts: PartDefinition[];
   providerUsage?: ProviderUsageSnapshot;
+  findingContractDecision?: FindingContractTeamLeaderDecision;
 }
 
 export interface DecomposeTaskResponse {
@@ -60,6 +94,7 @@ export async function decomposeTask(
       maxInitialParts,
       options.language,
       options.inspectTools,
+      options.findingContract,
     ), {
       cwd: options.cwd,
       personaPath: options.personaPath,
@@ -71,7 +106,9 @@ export async function decomposeTask(
       allowedTools: options.inspectTools ?? [],
       mcpServers: options.mcpServers,
       permissionMode: 'readonly',
-      outputSchema: loadDecompositionSchema(maxInitialParts),
+      outputSchema: options.findingContract === undefined
+        ? loadDecompositionSchema(maxInitialParts)
+        : withMaxInitialParts(createFindingContractDecompositionJsonSchema(), maxInitialParts),
       onStream: options.onStream,
       workflowMeta: options.workflowMeta,
       childProcessEnv: options.childProcessEnv,
@@ -91,10 +128,18 @@ export async function decomposeTask(
 
   const parts = response.structuredOutput?.parts;
   if (parts != null) {
+    const parsedParts = toPartDefinitions(parts, maxInitialParts, options.findingContract !== undefined);
+    if (options.findingContract !== undefined) {
+      validateFindingContractPartBatch(parsedParts, options.findingContract.targetFindingIds);
+    }
     return {
-      parts: toPartDefinitions(parts, maxInitialParts),
+      parts: parsedParts,
       ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
     };
+  }
+
+  if (options.findingContract !== undefined) {
+    throw new Error('Finding Contract Team Leader decomposition requires structured output');
   }
 
   return {
@@ -105,7 +150,7 @@ export async function decomposeTask(
 
 export async function requestMoreParts(
   originalInstruction: string,
-  allResults: Array<{ id: string; title: string; status: string; content: string }>,
+  allResults: TeamLeaderPartFeedbackResult[],
   existingIds: string[],
   options: MorePartsOptions,
 ): Promise<MorePartsResponse> {
@@ -114,6 +159,7 @@ export async function requestMoreParts(
     allResults,
     existingIds,
     options.language,
+    options.findingContract,
   );
 
   let response: AgentResponse;
@@ -129,7 +175,9 @@ export async function requestMoreParts(
       allowedTools: [],
       mcpServers: options.mcpServers,
       permissionMode: 'readonly',
-      outputSchema: loadMorePartsSchema(),
+      outputSchema: options.findingContract === undefined
+        ? loadMorePartsSchema()
+        : createFindingContractFeedbackJsonSchema(),
       onStream: options.onStream,
       workflowMeta: options.workflowMeta,
       childProcessEnv: options.childProcessEnv,
@@ -146,8 +194,32 @@ export async function requestMoreParts(
     throw new Error(`Team leader feedback failed: ${detail}`);
   }
 
+  const findingContractDecision = options.findingContract === undefined
+    ? undefined
+    : parseFindingContractTeamLeaderDecision(
+        response.structuredOutput,
+        options.findingContract.targetFindingIds,
+        existingIds,
+        options.findingContract.previouslyPlannedParts,
+      );
   return {
-    ...toMorePartsResponse(response.structuredOutput),
+    ...(findingContractDecision === undefined
+      ? toMorePartsResponse(response.structuredOutput)
+      : {
+          done: findingContractDecision.decision !== 'continue',
+          reasoning: findingContractDecision.reasoning,
+          parts: findingContractDecision.parts,
+          findingContractDecision,
+        }),
     ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
   };
+}
+
+function withMaxInitialParts(schema: Record<string, unknown>, maxInitialParts: number | undefined): Record<string, unknown> {
+  const clone = structuredClone(schema);
+  if (maxInitialParts === undefined) return clone;
+  const properties = clone.properties as Record<string, unknown>;
+  const parts = properties.parts as Record<string, unknown>;
+  parts.maxItems = maxInitialParts;
+  return clone;
 }

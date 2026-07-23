@@ -309,6 +309,16 @@ function validateFindingContractDelegatedIntake(config: WorkflowConfig, findingC
   }
 }
 
+function validateFindingContractTeamLeaderMode(config: WorkflowConfig, findingContractEnabled: boolean): void {
+  const steps = config.steps.filter((step) => step.teamLeader?.mode === 'finding_contract_fix');
+  if (steps.length === 0 || findingContractEnabled) {
+    return;
+  }
+  throw new Error(
+    `Configuration error: team_leader.mode "finding_contract_fix" on step "${steps[0]!.name}" requires finding_contract`,
+  );
+}
+
 /**
  * 子ワークフローが自前の finding_contract を持ちながら、workflow_call の親からも
  * 継承している場合を設定エラーで落とす。ledger_path / raw_findings_path は
@@ -459,6 +469,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   validateFindingContractInheritanceConflict(config, options);
   validateFindingContractOutputFormatRequiresContract(config, findingContractEnabled);
   validateFindingContractDelegatedIntake(config, findingContractEnabled);
+  validateFindingContractTeamLeaderMode(config, findingContractEnabled);
 
   if (options.startStep) {
     const startStep = config.steps.find((step) => step.name === options.startStep);

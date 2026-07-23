@@ -621,6 +621,22 @@ describe('agent-usecases', () => {
     ]);
   });
 
+  it('Finding Contract decomposition は構造化出力がない場合に汎用parserへフォールバックしない', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('```json [] ```'));
+
+    await expect(decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      findingContract: {
+        targetFindingIds: ['F-0001'],
+        actionableFindings: '{"open":[{"id":"F-0001"}]}',
+        completedPartIndex: [],
+        previouslyPlannedParts: [],
+      },
+    })).rejects.toThrow('requires structured output');
+
+    expect(parseParts).not.toHaveBeenCalled();
+  });
+
   it('decomposeTask は done 以外をエラーにする', async () => {
     vi.mocked(runAgent).mockResolvedValue({
       persona: 'team-leader',

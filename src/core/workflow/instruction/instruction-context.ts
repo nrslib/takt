@@ -39,6 +39,10 @@ export interface FindingContractInstructionContext {
   reviewScopeSnapshotId?: string;
 }
 
+export type FindingContractInstructionPolicy =
+  | { mode: 'omit' }
+  | { mode: 'explicit'; context: FindingContractInstructionContext };
+
 /**
  * Context for building instruction from template.
  */

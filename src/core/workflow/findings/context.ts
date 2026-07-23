@@ -43,6 +43,36 @@ function deriveFindingFamilyTags(
   };
 }
 
+export function selectActionableFindingEntries(ledger: FindingLedger): FindingLedgerEntry[] {
+  return ledger.findings.filter((finding) => (
+    finding.status === 'open' && finding.provisional === undefined
+  ));
+}
+
+export function renderActionableFindingLedgerInstructionSummary(
+  ledger: FindingLedger,
+  findingIds?: readonly string[],
+): string {
+  const selectedIds = findingIds === undefined ? undefined : new Set(findingIds);
+  const familyTagsByRawFindingId = indexRawFindingFamilyTags(ledger);
+  return JSON.stringify({
+    workflowName: ledger.workflowName,
+    open: selectActionableFindingEntries(ledger)
+      .filter((finding) => selectedIds === undefined || selectedIds.has(finding.id))
+      .map((finding) => ({
+        id: finding.id,
+        lifecycle: finding.lifecycle,
+        severity: finding.severity,
+        title: finding.title,
+        location: finding.location,
+        description: finding.description,
+        suggestion: finding.suggestion,
+        rawFindingIds: finding.rawFindingIds,
+        familyTags: deriveFindingFamilyTags(finding, familyTagsByRawFindingId).familyTags,
+      })),
+  }, null, 2);
+}
+
 export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): string {
   const familyTagsByRawFindingId = indexRawFindingFamilyTags(ledger);
   return JSON.stringify({

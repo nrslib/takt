@@ -13,6 +13,7 @@ import {
   type DecomposeTaskResponse,
   type MorePartsOptions,
   type MorePartsResponse,
+  type TeamLeaderPartFeedbackResult,
 } from '../decompose-task-usecase.js';
 import type { StructuredCaller } from './contracts.js';
 
@@ -53,7 +54,7 @@ export class DefaultStructuredCaller implements StructuredCaller {
 
   async requestMoreParts(
     originalInstruction: string,
-    allResults: Array<{ id: string; title: string; status: string; content: string }>,
+    allResults: TeamLeaderPartFeedbackResult[],
     existingIds: string[],
     options: MorePartsOptions,
   ): Promise<MorePartsResponse> {

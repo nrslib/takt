@@ -297,6 +297,7 @@ steps:
     knowledge: [takt, architecture, implementation-semantics]
     required_permission_mode: edit
     team_leader:
+      mode: finding_contract_fix
       max_concurrency: 2
       initial_max_parts: 2
       fail_on_part_error: false
@@ -304,9 +305,9 @@ steps:
       part_persona: coder
       part_edit: true
       part_permission_mode: edit
-    instruction: team-leader-fix
+    instruction: team-leader-finding-contract-fix
     rules:
-      - condition: 修正完了
+      - condition: when(structured.fix.decision == "complete")
         next: reviewers
-      - condition: 修正を進められない、または実装方針の再定義が必要
+      - condition: when(structured.fix.decision == "replan")
         next: replan

@@ -4,6 +4,7 @@ import type {
   WorkflowStep,
 } from '../../models/types.js';
 import { formatAgentFailure } from '../../../shared/types/agent-failure.js';
+import { createFindingContractPartCompletionJsonSchema } from '../team-leader-finding-contract.js';
 
 export function summarizeParts(parts: PartDefinition[]): Array<{ id: string; title: string }> {
   return parts.map((part) => ({ id: part.id, title: part.title }));
@@ -62,6 +63,14 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
     policyContents: step.policyContents,
     knowledgeContents: step.knowledgeContents,
     qualityGates: step.qualityGates,
+    ...(step.teamLeader.mode === 'finding_contract_fix'
+      ? {
+          structuredOutput: {
+            schemaRef: 'team-leader-finding-contract-part-completion',
+            schema: createFindingContractPartCompletionJsonSchema(),
+          },
+        }
+      : {}),
   };
 }
 

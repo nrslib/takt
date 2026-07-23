@@ -1,11 +1,48 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { parse as parseYaml } from 'yaml';
 import { WorkflowStepRawSchema } from '../core/models/schemas.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 describe('team_leader schema', () => {
+  it('finding_contract_fix mode を受け付け、それ以外を拒否する', () => {
+    const valid = WorkflowStepRawSchema.safeParse({
+      name: 'fix',
+      team_leader: { mode: 'finding_contract_fix' },
+      instruction: 'fix',
+    });
+    const invalid = WorkflowStepRawSchema.safeParse({
+      name: 'fix',
+      team_leader: { mode: 'unsupported' },
+      instruction: 'fix',
+    });
+
+    expect(valid.success).toBe(true);
+    expect(invalid.success).toBe(false);
+  });
+
+  it('default team high の fix は明示 decision だけで reviewers または replan へ遷移する', () => {
+    const source = readFileSync(
+      join(process.cwd(), 'builtins', 'ja', 'workflows', 'takt-default-team-high.yaml'),
+      'utf-8',
+    );
+    const workflow = parseYaml(source) as {
+      steps: Array<{
+        name: string;
+        team_leader?: { mode?: string };
+        rules?: Array<{ condition: string; next: string }>;
+      }>;
+    };
+    const fix = workflow.steps.find((step) => step.name === 'fix');
+
+    expect(fix?.team_leader?.mode).toBe('finding_contract_fix');
+    expect(fix?.rules).toEqual([
+      { condition: 'when(structured.fix.decision == "complete")', next: 'reviewers' },
+      { condition: 'when(structured.fix.decision == "replan")', next: 'replan' },
+    ]);
+  });
   it('max_parts <= 3 の設定を受け付ける', () => {
     const raw = {
       name: 'implement',
@@ -261,6 +298,7 @@ describe('normalizeWorkflowConfig team_leader', () => {
           name: 'implement',
           allow_git_commit: true,
           team_leader: {
+            mode: 'finding_contract_fix',
             persona: 'team-leader',
             max_concurrency: 2,
             initial_max_parts: 2,
@@ -283,6 +321,7 @@ describe('normalizeWorkflowConfig team_leader', () => {
     expect(step).toBeDefined();
     expect(step!.allowGitCommit).toBe(true);
     expect(step!.teamLeader).toEqual({
+      mode: 'finding_contract_fix',
       persona: 'team-leader',
       personaPath: undefined,
       personaDisplayName: 'team-leader',
