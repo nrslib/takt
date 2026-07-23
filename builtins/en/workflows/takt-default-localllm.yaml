@@ -149,8 +149,6 @@ loop_monitors:
       rules:
         - condition: The missing evidence can be obtained concretely and another run of the same regular review is worthwhile
           next: reviewers
-        - condition: A concrete implementation fix can resolve the problem reported by the completion gate
-          next: fix
         - condition: The implementation or test strategy can be redefined without changing requirements or acceptance criteria
           next: replan
         - condition: No feasible approach can satisfy the requirements after the attempted reviews and replans
@@ -163,8 +161,6 @@ loop_monitors:
       rules:
         - condition: The missing evidence can be obtained concretely and another run of the same boundary review is worthwhile
           next: boundary-reviewers
-        - condition: A concrete implementation fix can resolve the problem reported by the completion gate
-          next: fix
         - condition: The implementation or test strategy can be redefined without changing requirements or acceptance criteria
           next: replan
         - condition: No feasible approach can satisfy the requirements after the attempted reviews and replans

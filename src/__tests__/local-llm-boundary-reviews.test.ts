@@ -631,15 +631,50 @@ describe('takt-default-localllm boundary reviews', () => {
         cycle: ['reviewers', 'local-review-integrity-gate'],
         threshold: 2,
         instruction: 'loop-monitor-gate-needs-review',
-        nextSteps: ['reviewers', 'fix', 'replan', 'ABORT'],
+        nextSteps: ['reviewers', 'replan', 'ABORT'],
       },
       {
         cycle: ['boundary-reviewers', 'final-gate'],
         threshold: 2,
         instruction: 'loop-monitor-gate-needs-review',
-        nextSteps: ['boundary-reviewers', 'fix', 'replan', 'ABORT'],
+        nextSteps: ['boundary-reviewers', 'replan', 'ABORT'],
       },
     ]);
+  });
+
+  it.each(['ja', 'en'] as const)('%s のanomaly-only inner gate monitorはfinding_contract_fixへ遷移しない', (locale) => {
+    const monitors = readRawWorkflow(locale).loop_monitors ?? [];
+    const anomalyOnlyMonitors = monitors.filter((monitor) => (
+      INNER_GATE_MONITORS.some(({ cycle }) => (
+        JSON.stringify(monitor.cycle) === JSON.stringify(cycle)
+      ))
+    ));
+
+    expect(anomalyOnlyMonitors).toHaveLength(2);
+    for (const monitor of anomalyOnlyMonitors) {
+      expect(monitor.judge.rules.map((rule) => rule.next)).not.toContain('fix');
+    }
+  });
+
+  it.each(['ja', 'en'] as const)('%s のinner gate instructionはreviewer anomalyを修正根拠にしない', (locale) => {
+    const instruction = readFileSync(join(
+      process.cwd(),
+      'builtins',
+      locale,
+      'facets',
+      'instructions',
+      'loop-monitor-gate-needs-review.md',
+    ), 'utf-8');
+
+    expect(instruction).toMatch(locale === 'ja'
+      ? /reviewer anomaly は証拠不成立を示す非 actionable な状態/
+      : /reviewer anomaly is a non-actionable evidence failure/);
+    expect(instruction).toMatch(locale === 'ja'
+      ? /actionable な open finding がない限り修正を選ばず/
+      : /Do not choose a fix without an actionable open finding/);
+    expect(instruction).toMatch(locale === 'ja'
+      ? /claimed content を修正根拠にしない/
+      : /do not use the anomaly's claimed content as repair evidence/);
   });
 
   it.each(['ja', 'en'] as const)('%s の複合閉路は完全一致して起点へ自然遷移するときだけ発火する', (locale) => {

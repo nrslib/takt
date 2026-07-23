@@ -365,7 +365,11 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     ...(params.findingContract && params.findingLedgerStore
       ? {
           getFindingsSummaryForJudge: () =>
-            renderLoopMonitorFindingsSummary(params.findingLedgerStore!.loadLedger(), params.findingContract!),
+            renderLoopMonitorFindingsSummary(
+              params.findingLedgerStore!.loadLedger(),
+              params.findingContract!,
+              params.options.language,
+            ),
         }
       : {}),
   });

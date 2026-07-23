@@ -149,8 +149,6 @@ loop_monitors:
       rules:
         - condition: 不足証拠を具体的に補完でき、同じ通常レビューをもう一度実行する価値がある
           next: reviewers
-        - condition: 完了ゲートが示した問題を具体的な実装修正で解消できる
-          next: fix
         - condition: 要件と受入条件を変えずに実装方針またはテスト方針を再定義できる
           next: replan
         - condition: 試行済みのレビューと再計画を踏まえても要件を満たす実現可能な方針がない
@@ -163,8 +161,6 @@ loop_monitors:
       rules:
         - condition: 不足証拠を具体的に補完でき、同じ境界レビューをもう一度実行する価値がある
           next: boundary-reviewers
-        - condition: 完了ゲートが示した問題を具体的な実装修正で解消できる
-          next: fix
         - condition: 要件と受入条件を変えずに実装方針またはテスト方針を再定義できる
           next: replan
         - condition: 試行済みのレビューと再計画を踏まえても要件を満たす実現可能な方針がない
