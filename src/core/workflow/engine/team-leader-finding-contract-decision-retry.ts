@@ -120,17 +120,25 @@ export async function requestValidFindingContractDecision<T>(
   try {
     for (let attempt = 1; attempt <= FINDING_CONTRACT_DECISION_EMERGENCY_CALL_LIMIT; attempt++) {
       throwForRecoveryAbort(options.abortSignal, scope.signal);
-      if (Date.now() >= deadlineAt) {
-        const deadlineError = new FindingContractDecisionRecoveryDeadlineError();
+      const emitTerminated = (
+        terminationReason: NonNullable<FindingContractDecisionAttemptEvent['terminationReason']>,
+        error: unknown,
+        rejectedDecision?: FindingContractRejectedDecision,
+      ): void => {
         options.onAttempt?.({
           type: 'terminated',
           attempt,
           mode: state.mode,
           ...(state.strictReason === undefined ? {} : { strictReason: state.strictReason }),
           ...buildAttemptTiming(startedAt, deadlineAt),
-          terminationReason: 'deadline',
-          terminationError: describeTerminationError(deadlineError),
+          ...(rejectedDecision === undefined ? {} : { rejectedDecision }),
+          terminationReason,
+          terminationError: describeTerminationError(error),
         });
+      };
+      if (Date.now() >= deadlineAt) {
+        const deadlineError = new FindingContractDecisionRecoveryDeadlineError();
+        emitTerminated('deadline', deadlineError);
         throw deadlineError;
       }
       const timing = buildAttemptTiming(startedAt, deadlineAt);
@@ -161,51 +169,19 @@ export async function requestValidFindingContractDecision<T>(
         return result;
       } catch (error) {
         if (options.abortSignal?.aborted === true) {
-          options.onAttempt?.({
-            type: 'terminated',
-            attempt,
-            mode: state.mode,
-            ...(state.strictReason === undefined ? {} : { strictReason: state.strictReason }),
-            ...buildAttemptTiming(startedAt, deadlineAt),
-            terminationReason: 'abort',
-            terminationError: describeTerminationError(options.abortSignal.reason),
-          });
+          emitTerminated('abort', options.abortSignal.reason);
           options.abortSignal.throwIfAborted();
         }
         if (scope.signal.aborted) {
-          options.onAttempt?.({
-            type: 'terminated',
-            attempt,
-            mode: state.mode,
-            ...(state.strictReason === undefined ? {} : { strictReason: state.strictReason }),
-            ...buildAttemptTiming(startedAt, deadlineAt),
-            terminationReason: 'deadline',
-            terminationError: describeTerminationError(scope.signal.reason),
-          });
+          emitTerminated('deadline', scope.signal.reason);
           scope.signal.throwIfAborted();
         }
         if (error instanceof FindingContractDecisionRecoveryDeadlineError) {
-          options.onAttempt?.({
-            type: 'terminated',
-            attempt,
-            mode: state.mode,
-            ...(state.strictReason === undefined ? {} : { strictReason: state.strictReason }),
-            ...buildAttemptTiming(startedAt, deadlineAt),
-            terminationReason: 'deadline',
-            terminationError: describeTerminationError(error),
-          });
+          emitTerminated('deadline', error);
           throw error;
         }
         if (!(error instanceof FindingContractTeamLeaderDecisionValidationError)) {
-          options.onAttempt?.({
-            type: 'terminated',
-            attempt,
-            mode: state.mode,
-            ...(state.strictReason === undefined ? {} : { strictReason: state.strictReason }),
-            ...buildAttemptTiming(startedAt, deadlineAt),
-            terminationReason: 'provider_or_engine_error',
-            terminationError: describeTerminationError(error),
-          });
+          emitTerminated('provider_or_engine_error', error);
           throw error;
         }
         const rejectedDecision = recordRejectedDecision(state, attempt, error);
@@ -218,16 +194,7 @@ export async function requestValidFindingContractDecision<T>(
           rejectedDecision,
         });
         if (attempt === FINDING_CONTRACT_DECISION_EMERGENCY_CALL_LIMIT) {
-          options.onAttempt?.({
-            type: 'terminated',
-            attempt,
-            mode: state.mode,
-            ...(state.strictReason === undefined ? {} : { strictReason: state.strictReason }),
-            ...buildAttemptTiming(startedAt, deadlineAt),
-            rejectedDecision,
-            terminationReason: 'emergency_call_limit',
-            terminationError: describeTerminationError(error),
-          });
+          emitTerminated('emergency_call_limit', error, rejectedDecision);
           throw new FindingContractDecisionRecoveryExhaustedError(error);
         }
         promoteRecoveryMode(state, attempt, error, rejectedDecision.repeatCount);
