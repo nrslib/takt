@@ -162,6 +162,20 @@ describe('Finding Contract Team Leader contract', () => {
     }, createFindingContractDecompositionJsonSchema())).toThrow(/must match pattern/);
 
     expect(() => validateStructuredOutputAgainstSchema({
+      parts: [{
+        id: 'repair',
+        title: 'Repair',
+        instruction: 'repair',
+        findingContract: {
+          findingIds: ['F-0001'],
+          role: 'repair',
+          writePaths: ['src/a.ts'],
+          readPaths: [path],
+        },
+      }],
+    }, createFindingContractDecompositionJsonSchema())).toThrow(/must match pattern/);
+
+    expect(() => validateStructuredOutputAgainstSchema({
       decision: 'continue',
       reasoning: 'continue repair',
       parts: [{
@@ -173,6 +187,24 @@ describe('Finding Contract Team Leader contract', () => {
           role: 'repair',
           writePaths: [path],
           readPaths: [],
+        },
+      }],
+      fixCoverage: [],
+      blockers: [],
+    }, createFindingContractFeedbackJsonSchema())).toThrow(/must match pattern/);
+
+    expect(() => validateStructuredOutputAgainstSchema({
+      decision: 'continue',
+      reasoning: 'continue repair',
+      parts: [{
+        id: 'repair',
+        title: 'Repair',
+        instruction: 'repair',
+        findingContract: {
+          findingIds: ['F-0001'],
+          role: 'repair',
+          writePaths: ['src/a.ts'],
+          readPaths: [path],
         },
       }],
       fixCoverage: [],
