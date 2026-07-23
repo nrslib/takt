@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { parseFindingManagerOutput } from '../core/workflow/findings/schemas.js';
-import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
+import {
+  reconcileFindingLedger,
+  reconcileManagerActionRecovery,
+} from '../core/workflow/findings/reconciler.js';
 import { formatConflictId } from '../core/workflow/findings/conflict-identity.js';
 import { computeLineageKey, computeRawEvidenceHash } from '../core/workflow/findings/raw-canonicalization.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
   RawFinding,
+  ReviewerAnomalyEntry,
 } from '../core/workflow/findings/types.js';
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
@@ -34,6 +38,23 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
     description: 'The workflow cannot route on open findings.',
     suggestion: 'Read the consolidated finding ledger in deterministic rules.',
     relation: 'new',
+    ...overrides,
+  };
+}
+
+function makeReviewerAnomaly(overrides: Partial<ReviewerAnomalyEntry> = {}): ReviewerAnomalyEntry {
+  return {
+    id: 'RA-UNPROMOTED',
+    kind: 'quote-mismatch',
+    stableKey: 'reviewer-anomaly-unpromoted',
+    lineageKey: 'lineage-unpromoted',
+    sourceRawFindingIds: ['raw-anomaly-unpromoted'],
+    reviewers: ['coding-reviewer'],
+    title: 'Unverified finding',
+    mismatchReason: 'The quoted source does not match the reviewed snapshot.',
+    firstObserved: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+    lastObserved: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+    occurrences: 1,
     ...overrides,
   };
 }
@@ -157,6 +178,53 @@ describe('dispute/waiver transitions', () => {
 });
 
 describe('reconcileFindingLedger', () => {
+  it('should preserve unpromoted and promoted reviewer anomalies', () => {
+    const reviewerAnomalies: ReviewerAnomalyEntry[] = [
+      makeReviewerAnomaly(),
+      makeReviewerAnomaly({
+        id: 'RA-PROMOTED',
+        kind: 'stale-snapshot',
+        stableKey: 'reviewer-anomaly-promoted',
+        lineageKey: 'lineage-promoted',
+        sourceRawFindingIds: ['raw-anomaly-promoted'],
+        reviewers: ['architecture-reviewer'],
+        title: 'Previously stale finding',
+        mismatchReason: 'The reviewed snapshot changed before validation.',
+        promotedFindingId: 'F-0001',
+      }),
+    ];
+    const previousLedger = makeLedger({ reviewerAnomalies });
+
+    const ledger = reconcileFindingLedger({
+      previousLedger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput(),
+      context: makeContext(),
+    });
+
+    expect(ledger.reviewerAnomalies).toBe(reviewerAnomalies);
+  });
+
+  it('should preserve reviewer anomalies through manager action recovery reconciliation', () => {
+    const reviewerAnomalies = [makeReviewerAnomaly({
+      id: 'RA-ACTION-RECOVERY',
+      stableKey: 'reviewer-anomaly-action-recovery',
+      lineageKey: 'lineage-action-recovery',
+      sourceRawFindingIds: ['raw-anomaly-action-recovery'],
+      reviewers: ['ai-antipattern-reviewer'],
+      title: 'Unverified recovery finding',
+    })];
+    const previousLedger = makeLedger({ reviewerAnomalies });
+
+    const ledger = reconcileManagerActionRecovery({
+      previousLedger,
+      managerOutput: makeManagerOutput(),
+      context: makeContext(),
+    });
+
+    expect(ledger.reviewerAnomalies).toBe(reviewerAnomalies);
+  });
+
   it('should assign engine-owned ids to new findings and ignore raw finding ids', () => {
     const rawFinding = makeRawFinding({ rawFindingId: 'reviewer-supplied-id' });
     const previousLedger = makeLedger({ nextId: 7 });
