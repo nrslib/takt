@@ -49,13 +49,26 @@ export function selectActionableFindingEntries(ledger: FindingLedger): FindingLe
   ));
 }
 
-export function renderActionableFindingLedgerInstructionSummary(
+function buildActionableFindingLedgerInstructionSummary(
   ledger: FindingLedger,
   findingIds?: readonly string[],
-): string {
+): {
+  workflowName: string;
+  open: Array<{
+    id: string;
+    lifecycle: FindingLedgerEntry['lifecycle'];
+    severity: FindingSeverity;
+    title: string;
+    location: string | undefined;
+    description: string | undefined;
+    suggestion: string | undefined;
+    rawFindingIds: string[];
+    familyTags: string[];
+  }>;
+} {
   const selectedIds = findingIds === undefined ? undefined : new Set(findingIds);
   const familyTagsByRawFindingId = indexRawFindingFamilyTags(ledger);
-  return JSON.stringify({
+  return {
     workflowName: ledger.workflowName,
     open: selectActionableFindingEntries(ledger)
       .filter((finding) => selectedIds === undefined || selectedIds.has(finding.id))
@@ -70,6 +83,24 @@ export function renderActionableFindingLedgerInstructionSummary(
         rawFindingIds: finding.rawFindingIds,
         familyTags: deriveFindingFamilyTags(finding, familyTagsByRawFindingId).familyTags,
       })),
+  };
+}
+
+export function renderActionableFindingLedgerInstructionSummary(
+  ledger: FindingLedger,
+  findingIds?: readonly string[],
+): string {
+  return JSON.stringify(buildActionableFindingLedgerInstructionSummary(ledger, findingIds), null, 2);
+}
+
+export function renderCompactActionableFindingLedgerInstructionSummary(
+  ledger: FindingLedger,
+  findingIds?: readonly string[],
+): string {
+  const summary = buildActionableFindingLedgerInstructionSummary(ledger, findingIds);
+  return JSON.stringify({
+    ...summary,
+    open: summary.open.map(({ rawFindingIds: _rawFindingIds, ...finding }) => finding),
   }, null, 2);
 }
 

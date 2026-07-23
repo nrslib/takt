@@ -10,6 +10,8 @@ import {
   parseFindingContractPartCompletionClaim,
   parseFindingContractPartDefinition,
   buildLatestFindingContractDigests,
+  renderActionableFindingContractSummary,
+  renderCompactActionableFindingContractSummary,
   validateFindingContractPartBatch,
 } from '../core/workflow/team-leader-finding-contract.js';
 import {
@@ -17,7 +19,7 @@ import {
   validateFindingContractCompletionEvidence,
 } from '../core/workflow/team-leader-finding-contract-decision.js';
 import { buildFindingContractTeamLeaderAggregatedContent } from '../core/workflow/engine/team-leader-aggregation.js';
-import type { PartDefinition, PartResult } from '../core/models/types.js';
+import type { FindingLedger, PartDefinition, PartResult } from '../core/models/types.js';
 import { buildMorePartsPrompt } from '../agents/team-leader-structured-output.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { writeTeamLeaderPartArtifact } from '../core/workflow/engine/team-leader-artifacts.js';
@@ -66,6 +68,83 @@ function makeResult(part: PartDefinition, summary = `completed ${part.id}`): Par
 }
 
 describe('Finding Contract Team Leader contract', () => {
+  it('keeps actionable context while omitting raw finding IDs from the Team Leader summary', () => {
+    const observedAt = {
+      runId: 'run-1',
+      stepName: 'reviewers',
+      timestamp: '2026-07-23T00:00:00.000Z',
+    };
+    const ledger: FindingLedger = {
+      version: 1,
+      workflowName: 'workflow',
+      nextId: 2,
+      updatedAt: observedAt.timestamp,
+      findings: [{
+        id: 'F-0001',
+        status: 'open',
+        lifecycle: 'persists',
+        severity: 'high',
+        title: 'Defect',
+        location: 'src/defect.ts:10',
+        description: 'The defect persists.',
+        suggestion: 'Repair the defect class.',
+        reviewers: ['architecture-review', 'testing-review'],
+        rawFindingIds: ['raw-architecture', 'raw-testing'],
+        firstSeen: observedAt,
+        lastSeen: observedAt,
+      }],
+      rawFindings: [
+        {
+          rawFindingId: 'raw-architecture',
+          stepName: 'reviewers',
+          reviewer: 'architecture-review',
+          familyTag: 'architecture',
+          severity: 'high',
+          title: 'Defect',
+          location: 'src/defect.ts:10',
+          description: 'The defect persists.',
+          suggestion: 'Repair the defect class.',
+          relation: 'new',
+        },
+        {
+          rawFindingId: 'raw-testing',
+          stepName: 'reviewers',
+          reviewer: 'testing-review',
+          familyTag: 'testing',
+          severity: 'high',
+          title: 'Defect',
+          location: 'src/defect.ts:10',
+          description: 'The defect persists.',
+          suggestion: 'Repair the defect class.',
+          relation: 'new',
+        },
+      ],
+      conflicts: [],
+    };
+
+    const summary = JSON.parse(renderCompactActionableFindingContractSummary(ledger)) as {
+      open: Array<Record<string, unknown>>;
+    };
+    const assignedSummary = JSON.parse(renderActionableFindingContractSummary(ledger)) as {
+      open: Array<Record<string, unknown>>;
+    };
+
+    expect(summary.open[0]).toMatchObject({
+      id: 'F-0001',
+      lifecycle: 'persists',
+      severity: 'high',
+      location: 'src/defect.ts:10',
+      description: 'The defect persists.',
+      suggestion: 'Repair the defect class.',
+      familyTags: ['architecture', 'testing'],
+    });
+    expect(summary.open[0]).not.toHaveProperty('rawFindingIds');
+    expect(assignedSummary.open[0]).toHaveProperty(
+      'rawFindingIds',
+      ['raw-architecture', 'raw-testing'],
+    );
+  });
+
   it('parses a scoped assignment and normalizes portable paths', () => {
     const part = parseFindingContractPartDefinition({
       id: 'repair-api',
