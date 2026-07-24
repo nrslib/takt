@@ -5,14 +5,15 @@
  * finding ではなく reviewer anomaly（review-integrity 側）へ隔離する。だが「全
  * 指摘が anomaly に隔離された run」は product gate（open/provisional）が空になり、
  * ワークフローが即 COMPLETE へ流れて実質レビューされずに通り得た。これを防ぐため、
- * 未昇格（promotedFindingId 無し）の anomaly が残る限り product gate とは別の
- * review-integrity gate が COMPLETE を拒否し、再レビューへ送る。
+ * 有効な acknowledgement が無い anomaly が残る限り product gate とは別の
+ * review-integrity gate が COMPLETE を拒否する。
  *
  * その再レビューを無限に繰り返さないための有限予算がこのモジュール。stop budget
  * と同じ round-marker 方式（適用済みマーカー集合。crash/replay 冪等）で、「未昇格
  * anomaly が残ったまま完了した findings-manager ラウンド」を数える。上限に達したら
- * exhausted=true になり、builtin は再レビュー（reviewers）ではなく
- * 要件を維持した再計画へルーティングする。反復の有限停止は loop monitor が担う。
+ * exhausted=true を監査・ルーティング用の観測値として公開する。ただし shared final
+ * gate はこの値だけでは再計画せず、再計画は supervisor の明示判断に委ねる。
+ * 承認も補完もできない反復の有限停止は loop monitor が担う。
  *
  * ラウンド跨ぎの累積状態は FindingLedger.reviewIntegrity へ永続化する（run/resume を
  * 跨いだ累積が無料で成立する）。マーカーの一意性・冪等性は round-marker.ts の
@@ -55,7 +56,7 @@ export function reviewIntegrityRoundsCompleted(ledger: FindingLedger): number {
 }
 
 /** 未昇格（promotedFindingId 無し）の reviewer anomaly が1件でも残っているか。 */
-function hasOutstandingReviewerAnomalies(ledger: FindingLedger): boolean {
+function hasUnpromotedReviewerAnomalies(ledger: FindingLedger): boolean {
   return (ledger.reviewerAnomalies ?? []).some((anomaly) => anomaly.promotedFindingId === undefined);
 }
 
@@ -77,7 +78,7 @@ export function attachReviewIntegrityState(
   nowIso: string,
 ): FindingLedger {
   const priorState = previousLedger.reviewIntegrity;
-  if (!hasOutstandingReviewerAnomalies(nextLedger)) {
+  if (!hasUnpromotedReviewerAnomalies(nextLedger)) {
     // 未昇格 anomaly が残っていないラウンドは予算を消費しない。既存状態は
     // そのまま持ち越す（reconcile が作り直した nextLedger には prior state が
     // 乗っていないため、明示的に再付与する — stop budget と同じ理由）。

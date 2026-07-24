@@ -1,4 +1,7 @@
-import { FINDING_CONTRACT_LITERAL_PATH_PATTERN } from './team-leader-finding-contract-validation.js';
+import {
+  FINDING_CONTRACT_CHANGED_PATHS_LIMITS,
+  FINDING_CONTRACT_LITERAL_PATH_PATTERN,
+} from './team-leader-finding-contract-validation.js';
 
 const nonEmptyStringSchema = { type: 'string', minLength: 1 } as const;
 const stringArraySchema = {
@@ -10,6 +13,14 @@ const literalPathArraySchema = {
   items: {
     ...nonEmptyStringSchema,
     pattern: FINDING_CONTRACT_LITERAL_PATH_PATTERN,
+  },
+} as const;
+const changedPathArraySchema = {
+  ...literalPathArraySchema,
+  maxItems: FINDING_CONTRACT_CHANGED_PATHS_LIMITS.maxItems,
+  items: {
+    ...literalPathArraySchema.items,
+    maxLength: FINDING_CONTRACT_CHANGED_PATHS_LIMITS.maxItemLength,
   },
 } as const;
 const findingContractAssignmentSchema = {
@@ -86,7 +97,7 @@ const findingContractPartCompletionJsonSchema: Record<string, unknown> = {
         additionalProperties: false,
       },
     },
-    changedPaths: literalPathArraySchema,
+    changedPaths: changedPathArraySchema,
     checks: {
       type: 'array',
       items: {

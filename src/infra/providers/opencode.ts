@@ -59,6 +59,7 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     opencodeApiKey: options.opencodeApiKey ?? resolveOpencodeApiKey(),
     childProcessEnv: options.childProcessEnv,
     outputSchema: options.outputSchema,
+    structuredOutputRetryCount: options.structuredOutputRetryCount,
     language: options.language,
   };
 }

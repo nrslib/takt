@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+
+description: 'TAKT facet eval: robustness review of failure and cleanup boundaries'
+
+prompts:
+  - file://prompts/boundary-robustness-buggy.phase1.md
+
+providers:
+  - id: 'exec: bash providers/opencode-review.sh ollama-cloud/gemma4:31b fixtures/review-boundaries-buggy --phase2=prompts/boundary-robustness-buggy.phase2.md'
+    label: gemma4-31b
+
+tests:
+  - description: 'recall: auxiliary failure escalation and late cleanup boundary'
+    vars:
+      task: file://cases/review-boundaries-buggy.md
+      previous_response: file://cases/prev-review-boundaries.md
+    assert:
+      - type: javascript
+        metric: recall/optional-failure-escalates-whole-operation
+        value: file://asserts/boundary-robustness-recall.mjs
+      - type: javascript
+        metric: precision/no-fabricated-citations
+        value: |
+          const cited = [...output.matchAll(/((?:src)\/[\w./-]+\.ts):(\d+)/g)];
+          const maxLines = new Map([
+            ['src/types.ts', 20],
+            ['src/import-document.ts', 15],
+            ['src/cli-import.ts', 14],
+            ['src/system-enqueue.ts', 14],
+            ['src/interactive-import.ts', 22],
+          ]);
+          return cited.length > 0 && cited.every((match) => {
+            const max = maxLines.get(match[1]);
+            const line = Number(match[2]);
+            return max !== undefined && line >= 1 && line <= max;
+          });

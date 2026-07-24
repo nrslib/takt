@@ -75,6 +75,24 @@ function isHiddenInternalCallableWorkflowMetadata(filePath: string): boolean {
   }
 }
 
+function requestsReviewerAnomalyAttestationMetadata(filePath: string): boolean {
+  try {
+    const raw = parseYaml(readFileSync(filePath, 'utf-8'));
+    if (typeof raw !== 'object' || raw === null) {
+      return false;
+    }
+    return (raw as {
+      subworkflow?: {
+        attestation?: {
+          kind?: unknown;
+        };
+      };
+    }).subworkflow?.attestation?.kind === 'reviewer_anomaly_acknowledgement';
+  } catch {
+    return false;
+  }
+}
+
 function shouldSuppressHiddenInternalWorkflowWarning(filePath: string, error: unknown): boolean {
   return isHiddenInternalCallableWorkflowMetadata(filePath) && isMissingWorkflowCallArgError(error);
 }
@@ -209,6 +227,9 @@ export function collectValidatedWorkflowEntries<Config extends WorkflowConfig | 
       validatedEntries.set(entry.name, { entry, config });
     } catch (error) {
       log.debug('Skipping invalid workflow file', { path: entry.path, error: getErrorMessage(error) });
+      if (requestsReviewerAnomalyAttestationMetadata(entry.path)) {
+        validatedEntries.delete(entry.name);
+      }
       if (shouldSuppressHiddenInternalWorkflowWarning(entry.path, error)) {
         continue;
       }

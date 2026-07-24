@@ -54,10 +54,19 @@ vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) =
 });
 
 import { WorkflowEngine } from '../core/workflow/index.js';
-import type { WorkflowConfig } from '../core/models/index.js';
+import type { FindingLedger, WorkflowConfig, WorkflowResumePoint } from '../core/models/index.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
-import { resolveFindingLedgerRoot } from '../core/workflow/findings/store.js';
+import {
+  createFindingLedgerStore,
+  resolveFindingLedgerRoot,
+} from '../core/workflow/findings/store.js';
+import { getBuiltinWorkflowsDir } from '../infra/config/paths.js';
+import { loadWorkflowFileWithResolutionOptions } from '../infra/config/loaders/workflowResolvedLoader.js';
+import { runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
+import { resolveWorkflowCallContinuation } from '../core/workflow/run/resume-point.js';
 
 function createTestTmpDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'takt-review-integrity-'));
@@ -119,6 +128,98 @@ function reviewerStep(rules: ReturnType<typeof makeRule>[]): ReturnType<typeof m
       { name: 'review.md', format: 'resolved facet body', formatRef: 'review-finding-contract' },
     ],
     rules,
+  });
+}
+
+function seedReviewerAnomalyLedger(cwd: string, exhausted = true): void {
+  const findingsDir = join(resolveFindingLedgerRoot(cwd), '.takt', 'findings');
+  mkdirSync(findingsDir, { recursive: true });
+  const observation = {
+    runId: 'seed-run',
+    stepName: 'gemma-reviewer',
+    timestamp: '2026-06-13T00:00:00.000Z',
+  };
+  const ledger: FindingLedger = {
+    version: 1,
+    workflowName: 'attested-parent',
+    nextId: 1,
+    updatedAt: observation.timestamp,
+    findings: [],
+    rawFindings: [],
+    conflicts: [],
+    reviewerAnomalies: [{
+      id: 'RA-GEMMA',
+      kind: 'quote-mismatch',
+      stableKey: 'gemma-stable-key',
+      lineageKey: 'gemma-lineage',
+      sourceRawFindingIds: ['gemma-raw-1'],
+      reviewers: ['gemma-reviewer'],
+      title: 'Gemma source quote mismatch',
+      mismatchReason: 'verbatimExcerpt does not match the reviewed source',
+      firstObserved: observation,
+      lastObserved: observation,
+      occurrences: 1,
+    }],
+    reviewIntegrity: {
+      roundMarkers: Array.from({ length: 6 }, (_, index) => `review-round-${index + 1}`),
+      firstRoundAt: observation.timestamp,
+      exhausted,
+    },
+  };
+  writeFileSync(
+    join(findingsDir, 'peer-review.json'),
+    JSON.stringify(ledger, null, 2),
+  );
+}
+
+function createAttestedFinalGateChild(cwd: string): WorkflowConfig {
+  const filePath = join(
+    getBuiltinWorkflowsDir('ja'),
+    'merge-readiness-finding-contract-final-gate.yaml',
+  );
+  return loadWorkflowFileWithResolutionOptions(filePath, {
+    projectCwd: cwd,
+    lookupCwd: cwd,
+    source: 'builtin',
+  });
+}
+
+function createAttestedCallStep(name: string, next: string): WorkflowConfig['steps'][number] {
+  return {
+    name,
+    kind: 'workflow_call',
+    call: 'attested-final-gate-child',
+    personaDisplayName: name,
+    instruction: '',
+    rules: [
+      makeRule('COMPLETE', next),
+      makeRule('ABORT', 'ABORT'),
+    ],
+  };
+}
+
+function mockCleanApprovals(
+  rawFindingsByPersona: Readonly<Record<string, typeof HALLUCINATED_RAW>> = {},
+): void {
+  vi.mocked(runStatusJudgmentPhase).mockResolvedValue({
+    label: 'approved',
+    method: 'ai_judge',
+  });
+  vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+    options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+    const emitsRawFindings = options?.outputSchema
+      && JSON.stringify(options.outputSchema).includes('"rawFindings"');
+    return {
+      persona,
+      status: 'done',
+      content: 'approved',
+      ...(emitsRawFindings
+        ? { structuredOutput: { rawFindings: rawFindingsByPersona[persona]
+          ? [rawFindingsByPersona[persona]]
+          : [] } }
+        : {}),
+      timestamp: new Date(),
+    };
   });
 }
 
@@ -303,100 +404,457 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(personas).not.toContain('test-writer');
   });
 
-  it('review_budget 枯渇後は replan → implement → reviewers へ進み、write_tests を再実行せず loop monitor で有限停止する', async () => {
-    mockReviewerEmitsHallucination();
-
-    // builtin 相当の配線を最小化: gate は review_budget 枯渇までは再レビューし、
-    // 枯渇後は replan へ戻す。sticky な枯渇状態による反復は loop monitor が止める。
+  it('Gemma anomaly と sticky な budgetExhausted があっても、二段 APPROVE が開始時 evidence を ack して COMPLETE する', async () => {
+    seedReviewerAnomalyLedger(cwd);
+    mockCleanApprovals();
+    const childConfig = createAttestedFinalGateChild(cwd);
     const config: WorkflowConfig = {
-      name: 'review-integrity-bounded',
-      maxSteps: 20,
-      initialStep: 'reviewers',
+      name: 'attested-parent',
+      maxSteps: 8,
+      initialStep: 'final-gate',
       provider: 'claude',
-      loopMonitors: [{
-        cycle: ['replan', 'implement', 'reviewers', 'gate'],
-        threshold: 2,
-        judge: {
-          persona: 'supervisor',
-          instruction: 'Abort only when no feasible requirements-compliant approach remains.',
-          rules: [
-            makeRule('when(true)', 'ABORT'),
-          ],
-        },
-      }],
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
-        reviewBudget: { maxReviewRounds: 2 },
       },
-      steps: [
-        reviewerStep([makeRule('when(findings.conflicts.count == 0)', 'gate')]),
-        makeStep({
-          name: 'gate',
-          persona: 'gatekeeper',
-          instruction: 'Gate.',
-          rules: [
-            makeRule('when(findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true && findings.conflicts.count == 0)', 'replan'),
-            makeRule('when(findings.reviewerAnomalies.count > 0 && findings.conflicts.count == 0)', 'reviewers'),
-            makeRule('when(findings.open.count == 0 && findings.conflicts.count == 0)', 'COMPLETE'),
-          ],
-        }),
-        makeStep({
-          name: 'replan',
-          tags: ['plan'],
-          persona: 'planner',
-          instruction: 'Redefine the implementation approach without changing requirements.',
-          rules: [makeRule('when(true)', 'implement')],
-        }),
-        makeStep({
-          name: 'implement',
-          persona: 'coder',
-          instruction: 'Implement the revised approach.',
-          rules: [makeRule('when(true)', 'reviewers')],
-        }),
-      ],
+      steps: [createAttestedCallStep('final-gate', 'COMPLETE')],
     };
-
     const engine = new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
+      workflowCallResolver: () => childConfig,
     });
-    let abortReason = '';
-    engine.on('workflow:abort', (_state, reason: string) => { abortReason = reason; });
+
     const result = await engine.run();
 
-    // COMPLETE には至らず、再計画を試した後に loop monitor が有限停止する。
-    expect(result.status).toBe('aborted');
-    expect(abortReason).toContain('Workflow aborted by step transition');
-
-    const stepNames = vi.mocked(runAgent).mock.calls.map(([persona]) => persona);
-    expect(stepNames).toContain('planner');
-    expect(stepNames).toContain('coder');
-    expect(stepNames).not.toContain('test-writer');
-
-    // 初回だけで諦めず再レビューし、その後も再計画した実装をレビューしている。
-    const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
-      options?.outputSchema && JSON.stringify(options.outputSchema).includes('"rawFindings"')
-    ));
-    expect(reviewerCalls.length).toBeGreaterThan(2);
-
-    // 台帳: 予算を使い切り、anomaly は監査に残る（消えない）。
-    const ledgerPath = join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'peer-review.json');
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
-      findings: unknown[];
-      reviewerAnomalies?: Array<{ occurrences: number; promotedFindingId?: string }>;
-      reviewIntegrity?: { roundMarkers: string[]; exhausted: boolean };
-    };
-    expect(ledger.findings).toHaveLength(0);
-    expect(ledger.reviewIntegrity?.exhausted).toBe(true);
-    expect(ledger.reviewIntegrity?.roundMarkers.length).toBeGreaterThanOrEqual(2);
-    // 再レビューを跨いでも anomaly は消えず、単一の監査レコードとして残る
-    // （観測消去の禁止 — 複数レコードへ増殖もしない）。
+    expect(result.status).toBe('completed');
+    expect(result.findings?.reviewerAnomalies).toMatchObject({
+      count: 1,
+      outstanding: 0,
+      acknowledged: 1,
+      budgetExhausted: true,
+    });
+    const ledger = JSON.parse(readFileSync(
+      join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'peer-review.json'),
+      'utf-8',
+    )) as FindingLedger;
     expect(ledger.reviewerAnomalies).toHaveLength(1);
-    expect(ledger.reviewerAnomalies?.[0]?.promotedFindingId).toBeUndefined();
-    expect(ledger.reviewerAnomalies?.[0]?.occurrences).toBeGreaterThanOrEqual(1);
+    expect(ledger.reviewerAnomalyAcknowledgements).toHaveLength(1);
+    expect(ledger.reviewerAnomalyAcknowledgements?.[0]?.approvals.map((approval) => approval.stepName))
+      .toEqual(['merge-readiness-review', 'supervise']);
+  });
+
+  it('ack 保存後・親 workflow_call 完了記録前の direct resume は新 run でも同一 invocation replay になる', async () => {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'language: ja\n');
+    seedReviewerAnomalyLedger(cwd);
+    mockCleanApprovals();
+    const childConfig = createAttestedFinalGateChild(cwd);
+    const config: WorkflowConfig = {
+      name: 'attested-parent',
+      maxSteps: 8,
+      initialStep: 'final-gate',
+      provider: 'claude',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+      },
+      steps: [{
+        ...createAttestedCallStep('final-gate', 'COMPLETE'),
+        call: childConfig.name,
+      }],
+    };
+    const reportDirName = 'test-report-dir-crash-replay';
+    const firstEngine = new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName,
+      workflowCallResolver: () => childConfig,
+    });
+    let acknowledgementPersistenceObserved = false;
+    let parentResponseRecordedAtCrash: boolean | undefined;
+    let resumePointAtCrash: WorkflowResumePoint | undefined;
+    firstEngine.on('findings:ledger', (ledger: FindingLedger) => {
+      if ((ledger.reviewerAnomalyAcknowledgements?.length ?? 0) > 0) {
+        acknowledgementPersistenceObserved = true;
+        parentResponseRecordedAtCrash = firstEngine.getState().stepOutputs.has('final-gate');
+        resumePointAtCrash = firstEngine.getResumePoint();
+        throw new Error('simulated crash immediately after acknowledgement persistence');
+      }
+    });
+
+    const crashed = await firstEngine.run();
+    const ledgerPath = join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'peer-review.json');
+    const ledgerAfterCrash = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as FindingLedger;
+    const acknowledgementAfterCrash = ledgerAfterCrash.reviewerAnomalyAcknowledgements?.[0];
+    const resumePoint = resumePointAtCrash;
+
+    expect(crashed.status).toBe('aborted');
+    expect(acknowledgementPersistenceObserved).toBe(true);
+    expect(ledgerAfterCrash.reviewerAnomalyAcknowledgements).toHaveLength(1);
+    expect(parentResponseRecordedAtCrash).toBe(false);
+    expect(resumePoint).toBeDefined();
+    expect(resumePoint?.stack.map((entry) => entry.step)).toEqual([
+      'final-gate',
+      'supervise',
+    ]);
+    expect(resumePoint?.stack[0]?.step_iterations?.['final-gate']).toBe(1);
+    if (acknowledgementAfterCrash === undefined || resumePoint === undefined) {
+      throw new Error('Expected persisted acknowledgement and engine resume point after crash');
+    }
+    const startStep = resumePoint.stack[0]?.step;
+    if (startStep === undefined) {
+      throw new Error('Expected root workflow step in engine resume point');
+    }
+    const invocationBeforeResume = acknowledgementAfterCrash.gate.invocationId;
+    const runIdBeforeResume = acknowledgementAfterCrash.gate.startedAt.runId;
+    expect(invocationBeforeResume).toBe(`${reportDirName}:final-gate#1`);
+    expect(runIdBeforeResume).toBe(reportDirName);
+
+    const resumedReportDirName = 'test-report-dir-crash-replay-resumed';
+    const resumed = await executeWorkflow(config, 'task', cwd, {
+      projectCwd: cwd,
+      provider: 'claude',
+      outputMode: 'silent',
+      reportDirName: resumedReportDirName,
+      startStep,
+      resumePoint,
+      resumeSource: {
+        sourceRunSlug: reportDirName,
+        resumeMode: 'retry',
+      },
+      initialIterationOverride: resumePoint.iteration,
+    });
+    const ledgerAfterResume = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as FindingLedger;
+    const acknowledgementAfterResume = ledgerAfterResume.reviewerAnomalyAcknowledgements?.[0];
+
+    expect(resumed.reason).toBeUndefined();
+    expect(resumed).toMatchObject({ success: true });
+    expect(resumedReportDirName).not.toBe(reportDirName);
+    expect(resumed.runDirectory).toBe(join(cwd, '.takt', 'runs', resumedReportDirName));
+    expect(ledgerAfterResume.reviewerAnomalyAcknowledgements).toHaveLength(1);
+    expect(acknowledgementAfterResume).toEqual(acknowledgementAfterCrash);
+    expect(acknowledgementAfterResume?.gate.invocationId).toBe(invocationBeforeResume);
+    expect(acknowledgementAfterResume?.gate.startedAt.runId).toBe(runIdBeforeResume);
+    expect(vi.mocked(runAgent).mock.calls.map(([persona]) => persona)).toEqual([
+      'merge-readiness-reviewer',
+      'supervisor',
+      'merge-readiness-reviewer',
+      'supervisor',
+    ]);
+  });
+
+  it.each([
+    {
+      interruption: 'A承認後・B開始前',
+      iteration: 2,
+      childStepIterations: { 'merge-readiness-review': 1 },
+      expectedResumedStepIterations: [2, 1],
+    },
+    {
+      interruption: 'B承認後・ack保存前',
+      iteration: 3,
+      childStepIterations: { 'merge-readiness-review': 1, supervise: 1 },
+      expectedResumedStepIterations: [2, 2],
+    },
+  ])('$interruption の resume はAへ巻き戻し、同じ final gate をA→Bで再承認してack・COMPLETEする', async ({
+    iteration,
+    childStepIterations,
+    expectedResumedStepIterations,
+  }) => {
+    seedReviewerAnomalyLedger(cwd);
+    mockCleanApprovals();
+    const childConfig = createAttestedFinalGateChild(cwd);
+    const config: WorkflowConfig = {
+      name: 'attested-parent',
+      maxSteps: 10,
+      initialStep: 'final-gate',
+      provider: 'claude',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+      },
+      steps: [createAttestedCallStep('final-gate', 'COMPLETE')],
+    };
+    const resumePoint: WorkflowResumePoint = {
+      version: 1,
+      stack: [
+        buildWorkflowResumePointEntry(
+          config,
+          'final-gate',
+          'workflow_call',
+          new Map([['final-gate', 1]]),
+        ),
+        buildWorkflowResumePointEntry(
+          childConfig,
+          'supervise',
+          'agent',
+          new Map(Object.entries(childStepIterations)),
+        ),
+      ],
+      iteration,
+      elapsed_ms: 1_000,
+    };
+    const resumedSteps: Array<{ name: string; stepIteration: number }> = [];
+    const workflowCallContinuation = resolveWorkflowCallContinuation({
+      workflow: config,
+      resumePoint,
+      invocationRunId: 'source-run',
+      resolveWorkflowCall: () => childConfig,
+    });
+    expect(workflowCallContinuation).toBeDefined();
+    const engine = new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: `test-report-dir-resume-${iteration}`,
+      workflowCallResolver: () => childConfig,
+      startStep: 'final-gate',
+      resumePoint,
+      workflowCallContinuation,
+      initialIteration: resumePoint.iteration,
+    });
+    engine.on('step:start', (
+      step,
+      _activeIteration,
+      _instruction,
+      _providerInfo,
+      workflowName,
+      _resumeStepName,
+      stepIteration,
+    ) => {
+      if (workflowName === childConfig.name) {
+        resumedSteps.push({ name: step.name, stepIteration });
+      }
+    });
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('completed');
+    expect(resumedSteps).toEqual([
+      {
+        name: 'merge-readiness-review',
+        stepIteration: expectedResumedStepIterations[0],
+      },
+      {
+        name: 'supervise',
+        stepIteration: expectedResumedStepIterations[1],
+      },
+    ]);
+    const ledger = JSON.parse(readFileSync(
+      join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'peer-review.json'),
+      'utf-8',
+    )) as FindingLedger;
+    expect(ledger.reviewerAnomalyAcknowledgements).toHaveLength(1);
+    expect(ledger.reviewerAnomalyAcknowledgements?.[0]?.approvals.map((approval) => approval.stepName))
+      .toEqual(['merge-readiness-review', 'supervise']);
+  });
+
+  it('capability 付き builtin でも authenticated workflow_call invocation 無しでは ack できない', async () => {
+    seedReviewerAnomalyLedger(cwd);
+    mockCleanApprovals();
+    const childConfig = createAttestedFinalGateChild(cwd);
+    const contract = {
+      ledgerPath: '.takt/findings/peer-review.json',
+      rawFindingsPath: '.takt/findings/raw',
+      manager: {
+        persona: 'findings-manager',
+        instruction: 'findings-manager',
+        outputContract: 'findings-manager',
+      },
+    };
+    const ledgerStore = createFindingLedgerStore({
+      projectCwd: cwd,
+      reportDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'reports'),
+      workflowName: 'attested-parent',
+      ledgerPath: contract.ledgerPath,
+      rawFindingsPath: contract.rawFindingsPath,
+    });
+    const engine = new WorkflowEngine(childConfig, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      inheritedFindingContract: { contract, ledgerStore },
+    });
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('aborted');
+    expect(ledgerStore.loadLedger().reviewerAnomalyAcknowledgements).toBeUndefined();
+  });
+
+  it('plain spread で capability を失った attestation config は direct Engine で拒否する', () => {
+    seedReviewerAnomalyLedger(cwd);
+    const loaded = createAttestedFinalGateChild(cwd);
+    const plainConfig = { ...loaded };
+    const contract = {
+      ledgerPath: '.takt/findings/peer-review.json',
+      rawFindingsPath: '.takt/findings/raw',
+      manager: {
+        persona: 'findings-manager',
+        instruction: 'findings-manager',
+        outputContract: 'findings-manager',
+      },
+    };
+    const ledgerStore = createFindingLedgerStore({
+      projectCwd: cwd,
+      reportDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'reports'),
+      workflowName: 'attested-parent',
+      ledgerPath: contract.ledgerPath,
+      rawFindingsPath: contract.rawFindingsPath,
+    });
+
+    expect(() => new WorkflowEngine(plainConfig, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      inheritedFindingContract: { contract, ledgerStore },
+    })).toThrow(/not authorized by the workflow resolver/);
+  });
+
+  it('同一 identity の attestation config を発行後に変更すると direct Engine で拒否する', () => {
+    seedReviewerAnomalyLedger(cwd);
+    const loaded = createAttestedFinalGateChild(cwd);
+    loaded.steps[0]!.instruction = 'Mutated approval instruction';
+    const contract = {
+      ledgerPath: '.takt/findings/peer-review.json',
+      rawFindingsPath: '.takt/findings/raw',
+      manager: {
+        persona: 'findings-manager',
+        instruction: 'findings-manager',
+        outputContract: 'findings-manager',
+      },
+    };
+    const ledgerStore = createFindingLedgerStore({
+      projectCwd: cwd,
+      reportDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'reports'),
+      workflowName: 'attested-parent',
+      ledgerPath: contract.ledgerPath,
+      rawFindingsPath: contract.rawFindingsPath,
+    });
+
+    expect(() => new WorkflowEngine(loaded, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      inheritedFindingContract: { contract, ledgerStore },
+    })).toThrow(/workflow content changed after issuance/);
+  });
+
+  it('localllm 相当の inner gate 後に boundary へ進み、boundary の新 anomaly を final gate で再評価する', async () => {
+    seedReviewerAnomalyLedger(cwd);
+    const boundaryRaw = {
+      ...HALLUCINATED_RAW,
+      rawFindingId: 'boundary-1',
+      title: 'Boundary-only anomaly',
+      location: 'src/boundary-does-not-exist.ts:7',
+    };
+    mockCleanApprovals({ 'boundary-reviewer': boundaryRaw });
+    const childConfig = createAttestedFinalGateChild(cwd);
+    const config: WorkflowConfig = {
+      name: 'attested-parent',
+      maxSteps: 16,
+      initialStep: 'local-review-integrity-gate',
+      provider: 'claude',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+      },
+      steps: [
+        createAttestedCallStep('local-review-integrity-gate', 'boundary-reviewers'),
+        makeStep({
+          name: 'boundary-reviewers',
+          persona: 'boundary-reviewer',
+          instruction: 'Review boundaries.',
+          outputContracts: [{
+            name: 'boundary-review.md',
+            format: 'boundary review',
+            formatRef: 'failure-boundary-review-finding-contract',
+          }],
+          rules: [makeRule(
+            'approved && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)',
+            'final-gate',
+          )],
+        }),
+        createAttestedCallStep('final-gate', 'COMPLETE'),
+      ],
+    };
+    const engine = new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      workflowCallResolver: () => childConfig,
+    });
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('completed');
+    expect(vi.mocked(runAgent).mock.calls.map(([persona]) => persona)).toContain('boundary-reviewer');
+    const ledger = JSON.parse(readFileSync(
+      join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'peer-review.json'),
+      'utf-8',
+    )) as FindingLedger;
+    expect(ledger.reviewerAnomalies).toHaveLength(2);
+    expect(ledger.reviewerAnomalyAcknowledgements).toHaveLength(2);
+  });
+
+  it('gate 内で新たに生成された anomaly があれば開始時分も ack せず、次の gate で全件を再承認する', async () => {
+    seedReviewerAnomalyLedger(cwd);
+    const gateRaw = {
+      ...HALLUCINATED_RAW,
+      rawFindingId: 'gate-1',
+      title: 'Anomaly created by the supervisor gate',
+      location: 'src/gate-does-not-exist.ts:9',
+    };
+    mockCleanApprovals({ supervisor: gateRaw });
+    const childConfig = createAttestedFinalGateChild(cwd);
+    const config: WorkflowConfig = {
+      name: 'attested-parent',
+      maxSteps: 8,
+      initialStep: 'final-gate',
+      provider: 'claude',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+      },
+      steps: [createAttestedCallStep('final-gate', 'COMPLETE')],
+    };
+    const engine = new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      workflowCallResolver: () => childConfig,
+    });
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('aborted');
+    const ledgerPath = join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'peer-review.json');
+    const ledger = JSON.parse(readFileSync(
+      ledgerPath,
+      'utf-8',
+    )) as FindingLedger;
+    expect(ledger.reviewerAnomalies).toHaveLength(2);
+    expect(ledger.reviewerAnomalyAcknowledgements ?? []).toHaveLength(0);
+    const newAnomaly = ledger.reviewerAnomalies?.find((anomaly) => anomaly.title === gateRaw.title);
+    expect(newAnomaly).toBeDefined();
+
+    mockCleanApprovals();
+    const retryEngine = new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir-retry',
+      workflowCallResolver: () => childConfig,
+    });
+    const retryResult = await retryEngine.run();
+    const retriedLedger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as FindingLedger;
+
+    expect(retryResult.status).toBe('completed');
+    expect(retriedLedger.reviewerAnomalyAcknowledgements).toHaveLength(2);
   });
 
   it('final-gate supervisor は2つのFinding Contract報告を出しても、ステップごとに1回だけ取り込み、raw findingを重複保存しない', async () => {

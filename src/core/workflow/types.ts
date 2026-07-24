@@ -31,6 +31,7 @@ import type { StructuredOutputNormalizerRegistry } from './engine/structured-out
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
 import type { FindingContractConfig, FindingLedger } from '../models/finding-types.js';
 import type { RunResumeSource } from './run/run-meta.js';
+import type { WorkflowCallContinuation } from './run/resume-point.js';
 import type { FindingLedgerStore } from './findings/store.js';
 import type { OperationJournalStore } from './operations/operation-journal-types.js';
 
@@ -388,6 +389,8 @@ export interface WorkflowEngineOptions {
   resumePoint?: WorkflowResumePoint;
   resumeSource?: RunResumeSource;
   operationJournal?: WorkflowOperationJournalContext;
+  /** Validated in-flight workflow_call continuation resolved at the execution boundary. */
+  workflowCallContinuation?: WorkflowCallContinuation;
   /** Override report directory name (without parent path). */
   reportDirName?: string;
   /** Namespace appended under the shared run directories for nested workflow execution. */

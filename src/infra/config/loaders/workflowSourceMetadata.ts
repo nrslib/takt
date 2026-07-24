@@ -1,15 +1,14 @@
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import type { WorkflowConfig } from '../../../core/models/index.js';
+import { getWorkflowOpaqueRef } from '../../../core/workflow/reviewer-anomaly-capability.js';
 import type { WorkflowTrustInfo } from './workflowTrustSource.js';
 
 const WORKFLOW_SOURCE_PATH = Symbol('workflowSourcePath');
 const WORKFLOW_TRUST_INFO = Symbol('workflowTrustInfo');
-const WORKFLOW_OPAQUE_REF = Symbol.for('takt.workflowOpaqueRef');
 type WorkflowConfigWithSourcePath = WorkflowConfig & {
   [WORKFLOW_SOURCE_PATH]?: string;
   [WORKFLOW_TRUST_INFO]?: WorkflowTrustInfo;
-  [WORKFLOW_OPAQUE_REF]?: string;
 };
 
 export function attachWorkflowSourcePath(workflow: WorkflowConfig, sourcePath: string): WorkflowConfig {
@@ -31,18 +30,8 @@ export function buildOpaqueWorkflowRef(
   return `${trustInfo.source}:sha256:${digest}`;
 }
 
-export function attachWorkflowOpaqueRef(workflow: WorkflowConfig, opaqueRef: string): WorkflowConfig {
-  Object.defineProperty(workflow, WORKFLOW_OPAQUE_REF, {
-    value: opaqueRef,
-    writable: true,
-    configurable: true,
-    enumerable: false,
-  });
-  return workflow;
-}
-
 export function getAttachedWorkflowOpaqueRef(workflow: WorkflowConfig): string | undefined {
-  return (workflow as WorkflowConfigWithSourcePath)[WORKFLOW_OPAQUE_REF];
+  return getWorkflowOpaqueRef(workflow);
 }
 
 export function getWorkflowSourcePath(workflow: WorkflowConfig): string | undefined {

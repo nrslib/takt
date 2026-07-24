@@ -25,6 +25,7 @@ export const serialWorkflowTestFiles = Object.freeze([
   'src/__tests__/finding-stop-budget.test.ts',
   'src/__tests__/it-workflow-loader.test.ts',
   'src/__tests__/it-workflow-loader-canonical.test.ts',
+  'src/__tests__/local-llm-boundary-reviews.test.ts',
   'src/__tests__/workflow-categories.test.ts',
   'src/__tests__/workflowDiscovery.test.ts',
   'src/__tests__/workflow-engine-structured-caller.test.ts',

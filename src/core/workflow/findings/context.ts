@@ -7,6 +7,9 @@ import {
 } from './types.js';
 import { isLedgerConflictUnadjudicated } from './adjudication-evidence.js';
 import { computeReviewScopeSnapshotId } from './snapshot.js';
+import {
+  selectOutstandingReviewerAnomalies,
+} from './reviewer-anomaly-acknowledgement.js';
 
 function indexRawFindingFamilyTags(ledger: FindingLedger): ReadonlyMap<string, string> {
   const familyTagsByRawFindingId = new Map<string, string>();
@@ -230,13 +233,21 @@ export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): Fi
   const openItems = ledger.findings.filter((finding) => finding.status === 'open');
   const familyTagsByRawFindingId = indexRawFindingFamilyTags(ledger);
   const activeConflicts = ledger.conflicts.filter((conflict) => conflict.status === 'active');
+  const unpromotedAnomalies = (ledger.reviewerAnomalies ?? [])
+    .filter((anomaly) => anomaly.promotedFindingId === undefined);
+  const reviewScopeSnapshotId = activeConflicts.length > 0 || unpromotedAnomalies.length > 0
+    ? computeReviewScopeSnapshotId(cwd)
+    : undefined;
   let unadjudicatedConflictCount = 0;
   if (activeConflicts.length > 0) {
-    const reviewScopeSnapshotId = computeReviewScopeSnapshotId(cwd);
     unadjudicatedConflictCount = activeConflicts.filter((conflict) => (
-      isLedgerConflictUnadjudicated(conflict, ledger, reviewScopeSnapshotId)
+      isLedgerConflictUnadjudicated(conflict, ledger, reviewScopeSnapshotId!)
     )).length;
   }
+  const outstandingAnomalies = reviewScopeSnapshotId === undefined
+    ? []
+    : selectOutstandingReviewerAnomalies(ledger, reviewScopeSnapshotId);
+  const acknowledgedAnomalyCount = unpromotedAnomalies.length - outstandingAnomalies.length;
   const bySeverity = Object.fromEntries(
     FINDING_SEVERITIES.map((severity) => [severity, 0]),
   ) as Record<FindingSeverity, number>;
@@ -298,17 +309,15 @@ export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): Fi
     superseded: {
       count: ledger.findings.filter((finding) => finding.status === 'superseded').length,
     },
-    // review-integrity protocol: 二系統台帳の review-integrity 側。未昇格（promotedFindingId
-    // 無し）の anomaly だけを数える — 昇格済みは既に product finding 側
-    // （open/provisional 等）でカウントされているため二重計上しない。product
-    // gate（COMPLETE 判定）はこの count を一切参照しない — reviewerAnomalies は
-    // findings 配列と別物なので、参照しなくても構造的に gate を塞げない。
+    // count は既存どおり未昇格 anomaly の総数。ack によって意味を変えず、
+    // 現在の snapshot/evidence に対する completion 判定は outstanding を使う。
     reviewerAnomalies: {
-      count: (ledger.reviewerAnomalies ?? []).filter((anomaly) => anomaly.promotedFindingId === undefined).length,
+      count: unpromotedAnomalies.length,
+      outstanding: outstandingAnomalies.length,
+      acknowledged: acknowledgedAnomalyCount,
       // review-integrity requirement: review-integrity 予算が尽きたか（台帳側で計算・
-      // 永続化済み。ここは読むだけ）。未昇格 anomaly が残る限り COMPLETE は許さず
-      // 再レビューへ送るが、有限回で補完できなければ builtin はこれを見て
-      // 要件を維持した再計画へルーティングする。
+      // 永続化済み。ここは読むだけ）。shared final gate はこの値だけでは
+      // 再計画せず、supervisor の明示判断と有限停止監視を優先する。
       budgetExhausted: ledger.reviewIntegrity?.exhausted ?? false,
     },
     conflicts: {

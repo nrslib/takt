@@ -14,8 +14,14 @@ import {
   getPreviousOutput,
 } from '../core/workflow/engine/state-manager.js';
 import { MAX_USER_INPUTS, MAX_INPUT_LENGTH } from '../core/workflow/constants.js';
-import type { WorkflowConfig, AgentResponse, WorkflowState } from '../core/models/types.js';
+import type {
+  WorkflowConfig,
+  AgentResponse,
+  WorkflowResumePoint,
+  WorkflowState,
+} from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
+import { resolveWorkflowCallContinuation } from '../core/workflow/run/resume-point.js';
 
 function makeConfig(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig {
   return {
@@ -122,6 +128,381 @@ describe('StateManager', () => {
 
       expect(manager.incrementStepIteration('review')).toBe(7);
       expect(manager.state.stepIterations.get('fix')).toBe(2);
+    });
+
+    it('should preserve the persisted workflow_call invocation iteration for an in-flight child continuation', () => {
+      const childConfig = makeConfig({
+        name: 'child',
+        initialStep: 'review',
+        steps: [{ name: 'review', personaDisplayName: 'review', instruction: '' }],
+      });
+      const parentConfig = makeConfig({
+        steps: [{
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: childConfig.name,
+          personaDisplayName: 'delegate',
+          instruction: '',
+        }],
+      });
+      const resumePoint: WorkflowResumePoint = {
+        version: 1,
+        stack: [{
+          workflow: 'test-workflow',
+          step: 'delegate',
+          kind: 'workflow_call',
+          step_iterations: { delegate: 3 },
+        }, {
+          workflow: 'child',
+          step: 'review',
+          kind: 'agent',
+        }],
+        iteration: 12,
+        elapsed_ms: 100,
+      };
+      const continuation = resolveWorkflowCallContinuation({
+        workflow: parentConfig,
+        resumePoint,
+        invocationRunId: 'source-run',
+        resolveWorkflowCall: () => childConfig,
+      });
+      expect(continuation).toBeDefined();
+      const manager = new StateManager(
+        parentConfig,
+        makeOptions({
+          startStep: 'delegate',
+          resumePoint,
+          workflowCallContinuation: continuation,
+        }),
+      );
+
+      expect(manager.incrementStepIteration('delegate')).toBe(3);
+      expect(manager.incrementStepIteration('delegate')).toBe(4);
+    });
+
+    it('should not preserve an invocation iteration for a directly injected continuation object', () => {
+      const parentConfig = makeConfig({
+        steps: [{
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'child',
+          personaDisplayName: 'delegate',
+          instruction: '',
+        }],
+      });
+      const manager = new StateManager(
+        parentConfig,
+        makeOptions({
+          startStep: 'delegate',
+          resumePoint: {
+            version: 1,
+            stack: [{
+              workflow: parentConfig.name,
+              step: 'delegate',
+              kind: 'workflow_call',
+              step_iterations: { delegate: 3 },
+            }, {
+              workflow: 'child',
+              step: 'review',
+              kind: 'agent',
+            }],
+            iteration: 12,
+            elapsed_ms: 100,
+          },
+          workflowCallContinuation: {
+            invocationRunId: 'source-run',
+          } as unknown as NonNullable<WorkflowEngineOptions['workflowCallContinuation']>,
+        }),
+      );
+
+      expect(manager.incrementStepIteration('delegate')).toBe(4);
+    });
+
+    it('should not transfer a continuation iteration to a parallel workflow_call sibling', () => {
+      const childConfig = makeConfig({
+        name: 'child',
+        initialStep: 'review',
+        steps: [{ name: 'review', personaDisplayName: 'review', instruction: '' }],
+      });
+      const parentConfig = makeConfig({
+        initialStep: 'delegate-a',
+        steps: [
+          {
+            name: 'delegate-a',
+            kind: 'workflow_call',
+            call: childConfig.name,
+            personaDisplayName: 'delegate-a',
+            instruction: '',
+          },
+          {
+            name: 'delegate-b',
+            kind: 'workflow_call',
+            call: childConfig.name,
+            personaDisplayName: 'delegate-b',
+            instruction: '',
+          },
+        ],
+      });
+      const validatedResumePoint: WorkflowResumePoint = {
+        version: 1,
+        stack: [{
+          workflow: parentConfig.name,
+          step: 'delegate-a',
+          kind: 'workflow_call',
+          step_iterations: { 'delegate-a': 3 },
+        }, {
+          workflow: childConfig.name,
+          step: 'review',
+          kind: 'agent',
+        }],
+        iteration: 12,
+        elapsed_ms: 100,
+      };
+      const continuation = resolveWorkflowCallContinuation({
+        workflow: parentConfig,
+        resumePoint: validatedResumePoint,
+        invocationRunId: 'source-run',
+        resolveWorkflowCall: () => childConfig,
+      });
+      const siblingResumePoint: WorkflowResumePoint = {
+        ...validatedResumePoint,
+        stack: [{
+          ...validatedResumePoint.stack[0]!,
+          step: 'delegate-b',
+          step_iterations: { 'delegate-b': 3 },
+        }, validatedResumePoint.stack[1]!],
+      };
+
+      const manager = new StateManager(parentConfig, makeOptions({
+        startStep: 'delegate-b',
+        resumePoint: siblingResumePoint,
+        workflowCallContinuation: continuation,
+      }));
+
+      expect(manager.incrementStepIteration('delegate-b')).toBe(4);
+    });
+
+    it('should advance a single-frame workflow_call retry to a new invocation iteration', () => {
+      const manager = new StateManager(
+        makeConfig({
+          steps: [{
+            name: 'delegate',
+            kind: 'workflow_call',
+            call: 'child',
+            personaDisplayName: 'delegate',
+            instruction: '',
+          }],
+        }),
+        makeOptions({
+          startStep: 'delegate',
+          resumePoint: {
+            version: 1,
+            stack: [{
+              workflow: 'test-workflow',
+              step: 'delegate',
+              kind: 'workflow_call',
+              step_iterations: { delegate: 3 },
+            }],
+            iteration: 12,
+            elapsed_ms: 100,
+          },
+        }),
+      );
+
+      expect(manager.incrementStepIteration('delegate')).toBe(4);
+    });
+
+    it('should keep new, looped, and parallel workflow_call iterations unique', () => {
+      const manager = new StateManager(
+        makeConfig({
+          initialStep: 'delegate-a',
+          steps: [
+            {
+              name: 'delegate-a',
+              kind: 'workflow_call',
+              call: 'child',
+              personaDisplayName: 'delegate-a',
+              instruction: '',
+            },
+            {
+              name: 'delegate-b',
+              kind: 'workflow_call',
+              call: 'child',
+              personaDisplayName: 'delegate-b',
+              instruction: '',
+            },
+          ],
+        }),
+        makeOptions(),
+      );
+
+      expect(manager.incrementStepIteration('delegate-a')).toBe(1);
+      expect(manager.incrementStepIteration('delegate-b')).toBe(1);
+      expect(manager.incrementStepIteration('delegate-a')).toBe(2);
+      expect(manager.state.stepIterations).toEqual(new Map([
+        ['delegate-a', 2],
+        ['delegate-b', 1],
+      ]));
+    });
+
+    it('should preserve only the nested workflow_call frame that still has an in-flight child', () => {
+      const grandchildConfig = makeConfig({
+        name: 'grandchild',
+        initialStep: 'review',
+        steps: [{ name: 'review', personaDisplayName: 'review', instruction: '' }],
+      });
+      const nestedConfig = makeConfig({
+        name: 'nested-parent',
+        initialStep: 'nested-delegate',
+        steps: [{
+          name: 'nested-delegate',
+          kind: 'workflow_call',
+          call: grandchildConfig.name,
+          personaDisplayName: 'nested-delegate',
+          instruction: '',
+        }],
+      });
+      const rootConfig = makeConfig({
+        name: 'root',
+        initialStep: 'delegate',
+        steps: [{
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: nestedConfig.name,
+          personaDisplayName: 'delegate',
+          instruction: '',
+        }],
+      });
+      const resumePoint: WorkflowResumePoint = {
+        version: 1,
+        stack: [{
+          workflow: 'root',
+          step: 'delegate',
+          kind: 'workflow_call',
+          step_iterations: { delegate: 2 },
+        }, {
+          workflow: 'nested-parent',
+          step: 'nested-delegate',
+          kind: 'workflow_call',
+          step_iterations: { 'nested-delegate': 5 },
+        }, {
+          workflow: 'grandchild',
+          step: 'review',
+          kind: 'agent',
+        }],
+        iteration: 12,
+        elapsed_ms: 100,
+      };
+      const continuation = resolveWorkflowCallContinuation({
+        workflow: rootConfig,
+        resumePoint,
+        invocationRunId: 'source-run',
+        resolveWorkflowCall: (parent) =>
+          parent.name === rootConfig.name ? nestedConfig : grandchildConfig,
+      });
+      expect(continuation).toBeDefined();
+      const manager = new StateManager(
+        nestedConfig,
+        makeOptions({
+          startStep: 'nested-delegate',
+          resumePoint,
+          resumeStackPrefix: [{
+            workflow: 'root',
+            step: 'delegate',
+            kind: 'workflow_call',
+          }],
+          workflowCallContinuation: continuation,
+        }),
+      );
+
+      expect(manager.incrementStepIteration('nested-delegate')).toBe(5);
+    });
+
+    it('should not transfer a nested continuation iteration to a sibling call frame', () => {
+      const grandchildConfig = makeConfig({
+        name: 'grandchild',
+        initialStep: 'review',
+        steps: [{ name: 'review', personaDisplayName: 'review', instruction: '' }],
+      });
+      const nestedConfig = makeConfig({
+        name: 'nested-parent',
+        initialStep: 'nested-delegate-a',
+        steps: [
+          {
+            name: 'nested-delegate-a',
+            kind: 'workflow_call',
+            call: grandchildConfig.name,
+            personaDisplayName: 'nested-delegate-a',
+            instruction: '',
+          },
+          {
+            name: 'nested-delegate-b',
+            kind: 'workflow_call',
+            call: grandchildConfig.name,
+            personaDisplayName: 'nested-delegate-b',
+            instruction: '',
+          },
+        ],
+      });
+      const rootConfig = makeConfig({
+        name: 'root',
+        initialStep: 'delegate',
+        steps: [{
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: nestedConfig.name,
+          personaDisplayName: 'delegate',
+          instruction: '',
+        }],
+      });
+      const validatedResumePoint: WorkflowResumePoint = {
+        version: 1,
+        stack: [{
+          workflow: rootConfig.name,
+          step: 'delegate',
+          kind: 'workflow_call',
+          step_iterations: { delegate: 2 },
+        }, {
+          workflow: nestedConfig.name,
+          step: 'nested-delegate-a',
+          kind: 'workflow_call',
+          step_iterations: { 'nested-delegate-a': 5 },
+        }, {
+          workflow: grandchildConfig.name,
+          step: 'review',
+          kind: 'agent',
+        }],
+        iteration: 12,
+        elapsed_ms: 100,
+      };
+      const continuation = resolveWorkflowCallContinuation({
+        workflow: rootConfig,
+        resumePoint: validatedResumePoint,
+        invocationRunId: 'source-run',
+        resolveWorkflowCall: (parent) =>
+          parent.name === rootConfig.name ? nestedConfig : grandchildConfig,
+      });
+      const siblingResumePoint: WorkflowResumePoint = {
+        ...validatedResumePoint,
+        stack: [
+          validatedResumePoint.stack[0]!,
+          {
+            ...validatedResumePoint.stack[1]!,
+            step: 'nested-delegate-b',
+            step_iterations: { 'nested-delegate-b': 5 },
+          },
+          validatedResumePoint.stack[2]!,
+        ],
+      };
+
+      const manager = new StateManager(nestedConfig, makeOptions({
+        startStep: 'nested-delegate-b',
+        resumePoint: siblingResumePoint,
+        resumeStackPrefix: [validatedResumePoint.stack[0]!],
+        workflowCallContinuation: continuation,
+      }));
+
+      expect(manager.incrementStepIteration('nested-delegate-b')).toBe(6);
     });
 
     it('should not restore step iterations from a different resume target', () => {

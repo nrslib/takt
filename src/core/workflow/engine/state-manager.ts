@@ -11,7 +11,13 @@ import {
   MAX_INPUT_LENGTH,
 } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
-import { workflowEntryMatchesWorkflow } from '../workflow-reference.js';
+import { workflowCallContinuationMatches } from '../run/resume-point.js';
+import { isWorkflowCallStep } from '../step-kind.js';
+import {
+  getResumePointWorkflowReference,
+  getWorkflowReference,
+  workflowEntryMatchesWorkflow,
+} from '../workflow-reference.js';
 
 /**
  * Manages workflow execution state.
@@ -42,6 +48,35 @@ export class StateManager {
       && workflowEntryMatchesWorkflow(resumeEntry, config)
       ? new Map(Object.entries(resumeEntry.step_iterations ?? {}))
       : new Map<string, number>();
+    const resumeEntryIndex = options.resumeStackPrefix?.length ?? 0;
+    const childResumeEntry = options.resumePoint?.stack[resumeEntryIndex + 1];
+    const currentWorkflowStep = config.steps.find((step) => step.name === currentStep);
+    const invocationIteration = stepIterations.get(currentStep);
+    if (
+      options.workflowCallContinuation !== undefined
+      && childResumeEntry !== undefined
+      && currentWorkflowStep !== undefined
+      && isWorkflowCallStep(currentWorkflowStep)
+      && workflowCallContinuationMatches({
+        continuation: options.workflowCallContinuation,
+        frameIndex: resumeEntryIndex,
+        parentWorkflowRef: getWorkflowReference(config),
+        callStepName: currentWorkflowStep.name,
+        persistedIteration: invocationIteration,
+        childWorkflowRef: getResumePointWorkflowReference(childResumeEntry),
+        childStepName: childResumeEntry.step,
+        childStepKind: childResumeEntry.kind,
+      })
+    ) {
+      if (invocationIteration === undefined || !Number.isInteger(invocationIteration) || invocationIteration <= 0) {
+        throw new Error(`workflow_call step "${currentStep}" has an invalid resume iteration`);
+      }
+      if (invocationIteration === 1) {
+        stepIterations.delete(currentStep);
+      } else {
+        stepIterations.set(currentStep, invocationIteration - 1);
+      }
+    }
 
     this.state = {
       workflowName: config.name,

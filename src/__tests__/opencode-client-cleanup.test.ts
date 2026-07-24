@@ -2951,7 +2951,13 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(cleanupSignal?.aborted).toBe(false);
   });
 
-  it('should request native structured output and capture info.structured', async () => {
+  it.each([
+    { name: 'default retry count', configuredRetryCount: undefined, expectedRetryCount: 2 },
+    { name: 'explicit zero retry count', configuredRetryCount: 0, expectedRetryCount: 0 },
+  ])('should request native structured output with $name and capture info.structured', async ({
+    configuredRetryCount,
+    expectedRetryCount,
+  }) => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
     const stream = new MockEventStream([
@@ -2987,13 +2993,16 @@ describe('OpenCodeClient stream cleanup', () => {
       cwd: '/tmp',
       model: 'opencode/big-pickle',
       outputSchema: schema,
+      ...(configuredRetryCount === undefined
+        ? {}
+        : { structuredOutputRetryCount: configuredRetryCount }),
     });
 
     expect(result.status).toBe('done');
     expect(result.structuredOutput).toEqual({ rawFindings: [] });
     expect(promptAsync).toHaveBeenCalledWith(
       expect.objectContaining({
-        format: { type: 'json_schema', schema, retryCount: 2 },
+        format: { type: 'json_schema', schema, retryCount: expectedRetryCount },
       }),
       expect.any(Object),
     );

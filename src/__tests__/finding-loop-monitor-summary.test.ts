@@ -74,6 +74,10 @@ describe('renderLoopMonitorFindingsSummary', () => {
       activeConflictCount: 0,
       roundsCompleted: 6,
       maxRounds: 40,
+      reviewerAnomalies: {
+        count: 0,
+        budgetExhausted: false,
+      },
     });
     expect(data.openProvisional).toEqual([
       // firstObservedRound=1、6ラウンド完了 → 6ラウンド滞留。locationless は裁定可能
@@ -96,7 +100,7 @@ describe('renderLoopMonitorFindingsSummary', () => {
   it('レンダリングは構造の全要素（ID・種類・件数）を欠落なく反映する', () => {
     const ledger = makeLedger([provisionalEntry()], ['r1']);
     const data = buildLoopMonitorFindingsSummaryData(ledger, {});
-    const summary = renderLoopMonitorFindingsSummary(ledger, {});
+    const summary = renderLoopMonitorFindingsSummary(ledger, {}, 'en');
 
     // 文言は固定しない — データ構造から導出した識別子・数値が全て現れることだけを検証する。
     for (const provisional of data.openProvisional) {
@@ -110,6 +114,67 @@ describe('renderLoopMonitorFindingsSummary', () => {
   it('provisional が無ければ暫定リストは空になる', () => {
     const data = buildLoopMonitorFindingsSummaryData(makeLedger([]), {});
     expect(data.openProvisional).toEqual([]);
+  });
+
+  it.each(['ja', 'en'] as const)('anomaly-only 状態を %s の構造化データへ反映する', (language) => {
+    const observation = {
+      runId: 'run-1',
+      stepName: 'reviewers',
+      timestamp: '2026-07-01T00:00:00.000Z',
+    };
+    const ledger: FindingLedger = {
+      ...makeLedger([]),
+      reviewerAnomalies: [
+        {
+          id: 'RA-OUTSTANDING',
+          kind: 'quote-mismatch',
+          stableKey: 'outstanding',
+          lineageKey: 'lineage-outstanding',
+          sourceRawFindingIds: ['raw-outstanding'],
+          reviewers: ['coding-review'],
+          title: 'unverified claim',
+          claimedExcerpt: 'UNVERIFIED_CLAIM_CONTENT',
+          mismatchReason: 'quote mismatch',
+          firstObserved: observation,
+          lastObserved: observation,
+          occurrences: 1,
+        },
+        {
+          id: 'RA-PROMOTED',
+          kind: 'quote-mismatch',
+          stableKey: 'promoted',
+          lineageKey: 'lineage-promoted',
+          sourceRawFindingIds: ['raw-promoted'],
+          reviewers: ['coding-review'],
+          title: 'verified later',
+          mismatchReason: 'quote mismatch',
+          firstObserved: observation,
+          lastObserved: observation,
+          occurrences: 1,
+          promotedFindingId: 'F-0001',
+        },
+      ],
+      reviewIntegrity: {
+        roundMarkers: ['r1'],
+        firstRoundAt: '2026-07-01T00:00:00.000Z',
+        exhausted: true,
+      },
+    };
+
+    const data = buildLoopMonitorFindingsSummaryData(ledger, {});
+    const summary = renderLoopMonitorFindingsSummary(ledger, {}, language);
+
+    expect(data).toMatchObject({
+      openCount: 0,
+      openSubstantiveCount: 0,
+      openProvisional: [],
+      activeConflictCount: 0,
+      reviewerAnomalies: {
+        count: 1,
+        budgetExhausted: true,
+      },
+    });
+    expect(summary).not.toContain('UNVERIFIED_CLAIM_CONTENT');
   });
 });
 

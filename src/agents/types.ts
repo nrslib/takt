@@ -55,6 +55,7 @@ export interface RunAgentOptions {
   language?: Language;
   workflowMeta?: WorkflowMeta;
   outputSchema?: Record<string, unknown>;
+  structuredOutputRetryCount?: number;
   childProcessEnv?: Readonly<Record<string, string>>;
   onPromptResolved?: (promptParts: {
     systemPrompt: string;

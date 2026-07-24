@@ -61,7 +61,28 @@ export function resolveWorkflowTrustInfo(options: WorkflowTrustResolutionOptions
     };
   }
 
-  if (source === 'user' || source === 'builtin' || source === 'repertoire' || source === 'external') {
+  if (source === 'inline') {
+    return {
+      source,
+      sourcePath: resolve(filePath),
+      isProjectTrustRoot: true,
+      isProjectWorkflowRoot: false,
+    };
+  }
+
+  if (source === 'builtin') {
+    if (!isBuiltinWorkflowPath(filePath)) {
+      throw new Error(`Workflow trust source "builtin" requires a file inside a builtin workflow root: ${filePath}`);
+    }
+    return {
+      source,
+      sourcePath: resolve(filePath),
+      isProjectTrustRoot: false,
+      isProjectWorkflowRoot: false,
+    };
+  }
+
+  if (source === 'user' || source === 'repertoire' || source === 'external') {
     return {
       source,
       sourcePath: resolve(filePath),

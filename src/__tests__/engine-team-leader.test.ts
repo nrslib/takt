@@ -1075,9 +1075,15 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
             systemPrompt: typeof persona === 'string' ? persona : '',
             userInstruction: instruction,
           });
-          return makeResponse({ persona: 'team-leader', status: 'error', error: 'first failed' });
+          return makeResponse({ persona: 'team-leader', content: 'first invalid decomposition' });
         })
-        .mockRejectedValueOnce(new Error('second rejected'))
+        .mockImplementationOnce(async (persona, instruction, options) => {
+          options?.onPromptResolved?.({
+            systemPrompt: typeof persona === 'string' ? persona : '',
+            userInstruction: instruction,
+          });
+          return makeResponse({ persona: 'team-leader', content: 'second invalid decomposition' });
+        })
         .mockImplementationOnce(async (persona, instruction, options) => {
           options?.onPromptResolved?.({
             systemPrompt: typeof persona === 'string' ? persona : '',
@@ -1121,8 +1127,8 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       expect(state.status).toBe('completed');
       expect(usageRecords).toHaveLength(vi.mocked(runAgent).mock.calls.length);
       expect(leaderRecords.map((record) => record.success)).toEqual([
-        false,
-        false,
+        true,
+        true,
         true,
         false,
         false,

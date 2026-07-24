@@ -46,10 +46,20 @@ import {
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import { buildFindingsRuleContext } from '../findings/context.js';
 import { createFindingLedgerStore, type FindingLedgerStore } from '../findings/store.js';
-import type { FindingLedger, FindingLedgerEntry, ReviewerAnomalyEntry } from '../findings/types.js';
+import type {
+  FindingLedger,
+  FindingLedgerEntry,
+  ReviewerAnomalyApprovalReference,
+  ReviewerAnomalyEntry,
+} from '../findings/types.js';
+import { computeReviewScopeSnapshotId } from '../findings/snapshot.js';
+import {
+  appendReviewerAnomalyAcknowledgements,
+  selectOutstandingReviewerAnomalies,
+} from '../findings/reviewer-anomaly-acknowledgement.js';
 import { injectFindingConflictAdjudicationStep } from '../findings/adjudication-step.js';
 import { createFindingConflictAdjudicationRunner } from '../findings/adjudication-runner.js';
-import { ERROR_MESSAGES } from '../constants.js';
+import { COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import { inheritReviewReports, writeReviewReportInheritanceDiagnostic } from '../report-inheritance.js';
 import {
   resolveCurrentReviewReportPathsWithDiagnostics,
@@ -58,6 +68,14 @@ import {
   resolveInheritedReviewReportNamesWithDiagnostics,
   type InheritedReviewReportNamesResult,
 } from '../review-report-discovery.js';
+import {
+  formatWorkflowRuleCondition,
+  semanticLabelsOf,
+} from '../../models/workflow-rule-condition.js';
+import {
+  getReviewerAnomalyCallCapability,
+  transferReviewerAnomalyCallCapability,
+} from '../reviewer-anomaly-capability.js';
 const log = createLogger('workflow-engine');
 export type {
   WorkflowEvents,
@@ -163,6 +181,7 @@ export class WorkflowEngine extends EventEmitter {
       autoRoutingAiRouter,
       traceTaskMetadata,
     };
+    transferReviewerAnomalyCallCapability(options, this.options);
     this.projectCwd = this.options.projectCwd;
     this.cwd = cwd;
     this.task = task;
@@ -369,7 +388,121 @@ export class WorkflowEngine extends EventEmitter {
 
   /** 二系統台帳（review-integrity protocol）の未昇格 anomaly。 */
   private loadOutstandingReviewerAnomalies(ledger: FindingLedger): ReviewerAnomalyEntry[] {
-    return (ledger.reviewerAnomalies ?? []).filter((anomaly) => anomaly.promotedFindingId === undefined);
+    const unpromotedAnomalies = (ledger.reviewerAnomalies ?? [])
+      .filter((anomaly) => anomaly.promotedFindingId === undefined);
+    if (unpromotedAnomalies.length === 0) {
+      return [];
+    }
+    const reviewScopeSnapshotId = computeReviewScopeSnapshotId(this.cwd);
+    return selectOutstandingReviewerAnomalies(ledger, reviewScopeSnapshotId);
+  }
+
+  private resolveAttestationApprovalReferences():
+    [ReviewerAnomalyApprovalReference, ReviewerAnomalyApprovalReference] | undefined {
+    const attestation = getReviewerAnomalyCallCapability(this.options);
+    if (attestation === undefined) {
+      return undefined;
+    }
+    if (
+      this.state.currentStep !== attestation.approvalSteps[1]
+      || this.state.previousStep !== attestation.approvalSteps[0]
+    ) {
+      return undefined;
+    }
+    const invocationRunId = attestation.gate.startedAt.runId;
+    const references = attestation.approvalSteps.map((stepName, index) => {
+      const step = this.config.steps.find((candidate) => candidate.name === stepName);
+      const response = this.state.stepOutputs.get(stepName);
+      const matchedRuleIndex = response?.matchedRuleIndex;
+      const rule = matchedRuleIndex === undefined ? undefined : step?.rules?.[matchedRuleIndex];
+      const approvalRules = step?.rules?.filter(
+        (candidate) => semanticLabelsOf(candidate.condition).includes('approved'),
+      ) ?? [];
+      const expectedNext = index === 0 ? attestation.approvalSteps[1] : COMPLETE_STEP;
+      if (
+        response === undefined
+        || matchedRuleIndex === undefined
+        || rule === undefined
+        || approvalRules.length !== 1
+        || approvalRules[0] !== rule
+        || rule.next !== expectedNext
+      ) {
+        return undefined;
+      }
+      return {
+        stepName,
+        matchedRuleIndex,
+        condition: formatWorkflowRuleCondition(rule.condition),
+        observedAt: {
+          runId: invocationRunId,
+          stepName,
+          timestamp: response.timestamp.toISOString(),
+        },
+      };
+    });
+    return references[0] === undefined || references[1] === undefined
+      ? undefined
+      : [references[0], references[1]];
+  }
+
+  private async applyReviewerAnomalyAcknowledgementAttestation():
+    Promise<{ ok: true } | { ok: false; reason: string }> {
+    const attestation = getReviewerAnomalyCallCapability(this.options);
+    if (attestation === undefined) {
+      return { ok: true };
+    }
+    if (this.findingLedgerStore === undefined) {
+      return { ok: false, reason: 'Cannot COMPLETE: attested gate has no finding ledger store' };
+    }
+    const approvals = this.resolveAttestationApprovalReferences();
+    if (approvals === undefined) {
+      return { ok: false, reason: 'Cannot COMPLETE: reviewer anomaly acknowledgement requires both configured approval steps' };
+    }
+    const completedAt = {
+      runId: attestation.gate.startedAt.runId,
+      stepName: this.state.currentStep,
+      timestamp: new Date().toISOString(),
+    };
+    const buildInput = (currentReviewScopeSnapshotId: string) => ({
+      evidenceReferences: attestation.evidenceReferences,
+      reviewScopeSnapshotId: attestation.reviewScopeSnapshotId,
+      currentReviewScopeSnapshotId,
+      gate: attestation.gate,
+      completedAt,
+      approvals,
+    });
+    const currentReviewScopeSnapshotId = computeReviewScopeSnapshotId(this.cwd);
+    const input = buildInput(currentReviewScopeSnapshotId);
+    const mutation = await this.findingLedgerStore.updateLedger(
+      (current) => {
+        const result = appendReviewerAnomalyAcknowledgements(
+          current,
+          input,
+        );
+        return { ledger: result.ledger, result };
+      },
+      (current) => {
+        const result = appendReviewerAnomalyAcknowledgements(
+          current,
+          input,
+        );
+        return {
+          mutation: { ledger: result.ledger, result },
+          publish: result.eligible,
+        };
+      },
+    );
+    if (!mutation.result.eligible) {
+      return {
+        ok: false,
+        reason: `Cannot COMPLETE: reviewer anomaly acknowledgement was not eligible: ${mutation.result.reason}`,
+      };
+    }
+    this.refreshFindingsState();
+    if (mutation.result.appended > 0) {
+      this.emit('findings:ledger', structuredClone(mutation.ledger));
+    }
+    return { ok: true };
   }
 
   /**
@@ -378,14 +511,14 @@ export class WorkflowEngine extends EventEmitter {
    * 1. product gate: open な provisional finding（意味を確定
    *    できなかった観測）が1件でも残っていれば COMPLETE を拒否する。
    *
-   * 2. review-integrity gate（review-integrity requirement）: 未昇格（promotedFindingId
-   *    無し）の reviewer anomaly が1件でも残っていれば COMPLETE を拒否する。
+   * 2. review-integrity gate: 現在の review scope と evidence hash に対して未 ack
+   *    の reviewer anomaly が1件でも残っていれば COMPLETE を拒否する。
    *    二系統台帳（review-integrity protocol）で全指摘が anomaly に隔離された run は product
    *    gate が空になり「即 COMPLETE」で実質レビューされずに通り得たため、product
    *    gate とは別にここで fail-closed にする。anomaly は product finding では
    *    ないので product gate（open/provisional の count）は塞がない — この
-   *    review-integrity gate だけが COMPLETE を止め、builtin は未昇格 anomaly を
-   *    見て再レビューまたは再計画へルーティングする。custom
+   *    review-integrity gate だけが COMPLETE を止め、attested final gate だけが
+   *    二段承認後に開始時 anomaly を acknowledgement できる。custom
    *    workflow がその配線を欠いても、このエンジンゲートが COMPLETE を拒否する。
    *
    * builtin workflow は先に findings.provisional.count / findings.reviewerAnomalies を
@@ -394,9 +527,13 @@ export class WorkflowEngine extends EventEmitter {
    * state.findings のキャッシュではなく保存直前の台帳を再読込して行う（並列子の
    * 更新を見逃さない）。
    */
-  private checkCompletionGate(): { ok: true } | { ok: false; reason: string } {
+  private async checkCompletionGate(): Promise<{ ok: true } | { ok: false; reason: string }> {
     if (!this.findingLedgerStore) {
       return { ok: true };
+    }
+    const attestationGate = await this.applyReviewerAnomalyAcknowledgementAttestation();
+    if (!attestationGate.ok) {
+      return attestationGate;
     }
     const ledger = this.findingLedgerStore.loadLedger();
     const provisionals = this.loadOpenProvisionalFindings(ledger);
@@ -420,19 +557,19 @@ export class WorkflowEngine extends EventEmitter {
 
   private formatReviewIntegrityGateReason(anomalies: readonly ReviewerAnomalyEntry[]): string[] {
     return [
-      `- ${anomalies.length} unpromoted reviewer anomaly(ies) remain (reviewer claims whose evidence did not mechanically verify — the reviewed scope was not soundly reviewed):`,
+      `- ${anomalies.length} unacknowledged reviewer anomaly(ies) remain (reviewer claims whose evidence did not mechanically verify — the reviewed scope was not soundly reviewed):`,
       ...anomalies.map((anomaly) => `  - ${anomaly.id} [${anomaly.kind}]: ${anomaly.mismatchReason}`),
-      '  This is the review-integrity gate: an unpromoted anomaly is NOT a product finding, so it does not block the product gate — but the workflow must route on findings.reviewerAnomalies.count to re-review until a correctly-quoted finding promotes it, or replan when the existing review approach cannot substantiate it. Completion is never allowed while an unverified reviewer anomaly stands.',
+      '  This is the review-integrity gate: an anomaly is NOT a product finding and must never be used as fix evidence. Completion requires promotion or an evidence-bound acknowledgement from an attested two-stage final gate; unacknowledged anomalies remain fail-closed.',
     ];
   }
 
   /**
    * review-integrity gate 単独。checkCompletionGate は product
-   * gate（provisional）+ review-integrity gate（未昇格 anomaly）の両方を見るが、
-   * こちらは未昇格 anomaly だけを見る。returnValue 終端（`return: X`）に適用する
+   * gate（provisional）+ review-integrity gate（未 ack anomaly）の両方を見るが、
+   * こちらは未 ack anomaly だけを見る。returnValue 終端（`return: X`）に適用する
    * ためのもの: `return: need_replan` のような「未解決の provisional を親/呼び出し元へ
    * ハンドバックするシグナル」は provisional gate で塞ぐべきではない（provisional は
-   * そのシグナルで扱われる）が、未昇格 anomaly が残ったまま 'completed' になるのは
+   * そのシグナルで扱われる）が、未 acknowledgement anomaly が残ったまま 'completed' になるのは
    * どの完了経路でも許さない（review integrity は engine 側のハード不変条件）。
    */
   private checkReviewIntegrityGate(): { ok: true } | { ok: false; reason: string } {

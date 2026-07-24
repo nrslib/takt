@@ -3696,8 +3696,8 @@ describe('WorkflowEngine structured caller defaults', () => {
     // 子の最初のレビューは常に stepIteration=1 になる。ローカルの
     // rawFindingId が2回とも同じであれば、正規化後の id も完全に一致し、
     // 2回目が1回目を上書きして台帳から消えていた。
-    // buildWorkflowCallNamespace() と同じ「呼び出し時点の親イテレーション」を
-    // 名前空間に混ぜることで区別する。
+    // resume point に永続化される workflow_call step iteration を名前空間に
+    // 混ぜることで、再開では同一、次のループ呼び出しでは別として区別する。
     const childConfig: WorkflowConfig = {
       name: 'child-loop-collision',
       subworkflow: { callable: true },

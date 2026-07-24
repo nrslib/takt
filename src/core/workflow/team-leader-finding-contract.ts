@@ -18,6 +18,8 @@ export {
   createFindingContractPartCompletionJsonSchema,
 } from './team-leader-finding-contract-schema.js';
 import {
+  FINDING_CONTRACT_CHANGED_PATH_OUTSIDE_ASSIGNMENT_REASON,
+  FINDING_CONTRACT_CHANGED_PATHS_LIMITS,
   FindingContractInputValidationError,
   findingContractPathIsWithin,
   findingContractPathsOverlap,
@@ -47,6 +49,10 @@ export interface FindingContractPartIndexEntry {
   findingIds: string[];
   status: string;
   summary: string;
+  claimAssessment?: {
+    status: 'invalid';
+    validation: FindingContractClaimValidation;
+  };
   outcomes: Array<{
     findingId: string;
     outcome: 'addressed' | 'disputed' | 'blocked';
@@ -65,6 +71,9 @@ export interface FindingContractFindingDigest {
   title: string;
   role: 'diagnose' | 'repair' | 'verify';
   status: string;
+  claimAssessment?: {
+    status: 'invalid';
+  };
   outcome?: {
     outcome: 'addressed' | 'disputed' | 'blocked';
     evidence: string[];
@@ -76,6 +85,20 @@ export interface SequencedFindingContractPartIndexEntry {
   sequence: number;
   entry: FindingContractPartIndexEntry;
 }
+
+const INVALID_COMPLETION_CLAIM_REASON = 'Completion claim failed validation';
+
+export type FindingContractClaimValidation =
+  | {
+      readonly code: 'changed_path_outside_assignment';
+      readonly fieldPath: `changedPaths[${number}]`;
+      readonly reason: typeof FINDING_CONTRACT_CHANGED_PATH_OUTSIDE_ASSIGNMENT_REASON;
+    }
+  | {
+      readonly code: 'invalid_completion_claim';
+      readonly fieldPath: '$';
+      readonly reason: typeof INVALID_COMPLETION_CLAIM_REASON;
+    };
 
 const COMPACT_SUMMARY_MAX_LENGTH = 300;
 const COMPACT_EVIDENCE_MAX_ITEMS = 3;
@@ -267,12 +290,21 @@ export function parseFindingContractPartCompletionClaim(
       status: parsedStatus,
     };
   });
-  const changedPaths = requireStringArray(payload.changedPaths, `Part "${part.id}" changedPaths`)
+  const changedPaths = requireStringArray(
+    payload.changedPaths,
+    `Part "${part.id}" changedPaths`,
+    FINDING_CONTRACT_CHANGED_PATHS_LIMITS,
+  )
     .map((path, index) => normalizeFindingContractPath(path, `Part "${part.id}" changedPaths[${index}]`));
-  for (const path of changedPaths) {
+  for (const [index, path] of changedPaths.entries()) {
     if (!part.findingContract.writePaths.some((writePath) => findingContractPathIsWithin(path, writePath))) {
       throw new FindingContractInputValidationError(
         `Part "${part.id}" changed path is outside its writePaths assignment: ${path}`,
+        {
+          code: 'changed_path_outside_assignment',
+          fieldPath: `changedPaths[${index}]`,
+          reason: FINDING_CONTRACT_CHANGED_PATH_OUTSIDE_ASSIGNMENT_REASON,
+        },
       );
     }
   }
@@ -282,6 +314,38 @@ export function parseFindingContractPartCompletionClaim(
     checks,
     summary: requireBoundedString(payload.summary, `Part "${part.id}" summary`, 2000),
   };
+}
+
+export type FindingContractPartCompletionClaimAssessment =
+  | {
+      readonly status: 'valid';
+      readonly claim: FindingContractPartCompletionClaim;
+    }
+  | {
+      readonly status: 'invalid';
+      readonly validation: FindingContractClaimValidation;
+    };
+
+export function assessFindingContractPartCompletionClaim(
+  raw: unknown,
+  part: PartDefinition,
+): FindingContractPartCompletionClaimAssessment {
+  try {
+    return {
+      status: 'valid',
+      claim: parseFindingContractPartCompletionClaim(raw, part),
+    };
+  } catch (error) {
+    if (!(error instanceof FindingContractInputValidationError)) throw error;
+    return {
+      status: 'invalid',
+      validation: error.classification ?? {
+        code: 'invalid_completion_claim',
+        fieldPath: '$',
+        reason: INVALID_COMPLETION_CLAIM_REASON,
+      },
+    };
+  }
 }
 
 export function buildFindingContractPartIndexEntry(result: PartResult): FindingContractPartIndexEntry {
@@ -347,6 +411,9 @@ export function buildLatestFindingContractDigests(
         title: entry.title,
         role: entry.role,
         status: entry.status,
+        ...(entry.claimAssessment === undefined
+          ? {}
+          : { claimAssessment: { status: entry.claimAssessment.status } }),
         ...(outcome === undefined
           ? {}
           : { outcome: { outcome: outcome.outcome, evidence: outcome.evidence } }),

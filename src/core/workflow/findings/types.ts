@@ -16,6 +16,7 @@ export {
   RAW_DECISION_KINDS,
   RAW_FINDING_EVIDENCE_KINDS,
   RAW_FINDING_RELATIONS,
+  REVIEWER_ANOMALY_ACKNOWLEDGEMENT_DOMAIN,
   REVIEWER_ANOMALY_KINDS,
 } from '../../models/finding-types.js';
 
@@ -92,5 +93,7 @@ export type {
   RawFindingRelation,
   ReviewerAnomalyEntry,
   ReviewerAnomalyKind,
+  ReviewerAnomalyAcknowledgement,
+  ReviewerAnomalyApprovalReference,
   SourceQuoteEvidence,
 } from '../../models/finding-types.js';

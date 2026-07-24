@@ -1,6 +1,5 @@
 import type { PartResult } from '../models/types.js';
-import { parseFindingContractPartCompletionClaim } from './team-leader-finding-contract.js';
-import { FindingContractInputValidationError } from './team-leader-finding-contract-validation.js';
+import { assessFindingContractPartCompletionClaim } from './team-leader-finding-contract.js';
 
 export interface FindingContractEvidenceEntry {
   readonly findingId: string;
@@ -59,12 +58,12 @@ export function buildFindingContractDecisionEvidenceSnapshot(
       }
       continue;
     }
-    let claim: ReturnType<typeof parseFindingContractPartCompletionClaim>;
-    try {
-      claim = parseFindingContractPartCompletionClaim(result.response.structuredOutput, result.part);
-    } catch (error) {
-      if (!(error instanceof FindingContractInputValidationError)) throw error;
-      for (const findingId of assignment.findingIds) {
+    const assessment = assessFindingContractPartCompletionClaim(
+      result.response.structuredOutput,
+      result.part,
+    );
+    if (assessment.status === 'invalid') {
+      for (const [index, findingId] of assignment.findingIds.entries()) {
         entries.push({
           findingId,
           partId: result.part.id,
@@ -76,11 +75,14 @@ export function buildFindingContractDecisionEvidenceSnapshot(
           usableAsVerification: false,
           supportIneligibleReasons: ['invalid_claim'],
           verificationIneligibleReasons: ['invalid_claim'],
-          claimValidationError: error.message,
+          ...(index === 0
+            ? { claimValidationError: assessment.validation.reason }
+            : {}),
         });
       }
       continue;
     }
+    const claim = assessment.claim;
     const passedChecks = claim.checks.filter((check) => check.status === 'passed').length;
     const failedChecks = claim.checks.filter((check) => check.status === 'failed').length;
     for (const findingId of assignment.findingIds) {

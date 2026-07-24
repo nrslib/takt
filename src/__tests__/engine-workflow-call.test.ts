@@ -1138,6 +1138,96 @@ steps:
     });
   });
 
+  it('workflow_call は親providerRoutingのfinal-gate routingを子の両agentへ伝搬する', async () => {
+    writeWorkflow(tmpDir, 'takt/test-final-gate-routing.yaml', `name: takt/test-final-gate-routing
+subworkflow:
+  callable: true
+initial_step: merge-readiness-review
+max_steps: 5
+steps:
+  - name: merge-readiness-review
+    tags: [review, final-gate, merge-readiness]
+    persona: merge-readiness-reviewer
+    instruction: "Review merge readiness"
+    rules:
+      - condition: approved
+        next: supervise
+  - name: supervise
+    tags: [review, final-gate, supervise]
+    persona: supervisor
+    instruction: "Supervise final gate"
+    rules:
+      - condition: approved
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'final-gate',
+      max_steps: 8,
+      steps: [
+        {
+          name: 'final-gate',
+          kind: 'workflow_call',
+          call: 'takt/test-final-gate-routing',
+          rules: [
+            {
+              condition: 'COMPLETE',
+              next: 'COMPLETE',
+            },
+          ],
+        },
+      ],
+    });
+    const providerRouting = {
+      tags: {
+        review: {
+          provider: 'opencode' as const,
+          model: 'ollama-cloud/gemma4:31b',
+        },
+        'final-gate': {
+          provider: 'codex' as const,
+          model: 'gpt-5.2-codex',
+        },
+      },
+    };
+
+    mockPersonaResponses({}, 'approved');
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+    ]);
+
+    engine = new WorkflowEngine(
+      config,
+      tmpDir,
+      'Route final gate child workflow',
+      createWorkflowCallOptions(tmpDir, { providerRouting }),
+    );
+    const abortReasons: string[] = [];
+    const startedSteps: string[] = [];
+    engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+    engine.on('step:start', (step) => startedSteps.push(step.name));
+
+    const state = await engine.run();
+    const childCalls = vi.mocked(runAgent).mock.calls;
+
+    expect(abortReasons).toEqual([]);
+    expect(startedSteps).toEqual([
+      'final-gate',
+      'merge-readiness-review',
+      'supervise',
+    ]);
+    expect(state.status).toBe('completed');
+    expect(childCalls).toHaveLength(2);
+    for (const call of childCalls) {
+      expect(call[2]).toEqual(expect.objectContaining({
+        resolvedProvider: 'codex',
+        resolvedModel: 'gpt-5.2-codex',
+      }));
+    }
+  });
+
   it('workflow_call が provider だけ override した場合は親 model を引き継がない', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:

@@ -32,18 +32,21 @@ import { parseParts } from '../../core/workflow/engine/task-decomposer.js';
 import { createLogger, delay, getErrorMessage } from '../../shared/utils/index.js';
 import { buildMaxTurnsOption } from '../provider-call-options.js';
 import {
-  FindingContractDecompositionValidationError,
   validateFindingContractDecomposition,
 } from '../../core/workflow/team-leader-finding-contract-decomposition-validation.js';
 import {
   FindingContractControlValidationError,
-  createFindingContractControlValidationIssue,
 } from '../../core/workflow/team-leader-finding-contract-control-validation.js';
 import {
   createFindingContractDecisionValidationIssue,
   createFindingContractTeamLeaderDecisionValidationError,
 } from '../../core/workflow/team-leader-finding-contract-decision-validation.js';
 import { parseFindingContractTeamLeaderDecision } from '../../core/workflow/team-leader-finding-contract-decision.js';
+import {
+  createTeamLeaderDecompositionValidationError,
+  requestValidTeamLeaderDecomposition,
+  type RejectedTeamLeaderDecomposition,
+} from '../team-leader-decomposition-retry.js';
 
 const log = createLogger('prompt-based-structured-caller');
 
@@ -177,56 +180,50 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     maxInitialParts: number | undefined,
     options: DecomposeTaskOptions,
   ): Promise<DecomposeTaskResponse> {
-    const prompt = buildPromptBasedDecomposePrompt(
-      instruction,
-      maxInitialParts,
-      options.language,
-      options.inspectTools,
-      options.findingContract,
-    );
+    return requestValidTeamLeaderDecomposition({
+      abortSignal: options.abortSignal,
+      request: async (rejectedDecomposition) => {
+        const response = await this.requestPromptBasedDecompositionOnce(
+          instruction,
+          maxInitialParts,
+          options,
+          rejectedDecomposition,
+        );
 
-    return withRetry(async () => {
-      const response = await this.requestPromptBasedRawResponse(prompt, options, options.inspectTools ?? []);
+        if (response.status !== 'done') {
+          const detail = response.error || response.content || response.status;
+          throw new Error(`Team leader failed: ${detail}`);
+        }
 
-      if (response.status !== 'done') {
-        const detail = response.error || response.content || response.status;
-        throw new Error(`Team leader failed: ${detail}`);
-      }
-
-      if (options.findingContract === undefined) {
+        let parts;
+        try {
+          parts = options.findingContract === undefined
+            ? parseParts(response.content, maxInitialParts)
+            : validateFindingContractDecomposition(
+                parseLastJsonBlock(response.content),
+                maxInitialParts,
+                options.findingContract.targetFindingIds,
+              );
+        } catch (error) {
+          throw createTeamLeaderDecompositionValidationError(
+            'decomposition.parts_invalid',
+            '$',
+            error,
+          );
+        }
         return {
-          parts: parseParts(response.content, maxInitialParts),
+          parts,
           ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
         };
-      }
-      let rawParts: unknown;
-      try {
-        rawParts = parseLastJsonBlock(response.content);
-      } catch (error) {
-        throw new FindingContractDecompositionValidationError([
-          createFindingContractControlValidationIssue({
-            boundaryKind: 'decomposition',
-            code: 'shape.json_block',
-            category: 'shape',
-            path: '$',
-            message: error instanceof Error ? error.message : String(error),
-            retryability: 'corrective_retry',
-          }),
-        ], response.content);
-      }
-      const parts = validateFindingContractDecomposition(
-        rawParts,
-        maxInitialParts,
-        options.findingContract.targetFindingIds,
-      );
-      return {
-        parts,
-        ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
-      };
-    }, options.abortSignal, (error) => (
-      options.findingContract === undefined
-      || !(error instanceof FindingContractControlValidationError)
-    ));
+      },
+      onRejected: (rejectedDecomposition) => {
+        log.info('Team Leader decomposition failed validation; regenerating', {
+          attempt: rejectedDecomposition.attempt,
+          maxAttempts: rejectedDecomposition.maxAttempts,
+          issueCodes: rejectedDecomposition.issues.map((issue) => issue.code),
+        });
+      },
+    });
   }
 
   async requestDecompositionRawResponse(
@@ -234,15 +231,13 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     maxInitialParts: number | undefined,
     options: DecomposeTaskOptions,
   ): Promise<AgentResponse> {
-    const prompt = buildPromptBasedDecomposePrompt(
-      instruction,
-      maxInitialParts,
-      options.language,
-      options.inspectTools,
-      options.findingContract,
-    );
     return withRetry(
-      () => this.requestPromptBasedRawResponse(prompt, options, options.inspectTools ?? []),
+      () => this.requestPromptBasedDecompositionOnce(
+        instruction,
+        maxInitialParts,
+        options,
+        undefined,
+      ),
       options.abortSignal,
     );
   }
@@ -332,6 +327,23 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     );
   }
 
+  private requestPromptBasedDecompositionOnce(
+    instruction: string,
+    maxInitialParts: number | undefined,
+    options: DecomposeTaskOptions,
+    rejectedDecomposition: RejectedTeamLeaderDecomposition | undefined,
+  ): Promise<AgentResponse> {
+    const prompt = buildPromptBasedDecomposePrompt(
+      instruction,
+      maxInitialParts,
+      options.language,
+      options.inspectTools,
+      options.findingContract,
+      rejectedDecomposition,
+    );
+    return this.requestPromptBasedRawResponse(prompt, options, options.inspectTools ?? []);
+  }
+
   private async requestPromptBasedRawResponse(
     prompt: string,
     options: DecomposeTaskOptions | MorePartsOptions,
@@ -359,9 +371,11 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
           : {}),
       });
     } catch (error) {
+      options.abortSignal?.throwIfAborted();
       options.onAgentError?.(error);
       throw error;
     }
+    options.abortSignal?.throwIfAborted();
     options.onAgentResponse?.(response);
     return response;
   }

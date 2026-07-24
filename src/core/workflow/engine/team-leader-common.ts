@@ -4,7 +4,13 @@ import type {
   WorkflowStep,
 } from '../../models/types.js';
 import { formatAgentFailure } from '../../../shared/types/agent-failure.js';
-import { createFindingContractPartCompletionJsonSchema } from '../team-leader-finding-contract.js';
+import {
+  createFindingContractPartCompletionJsonSchema,
+  type FindingContractPartIndexEntry,
+} from '../team-leader-finding-contract.js';
+
+export const INVALID_FINDING_CONTRACT_CLAIM_CONTENT =
+  '[engine-generated placeholder: invalid Finding Contract claim content omitted; full response is in the audit artifact]';
 
 export function summarizeParts(parts: PartDefinition[]): Array<{ id: string; title: string }> {
   return parts.map((part) => ({ id: part.id, title: part.title }));
@@ -22,6 +28,25 @@ export function resolvePartErrorDetail(partResult: PartResult): string {
     }, { includeCategoryPrefix: true });
   }
   return detail;
+}
+
+export function buildTeamLeaderPartFeedbackResult(
+  partResult: PartResult,
+  findingContractClaim: FindingContractPartIndexEntry | undefined,
+) {
+  const content = partResult.response.status === 'error'
+    ? `[ERROR] ${resolvePartErrorDetail(partResult)}`
+    : findingContractClaim?.claimAssessment?.status === 'invalid'
+      ? INVALID_FINDING_CONTRACT_CLAIM_CONTENT
+      : partResult.response.content;
+
+  return {
+    id: partResult.part.id,
+    title: partResult.part.title,
+    status: partResult.response.status,
+    content,
+    ...(findingContractClaim === undefined ? {} : { findingContractClaim }),
+  };
 }
 
 export function createPartStep(step: WorkflowStep, part: PartDefinition): WorkflowStep {

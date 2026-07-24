@@ -5,9 +5,12 @@ E2E suite (which verifies engine mechanics), this measures whether the
 *content* of personas/policies/instructions actually produces good agent
 output — so that "the prompt got better" is a measured fact, not a feeling.
 
-All suites run on the **codex** provider (local Codex CLI login / ChatGPT
-plan), so runs consume subscription quota, not API billing. The `llm-rubric`
-grader is also pinned to codex for the same reason.
+Each suite declares its own provider in `promptfooconfig.<suite>.yaml`.
+The standard reviewer and coder suites currently use `openai:codex-sdk`,
+while the rescan and boundary suites include OpenCode-backed local/open
+models. Provider authentication and billing therefore depend on the selected
+suite. A model-graded assertion such as `llm-rubric` likewise uses the grader
+configured by that suite; it is not fixed globally.
 
 The `rescan` suite additionally runs local/open models through the opencode
 CLI (`eval/providers/opencode-review.sh`) to track how far facet design can
@@ -16,6 +19,26 @@ Because weak-model rows fluctuate and partially fail by design, `rescan` is
 excluded from the default suite run — invoke it explicitly
 (`npm run eval:prompts -- rescan --repeat 3`) and read per-metric rates,
 not the pass/fail summary.
+
+The `boundary-*` suites also use OpenCode with Gemma and require its
+authentication. They are excluded from the default run and must be invoked
+explicitly.
+
+Boundary suites execute the runtime's two prompt phases in one OpenCode
+session: Phase 1 performs the review, then Phase 2 renders the configured
+report and Finding Contract output. Assertions score only the Phase 2 report.
+Each planted defect must be described next to its exact `file:line` citation
+in one short finding-sized row; generic contract restatements and negated
+defect phrases do not count. Precision assertions require evidence that every
+scope-critical path was checked and reject reports that contain a defect
+finding for the clean fixture.
+
+This is a prompt-contract measurement, not a complete engine simulation. It
+reuses the runtime instruction builders, empty-ledger summaries, raw finding
+schema, review-scope snapshot, persona, and the same OpenCode session across
+both phases. It does not run parallel scheduling, session compaction,
+Finding Manager ingestion, retry/fallback, or Phase 3 status judgment; the
+real TAKT benchmark remains the integration check for those paths.
 
 ## Suites
 
@@ -27,6 +50,10 @@ not the pass/fail summary.
 | `frontend` | review-frontend / frontend-review | frontend-app | recall on 3 planted layering violations |
 | `cqrs` | review-backend-cqrs / cqrs-es-review | backend-cqrs | recall on 3 planted CQRS+ES violations |
 | `rescan` | peer-review / arch-review (round 2) | inventory-es | re-scan evidence + recall on 4 planted defects after previous findings were resolved |
+| `boundary-contract` | takt-default-localllm / contract-wiring-review | review-boundaries-buggy | contract sanity on equivalent-entry wiring loss |
+| `boundary-resource` | takt-default-localllm / resource-ownership-review | review-boundaries-buggy | contract sanity on cleanup ownership |
+| `boundary-robustness` | takt-default-localllm / failure-boundary-review | review-boundaries-buggy | contract sanity on auxiliary failure escalation |
+| `boundary-*-precision` | same reviewers | review-boundaries-clean | scope-critical path evidence with no defect finding |
 | `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
 
@@ -60,22 +87,27 @@ test case — and the case must FAIL before the facet fix is trusted.
 
 ## How it works
 
-The flow is: prepare (place latest facets) -> run on codex -> assert.
+The flow is: prepare (place latest facets) -> run the suite's configured
+provider -> assert.
 
 1. `eval/scripts/prepare.mjs` rebuilds the eval environment from the
-   *current* facets on every run, mirroring what the codex provider
-   receives at runtime:
-   - persona content prepended (codex concatenates system prompt + prompt)
+   *current* facets on every run. It assembles the same persona and
+   instruction content used by the runtime, then supplies that prompt to the
+   suite's configured provider:
+   - persona content prepended to the instruction
    - policy/knowledge truncated inline by `InstructionBuilder`, full
      content rewritten to snapshot files referenced as Source Paths
      (same contract as `StepExecutor.writeFacetSnapshot`)
    - the report directory is recreated and seeded from the fixture's
      `reports-seed/` (canned gather/peer reports)
+   - boundary targets additionally render `ReportInstructionBuilder` output,
+     include the runtime Finding Contract context, and resume the Phase 1
+     OpenCode session for Phase 2
    - `{task}` and `{previous_response}` exported as promptfoo template
      variables `{{task}}` / `{{previous_response}}`
    - mutable (coder) targets copied to `eval/.work/<id>`
 2. Fixtures are self-contained projects (own package.json / gradle files) —
-   without that, codex escapes to the enclosing takt repo and produces
+   without that, an agent can escape to the enclosing takt repo and produce
    false findings (this actually happened).
 3. `eval/cases/*.md` are the per-test `task` / `previous_response` values
    (inline diffs to review, canned gather/plan output). Keep canned
@@ -84,15 +116,15 @@ The flow is: prepare (place latest facets) -> run on codex -> assert.
    bypasses.
 4. Each planted violation maps to a specific policy/knowledge line and gets
    one `metric:`-labelled assertion (recall). Clean cases guard precision
-   via `llm-rubric`. Planting several violations in one realistic diff
-   amortizes the per-case agent cost (exploration dominates tokens, not
-   prompt size).
+   with the suite's configured JavaScript or model-graded assertion.
+   Planting several violations in one realistic diff amortizes the per-case
+   agent cost (exploration dominates tokens, not prompt size).
 
 ## Running
 
 ```bash
 npm run build                    # prepare script imports from dist/
-npm run eval:prompts             # prepare + ALL suites
+npm run eval:prompts             # prepare all targets + run the default suite set
 npm run eval:prompts -- arch cqrs        # only selected suites
 npm run eval:prompts -- arch --repeat 3  # extra flags pass through to promptfoo
 npm run eval:prompts:prepare     # prepare only (inspect eval/prompts/)
@@ -103,6 +135,10 @@ Run from the repo root. Note: `working_dir` in the configs is resolved
 relative to the config file's directory (`eval/`), not the process cwd.
 `run-evals.mjs` keeps going when a suite fails and prints a summary
 (promptfoo exits non-zero on test failures, which would break `&&` chains).
+With no suite arguments, `run-evals.mjs` excludes every `rescan*` and
+`boundary-*` suite because those measurements require OpenCode
+authentication and may intentionally contain weak-model failures. Select
+those suites explicitly when needed.
 
 ### Token budget rules
 
@@ -113,8 +149,8 @@ relative to the config file's directory (`eval/`), not the process cwd.
   effort; quantify with `--repeat` before judging a facet change.
 - Iterating on **assertions only** is free: promptfoo caches provider
   responses, so unchanged prompts re-score against cached outputs without
-  calling codex. Facet changes alter the prompt and trigger real calls
-  (that is the point).
+  calling the configured provider. Facet changes alter the prompt and
+  trigger real calls (that is the point).
 - Full suite + `--repeat` is for recording baselines and validating facet
   changes. For ad-hoc iteration, select suites (`-- arch`) or cases
   (`-- --filter-pattern "buggy"`).

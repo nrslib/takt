@@ -1,0 +1,614 @@
+name: takt-default-localllm
+description: "Team Leader workflow for routing regular reviews to local LLMs and narrowly rechecking wiring, resource ownership, and failure boundaries with a high-assurance model. Providers and models remain tag-configurable."
+finding_contract:
+  ledger_path: .takt/findings/takt-default-localllm.json
+  raw_findings_path: .takt/findings/takt-default-localllm/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+max_steps: 50
+initial_step: plan
+
+loop_monitors:
+  - cycle: [replan, implement]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, boundary-reviewers]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, boundary-reviewers, final-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: Replanning is making progress on blockers
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, boundary-reviewers, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: Replanning is making progress on blockers
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, boundary-reviewers, final-gate, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: Replanning is making progress on blockers
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate, boundary-reviewers]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate, boundary-reviewers, final-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: Replanning is making progress on blockers
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate, boundary-reviewers, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: Replanning is making progress on blockers
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate, boundary-reviewers, final-gate, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: Replanning is making progress on blockers
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [reviewers, local-review-integrity-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-gate-needs-review
+      rules:
+        - condition: The missing evidence can be obtained concretely and another run of the same regular review is worthwhile
+          next: reviewers
+        - condition: The implementation or test strategy can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements after the attempted reviews and replans
+          next: ABORT
+  - cycle: [boundary-reviewers, final-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-gate-needs-review
+      rules:
+        - condition: The missing evidence can be obtained concretely and another run of the same boundary review is worthwhile
+          next: boundary-reviewers
+        - condition: The implementation or test strategy can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements after the attempted reviews and replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, boundary-reviewers, final-gate, boundary-reviewers, final-gate]
+    threshold: 1
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate, reviewers, local-review-integrity-gate]
+    threshold: 1
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [fix, reviewers]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: The post-fix review confirms progress and the next fix is actionable
+          next: fix
+        - condition: The same finding repeats but replanning may resolve it
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [fix, reviewers, boundary-reviewers]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: The post-fix review confirms progress and the next fix is actionable
+          next: fix
+        - condition: The same finding repeats but replanning may resolve it
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [fix, reviewers, boundary-reviewers, final-gate]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: The post-fix review confirms progress and the next fix is actionable
+          next: fix
+        - condition: The same finding repeats but replanning may resolve it
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [fix, reviewers, local-review-integrity-gate]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: The post-fix review confirms progress and the next fix is actionable
+          next: fix
+        - condition: The same finding repeats but replanning may resolve it
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [fix, reviewers, local-review-integrity-gate, boundary-reviewers]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: The post-fix review confirms progress and the next fix is actionable
+          next: fix
+        - condition: The same finding repeats but replanning may resolve it
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [fix, reviewers, local-review-integrity-gate, boundary-reviewers, final-gate]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: The post-fix review confirms progress and the next fix is actionable
+          next: fix
+        - condition: The same finding repeats but replanning may resolve it
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [fix, reviewers, boundary-reviewers, final-gate, boundary-reviewers, final-gate]
+    threshold: 1
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: The post-fix review confirms progress and the next fix is actionable
+          next: fix
+        - condition: The same finding repeats but replanning may resolve it
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [fix, reviewers, local-review-integrity-gate, reviewers, local-review-integrity-gate]
+    threshold: 1
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: The post-fix review confirms progress and the next fix is actionable
+          next: fix
+        - condition: The same finding repeats but replanning may resolve it
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+steps:
+  - name: plan
+    tags: [plan]
+    edit: false
+    persona: planner
+    knowledge: architecture
+    instruction: plan
+    rules:
+      - condition: Requirements are clear and implementable
+        next: write_tests
+      - condition: User is asking a question rather than requesting implementation
+        next: COMPLETE
+      - condition: Requirements are unclear or insufficient
+        next: ABORT
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+
+  - name: replan
+    tags: [plan]
+    edit: false
+    persona: planner
+    knowledge: architecture
+    instruction: replan-implementation
+    rules:
+      - condition: An actionable, untried project-scoped change or investigation and its verification steps were defined
+        next: implement
+      - condition: Confirmed evidence shows that project-scoped changes or investigation cannot resolve the issue, leaving only external action or mutually unsatisfiable requirements
+        next: ABORT
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+
+  - name: write_tests
+    tags: [coding, test-planning]
+    edit: true
+    persona: coder
+    policy: [coding, testing]
+    knowledge: [takt, architecture, unit-testing, e2e-testing, implementation-semantics]
+    required_permission_mode: edit
+    instruction: write-tests-first
+    rules:
+      - condition: Tests written
+        next: implement
+      - condition: Skip test writing because target is not yet implemented
+        next: implement
+      - condition: Cannot proceed with writing tests
+        next: plan
+      - condition: User input required for confirmation
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - name: test-report.md
+          format: test-report
+
+  - name: implement
+    tags: [leader]
+    edit: true
+    persona: coder
+    policy: coding
+    knowledge: [takt, architecture, implementation-semantics]
+    required_permission_mode: edit
+    pass_previous_response: true
+    team_leader:
+      max_concurrency: 2
+      initial_max_parts: 2
+      fail_on_part_error: false
+      part_tags: [coding]
+      part_persona: coder
+      part_edit: true
+      part_permission_mode: edit
+    instruction: team-leader-implement
+    rules:
+      - condition: Implementation complete
+        next: reviewers
+      - condition: Cannot proceed with implementation
+        next: replan
+
+  - name: reviewers
+    tags: [review]
+    parallel:
+      - name: arch-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: architecture-reviewer
+        policy: review
+        knowledge: architecture
+        instruction: review-arch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: architect-review.md
+              format: architecture-review-finding-contract
+      - name: ai-antipattern-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: ai-antipattern-reviewer
+        policy: [review, ai-antipattern]
+        instruction: ai-antipattern-review
+        rules:
+          - condition: No AI-specific issues
+          - condition: AI-specific issues found
+        output_contracts:
+          report:
+            - name: ai-antipattern-review.md
+              format: ai-antipattern-review-finding-contract
+      - name: coding-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: coding-reviewer
+        policy: [review, coding]
+        instruction: review-coding
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review-finding-contract
+      - name: implementation-semantics-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: implementation-semantics-reviewer
+        policy: review
+        knowledge: implementation-semantics
+        instruction: review-implementation-semantics
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: implementation-semantics-review.md
+              format: implementation-semantics-review-finding-contract
+      - name: contract-lifecycle-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: contract-lifecycle-reviewer
+        policy: review
+        knowledge: contract-lifecycle
+        instruction: contract-lifecycle-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: contract-lifecycle-review.md
+              format: contract-lifecycle-review-finding-contract
+      - name: robustness-review
+        tags: [review]
+        edit: false
+        session: compact
+        persona: robustness-reviewer
+        policy: review
+        knowledge: robustness
+        instruction: robustness-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: robustness-review.md
+              format: robustness-review-finding-contract
+    rules:
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: replan
+      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: replan
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: replan
+      - condition: all("approved", "No AI-specific issues", "approved", "approved", "approved", "approved") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.outstanding == 0)
+        next: boundary-reviewers
+      - condition: any("approved", "needs_fix", "No AI-specific issues", "AI-specific issues found") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.outstanding > 0)
+        next: local-review-integrity-gate
+      - condition: any("needs_fix", "AI-specific issues found") && when(findings.conflicts.count == 0)
+        next: fix
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
+        next: fix
+
+  - name: local-review-integrity-gate
+    kind: workflow_call
+    call: merge-readiness-finding-contract-final-gate
+    args:
+      supervise_knowledge:
+        - architecture
+        - takt
+    rules:
+      - condition: COMPLETE
+        next: boundary-reviewers
+      - condition: needs_review
+        next: reviewers
+      - condition: need_replan
+        next: replan
+      - condition: needs_fix
+        next: fix
+      - condition: needs_conflict_adjudication
+        next: finding-conflict-adjudication
+      - condition: ABORT
+        next: ABORT
+
+  - name: boundary-reviewers
+    tags: [review, boundary-review]
+    parallel:
+      - name: contract-wiring-review
+        session_key: contract-wiring-review
+        tags: [review, boundary-review]
+        edit: false
+        session: compact
+        pass_previous_response: false
+        persona: contract-lifecycle-reviewer
+        policy: review
+        knowledge: contract-lifecycle
+        instruction: review-contract-wiring
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: contract-wiring-review.md
+              format: contract-wiring-review-finding-contract
+      - name: resource-ownership-review
+        session_key: resource-ownership-review
+        tags: [review, boundary-review]
+        edit: false
+        session: compact
+        pass_previous_response: false
+        persona: resource-ownership-reviewer
+        policy: review
+        knowledge: resource-ownership
+        instruction: review-resource-ownership
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: resource-ownership-review.md
+              format: resource-ownership-review-finding-contract
+      - name: failure-boundary-review
+        session_key: failure-boundary-review
+        tags: [review, boundary-review]
+        edit: false
+        session: compact
+        pass_previous_response: false
+        persona: failure-boundary-reviewer
+        policy: review
+        knowledge: failure-boundary
+        instruction: review-failure-boundary
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: failure-boundary-review.md
+              format: failure-boundary-review-finding-contract
+    rules:
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: replan
+      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: replan
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: replan
+      - condition: all("approved", "approved", "approved") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.outstanding == 0)
+        next: final-gate
+      - condition: any("approved", "needs_fix") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.outstanding > 0)
+        next: final-gate
+      - condition: any("needs_fix") && when(findings.conflicts.count == 0)
+        next: fix
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
+        next: fix
+
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-finding-contract-final-gate
+    args:
+      supervise_knowledge:
+        - architecture
+        - takt
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: needs_review
+        next: boundary-reviewers
+      - condition: need_replan
+        next: replan
+      - condition: needs_fix
+        next: fix
+      - condition: needs_conflict_adjudication
+        next: finding-conflict-adjudication
+      - condition: ABORT
+        next: ABORT
+
+  - name: fix
+    tags: [leader]
+    edit: true
+    persona: coder
+    policy: [coding, testing]
+    knowledge: [takt, architecture, implementation-semantics]
+    required_permission_mode: edit
+    team_leader:
+      mode: finding_contract_fix
+      max_concurrency: 3
+      initial_max_parts: 3
+      fail_on_part_error: false
+      part_tags: [coding]
+      part_persona: coder
+      part_edit: true
+      part_permission_mode: edit
+    instruction: team-leader-finding-contract-fix
+    rules:
+      - condition: when(structured.fix.decision == "complete")
+        next: reviewers
+      - condition: when(structured.fix.decision == "replan")
+        next: replan

@@ -70,6 +70,7 @@ workflow_categories:
       - review-fix-takt-default-high
       - takt-default-high
       - takt-default-team-high
+      - takt-default-localllm
   その他:
     workflows:
       - research

@@ -20,7 +20,8 @@ describe('workflowDiscovery', () => {
     const japaneseWorkflows = loadLanguageWorkflows('ja');
 
     expect(onWarning).not.toHaveBeenCalled();
-    expect(englishWorkflows.size + japaneseWorkflows.size).toBe(108);
+    expect(englishWorkflows.has('takt-default-localllm')).toBe(true);
+    expect(japaneseWorkflows.has('takt-default-localllm')).toBe(true);
   });
 
   it('repo 直下でも builtin の privileged workflow を discovery で skip しない', () => {

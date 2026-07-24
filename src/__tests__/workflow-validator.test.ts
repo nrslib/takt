@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import type { NormalAgentWorkflowStep, WorkflowConfig, WorkflowRule } from '../core/models/index.js';
+import { semanticLabelsOf } from '../core/models/workflow-rule-condition.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { getBuiltinWorkflowsDir } from '../infra/config/paths.js';
+import { loadWorkflowFileWithResolutionOptions } from '../infra/config/loaders/workflowResolvedLoader.js';
 
 function createFakeLedgerStore(): FindingLedgerStore {
   return {
@@ -1424,5 +1427,133 @@ describe('validateWorkflowConfig', () => {
         },
       })).not.toThrow();
     });
+  });
+});
+
+describe('reviewer anomaly acknowledgement attestation validation', () => {
+  const inheritedFindingContract = {
+    contract: {
+      ledgerPath: '.takt/findings/parent.json',
+      rawFindingsPath: '.takt/findings/parent/raw',
+      manager: {
+        persona: 'findings-manager',
+        instruction: 'findings-manager',
+        outputContract: 'findings-manager',
+      },
+    },
+    ledgerStore: createFakeLedgerStore(),
+  };
+
+  function createApprovalStep(name: string, next: string): NormalAgentWorkflowStep {
+    return createPlanAgent({
+      name,
+      persona: name,
+      personaDisplayName: name,
+      outputContracts: [{
+        name: `${name}.md`,
+        format: 'finding contract report',
+        formatRef: `${name}-finding-contract`,
+      }],
+      rules: [normalizeRule({
+        condition: 'approved && when(findings.open.count == 0)',
+        next,
+      })],
+    });
+  }
+
+  function loadAuthorizedAttestationWorkflow(): WorkflowConfig {
+    return loadWorkflowFileWithResolutionOptions(
+      `${getBuiltinWorkflowsDir('ja')}/merge-readiness-finding-contract-final-gate.yaml`,
+      {
+        projectCwd: process.cwd(),
+        lookupCwd: process.cwd(),
+        source: 'builtin',
+      },
+    );
+  }
+
+  function requireApprovalStep(
+    workflow: WorkflowConfig,
+    name: string,
+  ): NormalAgentWorkflowStep {
+    const step = workflow.steps.find((candidate) => candidate.name === name);
+    if (step === undefined || step.kind === 'workflow_call') {
+      throw new Error(`test workflow is missing approval step "${name}"`);
+    }
+    return step as NormalAgentWorkflowStep;
+  }
+
+  it('accepts only the declared two-stage approved path loaded from the real builtin', () => {
+    const workflow = loadAuthorizedAttestationWorkflow();
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      inheritedFindingContract,
+    })).not.toThrow();
+  });
+
+  it('rejects approval step content changed after resolver authorization', () => {
+    const missingFindingContractOutput = loadAuthorizedAttestationWorkflow();
+    requireApprovalStep(
+      missingFindingContractOutput,
+      'merge-readiness-review',
+    ).outputContracts = undefined;
+
+    const wrongApprovalPath = loadAuthorizedAttestationWorkflow();
+    const firstStep = requireApprovalStep(wrongApprovalPath, 'merge-readiness-review');
+    firstStep.rules = firstStep.rules?.map((rule) => (
+      semanticLabelsOf(rule.condition).includes('approved')
+        ? { ...rule, next: 'COMPLETE' }
+        : rule
+    ));
+
+    expect(() => validateWorkflowConfig(missingFindingContractOutput, {
+      projectCwd: process.cwd(),
+      inheritedFindingContract,
+    })).toThrow(/workflow content changed after issuance/);
+    expect(() => validateWorkflowConfig(wrongApprovalPath, {
+      projectCwd: process.cwd(),
+      inheritedFindingContract,
+    })).toThrow(/workflow content changed after issuance/);
+  });
+
+  it('rejects an approval rule appended after resolver authorization', () => {
+    const workflow = loadAuthorizedAttestationWorkflow();
+    const firstStep = requireApprovalStep(workflow, 'merge-readiness-review');
+    firstStep.rules = [
+      ...(firstStep.rules ?? []),
+      normalizeRule({
+        condition: 'approved && when(findings.open.count == 0)',
+        next: 'COMPLETE',
+      }),
+    ];
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      inheritedFindingContract,
+    })).toThrow(/workflow content changed after issuance/);
+  });
+
+  it('rejects a plain workflow config because YAML attestation is only a request', () => {
+    const workflow = createWorkflow({
+      initialStep: 'merge-readiness-review',
+      subworkflow: {
+        callable: true,
+        requiresFindingContract: true,
+        attestation: {
+          kind: 'reviewer_anomaly_acknowledgement',
+          approvalSteps: ['merge-readiness-review', 'supervise'],
+        },
+      },
+      steps: [
+        createApprovalStep('merge-readiness-review', 'supervise'),
+        createApprovalStep('supervise', 'COMPLETE'),
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      inheritedFindingContract,
+    })).toThrow(/not authorized by the workflow resolver/);
   });
 });

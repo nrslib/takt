@@ -775,6 +775,9 @@ function reconcileFindingLedgerWithValidator(
     ...(input.previousLedger.reviewerAnomalies !== undefined
       ? { reviewerAnomalies: input.previousLedger.reviewerAnomalies }
       : {}),
+    ...(input.previousLedger.reviewerAnomalyAcknowledgements !== undefined
+      ? { reviewerAnomalyAcknowledgements: input.previousLedger.reviewerAnomalyAcknowledgements }
+      : {}),
   });
 }
 

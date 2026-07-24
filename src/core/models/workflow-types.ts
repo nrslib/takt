@@ -128,12 +128,18 @@ export interface WorkflowSubworkflowParamConfig {
   default?: WorkflowCallArgValue;
 }
 
+export interface WorkflowSubworkflowAttestationConfig {
+  kind: 'reviewer_anomaly_acknowledgement';
+  approvalSteps: [string, string];
+}
+
 export interface WorkflowSubworkflowConfig {
   callable?: boolean;
   visibility?: 'internal';
   requiresFindingContract?: true;
   returns?: string[];
   params?: Record<string, WorkflowSubworkflowParamConfig>;
+  attestation?: WorkflowSubworkflowAttestationConfig;
 }
 
 export interface WorkflowResumePointEntry {

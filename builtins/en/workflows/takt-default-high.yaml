@@ -253,7 +253,7 @@ steps:
         next: replan
       - condition: all("approved", "No AI-specific issues", "approved", "approved", "approved", "approved") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
         next: final-gate
-      - condition: any("approved", "needs_fix", "No AI-specific issues", "AI-specific issues found") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+      - condition: any("approved", "needs_fix", "No AI-specific issues", "AI-specific issues found") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.outstanding > 0)
         next: final-gate
       - condition: any("needs_fix", "AI-specific issues found") && when(findings.conflicts.count == 0)
         next: fix

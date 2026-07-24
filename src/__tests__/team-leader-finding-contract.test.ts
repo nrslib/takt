@@ -26,7 +26,11 @@ import { buildMorePartsPrompt } from '../agents/team-leader-structured-output.js
 import { buildFindingContractRecoveryPromptSections } from '../agents/team-leader-finding-contract-recovery-prompt.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { writeTeamLeaderPartArtifact } from '../core/workflow/engine/team-leader-artifacts.js';
+import {
+  buildTeamLeaderPartFeedbackResult,
+} from '../core/workflow/engine/team-leader-common.js';
 import { validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
+import { FINDING_CONTRACT_CHANGED_PATHS_LIMITS } from '../core/workflow/team-leader-finding-contract-validation.js';
 import {
   FindingContractDecompositionValidationError,
   validateFindingContractDecomposition,
@@ -346,6 +350,37 @@ describe('Finding Contract Team Leader contract', () => {
     }, createFindingContractPartCompletionJsonSchema())).toThrow(/must match pattern/);
   });
 
+  it('keeps provider-facing finding ID schema native-compatible and validates semantics at runtime', () => {
+    const makePayload = (findingIds: string[]) => ({
+      parts: [{
+        id: 'repair',
+        title: 'Repair',
+        instruction: 'repair',
+        findingContract: {
+          findingIds,
+          role: 'repair',
+          writePaths: ['src/a.ts'],
+          readPaths: [],
+        },
+      }],
+    });
+
+    expect(() => validateStructuredOutputAgainstSchema(
+      makePayload([]),
+      createFindingContractDecompositionJsonSchema(),
+    )).not.toThrow();
+    expect(() => validateStructuredOutputAgainstSchema(
+      makePayload(['F-0001', 'F-0001']),
+      createFindingContractDecompositionJsonSchema(),
+    )).not.toThrow();
+    expect(() => parseFindingContractPartDefinition(makePayload([]).parts[0], 0))
+      .toThrow(/must not be empty/);
+    expect(() => parseFindingContractPartDefinition(
+      makePayload(['F-0001', 'F-0001']).parts[0],
+      0,
+    )).toThrow(/must not contain duplicates/);
+  });
+
   it('rejects unknown findings, duplicate repair ownership, and overlapping write paths', () => {
     expect(() => validateFindingContractPartBatch(
       [makePart('unknown', ['F-9999'])],
@@ -444,6 +479,86 @@ describe('Finding Contract Team Leader contract', () => {
     }, dynamicRoute)).not.toThrow();
   });
 
+  it('counts changed path maxLength as Unicode code points in both schema and runtime validation', () => {
+    const part = makePart('unicode-path-boundary', ['F-0001'], 'repair', ['.']);
+    const pathWithCodePoints = (length: number) => (
+      `src/${'😀'.repeat(length - 'src/'.length - '.ts'.length)}.ts`
+    );
+    const tooManyPaths = Array.from(
+      { length: FINDING_CONTRACT_CHANGED_PATHS_LIMITS.maxItems + 1 },
+      (_, index) => `src/generated-${index}.ts`,
+    );
+    const baseClaim = {
+      findingOutcomes: [{
+        findingId: 'F-0001',
+        outcome: 'addressed',
+        evidence: ['src/target.ts:1'],
+      }],
+      checks: [{ command: 'npm test', status: 'passed' }],
+      summary: 'claimed complete',
+    };
+    const schema = createFindingContractPartCompletionJsonSchema();
+
+    for (const length of [999, 1000]) {
+      const changedPath = pathWithCodePoints(length);
+      expect([...changedPath]).toHaveLength(length);
+      expect(changedPath.length).toBeGreaterThan(length);
+      expect(() => validateStructuredOutputAgainstSchema({
+        ...baseClaim,
+        changedPaths: [changedPath],
+      }, schema)).not.toThrow();
+      expect(() => parseFindingContractPartCompletionClaim({
+        ...baseClaim,
+        changedPaths: [changedPath],
+      }, part)).not.toThrow();
+    }
+
+    const overlongPath = pathWithCodePoints(1001);
+    expect(() => validateStructuredOutputAgainstSchema({
+      ...baseClaim,
+      changedPaths: [overlongPath],
+    }, schema)).toThrow();
+    expect(() => parseFindingContractPartCompletionClaim({
+      ...baseClaim,
+      changedPaths: [overlongPath],
+    }, part)).toThrow(
+      new RegExp(`exceeds ${FINDING_CONTRACT_CHANGED_PATHS_LIMITS.maxItemLength} characters`),
+    );
+
+    expect(() => validateStructuredOutputAgainstSchema({
+      ...baseClaim,
+      changedPaths: tooManyPaths,
+    }, schema)).toThrow();
+    expect(() => parseFindingContractPartCompletionClaim({
+      ...baseClaim,
+      changedPaths: tooManyPaths,
+    }, part)).toThrow(new RegExp(`exceeds ${FINDING_CONTRACT_CHANGED_PATHS_LIMITS.maxItems} items`));
+  });
+
+  it('preserves normal claim content and existing error feedback formatting', () => {
+    const normalResult = makeResult(makePart('normal-feedback', ['F-0001']));
+    const normalFeedback = buildTeamLeaderPartFeedbackResult(
+      normalResult,
+      buildFindingContractPartIndexEntry(normalResult),
+    );
+    expect(normalFeedback.content).toBe(normalResult.response.content);
+    expect(normalFeedback.findingContractClaim?.claimAssessment).toBeUndefined();
+
+    const errorResult = makeResult(makePart('error-feedback', ['F-0002']));
+    errorResult.response = {
+      ...errorResult.response,
+      status: 'error',
+      content: 'raw provider error content',
+      error: 'provider failed',
+    };
+    const errorFeedback = buildTeamLeaderPartFeedbackResult(
+      errorResult,
+      buildFindingContractPartIndexEntry(errorResult),
+    );
+    expect(errorFeedback.content).toBe('[ERROR] provider failed');
+    expect(errorFeedback.findingContractClaim?.claimAssessment).toBeUndefined();
+  });
+
   it('treats the repository root as containing every relative changed path', () => {
     const repair = makePart('repair-root', ['F-0001'], 'repair', ['./']);
 
@@ -537,6 +652,51 @@ describe('Finding Contract Team Leader contract', () => {
     };
     expect(() => parseDecision(addressed, ['F-0001'], [part], [result]))
       .toThrow(/no passed verification check/);
+  });
+
+  it('does not allow an invalid completion claim to support a complete decision', () => {
+    const part = makePart('invalid-complete-evidence', ['F-0001'], 'repair', ['src/owned']);
+    const result = makeResult(part);
+    result.response.structuredOutput = {
+      findingOutcomes: [{
+        findingId: 'F-0001',
+        outcome: 'addressed',
+        evidence: ['src/owned/a.ts:1'],
+      }],
+      changedPaths: ['src/outside.ts'],
+      checks: [{ command: 'npm test', status: 'passed' }],
+      summary: 'claimed complete',
+    };
+    let validationError: FindingContractTeamLeaderDecisionValidationError | undefined;
+    try {
+      parseDecision({
+        decision: 'complete',
+        reasoning: 'incorrectly uses an invalid claim',
+        parts: [],
+        fixCoverage: [{
+          findingId: 'F-0001',
+          disposition: 'addressed',
+          supportingPartIds: [part.id],
+          verificationPartIds: [part.id],
+        }],
+        blockers: [],
+      }, ['F-0001'], [part], [result]);
+    } catch (error) {
+      if (error instanceof FindingContractTeamLeaderDecisionValidationError) {
+        validationError = error;
+      } else {
+        throw error;
+      }
+    }
+
+    expect(validationError?.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining([
+      'evidence.invalid_part_claim',
+      'evidence.unsupported_disposition',
+      'evidence.ineligible_verification',
+      'evidence.missing_passed_verification',
+    ]));
+    expect(validationError?.issues.map((issue) => issue.message).join('\n'))
+      .toContain('Changed path is outside the part writePaths assignment');
   });
 
   it('collects independent completion evidence issues in one validation result', () => {

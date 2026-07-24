@@ -1007,7 +1007,13 @@ export class OpenCodeAttemptRunner {
       // ネイティブ構造化出力: OpenCode がスキーマのキー構造を強制する
       // （enum 等の値制約までは保証されないため、下流のスキーマ検証は維持）。
       ...(attemptPlan.structuredMode === 'native' && options.outputSchema !== undefined
-        ? { format: { type: 'json_schema' as const, schema: options.outputSchema, retryCount: 2 } }
+        ? {
+            format: {
+              type: 'json_schema' as const,
+              schema: options.outputSchema,
+              retryCount: options.structuredOutputRetryCount ?? 2,
+            },
+          }
         : {}),
       parts: [{ type: 'text' as const, text: promptText }],
     };
