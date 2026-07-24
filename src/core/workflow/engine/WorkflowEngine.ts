@@ -471,18 +471,20 @@ export class WorkflowEngine extends EventEmitter {
       completedAt,
       approvals,
     });
+    const currentReviewScopeSnapshotId = computeReviewScopeSnapshotId(this.cwd);
+    const input = buildInput(currentReviewScopeSnapshotId);
     const mutation = await this.findingLedgerStore.updateLedger(
       (current) => {
         const result = appendReviewerAnomalyAcknowledgements(
           current,
-          buildInput(computeReviewScopeSnapshotId(this.cwd)),
+          input,
         );
         return { ledger: result.ledger, result };
       },
       (current) => {
         const result = appendReviewerAnomalyAcknowledgements(
           current,
-          buildInput(computeReviewScopeSnapshotId(this.cwd)),
+          input,
         );
         return {
           mutation: { ledger: result.ledger, result },

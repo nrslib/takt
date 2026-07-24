@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
@@ -11,12 +12,17 @@ import { parse as parseYaml } from 'yaml';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { WorkflowConfig, WorkflowStep } from '../core/models/index.js';
 import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
+import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
+import type { FindingLedger } from '../core/workflow/findings/types.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
 import { resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
 import {
   invalidateAllResolvedConfigCache,
   invalidateGlobalConfigCache,
 } from '../infra/config/index.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowLoader.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { resetScenario, setMockScenario } from '../infra/mock/index.js';
 
 type Locale = 'ja' | 'en';
 
@@ -658,25 +664,170 @@ describe('takt-default-localllm boundary reviews', () => {
     }
   });
 
-  it.each(['ja', 'en'] as const)('%s のinner gate instructionはreviewer anomalyを修正根拠にしない', (locale) => {
-    const instruction = readFileSync(join(
-      process.cwd(),
-      'builtins',
-      locale,
-      'facets',
-      'instructions',
-      'loop-monitor-gate-needs-review.md',
-    ), 'utf-8');
+  it.each(['ja', 'en'] as const)('%s のanomaly-only台帳をloop judge promptへ注入しreviewersを選ぶ', async (locale) => {
+    const workflow = loadBuiltinWorkflow(locale);
+    const findingContract = workflow.findingContract;
+    if (findingContract === undefined) {
+      throw new Error('Missing finding contract');
+    }
+    const monitor = workflow.loopMonitors?.find((candidate) => (
+      JSON.stringify(candidate.cycle)
+        === JSON.stringify(['reviewers', 'local-review-integrity-gate'])
+    ));
+    if (monitor === undefined) {
+      throw new Error('Missing anomaly-only inner gate monitor');
+    }
+    const observation = {
+      runId: 'run-1',
+      stepName: 'reviewers',
+      timestamp: '2026-07-24T00:00:00.000Z',
+    };
+    const ledger: FindingLedger = {
+      version: 1,
+      workflowName: workflow.name,
+      nextId: 1,
+      updatedAt: observation.timestamp,
+      rawFindings: [],
+      conflicts: [],
+      findings: [],
+      reviewerAnomalies: [{
+        id: 'RA-0001',
+        kind: 'quote-mismatch',
+        stableKey: 'anomaly-only',
+        lineageKey: 'anomaly-only-lineage',
+        sourceRawFindingIds: ['raw-anomaly-only'],
+        reviewers: ['coding-review'],
+        title: 'unverified claim',
+        claimedExcerpt: 'UNVERIFIED_CLAIM_CONTENT',
+        mismatchReason: 'quote mismatch',
+        firstObserved: observation,
+        lastObserved: observation,
+        occurrences: 1,
+      }],
+    };
+    const config: WorkflowConfig = {
+      name: workflow.name,
+      maxSteps: 10,
+      initialStep: 'reviewers',
+      findingContract,
+      loopMonitors: [{
+        ...monitor,
+        threshold: 1,
+        judge: {
+          ...monitor.judge,
+          personaPath: undefined,
+        },
+      }],
+      steps: [
+        {
+          name: 'reviewers',
+          persona: 'reviewer',
+          personaDisplayName: 'reviewer',
+          instruction: 'Review the current evidence.',
+          rules: [
+            normalizeRule({ condition: 'needs_review', next: 'local-review-integrity-gate' }),
+            normalizeRule({ condition: 'stop', next: 'ABORT' }),
+          ],
+        },
+        {
+          name: 'local-review-integrity-gate',
+          persona: 'supervisor',
+          personaDisplayName: 'supervisor',
+          instruction: 'Evaluate review integrity.',
+          rules: [
+            normalizeRule({ condition: 'needs_review', next: 'reviewers' }),
+            normalizeRule({ condition: 'stop', next: 'ABORT' }),
+          ],
+        },
+        {
+          name: 'replan',
+          persona: 'planner',
+          personaDisplayName: 'planner',
+          instruction: 'Replan the evidence collection.',
+          rules: [
+            normalizeRule({ condition: 'when(true)', next: 'ABORT' }),
+          ],
+        },
+      ],
+    };
+    const projectDir = join(testRoot, `anomaly-only-${locale}`);
+    mkdirSync(projectDir, { recursive: true });
+    execFileSync('git', ['init'], { cwd: projectDir, stdio: 'pipe' });
+    execFileSync('git', [
+      '-c', 'user.name=Test User',
+      '-c', 'user.email=test@example.com',
+      'commit', '--allow-empty', '-m', 'initial',
+    ], { cwd: projectDir, stdio: 'pipe' });
+    createFindingLedgerStore({
+      projectCwd: projectDir,
+      reportDir: projectDir,
+      workflowName: config.name,
+      ledgerPath: findingContract.ledgerPath,
+      rawFindingsPath: findingContract.rawFindingsPath,
+    }).saveLedger(ledger);
+    const engine = new WorkflowEngine(config, projectDir, 'test anomaly-only gate', {
+      projectCwd: projectDir,
+      provider: 'mock',
+      language: locale,
+      reportDirName: `anomaly-only-${locale}`,
+    });
+    let selectedTransition: string | undefined;
+    let judgePrompt: string | undefined;
+    let reviewerRuns = 0;
+    const expectedInstructionContract = locale === 'ja'
+      ? 'reviewer anomaly は証拠不成立を示す非 actionable な状態であり、product finding ではありません。actionable な open finding がない限り修正を選ばず、anomaly の claimed content を修正根拠にしないでください。'
+      : 'A reviewer anomaly is a non-actionable evidence failure, not a product finding. Do not choose a fix without an actionable open finding, and do not use the anomaly\'s claimed content as repair evidence.';
+    const expectedAnomalyState = locale === 'ja'
+      ? '現在は open 0件（substantive 0件、ゲートを塞ぐ provisional 0件）'
+      : 'currently 0 open (0 substantive, 0 gate-blocking provisional)';
+    engine.on('step:start', (step, _iteration, instruction) => {
+      let selectedStep = 1;
+      if (step.name === 'reviewers') {
+        reviewerRuns += 1;
+        selectedStep = reviewerRuns === 1 ? 1 : 2;
+      } else if (step.name.startsWith('_loop_judge_')) {
+        judgePrompt = instruction;
+        const hasEngineComputedAnomalyState = [
+          '## Findings state (engine-computed)',
+          expectedInstructionContract,
+          expectedAnomalyState,
+          'findings.reviewerAnomalies.count: 1',
+        ].every((expected) => instruction.includes(expected))
+          && !instruction.includes('UNVERIFIED_CLAIM_CONTENT');
+        selectedStep = hasEngineComputedAnomalyState ? 1 : 2;
+      }
+      setMockScenario([
+        { status: 'done', content: `${step.name} response` },
+        {
+          status: 'done',
+          content: `selected step ${selectedStep}`,
+          structuredOutput: {
+            step: selectedStep,
+            reason: 'Selected from the observed prompt in this test',
+          },
+        },
+      ]);
+    });
+    engine.on('step:complete', (step, response) => {
+      if (step.name.startsWith('_loop_judge_') && response.matchedRuleIndex !== undefined) {
+        selectedTransition = step.rules?.[response.matchedRuleIndex]?.next;
+      }
+    });
 
-    expect(instruction).toMatch(locale === 'ja'
-      ? /reviewer anomaly は証拠不成立を示す非 actionable な状態/
-      : /reviewer anomaly is a non-actionable evidence failure/);
-    expect(instruction).toMatch(locale === 'ja'
-      ? /actionable な open finding がない限り修正を選ばず/
-      : /Do not choose a fix without an actionable open finding/);
-    expect(instruction).toMatch(locale === 'ja'
-      ? /claimed content を修正根拠にしない/
-      : /do not use the anomaly's claimed content as repair evidence/);
+    try {
+      const result = await engine.run();
+
+      expect(judgePrompt).toContain('## Findings state (engine-computed)');
+      expect(judgePrompt).toContain(expectedInstructionContract);
+      expect(judgePrompt).toContain(expectedAnomalyState);
+      expect(judgePrompt).toContain('findings.reviewerAnomalies.count: 1');
+      expect(judgePrompt).not.toContain('UNVERIFIED_CLAIM_CONTENT');
+      expect(result.status).toBe('aborted');
+      expect(selectedTransition).toBe('reviewers');
+    } finally {
+      engine.removeAllListeners();
+      resetScenario();
+    }
   });
 
   it.each(['ja', 'en'] as const)('%s の複合閉路は完全一致して起点へ自然遷移するときだけ発火する', (locale) => {

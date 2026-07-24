@@ -113,6 +113,11 @@ export interface DecomposeTaskResponse {
   providerUsage?: ProviderUsageSnapshot;
 }
 
+interface DecompositionRequestControl {
+  rejectedDecomposition: RejectedTeamLeaderDecomposition | undefined;
+  disableStructuredOutputRetry: boolean;
+}
+
 export async function requestDecompositionRawResponse(
   instruction: string,
   maxInitialParts: number | undefined,
@@ -122,8 +127,10 @@ export async function requestDecompositionRawResponse(
     instruction,
     maxInitialParts,
     options,
-    undefined,
-    false,
+    {
+      rejectedDecomposition: undefined,
+      disableStructuredOutputRetry: false,
+    },
   );
 }
 
@@ -139,8 +146,10 @@ export async function decomposeTask(
         instruction,
         maxInitialParts,
         options,
-        rejectedDecomposition,
-        true,
+        {
+          rejectedDecomposition,
+          disableStructuredOutputRetry: true,
+        },
       );
 
       if (response.status !== 'done') {
@@ -209,8 +218,7 @@ async function requestDecompositionOnce(
   instruction: string,
   maxInitialParts: number | undefined,
   options: DecomposeTaskOptions,
-  rejectedDecomposition: RejectedTeamLeaderDecomposition | undefined,
-  disableStructuredOutputRetry: boolean,
+  control: DecompositionRequestControl,
 ): Promise<AgentResponse> {
   let response: AgentResponse;
   try {
@@ -220,7 +228,7 @@ async function requestDecompositionOnce(
       options.language,
       options.inspectTools,
       options.findingContract,
-      rejectedDecomposition,
+      control.rejectedDecomposition,
     ), {
       cwd: options.cwd,
       personaPath: options.personaPath,
@@ -235,7 +243,7 @@ async function requestDecompositionOnce(
       outputSchema: options.findingContract === undefined
         ? loadDecompositionSchema(maxInitialParts)
         : withMaxInitialParts(createFindingContractDecompositionJsonSchema(), maxInitialParts),
-      ...(disableStructuredOutputRetry ? { structuredOutputRetryCount: 0 } : {}),
+      ...(control.disableStructuredOutputRetry ? { structuredOutputRetryCount: 0 } : {}),
       onStream: options.onStream,
       workflowMeta: options.workflowMeta,
       childProcessEnv: options.childProcessEnv,

@@ -15,6 +15,12 @@ function serializeCanonicalJson(value: unknown, ancestors: Set<object>): string 
     return serialized;
   }
   if (value !== null && typeof value === 'object') {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError(
+        'Cannot canonicalize unsupported object; expected an array or plain object',
+      );
+    }
     if (ancestors.has(value)) {
       throw new TypeError('Cannot canonicalize cyclic JSON content');
     }
