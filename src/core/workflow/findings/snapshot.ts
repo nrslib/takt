@@ -5,7 +5,7 @@ import { truncateUtf8 } from '../../../shared/utils/utf8.js';
 
 const HASH_CHUNK_BYTES = 1024 * 1024;
 const CAPTURE_ATTEMPTS = 3;
-const SNAPSHOT_FORMAT = Buffer.from('review-scope-snapshot-v2');
+const SNAPSHOT_FORMAT = Buffer.from('review-scope-snapshot');
 const SNAPSHOT_DIFF_MAX_BYTES = 20_000;
 const SNAPSHOT_DIFF_CAPTURE_MAX_BYTES = 128 * 1024;
 const SNAPSHOT_UNTRACKED_CONTENT_MAX_BYTES = 20_000;

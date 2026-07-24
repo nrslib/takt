@@ -9,23 +9,23 @@ function createFakeLedgerStore(): FindingLedgerStore {
   return {
     workflowName: 'fake',
     loadLedger: () => ({
-      version: 1,
       workflowName: 'fake',
       nextId: 1,
       updatedAt: new Date().toISOString(),
       findings: [],
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
     }),
     saveLedger: () => {},
     updateLedger: (mutator) => Promise.resolve(mutator({
-      version: 1,
       workflowName: 'fake',
       nextId: 1,
       updatedAt: new Date().toISOString(),
       findings: [],
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
     })),
     createRunCopy: () => '/tmp/fake-ledger-copy.json',
     saveRawFindings: () => '/tmp/fake-raw-findings.json',
@@ -594,10 +594,10 @@ describe('validateWorkflowConfig', () => {
     })).not.toThrow();
   });
 
-  it('v2 梯子設計: findingContract の parallel parent に迂回ルール（invalid manager output rule）はもう要求しない', () => {
+  it('findingContract の parallel parent に迂回ルール（invalid manager output rule）は要求しない', () => {
     // 旧実装は run-level の invalid_manager_output を迂回ルール
     // （非AI return need_replan / needs_fix / next fix）へ自動選択で流していたため、
-    // その存在を設定時に強制していた。v2 では manager の壊れた応答は provisional
+    // その存在を設定時に強制していた。manager の壊れた応答は provisional
     // として台帳へ着地し、run-level の失敗経路が無いため、この要求は撤去された
     // （custom workflow が provisional を処理しない場合はエンジンの COMPLETE
     // 最終不変条件が fail-fast する）。

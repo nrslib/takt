@@ -39,42 +39,53 @@ interface RawFindingDecisionRef {
 export function validateFindingManagerOutput(
   input: ValidateFindingManagerOutputInput,
 ): FindingManagerValidationResult {
+  assertFindingManagerOutputArrays(input.managerOutput);
   return validateFindingManagerOutputWithPolicy(input, true);
 }
 
 export function validateManagerActionRecoveryOutput(
   input: Omit<ValidateFindingManagerOutputInput, 'priorStepResponseText'>,
 ): FindingManagerValidationResult {
+  assertFindingManagerOutputArrays(input.managerOutput);
   const unexpectedDecisionCount = input.managerOutput.matches.length
     + input.managerOutput.newFindings.length
     + input.managerOutput.resolvedFindings.length
     + input.managerOutput.reopenedFindings.length
     + input.managerOutput.conflicts.length
     + input.managerOutput.resolvedConflicts.length
-    + (input.managerOutput.disputeNotes ?? []).length;
+    + input.managerOutput.disputeNotes.length;
   if (unexpectedDecisionCount > 0) {
     return { ok: false, errors: ['Manager action recovery output may contain only recovered manager actions'] };
   }
   return validateFindingManagerOutputWithPolicy(input, false);
 }
 
+const FINDING_MANAGER_OUTPUT_ARRAY_KEYS = [
+  'matches',
+  'newFindings',
+  'resolvedFindings',
+  'reopenedFindings',
+  'conflicts',
+  'resolvedConflicts',
+  'waivedFindings',
+  'disputeNotes',
+  'invalidatedFindings',
+  'duplicateFindings',
+  'dismissedFindings',
+] as const satisfies readonly (keyof FindingManagerOutput)[];
+
+function assertFindingManagerOutputArrays(managerOutput: FindingManagerOutput): void {
+  for (const key of FINDING_MANAGER_OUTPUT_ARRAY_KEYS) {
+    if (!Array.isArray(managerOutput[key])) {
+      throw new Error(`FindingManagerOutput.${key} must be an explicit array`);
+    }
+  }
+}
+
 function validateFindingManagerOutputWithPolicy(
   input: ValidateFindingManagerOutputInput,
   requireCoderWaiverEvidence: boolean,
 ): FindingManagerValidationResult {
-  // zod 経路は default([]) で補完されるが、手組みの manager output が渡る
-  // 経路も実在するため、入口で新配列の欠落を正規化する。
-  input = {
-    ...input,
-    managerOutput: {
-      ...input.managerOutput,
-      waivedFindings: input.managerOutput.waivedFindings ?? [],
-      disputeNotes: input.managerOutput.disputeNotes ?? [],
-      invalidatedFindings: input.managerOutput.invalidatedFindings ?? [],
-      dismissedFindings: input.managerOutput.dismissedFindings ?? [],
-      duplicateFindings: input.managerOutput.duplicateFindings ?? [],
-    },
-  };
   const context: ValidationContext = {
     previousFindingsById: new Map(input.previousLedger.findings.map((finding) => [finding.id, finding])),
     previousConflictsById: new Map(input.previousLedger.conflicts.map((conflict) => [conflict.id, conflict])),

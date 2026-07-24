@@ -4,7 +4,6 @@ import type { FindingLedger, FindingObservation } from './types.js';
 import type { ReviewerIntakeResult } from './manager-admission.js';
 import { intakeReviewerOutputs } from './manager-intake.js';
 import { buildFindingManagerStep } from './manager-step.js';
-import { computeRoundMarker } from './round-marker.js';
 import { resolveReviewIntegrityLimits } from './review-integrity.js';
 import { resolveStopBudgetLimits } from './stop-budget.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
@@ -31,6 +30,7 @@ export interface PreparedFindingManagerRound {
 
 export function prepareFindingManagerRound(
   input: RunFindingManagerForStepInput,
+  stopBudgetRoundMarker: string,
 ): PreparedFindingManagerRound {
   const previousLedger = input.ledgerStore.loadLedger();
   const ledgerCopyPath = input.ledgerCopyPath ?? input.ledgerStore.createRunCopy();
@@ -40,12 +40,6 @@ export function prepareFindingManagerRound(
     timestamp: input.timestamp,
   };
   const stopBudgetLimits = resolveStopBudgetLimits(input.contract.stopBudget);
-  const stopBudgetRoundMarker = computeRoundMarker({
-    runId: input.runId,
-    callNamespace: input.callNamespace,
-    parentStepName: input.parentStep.name,
-    stepIteration: input.stepIteration,
-  });
   const reviewIntegrityLimits = resolveReviewIntegrityLimits(input.contract.reviewBudget);
   const reviewerIntake = intakeReviewerOutputs({
     subResults: input.subResults,

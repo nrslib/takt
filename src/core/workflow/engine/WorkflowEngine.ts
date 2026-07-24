@@ -49,6 +49,7 @@ import { createFindingLedgerStore, type FindingLedgerStore } from '../findings/s
 import type { FindingLedger, FindingLedgerEntry, ReviewerAnomalyEntry } from '../findings/types.js';
 import { injectFindingConflictAdjudicationStep } from '../findings/adjudication-step.js';
 import { createFindingConflictAdjudicationRunner } from '../findings/adjudication-runner.js';
+import { rebindPendingManagerPublicationAtBootstrap } from '../findings/manager-commit.js';
 import { ERROR_MESSAGES } from '../constants.js';
 import { inheritReviewReports, writeReviewReportInheritanceDiagnostic } from '../report-inheritance.js';
 import {
@@ -98,6 +99,7 @@ export class WorkflowEngine extends EventEmitter {
   private readonly resumeStackPrefix: WorkflowResumePointEntry[];
   private readonly findingLedgerStore?: FindingLedgerStore;
   private readonly findingContract?: FindingContractConfig;
+  private findingContractBootstrap?: Promise<void>;
 
   private readonly optionsBuilder: WorkflowEngineServices['optionsBuilder'];
   private readonly stepExecutor: WorkflowEngineServices['stepExecutor'];
@@ -197,6 +199,9 @@ export class WorkflowEngine extends EventEmitter {
         workflowName: this.config.name,
         ledgerPath: this.findingContract.ledgerPath,
         rawFindingsPath: this.findingContract.rawFindingsPath,
+        ...(this.options.resumeSource?.sourceRunSlug === undefined
+          ? {}
+          : { trustedResumeSourceRunId: this.options.resumeSource.sourceRunSlug }),
       });
       this.refreshFindingsState();
       this.findingLedgerStore.createRunCopy();
@@ -276,8 +281,10 @@ export class WorkflowEngine extends EventEmitter {
         })
         : undefined,
     });
-    workflowRunExecutors.set(this, () => this.runWithSystemCleanup(
-      () => runWithWorkflowSpan(
+    workflowRunExecutors.set(this, async () => {
+      await this.initializeFindingContract();
+      return this.runWithSystemCleanup(
+        () => runWithWorkflowSpan(
         this.buildWorkflowSpanParams('full'),
         () => runWorkflowToCompletion({
           state: this.state,
@@ -330,8 +337,9 @@ export class WorkflowEngine extends EventEmitter {
         }),
         (error) => this.buildWorkflowErrorSpanOutcome(error),
       ),
-      () => true,
-    ));
+        () => true,
+      );
+    });
 
     log.debug('WorkflowEngine initialized', {
       workflow: config.name,
@@ -351,6 +359,17 @@ export class WorkflowEngine extends EventEmitter {
       return;
     }
     this.state.findings = buildFindingsRuleContext(this.findingLedgerStore.loadLedger(), this.cwd);
+  }
+
+  private async initializeFindingContract(): Promise<void> {
+    if (this.findingLedgerStore === undefined) {
+      return;
+    }
+    this.findingContractBootstrap ??= rebindPendingManagerPublicationAtBootstrap(
+      this.findingLedgerStore,
+    );
+    await this.findingContractBootstrap;
+    this.refreshFindingsState();
   }
 
   /** Open findings still carrying provisional metadata. */
@@ -731,6 +750,7 @@ export class WorkflowEngine extends EventEmitter {
     returnValue?: string;
     loopDetected?: boolean;
   }> {
+    await this.initializeFindingContract();
     return this.runWithSystemCleanup(
       () => runWithWorkflowSpan(
         this.buildWorkflowSpanParams('single_iteration'),

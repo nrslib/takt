@@ -15,22 +15,35 @@ import type {
   FindingProvisionalMetadata,
   RawFinding,
 } from './types.js';
+import {
+  matchesProvisionalRecoveryOrigin,
+  snapshotProvisionalRecoveryOrigin,
+  type ProvisionalRecoveryOrigin,
+} from './provisional-recovery-origin.js';
 
-export interface InterpretationRecoveryFailure {
-  provisionalFindingId: string;
-  expectedProvisionalRevision: number;
+interface InterpretationRecoveryFailureBase {
+  recoveryOrigin: ProvisionalRecoveryOrigin;
   attempt: number;
   sourceRawFindingId: string;
   reason: string;
 }
 
-function recoveryReviewerStableKey(provisional: FindingProvisionalMetadata): string {
-  if (provisional.recoveryReviewerStableKey !== undefined) {
-    return provisional.recoveryReviewerStableKey;
-  }
-  // 既存台帳には reviewer provenance が無いため、stableKey を attempt 名前空間にして同じ lineage の再試行を決定的に保つ。
-  return provisional.stableKey;
-}
+export type InterpretationRecoveryFailure =
+  | InterpretationRecoveryFailureBase & {
+      kind: 'source_missing';
+      outcome: 'audit_only';
+    }
+  | InterpretationRecoveryFailureBase & {
+      kind: 'reviewer_provenance_missing';
+      outcome: 'audit_only';
+    };
+
+export type InterpretationRecoveryCommitFailure =
+  | InterpretationRecoveryFailure
+  | InterpretationRecoveryFailureBase & {
+      kind: 'recovery_origin_stale';
+      outcome: 'stale';
+    };
 
 function sourceRawForRecovery(
   ledger: FindingLedger,
@@ -70,21 +83,18 @@ export function attachInterpretationRecoveryOrigins(input: {
     const provenanceMatches = processes.filter((process) => (
       process.provisional.recoveryReviewerStableKey === item.canonical.reviewerStableKey
     ));
-    const process = provenanceMatches.length === 1
-      ? provenanceMatches[0]
-      : processes.length === 1
-        ? processes[0]
-        : undefined;
-    if (process === undefined) {
+    if (provenanceMatches.length === 0) {
       return item;
     }
-    attachedProcessIds.add(process.id);
+    const recoveryOrigins = provenanceMatches
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((process) => {
+        attachedProcessIds.add(process.id);
+        return snapshotProvisionalRecoveryOrigin(process);
+      });
     return {
       ...item,
-      recoveryOrigin: {
-        provisionalFindingId: process.id,
-        expectedProvisionalRevision: process.revision ?? 1,
-      },
+      recoveryOrigins,
     };
   });
 }
@@ -103,14 +113,15 @@ export function collectInterpretationRecoveryPlan(input: {
   roundsCompleted: number;
 }): { items: CanonicalIntakeItem[]; failures: InterpretationRecoveryFailure[] } {
   const attachedProcessIds = new Set(input.currentItems.flatMap((item) => (
-    item.recoveryOrigin === undefined ? [] : [item.recoveryOrigin.provisionalFindingId]
+    item.recoveryOrigins?.map((origin) => origin.provisionalFindingId) ?? []
   )));
-  return interpretationProcesses(input.ledger, input.roundsCompleted).reduce<{
-    items: CanonicalIntakeItem[];
-    failures: InterpretationRecoveryFailure[];
-  }>((plan, finding) => {
+  const itemsByRawFindingId = new Map<string, CanonicalIntakeItem>();
+  const failures: InterpretationRecoveryFailure[] = [];
+  const processes = interpretationProcesses(input.ledger, input.roundsCompleted)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  for (const finding of processes) {
     if (attachedProcessIds.has(finding.id)) {
-      return plan;
+      continue;
     }
     const source = sourceRawForRecovery(input.ledger, finding.provisional);
     if (source === undefined) {
@@ -120,61 +131,112 @@ export function collectInterpretationRecoveryPlan(input: {
       const reason = finding.provisional.sourceRawFindingIds.length === 0
         ? `Interpretation recovery "${finding.provisional.stableKey}" has no source raw finding id`
         : `Interpretation recovery "${finding.provisional.stableKey}" references missing raw finding "${sourceRawFindingId}"`;
-      return {
-        ...plan,
-        failures: [...plan.failures, {
-          provisionalFindingId: finding.id,
-          expectedProvisionalRevision: finding.revision ?? 1,
-          attempt,
-          sourceRawFindingId,
-          reason,
-        }],
-      };
+      failures.push({
+        kind: 'source_missing',
+        outcome: 'audit_only',
+        recoveryOrigin: snapshotProvisionalRecoveryOrigin(finding),
+        attempt,
+        sourceRawFindingId,
+        reason,
+      });
+      continue;
+    }
+    const reviewerStableKey = finding.provisional.recoveryReviewerStableKey;
+    if (reviewerStableKey === undefined) {
+      const attempt = (finding.provisional.adjudicationAttempts ?? []).length + 1;
+      failures.push({
+        kind: 'reviewer_provenance_missing',
+        outcome: 'audit_only',
+        recoveryOrigin: snapshotProvisionalRecoveryOrigin(finding),
+        attempt,
+        sourceRawFindingId: source.rawFindingId,
+        reason: `Interpretation recovery "${finding.provisional.stableKey}" has no reviewer provenance`,
+      });
+      continue;
+    }
+    const origin = snapshotProvisionalRecoveryOrigin(finding);
+    const existing = itemsByRawFindingId.get(source.rawFindingId);
+    if (existing !== undefined) {
+      if (existing.recoveryOrigins === undefined) {
+        throw new Error(
+          `Interpretation recovery source "${source.rawFindingId}" lost its recovery origins`,
+        );
+      }
+      itemsByRawFindingId.set(source.rawFindingId, {
+        ...existing,
+        recoveryOrigins: [...existing.recoveryOrigins, origin]
+          .sort((left, right) => left.provisionalFindingId.localeCompare(right.provisionalFindingId)),
+      });
+      continue;
     }
     const candidate = candidateFromStoredRawFinding(
       source,
-      recoveryReviewerStableKey(finding.provisional),
+      reviewerStableKey,
     );
     const canonical = canonicalizeReviewerRawFinding(candidate, {
       ledger: input.ledger,
       preserveAmbiguityOrigin: true,
     }).canonical;
+    itemsByRawFindingId.set(source.rawFindingId, {
+      canonical,
+      wire: toLedgerRawFinding(canonical),
+      recoveryOrigins: [origin],
+      interpretationRecoveryAttempt: true,
+    });
+  }
+  return {
+    items: [...itemsByRawFindingId.values()],
+    failures,
+  };
+}
+
+export function resolveInterpretationRecoveryFailuresForCommit(
+  ledger: FindingLedger,
+  failures: readonly InterpretationRecoveryFailure[],
+): InterpretationRecoveryCommitFailure[] {
+  return failures.map((failure) => {
+    const finding = ledger.findings.find(
+      (candidate) => candidate.id === failure.recoveryOrigin.provisionalFindingId,
+    );
+    if (finding !== undefined && matchesProvisionalRecoveryOrigin(finding, failure.recoveryOrigin)) {
+      return failure;
+    }
     return {
-      ...plan,
-      items: [...plan.items, {
-        canonical,
-        wire: toLedgerRawFinding(canonical),
-        recoveryOrigin: {
-          provisionalFindingId: finding.id,
-          expectedProvisionalRevision: finding.revision ?? 1,
-        },
-        interpretationRecoveryAttempt: true,
-      }],
+      ...failure,
+      kind: 'recovery_origin_stale',
+      outcome: 'stale',
+      reason: `Interpretation recovery origin changed before commit: ${failure.reason}`,
     };
-  }, { items: [], failures: [] });
+  });
 }
 
 export function applyInterpretationRecoveryFailures(input: {
   ledger: FindingLedger;
-  failures: readonly InterpretationRecoveryFailure[];
+  failures: readonly InterpretationRecoveryCommitFailure[];
   observation: FindingObservation;
 }): FindingLedger {
   const failuresByFindingId = new Map(
-    input.failures.map((failure) => [failure.provisionalFindingId, failure]),
+    input.failures.flatMap((failure) => {
+      switch (failure.kind) {
+        case 'source_missing':
+        case 'reviewer_provenance_missing':
+          return [[failure.recoveryOrigin.provisionalFindingId, failure] as const];
+        case 'recovery_origin_stale':
+          return [];
+      }
+    }),
   );
   return {
     ...input.ledger,
     findings: input.ledger.findings.map((finding) => {
       const failure = failuresByFindingId.get(finding.id);
       if (failure === undefined
-        || finding.status !== 'open'
-        || finding.provisional === undefined
-        || (finding.revision ?? 1) !== failure.expectedProvisionalRevision) {
+        || !matchesProvisionalRecoveryOrigin(finding, failure.recoveryOrigin)) {
         return finding;
       }
       return {
         ...finding,
-        revision: (finding.revision ?? 1) + 1,
+        revision: finding.revision + 1,
         provisional: {
           ...finding.provisional,
           adjudicationAttempts: [
@@ -196,7 +258,7 @@ export function retainInterpretationRecoveryForLadder(
   admission: RawAdmissionEvaluation,
   intake: ReviewerIntakeResult,
 ): RawAdmissionEvaluation {
-  const recoveryItems = intake.items.filter((item) => item.recoveryOrigin !== undefined);
+  const recoveryItems = intake.items.filter((item) => item.recoveryOrigins !== undefined);
   if (recoveryItems.length === 0) {
     return admission;
   }

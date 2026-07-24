@@ -9,7 +9,11 @@ import { validateFindingManagerOutput } from '../core/workflow/findings/manager-
 import { reconcileCommitPlan } from '../core/workflow/findings/manager-commit-finalization.js';
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
-import { createReviewerRawFindingCandidates } from '../core/workflow/findings/raw-canonicalization.js';
+import {
+  computeLineageKey,
+  computeReviewerStableKey,
+  createReviewerRawFindingCandidates,
+} from '../core/workflow/findings/raw-canonicalization.js';
 import { detectClarifiableRawMismatches } from '../core/workflow/findings/relation-coherence.js';
 import type {
   FindingLedger,
@@ -19,8 +23,11 @@ import type {
   FindingManagerOutput,
   RawFinding,
 } from '../core/workflow/findings/types.js';
+import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 
-function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedgerEntry {
+function makeFinding(
+  overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+): FindingLedgerEntry {
   return {
     id: 'F-0001',
     status: 'open',
@@ -38,12 +45,12 @@ function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedger
 
 function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLedger> = {}): FindingLedger {
   return {
-    version: 1,
     workflowName: 'peer-review',
     nextId: 100,
     updatedAt: '2026-07-01T00:00:00.000Z',
     rawFindings: [],
     conflicts: [],
+    interpretations: [],
     findings,
     ...overrides,
   };
@@ -51,7 +58,7 @@ function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLe
 
 function makeConflict(overrides: Partial<FindingLedgerConflict> = {}): FindingLedgerConflict {
   return {
-    id: 'C-0001',
+    id: 'C-FA2947446963',
     status: 'active',
     findingIds: ['F-0001'],
     rawFindingIds: [],
@@ -282,9 +289,10 @@ describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () =>
 
 describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
   it('後着証拠が同じ conflict を再生成する場合、その resolve を不採用にして active を保つ', () => {
-    const conflict = makeConflict({ id: 'C-0001', findingIds: ['F-0001'], rawFindingIds: ['raw-old'] });
+    const conflictId = formatConflictId({ findingIds: ['F-0001'], rawFindingIds: ['raw-old'] });
+    const conflict = makeConflict({ id: conflictId, findingIds: ['F-0001'], rawFindingIds: ['raw-old'] });
     const freshLedger = makeLedger(
-      [makeFinding({ id: 'F-0001' })],
+      [makeFinding({ revision: 1, id: 'F-0001' })],
       { conflicts: [conflict] },
     );
     const ladderRaw = makeRaw({ rawFindingId: 'raw-ladder' });
@@ -301,9 +309,9 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
       freshLedger,
       rawFindings: [ladderRaw],
       managerOutput: outputWith({
-        // manager は C-0001 を resolve したが、ladder マージが同じ署名の
+        // manager は canonical conflict を resolve したが、ladder マージが同じ署名の
         // conflict（F-0001）を後着させた
-        resolvedConflicts: [{ conflictId: 'C-0001', evidence: 'adjudicated' }],
+        resolvedConflicts: [{ conflictId, evidence: 'adjudicated' }],
         conflicts: [{
           findingIds: ['F-0001'],
           rawFindingIds: ['raw-ladder'],
@@ -313,28 +321,42 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
       provisionalSpecs: [],
       anomalySpecs: [],
       pendingRejectedObservations: [],
-      rawProvenanceByRawFindingId: new Map(),
+      rawProvenanceByRawFindingId: new Map([[ladderRaw.rawFindingId, {
+        reviewerStableKey: computeReviewerStableKey({
+          workflowName: 'peer-review',
+          callNamespace: '',
+          parentStepName: 'reviewers',
+          reviewerPersonaKey: ladderRaw.reviewer,
+        }),
+        lineageKey: computeLineageKey({
+          location: ladderRaw.location!,
+          title: ladderRaw.title,
+          familyTag: ladderRaw.familyTag,
+        }),
+      }]]),
       cleanWire: [],
       explicitResolvedByMapping: new Map(),
       explicitPromotedFindingIds: new Set(),
       recoveryProvisionalRawFindingIds: new Set(),
+      staleRawFindingIds: new Set(),
       deferredRawFindingIds: new Set(),
+      unsupportedRawFindingReports: [],
       healthyReviewerStableKeys: new Set(),
     });
 
     expect(result.normalizationRejections.some((rejection) => (
-      rejection.includes('C-0001') && rejection.includes('regenerated')
+      rejection.includes('C-FA2947446963') && rejection.includes('regenerated')
     ))).toBe(true);
-    const savedConflict = result.ledger.conflicts.find((entry) => entry.id === 'C-0001')!;
+    const savedConflict = result.ledger.conflicts.find((entry) => entry.id === 'C-FA2947446963')!;
     expect(savedConflict.status).toBe('active');
   });
 });
 
 describe('assembleManagerOutput → 保存正規化 → reconciler（ラウンド2事故の再現形）', () => {
   const ledger = makeLedger([
-    makeFinding({ id: 'F-0001', rawFindingIds: ['raw-old-1'] }),
-    makeFinding({ id: 'F-0006', rawFindingIds: ['raw-old-6'], title: '候補に存在しない初期値が非表示のまま確定結果へ混入する' }),
-    makeFinding({ id: 'F-0008', rawFindingIds: ['raw-old-8'], title: '候補にない初期選択が非表示のまま確定・実行される' }),
+    makeFinding({ revision: 1, id: 'F-0001', rawFindingIds: ['raw-old-1'] }),
+    makeFinding({ revision: 1, id: 'F-0006', rawFindingIds: ['raw-old-6'], title: '候補に存在しない初期値が非表示のまま確定結果へ混入する' }),
+    makeFinding({ revision: 1, id: 'F-0008', rawFindingIds: ['raw-old-8'], title: '候補にない初期選択が非表示のまま確定・実行される' }),
   ]);
   const persistsRaws = [
     makeRaw({ rawFindingId: 'raw-6', relation: 'persists', targetFindingId: 'F-0006' }),
@@ -377,6 +399,25 @@ describe('assembleManagerOutput → 保存正規化 → reconciler（ラウン�
       previousLedger: ledger,
       rawFindings: persistsRaws,
       managerOutput: normalized.output,
+      provisionalFindings: [],
+      rawFindingDispositions: [],
+      rawProvenanceByRawFindingId: new Map(persistsRaws.map((rawFinding) => [
+        rawFinding.rawFindingId,
+        {
+          reviewerStableKey: computeReviewerStableKey({
+            workflowName: 'peer-review',
+            callNamespace: '',
+            parentStepName: 'reviewers',
+            reviewerPersonaKey: rawFinding.reviewer,
+          }),
+          lineageKey: computeLineageKey({
+            targetFindingId: rawFinding.targetFindingId!,
+            location: rawFinding.location!,
+            title: rawFinding.title,
+            familyTag: rawFinding.familyTag,
+          }),
+        },
+      ])),
       context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-02T00:00:00.000Z' },
     });
     const statusById = new Map(reconciled.findings.map((finding) => [finding.id, finding.status]));
@@ -417,7 +458,7 @@ describe('assembleManagerOutput → 保存正規化 → reconciler（ラウン�
 
 describe('invalidate と同ラウンド証拠の衝突', () => {
   it('このラウンドに match された finding への invalidate は不採用にする', () => {
-    const ledger = makeLedger([makeFinding({ id: 'F-0001' })]);
+    const ledger = makeLedger([makeFinding({ revision: 1, id: 'F-0001' })]);
     const raw = makeRaw({ rawFindingId: 'raw-1', relation: 'persists', targetFindingId: 'F-0001' });
     const result = assembleManagerOutput({
       previousLedger: ledger,
@@ -436,7 +477,7 @@ describe('invalidate と同ラウンド証拠の衝突', () => {
 
   it('active conflict が参照する finding への invalidate は不採用にする', () => {
     const ledger = makeLedger(
-      [makeFinding({ id: 'F-0001' })],
+      [makeFinding({ revision: 1, id: 'F-0001' })],
       { conflicts: [makeConflict({ findingIds: ['F-0001'] })] },
     );
     const result = assembleManagerOutput({
@@ -456,8 +497,8 @@ describe('invalidate と同ラウンド証拠の衝突', () => {
 
 describe('carried conflict の部分重複', () => {
   const ledger = makeLedger([
-    makeFinding({ id: 'F-0001' }),
-    makeFinding({ id: 'F-0002' }),
+    makeFinding({ revision: 1, id: 'F-0001' }),
+    makeFinding({ revision: 1, id: 'F-0002' }),
   ]);
   const raw = makeRaw({ rawFindingId: 'raw-1', relation: 'persists', targetFindingId: 'F-0001' });
 
@@ -536,7 +577,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
 
 describe('detectClarifiableRawMismatches の重複 ID 除外', () => {
   it('同一 ID が複数回現れる場合は clarification 対象から外す（素の ID で相関できない）', () => {
-    const ledger = makeLedger([makeFinding({ id: 'F-0001', status: 'resolved', lifecycle: 'resolved' })]);
+    const ledger = makeLedger([makeFinding({ revision: 1, id: 'F-0001', status: 'resolved', lifecycle: 'resolved' })]);
     // resolved な finding への persists 主張は clarifiable なミスマッチになる形
     const item = {
       rawFindingId: 'x',

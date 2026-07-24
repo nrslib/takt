@@ -1,6 +1,9 @@
 import { createLogger } from '../../../shared/utils/index.js';
 import { evaluateRawAdmission } from './manager-admission.js';
-import { commitFindingManagerRound } from './manager-commit.js';
+import {
+  commitFindingManagerRound,
+  resumePendingManagerCommit,
+} from './manager-commit.js';
 import type {
   FindingManagerRunResult,
   RunFindingManagerForStepInput,
@@ -9,6 +12,8 @@ import { runManagerDecisionStage } from './manager-decision.js';
 import { prepareFindingManagerRound } from './manager-preparation.js';
 import { retainInterpretationRecoveryForLadder } from './interpretation-recovery.js';
 import { computeReviewScopeSnapshotId } from './snapshot.js';
+import { computeRoundMarker } from './round-marker.js';
+import { runManagerRoundExclusive } from './manager-round-lock.js';
 
 const log = createLogger('finding-manager-runner');
 
@@ -26,52 +31,87 @@ export {
 export async function runFindingManagerForStep(
   input: RunFindingManagerForStepInput,
 ): Promise<FindingManagerRunResult> {
-  const reviewScopeSnapshotId = computeReviewScopeSnapshotId(input.cwd);
-  const prepared = prepareFindingManagerRound(input);
-  const admission = retainInterpretationRecoveryForLadder(evaluateRawAdmission({
-    cwd: input.cwd,
-    reviewScopeSnapshotId,
-    previousLedger: prepared.previousLedger,
-    intake: prepared.intake,
-  }), prepared.intake);
-  const managerDecision = await runManagerDecisionStage({
-    input,
-    previousLedger: prepared.previousLedger,
-    admission,
-    managerStep: prepared.managerStep,
-    ledgerCopyPath: prepared.ledgerCopyPath,
-    rawFindingsPath: prepared.rawFindingsPath,
-    observation: prepared.observation,
-    reviewScopeSnapshotId,
-  });
-  const committed = await commitFindingManagerRound({
-    input,
-    previousLedger: prepared.previousLedger,
-    intake: prepared.intake,
-    interpretationRecoveryFailures: prepared.interpretationRecoveryFailures,
-    admission,
-    managerDecision,
-    observation: prepared.observation,
-    stopBudgetLimits: prepared.stopBudgetLimits,
-    stopBudgetRoundMarker: prepared.stopBudgetRoundMarker,
-    reviewIntegrityLimits: prepared.reviewIntegrityLimits,
-    reviewScopeSnapshotId,
+  const stopBudgetRoundMarker = computeRoundMarker({
+    runId: input.runId,
+    callNamespace: input.callNamespace,
+    parentStepName: input.parentStep.name,
+    stepIteration: input.stepIteration,
   });
 
-  log.info('Finding contract intake completed', {
-    step: input.parentStep.name,
-    rawFindings: prepared.intake.items.length,
-    ambiguous: managerDecision.ladder.stats.ambiguousRawCount,
-    managerCalls: managerDecision.ladder.stats.managerCalls,
-    provisionalLandings: committed.provisionalLandingCount,
-    reviewerAnomalyLandings: committed.reviewerAnomalyLandingCount,
-    overflowReviewers: prepared.intake.overflowReports.length,
-    staleConfirmations: committed.staleRejectionCount,
+  return runManagerRoundExclusive(input.ledgerStore, async () => {
+    const loadedLedger = input.ledgerStore.loadLedger();
+    const resumed = await resumePendingManagerCommit(input, loadedLedger);
+    const currentLedger = resumed?.ledger ?? loadedLedger;
+    if (resumed?.completedRoundMarker === stopBudgetRoundMarker) {
+      return {
+        status: 'unchanged',
+        ledger: currentLedger,
+      };
+    }
+    if (currentLedger.stopBudget?.roundMarkers.includes(stopBudgetRoundMarker) === true) {
+      return {
+        status: 'unchanged',
+        ledger: currentLedger,
+      };
+    }
+
+    const reviewScopeSnapshotId = computeReviewScopeSnapshotId(input.cwd);
+    const prepared = prepareFindingManagerRound(input, stopBudgetRoundMarker);
+    const admission = retainInterpretationRecoveryForLadder(evaluateRawAdmission({
+      cwd: input.cwd,
+      reviewScopeSnapshotId,
+      previousLedger: prepared.previousLedger,
+      intake: prepared.intake,
+    }), prepared.intake);
+    const managerDecision = await runManagerDecisionStage({
+      input,
+      previousLedger: prepared.previousLedger,
+      admission,
+      managerStep: prepared.managerStep,
+      ledgerCopyPath: prepared.ledgerCopyPath,
+      rawFindingsPath: prepared.rawFindingsPath,
+      observation: prepared.observation,
+      reviewScopeSnapshotId,
+      stopBudgetRoundMarker,
+    });
+    const committed = await commitFindingManagerRound({
+      input,
+      previousLedger: prepared.previousLedger,
+      intake: prepared.intake,
+      interpretationRecoveryFailures: prepared.interpretationRecoveryFailures,
+      admission,
+      managerDecision,
+      observation: prepared.observation,
+      stopBudgetLimits: prepared.stopBudgetLimits,
+      stopBudgetRoundMarker,
+      reviewIntegrityLimits: prepared.reviewIntegrityLimits,
+      reviewScopeSnapshotId,
+    });
+
+    if (!committed.applied) {
+      return {
+        status: 'unchanged',
+        ledgerPath: prepared.ledgerCopyPath,
+        providerInfo: prepared.providerInfo,
+        ledger: committed.nextLedger,
+      };
+    }
+
+    log.info('Finding contract intake completed', {
+      step: input.parentStep.name,
+      rawFindings: prepared.intake.items.length,
+      ambiguous: managerDecision.ladder.stats.ambiguousRawCount,
+      managerCalls: managerDecision.ladder.stats.managerCalls,
+      provisionalLandings: committed.provisionalLandingCount,
+      reviewerAnomalyLandings: committed.reviewerAnomalyLandingCount,
+      overflowReviewers: prepared.intake.overflowReports.length,
+      staleConfirmations: committed.staleRejectionCount,
+    });
+    return {
+      status: 'updated',
+      ledgerPath: prepared.ledgerCopyPath,
+      providerInfo: prepared.providerInfo,
+      ledger: committed.nextLedger,
+    };
   });
-  return {
-    status: 'updated',
-    ledgerPath: prepared.ledgerCopyPath,
-    providerInfo: prepared.providerInfo,
-    ledger: committed.nextLedger,
-  };
 }

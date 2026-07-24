@@ -1366,13 +1366,13 @@ describe('WorkflowEngine report handle integration', () => {
     const sourceLedgerPath = join(projectCwd, '.takt', 'findings', 'review-ledger.json');
     writeReport(sourceReportDir, '05-arch-review.md', 'previous arch review');
     const sourceLedger = JSON.stringify({
-      version: 1,
       workflowName: 'fix-report-handles',
       nextId: 1,
       updatedAt: '2026-07-17T00:00:00.000Z',
       findings: [],
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
     });
     writeReport(join(projectCwd, '.takt', 'findings'), 'review-ledger.json', sourceLedger);
     const engine = new WorkflowEngine(config, cloneCwd, 'test task', {

@@ -6,6 +6,7 @@ import type { ReviewerIntakeResult } from './manager-admission.js';
 import { evaluateRawAdmission } from './manager-admission.js';
 import type {
   RawAdjudicationRecoveryResult,
+  RawAdjudicationFailure,
   RawAdjudicationReplayOrigin,
   RunFindingManagerForStepInput,
 } from './manager-contracts.js';
@@ -24,6 +25,7 @@ import {
 } from './raw-canonicalization.js';
 import { collectLandedRawIds } from './manager-utils.js';
 import type { FindingLedger, FindingObservation, RawFinding } from './types.js';
+import { matchesProvisionalRecoveryOrigin } from './provisional-recovery-origin.js';
 
 function emptyIntake(): ReviewerIntakeResult {
   return {
@@ -68,21 +70,23 @@ function buildReplayIntake(input: {
 }): {
   intake: ReviewerIntakeResult;
   origins: Map<string, RawAdjudicationReplayOrigin>;
-  failures: Map<string, string>;
+  failures: Map<string, RawAdjudicationFailure>;
   reservationByRawId: Map<string, RawAdjudicationReservation>;
 } {
   const intake = emptyIntake();
   const origins = new Map<string, RawAdjudicationReplayOrigin>();
-  const failures = new Map<string, string>();
+  const failures = new Map<string, RawAdjudicationFailure>();
   const reservationByRawId = new Map<string, RawAdjudicationReservation>();
   for (const reservation of input.reservations) {
     const finding = input.ledger.findings.find((entry) => entry.id === reservation.provisionalFindingId);
     if (finding?.provisional === undefined) {
       throw new Error(`Reserved raw adjudication provisional "${reservation.provisionalFindingId}" no longer exists`);
     }
-    // 既存台帳には reviewer provenance が無いため、stableKey を replay の canonical 名前空間として使う。
-    const reviewerStableKey = finding.provisional.recoveryReviewerStableKey
-      ?? finding.provisional.stableKey;
+    if (!matchesProvisionalRecoveryOrigin(finding, reservation.recoveryOrigin)) {
+      throw new Error(
+        `Reserved raw adjudication provisional "${reservation.provisionalFindingId}" changed after reservation`,
+      );
+    }
     const attempt = reservation.attempt;
     const replayRawId = replayRawFindingId({
       runId: input.runId,
@@ -100,12 +104,26 @@ function buildReplayIntake(input: {
       sourceRawFindingId: sourceResult.sourceRawFindingId,
       expectedProvisionalRevision: reservation.expectedRevision,
       attempt,
+      recoveryOrigin: reservation.recoveryOrigin,
     });
     reservationByRawId.set(replayRawId, reservation);
     if (sourceResult.source === undefined) {
-      failures.set(replayRawId, finding.provisional.sourceRawFindingIds.length === 0
-        ? 'Raw adjudication recovery has no source raw finding id'
-        : `Raw adjudication recovery references missing raw finding "${sourceResult.sourceRawFindingId}"`);
+      failures.set(replayRawId, {
+        kind: 'source_missing',
+        outcome: 'audit_only',
+        reason: finding.provisional.sourceRawFindingIds.length === 0
+          ? 'Raw adjudication recovery has no source raw finding id'
+          : `Raw adjudication recovery references missing raw finding "${sourceResult.sourceRawFindingId}"`,
+      });
+      continue;
+    }
+    const reviewerStableKey = finding.provisional.recoveryReviewerStableKey;
+    if (reviewerStableKey === undefined) {
+      failures.set(replayRawId, {
+        kind: 'reviewer_provenance_missing',
+        outcome: 'audit_only',
+        reason: 'Raw adjudication recovery has no reviewer provenance',
+      });
       continue;
     }
     const source = sourceResult.source;
@@ -116,7 +134,11 @@ function buildReplayIntake(input: {
     intake.items.push({ canonical, wire });
     if (wire.targetFindingId !== undefined
       && !input.ledger.findings.some((entry) => entry.id === wire.targetFindingId)) {
-      failures.set(replayRawId, `target finding "${wire.targetFindingId}" no longer exists`);
+      failures.set(replayRawId, {
+        kind: 'target_missing',
+        outcome: 'stale',
+        reason: `target finding "${wire.targetFindingId}" no longer exists`,
+      });
     }
   }
   return { intake, origins, failures, reservationByRawId };
@@ -125,12 +147,18 @@ function buildReplayIntake(input: {
 function admissionFailureReasons(
   intake: ReviewerIntakeResult,
   admittedRawIds: ReadonlySet<string>,
-): Map<string, string> {
-  return new Map(intake.items.flatMap((item) => (
-    admittedRawIds.has(item.wire.rawFindingId)
-      ? []
-      : [[item.wire.rawFindingId, 'replay source evidence did not pass current admission'] as const]
-  )));
+): Map<string, RawAdjudicationFailure> {
+  const failures = new Map<string, RawAdjudicationFailure>();
+  for (const item of intake.items) {
+    if (!admittedRawIds.has(item.wire.rawFindingId)) {
+      failures.set(item.wire.rawFindingId, {
+        kind: 'admission_rejected',
+        outcome: 'audit_only',
+        reason: 'replay source evidence did not pass current admission',
+      });
+    }
+  }
+  return failures;
 }
 
 function retainPreparedRecovery(input: {
@@ -210,7 +238,7 @@ async function runReservedRawAdjudicationRecovery(input: {
       intake: prepared.intake,
       output: createEmptyManagerOutput(),
       origins: prepared.origins,
-      failureReasons: prepared.failures,
+      failures: prepared.failures,
       capturedPreconditions,
       invalidAttempts: [],
       unsupportedRawFindingReports: [],
@@ -226,11 +254,11 @@ async function runReservedRawAdjudicationRecovery(input: {
     intake: prepared.intake,
   });
   const admittedRawIds = new Set(admission.cleanWire.map((wire) => wire.rawFindingId));
-  const failureReasons = new Map([
+  const failures = new Map([
     ...prepared.failures,
     ...admissionFailureReasons(prepared.intake, admittedRawIds),
   ]);
-  const adjudicableWire = admission.cleanWire.filter((wire) => !failureReasons.has(wire.rawFindingId));
+  const adjudicableWire = admission.cleanWire.filter((wire) => !failures.has(wire.rawFindingId));
   const mechanical = classifyRawFindingsMechanically({
     previousLedger: input.previousLedger,
     rawFindings: adjudicableWire,
@@ -244,7 +272,7 @@ async function runReservedRawAdjudicationRecovery(input: {
       ...admission,
       cleanWire: adjudicableWire,
       cleanAdmitted: admission.cleanAdmitted.filter(
-        (item) => !failureReasons.has(item.wire.rawFindingId),
+        (item) => !failures.has(item.wire.rawFindingId),
       ),
     },
     mechanical,
@@ -256,13 +284,13 @@ async function runReservedRawAdjudicationRecovery(input: {
   });
   let batchExecution = {
     output: mechanicalClean.managerOutput,
-    failureReasons: new Map<string, string>(),
+    failures: new Map<string, RawAdjudicationFailure>(),
     invalidAttempts: mechanicalClean.invalidAttempts,
     unsupportedRawFindingReports: mechanicalClean.unsupportedRawFindingReports,
     sentRawIds: new Set<string>(),
   };
   const retainedRawIds = new Set([
-    ...failureReasons.keys(),
+    ...failures.keys(),
     ...collectLandedRawIds(mechanical.output),
   ]);
   if (mechanical.residualRawFindings.length > 0) {
@@ -281,8 +309,8 @@ async function runReservedRawAdjudicationRecovery(input: {
       mechanical,
       mechanicallyClassifiedCount: adjudicableWire.length - mechanical.residualRawFindings.length,
     });
-    for (const [rawFindingId, reason] of batchExecution.failureReasons) {
-      failureReasons.set(rawFindingId, reason);
+    for (const [rawFindingId, failure] of batchExecution.failures) {
+      failures.set(rawFindingId, failure);
     }
     for (const rawFindingId of batchExecution.sentRawIds) {
       retainedRawIds.add(rawFindingId);
@@ -304,7 +332,7 @@ async function runReservedRawAdjudicationRecovery(input: {
     intake: retained.intake,
     output: batchExecution.output,
     origins: retained.origins,
-    failureReasons,
+    failures,
     capturedPreconditions,
     invalidAttempts: batchExecution.invalidAttempts,
     unsupportedRawFindingReports: batchExecution.unsupportedRawFindingReports,

@@ -6,12 +6,17 @@ import {
 import { RAW_ADJUDICATION_RECOVERY_LIMITS } from './raw-finding-limits.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import type { FindingManagerStore, FindingLedgerMutation } from './store.js';
+import {
+  snapshotProvisionalRecoveryOrigin,
+  type ProvisionalRecoveryOrigin,
+} from './provisional-recovery-origin.js';
 
 export interface RawAdjudicationReservation {
   provisionalFindingId: string;
   expectedRevision: number;
   attempt: number;
   reservationToken: string;
+  recoveryOrigin: ProvisionalRecoveryOrigin;
 }
 
 function rawAdjudicationReservationToken(input: {
@@ -49,7 +54,7 @@ export async function reserveRawAdjudicationRecovery(
         if (reservations.length >= RAW_ADJUDICATION_RECOVERY_LIMITS.maxReplayTargetsPerStep) {
           break;
         }
-        const expectedRevision = finding.revision ?? 1;
+        const expectedRevision = finding.revision;
         const attempt = (finding.provisional.adjudicationAttempts ?? []).length + 1;
         const reservationToken = rawAdjudicationReservationToken({
           provisionalFindingId: finding.id,
@@ -65,6 +70,7 @@ export async function reserveRawAdjudicationRecovery(
           expectedRevision,
           attempt,
           reservationToken,
+          recoveryOrigin: snapshotProvisionalRecoveryOrigin(finding),
         });
       }
       return { ledger, result: reservations };

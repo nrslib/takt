@@ -478,7 +478,7 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
     return createStep({
       name: 'findings-manager',
       structuredOutput: {
-        schemaRef: 'takt.findings.manager.v3',
+        schemaRef: 'takt.findings.manager',
         schema: { type: 'object' },
       },
       ...overrides,

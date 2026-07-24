@@ -1,6 +1,6 @@
 import type { FindingLedger, FindingManagerOutput } from './types.js';
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
-import { formatConflictId } from './conflict-identity.js';
+import { formatConflictId } from '../../models/finding-conflict-identity.js';
 
 export interface RejectedDuplicateNormalization {
   canonicalFindingId: string;

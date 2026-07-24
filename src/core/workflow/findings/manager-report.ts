@@ -1,5 +1,4 @@
 import type {
-  FindingManagerStore,
   FindingManagerValidationAttemptReport,
   InterpretationStatsReport,
   ProvisionalLandingReport,
@@ -9,10 +8,14 @@ import type {
   ReviewerOutputOverflowReport,
   UnsupportedRawFindingReport,
 } from './store.js';
-import type { FindingManagerOutput } from './types.js';
+import type {
+  FindingManagerOutput,
+  FindingManagerValidationReport,
+  InterpretationRecoveryOriginSettlement,
+  RawFindingDisposition,
+} from './types.js';
 
-export function saveManagerCommitReport(input: {
-  ledgerStore: FindingManagerStore;
+interface ManagerCommitReportInput {
   runId: string;
   stepName: string;
   managerOutput: FindingManagerOutput;
@@ -26,7 +29,13 @@ export function saveManagerCommitReport(input: {
   rawNormalizations: RawNormalizationAuditRecord[];
   clarifications: Array<{ reviewer: string; flaggedRawFindingIds: string[] }>;
   interpretationStats: InterpretationStatsReport;
-}): void {
+  rawFindingDispositions: RawFindingDisposition[];
+  interpretationRecoverySettlements: InterpretationRecoveryOriginSettlement[];
+}
+
+export function buildManagerCommitReport(
+  input: ManagerCommitReportInput,
+): FindingManagerValidationReport | undefined {
   const reportNeeded = input.invalidAttempts.length > 0
     || input.staleRejections.length > 0
     || input.admissionRejections.length > 0
@@ -35,12 +44,14 @@ export function saveManagerCommitReport(input: {
     || input.provisionalLandings.length > 0
     || input.reviewerAnomalyLandings.length > 0
     || input.clarifications.length > 0
-    || input.rawNormalizations.length > 0;
+    || input.rawNormalizations.length > 0
+    || input.rawFindingDispositions.length > 0
+    || input.interpretationRecoverySettlements.length > 0;
   if (!reportNeeded) {
-    return;
+    return undefined;
   }
 
-  input.ledgerStore.saveManagerValidationReport({
+  return {
     version: 1,
     runId: input.runId,
     stepName: input.stepName,
@@ -58,6 +69,12 @@ export function saveManagerCommitReport(input: {
       : {}),
     ...(input.rawNormalizations.length > 0 ? { rawNormalizations: input.rawNormalizations } : {}),
     ...(input.clarifications.length > 0 ? { relationClarifications: input.clarifications } : {}),
+    ...(input.rawFindingDispositions.length > 0
+      ? { rawFindingDispositions: input.rawFindingDispositions }
+      : {}),
+    ...(input.interpretationRecoverySettlements.length > 0
+      ? { interpretationRecoverySettlements: input.interpretationRecoverySettlements }
+      : {}),
     interpretationStats: input.interpretationStats,
     attempts: input.staleRejections.length > 0
       ? [
@@ -69,5 +86,5 @@ export function saveManagerCommitReport(input: {
         },
       ]
       : input.invalidAttempts,
-  });
+  };
 }

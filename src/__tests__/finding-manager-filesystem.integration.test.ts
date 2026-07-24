@@ -90,13 +90,13 @@ describe('finding manager filesystem error propagation', () => {
       rawFindingsPath: FINDING_CONTRACT.rawFindingsPath,
     });
     const initialLedger: FindingLedger = {
-      version: 1,
       workflowName: 'peer-review',
       nextId: 1,
       updatedAt: '2026-07-17T00:00:00.000Z',
       findings: [],
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
     };
     ledgerStore.saveLedger(initialLedger);
     const ledgerPath = join(cwd, FINDING_CONTRACT.ledgerPath);
@@ -162,13 +162,13 @@ describe('finding manager filesystem error propagation', () => {
       rawFindingsPath: FINDING_CONTRACT.rawFindingsPath,
     });
     ledgerStore.saveLedger({
-      version: 1,
       workflowName: 'peer-review',
       nextId: 1,
       updatedAt: '2026-07-17T00:00:00.000Z',
       findings: [],
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
     });
     const snapshotId = computeReviewScopeSnapshotId(cwd);
     executeAgentMock.mockImplementation(async () => {
@@ -184,6 +184,9 @@ describe('finding manager filesystem error propagation', () => {
           }],
           disputeDecisions: [],
           conflictDecisions: [],
+          invalidateDecisions: [],
+          duplicateDecisions: [],
+          dismissDecisions: [],
         },
       } as unknown as AgentResponse;
     });

@@ -8,13 +8,17 @@ import {
 import { attachFixpointState } from './fixpoint.js';
 import { attachStopBudgetState, resolveStopBudgetLimits } from './stop-budget.js';
 import { attachReviewIntegrityState, resolveReviewIntegrityLimits } from './review-integrity.js';
-import { markInterpretationsApplied } from './interpretation-wal.js';
+import {
+  markInterpretationsApplied,
+  normalizeProvisionalInterpretationEpochs,
+} from './interpretation-wal.js';
 import type { ReviewerAnomalyLandingReport } from './store.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
   FindingObservation,
   InterpretationApplicationResult,
+  RawFindingDisposition,
   RawFinding,
 } from './types.js';
 import type { RawAdmissionEvaluation } from './manager-admission.js';
@@ -26,7 +30,8 @@ import {
 } from './manager-provisional-settlement.js';
 import { collectActiveConflictFindingIds, normalizeMergedManagerPlan } from './manager-plan-normalization.js';
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
-import { collectRegeneratedConflictIds } from './conflict-identity.js';
+import { collectRegeneratedConflictIds } from '../../models/finding-conflict-identity.js';
+import { collectLandedRawIds } from './manager-utils.js';
 
 interface RejectedObservationPlan {
   attachments: Array<{ targetFindingId: string; rawFindingId: string; reason: string }>;
@@ -74,9 +79,19 @@ export function reconcileCommitPlan(input: {
   explicitResolvedByMapping: ReadonlyMap<string, string>;
   explicitPromotedFindingIds: ReadonlySet<string>;
   recoveryProvisionalRawFindingIds: ReadonlySet<string>;
+  staleRawFindingIds: ReadonlySet<string>;
   deferredRawFindingIds: ReadonlySet<string>;
+  unsupportedRawFindingReports: readonly {
+    rawFindingId: string;
+    evidence: string;
+  }[];
   healthyReviewerStableKeys: ReadonlySet<string>;
-}): { ledger: FindingLedger; landedSpecs: ProvisionalFindingSpec[]; normalizationRejections: string[] } {
+}): {
+  ledger: FindingLedger;
+  landedSpecs: ProvisionalFindingSpec[];
+  normalizationRejections: string[];
+  rawFindingDispositions: RawFindingDisposition[];
+} {
   // ladder マージ（mergeOutputs）は matches / newFindings / conflicts を後着させる。
   // 閉じる決定との衝突をここで一括正規化し、残った統合の match 転写もこの1回で
   // 行う（reconciler の最終検証がこの後に走る）。
@@ -136,6 +151,74 @@ export function reconcileCommitPlan(input: {
   const landedSpecs = suppressedSpecs.length > 0
     ? input.provisionalSpecs.filter((spec) => !dismissedStableKeys.has(spec.stableKey))
     : input.provisionalSpecs;
+  const landedRawFindingIds = collectLandedRawIds(settledOutput);
+  const provisionalRawFindingIds = new Set(
+    landedSpecs.flatMap((spec) => spec.sourceRawFindingIds),
+  );
+  const rawFindingDispositions: RawFindingDisposition[] = [
+    ...input.pendingRejectedObservations.map((pending) => ({
+      rawFindingId: pending.item.wire.rawFindingId,
+      outcome: 'audit_only' as const,
+      reason: pending.reason,
+    })),
+    ...input.anomalySpecs.flatMap((spec) => spec.sourceRawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      outcome: 'reviewer_anomaly' as const,
+      reason: spec.mismatchReason,
+    }))),
+    ...suppressedSpecs.flatMap((spec) => spec.sourceRawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      outcome: 'audit_only' as const,
+      reason: `The observation was recorded on the finding dismissed in this round: ${spec.reason}`,
+    }))),
+    ...[...input.recoveryProvisionalRawFindingIds].flatMap((rawFindingId) => (
+      landedRawFindingIds.has(rawFindingId) || provisionalRawFindingIds.has(rawFindingId)
+        ? []
+        : [{
+            rawFindingId,
+            outcome: 'audit_only' as const,
+            reason: 'The interpretation recovery observation remains represented by its existing provisional finding',
+          }]
+    )),
+    ...[...input.staleRawFindingIds].map((rawFindingId) => ({
+      rawFindingId,
+      outcome: 'stale' as const,
+      reason: 'The recovery observation precondition became stale before commit',
+    })),
+    ...[...input.deferredRawFindingIds].map((rawFindingId) => ({
+      rawFindingId,
+      outcome: 'deferred' as const,
+      reason: 'Another live interpretation reservation owns this raw finding',
+    })),
+    ...input.unsupportedRawFindingReports.map((report) => ({
+      rawFindingId: report.rawFindingId,
+      outcome: 'unsupported' as const,
+      reason: report.evidence,
+    })),
+  ];
+  const dispositionRawFindingIds = new Set(
+    rawFindingDispositions.map((disposition) => disposition.rawFindingId),
+  );
+  for (const rawFinding of input.rawFindings) {
+    if (rawFinding.relation !== 'resolution_confirmation'
+      || landedRawFindingIds.has(rawFinding.rawFindingId)
+      || provisionalRawFindingIds.has(rawFinding.rawFindingId)
+      || dispositionRawFindingIds.has(rawFinding.rawFindingId)) {
+      continue;
+    }
+    rawFindingDispositions.push({
+      rawFindingId: rawFinding.rawFindingId,
+      outcome: 'confirmation_not_applied',
+      reason: `Resolution confirmation for target "${rawFinding.targetFindingId}" was not accepted by any explicit manager or mechanical outcome`,
+    });
+    dispositionRawFindingIds.add(rawFinding.rawFindingId);
+  }
+  if (dispositionRawFindingIds.size !== rawFindingDispositions.length) {
+    throw new Error('A raw finding received multiple finite dispositions during commit planning');
+  }
+  const reconcileRawFindingIds = new Set(
+    input.rawFindings.map((rawFinding) => rawFinding.rawFindingId),
+  );
   const reconciled = reconcileFindingLedger({
     priorStepResponseText: input.runInput.priorStepResponseText,
     previousLedger: input.freshLedger,
@@ -143,13 +226,9 @@ export function reconcileCommitPlan(input: {
     managerOutput: settledOutput,
     provisionalFindings: landedSpecs,
     rawProvenanceByRawFindingId: input.rawProvenanceByRawFindingId,
-    excludedFromUnmentionedFallbackRawFindingIds: new Set([
-      ...input.pendingRejectedObservations.map((pending) => pending.item.wire.rawFindingId),
-      ...input.anomalySpecs.flatMap((spec) => spec.sourceRawFindingIds),
-      ...suppressedSpecs.flatMap((spec) => spec.sourceRawFindingIds),
-      ...input.recoveryProvisionalRawFindingIds,
-      ...input.deferredRawFindingIds,
-    ]),
+    rawFindingDispositions: rawFindingDispositions.filter(
+      (disposition) => reconcileRawFindingIds.has(disposition.rawFindingId),
+    ),
     context: {
       workflowName: input.runInput.workflowName,
       stepName: input.runInput.parentStep.name,
@@ -172,6 +251,7 @@ export function reconcileCommitPlan(input: {
     ledger: attached,
     landedSpecs,
     normalizationRejections,
+    rawFindingDispositions,
   };
 }
 
@@ -190,7 +270,7 @@ function dropRegeneratedConflictResolves(
   if (output.resolvedConflicts.length === 0) {
     return { output, rejections: [...priorRejections] };
   }
-  const regeneratedConflictIds = collectRegeneratedConflictIds(freshLedger.conflicts, output.conflicts);
+  const regeneratedConflictIds = collectRegeneratedConflictIds(output.conflicts);
   const regenerated = output.resolvedConflicts.filter(
     (resolved) => regeneratedConflictIds.has(resolved.conflictId),
   );
@@ -218,7 +298,7 @@ function dropRegeneratedConflictResolves(
  * dismissed になった finding の rejectedObservations へ監査添付する（黙って
  * 消さない）。同一 stableKey の spec が複数あっても raw ID を全量集約し、
  * 過去ラウンドで dismissed になった同 stableKey の finding には添付しない。
- * status / revision / canonical evidence には影響しない
+ * status / canonical evidence には影響しない
  * （rejectedObservations の既存契約と同じ）。
  */
 function attachSuppressedObservationsToDismissed(
@@ -250,6 +330,7 @@ function attachSuppressedObservationsToDismissed(
       }
       return {
         ...finding,
+        revision: finding.revision + 1,
         rejectedObservations: [
           ...(finding.rejectedObservations ?? []),
           ...[...rawIds].map((rawFindingId) => ({
@@ -303,7 +384,8 @@ export function applyCommitLedgerStates(input: {
     input.interpretationReservations,
     input.observation,
   );
-  const withPromotions = linkPromotedReviewerAnomalies(applied, input.verifiedEvidenceCandidates);
+  const normalized = normalizeProvisionalInterpretationEpochs(applied);
+  const withPromotions = linkPromotedReviewerAnomalies(normalized, input.verifiedEvidenceCandidates);
   const withFixpoint = attachFixpointState(input.freshLedger, withPromotions, input.runInput.cwd);
   const withStopBudget = attachStopBudgetState(
     input.freshLedger,

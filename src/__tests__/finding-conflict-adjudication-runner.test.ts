@@ -130,7 +130,6 @@ function makeState(): WorkflowState {
 function seedLedger(ledgerPath: string): void {
   mkdirSync(dirname(ledgerPath), { recursive: true });
   writeFileSync(ledgerPath, JSON.stringify({
-    version: 1,
     workflowName: 'runner-test',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
@@ -138,6 +137,7 @@ function seedLedger(ledgerPath: string): void {
       id: 'F-0001',
       status: 'open',
       lifecycle: 'new',
+      revision: 1,
       severity: 'high',
       title: 'Disputed issue',
       location: 'src/a.ts:5',
@@ -158,7 +158,7 @@ function seedLedger(ledgerPath: string): void {
       relation: 'new',
     }],
     conflicts: [{
-      id: 'C-0001',
+      id: 'C-FA2947446963',
       status: 'active',
       findingIds: ['F-0001'],
       rawFindingIds: [],
@@ -166,6 +166,7 @@ function seedLedger(ledgerPath: string): void {
       firstSeen: { runId: 'run-0', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
       lastSeen: { runId: 'run-0', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
     }],
+    interpretations: [],
   }, null, 2), 'utf-8');
 }
 
@@ -238,7 +239,7 @@ describe('finding-conflict-adjudication runner', () => {
       status: 'done',
       content: '{}',
       structuredOutput: {
-        conflictId: 'C-0001',
+        conflictId: 'C-FA2947446963',
         outcome: 'finding_stale',
         findingTransition: 'resolved',
         evidence: [evidence],
@@ -276,7 +277,7 @@ describe('finding-conflict-adjudication runner', () => {
         status: 'done',
         content: '{}',
         structuredOutput: {
-          conflictId: 'C-0001',
+          conflictId: 'C-FA2947446963',
           outcome: 'finding_stale',
           findingTransition: 'resolved',
           evidence: ['Verified fixed.', 'src/a.ts:5'],
@@ -305,7 +306,7 @@ describe('finding-conflict-adjudication runner', () => {
     expect(ledger.conflicts[0]?.adjudicationAttempts).toHaveLength(1);
 
     // 監査記録
-    const reportPath = join(reportDir, 'findings-adjudication.C-0001.json');
+    const reportPath = join(reportDir, 'findings-adjudication.C-FA2947446963.json');
     const report = JSON.parse(readFileSync(reportPath, 'utf-8')) as {
       discarded: boolean;
       reason: string;
@@ -317,7 +318,7 @@ describe('finding-conflict-adjudication runner', () => {
     expect(report.reason).toContain('changed');
     expect(result.response.content).toContain(report.reason);
     expect(report.freshEvidenceHash).not.toBe(report.promptEvidenceHash);
-    expect(report.output.conflictId).toBe('C-0001');
+    expect(report.output.conflictId).toBe('C-FA2947446963');
   });
 
   it('直列化待ち中に作業ツリーが変化した裁定を破棄する', async () => {
@@ -456,7 +457,7 @@ describe('finding-conflict-adjudication runner', () => {
         status: 'done',
         content: '{}',
         structuredOutput: {
-          conflictId: 'C-0001',
+          conflictId: 'C-FA2947446963',
           outcome: 'undetermined',
           findingTransition: 'keep_open',
           evidence: ['The evidence remains inconclusive.'],
@@ -481,7 +482,7 @@ describe('finding-conflict-adjudication runner', () => {
       reviewScopeSnapshot: captureReviewScopeSnapshot(cwd),
     }));
 
-    expect(result.response.content).toContain('Adjudicated conflict C-0001');
+    expect(result.response.content).toContain('Adjudicated conflict C-FA2947446963');
     expect(roundtripEvidenceHash).not.toBe(evidenceHashBeforeWait);
     expect(persistedAttemptHash).toBe(roundtripEvidenceHash);
     expect(persistedConflict.adjudications).toEqual([
@@ -505,7 +506,7 @@ describe('finding-conflict-adjudication runner', () => {
         status: 'done',
         content: '{}',
         structuredOutput: {
-          conflictId: 'C-0001',
+          conflictId: 'C-FA2947446963',
           outcome: 'finding_stale',
           findingTransition: 'resolved',
           evidence: ['Verified fixed.', 'src/a.ts:5'],
@@ -534,7 +535,7 @@ describe('finding-conflict-adjudication runner', () => {
       status: 'done',
       content: '{}',
       structuredOutput: {
-        conflictId: 'C-0001',
+        conflictId: 'C-FA2947446963',
         outcome: 'finding_stale',
         findingTransition: 'resolved',
         evidence: ['src/a.ts:5'],
@@ -555,7 +556,7 @@ describe('finding-conflict-adjudication runner', () => {
     };
     expect(result.response.content).toContain('discarded');
     const report = JSON.parse(readFileSync(
-      join(reportDir, 'findings-adjudication.C-0001.json'),
+      join(reportDir, 'findings-adjudication.C-FA2947446963.json'),
       'utf-8',
     )) as { discarded: boolean; reason: string };
     expect(report).toMatchObject({
@@ -591,7 +592,7 @@ describe('finding-conflict-adjudication runner', () => {
         status: 'done',
         content: '{}',
         structuredOutput: {
-          conflictId: 'C-0001',
+          conflictId: 'C-FA2947446963',
           outcome: 'undetermined',
           findingTransition: 'keep_open',
           evidence: ['Still disputed.'],
@@ -603,7 +604,7 @@ describe('finding-conflict-adjudication runner', () => {
 
     const result = await runner.run(step, makeState());
 
-    expect(result.response.content).toContain('Adjudicated conflict C-0001');
+    expect(result.response.content).toContain('Adjudicated conflict C-FA2947446963');
     expect(emitEvent).toHaveBeenCalledTimes(2);
     const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
       findings: Array<{ title: string }>;
@@ -649,7 +650,7 @@ describe('finding-conflict-adjudication runner', () => {
       status: 'done',
       content: '{}',
       structuredOutput: {
-        conflictId: 'C-0001',
+        conflictId: 'C-FA2947446963',
         outcome: 'undetermined',
         findingTransition: 'keep_open',
         evidence: ['Still cannot decide.'],
@@ -681,7 +682,7 @@ describe('finding-conflict-adjudication runner', () => {
       status: 'done',
       content: '{}',
       structuredOutput: {
-        conflictId: 'C-0001',
+        conflictId: 'C-FA2947446963',
         outcome: 'undetermined',
         findingTransition: 'keep_open',
         evidence: ['Still disputed.'],
@@ -693,7 +694,7 @@ describe('finding-conflict-adjudication runner', () => {
     await expect(runner.run(step, makeState())).rejects.toThrow('injected refresh failure');
     const retried = await runner.run(step, makeState());
 
-    expect(retried.response.content).toContain('Adjudicated conflict C-0001');
+    expect(retried.response.content).toContain('Adjudicated conflict C-FA2947446963');
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
     const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
       conflicts: Array<{ adjudicationAttempts?: unknown[]; adjudications?: unknown[] }>;
@@ -716,7 +717,7 @@ describe('finding-conflict-adjudication runner', () => {
         status: 'done',
         content: '{}',
         structuredOutput: {
-          conflictId: 'C-0001',
+          conflictId: 'C-FA2947446963',
           outcome: 'undetermined',
           findingTransition: 'keep_open',
           evidence: ['Cannot decide.'],
@@ -752,7 +753,7 @@ describe('finding-conflict-adjudication runner', () => {
         status: 'done',
         content: '{}',
         structuredOutput: {
-          conflictId: 'C-0001',
+          conflictId: 'C-FA2947446963',
           outcome: 'undetermined',
           findingTransition: 'keep_open',
           evidence: [`concurrent decision ${callNumber}`],
@@ -769,7 +770,7 @@ describe('finding-conflict-adjudication runner', () => {
     const ownerResult = await ownerRun;
 
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
-    expect(ownerResult.response.content).toContain('Adjudicated conflict C-0001');
+    expect(ownerResult.response.content).toContain('Adjudicated conflict C-FA2947446963');
     expect(competingResult.response.content).toContain('already being adjudicated');
     const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
       conflicts: Array<{
@@ -796,7 +797,7 @@ describe('finding-conflict-adjudication runner', () => {
         status: 'done',
         content: '{}',
         structuredOutput: {
-          conflictId: 'C-0001',
+          conflictId: 'C-FA2947446963',
           outcome: 'undetermined',
           findingTransition: 'keep_open',
           evidence: ['No longer actionable.'],
@@ -808,7 +809,7 @@ describe('finding-conflict-adjudication runner', () => {
 
     const result = await runner.run(step, makeState());
     const report = JSON.parse(readFileSync(
-      join(reportDir, 'findings-adjudication.C-0001.json'),
+      join(reportDir, 'findings-adjudication.C-FA2947446963.json'),
       'utf-8',
     )) as { reason: string };
     const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
@@ -816,7 +817,7 @@ describe('finding-conflict-adjudication runner', () => {
       conflicts: Array<{ status: string; adjudications?: unknown[] }>;
     };
 
-    expect(report.reason).toBe('conflict "C-0001" is no longer active');
+    expect(report.reason).toBe('conflict "C-FA2947446963" is no longer active');
     expect(result.response.content).toContain(report.reason);
     expect(ledger.findings[0]?.status).toBe('open');
     expect(ledger.conflicts[0]?.status).toBe('resolved');
@@ -830,7 +831,7 @@ describe('finding-conflict-adjudication runner', () => {
       status: 'done',
       content: '{}',
       structuredOutput: {
-        conflictId: 'C-0001',
+        conflictId: 'C-FA2947446963',
         outcome: 'evidence_invalid',
         findingTransition: 'invalidated',
         evidence: ['invalid premise'],
@@ -860,7 +861,7 @@ describe('finding-conflict-adjudication runner', () => {
       status: 'done',
       content: '{}',
       structuredOutput: {
-        conflictId: 'C-0001',
+        conflictId: 'C-FA2947446963',
         outcome: 'finding_stale',
         findingTransition: 'resolved',
         evidence: ['src/a.ts:4-6 shows that the disputed implementation is gone.'],

@@ -155,11 +155,11 @@ function applyPreconditionChecks(input: {
         // 既に同じ evidence で resolved 済み → 冪等成功として黙って外す。
         return false;
       case 'post-prompt-persists':
-        // prompt 後の persists 観測: target は open のまま、confirmation と
-        // persists を参照する active conflict + provisional。
+        // confirmation raw の有限着地は stale-precondition provisional が担う。
+        // conflict は target finding 単位で残し、同じ raw を二重帰属させない。
         extraConflicts = [...extraConflicts, {
           findingIds: [resolved.findingId],
-          rawFindingIds: [...resolved.rawFindingIds],
+          rawFindingIds: [],
           description: `Resolution confirmation for "${resolved.findingId}" conflicts with a persists observation saved after the confirmation was prompted`,
         }];
         specFor(resolved.findingId, [...resolved.rawFindingIds], `Confirmation for "${resolved.findingId}" was not applied: ${check.detail}`);

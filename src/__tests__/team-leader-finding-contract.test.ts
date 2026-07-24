@@ -119,7 +119,6 @@ describe('Finding Contract Team Leader contract', () => {
       timestamp: '2026-07-23T00:00:00.000Z',
     };
     const ledger: FindingLedger = {
-      version: 1,
       workflowName: 'workflow',
       nextId: 2,
       updatedAt: observedAt.timestamp,
@@ -127,6 +126,7 @@ describe('Finding Contract Team Leader contract', () => {
         id: 'F-0001',
         status: 'open',
         lifecycle: 'persists',
+        revision: 1,
         severity: 'high',
         title: 'Defect',
         location: 'src/defect.ts:10',
@@ -164,6 +164,7 @@ describe('Finding Contract Team Leader contract', () => {
         },
       ],
       conflicts: [],
+      interpretations: [],
     };
 
     const summary = JSON.parse(renderCompactActionableFindingContractSummary(ledger)) as {

@@ -236,7 +236,7 @@ Open finding items expose `familyTags` to both fixer instructions and `when()` r
 
 If a ledger references a raw finding that is no longer present, its id is exposed in `unknownRawFindingIds` instead of being silently discarded or making the ledger unreadable. Both arrays are deduplicated and sorted; `contains(item.unknownRawFindingIds, "raw-id")` uses the same membership syntax.
 
-**Migrating from the pre-v2 invalid-manager-output routing:** older workflows relied on the engine auto-selecting a deterministic detour rule (`return: need_replan`, `return: needs_fix`, or non-AI `next: fix`) when the Finding Manager output stayed semantically invalid. That run-level failure path no longer exists — invalid or missing manager decisions land as provisional findings and the run continues, so those detour rules are never auto-selected anymore. To migrate, add a rule such as `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` routed to your replan step *before* the `COMPLETE` rule (see the builtin `takt-default-high` workflow for the reference wiring). `takt workflow doctor` warns when a `finding_contract` workflow has no rule referencing `findings.provisional`.
+Invalid or missing Finding Manager decisions land as provisional findings and the run continues. Add a rule such as `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` routed to your replan step *before* the `COMPLETE` rule (see the builtin `takt-default-high` workflow for the reference wiring). `takt workflow doctor` warns when a `finding_contract` workflow has no rule referencing `findings.provisional`.
 
 ### Arpeggio Step (data-driven batch)
 

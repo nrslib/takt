@@ -13,7 +13,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import {
   createPrivateArtifact as createPrivateArtifactAtBoundary,
@@ -53,6 +53,27 @@ export interface PrivateDirectoryReadSnapshot {
   readonly stat: Stats;
   readonly ancestorIdentities: readonly DirectoryIdentity[];
 }
+
+export type PrivateFileState =
+  | {
+      readonly path: string;
+      readonly exists: false;
+    }
+  | {
+      readonly path: string;
+      readonly exists: true;
+      readonly stat: Stats;
+      readonly contentSha256: string;
+    };
+
+export type PrivateFileReadSnapshot =
+  | {
+      readonly state: Extract<PrivateFileState, { exists: false }>;
+    }
+  | {
+      readonly state: Extract<PrivateFileState, { exists: true }>;
+      readonly content: Buffer;
+    };
 
 function createPrivateArtifact(
   parentPath: string,
@@ -288,6 +309,43 @@ function assertTemporaryFileIdentity(path: string, expectedStat: Stats): void {
   }
 }
 
+function contentSha256(content: string | Buffer): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+function publicationConflict(message: string): PrivateArtifactPublicationConflictError {
+  return new PrivateArtifactPublicationConflictError(message);
+}
+
+function assertExpectedPrivateFileState(
+  path: string,
+  expected: PrivateFileState,
+  actualStat: Stats | undefined,
+  ancestorIdentities: readonly DirectoryIdentity[],
+): void {
+  if (expected.path !== path) {
+    throw new Error(`Private artifact expected state belongs to another path: ${expected.path}`);
+  }
+  if (!expected.exists) {
+    if (actualStat !== undefined) {
+      throw publicationConflict(`Private artifact file identity changed before publication: ${path}`);
+    }
+    return;
+  }
+  if (actualStat === undefined || !actualStat.isFile() || !hasMatchingIdentity(expected.stat, actualStat)) {
+    throw publicationConflict(`Private artifact file identity changed before publication: ${path}`);
+  }
+  const actualContent = readRegularFileNoFollow(path, actualStat);
+  assertAncestorIdentities(ancestorIdentities);
+  const verifiedStat = lstatOrUndefined(path);
+  if (verifiedStat === undefined || !hasMatchingIdentity(actualStat, verifiedStat)) {
+    throw publicationConflict(`Private artifact file identity changed before publication: ${path}`);
+  }
+  if (contentSha256(actualContent) !== expected.contentSha256) {
+    throw publicationConflict(`Private artifact file content changed before publication: ${path}`);
+  }
+}
+
 function verifyExistingPublicationTarget(
   path: string,
   expectedStat: Stats,
@@ -393,9 +451,18 @@ function writePrivateFileAtomically(
   mode: number,
   rejectExisting: boolean,
   publicationGuard?: () => PublicationGuardResult,
+  expectedState?: PrivateFileState,
 ): boolean {
   const absolute = resolve(filePath);
   const inspection = inspectPrivateArtifactPath(absolute, 'file');
+  if (expectedState !== undefined) {
+    assertExpectedPrivateFileState(
+      absolute,
+      expectedState,
+      inspection.expectedStat,
+      inspection.ancestorIdentities,
+    );
+  }
   if (rejectExisting && inspection.expectedStat !== undefined) {
     throw new Error(`Private artifact file already exists: ${absolute}`);
   }
@@ -454,6 +521,14 @@ function writePrivateFileAtomically(
           assertTemporaryFileIdentity(temporaryPath, createdStat);
         }
       }
+      if (expectedState !== undefined) {
+        assertExpectedPrivateFileState(
+          absolute,
+          expectedState,
+          lstatOrUndefined(absolute),
+          inspection.ancestorIdentities,
+        );
+      }
       publishPrivateArtifactAtBoundary(
         dirname(absolute),
         temporaryPath,
@@ -487,6 +562,27 @@ export function readRegularFileNoFollow(filePath: string, expectedStat: Stats): 
   } finally {
     closeSync(descriptor);
   }
+}
+
+export function readPrivateFileState(filePath: string): PrivateFileReadSnapshot {
+  const absolute = resolve(filePath);
+  const inspection = inspectPrivateArtifactPath(absolute, 'file');
+  if (inspection.expectedStat === undefined) {
+    return { state: { path: absolute, exists: false } };
+  }
+  const content = readRegularFileNoFollow(absolute, inspection.expectedStat);
+  assertAncestorIdentities(inspection.ancestorIdentities);
+  const verifiedStat = lstatOrUndefined(absolute);
+  if (verifiedStat === undefined || !hasMatchingIdentity(inspection.expectedStat, verifiedStat)) {
+    throw publicationConflict(`Private artifact file identity changed while reading: ${absolute}`);
+  }
+  const state = {
+    path: absolute,
+    exists: true as const,
+    stat: verifiedStat,
+    contentSha256: contentSha256(content),
+  };
+  return { state, content };
 }
 
 export function capturePrivateDirectoryReadSnapshot(directoryPath: string): PrivateDirectoryReadSnapshot {
@@ -561,6 +657,32 @@ export function writePrivateFileWithModeGuarded(
   publicationGuard: () => PublicationGuardResult,
 ): boolean {
   return writePrivateFileAtomically(filePath, content, mode, false, publicationGuard);
+}
+
+export function writePrivateFileWithModeExpected(
+  filePath: string,
+  content: string | Buffer,
+  mode: number,
+  expectedState: PrivateFileState,
+): void {
+  writePrivateFileAtomically(filePath, content, mode, false, undefined, expectedState);
+}
+
+export function writePrivateFileWithModeExpectedGuarded(
+  filePath: string,
+  content: string | Buffer,
+  mode: number,
+  expectedState: PrivateFileState,
+  publicationGuard: () => PublicationGuardResult,
+): boolean {
+  return writePrivateFileAtomically(
+    filePath,
+    content,
+    mode,
+    false,
+    publicationGuard,
+    expectedState,
+  );
 }
 
 export function writeNewPrivateFileWithMode(filePath: string, content: string | Buffer, mode: number): void {

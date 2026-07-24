@@ -8,17 +8,17 @@ import type {
   FindingReconcileContext,
   FindingRecord,
   FindingSeverity,
+  RawFindingDisposition,
   RawFinding,
 } from './types.js';
-import { assertLedgerIdAllocationInvariant } from './ledger-validation.js';
-import { compareRfc3339Timestamps } from '../../models/rfc3339.js';
+import { RAW_FINDING_DISPOSITION_OUTCOMES } from './types.js';
+import { assertFindingLedgerProjectionInvariant } from '../../models/finding-ledger-invariants.js';
 import {
   validateFindingManagerOutput,
   validateManagerActionRecoveryOutput,
 } from './manager-output-validation.js';
-import { computeLineageKey, computeProvisionalStableKey, computeReviewerStableKey } from './raw-canonicalization.js';
-import { countInterpretationEpochs, normalizeProvisionalInterpretationEpochs } from './interpretation-wal.js';
-import { formatConflictId, formatConflictSignature } from './conflict-identity.js';
+import { countInterpretationEpochs } from './interpretation-wal.js';
+import { formatConflictId } from '../../models/finding-conflict-identity.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 
 /**
@@ -49,42 +49,13 @@ interface ReconcileFindingLedgerInput {
   managerOutput: FindingManagerOutput;
   context: FindingReconcileContext;
   priorStepResponseText?: string;
-  /**
-   * どの決定にも現れなかった raw の着地先。「未言及 raw → new
-   * finding」フォールバックを廃止した（不採用の意味が消える / 根拠不成立の
-   * 再報告が新規 finding として洗浄される）。代わりに、呼び出し元
-   * （manager-runner.ts）が未言及 raw を provisional spec としてここへ渡す。
-   * 万一渡し漏れた raw が残った場合も reconciler 自身が defense-in-depth の
-   * fallback provisional に変換する（黙って消してゲートを開けない）。
-   */
-  provisionalFindings?: ProvisionalFindingSpec[];
-  /**
-   * 保存直前の再照合で項目単位で不採用になり、かつ provisional spec 側で
-   * 既に着地が決まっている raw finding id。defense-in-depth fallback の
-   * 対象から除外する（二重着地の防止）。
-   */
-  excludedFromUnmentionedFallbackRawFindingIds?: ReadonlySet<string>;
-  /**
-   * raw finding id → canonicalization が計算した provenance（reviewerStableKey /
-   * lineageKey）。defense-in-depth fallback はこれを使い、reviewer 名からの
-   * 別キー導出を行わない（contract invariant: 同一 lineage の provisional が intake 経路と
-   * fallback 経路で別 stableKey になり増殖していた）。manager-runner 経路は
-   * 常にこのマップを渡す。マップに無い raw（旧経路・テストの手組み raw）だけが
-   * 最終手段の導出に落ちる。
-   */
-  rawProvenanceByRawFindingId?: ReadonlyMap<string, { reviewerStableKey: string; lineageKey: string }>;
+  provisionalFindings: ProvisionalFindingSpec[];
+  rawFindingDispositions: readonly RawFindingDisposition[];
+  rawProvenanceByRawFindingId: ReadonlyMap<string, { reviewerStableKey: string; lineageKey: string }>;
 }
 
 function formatFindingId(nextId: number): string {
   return `F-${String(nextId).padStart(4, '0')}`;
-}
-
-function findMatchingConflicts(
-  conflictsById: ReadonlyMap<string, FindingLedgerConflict>,
-  conflict: Pick<FindingLedgerConflict, 'findingIds' | 'rawFindingIds'>,
-): FindingLedgerConflict[] {
-  const signature = formatConflictSignature(conflict);
-  return [...conflictsById.values()].filter((existing) => formatConflictSignature(existing) === signature);
 }
 
 function assertKnownFinding(findingIds: Set<string>, findingId: string): void {
@@ -146,12 +117,8 @@ function mergeRawFindingIds(current: readonly string[], next: readonly string[])
   return Array.from(new Set([...current, ...next]));
 }
 
-/**
- * 楽観的前提条件（CAS）の版数。エントリを変更する全ての決定適用で
- * +1 する。省略時（既存 v1 ledger）は 1 とみなす。
- */
 function bumpRevision(finding: Pick<FindingRecord, 'revision'>): number {
-  return (finding.revision ?? 1) + 1;
+  return finding.revision + 1;
 }
 
 function mergeReviewers(current: readonly string[], rawFindings: readonly RawFinding[]): string[] {
@@ -293,9 +260,7 @@ function withoutResolutionFields(finding: FindingRecord): Omit<FindingRecord, 'r
     firstSeen: finding.firstSeen,
     lastSeen: finding.lastSeen,
     ...(finding.reopenedEvidence !== undefined ? { reopenedEvidence: finding.reopenedEvidence } : {}),
-    // revision / provisional は解消情報ではないため reopen でも保持する
-    // （落とすと CAS の版数が巻き戻り、stale 検出が誤って成功する）。
-    ...(finding.revision !== undefined ? { revision: finding.revision } : {}),
+    revision: finding.revision,
     ...(finding.provisional !== undefined ? { provisional: finding.provisional } : {}),
     ...(finding.dismissal !== undefined ? { dismissal: finding.dismissal } : {}),
     // rejectedObservations の監査添付履歴も解消情報ではないため保持する。
@@ -314,37 +279,11 @@ function withoutConflictResolutionFields(
     description: conflict.description,
     firstSeen: conflict.firstSeen,
     lastSeen: conflict.lastSeen,
+    ...(conflict.adjudications !== undefined ? { adjudications: conflict.adjudications } : {}),
+    ...(conflict.adjudicationAttempts !== undefined
+      ? { adjudicationAttempts: conflict.adjudicationAttempts }
+      : {}),
   };
-}
-
-function mergeConflictHistory(conflicts: readonly FindingLedgerConflict[]): Pick<
-  FindingLedgerConflict,
-  'adjudications' | 'adjudicationAttempts'
-> {
-  const adjudications = conflicts
-    .flatMap((conflict) => conflict.adjudications ?? [])
-    .sort((left, right) => (
-      compareRfc3339Timestamps(left.decidedAt.timestamp, right.decidedAt.timestamp)
-      || left.evidenceHash.localeCompare(right.evidenceHash)
-    ));
-  const adjudicationAttempts = conflicts
-    .flatMap((conflict) => conflict.adjudicationAttempts ?? [])
-    .sort((left, right) => (
-      compareRfc3339Timestamps(left.startedAt.timestamp, right.startedAt.timestamp)
-      || left.evidenceHash.localeCompare(right.evidenceHash)
-      || left.reservationToken.localeCompare(right.reservationToken)
-    ));
-  return {
-    ...(adjudications.length > 0 ? { adjudications } : {}),
-    ...(adjudicationAttempts.length > 0 ? { adjudicationAttempts } : {}),
-  };
-}
-
-function selectConflictSurvivor(conflicts: readonly FindingLedgerConflict[]): FindingLedgerConflict | undefined {
-  return [...conflicts].sort((left, right) => (
-    compareRfc3339Timestamps(left.firstSeen.timestamp, right.firstSeen.timestamp)
-    || left.id.localeCompare(right.id)
-  ))[0];
 }
 
 function reconcileLedgerConflicts(input: {
@@ -384,9 +323,8 @@ function reconcileLedgerConflicts(input: {
       markRawFindingIdsUsed(input.usedRawFindingIds, conflict.rawFindingIds);
     }
 
-    const matchingConflicts = findMatchingConflicts(conflictsById, conflict);
-    const existing = selectConflictSurvivor(matchingConflicts);
-    const conflictId = existing?.id ?? formatConflictId(conflict);
+    const conflictId = formatConflictId(conflict);
+    const existing = conflictsById.get(conflictId);
     const base = existing !== undefined
       ? withoutConflictResolutionFields(existing)
       : {
@@ -399,27 +337,12 @@ function reconcileLedgerConflicts(input: {
         lastSeen: observationFromContext(input.context),
       };
 
-    for (const matchingConflict of matchingConflicts) {
-      if (matchingConflict.id !== conflictId) {
-        conflictsById.delete(matchingConflict.id);
-      }
-    }
-
     conflictsById.set(conflictId, {
       ...base,
       status: 'active',
-      rawFindingIds: mergeRawFindingIds(
-        mergeRawFindingIds(
-          base.rawFindingIds,
-          matchingConflicts
-            .filter((matchingConflict) => matchingConflict.id !== conflictId)
-            .flatMap((matchingConflict) => matchingConflict.rawFindingIds),
-        ),
-        conflict.rawFindingIds,
-      ),
+      rawFindingIds: mergeRawFindingIds(base.rawFindingIds, conflict.rawFindingIds),
       description: conflict.description,
       lastSeen: observationFromContext(input.context),
-      ...mergeConflictHistory(matchingConflicts),
     });
   }
 
@@ -429,6 +352,7 @@ function reconcileLedgerConflicts(input: {
 type ManagerOutputValidator = typeof validateFindingManagerOutput;
 
 export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): FindingLedger {
+  assertCanonicalReconcileInput(input);
   return reconcileFindingLedgerWithValidator(input, validateFindingManagerOutput);
 }
 
@@ -437,28 +361,99 @@ export function reconcileManagerActionRecovery(input: Pick<
   'previousLedger' | 'managerOutput' | 'context'
 >): FindingLedger {
   return reconcileFindingLedgerWithValidator(
-    { ...input, rawFindings: [] },
+    {
+      ...input,
+      rawFindings: [],
+      provisionalFindings: [],
+      rawFindingDispositions: [],
+      rawProvenanceByRawFindingId: new Map(),
+    },
     validateManagerActionRecoveryOutput,
   );
+}
+
+function assertCanonicalReconcileInput(input: ReconcileFindingLedgerInput): void {
+  if (!Array.isArray(input.provisionalFindings)) {
+    throw new Error('Reconciler input provisionalFindings must be an explicit array');
+  }
+  if (!Array.isArray(input.rawFindingDispositions)) {
+    throw new Error('Reconciler input rawFindingDispositions must be an explicit array');
+  }
+  if (!(input.rawProvenanceByRawFindingId instanceof Map)) {
+    throw new Error('Reconciler input rawProvenanceByRawFindingId must be an explicit Map');
+  }
+  for (const rawFinding of input.rawFindings) {
+    if (!input.rawProvenanceByRawFindingId.has(rawFinding.rawFindingId)) {
+      throw new Error(`Reconciler input is missing canonical provenance for raw finding "${rawFinding.rawFindingId}"`);
+    }
+  }
+  const knownRawFindingIds = new Set(input.rawFindings.map((rawFinding) => rawFinding.rawFindingId));
+  const dispositionRawFindingIds = new Set<string>();
+  for (const disposition of input.rawFindingDispositions) {
+    if (!knownRawFindingIds.has(disposition.rawFindingId)) {
+      throw new Error(`Raw finding disposition references unknown raw finding "${disposition.rawFindingId}"`);
+    }
+    if (dispositionRawFindingIds.has(disposition.rawFindingId)) {
+      throw new Error(`Raw finding "${disposition.rawFindingId}" has multiple dispositions`);
+    }
+    if (!RAW_FINDING_DISPOSITION_OUTCOMES.includes(disposition.outcome)) {
+      throw new Error(`Raw finding disposition has unknown outcome "${disposition.outcome}"`);
+    }
+    if (disposition.reason.trim().length === 0) {
+      throw new Error(`Raw finding disposition "${disposition.rawFindingId}" must include a reason`);
+    }
+    dispositionRawFindingIds.add(disposition.rawFindingId);
+  }
+}
+
+function managerOutcomeRawFindingIds(output: FindingManagerOutput): string[] {
+  return [
+    ...output.matches.flatMap((entry) => entry.rawFindingIds),
+    ...output.newFindings.flatMap((entry) => entry.rawFindingIds),
+    ...output.resolvedFindings.flatMap((entry) => entry.rawFindingIds),
+    ...output.reopenedFindings.flatMap((entry) => entry.rawFindingIds),
+    ...output.conflicts.flatMap((entry) => entry.rawFindingIds),
+  ];
+}
+
+function assertExactlyOneRawOutcome(input: ReconcileFindingLedgerInput): void {
+  const knownRawFindingIds = new Set(input.rawFindings.map((rawFinding) => rawFinding.rawFindingId));
+  const outcomeCounts = new Map(input.rawFindings.map((rawFinding) => [rawFinding.rawFindingId, 0]));
+  const recordKnownOutcome = (rawFindingId: string): void => {
+    if (knownRawFindingIds.has(rawFindingId)) {
+      outcomeCounts.set(rawFindingId, outcomeCounts.get(rawFindingId)! + 1);
+    }
+  };
+  for (const rawFindingId of managerOutcomeRawFindingIds(input.managerOutput)) {
+    recordKnownOutcome(rawFindingId);
+  }
+  for (const spec of input.provisionalFindings) {
+    for (const rawFindingId of spec.sourceRawFindingIds) {
+      if (!knownRawFindingIds.has(rawFindingId)) {
+        throw new Error(`Provisional outcome references unknown raw finding "${rawFindingId}"`);
+      }
+      recordKnownOutcome(rawFindingId);
+    }
+  }
+  for (const disposition of input.rawFindingDispositions) {
+    recordKnownOutcome(disposition.rawFindingId);
+  }
+  for (const [rawFindingId, count] of outcomeCounts) {
+    if (count === 0) {
+      throw new Error(`Raw finding "${rawFindingId}" has no explicit reconcile outcome`);
+    }
+    if (count > 1) {
+      throw new Error(
+        `Raw finding "${rawFindingId}" must have exactly one reconcile outcome; received ${count} (multiple explicit reconcile outcomes)`,
+      );
+    }
+  }
 }
 
 function reconcileFindingLedgerWithValidator(
   input: ReconcileFindingLedgerInput,
   validateOutput: ManagerOutputValidator,
 ): FindingLedger {
-  // 手組みの manager output（zod を経ない経路）でも新配列の欠落で落ちないよう
-  // 入口で正規化する。
-  input = {
-    ...input,
-    managerOutput: {
-      ...input.managerOutput,
-      waivedFindings: input.managerOutput.waivedFindings ?? [],
-      disputeNotes: input.managerOutput.disputeNotes ?? [],
-      invalidatedFindings: input.managerOutput.invalidatedFindings ?? [],
-      duplicateFindings: input.managerOutput.duplicateFindings ?? [],
-      dismissedFindings: input.managerOutput.dismissedFindings ?? [],
-    },
-  };
   const validation = validateOutput({
     previousLedger: input.previousLedger,
     rawFindings: input.rawFindings,
@@ -468,9 +463,10 @@ function reconcileFindingLedgerWithValidator(
   if (!validation.ok) {
     throw new Error(validation.errors.join('\n'));
   }
+  assertExactlyOneRawOutcome(input);
   const rawFindingIds = new Set(input.rawFindings.map((finding) => finding.rawFindingId));
   assertUniqueIds(input.rawFindings.map((finding) => finding.rawFindingId), 'raw finding id');
-  assertLedgerIdAllocationInvariant(input.previousLedger);
+  assertFindingLedgerProjectionInvariant(input.previousLedger);
   const previousById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
   const previousRawFindingsById = new Map(input.previousLedger.rawFindings.map((finding) => [
     finding.rawFindingId,
@@ -698,57 +694,7 @@ function reconcileFindingLedgerWithValidator(
     context: input.context,
   });
 
-  // 「未言及 raw → new finding」フォールバックは廃止した。
-  // どの決定にも現れなかった raw は呼び出し元が provisional spec として渡し、
-  // 渡し漏れも defense-in-depth でここが provisional に変換する（黙って消して
-  // ゲートを開けない。新規 finding への昇格もしない — 根拠不成立の再報告が
-  // 新規 finding として洗浄される経路だった）。
-  const excludedFromUnmentionedFallback = input.excludedFromUnmentionedFallbackRawFindingIds ?? new Set<string>();
-  const provisionalSpecs: ProvisionalFindingSpec[] = [...(input.provisionalFindings ?? [])];
-  const provisionalRawIds = new Set(provisionalSpecs.flatMap((spec) => spec.sourceRawFindingIds));
-  for (const rawFinding of input.rawFindings) {
-    // 解消確認は問題の観測ではない（適用されなかった確認の衝突化は呼び出し元の
-    // CAS 経路が担う）ため、fallback provisional の対象にしない。
-    if (rawFinding.relation === 'resolution_confirmation') {
-      continue;
-    }
-    if (usedRawFindingIds.has(rawFinding.rawFindingId)
-      || provisionalRawIds.has(rawFinding.rawFindingId)
-      || excludedFromUnmentionedFallback.has(rawFinding.rawFindingId)) {
-      continue;
-    }
-    // canonicalization が計算した provenance を最優先で使う（contract invariant: 別キー
-    // 導出は同一 lineage の provisional を増殖させる）。manager-runner 経路は
-    // 常にマップを渡すため、以下の導出はマップ外の raw（旧経路・手組み raw）
-    // だけの最終手段。
-    const provenance = input.rawProvenanceByRawFindingId?.get(rawFinding.rawFindingId);
-    const reviewerStableKey = provenance?.reviewerStableKey ?? computeReviewerStableKey({
-      workflowName: input.context.workflowName,
-      callNamespace: '',
-      parentStepName: input.context.stepName,
-      reviewerPersonaKey: rawFinding.reviewer,
-    });
-    const lineageKey = provenance?.lineageKey ?? computeLineageKey({
-      ...(rawFinding.targetFindingId !== undefined ? { targetFindingId: rawFinding.targetFindingId } : {}),
-      ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
-      title: rawFinding.title,
-      familyTag: rawFinding.familyTag,
-    });
-    provisionalSpecs.push({
-      kind: 'raw-adjudication-unresolved',
-      stableKey: computeProvisionalStableKey({ reviewerStableKey, lineageKey, provisionalKind: 'raw-adjudication-unresolved' }),
-      lineageKey,
-      sourceRawFindingIds: [rawFinding.rawFindingId],
-      reason: `Raw finding "${rawFinding.rawFindingId}" was not referenced by any decision; kept as a gate-blocking provisional instead of being dropped or promoted to a new finding`,
-      title: rawFinding.title,
-      severity: rawFinding.severity,
-      ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
-      description: rawFinding.description,
-      ...(rawFinding.suggestion !== undefined ? { suggestion: rawFinding.suggestion } : {}),
-      reviewers: [rawFinding.reviewer],
-    });
-  }
-
+  const provisionalSpecs = input.provisionalFindings;
   const provisionalNewFindings = applyProvisionalFindingSpecs({
     updatedById,
     ledger: input.previousLedger,
@@ -761,21 +707,18 @@ function reconcileFindingLedgerWithValidator(
     context: input.context,
   });
 
-  return normalizeProvisionalInterpretationEpochs({
-    version: 1,
+  return {
     workflowName: input.context.workflowName,
     nextId,
     updatedAt: input.context.timestamp,
     findings: [...updatedById.values(), ...newFindings, ...provisionalNewFindings],
     rawFindings: mergeRawFindingDetails(input.previousLedger.rawFindings, input.rawFindings),
     conflicts,
-    ...(input.previousLedger.interpretations !== undefined
-      ? { interpretations: input.previousLedger.interpretations }
-      : {}),
+    interpretations: input.previousLedger.interpretations,
     ...(input.previousLedger.reviewerAnomalies !== undefined
       ? { reviewerAnomalies: input.previousLedger.reviewerAnomalies }
       : {}),
-  });
+  };
 }
 
 /**
@@ -791,7 +734,7 @@ export function applyProvisionalFindingSpecsToLedger(
   context: FindingReconcileContext,
 ): FindingLedger {
   if (specs.length === 0) {
-    return normalizeProvisionalInterpretationEpochs(ledger);
+    return ledger;
   }
   const updatedById = new Map<string, FindingRecord>(
     ledger.findings.map((finding) => [finding.id, { ...finding }]),
@@ -808,12 +751,12 @@ export function applyProvisionalFindingSpecsToLedger(
     },
     context,
   });
-  return normalizeProvisionalInterpretationEpochs({
+  return {
     ...ledger,
     nextId,
     updatedAt: context.timestamp,
     findings: [...updatedById.values(), ...created],
-  });
+  };
 }
 
 /**

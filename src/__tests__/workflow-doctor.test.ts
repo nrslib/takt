@@ -222,11 +222,11 @@ steps:
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining("provider 'opencode' requires model"));
   });
 
-  it('warns when a finding_contract workflow has no findings.provisional routing (v2 migration)', async () => {
+  it('warns when a finding_contract workflow has no provisional routing', async () => {
     // persona facet を用意する（missing-resource エラーを避ける）。
     writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
     writeWorkflow(projectDir, '.takt/facets/personas/planner.md', 'You are a planner.');
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/legacy-fc-routing.yaml', `name: legacy-fc-routing
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/missing-provisional-routing.yaml', `name: missing-provisional-routing
 max_steps: 10
 initial_step: reviewers
 finding_contract:
@@ -254,7 +254,7 @@ steps:
     await doctorWorkflowCommand([filePath], projectDir);
 
     expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('findings.provisional.count'));
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('no longer auto-selects'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('Undeterminable observations land as gate-blocking provisional findings'));
     expect(mockError).not.toHaveBeenCalled();
   });
 
@@ -427,7 +427,7 @@ ${parallelSteps}
   it('does not warn when fixpoint and exhausted budget route through a bounded requirements-preserving replan', async () => {
     writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
     writeWorkflow(projectDir, '.takt/facets/personas/planner.md', 'You are a planner.');
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/v2-fc-routing.yaml', `name: v2-fc-routing
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/bounded-fc-routing.yaml', `name: bounded-fc-routing
 max_steps: 10
 initial_step: reviewers
 finding_contract:

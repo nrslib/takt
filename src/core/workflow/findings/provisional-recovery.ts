@@ -43,9 +43,6 @@ function envelopeRecoveryExhausted(
   provisional: FindingProvisionalMetadata,
   roundsCompleted: number,
 ): boolean {
-  if (provisional.firstObservedRound === undefined) {
-    return true;
-  }
   return roundsCompleted - provisional.firstObservedRound
     >= REVIEWER_ENVELOPE_RECOVERY_LIMITS.maxUnavailableRounds;
 }

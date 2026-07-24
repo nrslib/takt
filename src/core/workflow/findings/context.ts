@@ -107,7 +107,6 @@ export function renderCompactActionableFindingLedgerInstructionSummary(
 export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): string {
   const familyTagsByRawFindingId = indexRawFindingFamilyTags(ledger);
   return JSON.stringify({
-    version: ledger.version,
     workflowName: ledger.workflowName,
     open: ledger.findings
       .filter((finding) => finding.status === 'open')

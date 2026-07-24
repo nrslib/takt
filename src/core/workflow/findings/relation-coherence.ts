@@ -197,7 +197,7 @@ export interface ClarifyAmbiguousRawRelationsResult {
  * 同一 reviewer session へ1回だけ relation/target の明確化を求める。
  *
  * ステップを失敗させることは決して無い: 呼び出し失敗・出力不正・契約違反・
- * 出力超過のときは元の応答をそのまま返す（drop しない — v2 ではその raw は
+ * 出力超過のときは元の応答をそのまま返す（drop しない — その raw は
  * ambiguous のまま manager 解釈 / provisional へ進む）。
  */
 export async function clarifyAmbiguousRawRelationsOnce(

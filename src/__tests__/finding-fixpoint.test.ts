@@ -1,12 +1,12 @@
 /**
- * provisional fixpoint 判定（対策バッチ B1: raw finding 梯子設計 v2 の収束性
+ * provisional fixpoint 判定（対策バッチ B1: raw finding 解釈梯子の収束性
  * 対策）の単体・往復ラウンドテスト。
  *
  * - 単体: computeFixpointSnapshot / attachFixpointState の純粋なロジック
  * - 往復ラウンド: runFindingManagerForStep を実際に複数回呼び、
  *   findings-manager の1ラウンド = 1回の reconcile という前提のもとで、
  *   fixpoint.reached がラウンド跨ぎで正しく機械判定されることを検証する
- *   （v3-r4 実測形の再現、resume/新規走行を跨いだ継続、新観測による解消を含む）
+ *   （実測形の再現、resume/新規走行を跨いだ継続、新観測による解消を含む）
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,6 +22,7 @@ import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../c
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import { createFindingManagerPublicationDouble } from './helpers/finding-manager-publication.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -81,7 +82,9 @@ function observation(runId = 'run-1'): { runId: string; stepName: string; timest
   return { runId, stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' };
 }
 
-function provisionalFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedgerEntry {
+function provisionalFinding(
+  overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+): FindingLedgerEntry {
   return {
     id: 'F-0001',
     status: 'open',
@@ -92,7 +95,6 @@ function provisionalFinding(overrides: Partial<FindingLedgerEntry> = {}): Findin
     rawFindingIds: ['raw-1'],
     firstSeen: observation(),
     lastSeen: observation(),
-    revision: 1,
     provisional: {
       kind: 'invalid-location-evidence',
       stableKey: 'stable-key-a',
@@ -108,7 +110,9 @@ function provisionalFinding(overrides: Partial<FindingLedgerEntry> = {}): Findin
   };
 }
 
-function substantiveFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedgerEntry {
+function substantiveFinding(
+  overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+): FindingLedgerEntry {
   return {
     id: 'F-0002',
     status: 'open',
@@ -119,20 +123,19 @@ function substantiveFinding(overrides: Partial<FindingLedgerEntry> = {}): Findin
     rawFindingIds: ['raw-2'],
     firstSeen: observation(),
     lastSeen: observation(),
-    revision: 1,
     ...overrides,
   };
 }
 
 function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   return {
-    version: 1,
     workflowName: 'peer-review',
     nextId: 3,
     updatedAt: '2026-07-01T00:00:00.000Z',
     findings: [],
     rawFindings: [],
     conflicts: [],
+    interpretations: [],
     ...overrides,
   };
 }
@@ -146,12 +149,12 @@ describe('computeFixpointSnapshot', () => {
   it('collects only open findings with provisional metadata into provisionalKeys, keyed by stableKey', () => {
     const snapshot = computeFixpointSnapshot(ledger({
       findings: [
-        provisionalFinding({ id: 'F-0001', provisional: { ...provisionalFinding().provisional!, stableKey: 'key-a' } }),
+        provisionalFinding({ revision: 1, id: 'F-0001', provisional: { ...provisionalFinding({ revision: 1 }).provisional!, stableKey: 'key-a' } }),
         // resolved provisional は open ではないため除外される。
-        provisionalFinding({
+        provisionalFinding({ revision: 1,
           id: 'F-0003',
           status: 'resolved',
-          provisional: { ...provisionalFinding().provisional!, stableKey: 'key-b' },
+          provisional: { ...provisionalFinding({ revision: 1 }).provisional!, stableKey: 'key-b' },
         }),
       ],
     }));
@@ -161,10 +164,10 @@ describe('computeFixpointSnapshot', () => {
   it('collects every non-provisional finding regardless of status into substantiveEntries as "id:status"', () => {
     const snapshot = computeFixpointSnapshot(ledger({
       findings: [
-        substantiveFinding({ id: 'F-0002', status: 'open' }),
-        substantiveFinding({ id: 'F-0004', status: 'resolved' }),
+        substantiveFinding({ revision: 1, id: 'F-0002', status: 'open' }),
+        substantiveFinding({ revision: 1, id: 'F-0004', status: 'resolved' }),
         // provisional は substantiveEntries から除外される。
-        provisionalFinding({ id: 'F-0001' }),
+        provisionalFinding({ revision: 1, id: 'F-0001' }),
       ],
     }));
     expect(snapshot.substantiveEntries).toEqual(['F-0002:open', 'F-0004:resolved']);
@@ -180,10 +183,18 @@ describe('computeFixpointSnapshot', () => {
         severity: 'high',
         title: 'Conflicting claim',
         description: 'One reviewer says X, another says Y.',
+      }, {
+        rawFindingId: 'raw-c2',
+        stepName: 'reviewers',
+        reviewer: 'arch-review',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Resolved conflicting claim',
+        description: 'A separate conflict was already resolved.',
       }],
       conflicts: [
         {
-          id: 'C-0001',
+          id: 'C-2BF240CC0BEC',
           status: 'active',
           findingIds: ['F-0002'],
           rawFindingIds: ['raw-c1'],
@@ -192,21 +203,21 @@ describe('computeFixpointSnapshot', () => {
           lastSeen: observation(),
         },
         {
-          id: 'C-0002',
+          id: 'C-4CE476E40661',
           status: 'resolved',
-          findingIds: ['F-0002'],
-          rawFindingIds: ['raw-c1'],
+          findingIds: [],
+          rawFindingIds: ['raw-c2'],
           description: 'Already resolved conflict',
           firstSeen: observation(),
           lastSeen: observation(),
           resolvedAt: observation().timestamp,
         },
       ],
-      findings: [substantiveFinding({ id: 'F-0002' })],
+      findings: [substantiveFinding({ revision: 1, id: 'F-0002' })],
     });
     const snapshot = computeFixpointSnapshot(withRaws);
     expect(snapshot.unadjudicatedConflictEntries).toHaveLength(1);
-    expect(snapshot.unadjudicatedConflictEntries[0]).toMatch(/^C-0001:/);
+    expect(snapshot.unadjudicatedConflictEntries[0]).toMatch(/^C-2BF240CC0BEC:/);
   });
 
   it('changes the conflict fixpoint entry when the reviewed worktree changes', () => {
@@ -216,7 +227,7 @@ describe('computeFixpointSnapshot', () => {
       writeFileSync(join(scopeCwd, 'src', 'a.ts'), 'export const value = 1;\n');
       initializeGitFixture(scopeCwd, ['src/a.ts']);
       const withConflict = ledger({
-        findings: [substantiveFinding({ id: 'F-0002' })],
+        findings: [substantiveFinding({ revision: 1, id: 'F-0002' })],
         rawFindings: [{
           rawFindingId: 'raw-c1',
           stepName: 'reviewers',
@@ -227,7 +238,7 @@ describe('computeFixpointSnapshot', () => {
           description: 'One reviewer says X, another says Y.',
         }],
         conflicts: [{
-          id: 'C-0001',
+          id: 'C-2BF240CC0BEC',
           status: 'active',
           findingIds: ['F-0002'],
           rawFindingIds: ['raw-c1'],
@@ -248,8 +259,8 @@ describe('computeFixpointSnapshot', () => {
   });
 
   it('produces sorted, order-independent output (two different insertion orders yield the same snapshot)', () => {
-    const a = provisionalFinding({ id: 'F-0001', provisional: { ...provisionalFinding().provisional!, stableKey: 'zzz' } });
-    const b = provisionalFinding({ id: 'F-0002', provisional: { ...provisionalFinding().provisional!, stableKey: 'aaa' } });
+    const a = provisionalFinding({ revision: 1, id: 'F-0001', provisional: { ...provisionalFinding({ revision: 1 }).provisional!, stableKey: 'zzz' } });
+    const b = provisionalFinding({ revision: 1, id: 'F-0002', provisional: { ...provisionalFinding({ revision: 1 }).provisional!, stableKey: 'aaa' } });
     const snapshot1 = computeFixpointSnapshot(ledger({ findings: [a, b] }));
     const snapshot2 = computeFixpointSnapshot(ledger({ findings: [b, a] }));
     expect(snapshot1).toEqual(snapshot2);
@@ -257,15 +268,15 @@ describe('computeFixpointSnapshot', () => {
   });
 
   it('treats a bounded recovery attempt as progress instead of a fixpoint', () => {
-    const before = ledger({ findings: [provisionalFinding({
+    const before = ledger({ findings: [provisionalFinding({ revision: 1,
       provisional: {
-        ...provisionalFinding().provisional!,
+        ...provisionalFinding({ revision: 1 }).provisional!,
         kind: 'raw-adjudication-unresolved',
       },
     })] });
-    const after = ledger({ findings: [provisionalFinding({
+    const after = ledger({ findings: [provisionalFinding({ revision: 1,
       provisional: {
-        ...provisionalFinding().provisional!,
+        ...provisionalFinding({ revision: 1 }).provisional!,
         kind: 'raw-adjudication-unresolved',
         adjudicationAttempts: [{
           attempt: 1,
@@ -286,21 +297,21 @@ describe('computeFixpointSnapshot', () => {
 describe('attachFixpointState', () => {
   it('is never reached on the first comparable round (no previous snapshot), even if the round already has open provisional findings', () => {
     const previous = ledger();
-    const next = ledger({ findings: [provisionalFinding()] });
+    const next = ledger({ findings: [provisionalFinding({ revision: 1 })] });
     const result = attachFixpointState(previous, next);
     expect(result.fixpoint?.reached).toBe(false);
     expect(result.fixpoint?.snapshot.provisionalKeys).toEqual(['stable-key-a']);
   });
 
   it('reaches fixpoint when the round is identical to the previous round and has at least one open provisional', () => {
-    const withProvisional = ledger({ findings: [provisionalFinding()] });
+    const withProvisional = ledger({ findings: [provisionalFinding({ revision: 1 })] });
     const previous = attachFixpointState(ledger(), withProvisional);
     const next = attachFixpointState(previous, withProvisional);
     expect(next.fixpoint?.reached).toBe(true);
   });
 
   it('does not reach fixpoint when there is no open provisional finding, even if the snapshot is otherwise unchanged', () => {
-    const clean = ledger({ findings: [substantiveFinding({ status: 'resolved' })] });
+    const clean = ledger({ findings: [substantiveFinding({ revision: 1, status: 'resolved' })] });
     const previous = attachFixpointState(ledger(), clean);
     const next = attachFixpointState(previous, clean);
     expect(next.fixpoint?.reached).toBe(false);
@@ -308,32 +319,32 @@ describe('attachFixpointState', () => {
   });
 
   it('breaks fixpoint when the provisional key set changes (a different observation replaces the old one)', () => {
-    const round1 = ledger({ findings: [provisionalFinding({ provisional: { ...provisionalFinding().provisional!, stableKey: 'key-a' } })] });
-    const round2 = ledger({ findings: [provisionalFinding({ provisional: { ...provisionalFinding().provisional!, stableKey: 'key-b' } })] });
+    const round1 = ledger({ findings: [provisionalFinding({ revision: 1, provisional: { ...provisionalFinding({ revision: 1 }).provisional!, stableKey: 'key-a' } })] });
+    const round2 = ledger({ findings: [provisionalFinding({ revision: 1, provisional: { ...provisionalFinding({ revision: 1 }).provisional!, stableKey: 'key-b' } })] });
     const previous = attachFixpointState(ledger(), round1);
     const next = attachFixpointState(previous, round2);
     expect(next.fixpoint?.reached).toBe(false);
   });
 
   it('breaks fixpoint when a substantive finding changes status between rounds (e.g. resolved)', () => {
-    const round1 = ledger({ findings: [provisionalFinding(), substantiveFinding({ status: 'open' })] });
-    const round2 = ledger({ findings: [provisionalFinding(), substantiveFinding({ status: 'resolved' })] });
+    const round1 = ledger({ findings: [provisionalFinding({ revision: 1 }), substantiveFinding({ revision: 1, status: 'open' })] });
+    const round2 = ledger({ findings: [provisionalFinding({ revision: 1 }), substantiveFinding({ revision: 1, status: 'resolved' })] });
     const previous = attachFixpointState(ledger(), round1);
     const next = attachFixpointState(previous, round2);
     expect(next.fixpoint?.reached).toBe(false);
   });
 
   it('breaks fixpoint when a new substantive finding is created between rounds', () => {
-    const round1 = ledger({ findings: [provisionalFinding()] });
-    const round2 = ledger({ findings: [provisionalFinding(), substantiveFinding()] });
+    const round1 = ledger({ findings: [provisionalFinding({ revision: 1 })] });
+    const round2 = ledger({ findings: [provisionalFinding({ revision: 1 }), substantiveFinding({ revision: 1 })] });
     const previous = attachFixpointState(ledger(), round1);
     const next = attachFixpointState(previous, round2);
     expect(next.fixpoint?.reached).toBe(false);
   });
 
   it('always advances the stored snapshot to the current round, so a THIRD identical round reaches fixpoint after a differing round 2', () => {
-    const stable = ledger({ findings: [provisionalFinding()] });
-    const changed = ledger({ findings: [provisionalFinding(), substantiveFinding({ status: 'open' })] });
+    const stable = ledger({ findings: [provisionalFinding({ revision: 1 })] });
+    const changed = ledger({ findings: [provisionalFinding({ revision: 1 }), substantiveFinding({ revision: 1, status: 'open' })] });
     const round1 = attachFixpointState(ledger(), stable);
     const round2 = attachFixpointState(round1, changed);
     expect(round2.fixpoint?.reached).toBe(false);
@@ -359,13 +370,14 @@ afterAll(() => {
   rmSync(FIXTURE_CWD, { recursive: true, force: true });
 });
 
-function makeRoundHarness(initialLedger: FindingLedger): {
+function makeRoundHarness(initialLedger: FindingLedger, runIdPrefix = 'run'): {
   currentLedger: () => FindingLedger;
   run: (reviewerRawFindings: Array<Record<string, unknown>>) => ReturnType<typeof runFindingManagerForStep>;
 } {
   let ledgerState = initialLedger;
   const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
+    ledgerIdentity: '/test/finding-fixpoint/ledger.json',
     workflowName: 'peer-review',
     loadLedger: () => ledgerState,
     saveLedger: (next) => { ledgerState = next; },
@@ -383,6 +395,9 @@ function makeRoundHarness(initialLedger: FindingLedger): {
     createRunCopy: () => '/tmp/ledger-copy.json',
     saveRawFindings: () => '/tmp/raw-findings.json',
     saveManagerValidationReport: () => '/tmp/manager-report.json',
+    ...createFindingManagerPublicationDouble(
+      (report) => `/tmp/findings-manager-validation.${report.stepName}.json`,
+    ),
     saveConflictAdjudicationReport: () => '/tmp/adjudication-report.json',
   };
   const optionsBuilder = {
@@ -427,7 +442,7 @@ function makeRoundHarness(initialLedger: FindingLedger): {
         stepIteration: round,
         subResults,
         workflowName: 'peer-review',
-        runId: `run-${round}`,
+        runId: `${runIdPrefix}-${round}`,
         callNamespace: '',
         timestamp: `2026-07-0${round}T00:00:00.000Z`,
       });
@@ -438,9 +453,9 @@ function makeRoundHarness(initialLedger: FindingLedger): {
 /**
  * codex 対策#4: 幻覚 location（存在しないファイルへの claim）は
  * verbatimExcerpt 機械照合により reviewer anomaly（review-integrity 側、
- * product gate 非ブロッキング）へ隔離されるようになった — v3-r4 実測の架空指摘が
+ * product gate 非ブロッキング）へ隔離されるようになった — 実測の架空指摘が
  * product gate を誤って塞いでいたバグそのものの修正。GREEN の直接的な固定は
- * finding-evidence-protocol-fixture.test.ts（実 v3-r4 ledger データを使った
+ * finding-evidence-protocol-fixture.test.ts（実測 ledger データを使った
  * 決定的 red/green fixture）が担う。ここでは fixpoint 機構自体の往復ラウンド
  * 検証を維持するため、同じ「gate-blocking な provisional を作る」役割を
  * 構造的に矛盾した persists 参照（raw-meaning-ambiguous）で代替する。
@@ -499,8 +514,8 @@ function ambiguousPersistsRaw(overrides: Record<string, unknown> = {}): Record<s
 describe('runFindingManagerForStep: hallucinated location lands as a non-blocking reviewer anomaly (codex 対策#4)', () => {
   it('a hallucinated finding against a nonexistent file is isolated as a reviewer anomaly, not a gate-blocking provisional, and needs no manager call', async () => {
     const harness = makeRoundHarness({
-      version: 1, workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], rawFindings: [], conflicts: [],
+      workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
+      findings: [], rawFindings: [], conflicts: [], interpretations: [],
     });
 
     const result = await harness.run([hallucinatedRaw()]);
@@ -519,8 +534,8 @@ describe('runFindingManagerForStep: hallucinated location lands as a non-blockin
 describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics (structurally ambiguous re-report vehicle)', () => {
   it('is not a fixpoint on the first round, even though a provisional is already open', async () => {
     const harness = makeRoundHarness({
-      version: 1, workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], rawFindings: [], conflicts: [],
+      workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
+      findings: [], rawFindings: [], conflicts: [], interpretations: [],
     });
 
     executeAgentMock.mockImplementationOnce(async (_persona, instruction) => {
@@ -534,8 +549,8 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
 
   it('reaches fixpoint after the repeated claim consumes its second interpretation attempt', async () => {
     const harness = makeRoundHarness({
-      version: 1, workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], rawFindings: [], conflicts: [],
+      workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
+      findings: [], rawFindings: [], conflicts: [], interpretations: [],
     });
 
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
@@ -556,8 +571,8 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
 
   it('does not reach fixpoint when a different claim shows up on the second round instead', async () => {
     const harness = makeRoundHarness({
-      version: 1, workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], rawFindings: [], conflicts: [],
+      workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
+      findings: [], rawFindings: [], conflicts: [], interpretations: [],
     });
 
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
@@ -578,12 +593,12 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     expect(context.provisional.fixpoint).toBe(false);
   });
 
-  it('v3-r4 measured shape: a substantive finding resolving across rounds blocks fixpoint until it stabilizes, then the persistent ambiguous claim triggers it', async () => {
+  it('a measured substantive finding resolving across rounds blocks fixpoint until it stabilizes, then the persistent ambiguous claim triggers it', async () => {
     // F-0001 pre-seeded as an already-open substantive finding (as if an
     // earlier round created it) — round 1 below is the round where it is
     // confirmed resolved by a mechanically-handled resolution_confirmation.
     const harness = makeRoundHarness({
-      version: 1, workflowName: 'peer-review', nextId: 2, updatedAt: '2026-07-01T00:00:00.000Z',
+      workflowName: 'peer-review', nextId: 2, updatedAt: '2026-07-01T00:00:00.000Z',
       findings: [{
         id: 'F-0001',
         status: 'open',
@@ -609,6 +624,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
         description: 'A genuine issue that the fixer can and will resolve.',
       }],
       conflicts: [],
+      interpretations: [],
     });
 
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
@@ -654,8 +670,8 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
   it('resume continuity: a fresh harness (simulating a new process) that inherits a ledger already carrying a matching fixpoint snapshot can reach fixpoint on its very first round', async () => {
     // Round A produced by an earlier "process" (e.g. before a resume).
     const priorProcess = makeRoundHarness({
-      version: 1, workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], rawFindings: [], conflicts: [],
+      workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
+      findings: [], rawFindings: [], conflicts: [], interpretations: [],
     });
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const rawId = extractResidualRawIdFromEitherLocalId(
@@ -672,16 +688,18 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     // A brand new harness (simulating a fresh `takt` invocation / resume)
     // starts from that persisted ledger — not from an empty one — because
     // the fixpoint comparison lives on the ledger file, not in engine memory.
-    const resumedProcess = makeRoundHarness(ledgerFromPriorProcess);
+    const resumedProcess = makeRoundHarness(ledgerFromPriorProcess, 'resumed-run');
     await resumedProcess.run([ambiguousPersistsRaw({ rawFindingId: 'ambiguous-1-resumed' })]);
 
+    expect(resumedProcess.currentLedger().fixpoint?.snapshot)
+      .toEqual(ledgerFromPriorProcess.fixpoint?.snapshot);
     expect(buildFindingsRuleContext(resumedProcess.currentLedger()).provisional.fixpoint).toBe(true);
   });
 
   it('a human providing new review evidence after a fixpoint breaks it, routing back to replan instead of staying stuck', async () => {
     const harness = makeRoundHarness({
-      version: 1, workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], rawFindings: [], conflicts: [],
+      workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
+      findings: [], rawFindings: [], conflicts: [], interpretations: [],
     });
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const rawId = extractResidualRawIdFromEitherLocalId(

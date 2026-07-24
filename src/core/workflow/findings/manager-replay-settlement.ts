@@ -49,7 +49,7 @@ export function applyReplayOriginSettlement(input: {
   const eligibleOrigins = new Map([...input.origins].filter(([, origin]) => {
     const process = eligibleProcessesById.get(origin.provisionalFindingId);
     return process !== undefined
-      && (process.revision ?? 1) === origin.expectedProvisionalRevision;
+      && process.revision === origin.expectedProvisionalRevision;
   }));
   let matches = input.output.matches.map((match) => ({ ...match, rawFindingIds: [...match.rawFindingIds] }));
   let promotedFindingIds = new Set<string>();

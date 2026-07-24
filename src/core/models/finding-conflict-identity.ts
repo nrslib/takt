@@ -5,11 +5,7 @@ export interface ConflictIdentity {
   rawFindingIds: readonly string[];
 }
 
-export interface IdentifiedConflict extends ConflictIdentity {
-  id: string;
-}
-
-export function formatConflictSignature(conflict: ConflictIdentity): string {
+function formatConflictSignature(conflict: ConflictIdentity): string {
   const namespace = conflict.findingIds.length > 0 ? 'finding' : 'raw';
   const ids = conflict.findingIds.length > 0 ? conflict.findingIds : conflict.rawFindingIds;
   return JSON.stringify({ namespace, ids: [...ids].sort() });
@@ -22,15 +18,7 @@ export function formatConflictId(conflict: ConflictIdentity): string {
 }
 
 export function collectRegeneratedConflictIds(
-  existingConflicts: readonly IdentifiedConflict[],
   regeneratedConflicts: readonly ConflictIdentity[],
 ): Set<string> {
-  const regeneratedSignatures = new Set(regeneratedConflicts.map(formatConflictSignature));
-  const conflictIds = new Set(regeneratedConflicts.map(formatConflictId));
-  for (const conflict of existingConflicts) {
-    if (regeneratedSignatures.has(formatConflictSignature(conflict))) {
-      conflictIds.add(conflict.id);
-    }
-  }
-  return conflictIds;
+  return new Set(regeneratedConflicts.map(formatConflictId));
 }

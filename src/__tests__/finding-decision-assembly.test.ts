@@ -5,8 +5,12 @@ import {
   mergeFindingManagerOutputs,
 } from '../core/workflow/findings/mechanical-classification.js';
 import { validateFindingManagerOutput } from '../core/workflow/findings/manager-output-validation.js';
-import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
-import { collectRegeneratedConflictIds, formatConflictId } from '../core/workflow/findings/conflict-identity.js';
+import { reconcileFindingLedger as reconcileFindingLedgerStrict } from '../core/workflow/findings/reconciler.js';
+import { collectRegeneratedConflictIds, formatConflictId } from '../core/models/finding-conflict-identity.js';
+import {
+  computeLineageKey,
+  computeReviewerStableKey,
+} from '../core/workflow/findings/raw-canonicalization.js';
 import type {
   FindingLedger,
   FindingLedgerConflict,
@@ -14,6 +18,11 @@ import type {
   FindingManagerDecisions,
   RawFinding,
 } from '../core/workflow/findings/types.js';
+
+const DEFAULT_CONFLICT_ID = formatConflictId({
+  findingIds: ['F-0001'],
+  rawFindingIds: ['raw-existing'],
+});
 
 function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
   return {
@@ -29,7 +38,9 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
   };
 }
 
-function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedgerEntry {
+function makeFinding(
+  overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+): FindingLedgerEntry {
   return {
     id: 'F-0001',
     status: 'open',
@@ -47,7 +58,7 @@ function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedger
 
 function makeConflict(overrides: Partial<FindingLedgerConflict> = {}): FindingLedgerConflict {
   return {
-    id: 'C-0001',
+    id: DEFAULT_CONFLICT_ID,
     status: 'active',
     findingIds: ['F-0001'],
     rawFindingIds: ['raw-existing'],
@@ -60,15 +71,47 @@ function makeConflict(overrides: Partial<FindingLedgerConflict> = {}): FindingLe
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   return {
-    version: 1,
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
     rawFindings: [makeRawFinding({ rawFindingId: 'raw-existing', familyTag: 'bug' })],
     conflicts: [],
-    findings: [makeFinding()],
+    interpretations: [],
+    findings: [makeFinding({ revision: 1 })],
     ...overrides,
   };
+}
+
+type TestReconcileInput = Omit<
+  Parameters<typeof reconcileFindingLedgerStrict>[0],
+  'provisionalFindings' | 'rawFindingDispositions' | 'rawProvenanceByRawFindingId'
+>;
+
+function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
+  return reconcileFindingLedgerStrict({
+    ...input,
+    provisionalFindings: [],
+    rawFindingDispositions: [],
+    rawProvenanceByRawFindingId: new Map(input.rawFindings.map((rawFinding) => [
+      rawFinding.rawFindingId,
+      {
+        reviewerStableKey: computeReviewerStableKey({
+          workflowName: input.context.workflowName,
+          callNamespace: '',
+          parentStepName: input.context.stepName,
+          reviewerPersonaKey: rawFinding.reviewer,
+        }),
+        lineageKey: computeLineageKey({
+          ...(rawFinding.targetFindingId !== undefined
+            ? { targetFindingId: rawFinding.targetFindingId }
+            : {}),
+          ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
+          title: rawFinding.title,
+          familyTag: rawFinding.familyTag,
+        }),
+      },
+    ])),
+  });
 }
 
 function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): FindingManagerDecisions {
@@ -135,7 +178,7 @@ describe('assembleManagerOutput raw decisions', () => {
   });
 
   it('Given a "reopened" decision on a resolved finding When assembled Then it lands in reopenedFindings', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ status: 'resolved', lifecycle: 'resolved' })] });
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })] });
     const raw = makeRawFinding({ rawFindingId: 'raw-3', familyTag: 'bug' });
     const result = assembleManagerOutput({
       previousLedger: ledger,
@@ -187,7 +230,7 @@ describe('assembleManagerOutput raw decisions', () => {
   });
 
   it('Given a "same" decision on a resolved finding When assembled Then it is rejected with a reason', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ status: 'resolved', lifecycle: 'resolved' })] });
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })] });
     const raw = makeRawFinding({ rawFindingId: 'raw-1', familyTag: 'bug' });
     const result = assembleManagerOutput({
       previousLedger: ledger,
@@ -202,7 +245,7 @@ describe('assembleManagerOutput raw decisions', () => {
   });
 
   it('Given a "resolved" decision on a finding that is not open When assembled Then it is rejected with a reason', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ status: 'waived', lifecycle: 'waived' })] });
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, status: 'waived', lifecycle: 'waived' })] });
     const raw = makeRawFinding({ rawFindingId: 'raw-confirm', familyTag: 'bug', relation: 'resolution_confirmation', targetFindingId: 'F-0001' });
     const result = assembleManagerOutput({
       previousLedger: ledger,
@@ -288,7 +331,7 @@ describe('assembleManagerOutput raw decisions', () => {
   });
 
   it('Given two raws with different familyTags decided "same" for the same finding When assembled Then both are accepted and merged', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ rawFindingIds: [] })] });
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, rawFindingIds: [] })] });
     const raws = [
       makeRawFinding({ rawFindingId: 'raw-a', familyTag: 'bug' }),
       makeRawFinding({ rawFindingId: 'raw-b', familyTag: 'security' }),
@@ -387,8 +430,8 @@ describe('assembleManagerOutput dispute decisions', () => {
   it('Given an open canonical from a prior duplicate merge When waived in a later round Then the waiver is accepted', () => {
     const ledger = makeLedger({
       findings: [
-        makeFinding(),
-        makeFinding({
+        makeFinding({ revision: 1 }),
+        makeFinding({ revision: 1,
           id: 'F-0002',
           status: 'superseded',
           lifecycle: 'superseded',
@@ -434,7 +477,7 @@ describe('assembleManagerOutput dispute decisions', () => {
   });
 
   it('Given a "waive" decision on a critical finding When assembled Then it is rejected', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ severity: 'critical' })] });
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, severity: 'critical' })] });
     const result = assembleManagerOutput({
       previousLedger: ledger,
       residualRawFindings: [],
@@ -471,7 +514,7 @@ describe('assembleManagerOutput dispute decisions', () => {
     const claimForDifferentFinding = '## Disputed Findings\n- findingId: F-0002\n  reason: unrelated\n  evidence: src/other.ts:1';
     const result = assembleManagerOutput({
       previousLedger: makeLedger({
-        findings: [makeFinding({ id: 'F-0001' }), makeFinding({ id: 'F-0002', location: 'src/other.ts:1' })],
+        findings: [makeFinding({ revision: 1, id: 'F-0001' }), makeFinding({ revision: 1, id: 'F-0002', location: 'src/other.ts:1' })],
       }),
       residualRawFindings: [],
       decisions: makeDecisions({
@@ -522,12 +565,12 @@ describe('assembleManagerOutput conflict decisions', () => {
       previousLedger: ledger,
       residualRawFindings: [],
       decisions: makeDecisions({
-        conflictDecisions: [{ conflictId: 'C-0001', decision: 'resolve', evidence: 'Adjudicated in favor of F-0001.' }],
+        conflictDecisions: [{ conflictId: DEFAULT_CONFLICT_ID, decision: 'resolve', evidence: 'Adjudicated in favor of F-0001.' }],
       }),
     });
     expect(result.rejectedConflictDecisions).toEqual([]);
     expect(result.output.resolvedConflicts).toEqual([
-      { conflictId: 'C-0001', evidence: 'Adjudicated in favor of F-0001.' },
+      { conflictId: DEFAULT_CONFLICT_ID, evidence: 'Adjudicated in favor of F-0001.' },
     ]);
   });
 
@@ -537,7 +580,7 @@ describe('assembleManagerOutput conflict decisions', () => {
       previousLedger: ledger,
       residualRawFindings: [],
       decisions: makeDecisions({
-        conflictDecisions: [{ conflictId: 'C-0001', decision: 'keep', evidence: 'Still unresolved.' }],
+        conflictDecisions: [{ conflictId: DEFAULT_CONFLICT_ID, decision: 'keep', evidence: 'Still unresolved.' }],
       }),
     });
     expect(result.rejectedConflictDecisions).toEqual([]);
@@ -552,7 +595,7 @@ describe('assembleManagerOutput conflict decisions', () => {
       previousLedger: ledger,
       residualRawFindings: [],
       decisions: makeDecisions({
-        conflictDecisions: [{ conflictId: 'C-0001', decision: 'resolve', evidence: 'x' }],
+        conflictDecisions: [{ conflictId: DEFAULT_CONFLICT_ID, decision: 'resolve', evidence: 'x' }],
       }),
     });
     expect(result.output.resolvedConflicts).toEqual([]);
@@ -583,34 +626,24 @@ describe('assembleManagerOutput conflict decisions', () => {
     expect(result.output.conflicts.map((conflict) => conflict.findingIds)).toEqual([['F-0001']]);
   });
 
-  it('Given legacy and current active conflict IDs for regenerated evidence When assembled Then every matching ID is rejected and reconciliation keeps one active conflict', () => {
+  it('Given a canonical active conflict ID for regenerated evidence When assembled Then its resolve is rejected and reconciliation keeps it active', () => {
     const recurringConflictShape = { findingIds: ['F-0001'], rawFindingIds: [] };
-    const currentConflictId = formatConflictId(recurringConflictShape);
-    const legacyConflictId = 'C-1CA24A220BC7';
+    const conflictId = formatConflictId(recurringConflictShape);
     const ledger = makeLedger({
-      conflicts: [
-        makeConflict({ id: legacyConflictId, rawFindingIds: [] }),
-        makeConflict({ id: currentConflictId, rawFindingIds: [] }),
-      ],
+      conflicts: [makeConflict({ id: conflictId, rawFindingIds: [] })],
     });
-    const raw = makeRawFinding({ rawFindingId: 'raw-legacy-conflict', familyTag: 'bug' });
+    const raw = makeRawFinding({ rawFindingId: 'raw-recurring-conflict', familyTag: 'bug' });
     const result = assembleManagerOutput({
       previousLedger: ledger,
       residualRawFindings: [raw],
       decisions: makeDecisions({
-        rawDecisions: [{ rawFindingId: 'raw-legacy-conflict', decision: 'conflict', findingId: 'F-0001', evidence: 'Still contradicts.' }],
-        conflictDecisions: [
-          { conflictId: legacyConflictId, decision: 'resolve', evidence: 'Adjudicated legacy conflict.' },
-          { conflictId: currentConflictId, decision: 'resolve', evidence: 'Adjudicated current conflict.' },
-        ],
+        rawDecisions: [{ rawFindingId: raw.rawFindingId, decision: 'conflict', findingId: 'F-0001', evidence: 'Still contradicts.' }],
+        conflictDecisions: [{ conflictId, decision: 'resolve', evidence: 'Adjudicated conflict.' }],
       }),
     });
 
     expect(result.output.resolvedConflicts).toEqual([]);
-    expect(result.rejectedConflictDecisions.map((rejection) => rejection.conflictId)).toEqual([
-      legacyConflictId,
-      currentConflictId,
-    ]);
+    expect(result.rejectedConflictDecisions.map((rejection) => rejection.conflictId)).toEqual([conflictId]);
     expect(result.rejectedConflictDecisions.every((rejection) => rejection.reason.includes('regenerated'))).toBe(true);
 
     const nextLedger = reconcileFindingLedger({
@@ -619,16 +652,13 @@ describe('assembleManagerOutput conflict decisions', () => {
       managerOutput: result.output,
       context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-06-14T00:00:00.000Z' },
     });
-    expect(nextLedger.conflicts).toEqual([expect.objectContaining({ id: legacyConflictId, status: 'active' })]);
+    expect(nextLedger.conflicts).toEqual([expect.objectContaining({ id: conflictId, status: 'active' })]);
   });
 
-  it('Given raw-only regenerated evidence When collecting regenerated IDs Then it includes every legacy and current ID with the raw signature', () => {
+  it('Given raw-only regenerated evidence When collecting regenerated IDs Then it returns only the canonical ID', () => {
     const rawOnlyConflict = { findingIds: [], rawFindingIds: ['raw-security', 'raw-architecture'] };
-    const currentConflictId = formatConflictId(rawOnlyConflict);
-    expect(collectRegeneratedConflictIds([
-      { id: 'C-AB6BC1389C77', ...rawOnlyConflict },
-      { id: currentConflictId, ...rawOnlyConflict },
-    ], [rawOnlyConflict])).toEqual(new Set(['C-AB6BC1389C77', currentConflictId]));
+    const conflictId = formatConflictId(rawOnlyConflict);
+    expect(collectRegeneratedConflictIds([rawOnlyConflict])).toEqual(new Set([conflictId]));
   });
 
   // waive 変換で後から足される conflict も「今ラウンド再生成される」に含める。
@@ -665,18 +695,19 @@ describe('assembleManagerOutput conflict decisions', () => {
 
 describe('assembleManagerOutput combined decision kinds', () => {
   it('Given independent duplicate, invalidate, waive, dispute note, and conflict resolution decisions When assembled, validated, and reconciled Then every transition is retained without rejection', () => {
+    const conflictId = formatConflictId({ findingIds: ['F-0006'], rawFindingIds: [] });
     const ledger = makeLedger({
       nextId: 7,
       rawFindings: [],
       findings: [
-        makeFinding({ id: 'F-0001', location: 'src/canonical.ts:1' }),
-        makeFinding({ id: 'F-0002', location: 'src/duplicate.ts:1' }),
-        makeFinding({ id: 'F-0003', location: 'src/invalid.ts:1' }),
-        makeFinding({ id: 'F-0004', location: 'src/waive.ts:1' }),
-        makeFinding({ id: 'F-0005', location: 'src/note.ts:1' }),
-        makeFinding({ id: 'F-0006', location: 'src/conflict.ts:1' }),
+        makeFinding({ revision: 1, id: 'F-0001', location: 'src/canonical.ts:1' }),
+        makeFinding({ revision: 1, id: 'F-0002', location: 'src/duplicate.ts:1' }),
+        makeFinding({ revision: 1, id: 'F-0003', location: 'src/invalid.ts:1' }),
+        makeFinding({ revision: 1, id: 'F-0004', location: 'src/waive.ts:1' }),
+        makeFinding({ revision: 1, id: 'F-0005', location: 'src/note.ts:1' }),
+        makeFinding({ revision: 1, id: 'F-0006', location: 'src/conflict.ts:1' }),
       ],
-      conflicts: [makeConflict({ id: 'C-0001', findingIds: ['F-0006'], rawFindingIds: [] })],
+      conflicts: [makeConflict({ id: conflictId, findingIds: ['F-0006'], rawFindingIds: [] })],
     });
     const priorStepResponseText = [
       '## Disputed Findings',
@@ -702,7 +733,7 @@ describe('assembleManagerOutput combined decision kinds', () => {
           { findingId: 'F-0004', decision: 'waive', reason: 'frozen contract', evidence: 'src/waive.ts:1' },
           { findingId: 'F-0005', decision: 'note', reason: 'needs a record', evidence: 'src/note.ts:1' },
         ],
-        conflictDecisions: [{ conflictId: 'C-0001', decision: 'resolve', evidence: 'src/conflict.ts:1' }],
+        conflictDecisions: [{ conflictId, decision: 'resolve', evidence: 'src/conflict.ts:1' }],
       }),
       invalidLocationCandidateFindingIds: new Set(['F-0003']),
       priorStepResponseText,
@@ -721,7 +752,7 @@ describe('assembleManagerOutput combined decision kinds', () => {
     expect(result.output.invalidatedFindings).toEqual([{ findingId: 'F-0003', evidence: 'src/invalid.ts:1' }]);
     expect(result.output.waivedFindings).toEqual([{ findingId: 'F-0004', reason: 'frozen contract', evidence: 'src/waive.ts:1' }]);
     expect(result.output.disputeNotes).toEqual([{ findingId: 'F-0005', reason: 'needs a record', evidence: 'src/note.ts:1' }]);
-    expect(result.output.resolvedConflicts).toEqual([{ conflictId: 'C-0001', evidence: 'src/conflict.ts:1' }]);
+    expect(result.output.resolvedConflicts).toEqual([{ conflictId, evidence: 'src/conflict.ts:1' }]);
     expect(validateFindingManagerOutput({
       previousLedger: ledger,
       rawFindings: [],
@@ -755,7 +786,7 @@ describe('assembleManagerOutput combined decision kinds', () => {
         runId: 'run-2',
       },
     });
-    expect(next.conflicts).toEqual([expect.objectContaining({ id: 'C-0001', status: 'resolved' })]);
+    expect(next.conflicts).toEqual([expect.objectContaining({ id: conflictId, status: 'resolved' })]);
   });
 });
 
@@ -876,7 +907,7 @@ describe('assembleManagerOutput new-finding grouping', () => {
   // 「完全一致」ではないため、manager の new 判断は覆されない。
   it('Given an existing open finding whose title differs only by identifier case When a raw is decided "new" Then it is not auto-redirected', () => {
     const ledger = makeLedger({
-      findings: [makeFinding({
+      findings: [makeFinding({ revision: 1,
         title: 'Wrong identifier PATH',
         description: 'The code references the environment variable PATH incorrectly.',
       })],
@@ -962,7 +993,7 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
     });
     const result = assembleManagerOutput({
       previousLedger: makeLedger({
-        findings: [makeFinding({ description: 'The issue is present in the current review.' })],
+        findings: [makeFinding({ revision: 1, description: 'The issue is present in the current review.' })],
       }),
       residualRawFindings: [raw],
       decisions: makeDecisions({
@@ -1013,7 +1044,7 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
   // 復活だった（codex 再現ブロッカー B3）。
   it('Given an existing open finding with the same path and title but a different description When a raw is decided "new" Then the manager\'s new is preserved (no auto-redirect)', () => {
     const ledger = makeLedger({
-      findings: [makeFinding({ description: 'A specific file descriptor leak on the error path.' })],
+      findings: [makeFinding({ revision: 1, description: 'A specific file descriptor leak on the error path.' })],
     });
     const raw = makeRawFinding({
       rawFindingId: 'raw-late',
@@ -1036,7 +1067,7 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
 
   it('Given an existing RESOLVED finding with identical path, title and description When a raw is decided "new" Then it still creates a new finding (not redirected to a non-open finding)', () => {
     const ledger = makeLedger({
-      findings: [makeFinding({
+      findings: [makeFinding({ revision: 1,
         status: 'resolved',
         lifecycle: 'resolved',
         description: 'The issue is present in the current review.',
@@ -1087,7 +1118,7 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
   });
 
   it('Given a relation "reopened" raw with an explicit targetFindingId When the manager decides "new" Then the decision is rejected', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ status: 'resolved', lifecycle: 'resolved' })] });
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })] });
     const raw = makeRawFinding({
       rawFindingId: 'raw-reopen',
       relation: 'reopened',
@@ -1106,7 +1137,7 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
     expect(result.rejectedRawDecisions[0]?.reason).toContain('explicitly references');
   });
 
-  // takt-bench v3-r2 の再現。あるレビュアーが F-0001 の修正を確認し、別のレビュアーが
+  // takt-bench 実測の再現。あるレビュアーが F-0001 の修正を確認し、別のレビュアーが
   // 同じ familyTag の問題が別の行に残っていると報告した。両立しうる観測なので、
   // 出力全体を捨てずに open を維持し、衝突として記録しなければならない。
   // 以前は「1 finding = 1 決定」違反で台帳が更新されず reviewers ↔ fix が回り続けた。
@@ -1147,7 +1178,7 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
 
   // 本番経路の再現。resolution_confirmation は機械分類が処理して resolvedFindings に入り、
   // 残存指摘だけが LLM に渡って matches になる。衝突は merge で初めて生まれるため、
-  // 組み立てだけを直しても台帳は凍ったままになる（実測: takt-bench v3-r2）。
+  // 組み立てだけを直しても台帳は凍ったままになる（takt-bench で実測）。
   it('Given the confirmation is consumed by mechanical classification When merged with the LLM matches Then the merged output is canonical and valid', () => {
     const ledger = makeLedger();
     const stillPresent = makeRawFinding({ rawFindingId: 'raw-still-present', familyTag: 'bug', location: 'src/a.ts:22' });
@@ -1591,7 +1622,7 @@ describe('assembleManagerOutput carried conflicts', () => {
     expect(flattened.carriedFindingOnlyConflicts).toHaveLength(1);
 
     const freshLedger = makeLedger({
-      findings: [makeFinding({
+      findings: [makeFinding({ revision: 1,
         status: 'resolved',
         lifecycle: 'resolved',
         resolvedAt: '2026-07-10T00:00:00.000Z',
@@ -1620,15 +1651,36 @@ describe('assembleManagerOutput carried conflicts', () => {
       priorStepResponseText: DISPUTE_CLAIM,
     })).toEqual({ ok: true });
 
-    // manager-runner と同様、不採用 raw は未言及フォールバックから除外して適用する。
-    const next = reconcileFindingLedger({
+    const next = reconcileFindingLedgerStrict({
       previousLedger: freshLedger,
       rawFindings,
       managerOutput: fresh.output,
       priorStepResponseText: DISPUTE_CLAIM,
-      excludedFromUnmentionedFallbackRawFindingIds: new Set(
-        fresh.rejectedRawDecisions.map((rejected) => rejected.rawFindingId),
-      ),
+      provisionalFindings: [],
+      rawFindingDispositions: fresh.rejectedRawDecisions.map((rejected) => ({
+        rawFindingId: rejected.rawFindingId,
+        outcome: 'stale' as const,
+        reason: rejected.reason,
+      })),
+      rawProvenanceByRawFindingId: new Map(rawFindings.map((rawFinding) => [
+        rawFinding.rawFindingId,
+        {
+          reviewerStableKey: computeReviewerStableKey({
+            workflowName: 'peer-review',
+            callNamespace: '',
+            parentStepName: 'reviewers',
+            reviewerPersonaKey: rawFinding.reviewer,
+          }),
+          lineageKey: computeLineageKey({
+            ...(rawFinding.targetFindingId !== undefined
+              ? { targetFindingId: rawFinding.targetFindingId }
+              : {}),
+            ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
+            title: rawFinding.title,
+            familyTag: rawFinding.familyTag,
+          }),
+        },
+      ])),
       context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-10T00:00:00.000Z' },
     });
     expect(next.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('resolved');
@@ -1677,7 +1729,7 @@ describe('assembleManagerOutput carried conflicts', () => {
   // 単位で不採用にし、出力の残りは有効なまま保つ。
   it('Given a carried conflict that partially overlaps an existing conflict When assembled Then only that carried entry is rejected', () => {
     const ledger = makeLedger({
-      findings: [makeFinding({ id: 'F-0001' }), makeFinding({ id: 'F-0002', location: 'src/b.ts:1' })],
+      findings: [makeFinding({ revision: 1, id: 'F-0001' }), makeFinding({ revision: 1, id: 'F-0002', location: 'src/b.ts:1' })],
     });
     const raw = makeRawFinding({ rawFindingId: 'raw-1', familyTag: 'bug' });
     const result = assembleManagerOutput({

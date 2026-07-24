@@ -1,6 +1,7 @@
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import { evaluateRawAdmission } from './manager-admission.js';
 import type {
+  RawAdjudicationFailure,
   RawAdjudicationRecoveryResult,
   RawAdjudicationReplayOrigin,
   RunFindingManagerForStepInput,
@@ -12,36 +13,31 @@ import {
 } from './manager-provisional-settlement.js';
 import { collectLandedRawIds } from './manager-utils.js';
 import { reconcileFindingLedger } from './reconciler.js';
-import type { FindingLedger, FindingManagerOutput, FindingObservation } from './types.js';
-
-function filterRawIds(
-  rawFindingIds: readonly string[],
-  eligibleRawIds: ReadonlySet<string>,
-): string[] {
-  return rawFindingIds.filter((rawFindingId) => eligibleRawIds.has(rawFindingId));
-}
+import type {
+  FindingLedger,
+  FindingManagerOutput,
+  FindingObservation,
+  RawFindingDisposition,
+} from './types.js';
+import { matchesProvisionalRecoveryOrigin } from './provisional-recovery-origin.js';
 
 function filterReplayOutput(input: {
   output: FindingManagerOutput;
   eligibleRawIds: ReadonlySet<string>;
 }): FindingManagerOutput {
-  const newFindings = input.output.newFindings.flatMap((finding) => {
-    const rawFindingIds = filterRawIds(finding.rawFindingIds, input.eligibleRawIds);
-    return rawFindingIds.length === 0 ? [] : [{ ...finding, rawFindingIds }];
-  });
-  const filterLanding = <T extends { rawFindingIds: string[] }>(entries: readonly T[]): T[] => (
-    entries.flatMap((entry) => {
-      const rawFindingIds = filterRawIds(entry.rawFindingIds, input.eligibleRawIds);
-      return rawFindingIds.length === 0 ? [] : [{ ...entry, rawFindingIds }];
-    })
+  const retainEligibleEntries = <T extends { rawFindingIds: string[] }>(entries: readonly T[]): T[] => (
+    entries.filter((entry) => (
+      entry.rawFindingIds.length > 0
+      && entry.rawFindingIds.every((rawFindingId) => input.eligibleRawIds.has(rawFindingId))
+    ))
   );
   return {
     ...input.output,
-    matches: filterLanding(input.output.matches),
-    newFindings,
-    resolvedFindings: filterLanding(input.output.resolvedFindings),
-    reopenedFindings: filterLanding(input.output.reopenedFindings),
-    conflicts: filterLanding(input.output.conflicts),
+    matches: retainEligibleEntries(input.output.matches),
+    newFindings: retainEligibleEntries(input.output.newFindings),
+    resolvedFindings: retainEligibleEntries(input.output.resolvedFindings),
+    reopenedFindings: retainEligibleEntries(input.output.reopenedFindings),
+    conflicts: retainEligibleEntries(input.output.conflicts),
     resolvedConflicts: [],
     waivedFindings: [],
     disputeNotes: [],
@@ -51,51 +47,105 @@ function filterReplayOutput(input: {
   };
 }
 
-function collectEligibleOrigins(input: {
+function collectFreshOrigins(input: {
   freshLedger: FindingLedger;
   origins: ReadonlyMap<string, RawAdjudicationReplayOrigin>;
-}): Map<string, RawAdjudicationReplayOrigin> {
-  return new Map([...input.origins].filter(([, origin]) => {
+  failures: ReadonlyMap<string, RawAdjudicationFailure>;
+}): {
+  origins: Map<string, RawAdjudicationReplayOrigin>;
+  failures: Map<string, RawAdjudicationFailure>;
+} {
+  const origins = new Map<string, RawAdjudicationReplayOrigin>();
+  const failures = new Map(input.failures);
+  for (const [rawFindingId, origin] of input.origins) {
     const process = input.freshLedger.findings.find((finding) => finding.id === origin.provisionalFindingId);
-    return process?.status === 'open'
-      && process.provisional !== undefined
-      && (process.revision ?? 1) === origin.expectedProvisionalRevision
+    const isFresh = process !== undefined
+      && matchesProvisionalRecoveryOrigin(process, origin.recoveryOrigin)
       && (process.provisional.adjudicationAttempts ?? []).length === origin.attempt - 1;
-  }));
+    if (isFresh) {
+      origins.set(rawFindingId, origin);
+      continue;
+    }
+    failures.set(rawFindingId, {
+      kind: 'precondition_stale',
+      outcome: 'stale',
+      reason: `Replay origin "${origin.provisionalFindingId}" changed before commit`,
+    });
+  }
+  return { origins, failures };
+}
+
+function collectEligibleOrigins(input: {
+  freshOrigins: ReadonlyMap<string, RawAdjudicationReplayOrigin>;
+  recovery: RawAdjudicationRecoveryResult;
+  failures: ReadonlyMap<string, RawAdjudicationFailure>;
+}): {
+  origins: Map<string, RawAdjudicationReplayOrigin>;
+  failures: Map<string, RawAdjudicationFailure>;
+} {
+  const itemByRawFindingId = new Map(
+    input.recovery.intake.items.map((item) => [item.wire.rawFindingId, item]),
+  );
+  const origins = new Map<string, RawAdjudicationReplayOrigin>();
+  const failures = new Map(input.failures);
+  for (const [rawFindingId, origin] of input.freshOrigins) {
+    const item = itemByRawFindingId.get(rawFindingId);
+    if (item === undefined) {
+      if (!failures.has(rawFindingId)) {
+        failures.set(rawFindingId, {
+          kind: 'unlanded',
+          outcome: 'audit_only',
+          reason: 'Replay origin has neither payload nor a typed preparation outcome',
+        });
+      }
+      origins.set(rawFindingId, origin);
+      continue;
+    }
+    if (item.canonical.reviewerStableKey
+      !== origin.recoveryOrigin.expectedRecoveryReviewerStableKey) {
+      failures.set(rawFindingId, {
+        kind: 'reviewer_provenance_mismatch',
+        outcome: 'stale',
+        reason: 'Replay reviewer provenance no longer matches the reserved provisional origin',
+      });
+      continue;
+    }
+    origins.set(rawFindingId, origin);
+  }
+  return { origins, failures };
 }
 
 function recordReplayFailures(input: {
   ledger: FindingLedger;
   origins: ReadonlyMap<string, RawAdjudicationReplayOrigin>;
-  failureReasons: ReadonlyMap<string, string>;
+  failures: ReadonlyMap<string, RawAdjudicationFailure>;
   observation: FindingObservation;
 }): FindingLedger {
   const failuresByProcess = new Map([...input.origins].flatMap(([replayRawFindingId, origin]) => {
-    const reason = input.failureReasons.get(replayRawFindingId);
-    return reason === undefined
+    const failure = input.failures.get(replayRawFindingId);
+    return failure === undefined
       ? []
-      : [[origin.provisionalFindingId, { origin, replayRawFindingId, reason }] as const];
+      : [[origin.provisionalFindingId, { origin, replayRawFindingId, failure }] as const];
   }));
   return {
     ...input.ledger,
     findings: input.ledger.findings.map((finding) => {
       const failure = failuresByProcess.get(finding.id);
       if (failure === undefined
-        || finding.status !== 'open'
-        || finding.provisional === undefined
-        || (finding.revision ?? 1) !== failure.origin.expectedProvisionalRevision
+        || !matchesProvisionalRecoveryOrigin(finding, failure.origin.recoveryOrigin)
         || (finding.provisional.adjudicationAttempts ?? []).length !== failure.origin.attempt - 1) {
         return finding;
       }
       const attempts = finding.provisional.adjudicationAttempts ?? [];
       return {
         ...finding,
+        revision: finding.revision + 1,
         provisional: {
           ...finding.provisional,
           adjudicationAttempts: [...attempts, {
             attempt: failure.origin.attempt,
             replayRawFindingId: failure.replayRawFindingId,
-            reason: failure.reason,
+            reason: failure.failure.reason,
             at: input.observation,
           }],
         },
@@ -104,36 +154,92 @@ function recordReplayFailures(input: {
   };
 }
 
+function dispositionForFailure(
+  rawFindingId: string,
+  failure: RawAdjudicationFailure,
+): RawFindingDisposition {
+  switch (failure.kind) {
+    case 'source_missing':
+    case 'reviewer_provenance_missing':
+    case 'admission_rejected':
+    case 'input_budget_exceeded':
+    case 'manager_output_rejected':
+    case 'agent_failed':
+    case 'provisional_landing':
+    case 'unlanded':
+      return { rawFindingId, outcome: failure.outcome, reason: failure.reason };
+    case 'target_missing':
+    case 'precondition_stale':
+    case 'reviewer_provenance_mismatch':
+      return { rawFindingId, outcome: failure.outcome, reason: failure.reason };
+    case 'manager_unsupported':
+      return { rawFindingId, outcome: failure.outcome, reason: failure.reason };
+  }
+}
+
 export function applyRawAdjudicationRecovery(input: {
   freshLedger: FindingLedger;
   recovery: RawAdjudicationRecoveryResult;
   runInput: RunFindingManagerForStepInput;
   observation: FindingObservation;
   reviewScopeSnapshotId: string;
-}): FindingLedger {
+}): {
+  ledger: FindingLedger;
+  rawFindingDispositions: RawFindingDisposition[];
+} {
   if (input.recovery.origins.size === 0) {
-    return input.freshLedger;
+    return { ledger: input.freshLedger, rawFindingDispositions: [] };
   }
+  const fresh = collectFreshOrigins({
+    freshLedger: input.freshLedger,
+    origins: input.recovery.origins,
+    failures: input.recovery.failures,
+  });
+  const eligible = collectEligibleOrigins({
+    freshOrigins: fresh.origins,
+    recovery: input.recovery,
+    failures: fresh.failures,
+  });
+  const origins = eligible.origins;
+  const failures = eligible.failures;
+  if (origins.size === 0) {
+    return {
+      ledger: input.freshLedger,
+      rawFindingDispositions: [...input.recovery.origins.keys()].map((rawFindingId) => {
+        const failure = failures.get(rawFindingId);
+        if (failure === undefined) {
+          throw new Error(`Replay raw finding "${rawFindingId}" has no finite disposition`);
+        }
+        return dispositionForFailure(rawFindingId, failure);
+      }),
+    };
+  }
+  const eligibleRawIds = new Set(origins.keys());
+  const eligibleIntake = {
+    ...input.recovery.intake,
+    items: input.recovery.intake.items.filter(
+      (item) => eligibleRawIds.has(item.wire.rawFindingId),
+    ),
+  };
   const admission = evaluateRawAdmission({
     cwd: input.runInput.cwd,
     reviewScopeSnapshotId: input.reviewScopeSnapshotId,
     previousLedger: input.freshLedger,
-    intake: input.recovery.intake,
+    intake: eligibleIntake,
   });
   const admittedRawIds = new Set(admission.cleanWire.map((wire) => wire.rawFindingId));
-  const origins = collectEligibleOrigins({
-    freshLedger: input.freshLedger,
-    origins: input.recovery.origins,
-  });
   const adjudicableRawIds = new Set(
     [...origins.keys()].filter((rawFindingId) => (
-      admittedRawIds.has(rawFindingId) && !input.recovery.failureReasons.has(rawFindingId)
+      admittedRawIds.has(rawFindingId) && !failures.has(rawFindingId)
     )),
   );
-  const failures = new Map(input.recovery.failureReasons);
-  for (const rawFindingId of input.recovery.origins.keys()) {
+  for (const rawFindingId of origins.keys()) {
     if (!admittedRawIds.has(rawFindingId) && !failures.has(rawFindingId)) {
-      failures.set(rawFindingId, 'replay source evidence did not pass admission at commit time');
+      failures.set(rawFindingId, {
+        kind: 'admission_rejected',
+        outcome: 'audit_only',
+        reason: 'replay source evidence did not pass admission at commit time',
+      });
     }
   }
   const filteredOutput = filterReplayOutput({
@@ -157,7 +263,11 @@ export function applyRawAdjudicationRecovery(input: {
   });
   for (const spec of revalidated.provisionalSpecs) {
     for (const rawFindingId of spec.sourceRawFindingIds) {
-      failures.set(rawFindingId, spec.reason);
+      failures.set(rawFindingId, {
+        kind: 'provisional_landing',
+        outcome: 'audit_only',
+        reason: spec.reason,
+      });
     }
   }
   const settlement = settleProvisionalsWithCleanEvidence({
@@ -174,24 +284,53 @@ export function applyRawAdjudicationRecovery(input: {
   });
   for (const rawFindingId of origins.keys()) {
     if (!settlement.settledReplayRawIds.has(rawFindingId) && !failures.has(rawFindingId)) {
-      failures.set(rawFindingId, 'replay produced no substantive adjudication outcome');
+      failures.set(rawFindingId, {
+        kind: 'unlanded',
+        outcome: 'audit_only',
+        reason: 'replay produced no substantive adjudication outcome',
+      });
     }
   }
   const settledOutput = canonicalizeFindingManagerOutput(settlement.output);
-  const replayWire = input.recovery.intake.items.map((item) => item.wire);
-  const rawProvenance = new Map(input.recovery.intake.items.map((item) => [
+  const replayItems = eligibleIntake.items.filter((item) => (
+    failures.get(item.wire.rawFindingId)?.outcome !== 'stale'
+  ));
+  const replayWire = replayItems.map((item) => item.wire);
+  const rawProvenance = new Map(replayItems.map((item) => [
     item.wire.rawFindingId,
     {
       reviewerStableKey: item.canonical.reviewerStableKey,
       lineageKey: item.canonical.lineageKey,
     },
   ]));
+  const landedRawIds = collectLandedRawIds(settledOutput);
+  const rawFindingDispositions = [...input.recovery.origins.keys()].flatMap((rawFindingId) => {
+    if (landedRawIds.has(rawFindingId)) {
+      return [];
+    }
+    const failure = failures.get(rawFindingId);
+    if (failure !== undefined) {
+      return [dispositionForFailure(rawFindingId, failure)];
+    }
+    if (settlement.settledReplayRawIds.has(rawFindingId)) {
+      return [{
+        rawFindingId,
+        outcome: 'audit_only' as const,
+        reason: 'The replay observation was applied through provisional settlement',
+      }];
+    }
+    throw new Error(`Replay raw finding "${rawFindingId}" has no finite disposition`);
+  });
+  const replayRawFindingIds = new Set(replayWire.map((rawFinding) => rawFinding.rawFindingId));
   const reconciled = reconcileFindingLedger({
     previousLedger: input.freshLedger,
     rawFindings: replayWire,
     managerOutput: settledOutput,
+    provisionalFindings: [],
     rawProvenanceByRawFindingId: rawProvenance,
-    excludedFromUnmentionedFallbackRawFindingIds: new Set(input.recovery.origins.keys()),
+    rawFindingDispositions: rawFindingDispositions.filter(
+      (disposition) => replayRawFindingIds.has(disposition.rawFindingId),
+    ),
     context: {
       workflowName: input.runInput.workflowName,
       stepName: input.runInput.parentStep.name,
@@ -204,16 +343,13 @@ export function applyRawAdjudicationRecovery(input: {
     settlement,
     input.runInput.timestamp,
   );
-  const landedRawIds = collectLandedRawIds(settledOutput);
-  for (const rawFindingId of origins.keys()) {
-    if (!landedRawIds.has(rawFindingId) && !settlement.settledReplayRawIds.has(rawFindingId)) {
-      failures.set(rawFindingId, 'replay outcome was not committed');
-    }
-  }
-  return recordReplayFailures({
-    ledger: appliedSettlement,
-    origins,
-    failureReasons: failures,
-    observation: input.observation,
-  });
+  return {
+    ledger: recordReplayFailures({
+      ledger: appliedSettlement,
+      origins,
+      failures,
+      observation: input.observation,
+    }),
+    rawFindingDispositions,
+  };
 }

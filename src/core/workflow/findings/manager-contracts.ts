@@ -20,9 +20,11 @@ import type {
   FindingLedger,
   FindingManagerOutput,
   RawFinding,
+  RawFindingDispositionOutcome,
 } from './types.js';
 import type { CanonicalIntakeItem, ReviewerIntakeResult } from './manager-admission.js';
 import type { CapturedFindingPrecondition } from './finding-preconditions.js';
+import type { ProvisionalRecoveryOrigin } from './provisional-recovery-origin.js';
 
 export interface RunFindingManagerForStepInput {
   contract: FindingContractConfig;
@@ -43,12 +45,17 @@ export interface RunFindingManagerForStepInput {
   priorStepResponseText?: string;
 }
 
-export type FindingManagerRunResult = {
-  status: 'updated';
-  ledgerPath: string;
-  providerInfo: StepProviderInfo;
-  ledger: FindingLedger;
-};
+export type FindingManagerRunResult =
+  | {
+      status: 'updated';
+      ledgerPath: string;
+      providerInfo: StepProviderInfo;
+      ledger: FindingLedger;
+    }
+  | {
+      status: 'unchanged';
+      ledger: FindingLedger;
+    };
 
 export interface LadderTarget {
   canonical: CanonicalRawFinding;
@@ -57,10 +64,7 @@ export interface LadderTarget {
   interpretationKey: string;
   attemptOrdinal: number;
   interpretationRecoveryAttempt?: boolean;
-  recoveryOrigin?: {
-    provisionalFindingId: string;
-    expectedProvisionalRevision: number;
-  };
+  recoveryOrigins?: ProvisionalRecoveryOrigin[];
 }
 
 export interface LadderResult {
@@ -74,7 +78,7 @@ export interface LadderResult {
   pendingIndependentNew: Array<{
     wire: RawFinding;
     viaInterpretationKey?: string;
-    recoveryOrigin?: LadderTarget['recoveryOrigin'];
+    recoveryOrigins?: LadderTarget['recoveryOrigins'];
   }>;
   pendingConflicts: Array<{
     target: LadderTarget;
@@ -87,7 +91,7 @@ export interface LadderResult {
     target: LadderTarget;
     applicationResult: 'created' | 'matched_with_proof' | 'conflict_created';
   }>;
-  recoveryProvisionalInterpretationKeys: Set<string>;
+  recoveryProvisionalOrigins: Map<string, ProvisionalRecoveryOrigin[]>;
   stats: InterpretationStatsReport;
 }
 
@@ -107,13 +111,46 @@ export interface RawAdjudicationReplayOrigin {
   sourceRawFindingId: string;
   expectedProvisionalRevision: number;
   attempt: number;
+  recoveryOrigin: ProvisionalRecoveryOrigin;
 }
+
+type AuditOnlyRawAdjudicationFailureKind =
+  | 'source_missing'
+  | 'reviewer_provenance_missing'
+  | 'admission_rejected'
+  | 'input_budget_exceeded'
+  | 'manager_output_rejected'
+  | 'agent_failed'
+  | 'provisional_landing'
+  | 'unlanded';
+
+type StaleRawAdjudicationFailureKind =
+  | 'target_missing'
+  | 'precondition_stale'
+  | 'reviewer_provenance_mismatch';
+
+export type RawAdjudicationFailure =
+  | {
+      kind: AuditOnlyRawAdjudicationFailureKind;
+      outcome: Extract<RawFindingDispositionOutcome, 'audit_only'>;
+      reason: string;
+    }
+  | {
+      kind: StaleRawAdjudicationFailureKind;
+      outcome: Extract<RawFindingDispositionOutcome, 'stale'>;
+      reason: string;
+    }
+  | {
+      kind: 'manager_unsupported';
+      outcome: Extract<RawFindingDispositionOutcome, 'unsupported'>;
+      reason: string;
+    };
 
 export interface RawAdjudicationRecoveryResult {
   intake: ReviewerIntakeResult;
   output: FindingManagerOutput;
   origins: Map<string, RawAdjudicationReplayOrigin>;
-  failureReasons: Map<string, string>;
+  failures: Map<string, RawAdjudicationFailure>;
   capturedPreconditions: Map<string, CapturedFindingPrecondition>;
   invalidAttempts: FindingManagerValidationAttemptReport[];
   unsupportedRawFindingReports: UnsupportedRawFindingReport[];

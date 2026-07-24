@@ -26,7 +26,7 @@ import { normalizeFindingText, parseFindingLocation } from './location.js';
 import { hasDisputeClaimFor } from './manager-output-validation.js';
 import { FILE_LINE_EVIDENCE_PATTERN } from './evidence.js';
 import { effectiveRawFindingRelation, mergeFindingManagerOutputs } from './mechanical-classification.js';
-import { collectRegeneratedConflictIds, formatConflictId } from './conflict-identity.js';
+import { collectRegeneratedConflictIds, formatConflictId } from '../../models/finding-conflict-identity.js';
 import { collectActiveConflictFindingIds, rejectConflictTouchedDuplicates } from './manager-plan-normalization.js';
 
 /**
@@ -116,7 +116,7 @@ export interface AssembleManagerOutputResult {
   rejectedInvalidateDecisions: RejectedInvalidateDecision[];
   rejectedDuplicateDecisions: RejectedDuplicateDecision[];
   rejectedDismissDecisions: RejectedDismissDecision[];
-  /** Raw findings decided 'unsupported' this round. Excluded from the "unmentioned raw -> new finding" fallback by the caller (manager-runner.ts). */
+  /** Raw findings explicitly decided unsupported this round. The caller records them without creating a finding. */
   unsupportedRawDecisions: UnsupportedRawDecision[];
 }
 
@@ -855,10 +855,10 @@ function assembleConflictDecisions(input: {
   decisions: FindingManagerDecisions['conflictDecisions'];
   /**
    * 最終形の conflicts（merge + canonicalize + waive 変換 + 持ち越し統合の後）を
-   * 正準署名で照合した集合。現行生成 ID に加え、同じ署名を持つ既存の legacy/current
-   * ID も含む。この中に含まれる conflictId は今ラウンド再生成される。canonicalize
-   * 直後の conflicts だけから計算すると、waive 変換や持ち越しで後から足される
-   * conflict を見逃し、再生成される conflict の resolve を採用してしまう。
+   * 正準 ID へ変換した集合。この中に含まれる conflictId は今ラウンド再生成される。
+   * canonicalize 直後の conflicts だけから計算すると、waive 変換や持ち越しで
+   * 後から足される conflict を見逃し、再生成される conflict の resolve を
+   * 採用してしまう。
    */
   regeneratedConflictIds: ReadonlySet<string>;
 }): { resolvedConflicts: FindingManagerResolvedConflict[]; rejected: RejectedConflictDecision[] } {
@@ -896,10 +896,9 @@ function assembleConflictDecisions(input: {
       continue;
     }
     // reconciler は resolvedConflicts を先に適用し、その後同一の正準 conflict を
-    // active へ戻す。legacy/current ID が統合される場合もあるため、再活性化される
-    // ID は決定で指定された ID と一致しない。同じラウンドで同じ conflict が再生成
-    // されるなら、「resolve を採用した」という記録と実状態（active のまま）が
-    // 食い違うため不採用にする。
+    // active へ戻す。同じラウンドで同じ conflict が再生成されるなら、
+    // 「resolve を採用した」という記録と実状態（active のまま）が食い違うため
+    // 不採用にする。
     if (input.regeneratedConflictIds.has(decision.conflictId)) {
       rejected.push({
         conflictId: decision.conflictId,
@@ -1116,7 +1115,7 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     ...carriedResult.accepted,
   ]);
 
-  const regeneratedConflictIds = collectRegeneratedConflictIds(input.previousLedger.conflicts, conflicts);
+  const regeneratedConflictIds = collectRegeneratedConflictIds(conflicts);
   const conflictResult = assembleConflictDecisions({
     previousLedger: input.previousLedger,
     decisions: input.decisions.conflictDecisions,

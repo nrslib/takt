@@ -263,7 +263,7 @@ export function settleProvisionalsWithCleanEvidence(input: {
 
 /**
  * 証跡不成立の persists 再観測を open target の rejectedObservations へ
- * 監査添付する。canonical evidence / rawFindingIds / revision / status には
+ * 監査添付する。canonical evidence / rawFindingIds / status には
  * 一切触れない（evidence hash の入力にも含まれないため再開口しない）。
  * target が既に gate を塞いでいるため、観測は消えずゲートも開かない。
  */
@@ -298,7 +298,11 @@ export function applyRejectedObservationAttachments(
       if (appended.length === 0) {
         return finding;
       }
-      return { ...finding, rejectedObservations: [...existing, ...appended] };
+      return {
+        ...finding,
+        revision: finding.revision + 1,
+        rejectedObservations: [...existing, ...appended],
+      };
     }),
   };
 }
@@ -319,7 +323,7 @@ export function applyProvisionalSettlement(
       if (settlement.promotedFindingIds.has(finding.id) && finding.provisional !== undefined) {
         const promoted = { ...finding };
         delete promoted.provisional;
-        promoted.revision = (finding.revision ?? 1) + 1;
+        promoted.revision = finding.revision + 1;
         return promoted;
       }
       const mappedTarget = settlement.resolvedByMapping.get(finding.id);
@@ -330,7 +334,7 @@ export function applyProvisionalSettlement(
           lifecycle: 'resolved' as const,
           resolvedAt: timestamp,
           resolvedEvidence: `Deterministically settled through ${mappedTarget}`,
-          revision: (finding.revision ?? 1) + 1,
+          revision: finding.revision + 1,
         };
       }
       const resolvedEvidence = settlement.resolvedByEvidence.get(finding.id);
@@ -341,7 +345,7 @@ export function applyProvisionalSettlement(
           lifecycle: 'resolved' as const,
           resolvedAt: timestamp,
           resolvedEvidence,
-          revision: (finding.revision ?? 1) + 1,
+          revision: finding.revision + 1,
         };
       }
       return finding;

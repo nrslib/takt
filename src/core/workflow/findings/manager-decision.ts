@@ -39,6 +39,7 @@ export async function runManagerDecisionStage(params: {
   rawFindingsPath: string;
   observation: FindingObservation;
   reviewScopeSnapshotId: string;
+  stopBudgetRoundMarker: string;
 }): Promise<ManagerDecisionStageResult> {
   const {
     input,
@@ -49,6 +50,7 @@ export async function runManagerDecisionStage(params: {
     rawFindingsPath,
     observation,
     reviewScopeSnapshotId,
+    stopBudgetRoundMarker,
   } = params;
   const {
     cleanWire,
@@ -103,7 +105,7 @@ export async function runManagerDecisionStage(params: {
         });
         decisions = parseManagerDecisions(response);
       } catch (error) {
-        // manager の壊れた応答で run を殺さない（v2 の中核不変条件）。残余 raw は
+        // manager の壊れた応答で run を殺さない。残余 raw は
         // 全て provisional へ着地し、機械分類の確定分だけを適用する。
         const message = error instanceof Error ? error.message : String(error);
         log.warn('Finding manager decisions call failed; landing residual raws as provisional', { error: message });
@@ -161,6 +163,7 @@ export async function runManagerDecisionStage(params: {
       workflowName: input.workflowName,
       callNamespace: input.callNamespace,
       parentStepName: input.parentStep.name,
+      stopBudgetRoundMarker,
     });
 
     return {

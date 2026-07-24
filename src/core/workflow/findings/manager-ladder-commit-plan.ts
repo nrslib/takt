@@ -9,6 +9,7 @@ import type {
 import type { LadderResult, ManagerDecisionStageResult } from './manager-contracts.js';
 import { provisionalSpecForRaw, provisionalSpecForRawKind } from './manager-provisional.js';
 import { fullIdentityKeyOf } from './manager-provisional-settlement.js';
+import { matchesProvisionalRecoveryOrigin } from './provisional-recovery-origin.js';
 
 export interface LadderCommitPlan {
   output: FindingManagerOutput;
@@ -17,6 +18,7 @@ export interface LadderCommitPlan {
   recoverySettlements: Map<string, string>;
   recoveryPromotions: Set<string>;
   recoveryProvisionalRawFindingIds: Set<string>;
+  staleRecoveryRawFindingIds: Set<string>;
 }
 
 function withInterpretationResult(
@@ -28,13 +30,39 @@ function withInterpretationResult(
 }
 
 function recoveryOriginIsFresh(
-  origin: NonNullable<ManagerDecisionStageResult['ladder']['pendingAppliedReattach'][number]['target']['recoveryOrigin']>,
+  origin: NonNullable<ManagerDecisionStageResult['ladder']['pendingAppliedReattach'][number]['target']['recoveryOrigins']>[number],
   ledger: FindingLedger,
 ): boolean {
   const process = ledger.findings.find((finding) => finding.id === origin.provisionalFindingId);
-  return process?.status === 'open'
-    && process.provisional !== undefined
-    && (process.revision ?? 1) === origin.expectedProvisionalRevision;
+  return process !== undefined && matchesProvisionalRecoveryOrigin(process, origin);
+}
+
+function freshRecoveryOrigins(
+  origins: NonNullable<ManagerDecisionStageResult['ladder']['pendingAppliedReattach'][number]['target']['recoveryOrigins']>,
+  ledger: FindingLedger,
+): typeof origins {
+  return origins.filter((origin) => recoveryOriginIsFresh(origin, ledger));
+}
+
+function addRecoverySettlements(
+  current: Map<string, string>,
+  origins: NonNullable<ManagerDecisionStageResult['ladder']['pendingAppliedReattach'][number]['target']['recoveryOrigins']>,
+  target: string,
+): Map<string, string> {
+  return new Map([
+    ...current,
+    ...origins.map((origin) => [origin.provisionalFindingId, target] as const),
+  ]);
+}
+
+function primaryRecoveryOrigin(
+  origins: NonNullable<ManagerDecisionStageResult['ladder']['pendingAppliedReattach'][number]['target']['recoveryOrigins']>,
+) {
+  const primary = origins[0];
+  if (primary === undefined) {
+    throw new Error('Interpretation recovery target has an empty origin set');
+  }
+  return primary;
 }
 
 function ownsCompletedInterpretation(
@@ -43,7 +71,7 @@ function ownsCompletedInterpretation(
   interpretationKey: string,
 ): boolean {
   const reservationToken = ladder.interpretationReservations.get(interpretationKey);
-  return reservationToken !== undefined && ledger.interpretations?.some((record) => (
+  return reservationToken !== undefined && ledger.interpretations.some((record) => (
     record.interpretationKey === interpretationKey
     && record.stage === 'interpretation_completed'
     && record.reservationToken === reservationToken
@@ -86,8 +114,8 @@ export function selectCommittableLadder(
     provisionalByInterpretationKey: new Map(
       [...ladder.provisionalByInterpretationKey].filter(([key]) => committableKeys.has(key)),
     ),
-    recoveryProvisionalInterpretationKeys: new Set(
-      [...ladder.recoveryProvisionalInterpretationKeys].filter((key) => committableKeys.has(key)),
+    recoveryProvisionalOrigins: new Map(
+      [...ladder.recoveryProvisionalOrigins].filter(([key]) => committableKeys.has(key)),
     ),
   };
 }
@@ -95,13 +123,21 @@ export function selectCommittableLadder(
 export function buildLadderCommitPlan(
   ladder: ManagerDecisionStageResult['ladder'],
   freshLedger: FindingLedger,
+  staleRecoveryRawFindingIds: ReadonlySet<string>,
 ): LadderCommitPlan {
   const initialResults = new Map<string, InterpretationApplicationResult>(
     [...ladder.provisionalByInterpretationKey].map(([key, spec]) => {
-      const existsOpen = ladder.recoveryProvisionalInterpretationKeys.has(key) || freshLedger.findings.some(
+      const staleRecovery = ladder.recoveryProvisionalOrigins.has(key)
+        && spec.sourceRawFindingIds.some((rawFindingId) => staleRecoveryRawFindingIds.has(rawFindingId));
+      const existsOpen = ladder.recoveryProvisionalOrigins.has(key) || freshLedger.findings.some(
         (finding) => finding.status === 'open' && finding.provisional?.stableKey === spec.stableKey,
       );
-      return [key, existsOpen ? 'provisional_updated' : 'provisional_created'];
+      return [
+        key,
+        staleRecovery
+          ? 'stale_precondition'
+          : existsOpen ? 'provisional_updated' : 'provisional_created',
+      ];
     }),
   );
   const initial: LadderCommitPlan = {
@@ -112,15 +148,25 @@ export function buildLadderCommitPlan(
     recoveryPromotions: new Set(),
     recoveryProvisionalRawFindingIds: new Set(
       [...ladder.provisionalByInterpretationKey].flatMap(([key, spec]) => (
-        ladder.recoveryProvisionalInterpretationKeys.has(key) ? spec.sourceRawFindingIds : []
+        ladder.recoveryProvisionalOrigins.has(key)
+          ? spec.sourceRawFindingIds.filter((rawFindingId) => !staleRecoveryRawFindingIds.has(rawFindingId))
+          : []
       )),
     ),
+    staleRecoveryRawFindingIds: new Set(staleRecoveryRawFindingIds),
   };
   const withMatches = ladder.pendingSameWithProof.reduce<LadderCommitPlan>((plan, pending) => {
-    if (pending.target.recoveryOrigin !== undefined
-      && !recoveryOriginIsFresh(pending.target.recoveryOrigin, freshLedger)) {
+    const origins = pending.target.recoveryOrigins;
+    const freshOrigins = origins === undefined
+      ? undefined
+      : freshRecoveryOrigins(origins, freshLedger);
+    if (freshOrigins !== undefined && freshOrigins.length === 0) {
       return {
         ...plan,
+        staleRecoveryRawFindingIds: new Set([
+          ...plan.staleRecoveryRawFindingIds,
+          pending.target.wire.rawFindingId,
+        ]),
         interpretationResults: withInterpretationResult(
           plan.interpretationResults,
           pending.viaInterpretationKey,
@@ -161,24 +207,29 @@ export function buildLadderCommitPlan(
         pending.viaInterpretationKey,
         'matched_with_proof',
       ),
-      ...(pending.target.recoveryOrigin !== undefined
+      ...(freshOrigins !== undefined
         ? {
-            recoverySettlements: new Map([
-              ...plan.recoverySettlements,
-              [
-                pending.target.recoveryOrigin.provisionalFindingId,
-                pending.proof.targetFindingId,
-              ],
-            ]),
+            recoverySettlements: addRecoverySettlements(
+              plan.recoverySettlements,
+              freshOrigins,
+              pending.proof.targetFindingId,
+            ),
           }
         : {}),
     };
   }, initial);
   const withIndependent = ladder.pendingIndependentNew.reduce<LadderCommitPlan>((plan, pending) => {
-    const origin = pending.recoveryOrigin;
-    if (origin !== undefined && !recoveryOriginIsFresh(origin, freshLedger)) {
+    const origins = pending.recoveryOrigins;
+    const freshOrigins = origins === undefined
+      ? undefined
+      : freshRecoveryOrigins(origins, freshLedger);
+    if (freshOrigins !== undefined && freshOrigins.length === 0) {
       return {
         ...plan,
+        staleRecoveryRawFindingIds: new Set([
+          ...plan.staleRecoveryRawFindingIds,
+          pending.wire.rawFindingId,
+        ]),
         interpretationResults: withInterpretationResult(
           plan.interpretationResults,
           pending.viaInterpretationKey,
@@ -186,9 +237,15 @@ export function buildLadderCommitPlan(
         ),
       };
     }
+    const recovery = freshOrigins === undefined
+      ? undefined
+      : {
+          primary: primaryRecoveryOrigin(freshOrigins),
+          secondary: freshOrigins.slice(1),
+        };
     return {
       ...plan,
-      output: origin === undefined
+      output: recovery === undefined
         ? {
             ...plan.output,
             newFindings: [...plan.output.newFindings, {
@@ -200,7 +257,7 @@ export function buildLadderCommitPlan(
         : {
             ...plan.output,
             matches: [...plan.output.matches, {
-              findingId: origin.provisionalFindingId,
+              findingId: recovery.primary.provisionalFindingId,
               rawFindingIds: [pending.wire.rawFindingId],
               evidence: 'A fresh interpretation attempt confirmed the provisional as an independent finding',
             }],
@@ -210,16 +267,30 @@ export function buildLadderCommitPlan(
         pending.viaInterpretationKey,
         'created',
       ),
-      recoveryPromotions: origin === undefined
+      recoveryPromotions: recovery === undefined
         ? plan.recoveryPromotions
-        : new Set([...plan.recoveryPromotions, origin.provisionalFindingId]),
+        : new Set([...plan.recoveryPromotions, recovery.primary.provisionalFindingId]),
+      recoverySettlements: recovery === undefined
+        ? plan.recoverySettlements
+        : addRecoverySettlements(
+            plan.recoverySettlements,
+            recovery.secondary,
+            recovery.primary.provisionalFindingId,
+          ),
     };
   }, withMatches);
   const withConflicts = ladder.pendingConflicts.reduce<LadderCommitPlan>((plan, pending) => {
-    if (pending.target.recoveryOrigin !== undefined
-      && !recoveryOriginIsFresh(pending.target.recoveryOrigin, freshLedger)) {
+    const recoveryOrigins = pending.target.recoveryOrigins;
+    const freshOrigins = recoveryOrigins === undefined
+      ? undefined
+      : freshRecoveryOrigins(recoveryOrigins, freshLedger);
+    if (freshOrigins !== undefined && freshOrigins.length === 0) {
       return {
         ...plan,
+        staleRecoveryRawFindingIds: new Set([
+          ...plan.staleRecoveryRawFindingIds,
+          pending.target.wire.rawFindingId,
+        ]),
         interpretationResults: withInterpretationResult(
           plan.interpretationResults,
           pending.viaInterpretationKey,
@@ -243,20 +314,23 @@ export function buildLadderCommitPlan(
         ),
       };
     }
-    const origin = pending.target.recoveryOrigin;
+    const origins = freshOrigins;
     return {
       ...plan,
       output: {
         ...plan.output,
         conflicts: [...plan.output.conflicts, {
-          findingIds: origin === undefined
+          findingIds: origins === undefined
             ? [pending.targetFindingId]
-            : [pending.targetFindingId, origin.provisionalFindingId],
+            : [
+                pending.targetFindingId,
+                ...origins.map((origin) => origin.provisionalFindingId),
+              ],
           rawFindingIds: [pending.target.wire.rawFindingId],
           description: `Ambiguous observation "${pending.target.wire.title}" relates to finding "${pending.targetFindingId}" but its identity could not be determined`,
         }],
       },
-      provisionalSpecs: origin === undefined
+      provisionalSpecs: origins === undefined
         ? [...plan.provisionalSpecs, provisionalSpecForRaw({
             wire: pending.target.wire,
             canonical: pending.target.canonical,
@@ -268,21 +342,29 @@ export function buildLadderCommitPlan(
         pending.viaInterpretationKey,
         'conflict_created',
       ),
-      recoveryPromotions: origin === undefined
+      recoveryPromotions: origins === undefined
         ? plan.recoveryPromotions
-        : new Set([...plan.recoveryPromotions, origin.provisionalFindingId]),
+        : new Set([
+            ...plan.recoveryPromotions,
+            ...origins.map((origin) => origin.provisionalFindingId),
+          ]),
     };
   }, withIndependent);
   const freshRawsById = new Map(freshLedger.rawFindings.map((raw) => [raw.rawFindingId, raw]));
   return ladder.pendingAppliedReattach.reduce<LadderCommitPlan>((plan, pending) => {
-    const origin = pending.target.recoveryOrigin;
-    if (origin !== undefined) {
-      const process = freshLedger.findings.find((finding) => finding.id === origin.provisionalFindingId);
-      if (process === undefined
-        || process.status !== 'open'
-        || process.provisional === undefined
-        || (process.revision ?? 1) !== origin.expectedProvisionalRevision) {
-        return plan;
+    const recoveryOrigins = pending.target.recoveryOrigins;
+    const origins = recoveryOrigins === undefined
+      ? undefined
+      : freshRecoveryOrigins(recoveryOrigins, freshLedger);
+    if (origins !== undefined) {
+      if (origins.length === 0) {
+        return {
+          ...plan,
+          staleRecoveryRawFindingIds: new Set([
+            ...plan.staleRecoveryRawFindingIds,
+            pending.target.wire.rawFindingId,
+          ]),
+        };
       }
       if (pending.applicationResult === 'conflict_created') {
         const conflicts = freshLedger.conflicts.filter((conflict) => (
@@ -292,10 +374,11 @@ export function buildLadderCommitPlan(
         return conflicts.length === 1
           ? {
               ...plan,
-              recoverySettlements: new Map([
-                ...plan.recoverySettlements,
-                [process.id, `active conflict "${conflicts[0]!.id}"`],
-              ]),
+              recoverySettlements: addRecoverySettlements(
+                plan.recoverySettlements,
+                origins,
+                `active conflict "${conflicts[0]!.id}"`,
+              ),
             }
           : plan;
       }
@@ -306,7 +389,7 @@ export function buildLadderCommitPlan(
       pending.target.wire.description,
     );
     const candidates = freshLedger.findings.filter((finding) => {
-      if (origin?.provisionalFindingId === finding.id) {
+      if (origins?.some((origin) => origin.provisionalFindingId === finding.id) === true) {
         return false;
       }
       if (finding.status !== 'open') {
@@ -330,13 +413,14 @@ export function buildLadderCommitPlan(
         })],
       };
     }
-    if (origin !== undefined) {
+    if (origins !== undefined) {
       return {
         ...plan,
-        recoverySettlements: new Map([
-          ...plan.recoverySettlements,
-          [origin.provisionalFindingId, candidates[0]!.id],
-        ]),
+        recoverySettlements: addRecoverySettlements(
+          plan.recoverySettlements,
+          origins,
+          candidates[0]!.id,
+        ),
       };
     }
     return {

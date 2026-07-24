@@ -24,7 +24,9 @@ vi.mock('../core/workflow/findings/manager-output-validation.js', async (importO
 const { validateFindingManagerOutput } = await import('../core/workflow/findings/manager-output-validation.js');
 const validateMock = vi.mocked(validateFindingManagerOutput);
 
-function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedgerEntry {
+function makeFinding(
+  overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+): FindingLedgerEntry {
   return {
     id: 'F-0001',
     status: 'open',
@@ -42,12 +44,12 @@ function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedger
 
 function makeLedger(findings: FindingLedgerEntry[]): FindingLedger {
   return {
-    version: 1,
     workflowName: 'peer-review',
     nextId: findings.length + 1,
     updatedAt: '2026-07-01T00:00:00.000Z',
     rawFindings: [],
     conflicts: [],
+    interpretations: [],
     findings,
   };
 }
@@ -116,11 +118,11 @@ function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): Findin
 function makeActiveConflictDuplicateScenario() {
   const observedAt = { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' };
   const previousLedger = makeLedger([
-    makeFinding(),
-    makeFinding({ id: 'F-0002', rawFindingIds: ['raw-old-2'] }),
+    makeFinding({ revision: 1 }),
+    makeFinding({ revision: 1, id: 'F-0002', rawFindingIds: ['raw-old-2'] }),
   ]);
   previousLedger.conflicts = [{
-    id: 'C-0001',
+    id: 'C-2BF240CC0BEC',
     status: 'active',
     findingIds: ['F-0002'],
     rawFindingIds: ['raw-conflict'],
@@ -207,7 +209,7 @@ describe('assembleCleanManagerDecision の mechanical フォールバック', ()
   });
 
   it('最終検証に落ちたら empty ではなく mechanical 出力へ縮退し、残余 raw を manager-output-discarded で保持する', () => {
-    const previousLedger = makeLedger([makeFinding()]);
+    const previousLedger = makeLedger([makeFinding({ revision: 1 })]);
     const cleanWire = [CONFIRMATION_RAW, ISSUE_RAW];
     const mechanical = classifyRawFindingsMechanically({ previousLedger, rawFindings: cleanWire });
     expect(mechanical.output.resolvedFindings.map((resolved) => resolved.findingId)).toEqual(['F-0001']);
@@ -245,7 +247,7 @@ describe('assembleCleanManagerDecision の mechanical フォールバック', ()
   });
 
   it('mechanical 出力自体が最終検証に落ちる場合は fail fast（engine バグ）', () => {
-    const previousLedger = makeLedger([makeFinding()]);
+    const previousLedger = makeLedger([makeFinding({ revision: 1 })]);
     const cleanWire = [CONFIRMATION_RAW];
     const mechanical = classifyRawFindingsMechanically({ previousLedger, rawFindings: cleanWire });
 

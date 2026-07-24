@@ -221,7 +221,6 @@ describe('inferSeverity', () => {
 describe('buildReviewFindingEventsFromLedger', () => {
   it('should build review_finding events from a Finding Contract ledger', () => {
     const ledger: FindingLedger = {
-      version: 1,
       workflowName: 'peer-review',
       nextId: 2,
       updatedAt: '2026-06-13T01:00:00.000Z',
@@ -239,11 +238,13 @@ describe('buildReviewFindingEventsFromLedger', () => {
         },
       ],
       conflicts: [],
+      interpretations: [],
       findings: [
         {
           id: 'F-0001',
           status: 'open',
           lifecycle: 'new',
+          revision: 1,
           severity: 'high',
           title: 'Token is logged',
           location: 'src/security.ts:12',
@@ -283,17 +284,18 @@ describe('buildReviewFindingEventsFromLedger', () => {
 
   it('should not copy ledger title text into analytics rule IDs', () => {
     const ledger: FindingLedger = {
-      version: 1,
       workflowName: 'peer-review',
       nextId: 2,
       updatedAt: '2026-06-13T01:00:00.000Z',
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
       findings: [
         {
           id: 'F-0001',
           status: 'open',
           lifecycle: 'new',
+          revision: 1,
           severity: 'high',
           title: 'api_key=sk-secret123456 should not be logged',
           reviewers: ['security-reviewer'],

@@ -37,7 +37,6 @@ import type {
   ReviewerRawFindingCandidate,
 } from './types.js';
 import { normalizeFindingText, parseFindingLocation, parseFindingLocationRange } from './location.js';
-import { RAW_LADDER_POLICY_VERSION } from './raw-finding-limits.js';
 
 // ---------------------------------------------------------------------------
 // runtime brand（factory を通らない object を downstream で拒否するための登録簿）
@@ -144,7 +143,7 @@ export function computeProvisionalStableKey(input: {
   lineageKey: string;
   provisionalKind: string;
 }): string {
-  return sha256Of('provisional-stable-key', input.reviewerStableKey, input.lineageKey, input.provisionalKind, String(RAW_LADDER_POLICY_VERSION));
+  return sha256Of('provisional-stable-key', input.reviewerStableKey, input.lineageKey, input.provisionalKind);
 }
 
 /**
@@ -159,7 +158,7 @@ export function computeReviewerAnomalyStableKey(input: {
   lineageKey: string;
   anomalyKind: string;
 }): string {
-  return sha256Of('reviewer-anomaly-stable-key', input.reviewerStableKey, input.lineageKey, input.anomalyKind, String(RAW_LADDER_POLICY_VERSION));
+  return sha256Of('reviewer-anomaly-stable-key', input.reviewerStableKey, input.lineageKey, input.anomalyKind);
 }
 
 /** reviewer 全量超過の単一 blocker 用 overflow stableKey。 */
@@ -172,7 +171,7 @@ export function computeBaseInterpretationKey(input: {
   lineageKey: string;
   candidateEvidenceHash: string;
 }): string {
-  return sha256Of('interpretation-base-key', input.reviewerStableKey, input.lineageKey, input.candidateEvidenceHash, String(RAW_LADDER_POLICY_VERSION));
+  return sha256Of('interpretation-base-key', input.reviewerStableKey, input.lineageKey, input.candidateEvidenceHash);
 }
 
 export function computeInterpretationAttemptKey(
@@ -775,7 +774,7 @@ export function canonicalizeReviewerRawFinding(
 // ---------------------------------------------------------------------------
 
 /**
- * canonical を ledger v1 の RawFinding wire 形へ落とす。ambiguous で必須文字列が
+ * canonical を ledger の RawFinding wire 形へ落とす。ambiguous で必須文字列が
  * 欠損している場合も schema-valid な監査値で埋める（「不明な raw を黙って消すな」
  * — 監査経路は必ず残す）。relation は canonical の値をそのまま使う。
  * relation='new' に正規化された ambiguous の元 targetFindingId 主張は

@@ -2,7 +2,7 @@ import type { AgentWorkflowStep } from '../../models/types.js';
 import { RAW_DECISION_KINDS } from './types.js';
 import { RAW_ADJUDICATION_RECOVERY_LIMITS } from './raw-finding-limits.js';
 
-export const RAW_ADJUDICATION_SCHEMA_REF = 'takt.findings.raw-adjudication.v1';
+export const RAW_ADJUDICATION_SCHEMA_REF = 'takt.findings.raw-adjudication';
 
 const disabledDecisionItemsSchema = {
   type: 'object',

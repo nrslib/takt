@@ -4,15 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { reserveFindingConflictAdjudication } from '../core/workflow/findings/adjudication-reservation.js';
-import { formatConflictId } from '../core/workflow/findings/conflict-identity.js';
+import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
+import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import type { FindingLedger, FindingManagerOutput, RawFinding } from '../core/workflow/findings/types.js';
 
 const WORKFLOW_NAME = 'peer-review';
 const LEDGER_PATH = '.takt/findings/peer-review.json';
 const RAW_FINDINGS_PATH = '.takt/findings/raw';
-const LEGACY_CONFLICT_ID = 'C-1CA24A220BC7';
 
 function makeRawFinding(rawFindingId: string): RawFinding {
   return {
@@ -44,6 +44,7 @@ function makeManagerOutput(rawFindingId: string): FindingManagerOutput {
     disputeNotes: [],
     invalidatedFindings: [],
     duplicateFindings: [],
+    dismissedFindings: [],
   };
 }
 
@@ -64,7 +65,6 @@ function makeLedger(): FindingLedger {
   });
 
   return {
-    version: 1,
     workflowName: WORKFLOW_NAME,
     nextId: 2,
     updatedAt: newerObservation.timestamp,
@@ -72,51 +72,76 @@ function makeLedger(): FindingLedger {
       id: 'F-0001',
       status: 'open',
       lifecycle: 'new',
+      revision: 1,
       severity: 'high',
       title: 'Conflicting review conclusion',
       location: 'src/example.ts:1',
       reviewers: ['coding-review'],
-      rawFindingIds: ['raw-legacy'],
+      rawFindingIds: ['raw-previous'],
       firstSeen: olderObservation,
       lastSeen: newerObservation,
     }],
     rawFindings: [
-      makeRawFinding('raw-legacy'),
+      makeRawFinding('raw-previous'),
       makeRawFinding('raw-generated'),
     ],
+    interpretations: [],
     conflicts: [
       {
         id: generatedConflictId,
         status: 'active',
         findingIds: ['F-0001'],
-        rawFindingIds: ['raw-generated'],
-        description: 'Generated conflict.',
-        firstSeen: newerObservation,
+        rawFindingIds: ['raw-previous', 'raw-generated'],
+        description: 'Existing conflict.',
+        firstSeen: olderObservation,
         lastSeen: newerObservation,
         adjudicationAttempts: [{
-          evidenceHash: 'generated-pending-evidence',
-          reservationToken: 'generated-reservation',
+          evidenceHash: 'older-pending-evidence',
+          reservationToken: 'older-reservation',
+          startedAt: olderObservation,
+          originStep: 'reviewers',
+        }, {
+          evidenceHash: 'newer-pending-evidence',
+          reservationToken: 'newer-reservation',
           startedAt: newerObservation,
           originStep: 'final-gate',
         }],
       },
-      {
-        id: LEGACY_CONFLICT_ID,
-        status: 'active',
-        findingIds: ['F-0001'],
-        rawFindingIds: ['raw-legacy'],
-        description: 'Legacy conflict.',
-        firstSeen: olderObservation,
-        lastSeen: olderObservation,
-        adjudicationAttempts: [{
-          evidenceHash: 'legacy-pending-evidence',
-          reservationToken: 'legacy-reservation',
-          startedAt: olderObservation,
-          originStep: 'reviewers',
-        }],
-      },
     ],
   };
+}
+
+function reconcileCurrentRaw(): FindingLedger {
+  const rawFinding = makeRawFinding('raw-current');
+  return reconcileFindingLedger({
+    previousLedger: makeLedger(),
+    rawFindings: [rawFinding],
+    managerOutput: makeManagerOutput(rawFinding.rawFindingId),
+    provisionalFindings: [],
+    rawFindingDispositions: [],
+    rawProvenanceByRawFindingId: new Map([[
+      rawFinding.rawFindingId,
+      {
+        reviewerStableKey: computeReviewerStableKey({
+          workflowName: WORKFLOW_NAME,
+          callNamespace: '',
+          parentStepName: 'reviewers',
+          reviewerPersonaKey: rawFinding.reviewer,
+        }),
+        lineageKey: computeLineageKey({
+          location: rawFinding.location,
+          title: rawFinding.title,
+          familyTag: rawFinding.familyTag,
+        }),
+      },
+    ]]),
+    context: {
+      workflowName: WORKFLOW_NAME,
+      stepName: 'reviewers',
+      runId: 'run-2',
+      timestamp: '2026-06-14T00:00:00.000Z',
+    },
+  });
 }
 
 describe('reconciled conflict history reservation', () => {
@@ -149,20 +174,10 @@ describe('reconciled conflict history reservation', () => {
       ledgerPath: LEDGER_PATH,
       rawFindingsPath: RAW_FINDINGS_PATH,
     });
-    const reconciled = reconcileFindingLedger({
-      previousLedger: makeLedger(),
-      rawFindings: [makeRawFinding('raw-current')],
-      managerOutput: makeManagerOutput('raw-current'),
-      context: {
-        workflowName: WORKFLOW_NAME,
-        stepName: 'reviewers',
-        runId: 'run-2',
-        timestamp: '2026-06-14T00:00:00.000Z',
-      },
-    });
+    const reconciled = reconcileCurrentRaw();
     expect(reconciled.conflicts[0]?.adjudicationAttempts?.map((attempt) => attempt.evidenceHash)).toEqual([
-      'legacy-pending-evidence',
-      'generated-pending-evidence',
+      'older-pending-evidence',
+      'newer-pending-evidence',
     ]);
     store.saveLedger(reconciled);
     expect(store.loadLedger().conflicts[0]?.adjudicationAttempts?.map((attempt) => attempt.startedAt.timestamp)).toEqual([
@@ -172,7 +187,7 @@ describe('reconciled conflict history reservation', () => {
 
     const reservation = await reserveFindingConflictAdjudication({
       ledgerStore: store,
-      conflictId: LEGACY_CONFLICT_ID,
+      conflictId: reconciled.conflicts[0]!.id,
       requestedOriginStep: undefined,
       runId: 'run-2',
       observation: {
@@ -203,17 +218,7 @@ describe('reconciled conflict history reservation', () => {
       ledgerPath: LEDGER_PATH,
       rawFindingsPath: RAW_FINDINGS_PATH,
     });
-    const reconciled = reconcileFindingLedger({
-      previousLedger: makeLedger(),
-      rawFindings: [makeRawFinding('raw-current')],
-      managerOutput: makeManagerOutput('raw-current'),
-      context: {
-        workflowName: WORKFLOW_NAME,
-        stepName: 'reviewers',
-        runId: 'run-2',
-        timestamp: '2026-06-14T00:00:00.000Z',
-      },
-    });
+    const reconciled = reconcileCurrentRaw();
     store.saveLedger(reconciled);
     const ledger = structuredClone(reconciled);
     ledger.conflicts[0]!.adjudicationAttempts![0]!.startedAt.timestamp = '2026-06-12T22:15:00.0001Z';
@@ -222,7 +227,7 @@ describe('reconciled conflict history reservation', () => {
 
     const reservation = await reserveFindingConflictAdjudication({
       ledgerStore: store,
-      conflictId: LEGACY_CONFLICT_ID,
+      conflictId: reconciled.conflicts[0]!.id,
       requestedOriginStep: undefined,
       runId: 'run-2',
       observation: {

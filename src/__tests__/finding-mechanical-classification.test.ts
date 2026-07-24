@@ -25,7 +25,9 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
   };
 }
 
-function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedgerEntry {
+function makeFinding(
+  overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+): FindingLedgerEntry {
   return {
     id: 'F-0001',
     status: 'open',
@@ -43,13 +45,13 @@ function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedger
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   return {
-    version: 1,
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
     rawFindings: [makeRawFinding({ rawFindingId: 'raw-existing', location: 'src/a.ts:10' })],
     conflicts: [],
-    findings: [makeFinding()],
+    interpretations: [],
+    findings: [makeFinding({ revision: 1 })],
     ...overrides,
   };
 }
@@ -87,7 +89,7 @@ describe('classifyRawFindingsMechanically resolution confirmations (case 3)', ()
   });
 
   it('Given a confirmation targeting an already resolved finding When classified Then it goes to residual', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ status: 'resolved' })] });
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, status: 'resolved' })] });
     const raw = makeRawFinding({ rawFindingId: 'raw-confirm', relation: 'resolution_confirmation', targetFindingId: 'F-0001' });
     const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
     expect(result.residualRawFindings).toEqual([raw]);
@@ -114,7 +116,7 @@ describe('classifyRawFindingsMechanically explicit reference (case 2)', () => {
   });
 
   it('Given relation "persists" with targetFindingId pointing at a non-open finding When classified Then it goes to residual', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ status: 'resolved' })] });
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, status: 'resolved' })] });
     const raw = makeRawFinding({ rawFindingId: 'raw-persist', relation: 'persists', targetFindingId: 'F-0001' });
     const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
     expect(result.output.matches).toEqual([]);
@@ -130,7 +132,7 @@ describe('classifyRawFindingsMechanically explicit reference (case 2)', () => {
   it('Given relation "reopened" with targetFindingId pointing at a resolved finding When classified Then it still goes to residual (reopen always needs manager judgment)', () => {
     // reopen はより重い状態遷移のため、対象状態が「正しく」resolved/waived で
     // あっても機械では確定させない（保守的な原則）。
-    const ledger = makeLedger({ findings: [makeFinding({ status: 'resolved', lifecycle: 'resolved' })] });
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })] });
     const raw = makeRawFinding({ rawFindingId: 'raw-reopen', relation: 'reopened', targetFindingId: 'F-0001' });
     const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
     expect(result.residualRawFindings).toEqual([raw]);
@@ -191,7 +193,7 @@ describe('classifyRawFindingsMechanically exact duplicate content (case 1)', () 
 
   it('Given a raw whose content matches a RESOLVED finding\'s raw (not open) When classified Then it goes to residual as a reopen candidate', () => {
     const existingRaw = makeRawFinding({ rawFindingId: 'raw-existing', location: 'src/a.ts:10' });
-    const ledger = makeLedger({ rawFindings: [existingRaw], findings: [makeFinding({ status: 'resolved' })] });
+    const ledger = makeLedger({ rawFindings: [existingRaw], findings: [makeFinding({ revision: 1, status: 'resolved' })] });
     const raw = makeRawFinding({ rawFindingId: 'raw-issue', relation: 'new', location: 'src/a.ts:10' });
     const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
     expect(result.output.matches).toEqual([]);

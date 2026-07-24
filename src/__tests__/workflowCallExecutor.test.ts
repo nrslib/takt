@@ -41,23 +41,23 @@ function createFakeLedgerStore(): FindingLedgerStore {
   return {
     workflowName: 'fake',
     loadLedger: () => ({
-      version: 1,
       workflowName: 'fake',
       nextId: 1,
       updatedAt: new Date().toISOString(),
       findings: [],
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
     }),
     saveLedger: () => {},
     updateLedger: (mutator) => Promise.resolve(mutator({
-      version: 1,
       workflowName: 'fake',
       nextId: 1,
       updatedAt: new Date().toISOString(),
       findings: [],
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
     })),
     createRunCopy: () => '/tmp/fake-ledger-copy.json',
     saveRawFindings: () => '/tmp/fake-raw-findings.json',
@@ -226,13 +226,13 @@ describe('WorkflowCallExecutor', () => {
     );
     expect(childEngine.on).toHaveBeenCalledWith('findings:ledger', expect.any(Function));
     const ledger: FindingLedger = {
-      version: 1,
       workflowName: 'peer-review',
       nextId: 1,
       updatedAt: '2026-06-13T02:00:00.000Z',
       findings: [],
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
     };
     listeners.get('findings:ledger')?.(ledger);
     expect(emit).toHaveBeenCalledWith('findings:ledger', ledger);

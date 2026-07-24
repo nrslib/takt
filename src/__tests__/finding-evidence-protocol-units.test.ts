@@ -27,7 +27,9 @@ import {
 } from '../core/workflow/findings/review-integrity.js';
 import type { FindingLedger, FindingLedgerEntry, ReviewerAnomalyEntry } from '../core/workflow/findings/types.js';
 
-function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedgerEntry {
+function makeFinding(
+  overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+): FindingLedgerEntry {
   return {
     id: 'F-0001',
     status: 'open',
@@ -40,20 +42,19 @@ function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedger
     rawFindingIds: ['raw-existing'],
     firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
     lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
-    revision: 1,
     ...overrides,
   };
 }
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   return {
-    version: 1,
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
     findings: [],
     rawFindings: [],
     conflicts: [],
+    interpretations: [],
     ...overrides,
   };
 }
@@ -383,7 +384,7 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
   });
 
   it('ledger.findings には一切触れない（別配列への追記適用のみ）', () => {
-    const preExisting = makeFinding();
+    const preExisting = makeFinding({ revision: 1 });
     const before = makeLedger({ findings: [preExisting] });
     const after = applyReviewerAnomalySpecsToLedger(before, [makeSpec()], context);
     expect(after.findings).toEqual([preExisting]);
@@ -397,7 +398,7 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
 
   it('linkPromotedReviewerAnomalies: 同じ lineageKey を持つ product finding が後で見つかると promotedFindingId を張る（レコードは削除しない）', () => {
     const withAnomaly = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec({ lineageKey: 'lk-shared' })], context);
-    const finding = makeFinding({ id: 'F-0042', rawFindingIds: ['raw-verified'] });
+    const finding = makeFinding({ revision: 1, id: 'F-0042', rawFindingIds: ['raw-verified'] });
     const reconciled: FindingLedger = { ...withAnomaly, findings: [finding] };
 
     const linked = linkPromotedReviewerAnomalies(reconciled, [
@@ -422,7 +423,7 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
 
   it('linkPromotedReviewerAnomalies: 既に昇格済みの anomaly は再上書きしない（最初に昇格した finding id を保持する）', () => {
     const withAnomaly = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec({ lineageKey: 'lk-shared' })], context);
-    const firstFinding = makeFinding({ id: 'F-0001', rawFindingIds: ['raw-first'] });
+    const firstFinding = makeFinding({ revision: 1, id: 'F-0001', rawFindingIds: ['raw-first'] });
     const alreadyPromoted = linkPromotedReviewerAnomalies(
       { ...withAnomaly, findings: [firstFinding] },
       [{ lineageKey: 'lk-shared', rawFindingId: 'raw-first' }],
@@ -431,7 +432,7 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
 
     // 別ラウンドで同じ lineageKey が別 finding id に紐づく候補が来ても、
     // 既に昇格済みなら上書きしない。
-    const secondFinding = makeFinding({ id: 'F-0002', rawFindingIds: ['raw-second'] });
+    const secondFinding = makeFinding({ revision: 1, id: 'F-0002', rawFindingIds: ['raw-second'] });
     const reattempted = linkPromotedReviewerAnomalies(
       { ...alreadyPromoted, findings: [firstFinding, secondFinding] },
       [{ lineageKey: 'lk-shared', rawFindingId: 'raw-second' }],
@@ -440,7 +441,7 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
   });
 
   it('linkPromotedReviewerAnomalies: reviewerAnomalies が無い/候補が空なら ledger をそのまま返す（no-op）', () => {
-    const ledger = makeLedger({ findings: [makeFinding()] });
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1 })] });
     expect(linkPromotedReviewerAnomalies(ledger, [{ lineageKey: 'lk-x', rawFindingId: 'raw-existing' }])).toBe(ledger);
 
     const withAnomaly = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec()], context);

@@ -1,5 +1,5 @@
 /**
- * レビュア1回突き返し（v2 梯子設計 §3・実装単位4）: relation/target/kind の
+ * レビュア1回突き返し: relation/target/kind の
  * 意味矛盾がある raw に同一セッションで1回だけ明確化を求める。訂正契約
  * （raw 集合・本文不変）は決定的に検証し、失敗しても raw は drop されない
  * （ambiguous のまま manager 解釈 / provisional へ進む）。taint は engine 発行の
@@ -28,7 +28,9 @@ import type {
 const { executeAgent } = await import('../agents/agent-usecases.js');
 const executeAgentMock = vi.mocked(executeAgent);
 
-function makeOpenFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedgerEntry {
+function makeOpenFinding(
+  overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+): FindingLedgerEntry {
   return {
     id: 'F-0001',
     status: 'open',
@@ -74,13 +76,13 @@ function makeRawItem(overrides: Partial<WireRaw> = {}): WireRaw {
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   return {
-    version: 1,
     workflowName: 'coherence-test',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
-    findings: [makeOpenFinding()],
+    findings: [makeOpenFinding({ revision: 1 })],
     rawFindings: [],
     conflicts: [],
+    interpretations: [],
     ...overrides,
   };
 }
@@ -101,9 +103,9 @@ describe('detectClarifiableRawMismatches', () => {
   it('整合した persists/reopened/resolution_confirmation は対象外', () => {
     const ledger = makeLedger({
       findings: [
-        makeOpenFinding(),
-        makeOpenFinding({ id: 'F-0002', title: 'Another one', location: 'src/two.ts:1' }),
-        makeOpenFinding({ id: 'F-0003', status: 'resolved', lifecycle: 'resolved', title: 'Fixed one', location: 'src/three.ts:1' }),
+        makeOpenFinding({ revision: 1 }),
+        makeOpenFinding({ revision: 1, id: 'F-0002', title: 'Another one', location: 'src/two.ts:1' }),
+        makeOpenFinding({ revision: 1, id: 'F-0003', status: 'resolved', lifecycle: 'resolved', title: 'Fixed one', location: 'src/three.ts:1' }),
       ],
     });
     const raws = [
@@ -124,7 +126,7 @@ describe('detectClarifiableRawMismatches', () => {
     'resolution_confirmation は $status target の ambiguity を監査用に保持しつつ突き返さない',
     ({ status, lifecycle }) => {
       const ledger = makeLedger({
-        findings: [makeOpenFinding({ status, lifecycle })],
+        findings: [makeOpenFinding({ revision: 1, status, lifecycle })],
       });
       const raw = makeRawItem({
         relation: 'resolution_confirmation',
@@ -155,7 +157,7 @@ describe('detectClarifiableRawMismatches', () => {
 
   it('persists が未知 / 非 open target を指す矛盾を検出する', () => {
     const ledger = makeLedger({
-      findings: [makeOpenFinding({ id: 'F-0009', status: 'resolved', lifecycle: 'resolved', title: 'Old', location: 'src/x.ts:1' })],
+      findings: [makeOpenFinding({ revision: 1, id: 'F-0009', status: 'resolved', lifecycle: 'resolved', title: 'Old', location: 'src/x.ts:1' })],
     });
     const mismatches = detectClarifiableRawMismatches([
       makeRawItem({ rawFindingId: 'raw-unknown', relation: 'persists', targetFindingId: 'F-9999', title: 'T1', location: 'src/a.ts:1' }),
@@ -180,7 +182,7 @@ describe('detectClarifiableRawMismatches', () => {
   });
 
   it('open でない finding とは new 衝突しない', () => {
-    const ledger = makeLedger({ findings: [makeOpenFinding({ status: 'resolved', lifecycle: 'resolved' })] });
+    const ledger = makeLedger({ findings: [makeOpenFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })] });
     expect(detectClarifiableRawMismatches([makeRawItem()], ledger)).toHaveLength(0);
   });
 });
@@ -300,7 +302,7 @@ describe('clarifyAmbiguousRawRelationsOnce', () => {
       persona: 'coding-reviewer',
       response,
       ledger: makeLedger({
-        findings: [makeOpenFinding({ status: 'resolved', lifecycle: 'resolved' })],
+        findings: [makeOpenFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })],
       }),
       agentOptions: { provider: 'claude' },
       normalize: identityNormalize,

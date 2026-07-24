@@ -1,12 +1,12 @@
 /**
  * Shared parsing for the "path:line" shape used by RawFinding.location and
  * FindingLedgerEntry.location (see finding_contract_instruction.md: "file:line
- * evidence"). The ledger keeps `location` as a single free-form string for
- * backward compatibility (existing v1 ledgers parse unchanged); this module is
- * the single place that decomposes it into path/line for callers that need to
- * reason about identity (decision-assembly.ts) or admission (admission-validation.ts)
- * without treating the line number as part of identity. The Finding Contract
- * treats familyTag and line number as hints rather than identity fields.
+ * evidence"). The ledger keeps `location` as a single free-form string; this
+ * module is the single place that decomposes it into path/line for callers that
+ * need to reason about identity (decision-assembly.ts) or admission
+ * (admission-validation.ts) without treating the line number as part of
+ * identity. The Finding Contract treats familyTag and line number as hints
+ * rather than identity fields.
  */
 
 export interface ParsedFindingLocation {

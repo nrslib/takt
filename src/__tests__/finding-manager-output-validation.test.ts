@@ -9,17 +9,18 @@ import type {
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   return {
-    version: 1,
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
     rawFindings: [makeRawFinding({ rawFindingId: 'raw-existing' })],
     conflicts: [],
+    interpretations: [],
     findings: [
       {
         id: 'F-0001',
         status: 'open',
         lifecycle: 'new',
+        revision: 1,
         severity: 'high',
         title: 'Existing issue',
         reviewers: ['architecture-review'],
@@ -58,6 +59,7 @@ function makeManagerOutput(overrides: Partial<FindingManagerOutput> = {}): Findi
     disputeNotes: [],
     invalidatedFindings: [],
     duplicateFindings: [],
+    dismissedFindings: [],
     ...overrides,
   };
 }
@@ -431,6 +433,7 @@ describe('validateFindingManagerOutput', () => {
             id: 'F-0001',
             status: 'open',
             lifecycle: 'new',
+            revision: 1,
             severity: 'high',
             title: 'Existing issue',
             reviewers: ['architecture-review'],
@@ -442,6 +445,7 @@ describe('validateFindingManagerOutput', () => {
             id: 'F-0002',
             status: 'open',
             lifecycle: 'new',
+            revision: 1,
             severity: 'medium',
             title: 'Second issue',
             reviewers: ['architecture-review'],
@@ -806,6 +810,7 @@ describe('validateFindingManagerOutput', () => {
             id: 'F-0001',
             status: 'resolved',
             lifecycle: 'resolved',
+            revision: 1,
             severity: 'high',
             title: 'Resolved issue',
             reviewers: ['architecture-review'],

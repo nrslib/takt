@@ -12,9 +12,10 @@ import { chmodSync, readFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, w
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { assembleManagerOutput } from '../core/workflow/findings/decision-assembly.js';
 import { classifyRawFindingsMechanically } from '../core/workflow/findings/mechanical-classification.js';
-import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
+import { reconcileFindingLedger as reconcileFindingLedgerStrict } from '../core/workflow/findings/reconciler.js';
 import { validateLocationAdmission } from '../core/workflow/findings/admission-validation.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
 import { parseFindingLedger, parseRawFindings } from '../core/models/finding-schemas.js';
@@ -23,7 +24,10 @@ import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type { FindingLedger, FindingLedgerEntry, FindingLedgerStore, FindingManagerDecisions, RawFinding } from '../core/workflow/findings/types.js';
 import { createFindingAdjudicationReservation } from './helpers/finding-adjudication-reservation.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import { createFindingManagerPublicationDouble } from './helpers/finding-manager-publication.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
+import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
+import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 
 function buildFindingsRuleContext(ledger: FindingLedger) {
   return buildFindingsRuleContextWithCwd(ledger, process.cwd());
@@ -50,7 +54,9 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
   };
 }
 
-function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedgerEntry {
+function makeFinding(
+  overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+): FindingLedgerEntry {
   return {
     id: 'F-0001',
     status: 'open',
@@ -68,15 +74,47 @@ function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedger
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   return {
-    version: 1,
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
     rawFindings: [makeRawFinding({ rawFindingId: 'raw-existing' })],
     conflicts: [],
-    findings: [makeFinding()],
+    interpretations: [],
+    findings: [makeFinding({ revision: 1 })],
     ...overrides,
   };
+}
+
+type TestReconcileInput = Omit<
+  Parameters<typeof reconcileFindingLedgerStrict>[0],
+  'provisionalFindings' | 'rawFindingDispositions' | 'rawProvenanceByRawFindingId'
+>;
+
+function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
+  return reconcileFindingLedgerStrict({
+    ...input,
+    provisionalFindings: [],
+    rawFindingDispositions: [],
+    rawProvenanceByRawFindingId: new Map(input.rawFindings.map((rawFinding) => [
+      rawFinding.rawFindingId,
+      {
+        reviewerStableKey: computeReviewerStableKey({
+          workflowName: input.context.workflowName,
+          callNamespace: '',
+          parentStepName: input.context.stepName,
+          reviewerPersonaKey: rawFinding.reviewer,
+        }),
+        lineageKey: computeLineageKey({
+          ...(rawFinding.targetFindingId !== undefined
+            ? { targetFindingId: rawFinding.targetFindingId }
+            : {}),
+          ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
+          title: rawFinding.title,
+          familyTag: rawFinding.familyTag,
+        }),
+      },
+    ])),
+  });
 }
 
 function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): FindingManagerDecisions {
@@ -93,28 +131,28 @@ function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): Findin
 
 describe('item 3/6: duplicateDecisions merges duplicates into a canonical finding', () => {
   it('Given F-0011/F-0017/F-0018-style duplicates When the manager issues duplicateDecisions Then the canonical absorbs raw/reviewer evidence and duplicates become superseded, reducing the open count', () => {
-    const canonical = makeFinding({
+    const canonical = makeFinding({ revision: 1,
       id: 'F-0011',
       title: 'Distributed lock cleanup gap',
       location: 'src/lock/manager.ts:80',
       reviewers: ['robustness-review'],
       rawFindingIds: ['raw-f11'],
     });
-    const dupA = makeFinding({
+    const dupA = makeFinding({ revision: 1,
       id: 'F-0017',
       title: 'Lock handle not released under contention',
       location: 'src/lock/manager.ts:140',
       reviewers: ['concurrency-review'],
       rawFindingIds: ['raw-f17'],
     });
-    const dupB = makeFinding({
+    const dupB = makeFinding({ revision: 1,
       id: 'F-0018',
       title: 'Distributed lock leak on cleanup failure',
       location: 'src/lock/cleanup.ts:12',
       reviewers: ['reliability-review'],
       rawFindingIds: ['raw-f18'],
     });
-    const otherOpen = makeFinding({ id: 'F-0002', title: 'Unrelated issue', location: 'src/other.ts:1', rawFindingIds: [] });
+    const otherOpen = makeFinding({ revision: 1, id: 'F-0002', title: 'Unrelated issue', location: 'src/other.ts:1', rawFindingIds: [] });
     const ledger = makeLedger({
       nextId: 19,
       rawFindings: [
@@ -170,7 +208,7 @@ describe('item 3/6: duplicateDecisions merges duplicates into a canonical findin
   });
 
   it('Given a duplicateDecisions entry with an unknown duplicate finding id When assembled Then it is rejected and nothing is applied', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ id: 'F-0011' })] });
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, id: 'F-0011' })] });
     const result = assembleManagerOutput({
       previousLedger: ledger,
       residualRawFindings: [],
@@ -187,7 +225,7 @@ describe('item 3/6: duplicateDecisions merges duplicates into a canonical findin
   // （transitionedFindingIds）に載せて不採用にする。
   it('Given a duplicateDecisions canonical that is also waived in the same output When assembled Then the waive is rejected', () => {
     const ledger = makeLedger({
-      findings: [makeFinding({ id: 'F-0001' }), makeFinding({ id: 'F-0002', location: 'src/b.ts:1' })],
+      findings: [makeFinding({ revision: 1, id: 'F-0001' }), makeFinding({ revision: 1, id: 'F-0002', location: 'src/b.ts:1' })],
     });
     const claim = '## Disputed Findings\n- findingId: F-0001\n  reason: frozen contract\n  evidence: src/a.ts:10';
     const result = assembleManagerOutput({
@@ -212,7 +250,7 @@ describe('item 3/6: duplicateDecisions merges duplicates into a canonical findin
 
   it('Given a duplicateDecisions entry where the canonical is also a duplicate of another entry When assembled Then the cyclic entry is rejected', () => {
     const ledger = makeLedger({
-      findings: [makeFinding({ id: 'F-0001' }), makeFinding({ id: 'F-0002', location: 'src/b.ts:1' }), makeFinding({ id: 'F-0003', location: 'src/c.ts:1' })],
+      findings: [makeFinding({ revision: 1, id: 'F-0001' }), makeFinding({ revision: 1, id: 'F-0002', location: 'src/b.ts:1' }), makeFinding({ revision: 1, id: 'F-0003', location: 'src/c.ts:1' })],
     });
     const result = assembleManagerOutput({
       previousLedger: ledger,
@@ -348,10 +386,11 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     const savedLedgers: FindingLedger[] = [];
     const savedValidationReports: unknown[] = [];
     const ledgerStore: FindingLedgerStore = {
+      ledgerIdentity: '/test/finding-convergence/ledger.json',
       workflowName: 'peer-review',
       loadLedger: () => ledger,
       saveLedger: (next) => { savedLedgers.push(next); },
-      // v2 では WAL（beginInterpretations 等）が保存を複数回行うため、double も
+      // WAL（beginInterpretations 等）が保存を複数回行うため、double も
       // 状態を持つ（mutator の結果を次回の読み込みへ引き継ぐ）。
       updateLedger: (mutator) => {
         const mutation = mutator(ledger);
@@ -366,6 +405,10 @@ describe('item 1/4: raw admission validation and invalidate', () => {
         savedValidationReports.push(report);
         return join(projectDir, 'manager-report.json');
       },
+      ...createFindingManagerPublicationDouble((report) => {
+        savedValidationReports.push(report);
+        return join(projectDir, `findings-manager-validation.${report.stepName}.json`);
+      }),
     };
     const optionsBuilder = {
       buildAgentOptions: () => ({}),
@@ -446,7 +489,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
   });
 
   it('Given an existing critical open finding whose stored location does not exist When the manager invalidates it from the engine-offered candidate list Then it becomes invalidated and drops out of the blocking open set', async () => {
-    const criticalFinding = makeFinding({
+    const criticalFinding = makeFinding({ revision: 1,
       id: 'F-0012',
       severity: 'critical',
       title: 'Hallucinated critical finding',
@@ -494,7 +537,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
   // （並列子の生成物や fix ステップの成果物）とき、stale な invalidate を
   // そのまま適用せず不採用として検証レポートに残す。
   it('Given the invalidated location becomes valid between the manager judgment and the save When run Then the stale invalidate is rejected and the finding stays open', async () => {
-    const candidateFinding = makeFinding({
+    const candidateFinding = makeFinding({ revision: 1,
       id: 'F-0012',
       title: 'Location appears later',
       location: 'src/appears-later.ts:2',
@@ -546,7 +589,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
   it('Given the manager tries to invalidate a finding NOT in the engine-offered candidate list When assembled Then it is rejected (LLM claim alone is not enough)', () => {
     // 対象 finding の location は実在する（=候補集合に含まれない）ため、
     // manager が invalidate を主張しても採用されない。
-    const validFinding = makeFinding({ id: 'F-0001', location: 'src/a.ts:10' });
+    const validFinding = makeFinding({ revision: 1, id: 'F-0001', location: 'src/a.ts:10' });
     const ledger = makeLedger({ findings: [validFinding] });
     const result = assembleManagerOutput({
       previousLedger: ledger,
@@ -563,7 +606,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
   });
 
   it('Given a critical finding invalidate decision within the candidate set When assembled and reconciled Then critical severity does not block invalidation (unlike waive)', () => {
-    const criticalFinding = makeFinding({ id: 'F-0012', severity: 'critical' });
+    const criticalFinding = makeFinding({ revision: 1, id: 'F-0012', severity: 'critical' });
     const ledger = makeLedger({ nextId: 13, findings: [criticalFinding] });
     const assembly = assembleManagerOutput({
       previousLedger: ledger,
@@ -592,7 +635,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     // 対象 F-0001 を resolved にして、persists の機械分類（open target 前提）に
     // 掛からず manager 送りになるようにする。
     const ledger = makeLedger({
-      findings: [makeFinding({ status: 'resolved', lifecycle: 'resolved', location: 'src/real.ts:2' })],
+      findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved', location: 'src/real.ts:2' })],
     });
     const harness = makeHarness(ledger);
 
@@ -635,7 +678,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     });
 
     expect(result.status).toBe('updated');
-    // v2: 対象が open でない persists は ambiguous（persists-target-not-open）と
+    // 対象が open でない persists は ambiguous（persists-target-not-open）と
     // して解釈フェーズへ進む。decisions manager は呼ばれない（clean residual 0）。
     // この mock は decisions 形しか返さないため解釈 parse に失敗し、raw は
     // provisional として着地する（強制 new 化も drop もされない）。
@@ -706,8 +749,8 @@ describe('B5: invalidated / superseded audit visibility', () => {
     return makeLedger({
       nextId: 4,
       findings: [
-        makeFinding({ id: 'F-0001' }),
-        makeFinding({
+        makeFinding({ revision: 1, id: 'F-0001' }),
+        makeFinding({ revision: 1,
           id: 'F-0002',
           status: 'invalidated',
           lifecycle: 'invalidated',
@@ -717,7 +760,7 @@ describe('B5: invalidated / superseded audit visibility', () => {
           invalidatedAt: '2026-07-11T00:00:00.000Z',
           invalidatedEvidence: 'src/ghost.ts does not exist in the reviewed code',
         }),
-        makeFinding({
+        makeFinding({ revision: 1,
           id: 'F-0003',
           status: 'superseded',
           lifecycle: 'superseded',
@@ -737,14 +780,13 @@ describe('B5: invalidated / superseded audit visibility', () => {
     expect(context.superseded.count).toBe(1);
   });
 
-  it('Given a ledger with invalidated and superseded findings When summaries are rendered Then both appear with minimal item info and existing keys keep their shape', async () => {
+  it('Given a ledger with invalidated and superseded findings When summaries are rendered Then both appear with minimal item info', async () => {
     const { renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } = await import('../core/workflow/findings/context.js');
     const ledger = makeAuditLedger();
 
     const instructionSummary = JSON.parse(renderFindingLedgerInstructionSummary(ledger)) as Record<string, unknown>;
-    // 既存キーの形式維持（追加のみ）。
     expect(Object.keys(instructionSummary)).toEqual(
-      expect.arrayContaining(['version', 'workflowName', 'open', 'resolved', 'waived', 'invalidated', 'superseded', 'conflicts']),
+      expect.arrayContaining(['workflowName', 'open', 'resolved', 'waived', 'invalidated', 'superseded', 'conflicts']),
     );
     expect(instructionSummary.invalidated).toEqual([
       { id: 'F-0002', severity: 'high', title: 'Hallucinated finding', evidence: 'src/ghost.ts does not exist in the reviewed code' },
@@ -769,7 +811,7 @@ describe('finding family visibility', () => {
         makeRawFinding({ rawFindingId: 'raw-a', familyTag: 'architecture' }),
         makeRawFinding({ rawFindingId: 'raw-c', familyTag: 'testing' }),
       ],
-      findings: [makeFinding({ rawFindingIds: ['raw-b', 'raw-a', 'raw-c'] })],
+      findings: [makeFinding({ revision: 1, rawFindingIds: ['raw-b', 'raw-a', 'raw-c'] })],
     });
 
     const ruleContext = buildFindingsRuleContext(ledger);
@@ -786,7 +828,7 @@ describe('finding family visibility', () => {
 
   it('Given a canonical finding with an unknown raw reference When contexts are built Then the missing reference stays visible', async () => {
     const ledger = makeLedger({
-      findings: [makeFinding({ rawFindingIds: ['raw-missing'] })],
+      findings: [makeFinding({ revision: 1, rawFindingIds: ['raw-missing'] })],
     });
 
     const ruleContext = buildFindingsRuleContext(ledger);
@@ -806,7 +848,7 @@ describe('finding family visibility', () => {
         makeRawFinding({ rawFindingId: 'raw-1', familyTag: 'architecture' }),
         makeRawFinding({ rawFindingId: 'raw-1', familyTag: 'testing' }),
       ],
-      findings: [makeFinding({ rawFindingIds: ['raw-1'] })],
+      findings: [makeFinding({ revision: 1, rawFindingIds: ['raw-1'] })],
     });
 
     expect(() => buildFindingsRuleContext(ledger)).toThrow(
@@ -815,14 +857,14 @@ describe('finding family visibility', () => {
   });
 });
 
-// B4: v3-r2 実台帳の F-0016 raw 群（AI-PERSIST-F-0011-ROUTING /
+// B4: 収束回帰用の F-0016 raw 群（AI-PERSIST-F-0011-ROUTING /
 // AI-PERSIST-F-0006-ROUTING / AI-PERSIST-F-0017-ROUTING）の replay。旧エンジンの
 // familyTag + exact location 機械マージは、この3件（同じ familyTag=resource-leak、
 // 同じ routing.ts:302、意味は F-0006 系のリーク主張と F-0011/F-0017 系の分散
 // cleanup 懸念の2系統）を壊れた混成 finding F-0016 に畳んだ。新エンジンでは
 // 機械分類 → assembly → reconcile を通しても1つの finding に再マージされない。
-describe('B4: v3-r2 F-0016 raw-group replay against the real ledger', () => {
-  const fixturePath = fileURLToPath(new URL('./fixtures/v3-r2-ledger.json', import.meta.url));
+describe('B4: F-0016 raw-group replay against a coherent synthetic ledger', () => {
+  const fixturePath = fileURLToPath(new URL('./fixtures/finding-convergence-replay-ledger.json', import.meta.url));
 
   function loadFixtureLedger(): FindingLedger {
     return parseFindingLedger(JSON.parse(readFileSync(fixturePath, 'utf-8')));
@@ -835,8 +877,92 @@ describe('B4: v3-r2 F-0016 raw-group replay against the real ledger', () => {
   }
 
   const RAW_SUFFIXES = ['AI-PERSIST-F-0011-ROUTING', 'AI-PERSIST-F-0006-ROUTING', 'AI-PERSIST-F-0017-ROUTING'] as const;
+  const HISTORICAL_REVISION_EVENTS = {
+    'F-0006': ['created'],
+    'F-0011': ['created', 'persisted-1', 'persisted-2', 'persisted-3', 'dispute-1', 'dispute-2', 'dispute-3'],
+    'F-0016': ['created', 'persisted-with-three-raws', 'dispute-1'],
+    'F-0017': ['created', 'dispute-1'],
+  } as const;
 
-  it('Given the three real F-0016 raws replayed with their explicit targets When classified, assembled and reconciled Then each lands on its own target finding and no single finding re-merges them', () => {
+  it('preserves the historical finding meanings and exact revision counts in the reduced replay fixture', () => {
+    const ledger = loadFixtureLedger();
+
+    expect(Object.fromEntries(ledger.findings.map((finding) => [finding.id, finding.revision]))).toEqual(
+      Object.fromEntries(
+        Object.entries(HISTORICAL_REVISION_EVENTS).map(([findingId, events]) => [
+          findingId,
+          events.length,
+        ]),
+      ),
+    );
+    expect(ledger.findings.find((finding) => finding.id === 'F-0006')).toMatchObject({
+      title: 'interactive --pr で PR 画像の一時ディレクトリが解放されない',
+      location: 'src/app/cli/routing.ts:296',
+      reviewers: ['merge-readiness-review'],
+    });
+    expect(ledger.findings.find((finding) => finding.id === 'F-0011')).toMatchObject({
+      title: 'Fragile distributed cleanup pattern for image attachments',
+      location: 'src/app/cli/routing.ts:299',
+      reviewers: ['ai-antipattern-review'],
+    });
+    expect(ledger.findings.find((finding) => finding.id === 'F-0016')?.rawFindingIds).toEqual([
+      '20260710-145911-pr-task-attachments-takt-add-p:reviewers:9:ai-antipattern-review:F-0006-REVISITED',
+      '20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0011-ROUTING',
+      '20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0006-ROUTING',
+      '20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0017-ROUTING',
+    ]);
+    expect(ledger.conflicts).toHaveLength(1);
+    expect(ledger.conflicts[0]?.id).toBe(formatConflictId(ledger.conflicts[0]!));
+  });
+
+  it('preserves the three historical raw claims verbatim except for final-contract fields', () => {
+    const ledger = loadFixtureLedger();
+    const raws = RAW_SUFFIXES.map((suffix) => pickRaw(ledger, suffix));
+
+    expect(raws.map((raw) => raw.rawFindingId)).toEqual([
+      '20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0011-ROUTING',
+      '20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0006-ROUTING',
+      '20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0017-ROUTING',
+    ]);
+    expect(raws.map((raw) => raw.targetFindingId)).toEqual(['F-0011', 'F-0006', 'F-0017']);
+    expect(raws.map((raw) => raw.reviewer)).toEqual([
+      'ai-antipattern-review',
+      'ai-antipattern-review',
+      'ai-antipattern-review',
+    ]);
+    expect(raws[1]).toMatchObject({
+      familyTag: 'resource-leak',
+      location: 'src/app/cli/routing.ts:302',
+      title: 'interactive --pr mode cleanup consistency risk persists',
+      suggestion: 'PR添付のリソース管理をセッション添付とは明確に分離し、`dispatchConversationAction` の完了後、結果に関わらず `prCleanupAttachments` が確実に一度だけ呼ばれることを保証する構造にしてください。',
+    });
+    const historicalMeaning = raws.map(({
+      rawFindingId,
+      relation,
+      targetFindingId,
+      familyTag,
+      location,
+      title,
+      description,
+      suggestion,
+      reviewer,
+    }) => ({
+      rawFindingId,
+      relation,
+      targetFindingId,
+      familyTag,
+      location,
+      title,
+      description,
+      suggestion,
+      reviewer,
+    }));
+    expect(createHash('sha256').update(JSON.stringify(historicalMeaning)).digest('hex')).toBe(
+      'd9981ca6efa9e46bf7d8636a804c3a2125cb49fb68b9e56d7af7c1384c0126bd',
+    );
+  });
+
+  it('Given the three F-0016 replay raws with explicit targets When classified, assembled and reconciled Then each lands on its own target finding and no single finding re-merges them', () => {
     const ledger = loadFixtureLedger();
     // 現行 relation/targetFindingId を持つ実データ。
     // rawFindingId だけ replay 用に付け替える（台帳内の既存 id と衝突するため）。

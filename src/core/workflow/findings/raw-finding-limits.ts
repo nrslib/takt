@@ -84,9 +84,6 @@ export const REVIEWER_ENVELOPE_RECOVERY_LIMITS = {
   maxUnavailableRounds: 2,
 } as const;
 
-/** stable key / WAL のポリシー版数。上限・格子の互換が壊れる変更で上げる。 */
-export const RAW_LADDER_POLICY_VERSION = 2 as const;
-
 /**
  * トークン概算。provider 非依存の保守的近似（1 token ≒ 4 bytes）。
  *

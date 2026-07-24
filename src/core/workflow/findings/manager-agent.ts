@@ -19,7 +19,7 @@ import {
 } from '../instruction/fenced-block.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 
-export const RAW_FINDINGS_SCHEMA_REF = 'takt.findings.raw.v1';
+export const RAW_FINDINGS_SCHEMA_REF = 'takt.findings.raw';
 export { FINDING_MANAGER_SCHEMA_REF } from './manager-step.js';
 
 export function createRawFindingsStructuredOutput(
@@ -33,7 +33,7 @@ export function createRawFindingsStructuredOutput(
 }
 
 /**
- * v2: run-level の invalid_manager_output は存在しない。manager の壊れた応答・
+ * run-level の invalid_manager_output は存在しない。manager の壊れた応答・
  * 予算超過・解釈不能はすべて provisional として台帳へ着地し、run は継続する
  * （final gate は provisional が閉じ続ける）。
  */
@@ -44,7 +44,6 @@ export function buildManagerInputLedger(ledger: FindingLedger, fullDetailFinding
     || fullDetailFindingIds === undefined
     || fullDetailFindingIds.has(finding.id);
   return {
-    version: ledger.version,
     workflowName: ledger.workflowName,
     nextId: ledger.nextId,
     updatedAt: ledger.updatedAt,

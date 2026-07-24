@@ -235,7 +235,7 @@ open finding の各 item は、fixer instruction と `when()` の rule state の
 
 ledger が既に存在しない raw finding を参照している場合、その id は黙って破棄されたり ledger 全体を読めなくしたりせず、`unknownRawFindingIds` に公開されます。どちらの配列も重複排除・ソート済みで、`contains(item.unknownRawFindingIds, "raw-id")` も同じ包含構文を使います。
 
-**v2 以前の invalid-manager-output ルーティングからの移行:** 旧 workflow は、Finding Manager output が retry 後も意味論的に invalid なとき、エンジンが決定的な迂回 rule（`return: need_replan` / `return: needs_fix` / 非AI `next: fix`）を自動選択することに依存していました。この run-level の失敗経路は廃止されています — invalid・欠落した manager の判断は provisional finding として台帳へ着地して run が継続するため、これらの迂回 rule が自動選択されることはもうありません。移行するには、`COMPLETE` の rule より*前*に `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` を再計画ステップへ向ける rule を追加してください（配線の参考は builtin の `takt-default-high` workflow）。`finding_contract` を使う workflow が `findings.provisional` を一切参照していない場合、`takt workflow doctor` が警告します。
+invalid・欠落した Finding Manager の判断は provisional finding として台帳へ着地し、run は継続します。`COMPLETE` の rule より*前*に `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` を再計画ステップへ向ける rule を追加してください（配線の参考は builtin の `takt-default-high` workflow）。`finding_contract` を使う workflow が `findings.provisional` を一切参照していない場合、`takt workflow doctor` が警告します。
 
 ### Arpeggio Step（データ駆動バッチ）
 

@@ -28,7 +28,7 @@ export function emptyLadderResult(ambiguousRawCount: number): LadderResult {
     provisionalSpecs: [],
     provisionalByInterpretationKey: new Map(),
     pendingAppliedReattach: [],
-    recoveryProvisionalInterpretationKeys: new Set(),
+    recoveryProvisionalOrigins: new Map(),
     stats: {
       ambiguousRawCount,
       managerCalls: 0,
@@ -60,15 +60,17 @@ export function classifyInitialLadderTargets(input: {
     [...issuedProofs].filter(([rawFindingId]) => !input.provisionalOnlyRawFindingIds.has(rawFindingId)),
   );
   const classified = input.tainted.reduce<Omit<InitialLadderPlan, 'proofsByRawId'>>((plan, item) => {
-    const recoveryEvidenceIsRecorded = item.recoveryOrigin !== undefined
-      && input.previousLedger.findings.some((finding) => (
-        finding.id === item.recoveryOrigin?.provisionalFindingId
-        && finding.provisional?.sourceRawFindingIds.some((rawFindingId) => (
-          input.previousLedger.rawFindings.some((raw) => (
-            raw.rawFindingId === rawFindingId
-            && computeRawEvidenceHash(raw) === item.canonical.evidenceHash
-          ))
-        )) === true
+    const recoveryEvidenceIsRecorded = item.recoveryOrigins !== undefined
+      && item.recoveryOrigins.every((origin) => (
+        input.previousLedger.findings.some((finding) => (
+          finding.id === origin.provisionalFindingId
+          && finding.provisional?.sourceRawFindingIds.some((rawFindingId) => (
+            input.previousLedger.rawFindings.some((raw) => (
+              raw.rawFindingId === rawFindingId
+              && computeRawEvidenceHash(raw) === item.canonical.evidenceHash
+            ))
+          )) === true
+        ))
       ));
     const attempt = resolveInterpretationAttempt({
       ledger: input.previousLedger,
@@ -81,9 +83,9 @@ export function classifyInitialLadderTargets(input: {
       wire: item.wire,
       ...attempt,
       ...(item.interpretationRecoveryAttempt === true ? { interpretationRecoveryAttempt: true } : {}),
-      ...(item.recoveryOrigin !== undefined ? { recoveryOrigin: item.recoveryOrigin } : {}),
+      ...(item.recoveryOrigins !== undefined ? { recoveryOrigins: item.recoveryOrigins } : {}),
     };
-    const proof = item.recoveryOrigin === undefined || recoveryEvidenceIsRecorded
+    const proof = item.recoveryOrigins === undefined || recoveryEvidenceIsRecorded
       ? proofsByRawId.get(item.canonical.rawFindingId)
       : undefined;
     if (proof !== undefined) {
@@ -104,7 +106,7 @@ export function classifyInitialLadderTargets(input: {
             ...plan.result,
             pendingIndependentNew: [...plan.result.pendingIndependentNew, {
               wire: item.wire,
-              ...(target.recoveryOrigin !== undefined ? { recoveryOrigin: target.recoveryOrigin } : {}),
+              ...(target.recoveryOrigins !== undefined ? { recoveryOrigins: target.recoveryOrigins } : {}),
             }],
           },
         };
@@ -241,7 +243,7 @@ export function applyInterpretationDecisions(input: {
         pendingIndependentNew: [...result.pendingIndependentNew, {
           wire: target.wire,
           viaInterpretationKey: key,
-          ...(target.recoveryOrigin !== undefined ? { recoveryOrigin: target.recoveryOrigin } : {}),
+          ...(target.recoveryOrigins !== undefined ? { recoveryOrigins: target.recoveryOrigins } : {}),
         }],
       };
     }
@@ -271,18 +273,18 @@ export function applyInterpretationDecisions(input: {
         ? 'Stored same_with_proof decision no longer matches an engine-issued proof; kept provisional'
         : decision.reason,
     });
+    if (target.interpretationRecoveryAttempt === true && target.recoveryOrigins === undefined) {
+      throw new Error(`Interpretation recovery target "${target.wire.rawFindingId}" is missing its recovery origin`);
+    }
     return {
       ...result,
       provisionalSpecs: target.interpretationRecoveryAttempt === true
         ? result.provisionalSpecs
         : [...result.provisionalSpecs, spec],
       provisionalByInterpretationKey: new Map([...result.provisionalByInterpretationKey, [key, spec]]),
-      recoveryProvisionalInterpretationKeys: target.interpretationRecoveryAttempt === true
-        ? new Set([
-            ...result.recoveryProvisionalInterpretationKeys,
-            key,
-          ])
-        : result.recoveryProvisionalInterpretationKeys,
+      recoveryProvisionalOrigins: target.recoveryOrigins === undefined
+        ? result.recoveryProvisionalOrigins
+        : new Map([...result.recoveryProvisionalOrigins, [key, target.recoveryOrigins]]),
     };
   }, input.result);
 }

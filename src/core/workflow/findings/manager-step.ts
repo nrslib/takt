@@ -1,10 +1,10 @@
 import type { AgentWorkflowStep, FindingContractConfig, WorkflowConfig } from '../../models/types.js';
 import { AmbiguousInterpretationsOutputJsonSchema, FindingManagerDecisionsJsonSchema } from './schemas.js';
 
-export const FINDING_MANAGER_SCHEMA_REF = 'takt.findings.manager.v3';
+export const FINDING_MANAGER_SCHEMA_REF = 'takt.findings.manager';
 
 /** ambiguous raw 解釈フェーズの structured output。提案のみ。 */
-export const FINDING_INTERPRETATION_SCHEMA_REF = 'takt.findings.interpretation.v1';
+export const FINDING_INTERPRETATION_SCHEMA_REF = 'takt.findings.interpretation';
 
 /**
  * findings-manager の合成ステップを組み立てる。実行（manager-runner.ts）と

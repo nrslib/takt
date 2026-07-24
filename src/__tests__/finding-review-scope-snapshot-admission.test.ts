@@ -40,6 +40,7 @@ import type { AgentResponse, FindingContractConfig, WorkflowStep } from '../core
 import { verifySourceQuoteEvidence } from '../core/workflow/findings/admission-validation.js';
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
+import { createFindingManagerPublicationDouble } from './helpers/finding-manager-publication.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
@@ -78,16 +79,17 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
 
   function makeLedgerStore(): { store: FindingLedgerStore; current: () => FindingLedger } {
     let ledger: FindingLedger = {
-      version: 1,
       workflowName: 'peer-review',
       nextId: 1,
       updatedAt: '2026-07-13T00:00:00.000Z',
       findings: [],
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
     };
     const reservations = new Set<string>();
     const store: FindingLedgerStore = {
+      ledgerIdentity: '/test/finding-review-scope-snapshot-admission/ledger.json',
       workflowName: 'peer-review',
       loadLedger: () => ledger,
       saveLedger: (next) => { ledger = next; },
@@ -105,6 +107,9 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
       createRunCopy: () => '/tmp/ledger-copy.json',
       saveRawFindings: () => '/tmp/raw-findings.json',
       saveManagerValidationReport: () => '/tmp/manager-report.json',
+      ...createFindingManagerPublicationDouble(
+        (report) => `/tmp/findings-manager-validation.${report.stepName}.json`,
+      ),
       saveConflictAdjudicationReport: () => '/tmp/adjudication-report.json',
     };
     return { store, current: () => ledger };

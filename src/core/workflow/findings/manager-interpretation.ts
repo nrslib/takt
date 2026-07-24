@@ -41,6 +41,7 @@ export async function runAmbiguousLadder(input: {
   workflowName: string;
   callNamespace: string;
   parentStepName: string;
+  stopBudgetRoundMarker: string;
 }): Promise<LadderResult> {
   if (input.tainted.length === 0) {
     return emptyLadderResult(0);
@@ -62,7 +63,11 @@ export async function runAmbiguousLadder(input: {
       promptPreconditions: [],
     })),
     input.observation,
+    input.stopBudgetRoundMarker,
   );
+  if (begin.roundAlreadyApplied) {
+    return emptyLadderResult(input.tainted.length);
+  }
   let retainReservationsForCommit = false;
   try {
     const interpretationTargets = plannedTargets.map((target): LadderTarget => {
@@ -123,6 +128,7 @@ export async function runAmbiguousLadder(input: {
         batchResult.decisions,
         begin.ownedByKey,
         input.observation,
+        input.stopBudgetRoundMarker,
       );
       queue = queue.slice(prepared.batch.length);
       callCount += 1;

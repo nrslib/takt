@@ -2,7 +2,7 @@
  * codex 対策#4（typed evidence protocol + verbatimExcerpt 機械照合 +
  * 二系統台帳 + gate 分離）の決定的 red/green fixture。
  *
- * 実 ledger の架空指摘7件（takt-bench v3-r4 run
+ * 実 ledger の架空指摘7件（takt-bench run
  * 20260712-073441-pr-task-attachments-takt-add-p の
  * reviewers:2:ai-antipattern-review が返した finding-1〜finding-7）を、
  * 実際に生成された raw output のまま（読み取りのみで取得。この repo には
@@ -34,6 +34,7 @@ import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../core/workflow/findings/manager-runner.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
+import { createFindingManagerPublicationDouble } from './helpers/finding-manager-publication.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -52,7 +53,7 @@ beforeEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// fixture cwd: 実 v3-r4 run と同じ実在/不在パターンを再現する（hermetic —
+// fixture cwd: 実測 run と同じ実在/不在パターンを再現する（hermetic —
 // 実 takt リポジトリの現在の内容や行数の変化に依存しない）。
 // ---------------------------------------------------------------------------
 const FIXTURE_CWD = mkdtempSync(join(tmpdir(), 'takt-evidence-protocol-fixture-'));
@@ -62,7 +63,7 @@ function writeFixtureFile(relativePath: string, lineCount: number): void {
   writeFileSync(fullPath, `${Array.from({ length: lineCount }, (_, index) => `// unrelated line ${index + 1}`).join('\n')}\n`);
 }
 // finding-7 の claim（src/shared/constants.ts:20, "legacy mapping" 云々）と
-// 無関係な内容の実在ファイル — 実 v3-r4 実測どおり「path は実在するが引用内容は
+// 無関係な内容の実在ファイル — 実測どおり「path は実在するが引用内容は
 // 架空」を再現する。20行を超える内容にして line 20 を範囲内にする。
 writeFixtureFile('src/shared/constants.ts', 29);
 initializeGitFixture(FIXTURE_CWD, ['src/shared/constants.ts']);
@@ -73,7 +74,7 @@ afterAll(() => {
 });
 
 /**
- * 実 v3-r4 run（20260712-073441-pr-task-attachments-takt-add-p、
+ * 実測 run（20260712-073441-pr-task-attachments-takt-add-p、
  * reviewers ステップの2回目実行、ai-antipattern-review）の raw output を
  * そのまま埋め込む。rawFindingId はエンジンの namespacedRawFindingId が
  * 付与する前の、reviewer が実際に返したローカル id（"finding-N"）。
@@ -160,6 +161,7 @@ function makeHarness(initialLedger: FindingLedger): {
   let ledgerState = initialLedger;
   const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
+    ledgerIdentity: '/test/finding-evidence-protocol-fixture/ledger.json',
     workflowName: 'peer-review',
     loadLedger: () => ledgerState,
     saveLedger: (next) => { ledgerState = next; },
@@ -177,6 +179,9 @@ function makeHarness(initialLedger: FindingLedger): {
     createRunCopy: () => '/tmp/ledger-copy.json',
     saveRawFindings: () => '/tmp/raw-findings.json',
     saveManagerValidationReport: () => '/tmp/manager-report.json',
+    ...createFindingManagerPublicationDouble(
+      (report) => `/tmp/findings-manager-validation.${report.stepName}.json`,
+    ),
     saveConflictAdjudicationReport: () => '/tmp/adjudication-report.json',
   };
   const optionsBuilder = {
@@ -227,11 +232,11 @@ function makeHarness(initialLedger: FindingLedger): {
   };
 }
 
-describe('codex 対策#4 red/green fixture: v3-r4 実測の gemma 架空指摘7件（ai-antipattern-review 2巡目）', () => {
+describe('codex 対策#4 red/green fixture: 実測の gemma 架空指摘7件（ai-antipattern-review 2巡目）', () => {
   it('GREEN: 7件全てが reviewer anomaly へ隔離され、product finding は1件も作られず、product gate は塞がれない', async () => {
     const harness = makeHarness({
-      version: 1, workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-12T00:00:00.000Z',
-      findings: [], rawFindings: [], conflicts: [],
+      workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-12T00:00:00.000Z',
+      findings: [], rawFindings: [], conflicts: [], interpretations: [],
     });
 
     const result = await harness.run();
@@ -254,7 +259,7 @@ describe('codex 対策#4 red/green fixture: v3-r4 実測の gemma 架空指摘7�
     // 二系統台帳の実体を直接検証する: 6件は「path が存在しない」引用不一致、
     // 1件（finding-7 相当）は「path は実在するが引用が無い（verbatimExcerpt 欠損）」
     // ため、こちらも quote-mismatch として隔離される — 経路の実在性だけを見る
-    // 旧チェックが見逃していた欠陥（v3-r4 実測 F-0009）を新チェックは塞ぐ。
+    // 以前のチェックが見逃していた実測 F-0009 を新チェックは塞ぐ。
     const anomalies = ledger.reviewerAnomalies ?? [];
     expect(anomalies).toHaveLength(7);
     for (const anomaly of anomalies) {
@@ -295,7 +300,7 @@ describe('codex 対策#4 red/green fixture: v3-r4 実測の gemma 架空指摘7�
       revision: 1,
     };
     const harness = makeHarness({
-      version: 1, workflowName: 'peer-review', nextId: 2, updatedAt: '2026-07-12T00:00:00.000Z',
+      workflowName: 'peer-review', nextId: 2, updatedAt: '2026-07-12T00:00:00.000Z',
       findings: [seedFinding],
       rawFindings: [{
         rawFindingId: 'raw-seed',
@@ -308,6 +313,7 @@ describe('codex 対策#4 red/green fixture: v3-r4 実測の gemma 架空指摘7�
         description: 'Pre-existing finding untouched by this round.',
       }],
       conflicts: [],
+      interpretations: [],
     });
 
     await harness.run();

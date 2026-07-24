@@ -2,7 +2,10 @@ import { createLogger } from '../../../shared/utils/index.js';
 import type { AgentWorkflowStep } from '../../models/types.js';
 import { assembleCleanManagerDecision } from './manager-clean-decision.js';
 import type { RawAdmissionEvaluation } from './manager-admission.js';
-import type { RunFindingManagerForStepInput } from './manager-contracts.js';
+import type {
+  RawAdjudicationFailure,
+  RunFindingManagerForStepInput,
+} from './manager-contracts.js';
 import type { MechanicalClassificationResult } from './mechanical-classification.js';
 import { createEmptyManagerOutput } from './manager-output.js';
 import { collectLandedRawIds } from './manager-utils.js';
@@ -31,14 +34,18 @@ function admissionForBatch(
 
 function recordBatchSpecs(
   specs: ReturnType<typeof assembleCleanManagerDecision>['cleanProvisionalSpecs'],
-): Map<string, string> {
-  const failureReasons = new Map<string, string>();
+): Map<string, RawAdjudicationFailure> {
+  const failures = new Map<string, RawAdjudicationFailure>();
   for (const spec of specs) {
     for (const rawFindingId of spec.sourceRawFindingIds) {
-      failureReasons.set(rawFindingId, spec.reason);
+      failures.set(rawFindingId, {
+        kind: 'provisional_landing',
+        outcome: 'audit_only',
+        reason: spec.reason,
+      });
     }
   }
-  return failureReasons;
+  return failures;
 }
 
 function appendInvalidAttempts(
@@ -55,22 +62,23 @@ function appendInvalidAttempts(
 }
 
 function recordWholeOutputDiscard(input: {
-  failureReasons: Map<string, string>;
+  failures: Map<string, RawAdjudicationFailure>;
   rawFindingIds: ReadonlySet<string>;
 }): void {
   for (const rawFindingId of input.rawFindingIds) {
-    if (!input.failureReasons.has(rawFindingId)) {
-      input.failureReasons.set(
-        rawFindingId,
-        'Manager output violated ledger invariants and was discarded',
-      );
+    if (!input.failures.has(rawFindingId)) {
+      input.failures.set(rawFindingId, {
+        kind: 'manager_output_rejected',
+        outcome: 'audit_only',
+        reason: 'Manager output violated ledger invariants and was discarded',
+      });
     }
   }
 }
 
 interface RawAdjudicationBatchExecution {
   output: FindingManagerOutput;
-  failureReasons: Map<string, string>;
+  failures: Map<string, RawAdjudicationFailure>;
   invalidAttempts: FindingManagerValidationAttemptReport[];
   unsupportedRawFindingReports: UnsupportedRawFindingReport[];
   sentRawIds: Set<string>;
@@ -87,7 +95,7 @@ export async function runRawAdjudicationBatches(input: {
   mechanicallyClassifiedCount: number;
 }): Promise<RawAdjudicationBatchExecution> {
   let invalidAttempts: FindingManagerValidationAttemptReport[] = [];
-  const failureReasons = new Map<string, string>();
+  const failures = new Map<string, RawAdjudicationFailure>();
   const sentRawIds = new Set<string>();
   const successfulRawFindings: RawFinding[] = [];
   const successfulRawDecisions: FindingManagerDecisions['rawDecisions'] = [];
@@ -113,10 +121,11 @@ export async function runRawAdjudicationBatches(input: {
       const rawFindingId = batch.batch[0]?.rawFindingId;
       if (rawFindingId !== undefined) {
         sentRawIds.add(rawFindingId);
-        failureReasons.set(
-          rawFindingId,
-          `Raw adjudication input exceeded the per-call budget (${batch.inputTokens} estimated tokens)`,
-        );
+        failures.set(rawFindingId, {
+          kind: 'input_budget_exceeded',
+          outcome: 'audit_only',
+          reason: `Raw adjudication input exceeded the per-call budget (${batch.inputTokens} estimated tokens)`,
+        });
       }
       break;
     }
@@ -152,22 +161,33 @@ export async function runRawAdjudicationBatches(input: {
       const recorded = recordBatchSpecs(clean.cleanProvisionalSpecs);
       if (clean.wholeOutputDiscarded) {
         invalidAttempts = appendInvalidAttempts(invalidAttempts, clean.invalidAttempts);
-        for (const [rawFindingId, reason] of recorded) {
-          failureReasons.set(rawFindingId, reason);
+        for (const [rawFindingId, failure] of recorded) {
+          failures.set(rawFindingId, failure);
         }
-        recordWholeOutputDiscard({ failureReasons, rawFindingIds: batchRawIds });
+        recordWholeOutputDiscard({ failures, rawFindingIds: batchRawIds });
         break;
       }
       successfulRawFindings.push(...batch.batch);
       successfulRawDecisions.push(...response.decisions.rawDecisions);
-      for (const [rawFindingId, reason] of recorded) {
-        failureReasons.set(rawFindingId, reason);
+      for (const [rawFindingId, failure] of recorded) {
+        failures.set(rawFindingId, failure);
+      }
+      for (const unsupported of clean.unsupportedRawFindingReports) {
+        failures.set(unsupported.rawFindingId, {
+          kind: 'manager_unsupported',
+          outcome: 'unsupported',
+          reason: unsupported.evidence,
+        });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log.warn('Raw adjudication replay call failed', { error: message });
       for (const rawFindingId of batchRawIds) {
-        failureReasons.set(rawFindingId, message);
+        failures.set(rawFindingId, {
+          kind: 'agent_failed',
+          outcome: 'audit_only',
+          reason: message,
+        });
       }
       invalidAttempts = [...invalidAttempts, {
         attempt: invalidAttempts.length + 1,
@@ -197,15 +217,22 @@ export async function runRawAdjudicationBatches(input: {
     dismissCandidateFindingIds: new Set(),
     priorStepResponseText: undefined,
   });
-  for (const [rawFindingId, reason] of recordBatchSpecs(clean.cleanProvisionalSpecs)) {
-    failureReasons.set(rawFindingId, reason);
+  for (const [rawFindingId, failure] of recordBatchSpecs(clean.cleanProvisionalSpecs)) {
+    failures.set(rawFindingId, failure);
+  }
+  for (const unsupported of clean.unsupportedRawFindingReports) {
+    failures.set(unsupported.rawFindingId, {
+      kind: 'manager_unsupported',
+      outcome: 'unsupported',
+      reason: unsupported.evidence,
+    });
   }
   if (clean.wholeOutputDiscarded) {
-    recordWholeOutputDiscard({ failureReasons, rawFindingIds: successfulRawIds });
+    recordWholeOutputDiscard({ failures, rawFindingIds: successfulRawIds });
   }
   return {
     output: clean.managerOutput,
-    failureReasons,
+    failures,
     invalidAttempts: clean.invalidAttempts,
     unsupportedRawFindingReports: clean.unsupportedRawFindingReports,
     sentRawIds,

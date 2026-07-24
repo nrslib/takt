@@ -8,8 +8,7 @@ export const FINDING_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const
 // 'superseded': the finding was merged into a canonical duplicate (duplicateDecisions).
 // 'dismissed': a provisional finding's claim was adjudicated out of the
 // contract's jurisdiction or permanently unverifiable (dismissDecisions).
-// All are terminal, additive statuses: existing v1 ledgers need no migration
-// because a ledger that never produces these values is unaffected.
+// All are terminal, additive statuses.
 export const FINDING_STATUSES = ['open', 'resolved', 'waived', 'invalidated', 'superseded', 'dismissed'] as const;
 export const FINDING_LIFECYCLES = ['new', 'persists', 'resolved', 'reopened', 'waived', 'invalidated', 'superseded', 'dismissed'] as const;
 export const FINDING_CONFLICT_STATUSES = ['active', 'resolved'] as const;
@@ -203,7 +202,7 @@ export type FindingActionRecovery =
 
 export interface FindingProvisionalMetadata {
   kind: FindingProvisionalKind;
-  /** 決定的な再発同定キー（sha256(reviewerStableKey, lineageKey, kind, policyVersion)）。行番号・runId・タイムスタンプ・LLM 説明文は入れない。 */
+  /** 決定的な再発同定キー（sha256(reviewerStableKey, lineageKey, kind)）。行番号・runId・タイムスタンプ・LLM 説明文は入れない。 */
   stableKey: string;
   lineageKey: string;
   sourceRawFindingIds: string[];
@@ -213,17 +212,13 @@ export interface FindingProvisionalMetadata {
   /** この lineage に対する自動 manager 解釈の消費 epoch 数。上限は raw-finding-limits.ts の MAX_INTERPRETATION_EPOCHS_PER_LINEAGE。 */
   interpretationEpochs: number;
   gateEffect: 'block';
-  /** engine 主導の再裁定の失敗履歴（新しい順ではなく attempt 順）。optional — 既存 ledger は migration なしで読める。 */
+  /** engine 主導の再裁定の失敗履歴（新しい順ではなく attempt 順）。 */
   adjudicationAttempts?: FindingAdjudicationAttempt[];
   actionRecovery?: FindingActionRecovery;
   actionRecoveryAttempts?: FindingActionRecoveryAttempt[];
   recoveryReviewerStableKey?: string;
-  /**
-   * この provisional が最初に観測された manager ラウンド序数（stop budget の
-   * roundsCompleted + 1）。loop monitor judge へ渡す滞留ラウンド数の導出に使う。
-   * optional — 既存 v1 ledger は migration なしで読める（欠落時は滞留不明）。
-   */
-  firstObservedRound?: number;
+  /** この provisional が最初に観測された manager ラウンド序数（stop budget の roundsCompleted + 1）。 */
+  firstObservedRound: number;
 }
 
 export interface FindingLedgerEntry {
@@ -253,19 +248,15 @@ export interface FindingLedgerEntry {
   supersededByFindingId?: string;
   /** 人間が dismiss 裁定を後から覆しても根拠を監査できるよう、reopen 後も保持する。 */
   dismissal?: FindingDismissalRecord;
-  /**
-   * 楽観的前提条件（CAS）の版数。エントリを変更するたびに +1。省略時（既存 v1
-   * ledger）は 1 とみなす（finding-preconditions.ts の findingRevision 参照）。
-   * optional なので既存 ledger は migration なしで読める。
-   */
-  revision?: number;
+  /** 楽観的前提条件（CAS）の版数。エントリを変更するたびに +1。 */
+  revision: number;
   /** 意味を確定できなかった観測の gate-blocking メタデータ。 */
   provisional?: FindingProvisionalMetadata;
   /**
    * 証跡不成立で証拠としては不採用になった再観測の履歴。
    * location admission に落ちた persists が「実在する open target」を指す場合、
    * 独立 provisional を作らず（target が既に gate を塞いでいるため）ここへ
-   * 監査添付する。canonical evidence / revision / status には一切影響しない
+   * 監査添付する。canonical evidence / status には一切影響しない
    * （evidence hash の入力にも含めないため再開口しない）。
    */
   rejectedObservations?: Array<{
@@ -362,7 +353,6 @@ export interface FindingLedgerReviewIntegrityState {
 }
 
 export interface FindingLedger {
-  version: 1;
   workflowName: string;
   nextId: number;
   updatedAt: string;
@@ -371,23 +361,22 @@ export interface FindingLedger {
   conflicts: FindingLedgerConflict[];
   /**
    * 解釈 WAL（write-ahead log）。ambiguous raw への manager 解釈を
-   * 冪等化する。optional なので既存 v1 ledger は migration なしで読める。
+   * 冪等化する。
    */
-  interpretations?: FindingInterpretationRecord[];
+  interpretations: FindingInterpretationRecord[];
   /**
    * provisional fixpoint に対する再計画または有限停止の判定に使う直近の
    * findings-manager ラウンド終了時点の比較スナップショットと fixpoint 到達
    * 判定。ledger 自体が run を跨いで永続化されるため、resume や再走行を
    * またいだラウンド比較もここだけで完結する（engine 内メモリの
-   * LoopDetector/CycleDetector は resume で再構築され使えない）。optional
-   * なので既存 v1 ledger は migration なしで読める。
+   * LoopDetector/CycleDetector は resume で再構築され使えない）。
    */
   fixpoint?: FindingLedgerFixpointState;
   /**
    * 有限停止予算:
    * 累積ラウンド数と（設定されていれば）経過時間の消費状況。fixpoint と同様に
    * ledger 自体が run/resume を跨いで永続化されるため、resume を跨いだ累積も
-   * ここだけで完結する。optional なので既存 v1 ledger は migration なしで読める。
+   * ここだけで完結する。
    */
   stopBudget?: FindingLedgerStopBudgetState;
   /**
@@ -395,7 +384,6 @@ export interface FindingLedger {
    * (findings 配列)とは別の、監査専用・非 gate-blocking の隔離先。
    * verbatimExcerpt 機械照合が「引用不一致」または「対象版が変化(stale)」と
    * 判定した観測がここへ着地し、product gate(COMPLETE 判定)には一切影響しない。
-   * optional なので既存 v1 ledger は migration なしで読める。
    */
   reviewerAnomalies?: ReviewerAnomalyEntry[];
   /**
@@ -403,9 +391,13 @@ export interface FindingLedger {
    * anomaly が残ったまま完了した findings-manager ラウンド数を stop budget と
    * 同じ round-marker 方式で追跡する。fixpoint/stopBudget と同様に ledger 自体が
    * run/resume を跨いで永続化されるため、resume を跨いだ累積もここだけで完結する。
-   * optional なので既存 v1 ledger は migration なしで読める。
    */
   reviewIntegrity?: FindingLedgerReviewIntegrityState;
+  /**
+   * report 公開を要する manager round の唯一の再開状態。round の completed
+   * projection は report 公開成功まで top-level へ露出しない。
+   */
+  pendingManagerCommit?: FindingManagerPendingCommit;
 }
 
 // ---------------------------------------------------------------------------
@@ -636,35 +628,202 @@ export const INTERPRETATION_APPLICATION_RESULTS = [
 ] as const;
 export type InterpretationApplicationResult = typeof INTERPRETATION_APPLICATION_RESULTS[number];
 
-export interface FindingInterpretationRecord {
+interface FindingInterpretationRecordBase {
   interpretationKey: string;
-  baseInterpretationKey?: string;
-  attemptOrdinal?: number;
+  baseInterpretationKey: string;
+  attemptOrdinal: number;
   reviewerStableKey: string;
   lineageKey: string;
   candidateEvidenceHash: string;
-  policyVersion: 2;
 
-  stage: InterpretationStage;
   startedAt: FindingObservation;
-  /** interpretation_completed と finding mutation の間で同じ decision を二重適用させないため、ledger_applied まで所有権を保持する token。 */
-  reservationToken?: string;
-
   promptPreconditions: FindingMutationPrecondition[];
-
-  completedAt?: FindingObservation;
-  interruptedAt?: FindingObservation;
-  /** schema・capability 検証済みの manager 提案。resume 時はこれを再利用し再問い合わせしない。 */
-  validatedDecision?: AmbiguousInterpretation;
-
-  appliedAt?: FindingObservation;
-  applicationResult?: InterpretationApplicationResult;
 }
+
+export type FindingInterpretationRecord =
+  | FindingInterpretationRecordBase & {
+      stage: 'interpretation_started';
+      reservationToken: string;
+    }
+  | FindingInterpretationRecordBase & {
+      stage: 'interpretation_interrupted';
+      reservationToken: string;
+      interruptedAt: FindingObservation;
+    }
+  | FindingInterpretationRecordBase & {
+      stage: 'interpretation_completed';
+      reservationToken: string;
+      completedAt: FindingObservation;
+      validatedDecision: AmbiguousInterpretation;
+    }
+  | FindingInterpretationRecordBase & {
+      stage: 'ledger_applied';
+      reservationToken: string;
+      completedAt: FindingObservation;
+      validatedDecision: AmbiguousInterpretation;
+      appliedAt: FindingObservation;
+      applicationResult: InterpretationApplicationResult;
+    };
 
 // raw finding と台帳の関係を表す現行契約。新規観測、継続、解消確認、再発を
 // 明示し、targetFindingId の要否を一意に決める。
 export const RAW_FINDING_RELATIONS = ['new', 'persists', 'resolution_confirmation', 'reopened'] as const;
 export type RawFindingRelation = typeof RAW_FINDING_RELATIONS[number];
+
+export const RAW_FINDING_DISPOSITION_OUTCOMES = [
+  'reviewer_anomaly',
+  'audit_only',
+  'unsupported',
+  'stale',
+  'deferred',
+  'confirmation_not_applied',
+] as const;
+export type RawFindingDispositionOutcome = typeof RAW_FINDING_DISPOSITION_OUTCOMES[number];
+
+export interface RawFindingDisposition {
+  rawFindingId: string;
+  outcome: RawFindingDispositionOutcome;
+  reason: string;
+}
+
+export type InterpretationRecoveryOriginSettlement =
+  | {
+      provisionalFindingId: string;
+      sourceRawFindingId: string;
+      outcome: 'audit_only';
+      failureKind: 'source_missing' | 'reviewer_provenance_missing';
+      reason: string;
+    }
+  | {
+      provisionalFindingId: string;
+      sourceRawFindingId: string;
+      outcome: 'stale';
+      reason: string;
+    }
+  | {
+      provisionalFindingId: string;
+      sourceRawFindingId: string;
+      outcome: 'settled';
+      targetFindingId: string;
+    }
+  | {
+      provisionalFindingId: string;
+      sourceRawFindingId: string;
+      outcome: 'retained';
+    };
+
+export interface FindingManagerValidationAttemptReport {
+  attempt: number;
+  managerOutput: unknown;
+  validationErrors: string[];
+}
+
+export interface RawAdmissionRejectionReport {
+  rawFindingId: string;
+  location: string;
+  reason: string;
+}
+
+export interface UnsupportedRawFindingReport {
+  rawFindingId: string;
+  targetFindingId: string;
+  evidence: string;
+}
+
+export interface ReviewerOutputOverflowReport {
+  reviewer: string;
+  reason: string;
+}
+
+export interface RawNormalizationAuditRecord {
+  rawFindingId: string;
+  reviewer: string;
+  claimedRelation?: string;
+  claimedTargetFindingId?: string;
+  normalizedRelation: string;
+  wireTargetFindingId?: string;
+  ambiguityCodes: string[];
+  normalizations: Array<
+    | 'relation-normalized'
+    | 'target-dropped-from-wire'
+    | 'required-fields-missing'
+    | 'location-line-range-interpreted'
+    | 'location-not-applicable'
+  >;
+}
+
+export interface ProvisionalLandingReport {
+  kind: string;
+  stableKey: string;
+  reason: string;
+  sourceRawFindingIds: string[];
+}
+
+export interface ReviewerAnomalyLandingReport {
+  kind: string;
+  stableKey: string;
+  reason: string;
+  sourceRawFindingIds: string[];
+}
+
+export interface InterpretationStatsReport {
+  ambiguousRawCount: number;
+  managerCalls: number;
+  estimatedInputTokens: number;
+  estimatedOutputTokens: number;
+  reusedCompletedDecisions: number;
+  interruptedInterpretations: number;
+  budgetExhaustedLineages: number;
+}
+
+export interface FindingManagerValidationReport {
+  version: 1;
+  runId: string;
+  stepName: string;
+  retryCount: number;
+  ledgerUpdated: boolean;
+  finalErrors: string[];
+  attempts: FindingManagerValidationAttemptReport[];
+  rawAdmissionRejections?: RawAdmissionRejectionReport[];
+  unsupportedRawFindings?: UnsupportedRawFindingReport[];
+  reviewerOutputOverflows?: ReviewerOutputOverflowReport[];
+  provisionalLandings?: ProvisionalLandingReport[];
+  reviewerAnomalyLandings?: ReviewerAnomalyLandingReport[];
+  rawNormalizations?: RawNormalizationAuditRecord[];
+  interpretationStats?: InterpretationStatsReport;
+  relationClarifications?: Array<{ reviewer: string; flaggedRawFindingIds: string[] }>;
+  rawFindingDispositions?: RawFindingDisposition[];
+  interpretationRecoverySettlements?: InterpretationRecoveryOriginSettlement[];
+}
+
+export interface FindingManagerCommitProjection {
+  nextId: number;
+  updatedAt: string;
+  findings: FindingLedgerEntry[];
+  rawFindings: RawFinding[];
+  conflicts: FindingLedgerConflict[];
+  interpretations: FindingInterpretationRecord[];
+  fixpoint?: FindingLedgerFixpointState;
+  stopBudget?: FindingLedgerStopBudgetState;
+  reviewerAnomalies?: ReviewerAnomalyEntry[];
+  reviewIntegrity?: FindingLedgerReviewIntegrityState;
+}
+
+export interface FindingManagerReportPublication {
+  publicationId: string;
+  domainId: string;
+  originRunId: string;
+  destinationRunId: string;
+  fileName: string;
+  contentSha256: string;
+  report: FindingManagerValidationReport;
+}
+
+export interface FindingManagerPendingCommit {
+  roundMarker: string;
+  publication: FindingManagerReportPublication;
+  completed: FindingManagerCommitProjection;
+}
 
 // ---------------------------------------------------------------------------
 // typed evidence protocol（review-integrity protocol: admission control 強化）
@@ -722,8 +881,7 @@ export interface RawFinding {
   /** Ledger finding id this entry references (required for persists/reopened/resolution_confirmation; forbidden for new). */
   targetFindingId?: string;
   /**
-   * 証拠契約(review-integrity protocol)。既存 v1 台帳の raw finding には無いため optional —
-   * 欠損は「evidence なし」として扱う(migration 不要)。
+   * 証拠契約(review-integrity protocol)。欠損は「evidence なし」として扱う。
    */
   evidence?: RawFindingEvidence;
 }
@@ -958,12 +1116,11 @@ export interface FindingManagerOutput {
   dismissedFindings: FindingManagerDismissedFinding[];
 }
 
-// FindingManagerOutput（上記）は台帳の内部表現として残すが、LLM に直接組み立てさせる
-// のはやめる。8配列すべてを一貫した不変条件を守りながら自力で組み立てさせると、
-// gpt-5.5 のような十分に強いモデルでも検証に落ちる（takt-bench v2 で実測: 7 走行全滅、
-// "not open" / "familyTag mismatch" / "conflict is not active" 等）。LLM には
+// FindingManagerOutput（上記）は台帳適用前の内部表現として使い、LLM には直接
+// 組み立てさせない。全アクション配列を一貫した不変条件の下で生成する責務は
+// コード側に置く。LLM には
 // raw finding 1件・disputed finding 1件・conflict 1件ごとの「判断」だけを返させ、
-// 8配列への組み立てと不変条件の強制はコード（decision-assembly.ts）が担う。
+// アクション配列への組み立てと不変条件の強制はコード（decision-assembly.ts）が担う。
 // 'unsupported': the raw finding explicitly referenced an existing finding
 // (targetFindingId set, relation persists/reopened) but its own claim doesn't
 // hold up (e.g. self-contradicting evidence). Distinct from 'new' — an
@@ -1078,7 +1235,7 @@ export interface FindingsRuleContext {
      * 意味的な変化（provisional 集合・substantive finding の status・未裁定
      * conflict のいずれも）が無い fixpoint に達したかどうか。builtin workflow は
      * これを見て再計画または ABORT へルーティングする
-     * （raw finding 梯子設計 v2 の収束性対策）。
+     * （raw finding 解釈ラダーの収束性対策）。
      */
     fixpoint: boolean;
     items: Array<{ id: string; kind: string; reason: string }>;

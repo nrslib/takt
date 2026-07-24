@@ -7,6 +7,7 @@ function openFinding(id: string, title: string, location?: string): FindingLedge
     id,
     status: 'open',
     lifecycle: 'new',
+    revision: 1,
     severity: 'medium',
     title,
     ...(location !== undefined ? { location } : {}),
@@ -19,12 +20,12 @@ function openFinding(id: string, title: string, location?: string): FindingLedge
 
 function ledgerWith(findings: FindingLedgerEntry[]): FindingLedger {
   return {
-    version: 1,
     workflowName: 'peer-review',
     nextId: findings.length + 1,
     updatedAt: '2026-07-01T00:00:00.000Z',
     rawFindings: [],
     conflicts: [],
+    interpretations: [],
     findings,
   };
 }

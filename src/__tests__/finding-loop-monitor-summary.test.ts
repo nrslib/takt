@@ -5,7 +5,9 @@ import { createEmptyManagerOutput } from '../core/workflow/findings/manager-outp
 import { computeReviewerStableKey, computeLineageKey, computeProvisionalStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import type { FindingLedger, FindingLedgerEntry } from '../core/workflow/findings/types.js';
 
-function provisionalEntry(overrides: Partial<FindingLedgerEntry> = {}): FindingLedgerEntry {
+function provisionalEntry(
+  overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+): FindingLedgerEntry {
   return {
     id: 'F-0001',
     status: 'open',
@@ -34,12 +36,12 @@ function provisionalEntry(overrides: Partial<FindingLedgerEntry> = {}): FindingL
 
 function makeLedger(findings: FindingLedgerEntry[], roundMarkers: string[] = []): FindingLedger {
   return {
-    version: 1,
     workflowName: 'peer-review',
     nextId: findings.length + 1,
     updatedAt: '2026-07-01T00:00:00.000Z',
     rawFindings: [],
     conflicts: [],
+    interpretations: [],
     findings,
     ...(roundMarkers.length > 0
       ? { stopBudget: { roundMarkers, firstRoundAt: '2026-07-01T00:00:00.000Z', exhausted: false } }
@@ -51,17 +53,17 @@ describe('renderLoopMonitorFindingsSummary', () => {
   it('完了ゲート充足状況・滞留ラウンド数・解消経路を構造として導出する', () => {
     const ledger = makeLedger(
       [
-        provisionalEntry(),
-        provisionalEntry({
+        provisionalEntry({ revision: 1 }),
+        provisionalEntry({ revision: 1,
           id: 'F-0002',
           provisional: {
-            ...provisionalEntry().provisional!,
+            ...provisionalEntry({ revision: 1 }).provisional!,
             kind: 'reviewer-output-overflow',
             stableKey: 'stable-2',
             firstObservedRound: 5,
           },
         }),
-        { ...provisionalEntry({ id: 'F-0003' }), provisional: undefined },
+        { ...provisionalEntry({ revision: 1, id: 'F-0003' }), provisional: undefined },
       ],
       ['r1', 'r2', 'r3', 'r4', 'r5', 'r6'],
     );
@@ -83,18 +85,27 @@ describe('renderLoopMonitorFindingsSummary', () => {
     ]);
   });
 
-  it('firstObservedRound の無い既存台帳の provisional は滞留不明（undefined）になる', () => {
-    const legacy = provisionalEntry();
-    delete legacy.provisional!.firstObservedRound;
-    const data = buildLoopMonitorFindingsSummaryData(makeLedger([legacy], ['r1']), {});
+  it('必須の firstObservedRound から滞留ラウンド数を直接算出する', () => {
+    const entry = provisionalEntry({
+      revision: 1,
+      provisional: {
+        ...provisionalEntry({ revision: 1 }).provisional!,
+        firstObservedRound: 3,
+      },
+    });
+
+    const data = buildLoopMonitorFindingsSummaryData(
+      makeLedger([entry], ['r1', 'r2', 'r3', 'r4', 'r5']),
+      {},
+    );
 
     expect(data.openProvisional).toEqual([
-      expect.objectContaining({ id: 'F-0001', stalledRounds: undefined }),
+      expect.objectContaining({ id: 'F-0001', stalledRounds: 3 }),
     ]);
   });
 
   it('レンダリングは構造の全要素（ID・種類・件数）を欠落なく反映する', () => {
-    const ledger = makeLedger([provisionalEntry()], ['r1']);
+    const ledger = makeLedger([provisionalEntry({ revision: 1 })], ['r1']);
     const data = buildLoopMonitorFindingsSummaryData(ledger, {});
     const summary = renderLoopMonitorFindingsSummary(ledger, {});
 
@@ -147,6 +158,11 @@ describe('provisional firstObservedRound persistence', () => {
         severity: 'medium',
         reviewers: ['coding-review'],
       }],
+      rawFindingDispositions: [],
+      rawProvenanceByRawFindingId: new Map([[
+        'raw-9',
+        { reviewerStableKey, lineageKey },
+      ]]),
       context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-02T00:00:00.000Z' },
     });
 

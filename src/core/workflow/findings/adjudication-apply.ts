@@ -223,6 +223,7 @@ export function applyFindingConflictAdjudication(
         lifecycle: 'resolved',
         resolvedAt: decidedAt,
         resolvedEvidence: verification.evidence,
+        revision: finding.revision + 1,
       };
     });
   } else if (expectedTransition === 'invalidated') {
@@ -251,6 +252,7 @@ export function applyFindingConflictAdjudication(
         lifecycle: 'invalidated',
         invalidatedAt: decidedAt,
         invalidatedEvidence: evidenceText,
+        revision: finding.revision + 1,
       };
     });
   } else if (disposition === 'actionable_fix') {
@@ -265,6 +267,7 @@ export function applyFindingConflictAdjudication(
         ...finding,
         suggestion: appendActionableFixToSuggestion(finding.suggestion, output.actionableFix),
         lastSeen: observation,
+        revision: finding.revision + 1,
       };
     });
   }

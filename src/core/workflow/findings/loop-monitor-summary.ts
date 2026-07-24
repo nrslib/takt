@@ -9,8 +9,7 @@ export interface LoopMonitorProvisionalSummary {
   id: string;
   kind: FindingProvisionalKind;
   title: string;
-  /** undefined = firstObservedRound の無い既存台帳（滞留不明）。 */
-  stalledRounds: number | undefined;
+  stalledRounds: number;
   /** manager の dismissDecisions で裁定可能か（isDismissCandidate 参照）。 */
   dismissable: boolean;
 }
@@ -51,9 +50,7 @@ export function buildLoopMonitorFindingsSummaryData(
         id: finding.id,
         kind: provisional.kind,
         title: finding.title,
-        stalledRounds: provisional.firstObservedRound !== undefined
-          ? roundsCompleted - provisional.firstObservedRound + 1
-          : undefined,
+        stalledRounds: roundsCompleted - provisional.firstObservedRound + 1,
         dismissable: isDismissCandidate(finding, roundsCompleted),
       };
     }),
@@ -69,13 +66,10 @@ export function renderLoopMonitorFindingsSummary(
 ): string {
   const data = buildLoopMonitorFindingsSummaryData(ledger, contract);
   const provisionalLines = data.openProvisional.map((provisional) => {
-    const stalled = provisional.stalledRounds !== undefined
-      ? `${provisional.stalledRounds} manager round(s)`
-      : 'an unknown number of rounds';
     const settlement = provisional.dismissable
       ? 'settlement: later clean evidence OR manager dismissDecisions'
       : 'settlement: later clean evidence only';
-    return `- ${provisional.id} [${provisional.kind}] ${provisional.title} — stalled for ${stalled}; ${settlement}`;
+    return `- ${provisional.id} [${provisional.kind}] ${provisional.title} — stalled for ${provisional.stalledRounds} manager round(s); ${settlement}`;
   });
 
   return [

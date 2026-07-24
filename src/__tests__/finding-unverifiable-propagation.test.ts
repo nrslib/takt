@@ -27,7 +27,6 @@ import type { FindingLedger } from '../core/workflow/findings/types.js';
 
 function makeLedger(): FindingLedger {
   return {
-    version: 1,
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-07-17T00:00:00.000Z',
@@ -35,6 +34,7 @@ function makeLedger(): FindingLedger {
       id: 'F-0001',
       status: 'open',
       lifecycle: 'new',
+      revision: 1,
       severity: 'high',
       title: 'Existing issue',
       location: 'src/a.ts:1',
@@ -45,7 +45,7 @@ function makeLedger(): FindingLedger {
     }],
     rawFindings: [],
     conflicts: [{
-      id: 'C-0001',
+      id: 'C-FA2947446963',
       status: 'active',
       findingIds: ['F-0001'],
       rawFindingIds: [],
@@ -53,6 +53,7 @@ function makeLedger(): FindingLedger {
       firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-17T00:00:00.000Z' },
       lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-17T00:00:00.000Z' },
     }],
+    interpretations: [],
   };
 }
 
@@ -109,7 +110,7 @@ describe('unverifiable propagation', () => {
     expect(() => applyFindingConflictAdjudication({
       ledger,
       output: {
-        conflictId: 'C-0001',
+        conflictId: 'C-FA2947446963',
         outcome: 'evidence_invalid',
         findingTransition: 'invalidated',
         evidence: ['invalid premise'],
@@ -133,7 +134,7 @@ describe('unverifiable propagation', () => {
     expect(() => applyFindingConflictAdjudication({
       ledger,
       output: {
-        conflictId: 'C-0001',
+        conflictId: 'C-FA2947446963',
         outcome: 'finding_stale',
         findingTransition: 'resolved',
         evidence: ['src/a.ts:1'],

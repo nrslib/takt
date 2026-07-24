@@ -32,14 +32,21 @@ afterEach(() => {
 });
 
 function makeLedger(): FindingLedger {
+  const observedAt = {
+    runId: 'run-1',
+    stepName: 'reviewers',
+    timestamp: '2026-07-24T00:00:00.000Z',
+  };
   return {
-    version: 1,
     workflowName: 'workflow',
+    nextId: 3,
+    updatedAt: observedAt.timestamp,
     findings: [
       {
         id: 'F-0001',
         status: 'open',
         lifecycle: 'new',
+        revision: 1,
         severity: 'high',
         title: 'First defect',
         location: 'src/first.ts:10',
@@ -47,12 +54,14 @@ function makeLedger(): FindingLedger {
         suggestion: 'fix first',
         reviewers: ['reviewer'],
         rawFindingIds: ['R-0001'],
-        observations: [],
+        firstSeen: observedAt,
+        lastSeen: observedAt,
       },
       {
         id: 'F-0002',
         status: 'open',
         lifecycle: 'persists',
+        revision: 1,
         severity: 'medium',
         title: 'Second defect',
         location: 'src/second.ts:20',
@@ -60,7 +69,8 @@ function makeLedger(): FindingLedger {
         suggestion: 'fix second',
         reviewers: ['reviewer'],
         rawFindingIds: ['R-0002'],
-        observations: [],
+        firstSeen: observedAt,
+        lastSeen: observedAt,
       },
     ],
     rawFindings: [
@@ -86,8 +96,9 @@ function makeLedger(): FindingLedger {
       },
     ],
     conflicts: [],
+    interpretations: [],
     reviewerAnomalies: [],
-  } as unknown as FindingLedger;
+  };
 }
 
 function makeState(): WorkflowState {

@@ -521,7 +521,6 @@ describe('AnalyticsEmitter findings ledger integration', () => {
     initAnalyticsWriter(true, testDir);
     const emitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'peer-review', false);
     const ledger: FindingLedger = {
-      version: 1,
       workflowName: 'peer-review',
       nextId: 2,
       updatedAt: '2026-06-13T02:30:00.000Z',
@@ -530,6 +529,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
           id: 'F-0001',
           status: 'open',
           lifecycle: 'new',
+          revision: 1,
           severity: 'high',
           title: 'Secret token should not become ruleId',
           location: 'src/core/workflow/evaluation/RuleEvaluator.ts:48',
@@ -543,6 +543,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
       ],
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
     };
 
     emitter.updateProviderInfo(7, 'mock', 'test-model', 'peer-review');
@@ -572,7 +573,6 @@ describe('AnalyticsEmitter findings ledger integration', () => {
     initAnalyticsWriter(true, fileInsteadOfDirectory);
     const emitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'peer-review', false);
     const ledger: FindingLedger = {
-      version: 1,
       workflowName: 'peer-review',
       nextId: 2,
       updatedAt: '2026-06-13T02:30:00.000Z',
@@ -581,6 +581,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
           id: 'F-0001',
           status: 'open',
           lifecycle: 'new',
+          revision: 1,
           severity: 'high',
           title: 'Analytics write should not abort workflow',
           reviewers: ['architecture-reviewer'],
@@ -591,6 +592,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
       ],
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
     };
 
     expect(() => emitter.onFindingLedgerUpdated(ledger)).not.toThrow();

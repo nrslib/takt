@@ -30,6 +30,7 @@ import type { FindingLedger } from '../core/workflow/findings/types.js';
 import type { FindingManagerValidationReport } from '../core/workflow/findings/store.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import { createFindingManagerPublicationDouble } from './helpers/finding-manager-publication.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -169,6 +170,11 @@ function makeRunner(options: {
 } {
   const withFindingContract = options.withFindingContract ?? true;
   const projectCwd = options.projectCwd ?? '/tmp/project';
+  const validationReportWriter = vi.fn(
+    (report: FindingManagerValidationReport) => (
+      `/tmp/findings-manager-validation.${report.stepName}.json`
+    ),
+  );
   const deps: ParallelRunnerDeps = {
     optionsBuilder: {
       buildAgentOptions: vi.fn().mockReturnValue({}),
@@ -208,19 +214,20 @@ function makeRunner(options: {
     findingLedgerStore: {
       workflowName: 'test-workflow',
       loadLedger: vi.fn().mockReturnValue({
-        version: 1,
         workflowName: 'test-workflow',
         nextId: 1,
         updatedAt: '2026-07-13T00:00:00.000Z',
         findings: [],
         rawFindings: [],
         conflicts: [],
-      }),
+        interpretations: [],
+      } satisfies FindingLedger),
       saveLedger: vi.fn(),
       updateLedger: vi.fn(),
       createRunCopy: vi.fn().mockReturnValue('.takt/runs/test/reports/findings-ledger.json'),
       saveRawFindings: vi.fn(),
-      saveManagerValidationReport: vi.fn(),
+      saveManagerValidationReport: validationReportWriter,
+      ...createFindingManagerPublicationDouble((report) => validationReportWriter(report)),
       saveConflictAdjudicationReport: vi.fn(),
     } as unknown as ParallelRunnerDeps['findingLedgerStore'],
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
@@ -313,7 +320,6 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         ...evidence,
       }];
       let ledger: FindingLedger = {
-        version: 1,
         workflowName: 'test-workflow',
         nextId: 2,
         updatedAt: '2026-07-13T00:00:00.000Z',
@@ -321,6 +327,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
           id: 'F-0001',
           status: 'resolved',
           lifecycle: 'resolved',
+          revision: 1,
           severity: 'high',
           title: 'Fixed issue',
           location: evidence.location,
@@ -341,6 +348,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
           relation: 'new',
         }],
         conflicts: [],
+        interpretations: [],
       };
       const reports: FindingManagerValidationReport[] = [];
       const ledgerStore = deps.findingLedgerStore!;
@@ -354,7 +362,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       vi.mocked(ledgerStore.saveRawFindings).mockReturnValue(join(projectCwd, 'raw-findings.json'));
       vi.mocked(ledgerStore.saveManagerValidationReport).mockImplementation((report) => {
         reports.push(report);
-        return join(projectCwd, 'manager-report.json');
+        return join(projectCwd, `findings-manager-validation.${report.stepName}.json`);
       });
       queueAgentResponse(makeAgentResponse({
         persona: 'ai-antipattern-review',

@@ -230,16 +230,16 @@ describe('StepExecutor', () => {
     });
     const buildAgentOptions = vi.fn().mockReturnValue({});
     const buildFindingContractInstructionContext = vi.fn().mockReturnValue(findingContractContext);
-    mkdirSync(join(cwd, '.takt/reports'), { recursive: true });
+    const reportDir = '.takt/runs/test-run/reports';
+    mkdirSync(join(cwd, reportDir), { recursive: true });
     const findingLedgerStore = createFindingLedgerStore({
       projectCwd: cwd,
-      reportDir: join(cwd, '.takt/reports'),
+      reportDir: join(cwd, reportDir),
       workflowName: 'test-workflow',
       ledgerPath: '.takt/findings/ledger.json',
       rawFindingsPath: '.takt/findings/raw',
     });
     findingLedgerStore.saveLedger({
-      version: 1,
       workflowName: 'test-workflow',
       nextId: 2,
       updatedAt: '2026-07-22T00:00:00.000Z',
@@ -247,6 +247,7 @@ describe('StepExecutor', () => {
         id: 'F-0001',
         status: 'resolved',
         lifecycle: 'resolved',
+        revision: 1,
         severity: 'high',
         title: 'Fixed issue',
         location: 'src/fixed.ts:1',
@@ -267,13 +268,14 @@ describe('StepExecutor', () => {
         relation: 'new',
       }],
       conflicts: [],
+      interpretations: [],
     });
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions,
         buildPhaseRunnerContext: vi.fn().mockReturnValue({
           cwd,
-          reportDir: '.takt/reports',
+          reportDir,
           language: 'en',
           lastResponse: 'No findings.',
           getSessionId: () => undefined,
@@ -290,7 +292,7 @@ describe('StepExecutor', () => {
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,
       getProjectCwd: () => cwd,
-      getReportDir: () => '.takt/reports',
+      getReportDir: () => reportDir,
       getRunPaths: () => runPaths,
       getLanguage: () => 'en',
       getInteractive: () => false,
@@ -313,7 +315,7 @@ describe('StepExecutor', () => {
       refreshFindingsState: vi.fn(),
       emitEvent: vi.fn(),
       recordSynthesizedAgentUsage: vi.fn(),
-      getRunId: () => 'run',
+      getRunId: () => 'test-run',
       getFindingCallNamespace: () => '',
       onPhaseComplete: vi.fn(),
     };
@@ -432,7 +434,7 @@ describe('StepExecutor', () => {
     expect(savedLedger.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('resolved');
     expect(savedLedger.findings.every((finding) => finding.provisional === undefined)).toBe(true);
     const report = JSON.parse(readFileSync(
-      join(cwd, '.takt/reports/findings-manager-validation.review.json'),
+      join(cwd, reportDir, 'findings-manager-validation.review.json'),
       'utf-8',
     )) as FindingManagerValidationReport;
     expect(report.unsupportedRawFindings?.some(

@@ -12,14 +12,12 @@ import {
   type ReviewerAnomalySpec,
 } from './reviewer-anomalies.js';
 import { isLocationClaimAbsent, verifySourceQuoteEvidence } from './admission-validation.js';
+import type { ProvisionalRecoveryOrigin } from './provisional-recovery-origin.js';
 
 export interface CanonicalIntakeItem {
   canonical: CanonicalRawFinding;
   wire: RawFinding;
-  recoveryOrigin?: {
-    provisionalFindingId: string;
-    expectedProvisionalRevision: number;
-  };
+  recoveryOrigins?: ProvisionalRecoveryOrigin[];
   interpretationRecoveryAttempt?: true;
 }
 

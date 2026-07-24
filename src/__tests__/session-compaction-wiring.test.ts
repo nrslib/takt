@@ -8,6 +8,8 @@ import type { StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import type { ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
+import { parseFindingLedger } from '../core/workflow/findings/schemas.js';
+import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { makeRule, makeStep } from './test-helpers.js';
 
 const { compactSessionBeforePhase1Mock, ingestFindingContractResultsMock } = vi.hoisted(() => ({
@@ -321,20 +323,21 @@ describe('session compaction Phase 1 wiring', () => {
       findingContract: {} as NonNullable<StepExecutorDeps['findingContract']>,
       findingLedgerStore: {
         loadLedger: vi.fn().mockReturnValue({
-          version: 1,
           workflowName: 'test-workflow',
           nextId: 1,
           updatedAt: '2026-07-16T00:00:00.000Z',
           findings: [],
           rawFindings: [],
           conflicts: [],
-        }),
+          interpretations: [],
+        } satisfies FindingLedger),
       } as NonNullable<StepExecutorDeps['findingLedgerStore']>,
       refreshFindingsState: vi.fn(),
       emitEvent: vi.fn(),
       getRunId: () => 'test-run',
       getFindingCallNamespace: () => '',
     };
+    expect(() => parseFindingLedger(deps.findingLedgerStore!.loadLedger())).not.toThrow();
     const state = makeState();
     state.personaSessions.set('reviewer:opencode', 'session-old');
     compactSessionBeforePhase1Mock.mockResolvedValueOnce('fresh');

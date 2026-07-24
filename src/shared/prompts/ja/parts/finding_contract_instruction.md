@@ -12,6 +12,7 @@
 - `new` / `persists` / `resolution_confirmation` / `reopened` は、証跡と必要な ledger ID を添える raw relation です。最終 lifecycle 判定と finding ID の対応づけは findings-manager とエンジンが行うため、レビュワーは最終状態を採番・判定しないでください。
 {{/if}}{{#if reviewerHasOpenFindings}}- 毎ラウンド、自分のレビュー範囲に入る open な台帳の指摘を検証してください。
 - open な指摘が修正済みだと確認できたら、relation を "resolution_confirmation"、targetFindingId に台帳の finding ID、description に file:line の証跡を書いた raw finding として報告してください。指摘が resolved になる経路はこの確認だけです。
+- resolution_confirmation は必ず evidenceKind を "source_quote"（"locationless" は不可）にし、location は `file:line` または `file:startLine-endLine` 形式の単一連続範囲だけ、verbatimExcerpt はその location の現在の全文と完全一致、snapshotId は現在値 `{{reviewScopeSnapshotId}}` を必須にしてください。複数 location、カンマ区切り範囲、部分引用・整形済み引用、古い snapshotId、空の証拠は拒否されます。
 - 同じ場所で未修正のまま残っている open な指摘を再報告しないでください。まだ発生しているがそれを明示的に確認したい場合（例: 別の行に移動した、沈黙せず「まだ残っている」ことを記録したい）は、relation を "persists"、targetFindingId にその台帳 finding ID を設定して報告してください — 元の報告との familyTag や行番号の違いは問題になりません。finding ID を明示してください。実際に別問題へ退行した場合にだけ、新しい "new" の issue として報告してください。
 {{/if}}{{#if reviewerHasWaivedFindings}}- 台帳サマリで waived になっている指摘を再報告しないでください。waive の前提が崩れていると観測した場合は、relation を "reopened"、targetFindingId にその waived finding ID を設定して報告してください。
 {{/if}}{{#if reviewerHasDismissedFindings}}- 台帳サマリで dismissed になっている指摘を new として再報告しないでください。dismiss の前提が成立しなくなったと観測した場合は、relation を "reopened"、targetFindingId にその dismissed finding ID を設定して報告してください。

@@ -170,7 +170,7 @@ function resolveRealPathWithinProject(cwd: string, path: string): RealPathResolu
 /**
  * true if this location string asserts no location at all — either genuinely
  * empty/undefined, or the N/A marker. Shared by manager-runner.ts's
- * evidence admission gate (review-integrity protocol) so a claim that legacy-normalizes to
+ * evidence admission gate (review-integrity protocol) so a claim that normalizes to
  * "no location" isn't held to the source_quote verbatim-evidence bar, which
  * only makes sense for claims that assert code exists at a specific site.
  */

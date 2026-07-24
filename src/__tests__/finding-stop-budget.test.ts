@@ -4,7 +4,7 @@
  *
  * B1 の fixpoint 判定だけでは、レビュアーが毎ラウンド別の架空 provisional を
  * 1件でも生成し続けると provisional 集合が毎回変わり fixpoint が永久に成立
- * しない（v3-r4 実測）。ここでは「累積ラウンド数（と任意で経過時間）が上限を
+ * しない（実測済み）。ここでは「累積ラウンド数（と任意で経過時間）が上限を
  * 超えたら、fixpoint が成立していなくても有限停止を判断できるようにする」
  * モデル挙動に依存しない停止条件が正しく機能することを検証する。
  *
@@ -63,13 +63,13 @@ beforeEach(() => {
 
 function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   return {
-    version: 1,
     workflowName: 'peer-review',
     nextId: 1,
     updatedAt: '2026-07-01T00:00:00.000Z',
     findings: [],
     rawFindings: [],
     conflicts: [],
+    interpretations: [],
     ...overrides,
   };
 }
@@ -301,6 +301,7 @@ function makeRoundHarness(
   let ledgerState = initialLedger;
   const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
+    ledgerIdentity: '/test/finding-stop-budget/ledger.json',
     workflowName: 'peer-review',
     loadLedger: () => ledgerState,
     saveLedger: (next) => { ledgerState = next; },
@@ -412,8 +413,8 @@ function interpretationRunAgentResponse(instruction: string): AgentResponse {
 
 function emptyLedger(): FindingLedger {
   return {
-    version: 1, workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-    findings: [], rawFindings: [], conflicts: [],
+    workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
+    findings: [], rawFindings: [], conflicts: [], interpretations: [],
   };
 }
 
@@ -435,7 +436,7 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
     context = buildFindingsRuleContext(harness.currentLedger());
     // Churn is real: the provisional set is different every round, so fixpoint
     // never fires. Without the stop budget, builtin workflows would replan
-    // this forever (v3-r4 measured shape).
+    // this forever (measured churn shape).
     expect(context.provisional.fixpoint).toBe(false);
     expect(context.provisional.count).toBe(3);
     // The bounded stop budget fires independently of fixpoint: 3 completed
@@ -459,7 +460,7 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
 
   it('progress (a substantive finding resolving) does not reset the round budget — it accumulates monotonically alongside the churn', async () => {
     const seeded: FindingLedger = {
-      version: 1, workflowName: 'peer-review', nextId: 2, updatedAt: '2026-07-01T00:00:00.000Z',
+      workflowName: 'peer-review', nextId: 2, updatedAt: '2026-07-01T00:00:00.000Z',
       findings: [{
         id: 'F-0001',
         status: 'open',
@@ -485,6 +486,7 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
         description: 'A genuine issue that the fixer can and will resolve.',
       }],
       conflicts: [],
+      interpretations: [],
     };
     const harness = makeRoundHarness(seeded, { maxRounds: 3 });
 
@@ -546,6 +548,7 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
     let ledgerState = emptyLedger();
     const reservations = new Set<string>();
     const ledgerStore: FindingLedgerStore = {
+      ledgerIdentity: '/test/finding-stop-budget/integrity-ledger.json',
       workflowName: 'peer-review',
       loadLedger: () => ledgerState,
       saveLedger: (next) => { ledgerState = next; },

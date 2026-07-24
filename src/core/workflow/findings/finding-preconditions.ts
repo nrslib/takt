@@ -20,7 +20,7 @@ import { computeRawEvidenceHash } from './raw-canonicalization.js';
 const EVIDENCE_HASH_ALGORITHM_VERSION = 1;
 
 export function findingRevision(entry: Pick<FindingLedgerEntry, 'revision'>): number {
-  return entry.revision ?? 1;
+  return entry.revision;
 }
 
 /**

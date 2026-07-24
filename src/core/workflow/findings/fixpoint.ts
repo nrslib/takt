@@ -28,7 +28,6 @@ function provisionalFixpointKey(
 ): string {
   const provisional = finding.provisional;
   const envelopeRounds = provisional.kind === 'reviewer-output-overflow'
-    && provisional.firstObservedRound !== undefined
     ? Math.min(
         REVIEWER_ENVELOPE_RECOVERY_LIMITS.maxUnavailableRounds,
         Math.max(0, roundsCompleted - provisional.firstObservedRound + 1),

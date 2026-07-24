@@ -29,7 +29,7 @@ export function collectManagerActionRecoveryCandidates(
   return ledger.findings.flatMap((finding) => (
     isOpenProvisional(finding)
       && classifyProvisionalRecovery(finding.provisional, roundsCompleted) === 'action'
-      ? [{ provisionalFindingId: finding.id, expectedRevision: finding.revision ?? 1 }]
+      ? [{ provisionalFindingId: finding.id, expectedRevision: finding.revision }]
       : []
   ));
 }
@@ -131,7 +131,7 @@ function buildActionRecoveryPlan(input: {
     const process = input.ledger.findings.find((finding) => finding.id === candidate.provisionalFindingId);
     if (process === undefined
       || !isOpenProvisional(process)
-      || (process.revision ?? 1) !== candidate.expectedRevision
+      || process.revision !== candidate.expectedRevision
       || process.provisional.actionRecovery === undefined) {
       return plan;
     }
@@ -182,13 +182,13 @@ function recordActionRecoveryFailures(
       const reason = failures.get(finding.id);
       if (!isOpenProvisional(finding)
         || reason === undefined
-        || (finding.revision ?? 1) !== expectedById.get(finding.id)) {
+        || finding.revision !== expectedById.get(finding.id)) {
         return finding;
       }
       const attempts = finding.provisional.actionRecoveryAttempts ?? [];
       return {
         ...finding,
-        revision: (finding.revision ?? 1) + 1,
+        revision: finding.revision + 1,
         provisional: {
           ...finding.provisional,
           actionRecoveryAttempts: [

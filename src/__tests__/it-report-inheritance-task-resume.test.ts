@@ -12,6 +12,7 @@ import { runAgent } from '../agents/runner.js';
 import { executeAndCompleteTask } from '../features/tasks/execute/taskExecution.js';
 import { invalidateGlobalConfigCache } from '../infra/config/index.js';
 import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
+import { parseFindingLedger } from '../core/models/finding-schemas.js';
 
 const sourceRunSlug = '20260717-source-run';
 const resumeModes = ['requeue', 'retry', 'instruct'] as const;
@@ -168,15 +169,15 @@ function writeSourceReports(projectDir: string, withFindingContract: boolean): {
     return { sourceReportDir };
   }
 
-  const sourceLedger = JSON.stringify({
-    version: 1,
+  const sourceLedger = JSON.stringify(parseFindingLedger({
     workflowName: 'child-fix',
     nextId: 1,
     updatedAt: '2026-07-17T00:00:00.000Z',
     findings: [],
     rawFindings: [],
     conflicts: [],
-  });
+    interpretations: [],
+  }));
   const ledgerPath = join(projectDir, '.takt', 'findings', 'review-ledger.json');
   mkdirSync(join(projectDir, '.takt', 'findings'), { recursive: true });
   writeFileSync(ledgerPath, sourceLedger, 'utf-8');

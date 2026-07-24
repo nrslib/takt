@@ -76,7 +76,7 @@ describe('buildFindingContractInstruction', () => {
     });
 
     // provisional は fixer が直接直せない system finding であることを明示する
-    // （v2 梯子設計 実装単位9）。
+    // （解釈梯子の配線要件）。
     it('explains provisional findings as unfixable system findings in both languages', () => {
       const en = build({ contract: { hasOpenFindings: true }, language: 'en' });
       expect(en).toContain('provisional');
@@ -127,6 +127,23 @@ describe('buildFindingContractInstruction', () => {
       expect(en).toContain('relation "reopened"');
       expect(ja).toContain('dismissed になっている指摘');
       expect(ja).toContain('relation を "reopened"');
+    });
+
+    it('requires current exact single-range evidence for resolution confirmations in both languages', () => {
+      const contract = {
+        rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT,
+        reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+        hasOpenFindings: true,
+      };
+      const en = build({ contract });
+      const ja = build({ contract, language: 'ja' });
+
+      expect(en).toContain('exactly one contiguous location');
+      expect(en).toContain('exactly matches the complete current text');
+      expect(en).toContain(REVIEWER_SNAPSHOT_ID);
+      expect(ja).toContain('単一連続範囲');
+      expect(ja).toContain('現在の全文と完全一致');
+      expect(ja).toContain(REVIEWER_SNAPSHOT_ID);
     });
   });
 

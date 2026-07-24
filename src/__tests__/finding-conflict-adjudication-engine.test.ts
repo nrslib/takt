@@ -133,7 +133,6 @@ describe('finding-conflict-adjudication engine detour', () => {
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
     mkdirSync(dirname(ledgerPath), { recursive: true });
     writeFileSync(ledgerPath, JSON.stringify({
-      version: 1,
       workflowName,
       nextId: 2,
       updatedAt: '2026-06-13T00:00:00.000Z',
@@ -141,6 +140,7 @@ describe('finding-conflict-adjudication engine detour', () => {
         id: 'F-0001',
         status: 'open',
         lifecycle: 'new',
+        revision: 1,
         severity: 'high',
         title: 'Disputed issue',
         location: findingLocation,
@@ -151,7 +151,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       }],
       rawFindings: [],
       conflicts: [{
-        id: 'C-0001',
+        id: 'C-FA2947446963',
         status: 'active',
         findingIds: ['F-0001'],
         rawFindingIds: [],
@@ -159,6 +159,7 @@ describe('finding-conflict-adjudication engine detour', () => {
         firstSeen: { runId: 'run-0', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
         lastSeen: { runId: 'run-0', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
       }],
+      interpretations: [],
     }, null, 2), 'utf-8');
   };
 
@@ -181,7 +182,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           status: 'done',
           content: '{}',
           structuredOutput: {
-            conflictId: 'C-0001',
+            conflictId: 'C-FA2947446963',
             outcome: 'finding_stale',
             findingTransition: 'resolved',
             evidence: ['Verified fixed against current code.', 'src/a.ts:5'],
@@ -235,7 +236,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           status: 'done',
           content: '{}',
           structuredOutput: {
-            conflictId: 'C-0001',
+            conflictId: 'C-FA2947446963',
             outcome,
             findingTransition: 'keep_open',
             evidence: ['Cannot state a concrete resolution from the evidence available.'],
@@ -288,7 +289,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           status: 'done',
           content: '{}',
           structuredOutput: {
-            conflictId: 'C-0001',
+            conflictId: 'C-FA2947446963',
             outcome: 'finding_stale',
             findingTransition: 'resolved',
             evidence: ['Verified fixed against current code.', 'src/a.ts:5'],
@@ -350,7 +351,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           status: 'done',
           content: '{}',
           structuredOutput: {
-            conflictId: 'C-0001',
+            conflictId: 'C-FA2947446963',
             outcome: 'finding_stale',
             findingTransition: 'resolved',
             evidence: ['Verified fixed against current code.', 'src/a.ts:5'],
@@ -472,6 +473,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       id: 'F-0001',
       status: 'open',
       lifecycle: 'new',
+      revision: 1,
       severity: 'high',
       title: 'Disputed issue',
       location: 'src/a.ts:5',
@@ -492,7 +494,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       relation: 'new',
     };
     const conflictBase = {
-      id: 'C-0001',
+      id: 'C-FA2947446963',
       status: 'active',
       findingIds: ['F-0001'],
       rawFindingIds: [],
@@ -506,7 +508,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       computeReviewScopeSnapshotId(cwd),
     );
     writeFileSync(ledgerPath, JSON.stringify({
-      version: 1,
       workflowName: 'adjudication-engine-test',
       nextId: 2,
       updatedAt: '2026-06-13T00:00:00.000Z',
@@ -523,6 +524,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           originStep: 'final-gate',
         }],
       }],
+      interpretations: [],
     }, null, 2), 'utf-8');
 
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -534,7 +536,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           status: 'done',
           content: '{}',
           structuredOutput: {
-            conflictId: 'C-0001',
+            conflictId: 'C-FA2947446963',
             outcome: 'finding_stale',
             findingTransition: 'resolved',
             evidence: ['Verified fixed against current code.', 'src/a.ts:5'],
@@ -608,6 +610,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       id: 'F-0001',
       status: 'open',
       lifecycle: 'new',
+      revision: 1,
       severity: 'high',
       title: 'Disputed issue',
       location: 'src/a.ts:5',
@@ -628,7 +631,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       relation: 'new',
     };
     const conflictBase = {
-      id: 'C-0001',
+      id: 'C-FA2947446963',
       status: 'active',
       findingIds: ['F-0001'],
       rawFindingIds: [],
@@ -642,7 +645,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       computeReviewScopeSnapshotId(cwd),
     );
     writeFileSync(ledgerPath, JSON.stringify({
-      version: 1,
       workflowName: 'adjudication-engine-test',
       nextId: 2,
       updatedAt: '2026-06-13T00:00:00.000Z',
@@ -657,6 +659,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           // originStep なし
         }],
       }],
+      interpretations: [],
     }, null, 2), 'utf-8');
 
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -668,7 +671,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           status: 'done',
           content: '{}',
           structuredOutput: {
-            conflictId: 'C-0001',
+            conflictId: 'C-FA2947446963',
             outcome: 'finding_stale',
             findingTransition: 'resolved',
             evidence: ['Verified fixed against current code.', 'src/a.ts:5'],
@@ -734,7 +737,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           status: 'done',
           content: '{}',
           structuredOutput: {
-            conflictId: 'C-0001',
+            conflictId: 'C-FA2947446963',
             outcome: 'finding_stale',
             findingTransition: 'resolved',
             evidence: ['Verified fixed against current code.', 'src/a.ts:5'],
@@ -785,7 +788,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
       const isAdjudicationCall = schemaText.includes('"findingTransition"')
-        || instruction.includes('conflict C-0001');
+        || instruction.includes('conflict C-FA2947446963');
       if (isAdjudicationCall) {
         adjudicationCallCount += 1;
         if (adjudicationCallCount === 1) {
@@ -802,7 +805,7 @@ describe('finding-conflict-adjudication engine detour', () => {
         // 行われなければ（= claude 基準のままなら）structured output 欠落として
         // 落ち、run は完走できない。
         const fenced = JSON.stringify({
-          conflictId: 'C-0001',
+          conflictId: 'C-FA2947446963',
           outcome: 'finding_stale',
           findingTransition: 'resolved',
           evidence: ['Verified fixed against current code.', 'src/a.ts:5'],
@@ -835,7 +838,7 @@ describe('finding-conflict-adjudication engine detour', () => {
 
     const adjudicationCalls = vi.mocked(runAgent).mock.calls.filter(([, instruction, options]) => (
       (options?.outputSchema && JSON.stringify(options.outputSchema).includes('"findingTransition"'))
-      || instruction.includes('conflict C-0001')
+      || instruction.includes('conflict C-FA2947446963')
     ));
     // 1回目（claude・ネイティブ対応）: フェンス方式の契約は注入されない
     expect(adjudicationCalls[0]![1]).not.toContain('Return exactly one fenced JSON block');
@@ -1108,7 +1111,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           structuredOutput: {
             rawDecisions: [],
             disputeDecisions: [],
-            conflictDecisions: [{ conflictId: 'C-0001', decision: 'keep', evidence: 'Reviewers still disagree.' }],
+            conflictDecisions: [{ conflictId: 'C-FA2947446963', decision: 'keep', evidence: 'Reviewers still disagree.' }],
             invalidateDecisions: [],
             duplicateDecisions: [],
             dismissDecisions: [],
@@ -1123,7 +1126,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           status: 'done',
           content: '{}',
           structuredOutput: {
-            conflictId: 'C-0001',
+            conflictId: 'C-FA2947446963',
             outcome: 'finding_valid',
             findingTransition: 'keep_open',
             evidence: ['The reviewer is right: the guard is still missing at src/a.ts:5.'],
@@ -1267,7 +1270,6 @@ describe('finding-conflict-adjudication engine detour', () => {
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
     mkdirSync(dirname(ledgerPath), { recursive: true });
     writeFileSync(ledgerPath, JSON.stringify({
-      version: 1,
       workflowName: 'adjudication-engine-test',
       nextId: 2,
       updatedAt: '2026-06-13T00:00:00.000Z',
@@ -1275,6 +1277,7 @@ describe('finding-conflict-adjudication engine detour', () => {
         id: 'F-0001',
         status: 'open',
         lifecycle: 'new',
+        revision: 1,
         severity: 'high',
         title: 'Secret is logged',
         location: 'src/secret.ts:12',
@@ -1286,6 +1289,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       }],
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
     }, null, 2), 'utf-8');
 
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -1400,7 +1404,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       reportDirName: 'test-report-dir',
     }).run();
 
-    // v2 梯子設計: correction で persists に直っても taint は消えない（攻撃4:
+    // correction で persists に直っても taint は消えない（攻撃4:
     // persists 洗浄の防止）。targetFindingId が書かれているだけでは F-0001 に
     // 吸収されず、manager 提案（open_conflict）に従い conflict + provisional に
     // 着地する。provisional が残るため COMPLETE はエンジン最終不変条件で拒否
@@ -1431,7 +1435,6 @@ describe('finding-conflict-adjudication engine detour', () => {
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
     mkdirSync(dirname(ledgerPath), { recursive: true });
     writeFileSync(ledgerPath, JSON.stringify({
-      version: 1,
       workflowName: 'adjudication-engine-test',
       nextId: 2,
       updatedAt: '2026-06-13T00:00:00.000Z',
@@ -1439,6 +1442,7 @@ describe('finding-conflict-adjudication engine detour', () => {
         id: 'F-0001',
         status: 'open',
         lifecycle: 'new',
+        revision: 1,
         severity: 'high',
         title: 'Secret is logged',
         location: 'src/secret.ts:12',
@@ -1450,6 +1454,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       }],
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
     }, null, 2), 'utf-8');
 
     const incoherentOutput = {
@@ -1552,7 +1557,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       reportDirName: 'test-report-dir',
     }).run();
 
-    // v2: 直らなかった raw は drop されず provisional として台帳に残り、
+    // 直らなかった raw は drop されず provisional として台帳に残り、
     // COMPLETE はエンジン最終不変条件で拒否される。
     expect(result.status).toBe('aborted');
 

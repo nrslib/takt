@@ -89,9 +89,8 @@ export interface FindingContractIntakeInput {
 /**
  * findings-manager を実行し、台帳更新イベントを発火する。台帳への
  * 取り込みという副作用込みの手続きをここへ集約し、ParallelRunner と
- * StepExecutor の両方が同じ手順で呼べるようにする。取り込みは
- * 常に 'updated' で完了する（manager の壊れた応答・予算超過は
- * provisional として台帳へ着地し、run-level の invalid_manager_output は無い）。
+ * StepExecutor の両方が同じ手順で呼べるようにする。適用済みroundの再実行は
+ * 'unchanged' となり、台帳更新イベントを重ねて発火しない。
  */
 export async function ingestFindingContractResults(
   input: FindingContractIntakeInput,
@@ -114,8 +113,10 @@ export async function ingestFindingContractResults(
     ledgerCopyPath: input.ledgerCopyPath,
     priorStepResponseText: input.priorStepResponseText,
   });
-  input.refreshFindingsState();
-  input.emitEvent('findings:ledger', result.ledger);
+  if (result.status === 'updated') {
+    input.refreshFindingsState();
+    input.emitEvent('findings:ledger', result.ledger);
+  }
   return result;
 }
 

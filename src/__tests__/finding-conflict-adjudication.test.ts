@@ -38,7 +38,9 @@ function buildFindingsRuleContext(ledger: FindingLedger) {
   return buildFindingsRuleContextWithScope(ledger, process.cwd());
 }
 
-function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedgerEntry {
+function makeFinding(
+  overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+): FindingLedgerEntry {
   return {
     id: 'F-0001',
     status: 'open',
@@ -56,7 +58,7 @@ function makeFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLedger
 
 function makeConflict(overrides: Partial<FindingLedgerConflict> = {}): FindingLedgerConflict {
   return {
-    id: 'C-0001',
+    id: 'C-FA2947446963',
     status: 'active',
     findingIds: ['F-0001'],
     rawFindingIds: [],
@@ -69,11 +71,10 @@ function makeConflict(overrides: Partial<FindingLedgerConflict> = {}): FindingLe
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   return {
-    version: 1,
     workflowName: 'test-workflow',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
-    findings: [makeFinding()],
+    findings: [makeFinding({ revision: 1 })],
     rawFindings: [{
       rawFindingId: 'raw-1',
       stepName: 'reviewers',
@@ -85,13 +86,14 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
       description: 'The bug is present.',
     }],
     conflicts: [makeConflict()],
+    interpretations: [],
     ...overrides,
   };
 }
 
 function makeOutput(overrides: Partial<FindingConflictAdjudicationOutput> = {}): FindingConflictAdjudicationOutput {
   return {
-    conflictId: 'C-0001',
+    conflictId: 'C-FA2947446963',
     outcome: 'undetermined',
     findingTransition: 'keep_open',
     evidence: ['No conclusive evidence either way.'],
@@ -196,7 +198,7 @@ describe('computeConflictEvidenceHash / isConflictUnadjudicated', () => {
     const before = makeLedger({ rawFindings: [makeRaw()] });
     const hashBefore = computeConflictEvidenceHash(before.conflicts[0]!, before);
     const after = makeLedger({
-      findings: [makeFinding({ rawFindingIds: ['raw-renamed'] })],
+      findings: [makeFinding({ revision: 1, rawFindingIds: ['raw-renamed'] })],
       rawFindings: [makeRaw({ rawFindingId: 'raw-renamed' })],
     });
     const hashAfter = computeConflictEvidenceHash(after.conflicts[0]!, after);
@@ -214,7 +216,7 @@ describe('computeConflictEvidenceHash / isConflictUnadjudicated', () => {
     const before = makeLedger({ rawFindings: [makeRaw()] });
     const hashBefore = computeConflictEvidenceHash(before.conflicts[0]!, before);
     const after = makeLedger({
-      findings: [makeFinding({ rawFindingIds: ['raw-1', 'raw-2'] })],
+      findings: [makeFinding({ revision: 1, rawFindingIds: ['raw-1', 'raw-2'] })],
       rawFindings: [makeRaw(), makeRaw({ rawFindingId: 'raw-2', description: 'A second, different observation.' })],
     });
     const hashAfter = computeConflictEvidenceHash(after.conflicts[0]!, after);
@@ -226,7 +228,7 @@ describe('computeConflictEvidenceHash / isConflictUnadjudicated', () => {
     const hashBefore = computeConflictEvidenceHash(before.conflicts[0]!, before);
     const after = makeLedger({
       rawFindings: [makeRaw()],
-      findings: [makeFinding({
+      findings: [makeFinding({ revision: 1,
         disputes: [{ reason: 'stale', evidence: 'src/a.ts no longer has this code', recordedAt: { runId: 'run-2', stepName: 'fix', timestamp: '2026-06-13T01:00:00.000Z' } }],
       })],
     });
@@ -275,7 +277,7 @@ describe('applyFindingConflictAdjudication', () => {
     const finding = result.ledger.findings.find((f) => f.id === 'F-0001')!;
     expect(finding.status).toBe('resolved');
     expect(finding.lifecycle).toBe('resolved');
-    const conflict = result.ledger.conflicts.find((c) => c.id === 'C-0001')!;
+    const conflict = result.ledger.conflicts.find((c) => c.id === 'C-FA2947446963')!;
     expect(conflict.status).toBe('resolved');
     expect(conflict.adjudications).toHaveLength(1);
     expect(conflict.adjudications![0]!.evidenceHash).toBe('hash-1');
@@ -400,7 +402,7 @@ describe('applyFindingConflictAdjudication', () => {
   });
 
   it('evidence_invalid -> invalidated: machine-verifies when the finding location does not exist', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ location: 'src/does-not-exist.ts:1' })] });
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, location: 'src/does-not-exist.ts:1' })] });
     const output = makeOutput({
       outcome: 'evidence_invalid',
       findingTransition: 'invalidated',
@@ -415,7 +417,7 @@ describe('applyFindingConflictAdjudication', () => {
   });
 
   it('evidence_invalid -> invalidated: falls back to adjudicator evidence when the location resolves fine', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ location: 'src/a.ts:5' })] });
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, location: 'src/a.ts:5' })] });
     const output = makeOutput({
       outcome: 'evidence_invalid',
       findingTransition: 'invalidated',
@@ -444,14 +446,14 @@ describe('applyFindingConflictAdjudication', () => {
     expect(result.disposition).toBe('unresolved');
     const finding = result.ledger.findings.find((f) => f.id === 'F-0001')!;
     expect(finding.status).toBe('open');
-    const conflict = result.ledger.conflicts.find((c) => c.id === 'C-0001')!;
+    const conflict = result.ledger.conflicts.find((c) => c.id === 'C-FA2947446963')!;
     expect(conflict.status).toBe('active');
     expect(conflict.adjudications).toHaveLength(1);
     expect(conflict.adjudications![0]!.outcome).toBe('finding_valid');
   });
 
   it('finding_valid + actionableFix -> actionable_fix: conflict はレビュア側支持で resolved、finding は open のまま suggestion に fix が載る', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ suggestion: 'Original suggestion.' })] });
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, suggestion: 'Original suggestion.' })] });
     const output = makeOutput({
       outcome: 'finding_valid',
       findingTransition: 'keep_open',
@@ -467,7 +469,7 @@ describe('applyFindingConflictAdjudication', () => {
     expect(finding.status).toBe('open');
     expect(finding.suggestion).toContain('Original suggestion.');
     expect(finding.suggestion).toContain('[adjudicated fix] Guard the null case');
-    const conflict = result.ledger.conflicts.find((c) => c.id === 'C-0001')!;
+    const conflict = result.ledger.conflicts.find((c) => c.id === 'C-FA2947446963')!;
     expect(conflict.status).toBe('resolved');
     expect(conflict.resolvedEvidence).toContain('in favor of the reviewer');
     expect(conflict.resolvedEvidence).toContain('Guard the null case');
@@ -531,16 +533,22 @@ describe('applyFindingConflictAdjudication', () => {
 describe('selectConflictForAdjudication', () => {
   it('picks the first active conflict that is unadjudicated, skipping resolved and already-adjudicated ones', () => {
     const ledger = makeLedger({
+      nextId: 5,
+      findings: [
+        makeFinding({ revision: 1, id: 'F-0002', rawFindingIds: [] }),
+        makeFinding({ revision: 1, id: 'F-0003', rawFindingIds: [] }),
+        makeFinding({ revision: 1, id: 'F-0004', rawFindingIds: [] }),
+      ],
       conflicts: [
-        makeConflict({ id: 'C-resolved', status: 'resolved' }),
-        makeConflict({ id: 'C-adjudicated', adjudications: [{ evidenceHash: 'stays-same', outcome: 'undetermined', findingTransition: 'keep_open', evidence: ['x'], actionableFix: '', decidedAt: { runId: 'run-1', stepName: 'finding-conflict-adjudication', timestamp: '2026-06-13T00:00:00.000Z' } }] }),
-        makeConflict({ id: 'C-target' }),
+        makeConflict({ id: 'C-2BF240CC0BEC', findingIds: ['F-0002'], status: 'resolved' }),
+        makeConflict({ id: 'C-85DE8622C4AC', findingIds: ['F-0003'], adjudications: [{ evidenceHash: 'stays-same', outcome: 'undetermined', findingTransition: 'keep_open', evidence: ['x'], actionableFix: '', decidedAt: { runId: 'run-1', stepName: 'finding-conflict-adjudication', timestamp: '2026-06-13T00:00:00.000Z' } }] }),
+        makeConflict({ id: 'C-0868C7FDC93C', findingIds: ['F-0004'] }),
       ],
     });
     const target = selectConflictForAdjudication(ledger, (conflict) => (
-      conflict.id === 'C-target' || (conflict.adjudications?.at(-1)?.evidenceHash !== 'stays-same')
+      conflict.id === 'C-0868C7FDC93C' || (conflict.adjudications?.at(-1)?.evidenceHash !== 'stays-same')
     ));
-    expect(target?.id).toBe('C-target');
+    expect(target?.id).toBe('C-0868C7FDC93C');
   });
 
   it('returns undefined when nothing is eligible', () => {
@@ -582,7 +590,7 @@ describe('buildFindingsRuleContext: conflicts.unadjudicated', () => {
   it('re-counts as unadjudicated once a new dispute changes the evidence hash', () => {
     const ledger = makeLedger();
     const staleHash = computeConflictEvidenceHash(ledger.conflicts[0]!, ledger);
-    const findingWithNewDispute = makeFinding({
+    const findingWithNewDispute = makeFinding({ revision: 1,
       disputes: [{ reason: 'stale', evidence: 'no longer true', recordedAt: { runId: 'run-2', stepName: 'fix', timestamp: '2026-06-13T01:00:00.000Z' } }],
     });
     const changedLedger: FindingLedger = {

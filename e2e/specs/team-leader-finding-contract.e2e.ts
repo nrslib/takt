@@ -16,7 +16,6 @@ function seedFindingLedger(repoPath: string): void {
   mkdirSync(join(repoPath, 'src'), { recursive: true });
   writeFileSync(join(repoPath, 'src', 'target.ts'), 'export const target = false;\n', 'utf-8');
   writeFileSync(join(findingDirectory, 'peer-review.json'), JSON.stringify({
-    version: 1,
     workflowName: 'e2e-team-leader-finding-contract-fix',
     nextId: 2,
     updatedAt: '2026-07-23T00:00:00.000Z',
@@ -33,6 +32,7 @@ function seedFindingLedger(repoPath: string): void {
       relation: 'new',
     }],
     conflicts: [],
+    interpretations: [],
     findings: [{
       id: 'F-0001',
       status: 'open',

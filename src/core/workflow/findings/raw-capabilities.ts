@@ -61,7 +61,7 @@ function sameProofIdentityKey(fields: {
 }
 
 function findingRevisionOf(entry: FindingLedgerEntry): number {
-  return entry.revision ?? 1;
+  return entry.revision;
 }
 
 /**

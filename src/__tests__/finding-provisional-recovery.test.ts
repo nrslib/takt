@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FindingLedger, FindingLedgerEntry, FindingManagerOutput, RawFinding } from '../core/workflow/findings/types.js';
 import {
+  applyRejectedObservationAttachments,
   applyProvisionalSettlement,
   settleProvisionalsWithCleanEvidence,
 } from '../core/workflow/findings/manager-provisional-settlement.js';
@@ -15,7 +16,9 @@ import {
 import {
   beginInterpretations,
   completeInterpretations,
+  countInterpretationEpochs,
   markInterpretationsApplied,
+  normalizeProvisionalInterpretationEpochs,
   releaseInterpretationReservations,
   resolveInterpretationAttempt,
 } from '../core/workflow/findings/interpretation-wal.js';
@@ -26,10 +29,15 @@ import {
 } from '../core/workflow/findings/manager-action-recovery.js';
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import { applyRawAdjudicationRecovery } from '../core/workflow/findings/raw-adjudication-commit.js';
-import { captureFindingPreconditions } from '../core/workflow/findings/finding-preconditions.js';
+import {
+  captureFindingPreconditions,
+  checkFindingPrecondition,
+} from '../core/workflow/findings/finding-preconditions.js';
 import type { LadderResult, RunFindingManagerForStepInput } from '../core/workflow/findings/manager-contracts.js';
 import {
+  applyInterpretationRecoveryFailures,
   attachInterpretationRecoveryOrigins,
+  collectInterpretationRecoveryPlan,
   collectInterpretationRecoveryItems,
 } from '../core/workflow/findings/interpretation-recovery.js';
 import { classifyInitialLadderTargets } from '../core/workflow/findings/manager-interpretation-plan.js';
@@ -41,12 +49,37 @@ import {
   buildLadderCommitPlan,
   selectCommittableLadder,
 } from '../core/workflow/findings/manager-ladder-commit-plan.js';
+import {
+  buildFindingManagerCommitMutation,
+  type FindingManagerCommitPlanInput,
+} from '../core/workflow/findings/manager-commit-plan.js';
+import {
+  matchesProvisionalRecoveryOrigin,
+  snapshotProvisionalRecoveryOrigin,
+} from '../core/workflow/findings/provisional-recovery-origin.js';
+import { resolveReviewIntegrityLimits } from '../core/workflow/findings/review-integrity.js';
+import { resolveStopBudgetLimits } from '../core/workflow/findings/stop-budget.js';
+import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import { buildManagerCommitReport } from '../core/workflow/findings/manager-report.js';
 
 const observation = {
   runId: 'run-1',
   stepName: 'reviewers',
   timestamp: '2026-07-20T00:00:00.000Z',
 };
+const stopBudgetRoundMarker = 'test-round-marker';
+
+function completedWalFields(rawFindingId: string) {
+  return {
+    reservationToken: `reservation-${rawFindingId}`,
+    completedAt: observation,
+    validatedDecision: {
+      decision: 'provisional' as const,
+      rawFindingId,
+      reason: 'Recorded test interpretation.',
+    },
+  };
+}
 
 function emptyOutput(): FindingManagerOutput {
   return {
@@ -112,17 +145,968 @@ function provisional(
 
 function ledger(findings: FindingLedgerEntry[], rawFindings: RawFinding[] = []): FindingLedger {
   return {
-    version: 1,
     workflowName: 'peer-review',
     nextId: 20,
     updatedAt: observation.timestamp,
     findings,
     rawFindings,
     conflicts: [],
+    interpretations: [],
   };
 }
 
+function emptyCommitPlanInput(
+  overrides: Partial<FindingManagerCommitPlanInput> = {},
+): FindingManagerCommitPlanInput {
+  const previousLedger = ledger([]);
+  return {
+    input: {
+      contract: {},
+      cwd: process.cwd(),
+      ledgerStore: {},
+      optionsBuilder: {},
+      stepExecutor: {},
+      parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
+      stepIteration: 1,
+      subResults: [],
+      workflowName: previousLedger.workflowName,
+      runId: observation.runId,
+      callNamespace: '',
+      timestamp: observation.timestamp,
+    } as RunFindingManagerForStepInput,
+    previousLedger,
+    intake: {
+      items: [],
+      overflowRawFindingIds: new Set(),
+      overflowSpecs: [],
+      overflowReports: [],
+      clarifications: [],
+      rawNormalizations: [],
+      healthyReviewerStableKeys: new Set(),
+    },
+    interpretationRecoveryFailures: [],
+    admission: {
+      admissionRejections: [],
+      admissionAnomalySpecs: [],
+      admissionRejectedItems: [],
+      locationlessProvisionalItems: [],
+      pendingRejectedObservations: [],
+      cleanAdmitted: [],
+      tainted: [],
+      taintedAdmitted: [],
+      ladderAnomalySpecs: [],
+      verifiedEvidenceCandidates: [],
+      provisionalOnlyLadderRawIds: new Set(),
+      cleanWire: [],
+    },
+    managerDecision: {
+      managerOutput: emptyOutput(),
+      invalidAttempts: [],
+      cleanProvisionalSpecs: [],
+      unsupportedRawFindingReports: [],
+      cleanWireById: new Map(),
+      cleanCanonicalById: new Map(),
+      ladder: {
+        interpretationReservations: new Map(),
+        deferredRawFindingIds: new Set(),
+        pendingSameWithProof: [],
+        pendingIndependentNew: [],
+        pendingConflicts: [],
+        provisionalSpecs: [],
+        provisionalByInterpretationKey: new Map(),
+        pendingAppliedReattach: [],
+        recoveryProvisionalOrigins: new Map(),
+        stats: {} as LadderResult['stats'],
+      },
+      rawRecovery: {
+        intake: {
+          items: [],
+          overflowRawFindingIds: new Set(),
+          overflowSpecs: [],
+          overflowReports: [],
+          clarifications: [],
+          rawNormalizations: [],
+          healthyReviewerStableKeys: new Set(),
+        },
+        output: emptyOutput(),
+        origins: new Map(),
+        failures: new Map(),
+        capturedPreconditions: new Map(),
+        invalidAttempts: [],
+        unsupportedRawFindingReports: [],
+        cleanWireById: new Map(),
+        cleanCanonicalById: new Map(),
+        reservationTokens: new Set(),
+      },
+    },
+    observation,
+    stopBudgetLimits: resolveStopBudgetLimits(undefined),
+    stopBudgetRoundMarker: 'round-empty',
+    reviewIntegrityLimits: resolveReviewIntegrityLimits(undefined),
+    reviewScopeSnapshotId: 'snapshot-empty',
+    ...overrides,
+  };
+}
+
+type MixedManagerEntryKind =
+  | 'matches'
+  | 'newFindings'
+  | 'resolvedFindings'
+  | 'reopenedFindings'
+  | 'conflicts';
+
+function mixedManagerOutput(
+  kind: MixedManagerEntryKind,
+  findingId: string,
+  rawFindingIds: string[],
+  title: string,
+): FindingManagerOutput {
+  const output = emptyOutput();
+  switch (kind) {
+    case 'matches':
+      return {
+        ...output,
+        matches: [{ findingId, rawFindingIds, evidence: 'Manager grouped both raw findings.' }],
+      };
+    case 'newFindings':
+      return {
+        ...output,
+        newFindings: [{ rawFindingIds, title, severity: 'high' }],
+      };
+    case 'resolvedFindings':
+      return {
+        ...output,
+        resolvedFindings: [{ findingId, rawFindingIds, evidence: 'Manager grouped both raw findings.' }],
+      };
+    case 'reopenedFindings':
+      return {
+        ...output,
+        reopenedFindings: [{ findingId, rawFindingIds, evidence: 'Manager grouped both raw findings.' }],
+      };
+    case 'conflicts':
+      return {
+        ...output,
+        conflicts: [{
+          findingIds: [findingId],
+          rawFindingIds,
+          description: 'Manager grouped both raw findings.',
+        }],
+      };
+  }
+}
+
 describe('provisional recovery', () => {
+  it('preserves unsupported, stale, and audit-only replay outcomes in the final manager report', () => {
+    const rawFindingDispositions = [
+      { rawFindingId: 'replay-unsupported', outcome: 'unsupported' as const, reason: 'Unsupported.' },
+      { rawFindingId: 'replay-stale', outcome: 'stale' as const, reason: 'Precondition changed.' },
+      { rawFindingId: 'replay-audit', outcome: 'audit_only' as const, reason: 'Source is missing.' },
+    ];
+
+    const report = buildManagerCommitReport({
+      runId: observation.runId,
+      stepName: observation.stepName,
+      managerOutput: emptyOutput(),
+      invalidAttempts: [],
+      staleRejections: [],
+      admissionRejections: [],
+      unsupportedRawFindingReports: [],
+      overflowReports: [],
+      provisionalLandings: [],
+      reviewerAnomalyLandings: [],
+      rawNormalizations: [],
+      clarifications: [],
+      interpretationStats: {
+        ambiguousRawCount: 0,
+        managerCalls: 0,
+        estimatedInputTokens: 0,
+        estimatedOutputTokens: 0,
+        reusedCompletedDecisions: 0,
+        interruptedInterpretations: 0,
+        budgetExhaustedLineages: 0,
+      },
+      rawFindingDispositions,
+      interpretationRecoverySettlements: [],
+    });
+
+    expect(report).toEqual(expect.objectContaining({
+      version: 1,
+      rawFindingDispositions,
+    }));
+  });
+
+  it('returns the complete fresh ledger unchanged when the manager round marker was already applied', () => {
+    const baseFinding = provisional('F-0001', 'raw-adjudication-unresolved');
+    const finding: FindingLedgerEntry = {
+      ...baseFinding,
+      revision: 2,
+      provisional: {
+        ...baseFinding.provisional!,
+        interpretationEpochs: 1,
+      },
+    };
+    const freshLedger: FindingLedger = {
+      ...ledger([finding], [raw('source-1')]),
+      reviewerAnomalies: [{
+        id: 'A-0001',
+        kind: 'quote-mismatch',
+        stableKey: 'anomaly-1',
+        lineageKey: 'anomaly-lineage-1',
+        sourceRawFindingIds: ['source-1'],
+        reviewers: ['reviewer-a'],
+        title: 'Existing reviewer anomaly',
+        mismatchReason: 'Existing audit record.',
+        firstObserved: observation,
+        lastObserved: observation,
+        occurrences: 1,
+      }],
+      stopBudget: {
+        roundMarkers: ['round-repeat'],
+        firstRoundAt: observation.timestamp,
+        exhausted: false,
+      },
+      reviewIntegrity: {
+        roundMarkers: ['round-repeat'],
+        firstRoundAt: observation.timestamp,
+        exhausted: false,
+      },
+      interpretations: [{
+        interpretationKey: 'interpretation-existing',
+        baseInterpretationKey: 'interpretation-base-existing',
+        attemptOrdinal: 1,
+        reviewerStableKey: 'reviewer-stable-a',
+        lineageKey: finding.provisional!.lineageKey,
+        candidateEvidenceHash: 'evidence-existing',
+        stage: 'ledger_applied',
+        startedAt: observation,
+        ...completedWalFields('raw-existing'),
+        promptPreconditions: [],
+        appliedAt: observation,
+        applicationResult: 'provisional_created',
+      }],
+    };
+    const params = emptyCommitPlanInput({
+      previousLedger: freshLedger,
+      stopBudgetRoundMarker: 'round-repeat',
+    });
+
+    const mutation = buildFindingManagerCommitMutation(params, freshLedger);
+
+    expect(mutation.ledger).toBe(freshLedger);
+    expect(mutation.ledger).toEqual(freshLedger);
+  });
+
+  it('matches a reserved origin only when the complete provisional identity is unchanged', () => {
+    const process = provisional('F-0001', 'raw-adjudication-unresolved');
+    const origin = snapshotProvisionalRecoveryOrigin({
+      ...process,
+      provisional: process.provisional!,
+    });
+    const changes: FindingLedgerEntry[] = [
+      { ...process, revision: 2 },
+      { ...process, status: 'resolved' },
+      {
+        ...process,
+        provisional: { ...process.provisional!, stableKey: 'replacement-stable' },
+      },
+      {
+        ...process,
+        provisional: { ...process.provisional!, lineageKey: 'replacement-lineage' },
+      },
+      {
+        ...process,
+        provisional: {
+          ...process.provisional!,
+          recoveryReviewerStableKey: 'replacement-reviewer',
+        },
+      },
+    ];
+
+    expect(matchesProvisionalRecoveryOrigin(process, origin)).toBe(true);
+    expect(changes.every((finding) => !matchesProvisionalRecoveryOrigin(finding, origin))).toBe(true);
+  });
+
+  it('increments revision only when WAL epoch normalization changes a provisional and rejects the old recovery origin', () => {
+    const process = provisional('F-0001', 'interpretation-interrupted');
+    const origin = snapshotProvisionalRecoveryOrigin({
+      ...process,
+      provisional: process.provisional!,
+    });
+    const current: FindingLedger = {
+      ...ledger([process]),
+      interpretations: [{
+        interpretationKey: 'interpretation-1',
+        baseInterpretationKey: 'interpretation-base-1',
+        attemptOrdinal: 1,
+        reviewerStableKey: 'reviewer-stable-a',
+        lineageKey: process.provisional!.lineageKey,
+        candidateEvidenceHash: 'evidence-1',
+        stage: 'ledger_applied',
+        startedAt: observation,
+        ...completedWalFields('raw-1'),
+        promptPreconditions: [],
+        appliedAt: observation,
+        applicationResult: 'provisional_created',
+      }],
+    };
+
+    const normalized = normalizeProvisionalInterpretationEpochs(current);
+    const unchanged = normalizeProvisionalInterpretationEpochs(normalized);
+
+    expect(normalized.findings[0]?.provisional?.interpretationEpochs).toBe(1);
+    expect(normalized.findings[0]?.revision).toBe(2);
+    expect(matchesProvisionalRecoveryOrigin(normalized.findings[0]!, origin)).toBe(false);
+    expect(unchanged).toBe(normalized);
+    expect(unchanged.findings[0]).toBe(normalized.findings[0]);
+  });
+
+  it('does not consume an interpretation epoch or revision for stale_precondition WAL records', () => {
+    const process = provisional('F-0001', 'interpretation-interrupted');
+    const current: FindingLedger = {
+      ...ledger([process]),
+      interpretations: [{
+        interpretationKey: 'interpretation-stale',
+        baseInterpretationKey: 'interpretation-base-stale',
+        attemptOrdinal: 1,
+        reviewerStableKey: 'reviewer-stable-a',
+        lineageKey: process.provisional!.lineageKey,
+        candidateEvidenceHash: 'evidence-stale',
+        stage: 'ledger_applied',
+        startedAt: observation,
+        ...completedWalFields('raw-stale'),
+        promptPreconditions: [],
+        appliedAt: observation,
+        applicationResult: 'stale_precondition',
+      }],
+    };
+
+    const normalized = normalizeProvisionalInterpretationEpochs(current);
+
+    expect(normalized).toBe(current);
+    expect(normalized.findings[0]).toBe(process);
+    expect(normalized.findings[0]?.provisional?.interpretationEpochs).toBe(0);
+    expect(normalized.findings[0]?.revision).toBe(1);
+  });
+
+  it('consumes epochs only for the explicit successful ledger application results', () => {
+    const base = {
+      baseInterpretationKey: 'base',
+      attemptOrdinal: 1,
+      reviewerStableKey: 'reviewer',
+      lineageKey: 'lineage',
+      candidateEvidenceHash: 'evidence',
+      startedAt: observation,
+      reservationToken: 'reservation',
+      promptPreconditions: [],
+    };
+    const validatedDecision = {
+      decision: 'provisional' as const,
+      rawFindingId: 'raw-1',
+      reason: 'Still ambiguous.',
+    };
+    const records: FindingLedger['interpretations'] = [
+      { ...base, interpretationKey: 'started', stage: 'interpretation_started' },
+      {
+        ...base,
+        interpretationKey: 'interrupted',
+        stage: 'interpretation_interrupted',
+        interruptedAt: observation,
+      },
+      {
+        ...base,
+        interpretationKey: 'completed',
+        stage: 'interpretation_completed',
+        completedAt: observation,
+        validatedDecision,
+      },
+      {
+        ...base,
+        interpretationKey: 'stale',
+        stage: 'ledger_applied',
+        completedAt: observation,
+        validatedDecision,
+        appliedAt: observation,
+        applicationResult: 'stale_precondition',
+      },
+    ];
+    for (const applicationResult of [
+      'created',
+      'matched_with_proof',
+      'conflict_created',
+      'provisional_created',
+      'provisional_updated',
+    ] as const) {
+      records.push({
+        ...base,
+        interpretationKey: applicationResult,
+        stage: 'ledger_applied',
+        completedAt: observation,
+        validatedDecision,
+        appliedAt: observation,
+        applicationResult,
+      });
+    }
+
+    const current = { ...ledger([]), interpretations: records };
+    expect(countInterpretationEpochs({
+      ...current,
+      interpretations: records.slice(0, 4),
+    }, 'lineage')).toBe(0);
+    expect(countInterpretationEpochs(current, 'lineage')).toBe(5);
+  });
+
+  it('increments revision for a rejected observation attachment and rejects a pre-attachment precondition', () => {
+    const process = provisional('F-0001', 'unverified-locationless');
+    const current = ledger([process]);
+    const captured = captureFindingPreconditions(current).get(process.id)!;
+
+    const attached = applyRejectedObservationAttachments(
+      current,
+      [{
+        targetFindingId: process.id,
+        rawFindingId: 'rejected-raw-1',
+        reason: 'source quote did not match',
+      }],
+      observation,
+    );
+
+    expect(attached.findings[0]?.revision).toBe(2);
+    expect(checkFindingPrecondition({
+      captured,
+      freshLedger: attached,
+      expectedStatuses: ['open'],
+    })).toMatchObject({
+      outcome: 'stale',
+      detail: expect.stringContaining('revision changed from 1 to 2'),
+    });
+  });
+
+  it('treats absent reviewer provenance becoming the provisional stable key as an origin identity change', () => {
+    const process = provisional('F-0001', 'raw-adjudication-unresolved');
+    const {
+      recoveryReviewerStableKey: _recoveryReviewerStableKey,
+      ...withoutReviewerProvenance
+    } = process.provisional!;
+    const withoutReviewer = {
+      ...process,
+      provisional: withoutReviewerProvenance,
+    };
+    const origin = snapshotProvisionalRecoveryOrigin(withoutReviewer);
+    const explicitReviewer = {
+      ...withoutReviewer,
+      provisional: {
+        ...withoutReviewer.provisional,
+        recoveryReviewerStableKey: withoutReviewer.provisional.stableKey,
+      },
+    };
+
+    expect(origin.expectedRecoveryReviewerStableKey).toBeUndefined();
+    expect(matchesProvisionalRecoveryOrigin(withoutReviewer, origin)).toBe(true);
+    expect(matchesProvisionalRecoveryOrigin(explicitReviewer, origin)).toBe(false);
+  });
+
+  it('does not synthesize interpretation reviewer provenance from the provisional stable key', () => {
+    const process = provisional('F-0001', 'manager-budget-exhausted');
+    const {
+      recoveryReviewerStableKey: _recoveryReviewerStableKey,
+      ...withoutReviewerProvenance
+    } = process.provisional!;
+    process.provisional = {
+      ...withoutReviewerProvenance,
+      interpretationEpochs: 1,
+    };
+
+    const previousLedger = ledger([process], [raw('source-1')]);
+    const plan = collectInterpretationRecoveryPlan({
+      ledger: previousLedger,
+      currentItems: [],
+      roundsCompleted: 1,
+    });
+
+    expect(plan.items).toEqual([]);
+    expect(plan.failures).toEqual([
+      expect.objectContaining({
+        kind: 'reviewer_provenance_missing',
+        outcome: 'audit_only',
+        sourceRawFindingId: 'source-1',
+      }),
+    ]);
+    const mutation = buildFindingManagerCommitMutation(emptyCommitPlanInput({
+      previousLedger,
+      interpretationRecoveryFailures: plan.failures,
+    }), previousLedger);
+    expect(mutation.result.rawFindingDispositions).toEqual([{
+      rawFindingId: 'source-1',
+      outcome: 'audit_only',
+      reason: expect.stringContaining('reviewer provenance'),
+    }]);
+    expect(mutation.result.interpretationRecoverySettlements).toEqual([{
+      provisionalFindingId: 'F-0001',
+      sourceRawFindingId: 'source-1',
+      outcome: 'audit_only',
+      failureKind: 'reviewer_provenance_missing',
+      reason: expect.stringContaining('reviewer provenance'),
+    }]);
+  });
+
+  it('records a source-missing interpretation recovery as one report-only finite outcome', () => {
+    const process = provisional('F-0001', 'interpretation-interrupted');
+    process.provisional = {
+      ...process.provisional!,
+      sourceRawFindingIds: ['missing-source'],
+      interpretationEpochs: 1,
+    };
+    const previousLedger = ledger([process]);
+    const plan = collectInterpretationRecoveryPlan({
+      ledger: previousLedger,
+      currentItems: [],
+      roundsCompleted: 1,
+    });
+
+    expect(plan.items).toEqual([]);
+    expect(plan.failures).toEqual([
+      expect.objectContaining({
+        kind: 'source_missing',
+        outcome: 'audit_only',
+        sourceRawFindingId: 'missing-source',
+      }),
+    ]);
+
+    const mutation = buildFindingManagerCommitMutation(emptyCommitPlanInput({
+      previousLedger,
+      interpretationRecoveryFailures: plan.failures,
+    }), previousLedger);
+
+    expect(mutation.ledger.rawFindings).toEqual([]);
+    expect(mutation.result.rawFindingDispositions).toEqual([{
+      rawFindingId: 'missing-source',
+      outcome: 'audit_only',
+      reason: expect.stringContaining('missing raw finding'),
+    }]);
+    expect(mutation.result.interpretationRecoverySettlements).toEqual([{
+      provisionalFindingId: 'F-0001',
+      sourceRawFindingId: 'missing-source',
+      outcome: 'audit_only',
+      failureKind: 'source_missing',
+      reason: expect.stringContaining('missing raw finding'),
+    }]);
+  });
+
+  it('fans one missing source payload out to every provisional recovery origin exactly once', () => {
+    const first = provisional('F-0001', 'interpretation-interrupted');
+    const second = provisional('F-0002', 'interpretation-interrupted');
+    first.provisional = {
+      ...first.provisional!,
+      sourceRawFindingIds: ['shared-missing-source'],
+      interpretationEpochs: 1,
+    };
+    second.provisional = {
+      ...second.provisional!,
+      sourceRawFindingIds: ['shared-missing-source'],
+      interpretationEpochs: 1,
+    };
+    const previousLedger = ledger([first, second]);
+    const plan = collectInterpretationRecoveryPlan({
+      ledger: previousLedger,
+      currentItems: [],
+      roundsCompleted: 1,
+    });
+
+    expect(plan.failures).toHaveLength(2);
+    const mutation = buildFindingManagerCommitMutation(emptyCommitPlanInput({
+      previousLedger,
+      interpretationRecoveryFailures: plan.failures,
+    }), previousLedger);
+
+    expect(mutation.ledger.findings.map((finding) => ({
+      id: finding.id,
+      attempts: finding.provisional?.adjudicationAttempts?.map((attempt) => ({
+        replayRawFindingId: attempt.replayRawFindingId,
+        reason: attempt.reason,
+      })),
+    }))).toEqual([
+      {
+        id: 'F-0001',
+        attempts: [{
+          replayRawFindingId: 'shared-missing-source',
+          reason: expect.stringContaining('missing raw finding'),
+        }],
+      },
+      {
+        id: 'F-0002',
+        attempts: [{
+          replayRawFindingId: 'shared-missing-source',
+          reason: expect.stringContaining('missing raw finding'),
+        }],
+      },
+    ]);
+    expect(mutation.result.rawFindingDispositions).toEqual([{
+      rawFindingId: 'shared-missing-source',
+      outcome: 'audit_only',
+      reason: expect.stringContaining('missing raw finding'),
+    }]);
+    expect(mutation.result.interpretationRecoverySettlements).toEqual([
+      {
+        provisionalFindingId: 'F-0001',
+        sourceRawFindingId: 'shared-missing-source',
+        outcome: 'audit_only',
+        failureKind: 'source_missing',
+        reason: expect.stringContaining('missing raw finding'),
+      },
+      {
+        provisionalFindingId: 'F-0002',
+        sourceRawFindingId: 'shared-missing-source',
+        outcome: 'audit_only',
+        failureKind: 'source_missing',
+        reason: expect.stringContaining('missing raw finding'),
+      },
+    ]);
+  });
+
+  it('processes one stored raw payload once and carries every provisional recovery origin', () => {
+    const first = provisional('F-0001', 'interpretation-interrupted');
+    const second = provisional('F-0002', 'interpretation-interrupted');
+    first.provisional = {
+      ...first.provisional!,
+      interpretationEpochs: 1,
+    };
+    second.provisional = {
+      ...second.provisional!,
+      interpretationEpochs: 1,
+    };
+
+    const sharedSource = {
+      ...raw('source-1'),
+      relation: 'persists' as const,
+      targetFindingId: 'F-9999',
+    };
+    const previousLedger = ledger([first, second], [sharedSource]);
+    const plan = collectInterpretationRecoveryPlan({
+      ledger: previousLedger,
+      currentItems: [],
+      roundsCompleted: 1,
+    });
+
+    expect(plan.failures).toEqual([]);
+    expect(plan.items).toHaveLength(1);
+    expect(plan.items[0]).toMatchObject({
+      wire: { rawFindingId: 'source-1' },
+      interpretationRecoveryAttempt: true,
+      recoveryOrigins: [
+        { provisionalFindingId: 'F-0001' },
+        { provisionalFindingId: 'F-0002' },
+      ],
+    });
+
+    const ladderAfterOneDecision: LadderResult = {
+      interpretationReservations: new Map(),
+      deferredRawFindingIds: new Set(),
+      pendingSameWithProof: [],
+      pendingIndependentNew: [{
+        wire: plan.items[0]!.wire,
+        recoveryOrigins: plan.items[0]!.recoveryOrigins,
+      }],
+      pendingConflicts: [],
+      provisionalSpecs: [],
+      provisionalByInterpretationKey: new Map(),
+      pendingAppliedReattach: [],
+      recoveryProvisionalOrigins: new Map(),
+      stats: {} as LadderResult['stats'],
+    };
+
+    const commitPlan = buildLadderCommitPlan(
+      ladderAfterOneDecision,
+      previousLedger,
+      new Set(),
+    );
+    expect(commitPlan.output.matches).toEqual([expect.objectContaining({
+      findingId: 'F-0001',
+      rawFindingIds: ['source-1'],
+    })]);
+    expect(commitPlan.recoveryPromotions).toEqual(new Set(['F-0001']));
+    expect(commitPlan.recoverySettlements).toEqual(new Map([['F-0002', 'F-0001']]));
+
+    const baseCommitInput = emptyCommitPlanInput({
+      previousLedger,
+      intake: {
+        ...emptyCommitPlanInput().intake,
+        items: plan.items,
+      },
+    });
+    const mutation = buildFindingManagerCommitMutation({
+      ...baseCommitInput,
+      managerDecision: {
+        ...baseCommitInput.managerDecision,
+        ladder: ladderAfterOneDecision,
+      },
+    }, previousLedger);
+    expect(mutation.ledger.findings.map((finding) => ({
+      id: finding.id,
+      status: finding.status,
+      provisional: finding.provisional?.kind,
+      resolvedEvidence: finding.resolvedEvidence,
+    }))).toEqual([
+      {
+        id: 'F-0001',
+        status: 'open',
+        provisional: undefined,
+        resolvedEvidence: undefined,
+      },
+      {
+        id: 'F-0002',
+        status: 'resolved',
+        provisional: 'interpretation-interrupted',
+        resolvedEvidence: 'Deterministically settled through F-0001',
+      },
+    ]);
+  });
+
+  it('adjudicates a shared raw once while settling a provenance failure and a valid origin independently', () => {
+    const missingProvenance = provisional('F-0001', 'interpretation-interrupted');
+    const validOrigin = provisional('F-0002', 'interpretation-interrupted');
+    missingProvenance.provisional = {
+      ...missingProvenance.provisional!,
+      interpretationEpochs: 1,
+      recoveryReviewerStableKey: undefined,
+    };
+    validOrigin.provisional = {
+      ...validOrigin.provisional!,
+      interpretationEpochs: 1,
+    };
+    const sharedSource = raw('shared-provenance-source');
+    missingProvenance.provisional.sourceRawFindingIds = [sharedSource.rawFindingId];
+    validOrigin.provisional.sourceRawFindingIds = [sharedSource.rawFindingId];
+    const previousLedger = ledger([missingProvenance, validOrigin], [sharedSource]);
+    const recovery = collectInterpretationRecoveryPlan({
+      ledger: previousLedger,
+      currentItems: [],
+      roundsCompleted: 1,
+    });
+    const item = recovery.items[0]!;
+    const params = emptyCommitPlanInput({
+      previousLedger,
+      intake: {
+        ...emptyCommitPlanInput().intake,
+        items: recovery.items,
+      },
+      interpretationRecoveryFailures: recovery.failures,
+      managerDecision: {
+        ...emptyCommitPlanInput().managerDecision,
+        cleanWireById: new Map([[item.wire.rawFindingId, item.wire]]),
+        cleanCanonicalById: new Map([[item.canonical.rawFindingId, item.canonical]]),
+        ladder: {
+          ...emptyCommitPlanInput().managerDecision.ladder,
+          pendingIndependentNew: [{
+            wire: item.wire,
+            recoveryOrigins: item.recoveryOrigins,
+          }],
+        },
+      },
+      stopBudgetRoundMarker: 'round-mixed-provenance',
+    });
+
+    const mutation = buildFindingManagerCommitMutation(params, previousLedger);
+
+    expect(mutation.result.applied).toBe(true);
+    expect(mutation.ledger.findings.find((finding) => finding.id === missingProvenance.id))
+      .toEqual(expect.objectContaining({
+        provisional: expect.objectContaining({
+          adjudicationAttempts: [expect.objectContaining({
+            replayRawFindingId: sharedSource.rawFindingId,
+          })],
+        }),
+      }));
+    expect(mutation.ledger.rawFindings.filter(
+      (rawFinding) => rawFinding.rawFindingId === sharedSource.rawFindingId,
+    )).toHaveLength(1);
+    expect(mutation.result.rawFindingDispositions).not.toContainEqual(
+      expect.objectContaining({ rawFindingId: sharedSource.rawFindingId }),
+    );
+    expect(mutation.result.interpretationRecoverySettlements).toEqual([
+      expect.objectContaining({
+        provisionalFindingId: missingProvenance.id,
+        outcome: 'audit_only',
+        failureKind: 'reviewer_provenance_missing',
+      }),
+      expect.objectContaining({
+        provisionalFindingId: validOrigin.id,
+        outcome: 'settled',
+      }),
+    ]);
+  });
+
+  it('partitions stale and fresh origins under one raw without discarding the fresh settlement', () => {
+    const staleOriginFinding = provisional('F-0001', 'interpretation-interrupted');
+    const freshOriginFinding = provisional('F-0002', 'interpretation-interrupted');
+    staleOriginFinding.provisional = {
+      ...staleOriginFinding.provisional!,
+      interpretationEpochs: 1,
+    };
+    freshOriginFinding.provisional = {
+      ...freshOriginFinding.provisional!,
+      interpretationEpochs: 1,
+    };
+    const sharedSource = raw('shared-stale-source');
+    staleOriginFinding.provisional.sourceRawFindingIds = [sharedSource.rawFindingId];
+    freshOriginFinding.provisional.sourceRawFindingIds = [sharedSource.rawFindingId];
+    const previousLedger = ledger([staleOriginFinding, freshOriginFinding], [sharedSource]);
+    const recovery = collectInterpretationRecoveryPlan({
+      ledger: previousLedger,
+      currentItems: [],
+      roundsCompleted: 1,
+    });
+    const item = recovery.items[0]!;
+    const freshLedger = {
+      ...previousLedger,
+      findings: previousLedger.findings.map((finding) => (
+        finding.id === staleOriginFinding.id
+          ? { ...finding, revision: finding.revision + 1 }
+          : finding
+      )),
+    };
+    const params = emptyCommitPlanInput({
+      previousLedger,
+      intake: {
+        ...emptyCommitPlanInput().intake,
+        items: recovery.items,
+      },
+      managerDecision: {
+        ...emptyCommitPlanInput().managerDecision,
+        cleanWireById: new Map([[item.wire.rawFindingId, item.wire]]),
+        cleanCanonicalById: new Map([[item.canonical.rawFindingId, item.canonical]]),
+        ladder: {
+          ...emptyCommitPlanInput().managerDecision.ladder,
+          pendingIndependentNew: [{
+            wire: item.wire,
+            recoveryOrigins: item.recoveryOrigins,
+          }],
+        },
+      },
+      stopBudgetRoundMarker: 'round-partial-stale-origin',
+    });
+
+    const mutation = buildFindingManagerCommitMutation(params, freshLedger);
+
+    expect(mutation.ledger.rawFindings.filter(
+      (rawFinding) => rawFinding.rawFindingId === sharedSource.rawFindingId,
+    )).toHaveLength(1);
+    expect(mutation.ledger.findings.find((finding) => finding.id === freshOriginFinding.id)?.provisional)
+      .toBeUndefined();
+    expect(mutation.ledger.findings.find((finding) => finding.id === staleOriginFinding.id)?.provisional)
+      .toBeDefined();
+    expect(mutation.result.interpretationRecoverySettlements).toEqual([
+      expect.objectContaining({
+        provisionalFindingId: staleOriginFinding.id,
+        outcome: 'stale',
+      }),
+      expect.objectContaining({
+        provisionalFindingId: freshOriginFinding.id,
+        outcome: 'settled',
+      }),
+    ]);
+  });
+
+  it('processes a shared raw once when its valid recovery origins have different reviewer provenance', () => {
+    const first = provisional('F-0001', 'interpretation-interrupted');
+    const second = provisional('F-0002', 'interpretation-interrupted');
+    first.provisional = {
+      ...first.provisional!,
+      interpretationEpochs: 1,
+      recoveryReviewerStableKey: 'reviewer-stable-a',
+    };
+    second.provisional = {
+      ...second.provisional!,
+      interpretationEpochs: 1,
+      recoveryReviewerStableKey: 'reviewer-stable-b',
+    };
+    const sharedSource = raw('shared-reviewer-source');
+    first.provisional.sourceRawFindingIds = [sharedSource.rawFindingId];
+    second.provisional.sourceRawFindingIds = [sharedSource.rawFindingId];
+
+    const recovery = collectInterpretationRecoveryPlan({
+      ledger: ledger([first, second], [sharedSource]),
+      currentItems: [],
+      roundsCompleted: 1,
+    });
+
+    expect(recovery.failures).toEqual([]);
+    expect(recovery.items).toHaveLength(1);
+    expect(recovery.items[0]?.recoveryOrigins).toEqual([
+      expect.objectContaining({ provisionalFindingId: first.id }),
+      expect.objectContaining({ provisionalFindingId: second.id }),
+    ]);
+  });
+
+  it('records a changed interpretation recovery origin as one stale outcome without applying the old failure', () => {
+    const process = provisional('F-0001', 'interpretation-interrupted');
+    process.provisional = {
+      ...process.provisional!,
+      sourceRawFindingIds: ['missing-source'],
+      interpretationEpochs: 1,
+    };
+    const previousLedger = ledger([process]);
+    const plan = collectInterpretationRecoveryPlan({
+      ledger: previousLedger,
+      currentItems: [],
+      roundsCompleted: 1,
+    });
+    const freshLedger = ledger([{
+      ...process,
+      revision: process.revision + 1,
+    }]);
+
+    const mutation = buildFindingManagerCommitMutation(emptyCommitPlanInput({
+      previousLedger,
+      interpretationRecoveryFailures: plan.failures,
+    }), freshLedger);
+
+    expect(mutation.ledger.findings[0]?.provisional?.adjudicationAttempts).toBeUndefined();
+    expect(mutation.result.rawFindingDispositions).toEqual([{
+      rawFindingId: 'missing-source',
+      outcome: 'stale',
+      reason: expect.stringContaining('origin changed'),
+    }]);
+    expect(mutation.result.interpretationRecoverySettlements).toEqual([{
+      provisionalFindingId: 'F-0001',
+      sourceRawFindingId: 'missing-source',
+      outcome: 'stale',
+      reason: expect.stringContaining('origin changed'),
+    }]);
+  });
+
+  it('does not apply an interpretation recovery failure after provisional identity changes at the same revision', () => {
+    const process = provisional('F-0001', 'interpretation-interrupted');
+    process.provisional = {
+      ...process.provisional!,
+      sourceRawFindingIds: ['missing-source'],
+      interpretationEpochs: 1,
+    };
+    const plan = collectInterpretationRecoveryPlan({
+      ledger: ledger([process]),
+      currentItems: [],
+      roundsCompleted: 1,
+    });
+    expect(plan.failures).toHaveLength(1);
+
+    const replaced: FindingLedgerEntry = {
+      ...process,
+      provisional: {
+        ...process.provisional,
+        stableKey: 'replacement-stable',
+        lineageKey: 'replacement-lineage',
+        recoveryReviewerStableKey: 'replacement-reviewer',
+      },
+    };
+    const fresh = ledger([replaced]);
+    const applied = applyInterpretationRecoveryFailures({
+      ledger: fresh,
+      failures: plan.failures,
+      observation,
+    });
+
+    expect(applied).toEqual(fresh);
+  });
+
   it('promotes the replay origin instead of creating a second finding', () => {
     const process = provisional('F-0001', 'raw-adjudication-unresolved');
     const replay = raw('replay-1');
@@ -210,8 +1194,12 @@ describe('provisional recovery', () => {
           sourceRawFindingId: source.rawFindingId,
           expectedProvisionalRevision: 1,
           attempt: 1,
+          recoveryOrigin: snapshotProvisionalRecoveryOrigin({
+            ...processFinding,
+            provisional: processFinding.provisional!,
+          }),
         }]]),
-        failureReasons: new Map(),
+        failures: new Map(),
         capturedPreconditions: captureFindingPreconditions(current),
         invalidAttempts: [],
         unsupportedRawFindingReports: [],
@@ -230,9 +1218,151 @@ describe('provisional recovery', () => {
       reviewScopeSnapshotId: 'snapshot',
     });
 
-    expect(recovered.findings[0]?.provisional?.adjudicationAttempts).toEqual([
+    expect(recovered.rawFindingDispositions).toEqual([{
+      rawFindingId: wire.rawFindingId,
+      outcome: 'audit_only',
+      reason: 'replay source evidence did not pass admission at commit time',
+    }]);
+    expect(recovered.ledger.findings[0]?.provisional?.adjudicationAttempts).toEqual([
       expect.objectContaining({ attempt: 1, replayRawFindingId: wire.rawFindingId }),
     ]);
+  });
+
+  it('does not attach a replay from a different reviewer provenance to the reserved provisional', () => {
+    const processFinding = provisional('F-0001', 'raw-adjudication-unresolved');
+    const source = raw('source-1');
+    const current = ledger([processFinding], [source]);
+    const replaySource = { ...source, rawFindingId: 'replay-wrong-reviewer' };
+    const canonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(replaySource, 'reviewer-stable-b'),
+      { ledger: current },
+    ).canonical;
+    const wire = toLedgerRawFinding(canonical);
+    const recovered = applyRawAdjudicationRecovery({
+      freshLedger: current,
+      recovery: {
+        intake: {
+          items: [{ canonical, wire }],
+          overflowRawFindingIds: new Set(),
+          overflowSpecs: [],
+          overflowReports: [],
+          clarifications: [],
+          rawNormalizations: [],
+          healthyReviewerStableKeys: new Set(),
+        },
+        output: emptyOutput(),
+        origins: new Map([[wire.rawFindingId, {
+          provisionalFindingId: processFinding.id,
+          sourceRawFindingId: source.rawFindingId,
+          expectedProvisionalRevision: 1,
+          attempt: 1,
+          recoveryOrigin: snapshotProvisionalRecoveryOrigin({
+            ...processFinding,
+            provisional: processFinding.provisional!,
+          }),
+        }]]),
+        failures: new Map(),
+        capturedPreconditions: captureFindingPreconditions(current),
+        invalidAttempts: [],
+        unsupportedRawFindingReports: [],
+        cleanWireById: new Map(),
+        cleanCanonicalById: new Map(),
+        reservationTokens: new Set(),
+      },
+      runInput: {
+        cwd: process.cwd(),
+        workflowName: current.workflowName,
+        parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
+        runId: observation.runId,
+        timestamp: observation.timestamp,
+      } as RunFindingManagerForStepInput,
+      observation,
+      reviewScopeSnapshotId: 'snapshot',
+    });
+
+    expect(recovered.ledger).toEqual(current);
+    expect(recovered.rawFindingDispositions).toEqual([{
+      rawFindingId: wire.rawFindingId,
+      outcome: 'stale',
+      reason: expect.stringContaining('reviewer provenance'),
+    }]);
+  });
+
+  it('records an explicit replay-manager unsupported decision as an unsupported finite outcome', () => {
+    const processFinding = provisional('F-0001', 'raw-adjudication-unresolved');
+    const targetFinding: FindingLedgerEntry = {
+      ...provisional('F-0002', 'raw-adjudication-unresolved'),
+      provisional: undefined,
+      rawFindingIds: ['target-source'],
+    };
+    const source: RawFinding = {
+      ...raw('source-1'),
+      relation: 'persists',
+      targetFindingId: targetFinding.id,
+    };
+    const current = ledger([processFinding, targetFinding], [source]);
+    const replaySource = { ...source, rawFindingId: 'replay-unsupported' };
+    const canonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(replaySource, 'reviewer-stable-a'),
+      { ledger: current },
+    ).canonical;
+    const wire = toLedgerRawFinding(canonical);
+    const evidence = 'The replay does not support the referenced target.';
+    const recovered = applyRawAdjudicationRecovery({
+      freshLedger: current,
+      recovery: {
+        intake: {
+          items: [{ canonical, wire }],
+          overflowRawFindingIds: new Set(),
+          overflowSpecs: [],
+          overflowReports: [],
+          clarifications: [],
+          rawNormalizations: [],
+          healthyReviewerStableKeys: new Set(),
+        },
+        output: emptyOutput(),
+        origins: new Map([[wire.rawFindingId, {
+          provisionalFindingId: processFinding.id,
+          sourceRawFindingId: source.rawFindingId,
+          expectedProvisionalRevision: 1,
+          attempt: 1,
+          recoveryOrigin: snapshotProvisionalRecoveryOrigin({
+            ...processFinding,
+            provisional: processFinding.provisional!,
+          }),
+        }]]),
+        failures: new Map([[wire.rawFindingId, {
+          kind: 'manager_unsupported',
+          outcome: 'unsupported',
+          reason: evidence,
+        }]]),
+        capturedPreconditions: captureFindingPreconditions(current),
+        invalidAttempts: [],
+        unsupportedRawFindingReports: [{
+          rawFindingId: wire.rawFindingId,
+          targetFindingId: targetFinding.id,
+          evidence,
+        }],
+        cleanWireById: new Map(),
+        cleanCanonicalById: new Map(),
+        reservationTokens: new Set(),
+      },
+      runInput: {
+        cwd: process.cwd(),
+        workflowName: current.workflowName,
+        parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
+        runId: observation.runId,
+        timestamp: observation.timestamp,
+      } as RunFindingManagerForStepInput,
+      observation,
+      reviewScopeSnapshotId: 'snapshot',
+    });
+
+    expect(recovered.rawFindingDispositions).toEqual([{
+      rawFindingId: wire.rawFindingId,
+      outcome: 'unsupported',
+      reason: evidence,
+    }]);
   });
 
   it('advances a started WAL record to a distinct attempt key and terminates the old attempt', async () => {
@@ -250,9 +1380,9 @@ describe('provisional recovery', () => {
         reviewerStableKey: 'reviewer-stable-a',
         lineageKey: 'lineage-a',
         candidateEvidenceHash: 'evidence-a',
-        policyVersion: 2 as const,
         stage: 'interpretation_started' as const,
         startedAt: observation,
+        reservationToken: 'interrupted-owner',
         promptPreconditions: [],
       }],
     };
@@ -264,6 +1394,7 @@ describe('provisional recovery', () => {
     });
     const claimed = new Set<string>();
     const store: FindingManagerStore = {
+      ledgerIdentity: '/test/finding-provisional-recovery/reservation-ledger.json',
       workflowName: current.workflowName,
       loadLedger: () => current,
       saveLedger: (next) => {
@@ -295,7 +1426,7 @@ describe('provisional recovery', () => {
       lineageKey: 'lineage-a',
       candidateEvidenceHash: 'evidence-a',
       promptPreconditions: [],
-    }], observation);
+    }], observation, stopBudgetRoundMarker);
 
     expect(begun.interruptedPriorKeys).toEqual(new Set([
       computeInterpretationAttemptKey(baseInterpretationKey, 1),
@@ -310,6 +1441,7 @@ describe('provisional recovery', () => {
     let current = ledger([]);
     const claimed = new Set<string>();
     const store: FindingManagerStore = {
+      ledgerIdentity: '/test/finding-provisional-recovery/concurrent-ledger.json',
       workflowName: current.workflowName,
       loadLedger: () => current,
       saveLedger: (next) => { current = next; },
@@ -344,8 +1476,8 @@ describe('provisional recovery', () => {
     };
 
     const [first, second] = await Promise.all([
-      beginInterpretations(store, [input], observation),
-      beginInterpretations(store, [input], observation),
+      beginInterpretations(store, [input], observation, stopBudgetRoundMarker),
+      beginInterpretations(store, [input], observation, stopBudgetRoundMarker),
     ]);
     const owner = first.ownedByKey.size === 1 ? first : second;
     const deferred = first.ownedByKey.size === 0 ? first : second;
@@ -365,28 +1497,101 @@ describe('provisional recovery', () => {
       new Map([[interpretationKey, decision]]),
       deferred.ownedByKey,
       observation,
+      stopBudgetRoundMarker,
     );
     const completed = await completeInterpretations(
       store,
       new Map([[interpretationKey, decision]]),
       owner.ownedByKey,
       observation,
+      stopBudgetRoundMarker,
     );
 
     expect(ignored).toEqual(new Map());
     expect(completed).toEqual(new Map([[interpretationKey, decision]]));
     expect(current.interpretations?.[0]?.stage).toBe('interpretation_completed');
 
-    const liveContender = await beginInterpretations(store, [input], observation);
+    const liveContender = await beginInterpretations(
+      store,
+      [input],
+      observation,
+      stopBudgetRoundMarker,
+    );
     expect(liveContender.deferredKeys).toEqual(new Set([interpretationKey]));
     expect(liveContender.completedByKey).toEqual(new Map());
 
     const reservationToken = owner.ownedByKey.get(interpretationKey)!;
     store.releaseAdjudicationReservation(reservationToken);
-    const recovered = await beginInterpretations(store, [input], observation);
+    const recovered = await beginInterpretations(
+      store,
+      [input],
+      observation,
+      stopBudgetRoundMarker,
+    );
     expect(recovered.completedByKey).toEqual(new Map([[interpretationKey, decision]]));
     expect(recovered.ownedByKey).toEqual(new Map([[interpretationKey, reservationToken]]));
     releaseInterpretationReservations(store, recovered.ownedByKey);
+  });
+
+  it('does not persist begin or complete WAL mutations after the round marker is applied', async () => {
+    const current = {
+      ...ledger([]),
+      stopBudget: {
+        roundMarkers: [stopBudgetRoundMarker],
+        firstRoundAt: observation.timestamp,
+        exhausted: false,
+      },
+    };
+    let updateCalls = 0;
+    const store: FindingManagerStore = {
+      ledgerIdentity: '/test/finding-provisional-recovery/marker-ledger.json',
+      workflowName: current.workflowName,
+      loadLedger: () => current,
+      saveLedger: () => {
+        throw new Error('saveLedger must not be called');
+      },
+      updateLedger: async () => {
+        updateCalls += 1;
+        throw new Error('updateLedger must not be called');
+      },
+      claimAdjudicationReservation: () => {
+        throw new Error('reservation must not be claimed');
+      },
+      releaseAdjudicationReservation: () => {},
+      createRunCopy: () => '/tmp/ledger.json',
+      saveRawFindings: () => '/tmp/raw.json',
+      saveManagerValidationReport: () => '/tmp/report.json',
+    };
+    const input = {
+      baseInterpretationKey: 'base',
+      reviewerStableKey: 'reviewer',
+      lineageKey: 'lineage',
+      candidateEvidenceHash: 'evidence',
+      promptPreconditions: [],
+    };
+
+    const begun = await beginInterpretations(
+      store,
+      [input],
+      observation,
+      stopBudgetRoundMarker,
+    );
+    const completed = await completeInterpretations(
+      store,
+      new Map([['attempt', {
+        decision: 'provisional',
+        rawFindingId: 'raw-1',
+        reason: 'Still ambiguous.',
+      }]]),
+      new Map([['attempt', 'reservation']]),
+      observation,
+      stopBudgetRoundMarker,
+    );
+
+    expect(begun.roundAlreadyApplied).toBe(true);
+    expect(completed).toEqual(new Map());
+    expect(updateCalls).toBe(0);
+    expect(current.interpretations).toEqual([]);
   });
 
   it('marks only completed interpretation records as applied', () => {
@@ -405,7 +1610,6 @@ describe('provisional recovery', () => {
         reviewerStableKey: 'reviewer-stable-a',
         lineageKey: 'lineage-a',
         candidateEvidenceHash: 'evidence-a',
-        policyVersion: 2,
         stage: 'interpretation_started',
         startedAt: observation,
         reservationToken: 'owner-1',
@@ -443,7 +1647,6 @@ describe('provisional recovery', () => {
       reviewerStableKey: canonical.reviewerStableKey,
       lineageKey: canonical.lineageKey,
       candidateEvidenceHash: canonical.evidenceHash,
-      policyVersion: 2,
       stage: 'interpretation_completed',
       startedAt: observation,
       completedAt: observation,
@@ -460,18 +1663,610 @@ describe('provisional recovery', () => {
       provisionalSpecs: [],
       provisionalByInterpretationKey: new Map(),
       pendingAppliedReattach: [],
-      recoveryProvisionalInterpretationKeys: new Set(),
+      recoveryProvisionalOrigins: new Map(),
       stats: {} as LadderResult['stats'],
     };
 
-    const rejected = buildLadderCommitPlan(selectCommittableLadder(ladder, current), current);
+    const rejected = buildLadderCommitPlan(selectCommittableLadder(ladder, current), current, new Set());
     const accepted = buildLadderCommitPlan(selectCommittableLadder({
       ...ladder,
       interpretationReservations: new Map([[interpretationKey, 'actual-owner']]),
-    }, current), current);
+    }, current), current, new Set());
 
     expect(rejected.output.newFindings).toEqual([]);
     expect(accepted.output.newFindings).toHaveLength(1);
+  });
+
+  it('isolates a stale interpretation recovery raw from the complete commit reconciliation', () => {
+    const processFinding = provisional('F-0001', 'manager-budget-exhausted');
+    processFinding.provisional!.interpretationEpochs = 1;
+    const source = raw('source-1');
+    const previousLedger = ledger([processFinding], [source]);
+    const canonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(source, 'reviewer-stable-a'),
+      {
+        ledger: previousLedger,
+        preserveAmbiguityOrigin: true,
+      },
+    ).canonical;
+    const wire = toLedgerRawFinding(canonical);
+    const recoveryOrigin = snapshotProvisionalRecoveryOrigin({
+      ...processFinding,
+      provisional: processFinding.provisional!,
+    });
+    const baseInterpretationKey = computeBaseInterpretationKey({
+      reviewerStableKey: canonical.reviewerStableKey,
+      lineageKey: canonical.lineageKey,
+      candidateEvidenceHash: canonical.evidenceHash,
+    });
+    const priorInterpretationKey = computeInterpretationAttemptKey(baseInterpretationKey, 1);
+    const interpretationKey = computeInterpretationAttemptKey(baseInterpretationKey, 2);
+    const replacement = {
+      ...processFinding,
+      revision: processFinding.revision + 1,
+      provisional: {
+        ...processFinding.provisional!,
+        stableKey: 'replacement-stable-key',
+        lineageKey: canonical.lineageKey,
+      },
+    };
+    const freshLedger: FindingLedger = {
+      ...ledger([replacement], [source]),
+      interpretations: [
+        {
+          interpretationKey: priorInterpretationKey,
+          baseInterpretationKey,
+          attemptOrdinal: 1,
+          reviewerStableKey: canonical.reviewerStableKey,
+          lineageKey: canonical.lineageKey,
+          candidateEvidenceHash: canonical.evidenceHash,
+          stage: 'ledger_applied',
+          startedAt: observation,
+          ...completedWalFields(wire.rawFindingId),
+          promptPreconditions: [],
+          appliedAt: observation,
+          applicationResult: 'provisional_created',
+        },
+        {
+          interpretationKey,
+          baseInterpretationKey,
+          attemptOrdinal: 2,
+          reviewerStableKey: canonical.reviewerStableKey,
+          lineageKey: canonical.lineageKey,
+          candidateEvidenceHash: canonical.evidenceHash,
+          stage: 'interpretation_completed',
+          startedAt: observation,
+          completedAt: observation,
+          reservationToken: 'owner-1',
+          promptPreconditions: [],
+          validatedDecision: {
+            decision: 'create_independent',
+            rawFindingId: wire.rawFindingId,
+          },
+        },
+      ],
+    };
+    const intake = {
+      items: [{
+        canonical,
+        wire,
+        recoveryOrigins: [recoveryOrigin],
+        interpretationRecoveryAttempt: true as const,
+      }],
+      overflowRawFindingIds: new Set<string>(),
+      overflowSpecs: [],
+      overflowReports: [],
+      clarifications: [],
+      rawNormalizations: [],
+      healthyReviewerStableKeys: new Set<string>(),
+    };
+    const emptyAdmission = {
+      admissionRejections: [],
+      admissionAnomalySpecs: [],
+      admissionRejectedItems: [],
+      locationlessProvisionalItems: [],
+      pendingRejectedObservations: [],
+      cleanAdmitted: [],
+      tainted: [],
+      taintedAdmitted: [],
+      ladderAnomalySpecs: [],
+      verifiedEvidenceCandidates: [],
+      provisionalOnlyLadderRawIds: new Set<string>(),
+      cleanWire: [],
+    };
+    const input = {
+      contract: {},
+      cwd: process.cwd(),
+      ledgerStore: {},
+      optionsBuilder: {},
+      stepExecutor: {},
+      parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
+      stepIteration: 1,
+      subResults: [],
+      workflowName: previousLedger.workflowName,
+      runId: observation.runId,
+      callNamespace: '',
+      timestamp: observation.timestamp,
+    } as RunFindingManagerForStepInput;
+
+    const mutation = buildFindingManagerCommitMutation({
+      input,
+      previousLedger,
+      intake,
+      interpretationRecoveryFailures: [],
+      admission: emptyAdmission,
+      managerDecision: {
+        managerOutput: emptyOutput(),
+        invalidAttempts: [],
+        cleanProvisionalSpecs: [],
+        unsupportedRawFindingReports: [],
+        cleanWireById: new Map(),
+        cleanCanonicalById: new Map(),
+        ladder: {
+          interpretationReservations: new Map([[interpretationKey, 'owner-1']]),
+          deferredRawFindingIds: new Set(),
+          pendingSameWithProof: [],
+          pendingIndependentNew: [{
+            wire,
+            viaInterpretationKey: interpretationKey,
+            recoveryOrigins: [recoveryOrigin],
+          }],
+          pendingConflicts: [],
+          provisionalSpecs: [],
+          provisionalByInterpretationKey: new Map(),
+          pendingAppliedReattach: [],
+          recoveryProvisionalOrigins: new Map(),
+          stats: {} as LadderResult['stats'],
+        },
+        rawRecovery: {
+          intake: {
+            items: [],
+            overflowRawFindingIds: new Set(),
+            overflowSpecs: [],
+            overflowReports: [],
+            clarifications: [],
+            rawNormalizations: [],
+            healthyReviewerStableKeys: new Set(),
+          },
+          output: emptyOutput(),
+          origins: new Map(),
+          failures: new Map(),
+          capturedPreconditions: new Map(),
+          invalidAttempts: [],
+          unsupportedRawFindingReports: [],
+          cleanWireById: new Map(),
+          cleanCanonicalById: new Map(),
+          reservationTokens: new Set(),
+        },
+      },
+      observation,
+      stopBudgetLimits: resolveStopBudgetLimits(undefined),
+      stopBudgetRoundMarker: 'round-1',
+      reviewIntegrityLimits: resolveReviewIntegrityLimits(undefined),
+      reviewScopeSnapshotId: 'snapshot-1',
+    }, freshLedger);
+
+    expect(mutation.ledger.findings).toEqual(freshLedger.findings);
+    expect(mutation.ledger.rawFindings).toEqual(freshLedger.rawFindings);
+  });
+
+  it('isolates a stale recovery-origin raw that passed clean admission before any ladder outcome', () => {
+    const quote = verifiedSourceQuoteFields(
+      process.cwd(),
+      'src/core/workflow/findings/provisional-recovery-origin.ts',
+      1,
+    );
+    const cleanSource: RawFinding = {
+      ...raw('current-clean'),
+      location: quote.location,
+      evidence: {
+        kind: 'source_quote',
+        path: 'src/core/workflow/findings/provisional-recovery-origin.ts',
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: quote.verbatimExcerpt,
+        snapshotId: quote.snapshotId,
+      },
+    };
+    const processFinding = provisional('F-0001', 'manager-budget-exhausted');
+    const previousLedger = ledger([processFinding], [raw('source-1')]);
+    const canonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(cleanSource, 'reviewer-stable-a'),
+      { ledger: previousLedger },
+    ).canonical;
+    processFinding.provisional!.lineageKey = canonical.lineageKey;
+    const recoveryOrigin = snapshotProvisionalRecoveryOrigin({
+      ...processFinding,
+      provisional: processFinding.provisional!,
+    });
+    const wire = toLedgerRawFinding(canonical);
+    const freshLedger = ledger([{
+      ...processFinding,
+      revision: processFinding.revision + 1,
+    }], [raw('source-1')]);
+    const intake = {
+      items: [{ canonical, wire, recoveryOrigins: [recoveryOrigin] }],
+      overflowRawFindingIds: new Set<string>(),
+      overflowSpecs: [],
+      overflowReports: [],
+      clarifications: [],
+      rawNormalizations: [],
+      healthyReviewerStableKeys: new Set<string>(),
+    };
+    const input = {
+      contract: {},
+      cwd: process.cwd(),
+      ledgerStore: {},
+      optionsBuilder: {},
+      stepExecutor: {},
+      parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
+      stepIteration: 1,
+      subResults: [],
+      workflowName: previousLedger.workflowName,
+      runId: observation.runId,
+      callNamespace: '',
+      timestamp: observation.timestamp,
+    } as RunFindingManagerForStepInput;
+
+    const mutation = buildFindingManagerCommitMutation({
+      input,
+      previousLedger,
+      intake,
+      interpretationRecoveryFailures: [],
+      admission: {
+        admissionRejections: [],
+        admissionAnomalySpecs: [],
+        admissionRejectedItems: [],
+        locationlessProvisionalItems: [],
+        pendingRejectedObservations: [],
+        cleanAdmitted: [{ canonical, wire, recoveryOrigins: [recoveryOrigin] }],
+        tainted: [],
+        taintedAdmitted: [],
+        ladderAnomalySpecs: [],
+        verifiedEvidenceCandidates: [],
+        provisionalOnlyLadderRawIds: new Set(),
+        cleanWire: [wire],
+      },
+      managerDecision: {
+        managerOutput: {
+          ...emptyOutput(),
+          newFindings: [{
+            rawFindingIds: [wire.rawFindingId],
+            title: wire.title,
+            severity: wire.severity,
+          }],
+        },
+        invalidAttempts: [],
+        cleanProvisionalSpecs: [],
+        unsupportedRawFindingReports: [],
+        cleanWireById: new Map([[wire.rawFindingId, wire]]),
+        cleanCanonicalById: new Map([[canonical.rawFindingId, canonical]]),
+        ladder: {
+          interpretationReservations: new Map(),
+          deferredRawFindingIds: new Set(),
+          pendingSameWithProof: [],
+          pendingIndependentNew: [],
+          pendingConflicts: [],
+          provisionalSpecs: [],
+          provisionalByInterpretationKey: new Map(),
+          pendingAppliedReattach: [],
+          recoveryProvisionalOrigins: new Map(),
+          stats: {} as LadderResult['stats'],
+        },
+        rawRecovery: {
+          intake: {
+            items: [],
+            overflowRawFindingIds: new Set(),
+            overflowSpecs: [],
+            overflowReports: [],
+            clarifications: [],
+            rawNormalizations: [],
+            healthyReviewerStableKeys: new Set(),
+          },
+          output: emptyOutput(),
+          origins: new Map(),
+          failures: new Map(),
+          capturedPreconditions: new Map(),
+          invalidAttempts: [],
+          unsupportedRawFindingReports: [],
+          cleanWireById: new Map(),
+          cleanCanonicalById: new Map(),
+          reservationTokens: new Set(),
+        },
+      },
+      observation,
+      stopBudgetLimits: resolveStopBudgetLimits(undefined),
+      stopBudgetRoundMarker: 'round-clean',
+      reviewIntegrityLimits: resolveReviewIntegrityLimits(undefined),
+      reviewScopeSnapshotId: quote.snapshotId,
+    }, freshLedger);
+
+    expect(mutation.ledger.findings).toEqual(freshLedger.findings);
+    expect(mutation.ledger.rawFindings).toEqual(freshLedger.rawFindings);
+    expect(mutation.ledger.reviewerAnomalies).toBeUndefined();
+  });
+
+  it.each([
+    'matches',
+    'newFindings',
+    'resolvedFindings',
+    'reopenedFindings',
+    'conflicts',
+  ] as const)('drops a mixed %s entry atomically and lands its fresh raw as an explicit provisional', (kind) => {
+    const quote = verifiedSourceQuoteFields(
+      process.cwd(),
+      'src/core/workflow/findings/provisional-recovery-origin.ts',
+      1,
+    );
+    const staleSource: RawFinding = {
+      ...raw(`stale-${kind}`),
+      location: quote.location,
+      evidence: {
+        kind: 'source_quote',
+        path: 'src/core/workflow/findings/provisional-recovery-origin.ts',
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: quote.verbatimExcerpt,
+        snapshotId: quote.snapshotId,
+      },
+    };
+    const freshSource: RawFinding = {
+      ...raw(`fresh-${kind}`),
+      title: `Fresh ${kind} claim`,
+      location: quote.location,
+      evidence: {
+        kind: 'source_quote',
+        path: 'src/core/workflow/findings/provisional-recovery-origin.ts',
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: quote.verbatimExcerpt,
+        snapshotId: quote.snapshotId,
+      },
+    };
+    const processFinding = provisional('F-0001', 'manager-budget-exhausted');
+    const previousLedger = ledger([processFinding], [raw('source-1')]);
+    const staleCanonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(staleSource, 'reviewer-stable-a'),
+      { ledger: previousLedger },
+    ).canonical;
+    processFinding.provisional!.lineageKey = staleCanonical.lineageKey;
+    const recoveryOrigin = snapshotProvisionalRecoveryOrigin({
+      ...processFinding,
+      provisional: processFinding.provisional!,
+    });
+    const freshCanonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(freshSource, 'reviewer-stable-a'),
+      { ledger: previousLedger },
+    ).canonical;
+    const staleWire = toLedgerRawFinding(staleCanonical);
+    const freshWire = toLedgerRawFinding(freshCanonical);
+    const freshLedger = ledger([{
+      ...processFinding,
+      revision: processFinding.revision + 1,
+    }], [raw('source-1')]);
+    const staleItem = {
+      canonical: staleCanonical,
+      wire: staleWire,
+      recoveryOrigins: [recoveryOrigin],
+    };
+    const freshItem = { canonical: freshCanonical, wire: freshWire };
+    const params = emptyCommitPlanInput({
+      previousLedger,
+      intake: {
+        items: [staleItem, freshItem],
+        overflowRawFindingIds: new Set(),
+        overflowSpecs: [],
+        overflowReports: [],
+        clarifications: [],
+        rawNormalizations: [],
+        healthyReviewerStableKeys: new Set(),
+      },
+      managerDecision: {
+        ...emptyCommitPlanInput().managerDecision,
+        managerOutput: mixedManagerOutput(
+          kind,
+          processFinding.id,
+          [staleWire.rawFindingId, freshWire.rawFindingId],
+          freshWire.title,
+        ),
+        cleanWireById: new Map([
+          [staleWire.rawFindingId, staleWire],
+          [freshWire.rawFindingId, freshWire],
+        ]),
+        cleanCanonicalById: new Map([
+          [staleCanonical.rawFindingId, staleCanonical],
+          [freshCanonical.rawFindingId, freshCanonical],
+        ]),
+      },
+      reviewScopeSnapshotId: quote.snapshotId,
+      stopBudgetRoundMarker: `round-mixed-${kind}`,
+    });
+
+    const mutation = buildFindingManagerCommitMutation(params, freshLedger);
+
+    expect(mutation.ledger.rawFindings.map((item) => item.rawFindingId))
+      .not.toContain(staleWire.rawFindingId);
+    expect(mutation.ledger.rawFindings.map((item) => item.rawFindingId))
+      .toContain(freshWire.rawFindingId);
+    expect(mutation.ledger.findings).toContainEqual(expect.objectContaining({
+      status: 'open',
+      rawFindingIds: expect.arrayContaining([freshWire.rawFindingId]),
+      provisional: expect.objectContaining({
+        kind: 'raw-adjudication-unresolved',
+        reason: expect.stringContaining('mixed manager entry'),
+      }),
+    }));
+  });
+
+  it('marks a stale recovery provisional as stale_precondition without storing its raw observation', () => {
+    const processFinding = provisional('F-0001', 'manager-budget-exhausted');
+    const source = { ...raw('current-provisional'), relation: 'persists' as const, targetFindingId: processFinding.id };
+    const previousLedger = ledger([processFinding], [raw('source-1')]);
+    const canonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(source, 'reviewer-stable-a'),
+      { ledger: previousLedger, preserveAmbiguityOrigin: true },
+    ).canonical;
+    processFinding.provisional!.lineageKey = canonical.lineageKey;
+    const recoveryOrigin = snapshotProvisionalRecoveryOrigin({
+      ...processFinding,
+      provisional: processFinding.provisional!,
+    });
+    const wire = toLedgerRawFinding(canonical);
+    const baseInterpretationKey = computeBaseInterpretationKey({
+      reviewerStableKey: canonical.reviewerStableKey,
+      lineageKey: canonical.lineageKey,
+      candidateEvidenceHash: canonical.evidenceHash,
+    });
+    const interpretationKey = computeInterpretationAttemptKey(baseInterpretationKey, 1);
+    const freshLedger: FindingLedger = {
+      ...ledger([{
+        ...processFinding,
+        revision: processFinding.revision + 1,
+      }], [raw('source-1')]),
+      interpretations: [{
+        interpretationKey,
+        baseInterpretationKey,
+        attemptOrdinal: 1,
+        reviewerStableKey: canonical.reviewerStableKey,
+        lineageKey: canonical.lineageKey,
+        candidateEvidenceHash: canonical.evidenceHash,
+        stage: 'interpretation_completed',
+        startedAt: observation,
+        completedAt: observation,
+        reservationToken: 'owner-provisional',
+        promptPreconditions: [],
+        validatedDecision: {
+          decision: 'provisional',
+          rawFindingId: wire.rawFindingId,
+          reason: 'Meaning remains ambiguous.',
+        },
+      }],
+    };
+    const spec = {
+      kind: 'raw-meaning-ambiguous' as const,
+      stableKey: processFinding.provisional!.stableKey,
+      lineageKey: canonical.lineageKey,
+      sourceRawFindingIds: [wire.rawFindingId],
+      reason: 'Meaning remains ambiguous.',
+      title: wire.title,
+      severity: wire.severity,
+      description: wire.description,
+      reviewers: [wire.reviewer],
+      recoveryReviewerStableKey: canonical.reviewerStableKey,
+    };
+    const input = {
+      contract: {},
+      cwd: process.cwd(),
+      ledgerStore: {},
+      optionsBuilder: {},
+      stepExecutor: {},
+      parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
+      stepIteration: 1,
+      subResults: [],
+      workflowName: previousLedger.workflowName,
+      runId: observation.runId,
+      callNamespace: '',
+      timestamp: observation.timestamp,
+    } as RunFindingManagerForStepInput;
+
+    const mutation = buildFindingManagerCommitMutation({
+      input,
+      previousLedger,
+      intake: {
+        items: [{
+          canonical,
+          wire,
+          recoveryOrigins: [recoveryOrigin],
+          interpretationRecoveryAttempt: true,
+        }],
+        overflowRawFindingIds: new Set(),
+        overflowSpecs: [],
+        overflowReports: [],
+        clarifications: [],
+        rawNormalizations: [],
+        healthyReviewerStableKeys: new Set(),
+      },
+      interpretationRecoveryFailures: [],
+      admission: {
+        admissionRejections: [],
+        admissionAnomalySpecs: [],
+        admissionRejectedItems: [],
+        locationlessProvisionalItems: [],
+        pendingRejectedObservations: [],
+        cleanAdmitted: [],
+        tainted: [{
+          canonical,
+          wire,
+          recoveryOrigins: [recoveryOrigin],
+          interpretationRecoveryAttempt: true,
+        }],
+        taintedAdmitted: [{
+          canonical,
+          wire,
+          recoveryOrigins: [recoveryOrigin],
+          interpretationRecoveryAttempt: true,
+        }],
+        ladderAnomalySpecs: [],
+        verifiedEvidenceCandidates: [],
+        provisionalOnlyLadderRawIds: new Set([wire.rawFindingId]),
+        cleanWire: [],
+      },
+      managerDecision: {
+        managerOutput: emptyOutput(),
+        invalidAttempts: [],
+        cleanProvisionalSpecs: [],
+        unsupportedRawFindingReports: [],
+        cleanWireById: new Map(),
+        cleanCanonicalById: new Map(),
+        ladder: {
+          interpretationReservations: new Map([[interpretationKey, 'owner-provisional']]),
+          deferredRawFindingIds: new Set(),
+          pendingSameWithProof: [],
+          pendingIndependentNew: [],
+          pendingConflicts: [],
+          provisionalSpecs: [],
+          provisionalByInterpretationKey: new Map([[interpretationKey, spec]]),
+          pendingAppliedReattach: [],
+          recoveryProvisionalOrigins: new Map([[interpretationKey, [recoveryOrigin]]]),
+          stats: {} as LadderResult['stats'],
+        },
+        rawRecovery: {
+          intake: {
+            items: [],
+            overflowRawFindingIds: new Set(),
+            overflowSpecs: [],
+            overflowReports: [],
+            clarifications: [],
+            rawNormalizations: [],
+            healthyReviewerStableKeys: new Set(),
+          },
+          output: emptyOutput(),
+          origins: new Map(),
+          failures: new Map(),
+          capturedPreconditions: new Map(),
+          invalidAttempts: [],
+          unsupportedRawFindingReports: [],
+          cleanWireById: new Map(),
+          cleanCanonicalById: new Map(),
+          reservationTokens: new Set(),
+        },
+      },
+      observation,
+      stopBudgetLimits: resolveStopBudgetLimits(undefined),
+      stopBudgetRoundMarker: 'round-provisional',
+      reviewIntegrityLimits: resolveReviewIntegrityLimits(undefined),
+      reviewScopeSnapshotId: 'snapshot-provisional',
+    }, freshLedger);
+
+    expect(mutation.ledger.rawFindings).toEqual(freshLedger.rawFindings);
+    expect(mutation.ledger.findings).toEqual(freshLedger.findings);
+    expect(mutation.ledger.findings[0]?.revision).toBe(freshLedger.findings[0]?.revision);
+    expect(mutation.ledger.findings[0]?.provisional?.interpretationEpochs)
+      .toBe(freshLedger.findings[0]?.provisional?.interpretationEpochs);
+    expect(mutation.ledger.interpretations?.[0]).toMatchObject({
+      stage: 'ledger_applied',
+      applicationResult: 'stale_precondition',
+    });
   });
 
   it('advances current same-evidence reports even when the source raw is already recorded', () => {
@@ -500,9 +2295,9 @@ describe('provisional recovery', () => {
       reviewerStableKey: canonical.reviewerStableKey,
       lineageKey: canonical.lineageKey,
       candidateEvidenceHash: canonical.evidenceHash,
-      policyVersion: 2,
       stage: 'ledger_applied',
       startedAt: observation,
+      ...completedWalFields(source.rawFindingId),
       reservationToken: 'completed-attempt-owner',
       promptPreconditions: [],
       appliedAt: observation,
@@ -526,8 +2321,10 @@ describe('provisional recovery', () => {
 
   it('reserves a raw replay once per provisional revision and attempt', async () => {
     let current = ledger([provisional('F-0001', 'raw-adjudication-unresolved')], [raw('source-1')]);
+    const processFinding = current.findings[0]!;
     const claimed = new Set<string>();
     const store: FindingManagerStore = {
+      ledgerIdentity: '/test/finding-provisional-recovery/action-ledger.json',
       workflowName: current.workflowName,
       loadLedger: () => current,
       saveLedger: (next) => { current = next; },
@@ -557,7 +2354,18 @@ describe('provisional recovery', () => {
     const deferred = first.result.length === 0 ? first : second;
 
     expect(owner.result).toEqual([
-      expect.objectContaining({ provisionalFindingId: 'F-0001', expectedRevision: 1, attempt: 1 }),
+      expect.objectContaining({
+        provisionalFindingId: 'F-0001',
+        expectedRevision: 1,
+        attempt: 1,
+        recoveryOrigin: {
+          provisionalFindingId: processFinding.id,
+          expectedProvisionalRevision: 1,
+          expectedProvisionalStableKey: processFinding.provisional!.stableKey,
+          expectedProvisionalLineageKey: processFinding.provisional!.lineageKey,
+          expectedRecoveryReviewerStableKey: 'reviewer-stable-a',
+        },
+      }),
     ]);
     expect(deferred.result).toEqual([]);
     expect(current.findings[0]?.provisional?.adjudicationAttempts).toBeUndefined();
@@ -588,10 +2396,10 @@ describe('provisional recovery', () => {
     expect(recovered).toEqual([
       expect.objectContaining({
         wire: expect.objectContaining({ rawFindingId: source.rawFindingId }),
-        recoveryOrigin: {
+        recoveryOrigins: [expect.objectContaining({
           provisionalFindingId: processFinding.id,
           expectedProvisionalRevision: 1,
-        },
+        })],
       }),
     ]);
   });
@@ -613,15 +2421,38 @@ describe('provisional recovery', () => {
       roundsCompleted: 1,
     });
 
-    expect(attached[0]?.recoveryOrigin).toEqual({
+    expect(attached[0]?.recoveryOrigins).toEqual([{
       provisionalFindingId: processFinding.id,
       expectedProvisionalRevision: 1,
-    });
+      expectedProvisionalStableKey: processFinding.provisional!.stableKey,
+      expectedProvisionalLineageKey: processFinding.provisional!.lineageKey,
+      expectedRecoveryReviewerStableKey: 'reviewer-stable-a',
+    }]);
     expect(collectInterpretationRecoveryItems({
       ledger: current,
       currentItems: attached,
       roundsCompleted: 1,
     })).toEqual([]);
+  });
+
+  it('does not infer a recovery origin from lineage when reviewer provenance differs', () => {
+    const processFinding = provisional('F-0001', 'manager-budget-exhausted');
+    processFinding.provisional!.interpretationEpochs = 1;
+    const source = raw('source-1');
+    const current = ledger([processFinding], [source]);
+    const canonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(source, 'reviewer-stable-b'),
+      { ledger: current },
+    ).canonical;
+    processFinding.provisional!.lineageKey = canonical.lineageKey;
+
+    const attached = attachInterpretationRecoveryOrigins({
+      ledger: current,
+      currentItems: [{ canonical, wire: toLedgerRawFinding(canonical) }],
+      roundsCompleted: 1,
+    });
+
+    expect(attached[0]?.recoveryOrigins).toBeUndefined();
   });
 
   it('resolves an overflow after an empty healthy envelope and bounds absent recovery rounds', () => {
@@ -698,8 +2529,13 @@ describe('provisional recovery', () => {
       relation: 'reopened',
       targetFindingId: dismissed.id,
     };
+    const previousLedger = ledger([dismissed]);
+    const canonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(reopenedRaw, 'reviewer-stable-a'),
+      { ledger: previousLedger },
+    ).canonical;
     const reopened = reconcileFindingLedger({
-      previousLedger: ledger([dismissed]),
+      previousLedger,
       rawFindings: [reopenedRaw],
       managerOutput: {
         ...emptyOutput(),
@@ -709,6 +2545,12 @@ describe('provisional recovery', () => {
           evidence: 'A later reviewer supplied current evidence.',
         }],
       },
+      provisionalFindings: [],
+      rawFindingDispositions: [],
+      rawProvenanceByRawFindingId: new Map([[reopenedRaw.rawFindingId, {
+        reviewerStableKey: canonical.reviewerStableKey,
+        lineageKey: canonical.lineageKey,
+      }]]),
       context: {
         workflowName: 'peer-review',
         stepName: observation.stepName,

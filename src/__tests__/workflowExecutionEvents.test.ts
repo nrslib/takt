@@ -255,13 +255,13 @@ describe('bindWorkflowExecutionEvents', () => {
   it('findings ledger event を analytics emitter に渡す', () => {
     const { engine, analyticsEmitter } = createBridgeHarness();
     const ledger: FindingLedger = {
-      version: 1,
       workflowName: 'peer-review',
       nextId: 1,
       updatedAt: '2026-06-13T01:00:00.000Z',
       findings: [],
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
     };
 
     engine.emit('findings:ledger', ledger);
@@ -311,7 +311,6 @@ describe('bindWorkflowExecutionEvents', () => {
         actualAnalyticsEmitter.onFindingLedgerUpdated(ledger);
       });
       const ledger: FindingLedger = {
-        version: 1,
         workflowName: 'peer-review',
         nextId: 2,
         updatedAt: '2026-06-13T02:30:00.000Z',
@@ -320,6 +319,7 @@ describe('bindWorkflowExecutionEvents', () => {
             id: 'F-0001',
             status: 'open',
             lifecycle: 'new',
+            revision: 1,
             severity: 'high',
             title: 'Analytics write should not abort workflow',
             reviewers: ['architecture-reviewer'],
@@ -330,6 +330,7 @@ describe('bindWorkflowExecutionEvents', () => {
         ],
         rawFindings: [],
         conflicts: [],
+        interpretations: [],
       };
 
       expect(() => engine.emit('findings:ledger', ledger)).not.toThrow();

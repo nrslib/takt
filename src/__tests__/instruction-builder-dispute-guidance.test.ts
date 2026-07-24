@@ -154,16 +154,17 @@ describe('reviewer duty gating', () => {
 describe('ledgerHasOpenFindings', () => {
   function makeLedger(statuses: Array<'open' | 'resolved' | 'waived'>): FindingLedger {
     return {
-      version: 1,
       workflowName: 'w',
       nextId: statuses.length + 1,
       updatedAt: '2026-07-05T00:00:00.000Z',
       rawFindings: [],
       conflicts: [],
+      interpretations: [],
       findings: statuses.map((status, index) => ({
         id: `F-000${index + 1}`,
         status,
         lifecycle: status === 'open' ? 'new' : status,
+        revision: 1,
         severity: 'high',
         title: `Finding ${index + 1}`,
         reviewers: ['reviewer'],
