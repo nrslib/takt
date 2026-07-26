@@ -18,7 +18,6 @@ const validPart: PartDefinition = {
   findingContract: {
     findingIds: ['F-0001'],
     role: 'repair',
-    writePaths: ['src/file.ts'],
     readPaths: ['src/file.ts'],
   },
 };

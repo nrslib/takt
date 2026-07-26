@@ -108,6 +108,8 @@ steps:
       extends: review-readonly
     pass_previous_response: false
     rules:
+      - condition: BLOCKED
+        next: ABORT
       - condition: All clear
         next: COMPLETE
       - condition: Requirements unmet, tests failing, build errors
@@ -118,5 +120,5 @@ steps:
         - name: supervisor-validation.md
           format: supervisor-validation
         - name: summary.md
-          format: summary
+          format: supervisor-summary
           use_judge: false

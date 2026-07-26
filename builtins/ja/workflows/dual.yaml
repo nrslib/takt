@@ -173,8 +173,10 @@ steps:
       report:
         - name: coder-scope.md
           format: coder-scope
+          use_judge: false
         - name: coder-decisions.md
           format: coder-decisions
+          use_judge: false
     quality_gates:
       - デザイン参照がある場合、主要画面のレイアウト・文言・色・間隔を要素単位で照合したこと
       - デザイン参照がある場合、プラットフォーム制約による差分は決定ログに明記したこと

@@ -96,8 +96,10 @@ steps:
       report:
         - name: coder-scope.md
           format: coder-scope
+          use_judge: false
         - name: coder-decisions.md
           format: coder-decisions
+          use_judge: false
   - name: reviewers
     tags:
       - review
@@ -149,6 +151,7 @@ steps:
               - WebFetch
         instruction: supervise
         rules:
+          - condition: BLOCKED
           - condition: All checks passed
           - condition: Requirements unmet, tests failing
         output_contracts:
@@ -156,9 +159,11 @@ steps:
             - name: supervisor-validation.md
               format: supervisor-validation
             - name: summary.md
-              format: summary
+              format: supervisor-summary
               use_judge: false
     rules:
+      - condition: any("BLOCKED")
+        next: ABORT
       - condition: all("No AI-specific issues", "All checks passed")
         next: COMPLETE
       - condition: all("AI-specific issues found", "Requirements unmet, tests failing")

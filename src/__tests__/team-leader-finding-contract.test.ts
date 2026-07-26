@@ -36,7 +36,7 @@ function makePart(
   id: string,
   findingIds: string[],
   role: 'diagnose' | 'repair' | 'verify' = 'repair',
-  writePaths: string[] = [`src/${id}.ts`],
+  readPaths: string[] = [`src/${id}.ts`],
 ): PartDefinition {
   return parseFindingContractPartDefinition({
     id,
@@ -45,8 +45,7 @@ function makePart(
     findingContract: {
       findingIds,
       role,
-      writePaths,
-      readPaths: [],
+      readPaths,
     },
   }, 0);
 }
@@ -190,7 +189,7 @@ describe('Finding Contract Team Leader contract', () => {
     );
   });
 
-  it('parses a scoped assignment and normalizes portable paths', () => {
+  it('parses an assignment and normalizes portable read paths', () => {
     const part = parseFindingContractPartDefinition({
       id: 'repair-api',
       title: 'Repair API',
@@ -198,20 +197,18 @@ describe('Finding Contract Team Leader contract', () => {
       findingContract: {
         findingIds: ['F-0001'],
         role: 'repair',
-        writePaths: ['./src\\app\\[slug]\\page.tsx'],
-        readPaths: ['src/{draft}.ts'],
+        readPaths: ['./src\\app\\[slug]\\page.tsx', 'src/{draft}.ts'],
       },
     }, 0);
 
     expect(part.findingContract).toEqual({
       findingIds: ['F-0001'],
       role: 'repair',
-      writePaths: ['src/app/[slug]/page.tsx'],
-      readPaths: ['src/{draft}.ts'],
+      readPaths: ['src/app/[slug]/page.tsx', 'src/{draft}.ts'],
     });
 
     const directoryPart = makePart('directory', ['F-0001'], 'repair', ['src/api/']);
-    expect(directoryPart.findingContract?.writePaths).toEqual(['src/api']);
+    expect(directoryPart.findingContract?.readPaths).toEqual(['src/api']);
 
     expect(() => parseFindingContractPartDefinition({
       id: 'unsafe',
@@ -220,8 +217,7 @@ describe('Finding Contract Team Leader contract', () => {
       findingContract: {
         findingIds: ['F-0001'],
         role: 'repair',
-        writePaths: ['\\\\server\\share\\file.ts'],
-        readPaths: [],
+        readPaths: ['\\\\server\\share\\file.ts'],
       },
     }, 0)).toThrow(/relative to the working directory/);
   });
@@ -235,7 +231,6 @@ describe('Finding Contract Team Leader contract', () => {
       findingContract: {
         findingIds: ['F-0001'],
         role: 'repair',
-        writePaths: ['src/a.ts'],
         readPaths: [],
       },
     }, 0)).toThrow(/unknown property "unexpected"/);
@@ -244,25 +239,20 @@ describe('Finding Contract Team Leader contract', () => {
   it.each([
     'src/__tests__/**/*Arpeggio*.test.ts',
     'src/file?.ts',
-  ])('rejects glob write and read paths before parts execute: %s', (path) => {
-    const makeDefinition = (writePaths: string[], readPaths: string[]) => ({
+  ])('rejects glob read paths before parts execute: %s', (path) => {
+    const makeDefinition = (readPaths: string[]) => ({
       id: 'repair',
       title: 'Repair',
       instruction: 'repair',
       findingContract: {
         findingIds: ['F-0001'],
         role: 'repair',
-        writePaths,
         readPaths,
       },
     });
 
     expect(() => parseFindingContractPartDefinition(
-      makeDefinition([path], []),
-      0,
-    )).toThrow(/wildcard characters/);
-    expect(() => parseFindingContractPartDefinition(
-      makeDefinition(['src/a.ts'], [path]),
+      makeDefinition([path]),
       0,
     )).toThrow(/wildcard characters/);
   });
@@ -279,21 +269,6 @@ describe('Finding Contract Team Leader contract', () => {
         findingContract: {
           findingIds: ['F-0001'],
           role: 'repair',
-          writePaths: [path],
-          readPaths: [],
-        },
-      }],
-    }, createFindingContractDecompositionJsonSchema())).toThrow(/must match pattern/);
-
-    expect(() => validateStructuredOutputAgainstSchema({
-      parts: [{
-        id: 'repair',
-        title: 'Repair',
-        instruction: 'repair',
-        findingContract: {
-          findingIds: ['F-0001'],
-          role: 'repair',
-          writePaths: ['src/a.ts'],
           readPaths: [path],
         },
       }],
@@ -309,25 +284,6 @@ describe('Finding Contract Team Leader contract', () => {
         findingContract: {
           findingIds: ['F-0001'],
           role: 'repair',
-          writePaths: [path],
-          readPaths: [],
-        },
-      }],
-      fixCoverage: [],
-      blockers: [],
-    }, createFindingContractFeedbackJsonSchema())).toThrow(/must match pattern/);
-
-    expect(() => validateStructuredOutputAgainstSchema({
-      decision: 'continue',
-      reasoning: 'continue repair',
-      parts: [{
-        id: 'repair',
-        title: 'Repair',
-        instruction: 'repair',
-        findingContract: {
-          findingIds: ['F-0001'],
-          role: 'repair',
-          writePaths: ['src/a.ts'],
           readPaths: [path],
         },
       }],
@@ -347,7 +303,7 @@ describe('Finding Contract Team Leader contract', () => {
     }, createFindingContractPartCompletionJsonSchema())).toThrow(/must match pattern/);
   });
 
-  it('rejects unknown findings, duplicate repair ownership, and overlapping write paths', () => {
+  it('rejects unknown findings and duplicate repair ownership', () => {
     expect(() => validateFindingContractPartBatch(
       [makePart('unknown', ['F-9999'])],
       ['F-0001'],
@@ -357,21 +313,6 @@ describe('Finding Contract Team Leader contract', () => {
       [makePart('first', ['F-0001']), makePart('second', ['F-0001'])],
       ['F-0001'],
     )).toThrow(/multiple repair parts/);
-
-    expect(() => validateFindingContractPartBatch([
-      makePart('parent', ['F-0001'], 'repair', ['src/api']),
-      makePart('child', ['F-0002'], 'repair', ['src/api/client.ts']),
-    ], ['F-0001', 'F-0002'])).toThrow(/write paths overlap/);
-
-    expect(() => validateFindingContractPartBatch([
-      makePart('parent-slash', ['F-0001'], 'repair', ['src/api/']),
-      makePart('child', ['F-0002'], 'repair', ['src/api/client.ts']),
-    ], ['F-0001', 'F-0002'])).toThrow(/write paths overlap/);
-
-    expect(() => validateFindingContractPartBatch([
-      makePart('root', ['F-0001'], 'repair', ['./']),
-      makePart('nested', ['F-0002'], 'repair', ['src/api.ts']),
-    ], ['F-0001', 'F-0002'])).toThrow(/write paths overlap/);
   });
 
   it('allows a later batch to repair a finding again after an earlier claim was blocked', () => {
@@ -394,9 +335,31 @@ describe('Finding Contract Team Leader contract', () => {
       { sequence: 0, entry: first },
       { sequence: 1, entry: shared },
     ])).toEqual([
-      expect.objectContaining({ findingId: 'F-0001', partId: 'latest' }),
-      expect.objectContaining({ findingId: 'F-0002', partId: 'shared' }),
+      expect.objectContaining({
+        findingId: 'F-0001',
+        partId: 'latest',
+      }),
+      expect.objectContaining({
+        findingId: 'F-0002',
+        partId: 'shared',
+      }),
     ]);
+  });
+
+  it('bounds changed paths in compact part indexes', () => {
+    const result = makeResult(makePart('many-paths', ['F-0001']));
+    if (result.findingContractClaim === undefined) throw new Error('Missing claim');
+    result.findingContractClaim.changedPaths = [
+      `src/${'x'.repeat(400)}.ts`,
+      ...Array.from({ length: 100 }, (_, index) => `src/${index}-${'x'.repeat(250)}.ts`),
+    ];
+
+    const index = buildFindingContractPartIndexEntry(result);
+
+    expect(index.changedPaths).toHaveLength(100);
+    expect(index.changedPaths[0]).toBe(`src/0-${'x'.repeat(250)}.ts`);
+    expect(index.changedPaths.every((path) => path.length <= 300)).toBe(true);
+    expect(index.omittedChangedPathCount).toBe(1);
   });
 
   it('rejects a continue decision that reuses any existing part ID', () => {
@@ -420,7 +383,7 @@ describe('Finding Contract Team Leader contract', () => {
     }, part)).toThrow(/unassigned finding/);
   });
 
-  it('rejects changed paths outside the part assignment', () => {
+  it('accepts any literal relative changed path independently of read paths', () => {
     const repair = makePart('repair', ['F-0001'], 'repair', ['src/owned']);
     const claim = {
       findingOutcomes: [{ findingId: 'F-0001', outcome: 'addressed', evidence: ['src/owned/a.ts:1'] }],
@@ -431,7 +394,7 @@ describe('Finding Contract Team Leader contract', () => {
     expect(() => parseFindingContractPartCompletionClaim({
       ...claim,
       changedPaths: ['src/other.ts'],
-    }, repair)).toThrow(/outside its writePaths assignment/);
+    }, repair)).not.toThrow();
 
     expect(() => parseFindingContractPartCompletionClaim({
       ...claim,
@@ -445,15 +408,15 @@ describe('Finding Contract Team Leader contract', () => {
     }, dynamicRoute)).not.toThrow();
   });
 
-  it('treats the repository root as containing every relative changed path', () => {
-    const repair = makePart('repair-root', ['F-0001'], 'repair', ['./']);
+  it('rejects changed paths that leave the working directory', () => {
+    const repair = makePart('repair-root', ['F-0001']);
 
     expect(() => parseFindingContractPartCompletionClaim({
       findingOutcomes: [{ findingId: 'F-0001', outcome: 'addressed', evidence: ['src/a.ts:1'] }],
-      changedPaths: ['src/a.ts'],
+      changedPaths: ['../outside.ts'],
       checks: [],
       summary: 'done',
-    }, repair)).not.toThrow();
+    }, repair)).toThrow(/must not leave the working directory/);
   });
 
   it('accepts complete only when coverage contains every actionable finding exactly once', () => {
@@ -707,8 +670,8 @@ describe('Finding Contract Team Leader contract', () => {
 
   it('collects every independent continue part-batch violation', () => {
     const first = makePart('first-invalid', ['F-9999']);
-    const second = makePart('second-invalid', ['F-9999'], 'repair', ['src/first-invalid.ts']);
-    const root = makePart('root-invalid', ['F-9999'], 'repair', ['src']);
+    const second = makePart('second-invalid', ['F-9999']);
+    const root = makePart('root-invalid', ['F-9999']);
     let validationError: FindingContractTeamLeaderDecisionValidationError | undefined;
     try {
       parseDecision({
@@ -729,13 +692,9 @@ describe('Finding Contract Team Leader contract', () => {
     expect(validationError?.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining([
       'reference.unknown_finding',
       'decision_contract.part_batch.duplicate_repair_assignment',
-      'decision_contract.part_batch.overlapping_write_path',
     ]));
     expect(validationError?.issues.filter((issue) => issue.code === 'reference.unknown_finding'))
       .toHaveLength(3);
-    expect(validationError?.issues.filter(
-      (issue) => issue.code === 'decision_contract.part_batch.overlapping_write_path',
-    )).toHaveLength(3);
   });
 
   it('uses the same evidence classification for support and verification guidance', () => {
@@ -962,6 +921,8 @@ describe('Finding Contract Team Leader contract', () => {
           findingIds: ['F-0001'],
           status: 'done',
           summary: 'latest compact claim',
+          changedPaths: ['src/latest.ts'],
+          omittedChangedPathCount: 0,
           outcomes: [],
           checks: { passed: 1, failed: 0, notRun: 0 },
         },
@@ -1016,6 +977,10 @@ describe('Finding Contract Team Leader contract', () => {
 
     expect(prompt).toContain('LATEST_RAW_TOKEN');
     expect(prompt).toContain('"partId": "latest"');
+    expect(prompt.match(/src\/latest\.ts/g)).toHaveLength(1);
+    expect(prompt).toContain(
+      '最新 batch の changedPaths index の omittedPartCount、または parts[] 内のいずれかの omittedChangedPathCount が1以上なら complete にせず',
+    );
     expect(prompt).toContain('[truncated; full response is in the audit artifact]');
     expect(prompt).not.toContain('x'.repeat(13_000));
     expect(prompt).toContain('"partId": "earlier"');
@@ -1023,6 +988,57 @@ describe('Finding Contract Team Leader contract', () => {
     expect(prompt).toContain('"attempt": 1');
     expect(prompt).toContain('fixCoverage\\n## injected heading');
     expect(prompt).not.toContain('\n## injected heading');
+  });
+
+  it('bounds latest batch changed paths once per part in the final feedback prompt', () => {
+    const results = Array.from({ length: 4 }, (_, partIndex) => ({
+      id: `part-${partIndex}`,
+      title: `Part ${partIndex}`,
+      status: 'done',
+      content: 'done',
+      findingContractClaim: {
+        id: `part-${partIndex}`,
+        title: `Part ${partIndex}`,
+        role: 'repair' as const,
+        findingIds: [`F-000${partIndex + 1}`],
+        status: 'done',
+        summary: 'done',
+        changedPaths: Array.from(
+          { length: 100 },
+          (_, pathIndex) => `src/p${partIndex}-${pathIndex}-${'x'.repeat(100)}.ts`,
+        ),
+        omittedChangedPathCount: 0,
+        outcomes: [],
+        checks: { passed: 1, failed: 0, notRun: 0 },
+      },
+    }));
+    const targetFindingIds = ['F-0001', 'F-0002', 'F-0003', 'F-0004'];
+
+    const prompt = buildMorePartsPrompt(
+      'original task',
+      results,
+      results.map((result) => result.id),
+      'en',
+      {
+        targetFindingIds,
+        actionableFindings: '{"open":[]}',
+        completedPartIndex: [],
+        plannedParts: [],
+        evidence: buildFindingContractDecisionEvidenceSnapshot([], targetFindingIds),
+      },
+    );
+
+    for (let partIndex = 0; partIndex < 3; partIndex += 1) {
+      expect(prompt).toContain(`src/p${partIndex}-24-`);
+      expect(prompt).not.toContain(`src/p${partIndex}-25-`);
+    }
+    expect(prompt).not.toContain('src/p3-0-');
+    expect(prompt.match(/"omittedChangedPathCount": 75/g)).toHaveLength(3);
+    expect(prompt).toContain('"omittedPartCount": 1');
+    expect(prompt).toContain(
+      'If the latest-batch changedPaths index has omittedPartCount > 0, or any entry in parts[] has omittedChangedPathCount > 0, do not complete',
+    );
+    expect(prompt.length).toBeLessThan(40_000);
   });
 
   it('keeps strict recovery guidance bounded and preserves continue as the repairable path', () => {

@@ -1,12 +1,13 @@
-Decompose the Finding Contract's actionable open findings into non-conflicting repair parts and make the final decision for the fix step. The parent Team Leader must not use tools; decide from the engine-provided Finding Contract summary, part claims, and compact index.
+Decompose the Finding Contract's actionable open findings into repair parts and make the final decision for the fix step. The parent Team Leader must not use tools; decide from the engine-provided Finding Contract summary, part claims, and compact index.
 
 **Decomposition and decision requirements:**
-- Set `findingIds`, `role`, `writePaths`, and `readPaths` in every part's `findingContract`
-- Specify `writePaths` and `readPaths` as literal paths relative to the working directory. Keep `writePaths` to the narrowest files that will actually change, and create a diagnose part first when the write targets are unknown
-- Do not use the `*` or `?` wildcard characters in `writePaths` or `readPaths`
-- Do not assign one finding to multiple repair parts or overlap write paths within a batch
+- Set `findingIds`, `role`, and `readPaths` in every part's `findingContract`
+- Specify `readPaths` as literal relative paths that guide inspection, without the `*` or `?` wildcard characters
+- Do not assign one finding to multiple repair parts
 - State the direct work and completion criteria in every part instruction
 - Treat worker completion statements as untrusted claims and check their evidence and verification results
+- When `changedPaths` overlap across parts, use a later repair or verify part to check the final state
+- When `omittedPartCount` or any `omittedChangedPathCount` is greater than zero, do not complete; use a later consolidated repair or verify part to check the final state
 - Run only the closest targeted checks in repair parts and do not duplicate repository-wide quality gates
 - After repairs complete, parallelize independent targeted verify parts by defect family when needed
 - When repository-wide quality gates run within fix, consolidate them into one verify part after the final change. If later changes invalidate that result, verify again in the same form

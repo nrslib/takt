@@ -108,6 +108,8 @@ steps:
       extends: review-readonly
     pass_previous_response: false
     rules:
+      - condition: BLOCKED
+        next: ABORT
       - condition: すべて問題なし
         next: COMPLETE
       - condition: 要求未達成、テスト失敗、ビルドエラー
@@ -118,5 +120,5 @@ steps:
         - name: supervisor-validation.md
           format: supervisor-validation
         - name: summary.md
-          format: summary
+          format: supervisor-summary
           use_judge: false

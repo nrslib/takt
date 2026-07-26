@@ -17,10 +17,9 @@ const findingContractAssignmentSchema = {
   properties: {
     findingIds: stringArraySchema,
     role: { type: 'string', enum: ['diagnose', 'repair', 'verify'] },
-    writePaths: literalPathArraySchema,
     readPaths: literalPathArraySchema,
   },
-  required: ['findingIds', 'role', 'writePaths', 'readPaths'],
+  required: ['findingIds', 'role', 'readPaths'],
   additionalProperties: false,
 } as const;
 const findingContractPartSchema = {

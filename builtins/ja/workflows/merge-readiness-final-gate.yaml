@@ -62,9 +62,11 @@ steps:
         - name: supervisor-validation.md
           format: supervisor-validation
         - name: summary.md
-          format: summary
+          format: supervisor-summary
           use_judge: false
     rules:
+      - condition: BLOCKED
+        next: ABORT
       - condition: approved
         next: COMPLETE
       - condition: need_replan

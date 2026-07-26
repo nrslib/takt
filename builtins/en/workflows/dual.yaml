@@ -173,8 +173,10 @@ steps:
       report:
         - name: coder-scope.md
           format: coder-scope
+          use_judge: false
         - name: coder-decisions.md
           format: coder-decisions
+          use_judge: false
     quality_gates:
       - When design references exist, verify major screens element by element for layout, copy, color, and spacing
       - When design references exist, record any platform-driven deviations in the decision log

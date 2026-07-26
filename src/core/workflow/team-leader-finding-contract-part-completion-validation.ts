@@ -7,10 +7,7 @@ import { FILE_LINE_EVIDENCE_PATTERN } from './findings/evidence.js';
 import {
   parseFindingContractPartCompletionClaim,
 } from './team-leader-finding-contract.js';
-import {
-  findingContractPathIsWithin,
-  normalizeFindingContractPath,
-} from './team-leader-finding-contract-validation.js';
+import { normalizeFindingContractPath } from './team-leader-finding-contract-validation.js';
 import {
   FindingContractControlValidationError,
   createFindingContractControlValidationIssue,
@@ -107,7 +104,7 @@ export function createFindingContractPartCompletionMutationGuard(
 ): FindingContractPartCompletionMutationGuard {
   const payload = isRecord(raw) ? raw : {};
   return {
-    ...(readChangedPaths(payload.changedPaths, part) ?? {}),
+    ...(readChangedPaths(payload.changedPaths) ?? {}),
     ...(readChecks(payload.checks) ?? {}),
     outcomesByFindingId: readValidOutcomes(payload.findingOutcomes, part),
   };
@@ -281,7 +278,6 @@ function collectChangedPathIssues(
     }));
     return;
   }
-  const writePaths = part.findingContract?.writePaths ?? [];
   for (const [index, entry] of raw.entries()) {
     const path = `changedPaths[${index}]`;
     if (typeof entry !== 'string' || entry.trim().length === 0) {
@@ -295,9 +291,8 @@ function collectChangedPathIssues(
       }));
       continue;
     }
-    let normalized: string;
     try {
-      normalized = normalizeFindingContractPath(entry, `Part "${part.id}" ${path}`);
+      normalizeFindingContractPath(entry, `Part "${part.id}" ${path}`);
     } catch (error) {
       issues.push(issue({
         code: 'authority.invalid_changed_path',
@@ -308,16 +303,6 @@ function collectChangedPathIssues(
         retryability: 'terminal',
       }));
       continue;
-    }
-    if (!writePaths.some((writePath) => findingContractPathIsWithin(normalized, writePath))) {
-      issues.push(issue({
-        code: 'authority.changed_path_outside_assignment',
-        category: 'authority',
-        path,
-        message: `Part "${part.id}" changed path is outside its writePaths assignment: ${normalized}`,
-        partId: part.id,
-        retryability: 'terminal',
-      }));
     }
   }
 }
@@ -431,7 +416,6 @@ function mutationIssue(
 
 function readChangedPaths(
   raw: unknown,
-  part: PartDefinition,
 ): Pick<FindingContractPartCompletionMutationGuard, 'changedPaths'> | undefined {
   if (!Array.isArray(raw)) return undefined;
   const normalized: string[] = [];
@@ -439,9 +423,6 @@ function readChangedPaths(
     if (typeof entry !== 'string' || entry.trim().length === 0) return undefined;
     try {
       const path = normalizeFindingContractPath(entry, 'changedPaths');
-      if (!part.findingContract?.writePaths.some((writePath) => findingContractPathIsWithin(path, writePath))) {
-        return undefined;
-      }
       normalized.push(path);
     } catch {
       return undefined;

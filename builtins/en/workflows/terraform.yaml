@@ -73,8 +73,10 @@ steps:
       report:
         - name: coder-scope.md
           format: coder-scope
+          use_judge: false
         - name: coder-decisions.md
           format: coder-decisions
+          use_judge: false
   - name: reviewers
     tags:
       - review
@@ -205,6 +207,8 @@ steps:
           - WebFetch
     instruction: &terraform_supervise_instruction supervise
     rules:
+      - condition: BLOCKED
+        next: ABORT
       - condition: All reviewers approved and mergeable quality
         next: COMPLETE
       - condition: Only AI-specific issues need fixing
@@ -220,7 +224,7 @@ steps:
         - name: supervisor-validation.md
           format: supervisor-validation
         - name: summary.md
-          format: summary
+          format: supervisor-summary
           use_judge: false
 
   - name: supervise
@@ -234,6 +238,8 @@ steps:
     provider_options: *terraform_supervise_provider_options
     instruction: *terraform_supervise_instruction
     rules:
+      - condition: BLOCKED
+        next: ABORT
       - condition: All reviewers approved and mergeable quality
         next: COMPLETE
       - condition: Only AI-specific issues need fixing

@@ -1,12 +1,7 @@
 import { resolve } from 'node:path';
 import type { RunAgentOptions } from '../../../agents/types.js';
-import type { PartDefinition } from '../../models/types.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
 import { isRealPathInside } from '../../../shared/utils/index.js';
-import {
-  normalizeFindingContractPath,
-  requireNonEmptyString,
-} from '../team-leader-finding-contract-validation.js';
 import type {
   FindingContractControlValidationIssue,
 } from '../team-leader-finding-contract-control-validation.js';
@@ -27,56 +22,38 @@ const SESSIONLESS_INSPECTION_CAPABILITY: Record<ProviderType, 'claude' | 'unsupp
   kiro: 'unsupported',
 };
 
-function collectInspectionPaths(part: PartDefinition): string[] {
-  if (part.findingContract === undefined) {
-    throw new Error(`Part "${part.id}" is missing findingContract assignment`);
-  }
-  return Array.from(new Set([
-    ...part.findingContract.readPaths,
-    ...part.findingContract.writePaths,
-  ].map((path, index) => {
-    const label = `Part "${part.id}" inspectionPaths[${index}]`;
-    return normalizeFindingContractPath(requireNonEmptyString(path, label), label);
-  })));
-}
-
 function isAllowedReadPath(
   cwd: string,
-  allowedRoots: readonly string[],
   candidatePath: unknown,
 ): candidatePath is string {
   if (typeof candidatePath !== 'string' || candidatePath.trim().length === 0) {
     return false;
   }
   const candidate = resolve(cwd, candidatePath);
-  return isRealPathInside(cwd, candidate)
-    && allowedRoots.some((root) => isRealPathInside(root, candidate));
+  return isRealPathInside(cwd, candidate);
 }
 
 function buildClaudeInspectionOptions(
   cwd: string,
-  paths: readonly string[],
 ): SessionlessInspectionOptions {
-  const allowedRoots = paths.map((path) => resolve(cwd, path));
   return {
     allowedTools: [],
     onPermissionRequest: async (request) => {
       if (
         request.toolName === 'Read'
-        && isAllowedReadPath(cwd, allowedRoots, request.input.file_path)
+        && isAllowedReadPath(cwd, request.input.file_path)
       ) {
         return { behavior: 'allow', updatedInput: request.input };
       }
       return {
         behavior: 'deny',
-        message: 'Part completion inspection only permits file reads within findingContract readPaths and writePaths.',
+        message: 'Part completion inspection only permits file reads within the working directory.',
       };
     },
   };
 }
 
 export function buildSessionlessPartCompletionInspectionOptions(
-  part: PartDefinition,
   cwd: string,
   provider: ProviderType | undefined,
   issues: readonly FindingContractControlValidationIssue[],
@@ -87,15 +64,11 @@ export function buildSessionlessPartCompletionInspectionOptions(
   if (!requiresInspection) {
     return { allowedTools: [] };
   }
-  const paths = collectInspectionPaths(part);
-  if (paths.length === 0) {
-    return { allowedTools: [] };
-  }
   if (provider === undefined) {
     throw new Error('Sessionless part completion inspection requires a resolved provider');
   }
   if (SESSIONLESS_INSPECTION_CAPABILITY[provider] === 'claude') {
-    return buildClaudeInspectionOptions(cwd, paths);
+    return buildClaudeInspectionOptions(cwd);
   }
   throw new Error(
     `Provider "${provider}" does not support path-scoped sessionless part completion inspection`,

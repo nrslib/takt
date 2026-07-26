@@ -19,7 +19,6 @@ export type TeamLeaderMode = 'finding_contract_fix';
 export interface FindingContractPartAssignment {
   findingIds: string[];
   role: 'diagnose' | 'repair' | 'verify';
-  writePaths: string[];
   readPaths: string[];
 }
 

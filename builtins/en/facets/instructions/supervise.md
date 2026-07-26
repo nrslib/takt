@@ -33,6 +33,13 @@ Procedure:
 7. Extract diff-introduced contracts that are not visible in the requirements table
    - Metadata, source, trace, adapters, public tool contracts, and identifiers that are persisted, displayed, or reused must be checked as independent items even when absent from the original requirement
 
+## Verification Blocked by the Environment
+
+- Use BLOCKED only when a required test, build, or functional check cannot run because of an environmental constraint that task-scope code changes cannot resolve
+- Before selecting BLOCKED, verify the attempted command, actual error, required environment, available environment, and the `runtime.prepare` configuration and result or why it cannot be used
+- Treat implementation defects, dependency or test-configuration defects, failed executed checks, checks that were not attempted, and problems fixable within task scope as REJECT rather than BLOCKED
+- Do not approve unverified scope; record the environmental blocker and unverified scope in `summary` when BLOCKED
+
 ## Report Priority (supervise-specific)
 
 - Do not treat summary reports as primary evidence. Use execution-result reports, reviewer reports with concrete verification details, and actual code in that order
@@ -45,4 +52,4 @@ Procedure:
 ## Output
 
 - Follow the `supervisor-validation` output contract to record requirements fulfillment, prior finding re-evaluation, unclassified concern checks, verification evidence, and unverified scope
-- Only when APPROVE, follow the `summary` output contract to produce the completion summary
+- Follow the `supervisor-summary` output contract and record APPROVE / REJECT / BLOCKED accurately. Do not record completion unless APPROVE

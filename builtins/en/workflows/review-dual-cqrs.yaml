@@ -250,9 +250,11 @@ steps:
         - name: supervisor-validation.md
           format: supervisor-validation
         - name: summary.md
-          format: summary
+          format: supervisor-summary
           use_judge: false
     rules:
+      - condition: BLOCKED
+        next: ABORT
       - condition: approved
         next: COMPLETE
 
@@ -268,5 +270,7 @@ steps:
     instruction: *review_synthesis_instruction
     output_contracts: *review_synthesis_output_contracts
     rules:
+      - condition: BLOCKED
+        next: ABORT
       - condition: Review integration complete
         next: COMPLETE
