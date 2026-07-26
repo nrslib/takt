@@ -16,6 +16,7 @@ import { buildRunPaths, type RunPaths } from '../run/run-paths.js';
 import type {
   WorkflowCallChildEngine,
   WorkflowAbortKind,
+  AutoRoutingEstimatorSource,
   WorkflowEngineOptions,
   WorkflowRunResult,
   WorkflowSharedRuntimeState,
@@ -63,7 +64,6 @@ import {
 import { getRemoteRepositoryIdentifiers } from '../../../infra/git/detect.js';
 const log = createLogger('workflow-engine');
 
-type AutoRoutingEstimatorSource = 'injected' | 'engine-default' | 'absent';
 type WorkflowEngineRuntimeOptions = WorkflowEngineOptions & {
   structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
   autoRoutingEstimatorSource: AutoRoutingEstimatorSource;
@@ -143,9 +143,7 @@ export class WorkflowEngine extends EventEmitter {
       inheritedAutoRouting,
       options.autoStrategyOverride,
     );
-    const inheritedEstimatorSource = (options as WorkflowEngineOptions & {
-      autoRoutingEstimatorSource?: AutoRoutingEstimatorSource;
-    }).autoRoutingEstimatorSource;
+    const inheritedEstimatorSource = options.autoRoutingEstimatorSource;
     const autoRoutingEstimatorSource = inheritedEstimatorSource
       ?? (options.autoRoutingEstimator !== undefined
         ? 'injected'

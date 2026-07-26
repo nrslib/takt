@@ -51,6 +51,13 @@ function matchRule(rules: AutoRoutingConfig['rules'], step: RoutingSelectionInpu
     ?? findMappingValue(rules?.personas, step.personaKey);
 }
 
+export function resolveAutoRoutingRuleCandidate(
+  autoRouting: AutoRoutingConfig,
+  step: RoutingSelectionInput['step'],
+): AutoRoutingCandidate | undefined {
+  return findCandidate(autoRouting, matchRule(autoRouting.rules, step));
+}
+
 function resolvePoolName(config: AutoRoutingConfig, step: RoutingSelectionInput['step']): string {
   let matchedPool: string | undefined;
   for (const tag of step.tags ?? []) {
@@ -79,7 +86,7 @@ export function resolveExecutableRoutingCandidates(
   autoRouting: AutoRoutingConfig,
   step: RoutingSelectionInput['step'],
 ): ExecutableRoutingCandidates {
-  const hardRule = findCandidate(autoRouting, matchRule(autoRouting.rules, step));
+  const hardRule = resolveAutoRoutingRuleCandidate(autoRouting, step);
   if (hardRule !== undefined) {
     return {
       candidates: [hardRule],
@@ -147,5 +154,5 @@ export function maxRoutingTier(left: RoutingTier, right: RoutingTier): RoutingTi
 }
 
 export function promoteRoutingTier(tier: RoutingTier): RoutingTier {
-  return tier === 'low' ? 'medium' : tier === 'medium' ? 'high' : 'high';
+  return tier === 'low' ? 'medium' : 'high';
 }

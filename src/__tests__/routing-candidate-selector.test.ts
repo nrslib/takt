@@ -56,6 +56,20 @@ describe('selectRoutingCandidate', () => {
     });
   });
 
+  it('Given the same medium requirement, When selecting with performance strategy, Then the highest-tier candidate is selected', () => {
+    const decision = selectRoutingCandidate({
+      autoRouting: createAutoRoutingConfig('performance'),
+      step: { name: 'implement', tags: ['implementation'] },
+      estimate: { requiredTier: 'medium', reasonCodes: ['focused-change'] },
+    });
+
+    expect(decision).toMatchObject({
+      candidate: { name: 'sol', routingTier: 'high' },
+      poolName: 'implementation',
+      resolutionSource: 'auto.dynamic',
+    });
+  });
+
   it('Given a hard rule and a high dynamic estimate, When selecting a candidate, Then the hard rule wins without applying the dynamic pool', () => {
     const decision = selectRoutingCandidate({
       autoRouting: createAutoRoutingConfig(),
@@ -89,7 +103,7 @@ describe('selectRoutingCandidate', () => {
       autoRouting,
       step: { name: 'implement', tags: ['implementation'] },
       estimate: { requiredTier: 'high', reasonCodes: ['complex-work'] },
-    })).toThrow(/required.*high|eligible.*candidate/i);
+    })).toThrow('No eligible candidate meets required high routing tier');
   });
 
   it('Given an estimator failure, When resolving a pool, Then the configured pool fallback is selected directly', () => {

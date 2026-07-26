@@ -23,6 +23,7 @@ import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../
 import { buildWorkflowCallNamespaceSegment } from '../workflow-call-namespace.js';
 import type {
   StepProviderInfo,
+  AutoRoutingEstimatorSource,
   WorkflowAbortKind,
   WorkflowCallChildEngine,
   WorkflowCallResolver,
@@ -41,8 +42,6 @@ export interface WorkflowCallIsolatedStateSync {
   iteration: number;
   maxSteps?: WorkflowMaxSteps;
 }
-
-type AutoRoutingEstimatorSource = 'injected' | 'engine-default' | 'absent';
 
 interface ChildRoutingRuntime {
   estimator: WorkRequirementEstimator;
@@ -187,9 +186,7 @@ export class WorkflowCallExecutor {
     if (existing !== undefined) {
       return existing;
     }
-    const configuredEstimatorSource = (options as WorkflowEngineOptions & {
-      autoRoutingEstimatorSource?: AutoRoutingEstimatorSource;
-    }).autoRoutingEstimatorSource;
+    const configuredEstimatorSource = options.autoRoutingEstimatorSource;
     const estimatorSource = configuredEstimatorSource
       ?? (options.autoRoutingEstimator === undefined ? 'engine-default' : 'injected');
     const inheritsParentAutoRouting = childWorkflow.autoRouting === undefined;
@@ -375,12 +372,8 @@ export class WorkflowCallExecutor {
     const childRoutingRuntime = childAutoRouting === undefined
       ? undefined
       : this.getChildRoutingRuntime(request.childWorkflow, childAutoRouting, options, request.step);
-    const inheritedEstimatorSource = (options as WorkflowEngineOptions & {
-      autoRoutingEstimatorSource?: AutoRoutingEstimatorSource;
-    }).autoRoutingEstimatorSource;
-    const childOptions: WorkflowEngineOptions & {
-      autoRoutingEstimatorSource?: AutoRoutingEstimatorSource;
-    } = {
+    const inheritedEstimatorSource = options.autoRoutingEstimatorSource;
+    const childOptions: WorkflowEngineOptions = {
       ...options,
       maxStepsOverride: this.deps.sharedRuntime.maxSteps ?? this.deps.getMaxSteps(),
       initialSessions: Object.fromEntries(this.deps.state.personaSessions),

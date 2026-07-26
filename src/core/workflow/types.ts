@@ -313,6 +313,8 @@ export type SessionUpdateCallback = (persona: string, sessionId: string | undefi
  */
 export type IterationLimitCallback = (request: IterationLimitRequest) => Promise<number | null>;
 
+export type AutoRoutingEstimatorSource = 'injected' | 'engine-default' | 'absent';
+
 /** Options for workflow engine */
 export interface WorkflowEngineOptions {
   abortSignal?: AbortSignal;
@@ -372,6 +374,8 @@ export interface WorkflowEngineOptions {
   onEffectiveAutoRoutingReached?: () => void;
   /** Run-scoped AI router for automatic provider/model routing. */
   autoRoutingEstimator?: WorkRequirementEstimator;
+  /** Origin of the run-scoped AI router, propagated to child workflow engines. */
+  autoRoutingEstimatorSource?: AutoRoutingEstimatorSource;
   routingRuntime?: RoutingRuntime;
   /** Repository identifiers and other run-local values redacted from routing model input. */
   routingSensitiveValues?: readonly string[];

@@ -690,11 +690,6 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(routingEvents.some((event) => (
       (event[3] as { providerSource?: string }).providerSource === 'auto.fallback'
     ))).toBe(false);
-    expect(debugLogSpy.mock.calls.some(([level, component, message]) => (
-      level === 'WARN'
-      && component === 'team-leader-runner'
-      && message === 'Auto routing estimator failed; using configured pool fallback'
-    ))).toBe(false);
 
     const usageLog = readFileSync(usageLogger.filepath, 'utf-8').trim();
     const usageRecords = usageLog
@@ -757,6 +752,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       'Task: {task}',
       'Implement [SECRET] API',
     ]));
+    expect(JSON.stringify(estimate.mock.calls)).not.toContain('SECRET_TASK_SHOULD_NOT_REACH_ROUTER');
   });
 
   it('leader routing estimator の中断を fallback に変換せず親 AbortSignal を伝播する', async () => {

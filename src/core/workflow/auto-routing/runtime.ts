@@ -49,13 +49,14 @@ export class RoutingRuntime {
       if (error instanceof Error && error.name === 'AbortError') {
         throw error;
       }
+      const estimatorFailure = error instanceof Error ? error : new Error(String(error));
       return this.resolveFallback(
         input.scope,
         fingerprint,
         fingerprintChanged,
         input.snapshot,
         previous,
-        error as Error,
+        estimatorFailure,
         Math.max(0, Date.now() - estimatorStartedAt),
         getRoutingInputTokenBucket(modelInput),
       );

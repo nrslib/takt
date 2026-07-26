@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { RoutingRuntime } from '../core/workflow/auto-routing/runtime.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
 
-function createAutoRoutingConfig(): AutoRoutingConfig {
-  return {
+function createAutoRoutingConfig(overrides: Partial<AutoRoutingConfig> = {}): AutoRoutingConfig {
+  const config: AutoRoutingConfig = {
     strategy: 'cost',
     router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
     candidates: [
@@ -15,6 +15,7 @@ function createAutoRoutingConfig(): AutoRoutingConfig {
       general: { candidates: ['terra', 'sol'], fallback: 'sol' },
     },
   };
+  return { ...config, ...overrides };
 }
 
 function createSnapshot(description: string) {
@@ -68,6 +69,21 @@ describe('RoutingRuntime', () => {
     expect(retry.escalationReason).toBe('failed-without-progress');
   });
 
+  it('Given the same work completed without progress, When it is routed again, Then the required tier is promoted with a no-progress reason', async () => {
+    const estimator = {
+      estimate: vi.fn().mockResolvedValue({ requiredTier: 'medium', reasonCodes: ['focused-change'] }),
+    };
+    const runtime = new RoutingRuntime({ autoRouting: createAutoRoutingConfig(), estimator });
+    const snapshot = createSnapshot('Resolve the same unresolved finding');
+
+    await runtime.resolve({ scope: 'implement', snapshot });
+    runtime.recordExecutionResult({ scope: 'implement', status: 'done', madeProgress: false });
+    const retry = await runtime.resolve({ scope: 'implement', snapshot });
+
+    expect(retry.requiredTier).toBe('high');
+    expect(retry.escalationReason).toBe('no-progress');
+  });
+
   it('Given a resolved finding changes the work fingerprint, When the new work estimates medium, Then the old high-tier floor is not retained', async () => {
     const estimator = {
       estimate: vi.fn()
@@ -105,12 +121,15 @@ describe('RoutingRuntime', () => {
   });
 
   it('Given a fallback candidate below the unchanged-work floor, When estimation fails, Then routing fails closed', async () => {
-    const autoRouting = createAutoRoutingConfig();
-    autoRouting.candidatePools.general = { candidates: ['terra', 'sol'], fallback: 'terra' };
+    const autoRouting = createAutoRoutingConfig({
+      candidatePools: {
+        general: { candidates: ['terra', 'sol'], fallback: 'terra' },
+      },
+    });
     const estimator = {
       estimate: vi.fn()
         .mockResolvedValueOnce({ requiredTier: 'high', reasonCodes: ['critical-finding'] })
-        .mockRejectedValueOnce(new Error('router unavailable')),
+        .mockRejectedValueOnce('router unavailable'),
     };
     const runtime = new RoutingRuntime({ autoRouting, estimator });
     const snapshot = createSnapshot('Resolve the same unresolved finding');

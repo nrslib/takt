@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitive-text.js';
 import { ROUTING_WORK_SNAPSHOT_LOCAL_IDENTITY, type RoutingModelInput, type RoutingWorkSnapshot } from './contracts.js';
+import {
+  ROUTING_REMAINING_WORK_FIELD_BUDGET,
+  ROUTING_REMAINING_WORK_ITEM_LIMIT,
+  ROUTING_REMAINING_WORK_TOTAL_BUDGET,
+} from './limits.js';
 
 export const ROUTING_MODEL_INPUT_VERSION = 'routing-model-input/v1';
 const FIELD_BUDGET = 2_000;
-const REMAINING_WORK_BUDGET = 1_000;
-const REMAINING_WORK_ITEM_LIMIT = 64;
-const REMAINING_WORK_TOTAL_BUDGET = 8_000;
 const STEP_TAG_LIMIT = 32;
 const STEP_TAG_BUDGET = 256;
 
@@ -130,12 +132,12 @@ function normalizeRemainingWork(
 ): RoutingWorkSnapshot['remainingWork'][number] {
   return {
     ...work,
-    description: normalizeRoutingText(work.description, REMAINING_WORK_BUDGET, sensitiveValues),
+    description: normalizeRoutingText(work.description, ROUTING_REMAINING_WORK_FIELD_BUDGET, sensitiveValues),
     ...(work.title !== undefined
-      ? { title: normalizeRoutingText(work.title, REMAINING_WORK_BUDGET, sensitiveValues) }
+      ? { title: normalizeRoutingText(work.title, ROUTING_REMAINING_WORK_FIELD_BUDGET, sensitiveValues) }
       : {}),
     ...(work.suggestion !== undefined
-      ? { suggestion: normalizeRoutingText(work.suggestion, REMAINING_WORK_BUDGET, sensitiveValues) }
+      ? { suggestion: normalizeRoutingText(work.suggestion, ROUTING_REMAINING_WORK_FIELD_BUDGET, sensitiveValues) }
       : {}),
   };
 }
@@ -145,10 +147,10 @@ function normalizeRemainingWorkCollection(snapshot: RoutingWorkSnapshot): Pick<R
   let serializedLength = 0;
   const sensitiveValues = snapshot[ROUTING_WORK_SNAPSHOT_LOCAL_IDENTITY]?.sensitiveValues ?? [];
   for (const work of snapshot.remainingWork) {
-    if (remainingWork.length === REMAINING_WORK_ITEM_LIMIT) break;
+    if (remainingWork.length === ROUTING_REMAINING_WORK_ITEM_LIMIT) break;
     const normalizedWork = normalizeRemainingWork(work, sensitiveValues);
     const normalizedLength = JSON.stringify(normalizedWork).length;
-    if (serializedLength + normalizedLength > REMAINING_WORK_TOTAL_BUDGET) break;
+    if (serializedLength + normalizedLength > ROUTING_REMAINING_WORK_TOTAL_BUDGET) break;
     remainingWork.push(normalizedWork);
     serializedLength += normalizedLength;
   }

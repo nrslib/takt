@@ -211,6 +211,29 @@ function emitNormalRoutingDecision(
   );
 }
 
+function recordNormalRoutingResult(
+  deps: WorkflowRunLoopDeps,
+  step: WorkflowStep,
+  providerInfo: StepProviderInfo,
+  response: AgentResponse,
+): void {
+  if (providerInfo.autoRoutingDecision === undefined) {
+    return;
+  }
+  const scope = createRoutingScope({
+    workflow: deps.getWorkflowName(),
+    parentStep: step.name,
+    workItem: step.name,
+  });
+  if (!deps.options.routingRuntime?.hasResolution(scope)) {
+    return;
+  }
+  deps.options.routingRuntime.recordExecutionResult({
+    scope,
+    status: response.status === 'done' ? 'done' : 'failed',
+  });
+}
+
 function sameFallbackProvider(
   candidate: RateLimitFallbackProvider,
   current: { provider?: StepProviderInfo['provider']; model?: StepProviderInfo['model'] },
@@ -663,20 +686,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
       const { response, instruction, providerInfo: resultProviderInfo } = result;
       const completedProviderInfo = resultProviderInfo ?? providerInfo;
-      const routingScope = createRoutingScope({
-        workflow: deps.getWorkflowName(),
-        parentStep: step.name,
-        workItem: step.name,
-      });
-      if (
-        completedProviderInfo.autoRoutingDecision !== undefined
-        && deps.options.routingRuntime?.hasResolution(routingScope)
-      ) {
-        deps.options.routingRuntime.recordExecutionResult({
-          scope: routingScope,
-          status: response.status === 'done' ? 'done' : 'failed',
-        });
-      }
+      recordNormalRoutingResult(deps, step, completedProviderInfo, response);
       emitNormalRoutingDecision(
         deps,
         step,
@@ -957,20 +967,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
   const { response, providerInfo: resultProviderInfo } = result;
   const completedProviderInfo = resultProviderInfo ?? providerInfo;
-  const routingScope = createRoutingScope({
-    workflow: deps.getWorkflowName(),
-    parentStep: step.name,
-    workItem: step.name,
-  });
-  if (
-    completedProviderInfo.autoRoutingDecision !== undefined
-    && deps.options.routingRuntime?.hasResolution(routingScope)
-  ) {
-    deps.options.routingRuntime.recordExecutionResult({
-      scope: routingScope,
-      status: response.status === 'done' ? 'done' : 'failed',
-    });
-  }
+  recordNormalRoutingResult(deps, step, completedProviderInfo, response);
   emitNormalRoutingDecision(
     deps,
     step,

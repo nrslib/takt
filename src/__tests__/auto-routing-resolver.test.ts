@@ -227,4 +227,38 @@ describe('resolveAutoRoutingBatch', () => {
     expect(result.get('part-2')).toMatchObject({ autoRoutingDecision: { candidateName: 'reasoning', requiredTier: 'high' } });
     expect(estimator.estimate).toHaveBeenCalledTimes(2);
   });
+
+  it('Given more items than the routing concurrency, When resolving a batch, Then estimator calls stay within the limit', async () => {
+    let active = 0;
+    let maxActive = 0;
+    const releases: Array<() => void> = [];
+    const estimator: WorkRequirementEstimator = {
+      estimate: vi.fn(async () => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise<void>((resolve) => releases.push(resolve));
+        active -= 1;
+        return { requiredTier: 'medium', reasonCodes: ['focused-change'] };
+      }),
+    };
+    const resolving = resolveAutoRoutingBatch({
+      autoRouting: createAutoRoutingConfig({ rules: {} }),
+      estimator,
+      concurrency: 2,
+      items: ['part-1', 'part-2', 'part-3'].map((id) => ({
+        id,
+        step: createStepMetadata({ name: id, tags: [] }),
+        snapshot: createSnapshot(),
+        currentProviderInfo: { provider: undefined, model: undefined },
+      })),
+    });
+
+    await vi.waitFor(() => expect(estimator.estimate).toHaveBeenCalledTimes(2));
+    releases.splice(0).forEach((release) => release());
+    await vi.waitFor(() => expect(estimator.estimate).toHaveBeenCalledTimes(3));
+    releases.splice(0).forEach((release) => release());
+    await resolving;
+
+    expect(maxActive).toBe(2);
+  });
 });

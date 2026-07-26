@@ -43,9 +43,7 @@ const log = createLogger('workflow-engine');
 
 interface WorkflowEngineSetupParams {
   config: WorkflowConfig;
-  state: {
-    personaSessions: Map<string, string>;
-  };
+  state: WorkflowState;
   task: string;
   projectCwd: string;
   getCwd: () => string;
@@ -296,7 +294,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     engineOptions: params.options,
     getCwd: params.getCwd,
     getTask: () => params.task,
-    getState: () => params.state as WorkflowState,
+    getState: () => params.state,
     getWorkflowName: () => params.config.name,
     getInteractive: () => params.options.interactive === true,
     getRunPaths: params.getRunPaths,

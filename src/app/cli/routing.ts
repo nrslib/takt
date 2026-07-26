@@ -274,7 +274,8 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       save_task: async ({ task: confirmedTask }) => {
         if (prNumber !== undefined) {
           if (prBranch === undefined) {
-            throw new Error('Fetched PR head branch is required when saving a PR review task.');
+            logError('Fetched PR head branch is required when saving a PR review task.');
+            process.exit(1);
           }
           await saveTaskFromInteractive(resolvedCwd, confirmedTask, workflowId, {
             prNumber,

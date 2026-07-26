@@ -177,29 +177,42 @@ describe('auto_routing config schema', () => {
           name: 'cheap', description: 'Very cheap tasks', provider: 'claude-sdk',
           model: 'claude-haiku-4-5-20251001', routing_tier: 'tiny',
         }],
+        candidate_pools: {
+          general: { candidates: ['cheap'], fallback: 'cheap' },
+          implementation: { candidates: ['cheap'], fallback: 'cheap' },
+        },
+        pool_rules: undefined,
+        rules: {},
       }),
     });
 
     expect(result.success).toBe(false);
-    if (!result.success) expectParseFailureMessage(result, /high|medium|low|routing_tier/i);
+    if (!result.success) expectParseFailureMessage(result, /routing_tier/i);
   });
 
   it.each([
-    ['unknown default pool', { default_pool: 'missing' }, /default.*pool|missing/i],
+    ['unknown default pool', { default_pool: 'missing' }, 'auto_routing.default_pool', /unknown pool/i],
     ['unknown pool candidate', {
       candidate_pools: { general: { candidates: ['missing'], fallback: 'missing' } },
-    }, /candidate|missing/i],
+    }, 'auto_routing.candidate_pools.general.candidates', /unknown candidate/i],
     ['fallback outside pool', {
       candidate_pools: { general: { candidates: ['coding'], fallback: 'reasoning' } },
-    }, /fallback|pool/i],
-  ])('Given %s, When parsing config, Then pool references fail fast', (_name, overrides, expected) => {
+    }, 'auto_routing.candidate_pools.general.fallback', /belong to its pool candidates/i],
+  ])('Given %s, When parsing config, Then pool references fail fast', (_name, overrides, expectedPath, expectedMessage) => {
     const result = ProjectConfigSchema.safeParse({
       provider: 'mock',
       auto_routing: createAutoRoutingConfig(overrides),
     });
 
     expect(result.success).toBe(false);
-    if (!result.success) expectParseFailureMessage(result, expected);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: expectedPath.split('.'),
+          message: expect.stringMatching(expectedMessage),
+        }),
+      ]));
+    }
   });
 
   it('Given an opencode auto-routing candidate uses a bare model, When normalizing config, Then provider compatibility rejects it', () => {

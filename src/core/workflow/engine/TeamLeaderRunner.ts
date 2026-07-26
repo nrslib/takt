@@ -1203,8 +1203,10 @@ export class TeamLeaderRunner {
       return;
     }
 
+    const routingLedger = this.deps.findingLedgerStore?.loadLedger();
     const routed = await resolveAutoRoutingBatch({
       autoRouting: this.deps.engineOptions.autoRouting,
+      concurrency: step.teamLeader?.maxConcurrency,
       items: parts.map((part) => {
         const partStep = createPartStep(step, part);
         const partResolutionRuntime = this.getPartProviderResolutionRuntime(runtime);
@@ -1236,7 +1238,7 @@ export class TeamLeaderRunner {
             },
             part: { title: part.title, instruction: part.instruction },
             lastOutput: this.deps.getState().lastOutput?.content,
-            findings: buildRoutingFindings(this.deps.findingLedgerStore?.loadLedger()),
+            findings: buildRoutingFindings(routingLedger),
             sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
           }),
           currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(partStep, partResolutionRuntime),

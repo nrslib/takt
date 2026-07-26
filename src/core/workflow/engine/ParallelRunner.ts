@@ -250,9 +250,13 @@ export class ParallelRunner {
     const findingLedgerCopyPath = findingContractContext?.ledgerCopyPath;
     const rawFindingsStructuredOutput = findingContractContext?.rawFindingsStructuredOutput;
     const agentSubSteps = subSteps.filter(isAgentParallelSubStep);
+    const routingLedger = this.deps.engineOptions.autoRouting && agentSubSteps.length > 0
+      ? this.deps.findingLedgerStore?.loadLedger()
+      : undefined;
     const routedProviderInfoByStep = this.deps.engineOptions.autoRouting
       ? await resolveAutoRoutingBatch({
           autoRouting: this.deps.engineOptions.autoRouting,
+          concurrency: step.concurrency,
           items: agentSubSteps.map((subStep) => ({
             id: subStep.name,
             scope: createRoutingScope({
@@ -280,7 +284,7 @@ export class ParallelRunner {
                 passPreviousResponse: subStep.passPreviousResponse === true,
               },
               lastOutput: state.lastOutput?.content,
-              findings: buildRoutingFindings(this.deps.findingLedgerStore?.loadLedger()),
+              findings: buildRoutingFindings(routingLedger),
               sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
             }),
             currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(subStep, runtime),

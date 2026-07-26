@@ -2,6 +2,11 @@ import { createHash } from 'node:crypto';
 import { ROUTING_WORK_SNAPSHOT_LOCAL_IDENTITY, type RoutingWorkSnapshot } from './contracts.js';
 import { normalizeRoutingText } from './normalizer.js';
 import type { FindingLedger } from '../../models/finding-types.js';
+import {
+  ROUTING_REMAINING_WORK_FIELD_BUDGET,
+  ROUTING_REMAINING_WORK_ITEM_LIMIT,
+  ROUTING_REMAINING_WORK_TOTAL_BUDGET,
+} from './limits.js';
 
 type Finding = {
   id: string;
@@ -12,10 +17,6 @@ type Finding = {
   suggestion?: string;
   provisional?: unknown;
 };
-
-const SNAPSHOT_REMAINING_WORK_ITEM_LIMIT = 64;
-const SNAPSHOT_REMAINING_WORK_TOTAL_BUDGET = 8_000;
-const SNAPSHOT_REMAINING_WORK_FIELD_BUDGET = 1_000;
 
 export interface BuildRoutingWorkSnapshotInput {
   goal: string;
@@ -73,12 +74,12 @@ function projectWorkForSnapshot(
 ): RoutingWorkSnapshot['remainingWork'][number] {
   return {
     ...work,
-    description: normalizeRoutingText(work.description, SNAPSHOT_REMAINING_WORK_FIELD_BUDGET, sensitiveValues),
+    description: normalizeRoutingText(work.description, ROUTING_REMAINING_WORK_FIELD_BUDGET, sensitiveValues),
     ...(work.title !== undefined
-      ? { title: normalizeRoutingText(work.title, SNAPSHOT_REMAINING_WORK_FIELD_BUDGET, sensitiveValues) }
+      ? { title: normalizeRoutingText(work.title, ROUTING_REMAINING_WORK_FIELD_BUDGET, sensitiveValues) }
       : {}),
     ...(work.suggestion !== undefined
-      ? { suggestion: normalizeRoutingText(work.suggestion, SNAPSHOT_REMAINING_WORK_FIELD_BUDGET, sensitiveValues) }
+      ? { suggestion: normalizeRoutingText(work.suggestion, ROUTING_REMAINING_WORK_FIELD_BUDGET, sensitiveValues) }
       : {}),
   };
 }
@@ -89,10 +90,10 @@ function appendBoundedWork(
   totalSize: { value: number },
   sensitiveValues: readonly string[],
 ): boolean {
-  if (target.length >= SNAPSHOT_REMAINING_WORK_ITEM_LIMIT) return false;
+  if (target.length >= ROUTING_REMAINING_WORK_ITEM_LIMIT) return false;
   const projected = projectWorkForSnapshot(work, sensitiveValues);
   const size = JSON.stringify(projected).length;
-  if (totalSize.value + size > SNAPSHOT_REMAINING_WORK_TOTAL_BUDGET) return false;
+  if (totalSize.value + size > ROUTING_REMAINING_WORK_TOTAL_BUDGET) return false;
   target.push(projected);
   totalSize.value += size;
   return true;

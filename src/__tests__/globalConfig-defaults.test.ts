@@ -497,6 +497,8 @@ describe('loadGlobalConfig', () => {
     expect(raw).toContain('model: global-default-model');
     expect(raw).toContain('auto_routing:');
     expect(raw).toContain('routing_tier: medium');
+    expect(raw).toContain('default_pool: general');
+    expect(raw).toContain('fallback: coding');
     expect(raw).toContain('provider_options:');
     expect(raw).toContain('reasoning_effort: high');
     expect(raw).not.toContain('autoRouting:');

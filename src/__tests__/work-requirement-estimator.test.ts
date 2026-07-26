@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWorkRequirementEstimator } from '../agents/auto-routing-usecase.js';
 import { runAgent } from '../agents/runner.js';
+import type { RoutingModelInput } from '../core/workflow/auto-routing/contracts.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-function createModelInput() {
+function createModelInput(): RoutingModelInput {
   return {
     version: 'routing-model-input/v1',
     goal: 'Implement a focused validation fix',
@@ -94,6 +95,8 @@ describe('createWorkRequirementEstimator', () => {
       cwd: '/repo',
       provider: 'claude-sdk',
       model: 'claude-haiku-4-5-20251001',
+      language: 'ja',
+      childProcessEnv: { TAKT_TEST: '1' },
     });
 
     await estimator.estimate(createModelInput());
@@ -102,14 +105,65 @@ describe('createWorkRequirementEstimator', () => {
     expect(prompt).toContain('required_tier');
     expect(prompt).not.toMatch(/terra|sol|candidate_pool|gpt-5|\/repo/i);
     expect(options).toMatchObject({
+      cwd: '/repo',
+      provider: 'claude-sdk',
+      resolvedProvider: 'claude-sdk',
+      model: 'claude-haiku-4-5-20251001',
+      resolvedModel: 'claude-haiku-4-5-20251001',
       permissionMode: 'readonly',
+      language: 'ja',
+      childProcessEnv: { TAKT_TEST: '1' },
       outputSchema: {
         properties: {
           required_tier: { type: 'string' },
           reason_codes: { type: 'array' },
         },
+        required: ['required_tier', 'reason_codes'],
       },
     });
+  });
+
+  it('Given an invalid estimator response, When parsing it, Then it rejects without disclosing raw router content', async () => {
+    const rawContent = '{"required_tier":"candidate=Authorization: Bearer sk-test","reason_codes":[]}';
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'auto-router',
+      status: 'done',
+      content: rawContent,
+      timestamp: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const estimator = createWorkRequirementEstimator({
+      cwd: '/repo',
+      provider: 'claude-sdk',
+      model: 'claude-haiku-4-5-20251001',
+    });
+
+    try {
+      await estimator.estimate(createModelInput());
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      expect(error.message).toMatch(/invalid required_tier/i);
+      expect(error.message).not.toContain(rawContent);
+      return;
+    }
+    throw new Error('Expected invalid estimator response to reject');
+  });
+
+  it('Given an already aborted parent signal, When estimating work requirements, Then no provider call starts', async () => {
+    const controller = new AbortController();
+    const reason = new Error('routing cancelled');
+    controller.abort(reason);
+    const estimator = createWorkRequirementEstimator({
+      cwd: '/repo',
+      provider: 'claude-sdk',
+      model: 'claude-haiku-4-5-20251001',
+      abortSignal: controller.signal,
+    });
+
+    await expect(estimator.estimate(createModelInput())).rejects.toBe(reason);
+    expect(runAgent).not.toHaveBeenCalled();
   });
 
   it('Given a call-scoped abort signal, When routing is cancelled, Then the estimator stops before a response arrives', async () => {
