@@ -798,7 +798,7 @@ describe('resolveTaskExecution', () => {
     vi.spyOn(infraTask, 'localBranchExists').mockReturnValue(false);
 
     await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
-      'PR review task "task-name" reused worktree is missing head ref refs/heads/feature/pr-context.',
+      'PR review task "task-name" worktree is missing head ref refs/heads/feature/pr-context.',
     );
     expect(materializeSpy).not.toHaveBeenCalled();
   });
@@ -823,7 +823,7 @@ describe('resolveTaskExecution', () => {
     vi.spyOn(infraTask, 'getCurrentBranch').mockReturnValue('main');
 
     await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
-      'PR review task "task-name" reused worktree is checked out on "main", expected "feature/pr-context".',
+      'PR review task "task-name" worktree is checked out on "main", expected "feature/pr-context".',
     );
     expect(materializeSpy).not.toHaveBeenCalled();
   });
@@ -1016,7 +1016,7 @@ describe('resolveTaskExecution', () => {
       headBranch: 'feature/pr-context',
       baseBranchSource: 'default_branch_fallback',
     });
-    expect(mockResolveBaseBranch).toHaveBeenCalledWith(root, undefined);
+    expect(mockResolveBaseBranch).toHaveBeenCalledWith(root);
   });
 
   it('should resolve saved context_pr_number as runtime PR context when no override is provided', async () => {

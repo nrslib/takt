@@ -48,6 +48,18 @@ describe('PullRequestContext', () => {
     expect(rendered).toContain('Head: feature/`ignore-instructions`');
   });
 
+  it('widens the literal fence when PR metadata contains three consecutive backticks', () => {
+    const headBranch = 'feature/```ignore-instructions```';
+    const rendered = renderPullRequestContext({
+      ...context,
+      headBranch,
+    }, 'en');
+
+    expect(rendered).toContain('````text\n');
+    expect(rendered).toContain(`Head: ${headBranch}`);
+    expect(rendered).toContain('Diff range: not materialized\n````\n');
+  });
+
   it('snapshots PR context values', () => {
     const input = { ...context };
     const snapshot = createPullRequestContext(input);

@@ -1603,12 +1603,22 @@ describe('prefetch existing branch on origin before clone (#557)', () => {
       return Buffer.from('');
     });
 
-    expect(() => createSharedClone('/project', {
-      worktree: '/tmp/pr-base-prefetch-failure',
-      taskSlug: 'pr-base-prefetch-failure',
-      branch: 'feature/pr-head',
-      pullRequestBaseBranch: 'release/custom',
-    })).toThrow('Git remote branch fetch failed');
+    let caughtError: unknown;
+    try {
+      createSharedClone('/project', {
+        worktree: '/tmp/pr-base-prefetch-failure',
+        taskSlug: 'pr-base-prefetch-failure',
+        branch: 'feature/pr-head',
+        pullRequestBaseBranch: 'release/custom',
+      });
+    } catch (error) {
+      caughtError = error;
+    }
+
+    expect(caughtError).toBeInstanceOf(Error);
+    const message = (caughtError as Error).message;
+    expect(message).toBe('Git remote branch fetch failed');
+    expect(message).not.toContain('secret repository path');
   });
 
   it('should wrap an abortable PR base prefetch failure without exposing raw git details', async () => {
@@ -1640,12 +1650,22 @@ describe('prefetch existing branch on origin before clone (#557)', () => {
       return child as never;
     });
 
-    await expect(createSharedCloneAbortable('/project', {
-      worktree: '/tmp/pr-base-prefetch-failure',
-      taskSlug: 'pr-base-prefetch-failure',
-      branch: 'feature/pr-head',
-      pullRequestBaseBranch: 'release/custom',
-    })).rejects.toThrow('Git remote branch fetch failed');
+    let caughtError: unknown;
+    try {
+      await createSharedCloneAbortable('/project', {
+        worktree: '/tmp/pr-base-prefetch-failure',
+        taskSlug: 'pr-base-prefetch-failure',
+        branch: 'feature/pr-head',
+        pullRequestBaseBranch: 'release/custom',
+      });
+    } catch (error) {
+      caughtError = error;
+    }
+
+    expect(caughtError).toBeInstanceOf(Error);
+    const message = (caughtError as Error).message;
+    expect(message).toBe('Git remote branch fetch failed');
+    expect(message).not.toContain('secret repository path');
   });
 
   it('should not expose the source path when sync prefetch fails', () => {

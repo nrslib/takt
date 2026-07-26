@@ -10,18 +10,10 @@ import { execFileSync } from 'node:child_process';
 import {
   TaskRunner,
   detectDefaultBranch,
-  getCurrentBranch,
-  localBranchExists,
-  materializePullRequestBase,
-  resolveBaseBranch,
 } from '../../../infra/task/index.js';
 import { resolveWorkflowConfigValues, getWorkflowDescription } from '../../../infra/config/index.js';
 import { info, warn, error as logError } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import { sanitizeTerminalText } from '../../../shared/utils/text.js';
-import {
-  toLocalBranchRef,
-} from '../../../shared/utils/gitBranchValidation.js';
 import { runInstructMode } from './instructMode.js';
 import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
 import type { WorkflowContext } from '../../interactive/interactive.js';
@@ -42,7 +34,7 @@ import {
   cleanupPreparedRetryTaskSpec,
   prepareRetryTaskSpecWithAttachments,
 } from '../retryTaskSpecAttachments.js';
-import { createPullRequestContext } from '../../../core/workflow/pr-context.js';
+import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
 
 const log = createLogger('list-tasks');
 
@@ -163,38 +155,21 @@ export async function instructBranch(
 
   const prNumber = target.data?.source === 'pr_review' ? target.data.pr_number : undefined;
   const isPrReviewTask = prNumber !== undefined;
-  const branchContextCwd = isPrReviewTask ? worktreePath : projectDir;
-  const baseBranch = isPrReviewTask
-    ? target.data?.base_branch ?? resolveBaseBranch(projectDir).branch
-    : detectDefaultBranch(projectDir);
-  if (isPrReviewTask) {
-    const checkedOutBranch = getCurrentBranch(worktreePath);
-    if (checkedOutBranch !== branch) {
-      throw new Error(
-        `PR review task "${sanitizeTerminalText(target.name)}" worktree is checked out on "${sanitizeTerminalText(checkedOutBranch)}", expected "${sanitizeTerminalText(branch)}".`,
-      );
-    }
-    if (!localBranchExists(worktreePath, branch)) {
-      throw new Error(
-        `PR review task "${sanitizeTerminalText(target.name)}" worktree is missing head ref ${toLocalBranchRef(branch)}.`,
-      );
-    }
-  }
   const prContext = isPrReviewTask
-    ? createPullRequestContext({
-      source: 'pr_review',
+    ? resolveTaskPullRequestWorktreeContext({
+      projectDir,
+      worktreePath,
+      taskName: target.name,
       prNumber,
-      baseBranch,
       headBranch: branch,
-      baseBranchSource: target.data?.base_branch === undefined
-        ? 'default_branch_fallback'
-        : 'pull_request',
-      baseDiffRef: materializePullRequestBase(projectDir, worktreePath, baseBranch),
-      headDiffRef: toLocalBranchRef(branch),
+      ...(target.data?.base_branch === undefined
+        ? {}
+        : { savedBaseBranch: target.data.base_branch }),
     })
     : undefined;
+  const baseBranch = prContext?.baseBranch ?? detectDefaultBranch(projectDir);
   const branchContext = getBranchContext(
-    branchContextCwd,
+    prContext ? worktreePath : projectDir,
     prContext?.headDiffRef ?? branch,
     prContext?.baseDiffRef ?? baseBranch,
     prContext !== undefined,

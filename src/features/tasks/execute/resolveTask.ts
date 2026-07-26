@@ -8,9 +8,6 @@ import {
   createSharedCloneAbortable,
   resolveBaseBranch,
   branchExists,
-  getCurrentBranch,
-  localBranchExists,
-  materializePullRequestBase,
   summarizeTaskName,
   resolveTaskWorkflowValue,
   resolveTaskStartStepValue,
@@ -22,19 +19,17 @@ import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resu
 import { getGitProvider, type GitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import {
-  toLocalBranchRef,
-} from '../../../shared/utils/gitBranchValidation.js';
 import { generateReportDir } from '../../../shared/utils/reportDir.js';
 import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
 import { stageTaskSpecForExecution } from './taskSpecContext.js';
 import { resolveReusedWorktreeExecution } from './reusedWorktree.js';
 import type { ExecuteTaskOptions, TaskExecutionContextOverride } from './types.js';
+import { createPullRequestContext, type PullRequestContext } from '../../../core/workflow/pr-context.js';
 import {
-  createPullRequestContext,
-  type PullRequestContext,
-} from '../../../core/workflow/pr-context.js';
+  materializeTaskPullRequestWorktreeContext,
+  resolveTaskPullRequestContext,
+} from '../pullRequestWorktreeContext.js';
 
 const log = createLogger('task');
 
@@ -87,15 +82,13 @@ function resolvePrReviewContext(
     headBranch: normalizedData.branch,
   });
 
-  const baseBranch = normalizedData.base_branch ?? resolveTaskBaseBranch(projectCwd, undefined);
-  return createPullRequestContext({
-    source: 'pr_review',
+  return resolveTaskPullRequestContext({
+    projectDir: projectCwd,
     prNumber: normalizedData.pr_number,
-    baseBranch,
     headBranch: normalizedData.branch,
-    baseBranchSource: normalizedData.base_branch === undefined
-      ? 'default_branch_fallback'
-      : 'pull_request',
+    ...(normalizedData.base_branch === undefined
+      ? {}
+      : { savedBaseBranch: normalizedData.base_branch }),
   });
 }
 
@@ -329,27 +322,11 @@ export async function resolveTaskExecution(
       worktreePath = reusedWorktree.worktreePath;
       isWorktree = reusedWorktree.isWorktree;
       if (prContext) {
-        const checkedOutBranch = getCurrentBranch(reusedWorktree.execCwd);
-        if (checkedOutBranch !== prContext.headBranch) {
-          throw new Error(
-            `PR review task "${task.name}" reused worktree is checked out on "${checkedOutBranch}", expected "${prContext.headBranch}".`,
-          );
-        }
-        const headDiffRef = toLocalBranchRef(prContext.headBranch);
-        if (!localBranchExists(reusedWorktree.execCwd, prContext.headBranch)) {
-          throw new Error(
-            `PR review task "${task.name}" reused worktree is missing head ref ${headDiffRef}.`,
-          );
-        }
-        const baseDiffRef = materializePullRequestBase(
-          defaultCwd,
-          reusedWorktree.execCwd,
-          prContext.baseBranch,
-        );
-        prContext = createPullRequestContext({
-          ...prContext,
-          baseDiffRef,
-          headDiffRef,
+        prContext = materializeTaskPullRequestWorktreeContext({
+          projectDir: defaultCwd,
+          worktreePath: reusedWorktree.execCwd,
+          taskName: task.name,
+          prContext,
         });
       }
     } else {

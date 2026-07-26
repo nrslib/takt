@@ -8,10 +8,6 @@
 import * as fs from 'node:fs';
 import type { TaskFailure, TaskListItem } from '../../../infra/task/index.js';
 import {
-  getCurrentBranch,
-  localBranchExists,
-  materializePullRequestBase,
-  resolveBaseBranch,
   TaskRunner,
   resolveTaskWorkflowValue,
 } from '../../../infra/task/index.js';
@@ -19,9 +15,6 @@ import { loadWorkflowByIdentifier, resolveWorkflowConfigValue, getWorkflowDescri
 import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import { info, header, blankLine, status, warn } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import {
-  toLocalBranchRef,
-} from '../../../shared/utils/gitBranchValidation.js';
 import type { WorkflowConfig, WorkflowResumePoint } from '../../../core/models/index.js';
 import { readRunMetaBySlug, type RunMeta } from '../../../core/workflow/run/run-meta.js';
 import {
@@ -52,10 +45,8 @@ import {
 } from '../retryTaskSpecAttachments.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-reference.js';
-import {
-  createPullRequestContext,
-  type PullRequestContext,
-} from '../../../core/workflow/pr-context.js';
+import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
+import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
 
 const log = createLogger('list-tasks');
 
@@ -154,28 +145,13 @@ function resolveTaskRetryPullRequestContext(
     throw new Error(`PR review task "${sanitizeTerminalText(task.name)}" is missing head branch.`);
   }
 
-  const hasSavedBaseBranch = data.base_branch !== undefined;
-  const baseBranch = data.base_branch ?? resolveBaseBranch(projectDir).branch;
-  const checkedOutBranch = getCurrentBranch(worktreePath);
-  if (checkedOutBranch !== data.branch) {
-    throw new Error(
-      `PR review task "${sanitizeTerminalText(task.name)}" worktree is checked out on "${sanitizeTerminalText(checkedOutBranch)}", expected "${sanitizeTerminalText(data.branch)}".`,
-    );
-  }
-  const headDiffRef = toLocalBranchRef(data.branch);
-  if (!localBranchExists(worktreePath, data.branch)) {
-    throw new Error(
-      `PR review task "${sanitizeTerminalText(task.name)}" worktree is missing head ref ${headDiffRef}.`,
-    );
-  }
-  return createPullRequestContext({
-    source: 'pr_review',
+  return resolveTaskPullRequestWorktreeContext({
+    projectDir,
+    worktreePath,
+    taskName: task.name,
     prNumber: data.pr_number,
-    baseBranch,
     headBranch: data.branch,
-    baseBranchSource: hasSavedBaseBranch ? 'pull_request' : 'default_branch_fallback',
-    baseDiffRef: materializePullRequestBase(projectDir, worktreePath, baseBranch),
-    headDiffRef,
+    ...(data.base_branch === undefined ? {} : { savedBaseBranch: data.base_branch }),
   });
 }
 
