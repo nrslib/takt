@@ -348,14 +348,15 @@ describe('Finding Contract Team Leader contract', () => {
   it('bounds changed paths in compact part indexes', () => {
     const result = makeResult(makePart('many-paths', ['F-0001']));
     if (result.findingContractClaim === undefined) throw new Error('Missing claim');
-    result.findingContractClaim.changedPaths = Array.from(
-      { length: 101 },
-      (_, index) => `src/${index}-${'x'.repeat(400)}.ts`,
-    );
+    result.findingContractClaim.changedPaths = [
+      `src/${'x'.repeat(400)}.ts`,
+      ...Array.from({ length: 100 }, (_, index) => `src/${index}-${'x'.repeat(250)}.ts`),
+    ];
 
     const index = buildFindingContractPartIndexEntry(result);
 
     expect(index.changedPaths).toHaveLength(100);
+    expect(index.changedPaths[0]).toBe(`src/0-${'x'.repeat(250)}.ts`);
     expect(index.changedPaths.every((path) => path.length <= 300)).toBe(true);
     expect(index.omittedChangedPathCount).toBe(1);
   });
@@ -1003,7 +1004,7 @@ describe('Finding Contract Team Leader contract', () => {
         summary: 'done',
         changedPaths: Array.from(
           { length: 100 },
-          (_, pathIndex) => `src/p${partIndex}-${pathIndex}-${'x'.repeat(400)}.ts`,
+          (_, pathIndex) => `src/p${partIndex}-${pathIndex}-${'x'.repeat(100)}.ts`,
         ),
         omittedChangedPathCount: 0,
         outcomes: [],

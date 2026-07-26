@@ -283,8 +283,8 @@ export function buildFindingContractPartIndexEntry(result: PartResult): FindingC
     throw new Error(`Part "${result.part.id}" is missing its validated Finding Contract completion claim`);
   }
   const changedPaths = claim.changedPaths
-    .slice(0, COMPACT_CHANGED_PATH_MAX_ITEMS)
-    .map((path) => truncateCompactText(path, COMPACT_CHANGED_PATH_MAX_LENGTH));
+    .filter((path) => path.length <= COMPACT_CHANGED_PATH_MAX_LENGTH)
+    .slice(0, COMPACT_CHANGED_PATH_MAX_ITEMS);
   return {
     id: result.part.id,
     title: result.part.title,

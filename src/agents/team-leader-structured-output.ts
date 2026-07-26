@@ -57,8 +57,7 @@ function buildLatestBatchChangedPathIndex(
   return {
     parts: visibleClaims.map(({ partId, claim }) => {
       const changedPaths = claim.changedPaths
-        .slice(0, LATEST_BATCH_CHANGED_PATH_PER_PART_MAX_ITEMS)
-        .map((path) => truncatePromptLabel(path, 300));
+        .slice(0, LATEST_BATCH_CHANGED_PATH_PER_PART_MAX_ITEMS);
       return {
         partId: truncatePromptLabel(partId, 120),
         changedPaths,

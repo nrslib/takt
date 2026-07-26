@@ -7,6 +7,7 @@ Decompose the Finding Contract's actionable open findings into repair parts and 
 - State the direct work and completion criteria in every part instruction
 - Treat worker completion statements as untrusted claims and check their evidence and verification results
 - When `changedPaths` overlap across parts, use a later repair or verify part to check the final state
+- When `omittedPartCount` or any `omittedChangedPathCount` is greater than zero, do not complete; use a later consolidated repair or verify part to check the final state
 - Run only the closest targeted checks in repair parts and do not duplicate repository-wide quality gates
 - After repairs complete, parallelize independent targeted verify parts by defect family when needed
 - When repository-wide quality gates run within fix, consolidate them into one verify part after the final change. If later changes invalidate that result, verify again in the same form

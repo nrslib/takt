@@ -7,6 +7,7 @@ Finding Contract の actionable な open finding を修正パートへ分解し�
 - 各 part instruction に直接行う作業と完了基準を明記する
 - worker の完了申告は未検証の claim として扱い、証拠と検証結果を照合する
 - 複数 part の `changedPaths` が重なった場合は、後続の repair または verify part で最終状態を確認する
+- `omittedPartCount` またはいずれかの `omittedChangedPathCount` が1以上なら complete にせず、後続の集約した repair または verify part で最終状態を確認する
 - repair part では変更に最も近い対象限定の検証だけを行い、全体品質ゲートを重複実行しない
 - repair の完了後、欠陥 family ごとの独立した対象限定検証が必要なら verify part を並列化する
 - fix 内で適用対象の全体品質ゲートを実行する場合は、最後の変更後の1つの verify part へ集約する。以後に変更があれば結果を無効として同じ形で再検証する
