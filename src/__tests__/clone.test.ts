@@ -1,11 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 
-const { mockLogInfo, mockLogDebug, mockLogError, mockSyncProjectLocalTaktForRetry } = vi.hoisted(() => ({
+const {
+  mockLogInfo,
+  mockLogDebug,
+  mockLogError,
+  mockRandomBytes,
+  mockSyncProjectLocalTaktForRetry,
+} = vi.hoisted(() => ({
   mockLogInfo: vi.fn(),
   mockLogDebug: vi.fn(),
   mockLogError: vi.fn(),
+  mockRandomBytes: vi.fn(),
   mockSyncProjectLocalTaktForRetry: vi.fn(),
+}));
+
+vi.mock('node:crypto', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:crypto')>()),
+  randomBytes: mockRandomBytes,
 }));
 
 vi.mock('node:child_process', () => ({
@@ -85,9 +97,25 @@ const mockLoadProjectConfig = vi.mocked(loadProjectConfig);
 const mockResolveConfigValue = vi.mocked(resolveConfigValue);
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
+  let randomByteValue = 1;
+  mockRandomBytes.mockImplementation((size: number) => {
+    const value = Buffer.alloc(size, randomByteValue);
+    randomByteValue += 1;
+    return value;
+  });
   vi.mocked(fs.statSync).mockImplementation(() => ({ isFile: () => false }) as unknown as fs.Stats);
-  vi.mocked(fs.readFileSync).mockReset();
+  vi.mocked(fs.realpathSync).mockImplementation((value: fs.PathLike) => String(value));
+  mockExecFileSync.mockImplementation((_cmd, args) => {
+    const argsArr = args as string[];
+    if (argsArr[0] === 'show-ref' || (argsArr[0] === 'config' && argsArr[1] === '--local')) {
+      throw new Error('not found');
+    }
+    if (argsArr[0] === 'symbolic-ref') {
+      return Buffer.from('refs/remotes/origin/main\n');
+    }
+    return Buffer.from('');
+  });
   mockLoadProjectConfig.mockReturnValue({});
   mockResolveConfigValue.mockReturnValue(undefined);
 });
@@ -430,7 +458,7 @@ describe('branch and worktree path formatting with issue numbers', () => {
     expect(result.branch).toMatch(/^takt\/\d{8}T\d{4}-regular-task$/);
   });
 
-  it('should format worktree path as {timestamp}-{issue}-{slug} when issue number is provided', () => {
+  it('should format worktree path as readable filesystem-safe stem with a unique suffix when issue number is provided', () => {
     setupMockForPathTest();
 
     const result = createSharedClone('/project', {
@@ -439,10 +467,11 @@ describe('branch and worktree path formatting with issue numbers', () => {
       issueNumber: 99,
     });
 
-    expect(result.path).toMatch(/\/\d{8}T\d{4}-99-fix-bug$/);
+    expect(result.path).toMatch(/\/\d{8}T\d{4}-99-fix-bug-[a-f0-9]{16}$/);
+    expect(path.basename(result.path)).toMatch(/^[a-zA-Z0-9-]+$/);
   });
 
-  it('should format worktree path as {timestamp}-{slug} when no issue number', () => {
+  it('should format worktree path as readable filesystem-safe stem with a unique suffix when no issue number', () => {
     setupMockForPathTest();
 
     const result = createSharedClone('/project', {
@@ -450,8 +479,8 @@ describe('branch and worktree path formatting with issue numbers', () => {
       taskSlug: 'regular-task',
     });
 
-    expect(result.path).toMatch(/\/\d{8}T\d{4}-regular-task$/);
-    expect(result.path).not.toMatch(/-\d+-/);
+    expect(result.path).toMatch(/\/\d{8}T\d{4}-regular-task-[a-f0-9]{16}$/);
+    expect(path.basename(result.path)).toMatch(/^[a-zA-Z0-9-]+$/);
   });
 
   it('should use custom branch when provided, ignoring issue number', () => {
@@ -479,7 +508,7 @@ describe('branch and worktree path formatting with issue numbers', () => {
     expect(result.path).toBe('/custom/path/to/worktree');
   });
 
-  it('should fall back to timestamp-only format when issue number provided but slug is empty', () => {
+  it('should append a unique suffix to the timestamp-only path when issue number is provided but slug is empty', () => {
     setupMockForPathTest();
 
     const result = createSharedClone('/project', {
@@ -489,7 +518,35 @@ describe('branch and worktree path formatting with issue numbers', () => {
     });
 
     expect(result.branch).toMatch(/^takt\/\d{8}T\d{4}$/);
-    expect(result.path).toMatch(/\/\d{8}T\d{4}$/);
+    expect(result.path).toMatch(/\/\d{8}T\d{4}-[a-f0-9]{16}$/);
+  });
+
+  it.each([
+    ['whitespace', 'fix review comments', undefined, 'fix-review-comments'],
+    ['path separators', '../../../escape', 99, 'escape'],
+    ['dot segments', '..', undefined, undefined],
+  ])('should keep the clone path inside its base directory when the task slug contains %s', (
+    _description,
+    taskSlug,
+    issueNumber,
+    normalizedSlug,
+  ) => {
+    setupMockForPathTest();
+
+    const result = createSharedClone('/project', {
+      worktree: true,
+      taskSlug,
+      ...(issueNumber === undefined ? {} : { issueNumber }),
+    });
+
+    const cloneBaseDir = '/takt-worktrees';
+    expect(path.relative(cloneBaseDir, result.path)).not.toMatch(/^\.\.(?:\/|$)/);
+    expect(path.basename(result.path)).toMatch(/^[a-zA-Z0-9-]+$/);
+    if (normalizedSlug === undefined) {
+      expect(path.basename(result.path)).not.toContain('..');
+    } else {
+      expect(path.basename(result.path)).toContain(normalizedSlug);
+    }
   });
 });
 
@@ -2476,7 +2533,6 @@ describe('auto clone path allocation', () => {
     mockResolveConfigValue.mockImplementation((_projectDir, key) => (
       key === 'worktreeDir' ? '/tmp/takt-worktrees' : undefined
     ));
-    vi.mocked(fs.existsSync).mockReturnValue(false);
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
       if (argsArr[0] === 'symbolic-ref') return Buffer.from('refs/remotes/origin/main\n');
@@ -2489,18 +2545,43 @@ describe('auto clone path allocation', () => {
 
     const result = new CloneManager().createTempCloneForBranch('/project', 'feature/temp-command-gate');
 
-    expect(result.path).toContain('/tmp/takt-worktrees/tmp-');
+    expect(result.path).toMatch(/^\/tmp\/takt-worktrees\/tmp-\d{8}T\d{4}-[a-f0-9]{16}$/);
     expect(mockSyncProjectLocalTaktForRetry).toHaveBeenCalledWith('/project', result.path);
   });
 
-  it('should allocate a suffixed path when the generated clone path already exists', () => {
+  it('should generate distinct temp clone paths in the same minute', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.123Z'));
     mockResolveConfigValue.mockImplementation((_projectDir, key) => (
       key === 'worktreeDir' ? '/tmp/takt-worktrees' : undefined
     ));
-    vi.mocked(fs.existsSync).mockImplementation((value: fs.PathLike) => (
-      String(value) === '/tmp/takt-worktrees/20260101T0000-test-task'
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'symbolic-ref') return Buffer.from('refs/remotes/origin/main\n');
+      if (argsArr[0] === 'clone') return Buffer.from('');
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config' && argsArr[1] === '--local') throw new Error('not set');
+      if (argsArr[0] === 'config') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    try {
+      const first = new CloneManager().createTempCloneForBranch('/project', 'feature/first');
+      const second = new CloneManager().createTempCloneForBranch('/project', 'feature/second');
+
+      expect(first.path).toMatch(/^\/tmp\/takt-worktrees\/tmp-20260101T0000-[a-f0-9]{16}$/);
+      expect(second.path).toMatch(/^\/tmp\/takt-worktrees\/tmp-20260101T0000-[a-f0-9]{16}$/);
+      expect(first.path).not.toBe(second.path);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('should generate distinct paths for synchronous clones with the same slug in the same minute', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.123Z'));
+    mockResolveConfigValue.mockImplementation((_projectDir, key) => (
+      key === 'worktreeDir' ? '/tmp/takt-worktrees' : undefined
     ));
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
@@ -2515,12 +2596,82 @@ describe('auto clone path allocation', () => {
     });
 
     try {
-      const result = new CloneManager().createSharedClone('/project', {
+      const first = new CloneManager().createSharedClone('/project', {
         worktree: true,
-        taskSlug: 'test-task',
+        taskSlug: 'fix-review-comments',
+        branch: 'takt/827/add-trace-task-metadata',
+      });
+      const second = new CloneManager().createSharedClone('/project', {
+        worktree: true,
+        taskSlug: 'fix-review-comments',
+        branch: 'takt/816/implement-finding-contract',
       });
 
-      expect(result.path).toBe('/tmp/takt-worktrees/20260101T0000-test-task-2');
+      expect(first.path).toMatch(/^\/tmp\/takt-worktrees\/20260101T0000-fix-review-comments-[a-f0-9]{16}$/);
+      expect(second.path).toMatch(/^\/tmp\/takt-worktrees\/20260101T0000-fix-review-comments-[a-f0-9]{16}$/);
+      expect(first.path).not.toBe(second.path);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('should persist each abortable clone under its own generated path when same-slug tasks start in the same minute', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.123Z'));
+    mockResolveConfigValue.mockImplementation((_projectDir, key) => (
+      key === 'worktreeDir' ? '/tmp/takt-worktrees' : undefined
+    ));
+    mockGitSpawn((args) => {
+      if (args[0] === 'fetch') return 1;
+      if (args[0] === 'show-ref' && String(args[3]).startsWith('refs/remotes/origin/')) return 1;
+      if (args[0] === 'show-ref' && String(args[3]).startsWith('refs/heads/')) return 0;
+      return 0;
+    });
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config' && argsArr[1] === '--local') throw new Error('not set');
+      if (argsArr[0] === 'config') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    try {
+      const clonePromises = Promise.all([
+        new CloneManager().createSharedCloneAbortable('/project', {
+          worktree: true,
+          taskSlug: 'fix-review-comments',
+          branch: 'takt/827/add-trace-task-metadata',
+        }),
+        new CloneManager().createSharedCloneAbortable('/project', {
+          worktree: true,
+          taskSlug: 'fix-review-comments',
+          branch: 'takt/816/implement-finding-contract',
+        }),
+      ]);
+      await vi.runAllTimersAsync();
+      const [first, second] = await clonePromises;
+
+      expect(first.path).toMatch(/^\/tmp\/takt-worktrees\/20260101T0000-fix-review-comments-[a-f0-9]{16}$/);
+      expect(second.path).toMatch(/^\/tmp\/takt-worktrees\/20260101T0000-fix-review-comments-[a-f0-9]{16}$/);
+      expect(first.path).not.toBe(second.path);
+
+      const metadataByBranch = new Map<string, { filePath: string; clonePath: string }>(
+        vi.mocked(fs.writeFileSync).mock.calls
+          .filter(([filePath]) => String(filePath).includes('/.takt/clone-meta/'))
+          .map(([filePath, content]) => {
+            const metadata = JSON.parse(String(content)) as { branch: string; clonePath: string };
+            return [metadata.branch, { filePath: String(filePath), clonePath: metadata.clonePath }];
+          }),
+      );
+
+      expect(metadataByBranch.get(first.branch)).toEqual({
+        filePath: '/project/.takt/clone-meta/takt--827--add-trace-task-metadata.json',
+        clonePath: first.path,
+      });
+      expect(metadataByBranch.get(second.branch)).toEqual({
+        filePath: '/project/.takt/clone-meta/takt--816--implement-finding-contract.json',
+        clonePath: second.path,
+      });
     } finally {
       vi.useRealTimers();
     }

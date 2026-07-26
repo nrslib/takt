@@ -1,6 +1,6 @@
-import * as path from 'node:path';
 import type { SystemStepRuntimeState } from '../../../core/workflow/system/system-step-services.js';
 import { cloneAndIsolate } from '../../task/clone-exec.js';
+import { createPrSyncWorktreePath } from '../../task/clone-path.js';
 import {
   removeClone,
   resolveCloneBaseDir,
@@ -17,7 +17,7 @@ export interface PrSyncSession {
 }
 
 function buildWorktreePath(projectCwd: string): string {
-  return path.join(resolveCloneBaseDir(projectCwd), `pr-sync-${Date.now()}`);
+  return createPrSyncWorktreePath(resolveCloneBaseDir(projectCwd), Date.now());
 }
 
 function createPrSyncSession(projectCwd: string, branch: string): PrSyncSession {

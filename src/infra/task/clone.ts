@@ -34,6 +34,7 @@ import {
   toRemoteTrackingBranchRef,
 } from '../../shared/utils/gitBranchValidation.js';
 import { isTaskAbortError } from './clone-errors.js';
+import { createTaskClonePath, createTempClonePath } from './clone-path.js';
 
 export type { WorktreeOptions, WorktreeResult };
 export {
@@ -81,43 +82,18 @@ export class CloneManager {
 
   private static resolveClonePath(projectDir: string, options: WorktreeOptions): string {
     const timestamp = CloneManager.generateTimestamp();
-    const slug = options.taskSlug;
-
-    let dirName: string;
-    if (options.issueNumber !== undefined && slug) {
-      dirName = `${timestamp}-${options.issueNumber}-${slug}`;
-    } else if (slug) {
-      dirName = `${timestamp}-${slug}`;
-    } else {
-      dirName = timestamp;
-    }
-
     if (typeof options.worktree === 'string') {
       return path.isAbsolute(options.worktree)
         ? options.worktree
         : path.resolve(projectDir, options.worktree);
     }
 
-    return CloneManager.resolveAvailableClonePath(
+    return createTaskClonePath(
       CloneManager.resolveCloneBaseDir(projectDir),
-      dirName,
+      timestamp,
+      options.issueNumber,
+      options.taskSlug,
     );
-  }
-
-  private static resolveAvailableClonePath(baseDir: string, dirName: string): string {
-    const firstCandidate = path.join(baseDir, dirName);
-    if (!fs.existsSync(firstCandidate)) {
-      return firstCandidate;
-    }
-
-    for (let suffix = 2; suffix <= 100; suffix += 1) {
-      const candidate = path.join(baseDir, `${dirName}-${suffix}`);
-      if (!fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-
-    throw new Error(`Unable to allocate clone path in ${baseDir} for ${dirName}`);
   }
 
   private static resolveBranchName(options: WorktreeOptions): string {
@@ -335,9 +311,9 @@ export class CloneManager {
     CloneManager.resolveBaseBranch(projectDir);
 
     const timestamp = CloneManager.generateTimestamp();
-    const clonePath = CloneManager.resolveAvailableClonePath(
+    const clonePath = createTempClonePath(
       CloneManager.resolveCloneBaseDir(projectDir),
-      `tmp-${timestamp}`,
+      timestamp,
     );
 
     log.info('Creating temp clone for branch', { path: clonePath, branch });
