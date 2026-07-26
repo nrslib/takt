@@ -80,7 +80,10 @@ export interface EnqueueTaskRequest extends SaveEnqueuedTaskOptions {
 
 export interface IssueEnqueueTaskRequest extends EnqueueTaskRequest {
   labels?: string[];
+  /** Generated title that must pass the issue-title fallback rules. */
   title?: string;
+  /** User-supplied title that intentionally bypasses generated-title fallback rules. */
+  explicitTitle?: string;
   gitProvider: IssueEnqueueGitProvider;
   issueOutputMode?: 'terminal' | 'silent';
 }
@@ -249,7 +252,8 @@ export async function createIssueAndEnqueueTask(
   const issueResult = deps.createIssueFromTaskResult(input.task, {
     cwd: input.cwd,
     ...(input.labels !== undefined ? { labels: input.labels } : {}),
-    ...(input.title !== undefined ? { explicitTitle: input.title } : {}),
+    ...(input.title !== undefined ? { title: input.title } : {}),
+    ...(input.explicitTitle !== undefined ? { explicitTitle: input.explicitTitle } : {}),
     outputMode: input.issueOutputMode ?? 'silent',
     gitProvider: input.gitProvider,
   });

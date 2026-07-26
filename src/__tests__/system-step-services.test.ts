@@ -1775,7 +1775,7 @@ describe('DefaultSystemStepServices', () => {
     expect(getGitProvider).not.toHaveBeenCalled();
     expect(mockCreateIssueFromTaskResult).toHaveBeenCalledWith('Implement follow-up effect', {
       cwd: '/repo',
-      explicitTitle: 'Implement follow-up effect with issue title',
+      title: 'Implement follow-up effect with issue title',
       outputMode: 'silent',
       gitProvider: requestProvider,
     });
@@ -1871,7 +1871,7 @@ describe('DefaultSystemStepServices', () => {
 
     expect(mockCreateIssueFromTaskResult).toHaveBeenCalledWith('Implement follow-up effect', {
       cwd: '/repo',
-      explicitTitle: 'Implement follow-up effect with issue title',
+      title: 'Implement follow-up effect with issue title',
       labels: ['bug', 'enhancement'],
       outputMode: 'silent',
       gitProvider: expect.objectContaining({

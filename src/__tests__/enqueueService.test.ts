@@ -4,6 +4,7 @@ import {
   IssueEnqueueCancelledError,
 } from '../infra/task/enqueueService.js';
 import type { GitProvider, Issue } from '../infra/git/index.js';
+import { createIssueFromTaskResult } from '../infra/task/issueTask.js';
 
 function createTestGitProvider(overrides: Partial<GitProvider> = {}): GitProvider {
   const issue: Issue = {
@@ -41,6 +42,36 @@ function createTestGitProvider(overrides: Partial<GitProvider> = {}): GitProvide
 }
 
 describe('createIssueAndEnqueueTask', () => {
+  it.each([
+    ['a prohibited title', '# Task Order'],
+    ['a title shorter than the minimum', 'abc'],
+  ])('falls back to a task-derived title for %s', async (_case, title) => {
+    const createIssue = vi.fn(() => ({ success: true as const, issueNumber: 913 }));
+    const gitProvider = createTestGitProvider({ createIssue });
+    const saveTaskFile = vi.fn().mockResolvedValue({
+      taskName: 'task-1',
+      tasksFile: '/repo/.takt/tasks.yaml',
+    });
+    const task = '## Implement enqueue title fallback\nDetails';
+
+    const result = await createIssueAndEnqueueTask({
+      cwd: '/repo',
+      task,
+      workflow: 'review',
+      title,
+      gitProvider,
+    }, {
+      createIssueFromTaskResult,
+      saveTaskFile,
+    });
+
+    expect(result.success).toBe(true);
+    expect(createIssue).toHaveBeenCalledWith({
+      title: 'Implement enqueue title fallback',
+      body: task,
+    }, '/repo');
+  });
+
   it('does not create an issue when the abort signal is already aborted', async () => {
     const closeIssue = vi.fn(() => ({ success: true as const }));
     const gitProvider = createTestGitProvider({ closeIssue });

@@ -111,7 +111,7 @@ export async function enqueueTaktTask(
       worktree: input.worktree ?? true,
       autoPr: input.autoPr,
       taskContext: input.taskContext,
-      ...(input.issue.title !== undefined ? { title: input.issue.title } : {}),
+      ...(input.issue.title !== undefined ? { explicitTitle: input.issue.title } : {}),
       ...(input.issue.labels !== undefined ? { labels: input.issue.labels } : {}),
       gitProvider: getGitProvider(),
       abortSignal,
