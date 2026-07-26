@@ -13,7 +13,7 @@
   <a href="./docs/README.ja.md">日本語</a>
 </p>
 
-![TAKT workflow control for AI coding agents](./docs/assets/product-hunt/01-hero.png)
+![TAKT workflow control for AI coding agents](./docs/assets/description/01-hero.png)
 
 **Stop babysitting AI coding agents.**
 
