@@ -530,8 +530,12 @@ describe('runTeamLeaderExecution', () => {
 
   it('doneでrunning partを取消さない場合はsettlementまで待つ', async () => {
     let releasePart: (() => void) | undefined;
+    let markFeedbackRequested: (() => void) | undefined;
     const runningPart = new Promise<void>((resolve) => {
       releasePart = resolve;
+    });
+    const feedbackRequested = new Promise<void>((resolve) => {
+      markFeedbackRequested = resolve;
     });
     const execution = runTeamLeaderExecution({
       initialParts: ['p1', 'p2'].map(makePart),
@@ -542,14 +546,18 @@ describe('runTeamLeaderExecution', () => {
         }
         return makeResult(part);
       },
-      requestMoreParts: async () => ({
-        done: true,
-        reasoning: 'no more planning',
-        cancelPartIds: [],
-        parts: [],
-      }),
+      requestMoreParts: async () => {
+        markFeedbackRequested?.();
+        return {
+          done: true,
+          reasoning: 'no more planning',
+          cancelPartIds: [],
+          parts: [],
+        };
+      },
     });
 
+    await feedbackRequested;
     let settled = false;
     void execution.then(() => { settled = true; });
     await new Promise<void>((resolve) => setImmediate(resolve));
