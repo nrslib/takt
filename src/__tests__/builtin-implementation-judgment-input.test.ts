@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/types.js';
-import { getJudgmentReportFiles } from '../core/workflow/output-contract-files.js';
 import { runStatusJudgmentPhase } from '../core/workflow/status-judgment-phase.js';
 import { loadAllWorkflowsWithSourcesFromDirs } from '../infra/config/loaders/workflowDiscovery.js';
 
@@ -31,17 +30,18 @@ describe('builtin implementation status judgment input', () => {
     'should exclude implementation metadata reports from status judgment in every shipped %s workflow',
     (language) => {
       const workflows = loadBuiltinWorkflows(language);
-      const implementationSteps = Array.from(workflows.values())
+      const implementationMetadataContracts = Array.from(workflows.values())
         .filter(({ source }) => source === 'builtin')
         .flatMap(({ config }) => config.steps)
-        .filter((step) => step.outputContracts?.some(
+        .flatMap((step) => step.outputContracts ?? [])
+        .filter(
           (contract) => contract.formatRef !== undefined
             && IMPLEMENTATION_METADATA_FORMATS.has(contract.formatRef),
-        ));
+        );
 
-      expect(implementationSteps.length).toBeGreaterThan(0);
-      for (const step of implementationSteps) {
-        expect(getJudgmentReportFiles(step.outputContracts)).toEqual([]);
+      expect(implementationMetadataContracts.length).toBeGreaterThan(0);
+      for (const contract of implementationMetadataContracts) {
+        expect(contract.useJudge).toBe(false);
       }
     },
   );
