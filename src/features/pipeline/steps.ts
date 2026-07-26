@@ -306,7 +306,7 @@ export async function resolveExecutionContext(
     info(`Fetching and checking out PR branch: ${safePrBranch}`);
     checkoutBranch(cwd, prBranch);
     success(`Checked out PR branch: ${safePrBranch}`);
-    const baseBranch = resolveExecutionBaseBranch(cwd, prBaseBranch);
+    const baseBranch = prBaseBranch ?? resolveExecutionBaseBranch(cwd);
     return attachPipelinePrContext(
       options.prNumber,
       prBaseBranch,

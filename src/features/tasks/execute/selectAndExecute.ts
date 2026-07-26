@@ -68,7 +68,9 @@ export async function confirmAndCreateWorktree(
     return { execCwd: cwd, isWorktree: false };
   }
 
-  const baseBranch = resolveBaseBranch(cwd, baseBranchOverride).branch;
+  const baseBranch = materializePullRequestDiff && baseBranchOverride !== undefined
+    ? baseBranchOverride
+    : resolveBaseBranch(cwd, baseBranchOverride).branch;
 
   const taskSlug = await withProgress(
     'Generating branch name...',

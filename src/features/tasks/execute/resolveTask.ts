@@ -307,9 +307,11 @@ export async function resolveTaskExecution(
     throwIfAborted(abortSignal);
     const targetBranch = contextBranch ?? data.branch;
     const needsBaseBranch = !targetBranch || !branchExists(defaultCwd, targetBranch);
-    baseBranch = needsBaseBranch
-      ? resolveTaskBaseBranch(defaultCwd, preferredBaseBranch)
-      : preferredBaseBranch;
+    baseBranch = prContext
+      ? prContext.baseBranch
+      : needsBaseBranch
+        ? resolveTaskBaseBranch(defaultCwd, preferredBaseBranch)
+        : preferredBaseBranch;
 
     const reusedWorktree = resolveReusedWorktreeExecution(
       defaultCwd,

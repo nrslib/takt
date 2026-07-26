@@ -119,6 +119,8 @@ describe('shared clone generated metadata isolation', () => {
     runGit(updaterRepo, ['push', '--quiet', 'origin', baseBranch]);
     const expectedBase = runGit(updaterRepo, ['rev-parse', 'HEAD']).toString().trim();
     expect(staleLocalBase).not.toBe(expectedBase);
+    runGit(projectRepo, ['branch', '-D', baseBranch]);
+    runGit(projectRepo, ['update-ref', '-d', `refs/remotes/origin/${baseBranch}`]);
 
     const result = createSharedClone(projectRepo, {
       worktree: clonePath,
@@ -147,6 +149,8 @@ describe('shared clone generated metadata isolation', () => {
     );
     expect(runGit(clonePath, ['rev-parse', result.pullRequestBaseRef!]).toString().trim()).toBe(expectedBase);
 
+    runGit(projectRepo, ['update-ref', '-d', `refs/remotes/origin/${baseBranch}`]);
+    runGit(projectRepo, ['update-ref', '-d', `refs/takt/pr-base/${baseBranch}`]);
     expect(materializePullRequestBase(projectRepo, projectRepo, baseBranch)).toBe(
       `refs/takt/pr-base/${baseBranch}`,
     );

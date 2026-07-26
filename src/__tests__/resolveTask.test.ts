@@ -747,7 +747,9 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
       worktreePath: undefined,
     });
-    vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({ branch: 'release/2026.07' });
+    const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
+      branch: 'release/2026.07',
+    });
     const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
       path: worktreePath,
       branch: 'feature/pr-context',
@@ -770,6 +772,7 @@ describe('resolveTaskExecution', () => {
       baseDiffRef: 'refs/takt/pr-base/release/2026.07',
       headDiffRef: 'refs/heads/feature/pr-context',
     });
+    expect(mockResolveBaseBranch).not.toHaveBeenCalled();
   });
 
   it('should reject a runtime PR identity that conflicts with saved PR review metadata', async () => {

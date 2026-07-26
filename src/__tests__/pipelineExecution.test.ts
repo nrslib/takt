@@ -1482,6 +1482,10 @@ describe('executePipeline', () => {
       expect(prOptions.base).toBe('release/main');
       expect(prOptions.base).not.toBeUndefined();
       expect(prOptions.base).not.toBe('develop');
+      expect(mockExecFileSync.mock.calls.some((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args[0] === 'check-ref-format' && args[2] === 'release/main';
+      })).toBe(false);
     });
 
     it('should resolve default base branch for PR creation when baseRefName is undefined', async () => {
