@@ -220,8 +220,10 @@ describe('WorkflowEngine promotion', () => {
           description: 'Workflow execution',
           provider: 'codex',
           model: 'candidate-model',
-          costTier: 'medium',
+          routingTier: 'medium',
         }],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['workflow-candidate'], fallback: 'workflow-candidate' } },
         rules: {
           steps: {
             implement: 'workflow-candidate',

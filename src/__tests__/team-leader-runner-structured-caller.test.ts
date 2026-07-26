@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { TeamLeaderRunner } from '../core/workflow/engine/TeamLeaderRunner.js';
-import { runTeamLeaderPart } from '../core/workflow/engine/team-leader-part-runner.js';
+import {
+  buildPartScopedSessionKey,
+  runTeamLeaderPart,
+} from '../core/workflow/engine/team-leader-part-runner.js';
 import type { AgentResponse, WorkflowStep, WorkflowState } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
@@ -603,8 +606,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
       sessionId: undefined,
     });
+    const partSessionKey = buildPartScopedSessionKey(
+      { name: 'implement.part-1', instruction: 'Implement API' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
     const sessions = new Map<string, string>([
-      ['coder:opencode', 'existing-part-session'],
+      [partSessionKey, 'existing-part-session'],
     ]);
     const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
       if (sessionId === undefined) {
@@ -614,7 +621,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       }
     });
     const optionsBuilder = {
-      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode' }),
+      resolveStepProviderModel: vi.fn().mockReturnValue({
+        provider: 'opencode',
+        model: 'opencode/zai-coding-plan/glm-5.1',
+      }),
       buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
     } as unknown as OptionsBuilder;
     const step: WorkflowStep = {
@@ -648,7 +658,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     );
 
     expect(updatePersonaSession).not.toHaveBeenCalled();
-    expect(sessions.get('coder:opencode')).toBe('existing-part-session');
+    expect(sessions.get(partSessionKey)).toBe('existing-part-session');
   });
 
   it('Given teamLeader.partTags, When running multiple decomposed parts, Then each part step gets part tags without changing aggregated output', async () => {
@@ -1605,9 +1615,31 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       updatePersonaSession,
     );
 
-    expect(updatePersonaSession).toHaveBeenCalledWith('implement.part-1:opencode', 'session-opencode-1');
-    expect(updatePersonaSession).toHaveBeenCalledWith('implement.part-2:opencode', 'session-opencode-2');
-    expect(sessions.has('coder:opencode')).toBe(false);
+    const partOneSessionKey = buildPartScopedSessionKey(
+      { name: 'implement.part-1', instruction: 'Implement API' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
+    const partTwoSessionKey = buildPartScopedSessionKey(
+      { name: 'implement.part-2', instruction: 'Implement UI' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
+
+    expect(JSON.parse(partOneSessionKey)).toEqual([
+      'implement.part-1',
+      'opencode',
+      'opencode/zai-coding-plan/glm-5.1',
+    ]);
+    expect(JSON.parse(partTwoSessionKey)).toEqual([
+      'implement.part-2',
+      'opencode',
+      'opencode/zai-coding-plan/glm-5.1',
+    ]);
+    expect(updatePersonaSession).toHaveBeenCalledWith(partOneSessionKey, 'session-opencode-1');
+    expect(updatePersonaSession).toHaveBeenCalledWith(partTwoSessionKey, 'session-opencode-2');
+    expect(sessions.has(buildPartScopedSessionKey(
+      { name: 'coder', instruction: 'Task: {task}' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    ))).toBe(false);
   });
 
   it('report phase の有無にかかわらず member session を part-scoped に保存する', async () => {
@@ -1708,8 +1740,17 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       updatePersonaSession,
     );
 
-    expect(updatePersonaSession).toHaveBeenCalledWith('implement.part-1:opencode', 'session-opencode-1');
-    expect(updatePersonaSession).not.toHaveBeenCalledWith('coder:opencode', 'session-opencode-1');
+    const partSessionKey = buildPartScopedSessionKey(
+      { name: 'implement.part-1', instruction: 'Implement API' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
+    const coderSessionKey = buildPartScopedSessionKey(
+      { name: 'coder', instruction: 'Task: {task}' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
+
+    expect(updatePersonaSession).toHaveBeenCalledWith(partSessionKey, 'session-opencode-1');
+    expect(updatePersonaSession).not.toHaveBeenCalledWith(coderSessionKey, 'session-opencode-1');
   });
 
   it('non-Claude part execution でも partAllowedTools をそのまま runtime に渡す（プロバイダ層で log & ignore される）', async () => {

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { CapabilityAwareStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
-import { createAutoRoutingAiRouter } from '../../../agents/auto-routing-usecase.js';
+import { createWorkRequirementEstimator } from '../../../agents/auto-routing-usecase.js';
 import { createLogger, generateReportDir, getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
 import type {
   AgentResponse,
@@ -27,6 +27,8 @@ import { runSingleWorkflowIteration, runWorkflowToCompletion } from './WorkflowR
 import { validateWorkflowConfig } from './WorkflowValidator.js';
 import { getWorkflowStepKind } from '../step-kind.js';
 import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
+import { RoutingRuntime } from '../auto-routing/runtime.js';
+import { buildRoutingFindings } from '../auto-routing/snapshot.js';
 import { resolveEffectiveAutoRouting } from '../auto-routing/effective-auto-routing.js';
 import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
 import { runWithWorkflowSpan, type WorkflowSpanOutcome, type WorkflowSpanParams } from '../observability/workflowSpans.js';
@@ -58,7 +60,14 @@ import {
   resolveInheritedReviewReportNamesWithDiagnostics,
   type InheritedReviewReportNamesResult,
 } from '../review-report-discovery.js';
+import { getRemoteRepositoryIdentifiers } from '../../../infra/git/detect.js';
 const log = createLogger('workflow-engine');
+
+type AutoRoutingEstimatorSource = 'injected' | 'engine-default' | 'absent';
+type WorkflowEngineRuntimeOptions = WorkflowEngineOptions & {
+  structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
+  autoRoutingEstimatorSource: AutoRoutingEstimatorSource;
+};
 export type {
   WorkflowEvents,
   StepProviderInfo,
@@ -87,7 +96,7 @@ export class WorkflowEngine extends EventEmitter {
   private projectCwd: string;
   private cwd: string;
   private task: string;
-  private options: WorkflowEngineOptions & { structuredOutputNormalizers: StructuredOutputNormalizerRegistry };
+  private options: WorkflowEngineRuntimeOptions;
   private maxSteps: WorkflowMaxSteps;
   private loopDetector: LoopDetector;
   private cycleDetector: CycleDetector;
@@ -126,16 +135,6 @@ export class WorkflowEngine extends EventEmitter {
       ...options.traceTaskMetadata,
       runDir: runPaths.runRootAbs,
     };
-    const autoRoutingAiRouter = options.autoRoutingAiRouter ?? createAutoRoutingAiRouter({
-      cwd,
-      workflowName: config.name,
-      runId: runPaths.slug,
-      language: options.language,
-      childProcessEnv: options.childProcessEnv,
-      abortSignal: options.abortSignal,
-      onStream: options.onStream,
-      onProviderStream: options.onProviderStream,
-    });
     const inheritedAutoRouting = resolveEffectiveAutoRouting(config, options.autoRouting);
     if (options.autoStrategyOverride !== undefined && inheritedAutoRouting !== undefined) {
       options.onEffectiveAutoRoutingReached?.();
@@ -144,6 +143,34 @@ export class WorkflowEngine extends EventEmitter {
       inheritedAutoRouting,
       options.autoStrategyOverride,
     );
+    const inheritedEstimatorSource = (options as WorkflowEngineOptions & {
+      autoRoutingEstimatorSource?: AutoRoutingEstimatorSource;
+    }).autoRoutingEstimatorSource;
+    const autoRoutingEstimatorSource = inheritedEstimatorSource
+      ?? (options.autoRoutingEstimator !== undefined
+        ? 'injected'
+        : effectiveAutoRouting === undefined
+          ? 'absent'
+          : 'engine-default');
+    const autoRoutingEstimator = effectiveAutoRouting === undefined
+      ? options.autoRoutingEstimator
+      : options.autoRoutingEstimator ?? createWorkRequirementEstimator({
+        cwd,
+        provider: effectiveAutoRouting.router.provider,
+        model: effectiveAutoRouting.router.model,
+        language: options.language,
+        childProcessEnv: options.childProcessEnv,
+        abortSignal: options.abortSignal,
+      });
+    const routingSensitiveValues = effectiveAutoRouting === undefined
+      ? options.routingSensitiveValues
+      : options.routingSensitiveValues ?? getRemoteRepositoryIdentifiers(options.projectCwd);
+    const routingRuntime = effectiveAutoRouting === undefined || autoRoutingEstimator === undefined
+      ? undefined
+      : options.routingRuntime ?? new RoutingRuntime({
+        autoRouting: effectiveAutoRouting,
+        estimator: autoRoutingEstimator,
+      });
     // The adjudication target must participate in normal step validation and execution,
     // so it is injected into config.steps whenever the workflow (or a
     // loop monitor judge) wires a rule to it and a finding contract is in
@@ -160,7 +187,10 @@ export class WorkflowEngine extends EventEmitter {
       structuredCaller: this.structuredCaller,
       structuredOutputNormalizers: options.structuredOutputNormalizers ?? createStructuredOutputNormalizerRegistry([]),
       autoRouting: effectiveAutoRouting,
-      autoRoutingAiRouter,
+      autoRoutingEstimator,
+      autoRoutingEstimatorSource,
+      routingRuntime,
+      routingSensitiveValues,
       traceTaskMetadata,
     };
     this.projectCwd = this.options.projectCwd;
@@ -283,6 +313,8 @@ export class WorkflowEngine extends EventEmitter {
           state: this.state,
           options: this.options,
           getWorkflowName: () => this.config.name,
+          getTask: () => this.task,
+          getRoutingFindings: () => buildRoutingFindings(this.findingLedgerStore?.loadLedger()),
           getCurrentWorkflowStack: () => this.sharedRuntime.activeResumePoint?.stack,
           getCwd: () => this.cwd,
           getMaxSteps: () => this.maxSteps,
@@ -738,6 +770,8 @@ export class WorkflowEngine extends EventEmitter {
           state: this.state,
           options: this.options,
           getWorkflowName: () => this.config.name,
+          getTask: () => this.task,
+          getRoutingFindings: () => buildRoutingFindings(this.findingLedgerStore?.loadLedger()),
           getCurrentWorkflowStack: () => this.sharedRuntime.activeResumePoint?.stack,
           getCwd: () => this.cwd,
           getMaxSteps: () => this.maxSteps,

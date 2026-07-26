@@ -103,7 +103,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         projectCwd: tmpDir,
         provider: 'mock',
         initialSessions: {
-          'coder:mock': 'existing-session',
+          '["coder","mock"]': 'existing-session',
         },
         onSessionUpdate,
       });
@@ -118,7 +118,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       const state = await engine.run();
 
       expect(state.status).toBe('completed');
-      expect(state.personaSessions.get('coder:mock')).toBe('existing-session');
+      expect(state.personaSessions.get('["coder","mock"]')).toBe('existing-session');
       expect(onSessionUpdate).not.toHaveBeenCalled();
     });
 
@@ -137,7 +137,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'mock',
-        initialSessions: { 'coder:mock': 'session-old' },
+        initialSessions: { '["coder","mock"]': 'session-old' },
         onSessionUpdate,
       });
       mockRunAgentSequence([
@@ -150,8 +150,8 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       const state = await engine.run();
 
       expect(state.status).toBe('aborted');
-      expect(state.personaSessions.has('coder:mock')).toBe(false);
-      expect(onSessionUpdate).toHaveBeenLastCalledWith('coder:mock', undefined);
+      expect(state.personaSessions.has('["coder","mock"]')).toBe(false);
+      expect(onSessionUpdate).toHaveBeenLastCalledWith('["coder","mock"]', undefined);
     });
 
     it('should fail fast on a Phase 3 schema error even when Phase 1 content has a matching tag', async () => {

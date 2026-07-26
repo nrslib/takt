@@ -117,17 +117,36 @@ function createValidatorAutoRouting(rules?: AutoRoutingConfig['rules']): AutoRou
         description: 'Claude candidate',
         provider: 'claude-sdk',
         model: 'sonnet',
-        costTier: 'medium',
+        routingTier: 'medium',
       },
       {
         name: 'codex',
         description: 'Codex candidate',
         provider: 'codex',
         model: 'gpt-5-codex',
-        costTier: 'medium',
+        routingTier: 'medium',
       },
     ],
+    defaultPool: 'general',
+    candidatePools: { general: { candidates: ['claude', 'codex'], fallback: 'claude' } },
     ...(rules !== undefined ? { rules } : {}),
+  };
+}
+
+function createPoolScopedValidatorAutoRouting(): AutoRoutingConfig {
+  return {
+    ...createValidatorAutoRouting(),
+    defaultPool: 'claude-only',
+    candidatePools: {
+      'claude-only': { candidates: ['claude'], fallback: 'claude' },
+      'codex-only': { candidates: ['codex'], fallback: 'codex' },
+    },
+    poolRules: {
+      tags: {
+        'claude-only': 'claude-only',
+        'codex-only': 'codex-only',
+      },
+    },
   };
 }
 
@@ -175,15 +194,46 @@ describe('validateWorkflowConfig', () => {
     })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
   });
 
-  it('fails fast when any dynamic auto-routing candidate is incompatible with an explicit model', () => {
+  it('accepts a normal step when an incompatible candidate is outside the selected pool', () => {
     const workflow = createWorkflow({
-      steps: [createPlanAgent({ model: 'sonnet' })],
+      steps: [createPlanAgent({ model: 'sonnet', tags: ['claude-only'] })],
     });
 
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
-      autoRouting: createValidatorAutoRouting(),
+      autoRouting: createPoolScopedValidatorAutoRouting(),
+    })).not.toThrow();
+  });
+
+  it('fails fast when a selected dynamic pool candidate is incompatible with an explicit model', () => {
+    const workflow = createWorkflow({
+      steps: [createPlanAgent({ model: 'sonnet', tags: ['codex-only'] })],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      autoRouting: createPoolScopedValidatorAutoRouting(),
     })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
+  });
+
+  it('accepts a parallel sub-step when an incompatible candidate is outside the selected pool', () => {
+    const workflow = createWorkflow({
+      steps: [{
+        name: 'plan',
+        persona: 'planner',
+        personaDisplayName: 'planner',
+        edit: false,
+        instruction: '{task}',
+        passPreviousResponse: true,
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+        parallel: [createPlanAgent({ name: 'review', model: 'sonnet', tags: ['claude-only'] })],
+      }],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      autoRouting: createPoolScopedValidatorAutoRouting(),
+    })).not.toThrow();
   });
 
   it('fails fast for incompatible auto-routing on a parallel sub-step', () => {
@@ -289,6 +339,25 @@ describe('validateWorkflowConfig', () => {
       projectCwd: process.cwd(),
       autoRouting: createValidatorAutoRouting({ steps: { plan: 'codex' } }),
     })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
+  });
+
+  it('accepts a loop monitor when an incompatible candidate is outside the triggering step pool', () => {
+    const workflow = createWorkflow({
+      steps: [createPlanAgent({ tags: ['claude-only'] })],
+      loopMonitors: [{
+        cycle: ['plan'],
+        threshold: 1,
+        judge: {
+          model: 'sonnet',
+          rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+        },
+      }],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      autoRouting: createPoolScopedValidatorAutoRouting(),
+    })).not.toThrow();
   });
 
   it('fails fast when a loop monitor judge points to an unknown step', () => {

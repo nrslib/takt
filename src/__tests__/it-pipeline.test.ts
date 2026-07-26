@@ -226,17 +226,22 @@ auto_routing:
       description: Low-cost candidate
       provider: mock
       model: mock/low-model
-      cost_tier: low
+      routing_tier: low
     - name: medium
       description: Balanced candidate
       provider: mock
       model: mock/medium-model
-      cost_tier: medium
+      routing_tier: medium
     - name: high
       description: High-performance candidate
       provider: mock
       model: mock/high-model
-      cost_tier: high
+      routing_tier: high
+  default_pool: general
+  candidate_pools:
+    general:
+      candidates: [low, medium, high]
+      fallback: high
 initial_step: child-step
 max_steps: 2
 steps:
@@ -480,7 +485,7 @@ describe('Pipeline Integration Tests', () => {
   it.each([
     { name: 'root workflow', child: false },
     { name: 'workflow_call child', child: true },
-  ])('should reject an invalid auto strategy tier without reporting it as unused for $name', async ({ child }) => {
+  ])('should accept a pool with one eligible tier regardless of strategy without reporting it as unused for $name', async ({ child }) => {
     const invalidAutoRouting = `workflow_config:
   provider: mock
 auto_routing:
@@ -493,7 +498,12 @@ auto_routing:
       description: Balanced candidate
       provider: mock
       model: mock/medium-model
-      cost_tier: medium`;
+      routing_tier: medium
+  default_pool: general
+  candidate_pools:
+    general:
+      candidates: [medium]
+      fallback: medium`;
 
     if (child) {
       const workflowsDir = join(testDir, '.takt', 'workflows');
@@ -548,11 +558,7 @@ steps:
       cwd: testDir,
       autoStrategy: 'performance',
     });
-    if (child) {
-      await expect(execution).resolves.toBe(3);
-    } else {
-      await expect(execution).rejects.toThrow(/performance|high|candidate/i);
-    }
+    await expect(execution).resolves.toBe(0);
     expect(mockWorkflowWarn).not.toHaveBeenCalledWith(
       expect.stringMatching(/auto-strategy.*ignored/i),
     );

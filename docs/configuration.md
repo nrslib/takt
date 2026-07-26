@@ -537,7 +537,7 @@ explicit CLI / environment override
 > provider_routing.tags.<tag>
 > provider_routing.personas.<raw persona key>
 > persona_providers.<persona display name>  # deprecated legacy
-> effective auto_routing (auto.rules / auto.ai / auto.default)
+> effective auto_routing (auto.rules / auto.dynamic / auto.fallback)
 > workflow_config.provider/model
 > project .takt/config.yaml
 > global ~/.takt/config.yaml
@@ -566,25 +566,31 @@ auto_routing:
       description: Planning, final decisions, requirement-fulfillment judgment, and other advanced reasoning
       provider: codex
       model: gpt-5.6-sol
-      cost_tier: high
+      routing_tier: high
     - name: coding
       description: Implementation, tests, debugging, and refactoring
       provider: codex
       model: gpt-5.6-terra
-      cost_tier: medium
+      routing_tier: medium
     - name: lightweight
       description: Formatting and small mechanical edits
       provider: codex
       model: gpt-5.6-luna
-      cost_tier: low
+      routing_tier: low
   rules:
-    tags:
-      implementation: coding
-      architecture: advanced
     steps:
       security-audit: advanced
-    personas:
-      architect: advanced
+  default_pool: general
+  candidate_pools:
+    general:
+      candidates: [lightweight, coding, advanced]
+      fallback: advanced
+    implementation:
+      candidates: [coding, advanced]
+      fallback: advanced
+  pool_rules:
+    tags:
+      implementation: implementation
 ```
 
 A self-contained workflow may override routing with a workflow-level block. The workflow-level `auto_routing` block itself enables automatic routing for that workflow:
@@ -602,17 +608,22 @@ auto_routing:
     - name: coding
       provider: codex
       model: gpt-5.6-terra
-      cost_tier: medium
+      routing_tier: medium
       description: Implementation, testing, debugging, and refactoring
+  default_pool: general
+  candidate_pools:
+    general:
+      candidates: [coding]
+      fallback: coding
 ```
 
 Auto-routing candidate selection applies only to workflow step execution. Internal operations without workflow-step context, such as AI task-slug generation and sync conflict resolution, use the resolved concrete top-level provider/model. `auto_routing.router` and candidates are never implicit defaults.
 
 Assistant conversations (interactive planning, instruct on existing tasks, and retry dialogue) do not go through auto routing. They resolve `takt_providers.assistant`, then fall back to the top-level provider/model when the assistant setting is unset; the assistant setting is not a default for other internal operations. CLI `--provider` / `--model` overrides apply to interactive planning only, while instruct and retry do not accept those overrides. Without a resolvable assistant or top-level provider, assistant startup fails with `Provider is not configured.`
 
-Auto routing occupies the position shown in the complete provider/model priority above. Within auto routing, rules are checked in `tags`, `steps`, `personas` order. If multiple step tags match, the later tag on the step wins. If no rule matches, TAKT asks the configured router model to select a candidate from descriptions; router failures log a warning and fall back to the strategy default: `cost` chooses the first `low` candidate, `balanced` the first `medium`, and `performance` the first `high`.
+Auto routing occupies the position shown in the complete provider/model priority above. Hard rules are checked in `tags`, `steps`, `personas` order. Otherwise `pool_rules` selects a candidate pool and the router estimates only the required tier; TAKT deterministically selects the candidate. After a successful estimate, `cost` selects the lowest `routing_tier` in the selected pool that meets the required tier. `balanced` selects from candidates that meet the required tier, using the lowest such tier and then the order in that pool's `candidates` list when candidates have the same tier. `performance` selects the highest `routing_tier` in the selected pool. Estimator failures use that pool's explicit `fallback`. A successful estimate with no candidate at or above its required tier is an execution error.
 
-Candidate `cost_tier` is limited to `high`, `medium`, or `low`. Candidate `provider_options` are merged at step priority, so env/CLI-resolved option leaves still win. `model: auto` is not supported; use multiple candidates instead. CLI can override the strategy with `--auto-strategy cost|balanced|performance`; the override is propagated until execution reaches a workflow with effective `auto_routing`. If execution completes without reaching one, the strategy flag is ignored with a warning.
+Candidate `routing_tier` is limited to `high`, `medium`, or `low`. Every configuration requires `default_pool`, non-empty `candidate_pools`, and a pool-local `fallback`. Candidate `provider_options` are merged at step priority, so env/CLI-resolved option leaves still win. `model: auto` is not supported; use multiple candidates instead. CLI can override the strategy with `--auto-strategy cost|balanced|performance`; the override is propagated until execution reaches a workflow with effective `auto_routing`. If execution completes without reaching one, the strategy flag is ignored with a warning. The router receives normalized task, raw step instruction, and current remaining work; identifier redaction reduces identification risk but does not guarantee anonymity. Routing events remain local-only and do not contain routing text.
 
 Routing decisions are local-only telemetry. When `telemetry.routing_decisions` is enabled, TAKT writes them as NDJSON under the project `.takt/events/` directory. TAKT does not upload routing decisions. Use `takt telemetry status`, `takt telemetry enable`, and `takt telemetry disable` to inspect or change only this local recording setting.
 

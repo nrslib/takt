@@ -45,7 +45,12 @@ import {
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { resolveInspectToolsForProvider } from './engine-provider-options.js';
-import { resolveAutoRoutingBatch, resolveAutoRoutingRuntime } from '../auto-routing/resolver.js';
+import {
+  createRoutingScope,
+  resolveAutoRoutingBatch,
+  resolveAutoRoutingRuntime,
+} from '../auto-routing/resolver.js';
+import { buildRoutingFindings, buildRoutingWorkSnapshot } from '../auto-routing/snapshot.js';
 import { InstructionBuildTransaction } from './instruction-build-transaction.js';
 import { recordAgentUsageEvent } from './agent-usage-event.js';
 import type { FindingLedgerStore } from '../findings/store.js';
@@ -87,6 +92,8 @@ export interface TeamLeaderRunnerDeps {
   readonly stepExecutor: StepExecutor;
   readonly engineOptions: WorkflowEngineOptions;
   readonly getCwd: () => string;
+  readonly getTask: () => string;
+  readonly getState: () => WorkflowState;
   readonly getWorkflowName: () => string;
   readonly getInteractive: () => boolean;
   readonly getRunPaths: () => RunPaths;
@@ -357,6 +364,15 @@ export class TeamLeaderRunner {
       leaderProviderInfo,
       Math.max(0, Date.now() - leaderStartedAt),
       parentIteration,
+    );
+    this.recordRoutingResult(
+      createRoutingScope({
+        workflow: this.deps.getWorkflowName(),
+        parentStep: step.name,
+        workItem: 'leader',
+      }),
+      leaderProviderInfo,
+      leaderResponse,
     );
     log.debug('Team leader decomposed parts', {
       step: step.name,
@@ -706,6 +722,7 @@ export class TeamLeaderRunner {
       executionAbortScope.dispose();
     }
     const { plannedParts, partResults, findingContractDecision } = executionResult;
+    this.recordPartRoutingResults(step, partResults, routedProviderInfoByPart);
     this.emitPartRoutingDecisionEvents(step, partResults, routedProviderInfoByPart, parentIteration);
 
     const rateLimitedResult = partResults.find((result) => result.response.status === 'rate_limited');
@@ -832,15 +849,39 @@ export class TeamLeaderRunner {
     const currentProviderInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(leaderStep, runtime);
     const autoRuntime = await resolveAutoRoutingRuntime({
       autoRouting: this.deps.engineOptions.autoRouting,
+      scope: createRoutingScope({
+        workflow: this.deps.getWorkflowName(),
+        parentStep: leaderStep.name,
+        workItem: 'leader',
+      }),
       step: {
         name: leaderStep.name,
         tags: leaderStep.tags,
         personaKey: leaderStep.providerRoutingPersonaKey,
         instruction: leaderStep.instruction,
       },
+      snapshot: buildRoutingWorkSnapshot({
+        goal: this.deps.getTask(),
+        userInputs: this.deps.getState().userInputs,
+        retryNote: this.deps.engineOptions.retryNote,
+        step: {
+          name: leaderStep.name,
+          tags: leaderStep.tags ?? [],
+          personaKey: leaderStep.providerRoutingPersonaKey,
+          instruction: leaderStep.instruction,
+          stepType: 'agent',
+          edit: leaderStep.edit,
+          passPreviousResponse: leaderStep.passPreviousResponse === true,
+        },
+        lastOutput: this.deps.getState().lastOutput?.content,
+        findings: buildRoutingFindings(this.deps.findingLedgerStore?.loadLedger()),
+        sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
+      }),
       currentProviderInfo,
-      routeWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeStep,
+      estimator: this.deps.engineOptions.autoRoutingEstimator,
+      runtime: this.deps.engineOptions.routingRuntime,
       logger: log,
+      abortSignal: this.deps.engineOptions.abortSignal,
     });
     if (!autoRuntime) {
       return runtime;
@@ -894,7 +935,10 @@ export class TeamLeaderRunner {
         pendingSessionPublication = {
           key: buildPartScopedSessionKey(
             createPartStep(step, part),
-            result.providerInfo?.provider,
+            {
+              provider: result.providerInfo?.provider,
+              model: result.providerInfo?.model,
+            },
           ),
           sessionId: result.response.sessionId,
         };
@@ -1065,6 +1109,43 @@ export class TeamLeaderRunner {
     }
   }
 
+  private recordPartRoutingResults(
+    step: WorkflowStep,
+    partResults: PartResult[],
+    routedProviderInfoByPart: Map<string, StepProviderInfo>,
+  ): void {
+    for (const result of partResults) {
+      this.recordRoutingResult(
+        createRoutingScope({
+          workflow: this.deps.getWorkflowName(),
+          parentStep: step.name,
+          workItem: result.part.id,
+        }),
+        routedProviderInfoByPart.get(result.part.id),
+        result.response,
+      );
+    }
+  }
+
+  private recordRoutingResult(
+    scope: string,
+    providerInfo: StepProviderInfo | undefined,
+    response: AgentResponse,
+  ): void {
+    const routingRuntime = this.deps.engineOptions.routingRuntime;
+    if (
+      routingRuntime === undefined
+      || providerInfo?.autoRoutingDecision === undefined
+      || !routingRuntime.hasResolution(scope)
+    ) {
+      return;
+    }
+    routingRuntime.recordExecutionResult({
+      scope,
+      status: response.status === 'done' ? 'done' : 'failed',
+    });
+  }
+
   private emitLeaderRoutingDecisionEvent(
     leaderStep: WorkflowStep,
     response: AgentResponse,
@@ -1129,16 +1210,42 @@ export class TeamLeaderRunner {
         const partResolutionRuntime = this.getPartProviderResolutionRuntime(runtime);
         return {
           id: part.id,
+          scope: createRoutingScope({
+            workflow: this.deps.getWorkflowName(),
+            parentStep: step.name,
+            workItem: part.id,
+          }),
           step: {
             name: partStep.name,
             tags: partStep.tags,
             personaKey: partStep.providerRoutingPersonaKey,
+            instruction: partStep.instruction,
           },
+          snapshot: buildRoutingWorkSnapshot({
+            goal: this.deps.getTask(),
+            userInputs: this.deps.getState().userInputs,
+            retryNote: this.deps.engineOptions.retryNote,
+            step: {
+              name: partStep.name,
+              tags: partStep.tags ?? [],
+              personaKey: partStep.providerRoutingPersonaKey,
+              instruction: partStep.instruction,
+              stepType: 'agent',
+              edit: partStep.edit,
+              passPreviousResponse: partStep.passPreviousResponse === true,
+            },
+            part: { title: part.title, instruction: part.instruction },
+            lastOutput: this.deps.getState().lastOutput?.content,
+            findings: buildRoutingFindings(this.deps.findingLedgerStore?.loadLedger()),
+            sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
+          }),
           currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(partStep, partResolutionRuntime),
         };
       }),
-      routeBatchWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeBatch,
+      estimator: this.deps.engineOptions.autoRoutingEstimator,
+      runtime: this.deps.engineOptions.routingRuntime,
       logger: log,
+      abortSignal: this.deps.engineOptions.abortSignal,
     });
 
     for (const [partId, providerInfo] of routed.entries()) {

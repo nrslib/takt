@@ -900,16 +900,18 @@ steps:
           description: 'Reasoning',
           provider: 'claude-sdk',
           model: 'claude-opus-4-20250514',
-          costTier: 'high',
+          routingTier: 'high',
         },
         {
           name: 'coding',
           description: 'Implementation',
           provider: 'codex',
           model: 'gpt-5',
-          costTier: 'medium',
+          routingTier: 'medium',
         },
       ],
+      defaultPool: 'general',
+      candidatePools: { general: { candidates: ['reasoning', 'coding'], fallback: 'reasoning' } },
     } satisfies NonNullable<WorkflowConfig['autoRouting']>;
     const config = {
       ...makeConfig(),
@@ -938,16 +940,18 @@ steps:
             description: 'Reasoning',
             provider: 'claude-sdk',
             model: 'claude-opus-4-20250514',
-            costTier: 'high',
+            routingTier: 'high',
           },
           {
             name: 'coding',
             description: 'Implementation',
             provider: 'codex',
             model: 'gpt-5',
-            costTier: 'medium',
+            routingTier: 'medium',
           },
         ],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['reasoning', 'coding'], fallback: 'reasoning' } },
       },
     } satisfies WorkflowConfig;
 

@@ -172,25 +172,19 @@ export const ProviderBlockSchema = z.object({
 
 export const ProviderReferenceSchema = z.union([ProviderTypeSchema, ProviderBlockSchema]);
 
-export const CostTierSchema = z.enum(['high', 'medium', 'low']);
+export const RoutingTierSchema = z.enum(['high', 'medium', 'low']);
 export const AutoRoutingStrategySchema = z.enum(['cost', 'balanced', 'performance']);
 const AutoRoutingFullModelIdSchema = z.string().min(1).refine((value) => (
   /[0-9]/.test(value) || value.includes('/')
 ), {
   message: 'auto_routing model must be a full model id',
 });
-const AutoRoutingStrategyCostTier = {
-  cost: 'low',
-  balanced: 'medium',
-  performance: 'high',
-} as const;
-
 const AutoRoutingCandidateSchema = z.object({
   name: z.string().min(1),
-  description: z.string().min(1),
+  description: z.string().min(1).optional(),
   provider: ProviderTypeSchema,
   model: AutoRoutingFullModelIdSchema,
-  cost_tier: CostTierSchema,
+  routing_tier: RoutingTierSchema,
   provider_options: StepProviderOptionsSchema,
 }).strict();
 
@@ -201,6 +195,16 @@ const AutoRoutingSchemaBase = z.object({
     model: AutoRoutingFullModelIdSchema,
   }).strict(),
   candidates: z.array(AutoRoutingCandidateSchema).min(1),
+  default_pool: z.string().min(1),
+  candidate_pools: z.record(z.string().min(1), z.object({
+    candidates: z.array(z.string().min(1)).min(1),
+    fallback: z.string().min(1),
+  }).strict()),
+  pool_rules: z.object({
+    tags: z.record(z.string(), z.string().min(1)).optional(),
+    steps: z.record(z.string(), z.string().min(1)).optional(),
+    personas: z.record(z.string(), z.string().min(1)).optional(),
+  }).strict().optional(),
   rules: z.object({
     tags: z.record(z.string(), z.string().min(1)).optional(),
     steps: z.record(z.string(), z.string().min(1)).optional(),
@@ -240,13 +244,32 @@ function validateAutoRoutingSchema(
     }
   }
 
-  const requiredTier = AutoRoutingStrategyCostTier[config.strategy];
-  if (!config.candidates.some((candidate) => candidate.cost_tier === requiredTier)) {
+  if (!Object.hasOwn(config.candidate_pools, config.default_pool)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      path: ['candidates'],
-      message: `auto_routing strategy "${config.strategy}" requires at least one ${requiredTier} cost_tier candidate`,
+      path: ['default_pool'],
+      message: `auto_routing default_pool references unknown pool "${config.default_pool}"`,
     });
+  }
+  for (const [poolName, pool] of Object.entries(config.candidate_pools)) {
+    for (const candidateName of pool.candidates) {
+      if (!candidateNames.has(candidateName)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['candidate_pools', poolName, 'candidates'], message: `auto_routing pool "${poolName}" references unknown candidate "${candidateName}"` });
+      }
+    }
+    if (!pool.candidates.includes(pool.fallback)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['candidate_pools', poolName, 'fallback'], message: `auto_routing pool fallback must belong to its pool candidates` });
+    }
+    if (!candidateNames.has(pool.fallback)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['candidate_pools', poolName, 'fallback'], message: `auto_routing pool "${poolName}" fallback references unknown candidate "${pool.fallback}"` });
+    }
+  }
+  for (const [ruleKind, rules] of Object.entries(config.pool_rules ?? {})) {
+    for (const [ruleKey, poolName] of Object.entries(rules ?? {})) {
+      if (!Object.hasOwn(config.candidate_pools, poolName)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pool_rules', ruleKind, ruleKey], message: `auto_routing pool rule references unknown pool "${poolName}"` });
+      }
+    }
   }
 }
 

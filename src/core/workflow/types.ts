@@ -25,7 +25,8 @@ import type { ProviderPermissionProfiles } from '../models/provider-profiles.js'
 import type { ProviderUsageSnapshot } from '../models/response.js';
 import type { StepProviderOptions } from '../models/workflow-types.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
-import type { AutoRoutingAiRouter } from '../../agents/auto-routing-usecase.js';
+import type { WorkRequirementEstimator } from './auto-routing/contracts.js';
+import type { RoutingRuntime } from './auto-routing/runtime.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
 import type { StructuredOutputNormalizerRegistry } from './engine/structured-output-normalizer.js';
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
@@ -108,9 +109,16 @@ export interface StepProviderInfo {
   providerOptionsSources?: Readonly<Record<string, ProviderResolutionSource>>;
   autoRoutingDecision?: {
     candidateName: string;
-    costTier: 'high' | 'medium' | 'low';
+    routingTier: 'high' | 'medium' | 'low';
     strategy: AutoRoutingStrategy;
     candidateCount: number;
+    requiredTier?: 'high' | 'medium' | 'low';
+    reasonCodes?: string[];
+    fallbackReason?: string;
+    fingerprintChanged?: boolean;
+    retryReason?: 'failed-without-progress' | 'no-progress';
+    estimatorDurationMs?: number;
+    inputTokenBucket?: 'small' | 'medium' | 'large';
   };
 }
 
@@ -363,7 +371,10 @@ export interface WorkflowEngineOptions {
   autoStrategyOverride?: AutoRoutingStrategy;
   onEffectiveAutoRoutingReached?: () => void;
   /** Run-scoped AI router for automatic provider/model routing. */
-  autoRoutingAiRouter?: AutoRoutingAiRouter;
+  autoRoutingEstimator?: WorkRequirementEstimator;
+  routingRuntime?: RoutingRuntime;
+  /** Repository identifiers and other run-local values redacted from routing model input. */
+  routingSensitiveValues?: readonly string[];
   /** Source layer for resolved provider options */
   providerOptionsSource?: ProviderOptionsSource;
   /** Nested origin resolver for provider options traced-config values */

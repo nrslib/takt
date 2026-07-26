@@ -290,20 +290,31 @@ auto_routing:
       description: Planning, final decisions, requirement-fulfillment judgment, and other advanced reasoning
       provider: codex
       model: gpt-5.6-sol
-      cost_tier: high
+      routing_tier: high
     - name: coding
       description: Implementation, tests, debugging, and refactoring
       provider: codex
       model: gpt-5.6-terra
-      cost_tier: medium
+      routing_tier: medium
     - name: lightweight
       description: Formatting and small mechanical edits
       provider: codex
       model: gpt-5.6-luna
-      cost_tier: low
+      routing_tier: low
   rules:
+    steps:
+      security-audit: advanced
+  default_pool: general
+  candidate_pools:
+    general:
+      candidates: [lightweight, coding, advanced]
+      fallback: advanced
+    implementation:
+      candidates: [coding, advanced]
+      fallback: advanced
+  pool_rules:
     tags:
-      implementation: coding
+      implementation: implementation
 ```
 
 Operations without workflow-step context, such as AI task-slug generation, use the concrete top-level provider/model. `auto_routing.router` and candidates are only for workflow routing and are never implicit defaults. Assistant conversations (interactive planning, instruct, and retry) are not auto-routed: they use `takt_providers.assistant` when set and otherwise fall back to the top-level provider/model. CLI provider/model overrides apply only to interactive planning, not instruct or retry.

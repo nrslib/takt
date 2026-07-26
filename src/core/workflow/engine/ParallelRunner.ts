@@ -29,7 +29,8 @@ import type { RuntimeStepResolution } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
-import { resolveAutoRoutingBatch } from '../auto-routing/resolver.js';
+import { createRoutingScope, resolveAutoRoutingBatch } from '../auto-routing/resolver.js';
+import { buildRoutingFindings, buildRoutingWorkSnapshot } from '../auto-routing/snapshot.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
@@ -254,15 +255,38 @@ export class ParallelRunner {
           autoRouting: this.deps.engineOptions.autoRouting,
           items: agentSubSteps.map((subStep) => ({
             id: subStep.name,
+            scope: createRoutingScope({
+              workflow: this.deps.getWorkflowName(),
+              parentStep: step.name,
+              workItem: subStep.name,
+            }),
             step: {
               name: subStep.name,
               tags: subStep.tags,
               personaKey: subStep.providerRoutingPersonaKey,
               instruction: subStep.instruction,
             },
+            snapshot: buildRoutingWorkSnapshot({
+              goal: task,
+              userInputs: state.userInputs,
+              retryNote: this.deps.engineOptions.retryNote,
+              step: {
+                name: subStep.name,
+                tags: subStep.tags ?? [],
+                personaKey: subStep.providerRoutingPersonaKey,
+                instruction: subStep.instruction,
+                stepType: 'parallel',
+                edit: subStep.edit,
+                passPreviousResponse: subStep.passPreviousResponse === true,
+              },
+              lastOutput: state.lastOutput?.content,
+              findings: buildRoutingFindings(this.deps.findingLedgerStore?.loadLedger()),
+              sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
+            }),
             currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(subStep, runtime),
           })),
-          routeBatchWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeBatch,
+          estimator: this.deps.engineOptions.autoRoutingEstimator,
+          runtime: this.deps.engineOptions.routingRuntime,
           logger: log,
           abortSignal: this.deps.engineOptions.abortSignal,
         })
@@ -323,7 +347,10 @@ export class ParallelRunner {
           };
 
         // Session key uses the same resolved provider as Phase 1 options and resume phases.
-        const subSessionKey = buildSessionKey(executableSubStep, subPm.provider);
+        const subSessionKey = buildSessionKey(executableSubStep, {
+          provider: subPm.provider,
+          model: subPm.model,
+        });
 
         // Phase 1: main execution (Write excluded if sub-step has report)
         const baseOptions = this.deps.optionsBuilder.buildAgentOptions(executableSubStep, subRuntime);
@@ -714,6 +741,7 @@ export class ParallelRunner {
       };
     });
     this.mergeWorkflowCallSubStepEffects(step, subResults, state, updatePersonaSession);
+    this.recordSubStepRoutingResults(step, subResults);
     this.emitSubStepRoutingDecisionEvents(subResults, state.iteration);
 
     const ruleDetectionFailure = settled.find(
@@ -1001,6 +1029,30 @@ export class ParallelRunner {
         iteration,
         this.deps.getWorkflowName(),
       );
+    }
+  }
+
+  private recordSubStepRoutingResults(step: WorkflowStep, subResults: ParallelSubStepResult[]): void {
+    const routingRuntime = this.deps.engineOptions.routingRuntime;
+    if (routingRuntime === undefined) {
+      return;
+    }
+    for (const result of subResults) {
+      const scope = createRoutingScope({
+        workflow: this.deps.getWorkflowName(),
+        parentStep: step.name,
+        workItem: result.subStep.name,
+      });
+      if (
+        result.providerInfo?.autoRoutingDecision === undefined
+        || !routingRuntime.hasResolution(scope)
+      ) {
+        continue;
+      }
+      routingRuntime.recordExecutionResult({
+        scope,
+        status: result.response.status === 'done' ? 'done' : 'failed',
+      });
     }
   }
 

@@ -111,7 +111,7 @@ export type {
 // Configuration types (global and project)
 export type {
   PersonaProviderEntry,
-  CostTier,
+  RoutingTier,
   AutoRoutingStrategy,
   AutoRoutingCandidate,
   AutoRoutingConfig,

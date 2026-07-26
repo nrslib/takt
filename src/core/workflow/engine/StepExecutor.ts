@@ -783,7 +783,10 @@ export class StepExecutor {
     const phase1Instruction = preparedExecution?.phase1Instruction
       ?? this.buildPhase1Instruction(instruction, executableStep, runtime);
     const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(executableStep, runtime);
-    const sessionKey = buildSessionKey(executableStep, providerInfo.provider);
+    const sessionKey = buildSessionKey(executableStep, {
+      provider: providerInfo.provider,
+      model: providerInfo.model,
+    });
     log.debug('Running step', {
       step: step.name,
       persona: step.persona ?? '(none)',

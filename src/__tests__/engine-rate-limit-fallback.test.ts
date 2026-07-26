@@ -935,8 +935,14 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(engine.getState().previousResponseSourcePath).toMatch(
       /^\.takt\/runs\/test-report-dir\/context\/previous_responses\/implement\.1\.\d{8}T\d{6}Z\.md$/,
     );
-    expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-1:claude', 'part-claude-session');
-    expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-1:claude', undefined);
+    expect(onSessionUpdate).toHaveBeenCalledWith(
+      '["implement.part-1","claude","claude-sonnet"]',
+      'part-claude-session',
+    );
+    expect(onSessionUpdate).toHaveBeenCalledWith(
+      '["implement.part-1","claude","claude-sonnet"]',
+      undefined,
+    );
     expect(runReportPhase).toHaveBeenCalledTimes(2);
     expect(mockRuleEvaluation).toHaveBeenCalledOnce();
   });
@@ -986,10 +992,22 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect([...stateAfterRateLimit.stepOutputs.keys()]).toEqual(['review']);
     expect(stateAfterRateLimit.personaSessions).toEqual(new Map());
     expect(stateAfterRateLimit.stepIterations).toEqual(new Map());
-    expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-1:claude', 'part-rate-limited-session');
-    expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-2:claude', 'part-success-session');
-    expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-1:claude', undefined);
-    expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-2:claude', undefined);
+    expect(onSessionUpdate).toHaveBeenCalledWith(
+      '["implement.part-1","claude","claude-sonnet"]',
+      'part-rate-limited-session',
+    );
+    expect(onSessionUpdate).toHaveBeenCalledWith(
+      '["implement.part-2","claude","claude-sonnet"]',
+      'part-success-session',
+    );
+    expect(onSessionUpdate).toHaveBeenCalledWith(
+      '["implement.part-1","claude","claude-sonnet"]',
+      undefined,
+    );
+    expect(onSessionUpdate).toHaveBeenCalledWith(
+      '["implement.part-2","claude","claude-sonnet"]',
+      undefined,
+    );
     vi.setSystemTime(new Date('2026-06-20T01:02:04.000Z'));
     const completed = await engine.runSingleIteration();
     const state = engine.getState();
@@ -1027,7 +1045,9 @@ describe('WorkflowEngine rate limit fallback', () => {
     // Given
     const onSessionUpdate = vi.fn();
     const engine = new WorkflowEngine(teamLeaderStepConfig(), tmpDir, 'test task', createEngineOptions(tmpDir, {
-      initialSessions: { 'implement.part-1:claude': 'part-original-session' },
+      initialSessions: {
+        '["implement.part-1","claude","claude-sonnet"]': 'part-original-session',
+      },
       onSessionUpdate,
       rateLimitFallback: {
         switchChain: [{ provider: 'codex', model: 'gpt-5' }],
@@ -1046,15 +1066,28 @@ describe('WorkflowEngine rate limit fallback', () => {
 
     // Then
     expect(result.nextStep).toBe('implement');
-    expect(engine.getState().personaSessions.get('implement.part-1:claude')).toBe('part-original-session');
-    expect(onSessionUpdate).toHaveBeenNthCalledWith(1, 'implement.part-1:claude', 'part-attempt-session');
-    expect(onSessionUpdate).toHaveBeenNthCalledWith(2, 'implement.part-1:claude', 'part-original-session');
+    expect(engine.getState().personaSessions.get(
+      '["implement.part-1","claude","claude-sonnet"]',
+    )).toBe('part-original-session');
+    expect(onSessionUpdate).toHaveBeenNthCalledWith(
+      1,
+      '["implement.part-1","claude","claude-sonnet"]',
+      'part-attempt-session',
+    );
+    expect(onSessionUpdate).toHaveBeenNthCalledWith(
+      2,
+      '["implement.part-1","claude","claude-sonnet"]',
+      'part-original-session',
+    );
   });
 
   it('team_leader part の rollback callback が throw しても後続 session と non-session state を復元する', async () => {
     // Given
     const onSessionUpdate = vi.fn((key: string, sessionId: string | undefined) => {
-      if (key === 'implement.part-1:claude' && sessionId === undefined) {
+      if (
+        key === '["implement.part-1","claude","claude-sonnet"]'
+        && sessionId === undefined
+      ) {
         throw new Error('session rollback callback failed');
       }
     });
@@ -1084,10 +1117,26 @@ describe('WorkflowEngine rate limit fallback', () => {
 
     // Then
     const state = engine.getState();
-    expect(onSessionUpdate).toHaveBeenNthCalledWith(1, 'implement.part-1:claude', 'part-1-attempt-session');
-    expect(onSessionUpdate).toHaveBeenNthCalledWith(2, 'implement.part-2:claude', 'part-2-attempt-session');
-    expect(onSessionUpdate).toHaveBeenNthCalledWith(3, 'implement.part-1:claude', undefined);
-    expect(onSessionUpdate).toHaveBeenNthCalledWith(4, 'implement.part-2:claude', undefined);
+    expect(onSessionUpdate).toHaveBeenNthCalledWith(
+      1,
+      '["implement.part-1","claude","claude-sonnet"]',
+      'part-1-attempt-session',
+    );
+    expect(onSessionUpdate).toHaveBeenNthCalledWith(
+      2,
+      '["implement.part-2","claude","claude-sonnet"]',
+      'part-2-attempt-session',
+    );
+    expect(onSessionUpdate).toHaveBeenNthCalledWith(
+      3,
+      '["implement.part-1","claude","claude-sonnet"]',
+      undefined,
+    );
+    expect(onSessionUpdate).toHaveBeenNthCalledWith(
+      4,
+      '["implement.part-2","claude","claude-sonnet"]',
+      undefined,
+    );
     expect(state.personaSessions).toEqual(new Map());
     expect(state.lastOutput).toBeUndefined();
     expect(state.pendingFallback).toBeUndefined();
@@ -1123,7 +1172,10 @@ describe('WorkflowEngine rate limit fallback', () => {
 
       // Then
       const state = engine.getState();
-      expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-1:claude', undefined);
+      expect(onSessionUpdate).toHaveBeenCalledWith(
+        '["implement.part-1","claude","claude-sonnet"]',
+        undefined,
+      );
       expect(state.personaSessions).toEqual(new Map());
       expect(state.lastOutput).toBeUndefined();
       expect(state.pendingFallback).toBeUndefined();
@@ -1157,9 +1209,11 @@ describe('WorkflowEngine rate limit fallback', () => {
             description: 'Default team leader execution',
             provider: 'claude',
             model: 'claude-sonnet',
-            costTier: 'medium',
+            routingTier: 'medium',
           },
         ],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['balanced-claude'], fallback: 'balanced-claude' } },
         rules: {
           tags: {
             implementation: 'balanced-claude',

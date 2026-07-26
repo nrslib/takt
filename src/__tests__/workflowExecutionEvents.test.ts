@@ -364,10 +364,10 @@ describe('bindWorkflowExecutionEvents', () => {
     const providerInfo = {
       provider: 'codex',
       model: 'gpt-5',
-      providerSource: 'auto.ai',
+      providerSource: 'auto.dynamic',
       autoRoutingDecision: {
         candidateName: 'coding',
-        costTier: 'medium',
+        routingTier: 'medium',
         strategy: 'balanced',
         candidateCount: 2,
       },
@@ -1191,6 +1191,7 @@ describe('bindWorkflowExecutionEvents', () => {
       reportDirectory: '/tmp/project/run/reports',
       reason: 'Step "review" failed',
     });
+
   });
 
   it('event sink 失敗時は workflow を abort し、flush で伝播する', async () => {

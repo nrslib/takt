@@ -7,6 +7,7 @@ import type {
   WorkflowConfig,
   WorkflowMaxSteps,
   WorkflowResumePoint,
+  WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
@@ -294,6 +295,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     stepExecutor,
     engineOptions: params.options,
     getCwd: params.getCwd,
+    getTask: () => params.task,
+    getState: () => params.state as WorkflowState,
     getWorkflowName: () => params.config.name,
     getInteractive: () => params.options.interactive === true,
     getRunPaths: params.getRunPaths,

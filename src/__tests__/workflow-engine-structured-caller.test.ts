@@ -88,9 +88,11 @@ function createStructuredCorrectionAutoRoutingConfig(): AutoRoutingConfig {
         description: 'Reviewer sub-step',
         provider: 'claude',
         model: 'claude-sonnet-4-5-20250929',
-        costTier: 'medium',
+        routingTier: 'medium',
       },
     ],
+    defaultPool: 'general',
+    candidatePools: { general: { candidates: ['reviewer'], fallback: 'reviewer' } },
     rules: {
       steps: {
         'solo-review': 'reviewer',
