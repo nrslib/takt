@@ -8,8 +8,10 @@
 import * as fs from 'node:fs';
 import type { TaskFailure, TaskListItem } from '../../../infra/task/index.js';
 import {
-  detectDefaultBranch,
+  getCurrentBranch,
+  localBranchExists,
   materializePullRequestBase,
+  resolveBaseBranch,
   TaskRunner,
   resolveTaskWorkflowValue,
 } from '../../../infra/task/index.js';
@@ -153,7 +155,19 @@ function resolveTaskRetryPullRequestContext(
   }
 
   const hasSavedBaseBranch = data.base_branch !== undefined;
-  const baseBranch = data.base_branch ?? detectDefaultBranch(worktreePath);
+  const baseBranch = data.base_branch ?? resolveBaseBranch(projectDir).branch;
+  const checkedOutBranch = getCurrentBranch(worktreePath);
+  if (checkedOutBranch !== data.branch) {
+    throw new Error(
+      `PR review task "${sanitizeTerminalText(task.name)}" worktree is checked out on "${sanitizeTerminalText(checkedOutBranch)}", expected "${sanitizeTerminalText(data.branch)}".`,
+    );
+  }
+  const headDiffRef = toLocalBranchRef(data.branch);
+  if (!localBranchExists(worktreePath, data.branch)) {
+    throw new Error(
+      `PR review task "${sanitizeTerminalText(task.name)}" worktree is missing head ref ${headDiffRef}.`,
+    );
+  }
   return createPullRequestContext({
     source: 'pr_review',
     prNumber: data.pr_number,
@@ -161,7 +175,7 @@ function resolveTaskRetryPullRequestContext(
     headBranch: data.branch,
     baseBranchSource: hasSavedBaseBranch ? 'pull_request' : 'default_branch_fallback',
     baseDiffRef: materializePullRequestBase(projectDir, worktreePath, baseBranch),
-    headDiffRef: toLocalBranchRef(data.branch),
+    headDiffRef,
   });
 }
 

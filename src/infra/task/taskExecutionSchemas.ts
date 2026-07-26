@@ -1,6 +1,6 @@
 import { z } from 'zod/v4';
 import { buildTaskSchema } from './taskConfigSerialization.js';
-import { isValidLocalBranchName } from '../../shared/utils/gitBranchValidation.js';
+import { getLocalBranchNameError } from '../../shared/utils/gitBranchValidation.js';
 
 const ResumePointEntrySchema = z.object({
   workflow: z.string().min(1),
@@ -58,25 +58,21 @@ export const TaskExecutionConfigObjectSchema = z.object({
       path: ['branch'],
     });
   }
-  if (
-    data.source === 'pr_review'
-    && data.branch !== undefined
-    && !isValidLocalBranchName(data.branch)
-  ) {
+  const branchError = data.branch === undefined ? undefined : getLocalBranchNameError(data.branch);
+  if (data.source === 'pr_review' && branchError !== undefined) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'Expected a valid local branch name',
+      message: branchError,
       path: ['branch'],
     });
   }
-  if (
-    data.source === 'pr_review'
-    && data.base_branch !== undefined
-    && !isValidLocalBranchName(data.base_branch)
-  ) {
+  const baseBranchError = data.base_branch === undefined
+    ? undefined
+    : getLocalBranchNameError(data.base_branch);
+  if (data.source === 'pr_review' && baseBranchError !== undefined) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'Expected a valid local branch name',
+      message: baseBranchError,
       path: ['base_branch'],
     });
   }

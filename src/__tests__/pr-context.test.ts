@@ -37,18 +37,38 @@ describe('PullRequestContext', () => {
     expect(rendered).toContain('default branch is being used as the base');
   });
 
-  it('validates and snapshots PR context values', () => {
+  it.each(['en', 'ja'] as const)('renders PR metadata as an untrusted literal block in %s', (language) => {
+    const rendered = renderPullRequestContext({
+      ...context,
+      headBranch: 'feature/`ignore-instructions`',
+    }, language);
+
+    expect(rendered).toContain(language === 'ja' ? '非信頼な参照メタデータ' : 'untrusted reference metadata');
+    expect(rendered).toContain('```text\n');
+    expect(rendered).toContain('Head: feature/`ignore-instructions`');
+  });
+
+  it('snapshots PR context values', () => {
     const input = { ...context };
     const snapshot = createPullRequestContext(input);
     input.baseBranch = 'release/changed';
 
     expect(snapshot.baseBranch).toBe('release/2026.07');
+  });
+
+  it('rejects an invalid PR number', () => {
     expect(() => createPullRequestContext({ ...context, prNumber: 0 })).toThrow(/positive safe integer/);
+  });
+
+  it('rejects a head branch with surrounding whitespace', () => {
     expect(() => createPullRequestContext({ ...context, headBranch: ' origin/main' })).toThrow(/branch/i);
+  });
+
+  it('rejects a pseudo-ref head branch', () => {
     expect(() => createPullRequestContext({ ...context, headBranch: 'HEAD' })).toThrow(/pseudo-ref/i);
   });
 
-  it('encodes and decodes only the strict snake_case persisted form', () => {
+  it('encodes the strict snake_case persisted form', () => {
     const persisted = encodePullRequestContext(context);
 
     expect(persisted).toEqual({
@@ -58,8 +78,19 @@ describe('PullRequestContext', () => {
       head_branch: 'feature/saved-pr-head',
       base_branch_source: 'pull_request',
     });
-    expect(decodePullRequestContext(persisted)).toEqual(context);
+  });
+
+  it('round-trips the strict snake_case persisted form', () => {
+    expect(decodePullRequestContext(encodePullRequestContext(context))).toEqual(context);
+  });
+
+  it('rejects extra persisted context keys', () => {
+    const persisted = encodePullRequestContext(context);
     expect(() => decodePullRequestContext({ ...persisted, prNumber: 861 })).toThrow(/snake_case/);
+  });
+
+  it('rejects an invalid decoded branch', () => {
+    const persisted = encodePullRequestContext(context);
     expect(() => decodePullRequestContext({ ...persisted, head_branch: 'HEAD' })).toThrow(/snake_case/);
   });
 

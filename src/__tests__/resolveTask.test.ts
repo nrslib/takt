@@ -775,7 +775,91 @@ describe('resolveTaskExecution', () => {
     expect(mockResolveBaseBranch).not.toHaveBeenCalled();
   });
 
-  it('should reject a runtime PR identity that conflicts with saved PR review metadata', async () => {
+  it('should reject a reused PR worktree whose local head ref is missing', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'pr-task');
+    fs.mkdirSync(worktreePath, { recursive: true });
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        worktree: true,
+        source: 'pr_review',
+        pr_number: 938,
+        branch: 'feature/pr-context',
+        base_branch: 'release/2026.07',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+    });
+    const materializeSpy = vi.spyOn(infraTask, 'materializePullRequestBase').mockReturnValue(
+      'refs/takt/pr-base/release/2026.07',
+    );
+    vi.spyOn(infraTask, 'getCurrentBranch').mockReturnValue('feature/pr-context');
+    vi.spyOn(infraTask, 'localBranchExists').mockReturnValue(false);
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
+      'PR review task "task-name" reused worktree is missing head ref refs/heads/feature/pr-context.',
+    );
+    expect(materializeSpy).not.toHaveBeenCalled();
+  });
+
+  it('should reject a reused PR worktree checked out on a different branch', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'pr-task');
+    fs.mkdirSync(worktreePath, { recursive: true });
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        worktree: true,
+        source: 'pr_review',
+        pr_number: 938,
+        branch: 'feature/pr-context',
+        base_branch: 'release/2026.07',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+    });
+    const materializeSpy = vi.spyOn(infraTask, 'materializePullRequestBase');
+    vi.spyOn(infraTask, 'getCurrentBranch').mockReturnValue('main');
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
+      'PR review task "task-name" reused worktree is checked out on "main", expected "feature/pr-context".',
+    );
+    expect(materializeSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: 'pr_number',
+      taskContext: {
+        branch: 'feature/saved-branch',
+        baseBranch: 'release/saved-base',
+        prNumber: 938,
+      },
+      message: 'PR review task "task-name" cannot override saved pr_number 100 with runtime taskContext.prNumber 938.',
+    },
+    {
+      label: 'branch',
+      taskContext: {
+        branch: 'feature/runtime-branch',
+        baseBranch: 'release/saved-base',
+        prNumber: 100,
+      },
+      message: 'PR review task "task-name" cannot override saved branch "feature/saved-branch" with runtime taskContext.branch "feature/runtime-branch".',
+    },
+    {
+      label: 'base_branch',
+      taskContext: {
+        branch: 'feature/saved-branch',
+        baseBranch: 'release/runtime-base',
+        prNumber: 100,
+      },
+      message: 'PR review task "task-name" cannot override saved base_branch "release/saved-base" with runtime taskContext.baseBranch "release/runtime-base".',
+    },
+  ])('should reject a runtime $label that conflicts with saved PR review metadata', async ({
+    taskContext,
+    message,
+  }) => {
     const root = createTempProjectDir();
     const task = createTask({
       data: ({
@@ -790,28 +874,17 @@ describe('resolveTaskExecution', () => {
       status: 'pending',
     });
 
-    const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
-      branch: 'main',
-    });
     const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
       path: '/tmp/shared-clone',
       branch: 'takt/938/add-mcp',
     });
 
     await expect(resolveTaskExecution(task, root, undefined, {
-      taskContext: {
-        branch: 'takt/938/add-mcp',
-        baseBranch: 'main',
-        prNumber: 938,
-      },
-    })).rejects.toThrow(
-      'PR review task "task-name" cannot override saved pr_number 100 with runtime taskContext.prNumber 938.',
-    );
-    expect(mockResolveBaseBranch).not.toHaveBeenCalled();
+      taskContext,
+    })).rejects.toThrow(message);
     expect(mockCreateSharedClone).not.toHaveBeenCalled();
 
     mockCreateSharedClone.mockRestore();
-    mockResolveBaseBranch.mockRestore();
   });
 
   it('should normalize a saved PR review task into prompt context', async () => {
@@ -854,7 +927,9 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow();
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
+      /branch is required when source is \\"pr_review\\"/,
+    );
   });
 
   it('should reject a PR review task with an empty head branch', async () => {
@@ -869,10 +944,21 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow();
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
+      'branch must be a non-empty branch name without surrounding whitespace.',
+    );
   });
 
-  it.each(['   ', 'HEAD'])('should reject a PR review task with invalid head branch %s', async (branch) => {
+  it.each([
+    [
+      '   ',
+      'branch must be a non-empty branch name without surrounding whitespace.',
+    ],
+    [
+      'HEAD',
+      'branch must be a branch name, not a pseudo-ref: HEAD',
+    ],
+  ])('should reject a PR review task with invalid head branch %s', async (branch, message) => {
     const root = createTempProjectDir();
     const task = createTask({
       data: ({
@@ -884,7 +970,7 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow();
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(message);
   });
 
   it.each(['refs/heads/feature/pr-context', 'origin/feature/pr-context'])(

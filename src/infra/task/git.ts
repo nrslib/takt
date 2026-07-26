@@ -118,6 +118,7 @@ export function checkoutBranch(cwd: string, branch: string): void {
   log.info('Checking out branch from origin', { branch });
   execFileSync('git', [
     'fetch',
+    '--force',
     'origin',
     `${toLocalBranchRef(branch)}:${toRemoteTrackingBranchRef(branch)}`,
   ], { cwd, stdio: 'pipe' });
@@ -136,6 +137,7 @@ export function materializePullRequestBase(
   const remoteTrackingRef = toRemoteTrackingBranchRef(baseBranch);
   execFileSync('git', [
     'fetch',
+    '--force',
     'origin',
     `${toLocalBranchRef(baseBranch)}:${remoteTrackingRef}`,
   ], { cwd: projectCwd, stdio: 'pipe' });
@@ -148,6 +150,7 @@ export function materializePullRequestBase(
   } else {
     execFileSync('git', [
       'fetch',
+      '--force',
       '--no-write-fetch-head',
       projectCwd,
       `${remoteTrackingRef}:${baseRef}`,

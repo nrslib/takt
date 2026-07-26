@@ -526,9 +526,8 @@ describe('resolveBaseBranch', () => {
     });
 
     expect(fetchCalls.length).toBeGreaterThanOrEqual(1);
-    expect(fetchCalls[0]![0]).toBe('fetch');
-    expect(fetchCalls[0]![1]).toBe('origin');
-    expect(fetchCalls[0]![2]).toMatch(
+    expect(fetchCalls[0]!.slice(0, 3)).toEqual(['fetch', '--force', 'origin']);
+    expect(fetchCalls[0]![3]).toMatch(
       /^refs\/heads\/takt\/\d{8}T\d{4}-test-no-fetch:refs\/remotes\/origin\/takt\/\d{8}T\d{4}-test-no-fetch$/,
     );
   });
@@ -867,6 +866,7 @@ describe('branchExists remote tracking branch fallback', () => {
     expect(fetchCalls).toHaveLength(2);
     expect(fetchCalls[0]).toEqual([
       'fetch',
+      '--force',
       'origin',
       'refs/heads/feature/remote-only:refs/remotes/origin/feature/remote-only',
     ]);
@@ -1590,6 +1590,64 @@ describe('branchExists remote tracking branch fallback', () => {
 });
 
 describe('prefetch existing branch on origin before clone (#557)', () => {
+  it('should wrap a sync PR base prefetch failure without exposing raw git details', () => {
+    let fetchCount = 0;
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'fetch') {
+        fetchCount += 1;
+        if (fetchCount === 2) {
+          throw new Error('fatal: secret repository path');
+        }
+      }
+      return Buffer.from('');
+    });
+
+    expect(() => createSharedClone('/project', {
+      worktree: '/tmp/pr-base-prefetch-failure',
+      taskSlug: 'pr-base-prefetch-failure',
+      branch: 'feature/pr-head',
+      pullRequestBaseBranch: 'release/custom',
+    })).toThrow('Git remote branch fetch failed');
+  });
+
+  it('should wrap an abortable PR base prefetch failure without exposing raw git details', async () => {
+    let fetchCount = 0;
+    mockSpawn.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        pid: number;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.pid = 12345;
+      child.kill = vi.fn();
+
+      setImmediate(() => {
+        if (argsArr[0] === 'fetch') {
+          fetchCount += 1;
+          if (fetchCount === 2) {
+            child.stderr.emit('data', 'fatal: secret repository path');
+            child.emit('close', 1);
+            return;
+          }
+        }
+        child.emit('close', 0);
+      });
+      return child as never;
+    });
+
+    await expect(createSharedCloneAbortable('/project', {
+      worktree: '/tmp/pr-base-prefetch-failure',
+      taskSlug: 'pr-base-prefetch-failure',
+      branch: 'feature/pr-head',
+      pullRequestBaseBranch: 'release/custom',
+    })).rejects.toThrow('Git remote branch fetch failed');
+  });
+
   it('should not expose the source path when sync prefetch fails', () => {
     const hiddenProjectDir = '/hidden/main';
     const branch = 'feature/prefetch-failure';
@@ -1598,7 +1656,7 @@ describe('prefetch existing branch on origin before clone (#557)', () => {
       const argsArr = args as string[];
       const cwd = (opts as { cwd?: string } | undefined)?.cwd;
 
-      if (argsArr[0] === 'fetch' && cwd === hiddenProjectDir && argsArr[1] === 'origin') {
+      if (argsArr[0] === 'fetch' && cwd === hiddenProjectDir && argsArr[2] === 'origin') {
         throw new Error(`fatal: ${hiddenProjectDir} was not found`);
       }
       if (argsArr[0] === 'fetch') return Buffer.from('');
@@ -1649,7 +1707,7 @@ describe('prefetch existing branch on origin before clone (#557)', () => {
       child.kill = vi.fn();
 
       setImmediate(() => {
-        if (argsArr[0] === 'fetch' && argsArr[1] === 'origin') {
+        if (argsArr[0] === 'fetch' && argsArr[2] === 'origin') {
           child.stderr.emit('data', `fatal: ${hiddenProjectDir} was not found`);
           child.emit('close', 1);
           return;
@@ -1749,7 +1807,7 @@ describe('prefetch existing branch on origin before clone (#557)', () => {
       const cwd = (opts as { cwd?: string } | undefined)?.cwd;
 
       if (argsArr[0] === 'fetch' && cwd === '/project') {
-        opSequence.push(`project-fetch:${argsArr[2]}`);
+        opSequence.push(`project-fetch:${argsArr[3]}`);
         return Buffer.from('');
       }
       if (argsArr[0] === 'clone') {
@@ -1872,14 +1930,14 @@ describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', (
     });
 
     expect(fetchCalls).toHaveLength(3);
-    expect(fetchCalls[0]![0]).toBe('fetch');
-    expect(fetchCalls[0]![1]).toBe('origin');
-    expect(fetchCalls[0]![2]).toMatch(
+    expect(fetchCalls[0]!.slice(0, 3)).toEqual(['fetch', '--force', 'origin']);
+    expect(fetchCalls[0]![3]).toMatch(
       /^refs\/heads\/takt\/\d{8}T\d{4}-autofetch-task:refs\/remotes\/origin\/takt\/\d{8}T\d{4}-autofetch-task$/,
     );
     expect(fetchCalls[1]).toEqual(['fetch', 'origin']);
     expect(fetchCalls[2]).toEqual([
       'fetch',
+      '--force',
       '--no-write-fetch-head',
       '/project-autofetch-test',
       'refs/remotes/origin/main:refs/takt/base/main',

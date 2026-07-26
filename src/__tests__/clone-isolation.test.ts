@@ -75,88 +75,158 @@ function filesContaining(rootDir: string, needle: string): string[] {
   return matches.sort();
 }
 
+function createPullRequestRepoFixture() {
+  const tempDir = createTempDir();
+  const remoteRepo = path.join(tempDir, 'origin.git');
+  const projectRepo = path.join(tempDir, 'project');
+  const updaterRepo = path.join(tempDir, 'base-updater');
+  const clonePath = path.join(tempDir, 'pr-clone');
+  const baseBranch = 'release/custom';
+  const headBranch = 'feature/pr-head';
+
+  runGit(tempDir, ['init', '--bare', '--quiet', remoteRepo]);
+  runGit(tempDir, ['clone', '--quiet', remoteRepo, projectRepo]);
+  runGit(projectRepo, ['config', 'user.email', 'takt@example.com']);
+  runGit(projectRepo, ['config', 'user.name', 'TAKT Test']);
+  runGit(projectRepo, ['switch', '--quiet', '-c', 'main']);
+  fs.writeFileSync(path.join(projectRepo, 'README.md'), 'initial\n');
+  runGit(projectRepo, ['add', 'README.md']);
+  runGit(projectRepo, ['commit', '--quiet', '-m', 'initial']);
+  runGit(projectRepo, ['push', '--quiet', '-u', 'origin', 'main']);
+
+  runGit(projectRepo, ['switch', '--quiet', '-c', baseBranch]);
+  fs.writeFileSync(path.join(projectRepo, 'base.txt'), 'base v1\n');
+  runGit(projectRepo, ['add', 'base.txt']);
+  runGit(projectRepo, ['commit', '--quiet', '-m', 'base v1']);
+  runGit(projectRepo, ['push', '--quiet', '-u', 'origin', baseBranch]);
+  const staleLocalBase = runGit(projectRepo, ['rev-parse', `refs/heads/${baseBranch}`]).toString().trim();
+
+  runGit(projectRepo, ['switch', '--quiet', '-c', headBranch]);
+  fs.writeFileSync(path.join(projectRepo, 'head.txt'), 'head\n');
+  runGit(projectRepo, ['add', 'head.txt']);
+  runGit(projectRepo, ['commit', '--quiet', '-m', 'head']);
+  runGit(projectRepo, ['push', '--quiet', '-u', 'origin', headBranch]);
+  const expectedHead = runGit(projectRepo, ['rev-parse', `refs/heads/${headBranch}`]).toString().trim();
+  runGit(projectRepo, ['switch', '--quiet', 'main']);
+
+  runGit(tempDir, ['clone', '--quiet', remoteRepo, updaterRepo]);
+  runGit(updaterRepo, ['config', 'user.email', 'takt@example.com']);
+  runGit(updaterRepo, ['config', 'user.name', 'TAKT Test']);
+  runGit(updaterRepo, ['switch', '--quiet', baseBranch]);
+  fs.writeFileSync(path.join(updaterRepo, 'base.txt'), 'base v2\n');
+  runGit(updaterRepo, ['commit', '--quiet', '-am', 'base v2']);
+  runGit(updaterRepo, ['push', '--quiet', 'origin', baseBranch]);
+  const expectedBase = runGit(updaterRepo, ['rev-parse', 'HEAD']).toString().trim();
+  expect(staleLocalBase).not.toBe(expectedBase);
+  runGit(projectRepo, ['branch', '-D', baseBranch]);
+  runGit(projectRepo, ['update-ref', '-d', `refs/remotes/origin/${baseBranch}`]);
+
+  return {
+    projectRepo,
+    updaterRepo,
+    clonePath,
+    baseBranch,
+    headBranch,
+    expectedBase,
+    expectedHead,
+  };
+}
+
+function createPullRequestClone(fixture: ReturnType<typeof createPullRequestRepoFixture>) {
+  return createSharedClone(fixture.projectRepo, {
+    worktree: fixture.clonePath,
+    taskSlug: 'pr-custom-base',
+    branch: fixture.headBranch,
+    baseBranch: fixture.baseBranch,
+    pullRequestBaseBranch: fixture.baseBranch,
+  });
+}
+
+function forceRewriteBase(
+  updaterRepo: string,
+  baseBranch: string,
+  content: string,
+): string {
+  runGit(updaterRepo, ['switch', '--quiet', '-C', baseBranch, 'origin/main']);
+  fs.writeFileSync(path.join(updaterRepo, 'base.txt'), `${content}\n`);
+  runGit(updaterRepo, ['add', 'base.txt']);
+  runGit(updaterRepo, ['commit', '--quiet', '-m', content]);
+  runGit(updaterRepo, ['push', '--quiet', '--force', 'origin', baseBranch]);
+  return runGit(updaterRepo, ['rev-parse', 'HEAD']).toString().trim();
+}
+
 describe('shared clone generated metadata isolation', () => {
   it('materializes the latest custom PR base and remote head into exact isolated refs', () => {
-    const tempDir = createTempDir();
-    const remoteRepo = path.join(tempDir, 'origin.git');
-    const projectRepo = path.join(tempDir, 'project');
-    const updaterRepo = path.join(tempDir, 'base-updater');
-    const clonePath = path.join(tempDir, 'pr-clone');
-    const baseBranch = 'release/custom';
-    const headBranch = 'feature/pr-head';
-
-    runGit(tempDir, ['init', '--bare', '--quiet', remoteRepo]);
-    runGit(tempDir, ['clone', '--quiet', remoteRepo, projectRepo]);
-    runGit(projectRepo, ['config', 'user.email', 'takt@example.com']);
-    runGit(projectRepo, ['config', 'user.name', 'TAKT Test']);
-    runGit(projectRepo, ['switch', '--quiet', '-c', 'main']);
-    fs.writeFileSync(path.join(projectRepo, 'README.md'), 'initial\n');
-    runGit(projectRepo, ['add', 'README.md']);
-    runGit(projectRepo, ['commit', '--quiet', '-m', 'initial']);
-    runGit(projectRepo, ['push', '--quiet', '-u', 'origin', 'main']);
-
-    runGit(projectRepo, ['switch', '--quiet', '-c', baseBranch]);
-    fs.writeFileSync(path.join(projectRepo, 'base.txt'), 'base v1\n');
-    runGit(projectRepo, ['add', 'base.txt']);
-    runGit(projectRepo, ['commit', '--quiet', '-m', 'base v1']);
-    runGit(projectRepo, ['push', '--quiet', '-u', 'origin', baseBranch]);
-    const staleLocalBase = runGit(projectRepo, ['rev-parse', `refs/heads/${baseBranch}`]).toString().trim();
-
-    runGit(projectRepo, ['switch', '--quiet', '-c', headBranch]);
-    fs.writeFileSync(path.join(projectRepo, 'head.txt'), 'head\n');
-    runGit(projectRepo, ['add', 'head.txt']);
-    runGit(projectRepo, ['commit', '--quiet', '-m', 'head']);
-    runGit(projectRepo, ['push', '--quiet', '-u', 'origin', headBranch]);
-    const expectedHead = runGit(projectRepo, ['rev-parse', `refs/heads/${headBranch}`]).toString().trim();
-    runGit(projectRepo, ['switch', '--quiet', 'main']);
-
-    runGit(tempDir, ['clone', '--quiet', remoteRepo, updaterRepo]);
-    runGit(updaterRepo, ['config', 'user.email', 'takt@example.com']);
-    runGit(updaterRepo, ['config', 'user.name', 'TAKT Test']);
-    runGit(updaterRepo, ['switch', '--quiet', baseBranch]);
-    fs.writeFileSync(path.join(updaterRepo, 'base.txt'), 'base v2\n');
-    runGit(updaterRepo, ['commit', '--quiet', '-am', 'base v2']);
-    runGit(updaterRepo, ['push', '--quiet', 'origin', baseBranch]);
-    const expectedBase = runGit(updaterRepo, ['rev-parse', 'HEAD']).toString().trim();
-    expect(staleLocalBase).not.toBe(expectedBase);
-    runGit(projectRepo, ['branch', '-D', baseBranch]);
-    runGit(projectRepo, ['update-ref', '-d', `refs/remotes/origin/${baseBranch}`]);
-
-    const result = createSharedClone(projectRepo, {
-      worktree: clonePath,
-      taskSlug: 'pr-custom-base',
-      branch: headBranch,
-      baseBranch,
-      pullRequestBaseBranch: baseBranch,
-    });
+    const fixture = createPullRequestRepoFixture();
+    const result = createPullRequestClone(fixture);
 
     expect(result).toMatchObject({
-      path: clonePath,
-      branch: headBranch,
-      pullRequestBaseRef: `refs/takt/pr-base/${baseBranch}`,
-      pullRequestHeadRef: `refs/heads/${headBranch}`,
+      path: fixture.clonePath,
+      branch: fixture.headBranch,
+      pullRequestBaseRef: `refs/takt/pr-base/${fixture.baseBranch}`,
+      pullRequestHeadRef: `refs/heads/${fixture.headBranch}`,
     });
-    expect(runGit(clonePath, ['rev-parse', result.pullRequestBaseRef!]).toString().trim()).toBe(expectedBase);
-    expect(runGit(clonePath, ['rev-parse', result.pullRequestHeadRef!]).toString().trim()).toBe(expectedHead);
+    expect(runGit(fixture.clonePath, ['rev-parse', result.pullRequestBaseRef!]).toString().trim()).toBe(fixture.expectedBase);
+    expect(runGit(fixture.clonePath, ['rev-parse', result.pullRequestHeadRef!]).toString().trim()).toBe(fixture.expectedHead);
     expect(() => runGit(
-      clonePath,
+      fixture.clonePath,
       ['diff', '--stat', `${result.pullRequestBaseRef}...${result.pullRequestHeadRef}`],
     )).not.toThrow();
+  });
 
-    runGit(clonePath, ['update-ref', '-d', result.pullRequestBaseRef!]);
-    expect(materializePullRequestBase(projectRepo, clonePath, baseBranch)).toBe(
-      `refs/takt/pr-base/${baseBranch}`,
+  it('force-updates an existing PR base ref across repositories', () => {
+    const fixture = createPullRequestRepoFixture();
+    const result = createPullRequestClone(fixture);
+    const rewrittenBase = forceRewriteBase(
+      fixture.updaterRepo,
+      fixture.baseBranch,
+      'rewrite base',
     );
-    expect(runGit(clonePath, ['rev-parse', result.pullRequestBaseRef!]).toString().trim()).toBe(expectedBase);
 
-    runGit(projectRepo, ['update-ref', '-d', `refs/remotes/origin/${baseBranch}`]);
-    runGit(projectRepo, ['update-ref', '-d', `refs/takt/pr-base/${baseBranch}`]);
-    expect(materializePullRequestBase(projectRepo, projectRepo, baseBranch)).toBe(
-      `refs/takt/pr-base/${baseBranch}`,
+    expect(materializePullRequestBase(
+      fixture.projectRepo,
+      fixture.clonePath,
+      fixture.baseBranch,
+    )).toBe(`refs/takt/pr-base/${fixture.baseBranch}`);
+    expect(runGit(
+      fixture.projectRepo,
+      ['rev-parse', `refs/remotes/origin/${fixture.baseBranch}`],
+    ).toString().trim()).toBe(rewrittenBase);
+    expect(runGit(
+      fixture.clonePath,
+      ['rev-parse', result.pullRequestBaseRef!],
+    ).toString().trim()).toBe(rewrittenBase);
+  });
+
+  it('force-updates existing remote-tracking and PR base refs in the same repository', () => {
+    const fixture = createPullRequestRepoFixture();
+    createPullRequestClone(fixture);
+    expect(materializePullRequestBase(
+      fixture.projectRepo,
+      fixture.projectRepo,
+      fixture.baseBranch,
+    )).toBe(`refs/takt/pr-base/${fixture.baseBranch}`);
+    const rewrittenBase = forceRewriteBase(
+      fixture.updaterRepo,
+      fixture.baseBranch,
+      'rewrite base again',
     );
+
+    expect(materializePullRequestBase(
+      fixture.projectRepo,
+      fixture.projectRepo,
+      fixture.baseBranch,
+    )).toBe(`refs/takt/pr-base/${fixture.baseBranch}`);
+    expect(runGit(
+      fixture.projectRepo,
+      ['rev-parse', `refs/remotes/origin/${fixture.baseBranch}`],
+    ).toString().trim()).toBe(rewrittenBase);
     expect(
-      runGit(projectRepo, ['rev-parse', `refs/takt/pr-base/${baseBranch}`]).toString().trim(),
-    ).toBe(expectedBase);
+      runGit(
+        fixture.projectRepo,
+        ['rev-parse', `refs/takt/pr-base/${fixture.baseBranch}`],
+      ).toString().trim(),
+    ).toBe(rewrittenBase);
   });
 
   it('does not leave the source repo path in clone .git metadata for local branch clones', () => {

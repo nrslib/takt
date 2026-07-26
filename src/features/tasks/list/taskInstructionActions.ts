@@ -10,11 +10,15 @@ import { execFileSync } from 'node:child_process';
 import {
   TaskRunner,
   detectDefaultBranch,
+  getCurrentBranch,
+  localBranchExists,
   materializePullRequestBase,
+  resolveBaseBranch,
 } from '../../../infra/task/index.js';
 import { resolveWorkflowConfigValues, getWorkflowDescription } from '../../../infra/config/index.js';
 import { info, warn, error as logError } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import {
   toLocalBranchRef,
 } from '../../../shared/utils/gitBranchValidation.js';
@@ -161,8 +165,21 @@ export async function instructBranch(
   const isPrReviewTask = prNumber !== undefined;
   const branchContextCwd = isPrReviewTask ? worktreePath : projectDir;
   const baseBranch = isPrReviewTask
-    ? target.data?.base_branch ?? detectDefaultBranch(worktreePath)
+    ? target.data?.base_branch ?? resolveBaseBranch(projectDir).branch
     : detectDefaultBranch(projectDir);
+  if (isPrReviewTask) {
+    const checkedOutBranch = getCurrentBranch(worktreePath);
+    if (checkedOutBranch !== branch) {
+      throw new Error(
+        `PR review task "${sanitizeTerminalText(target.name)}" worktree is checked out on "${sanitizeTerminalText(checkedOutBranch)}", expected "${sanitizeTerminalText(branch)}".`,
+      );
+    }
+    if (!localBranchExists(worktreePath, branch)) {
+      throw new Error(
+        `PR review task "${sanitizeTerminalText(target.name)}" worktree is missing head ref ${toLocalBranchRef(branch)}.`,
+      );
+    }
+  }
   const prContext = isPrReviewTask
     ? createPullRequestContext({
       source: 'pr_review',
@@ -184,17 +201,18 @@ export async function instructBranch(
     baseBranch,
   );
 
-  const result = prContext === undefined
-    ? await runInstructMode(
-      worktreePath, branchContext, branch,
-      target.name, target.content, target.data?.retry_note ?? '',
-      workflowContext, runSessionContext, previousOrderContent,
-    )
-    : await runInstructMode(
-      worktreePath, branchContext, branch,
-      target.name, target.content, target.data?.retry_note ?? '',
-      workflowContext, runSessionContext, previousOrderContent, prContext,
-    );
+  const result = await runInstructMode({
+    cwd: worktreePath,
+    branchContext,
+    branchName: branch,
+    taskName: target.name,
+    taskContent: target.content,
+    retryNote: target.data?.retry_note ?? '',
+    workflowContext,
+    runSessionContext,
+    previousOrderContent,
+    ...(prContext === undefined ? {} : { prContext }),
+  });
 
   const executeWithInstruction = async (instruction: string): Promise<boolean> => {
     const retryNote = appendRetryNote(target.data?.retry_note, instruction);

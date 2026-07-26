@@ -25,9 +25,9 @@ export function isValidLocalBranchName(branch: string): boolean {
   return getLocalBranchNameError(branch, GENERIC_BRANCH_LABELS) === undefined;
 }
 
-function getLocalBranchNameError(
+export function getLocalBranchNameError(
   branch: string,
-  labels: BranchValidationLabels,
+  labels: BranchValidationLabels = GENERIC_BRANCH_LABELS,
 ): string | undefined {
   const trimmed = branch.trim();
   if (trimmed.length === 0 || trimmed !== branch) {

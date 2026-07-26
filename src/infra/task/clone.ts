@@ -22,6 +22,7 @@ import {
   fetchRemoteBranchIntoIsolatedCloneAbortable,
   fetchBaseBranchIntoIsolatedClone,
   fetchBaseBranchIntoIsolatedCloneAbortable,
+  REMOTE_BRANCH_FETCH_FAILED_MESSAGE,
   resolveCloneSubmoduleOptions,
   runGitCommandAbortable,
 } from './clone-exec.js';
@@ -32,6 +33,7 @@ import {
   toPullRequestBaseRef,
   toRemoteTrackingBranchRef,
 } from '../../shared/utils/gitBranchValidation.js';
+import { isTaskAbortError } from './clone-errors.js';
 
 export type { WorktreeOptions, WorktreeResult };
 export {
@@ -160,15 +162,16 @@ export class CloneManager {
     try {
       execFileSync('git', [
         'fetch',
+        '--force',
         'origin',
         `${toLocalBranchRef(branch)}:${toRemoteTrackingBranchRef(branch)}`,
       ], {
         cwd: projectDir,
         stdio: 'pipe',
       });
-    } catch (err) {
+    } catch {
       if (options.pullRequestBaseBranch !== undefined) {
-        throw err;
+        throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
       }
       log.info('Failed to prefetch branch from origin, continuing', {
         branch,
@@ -176,14 +179,19 @@ export class CloneManager {
     }
 
     if (options.pullRequestBaseBranch !== undefined) {
-      execFileSync('git', [
-        'fetch',
-        'origin',
-        `${toLocalBranchRef(options.pullRequestBaseBranch)}:${toRemoteTrackingBranchRef(options.pullRequestBaseBranch)}`,
-      ], {
-        cwd: projectDir,
-        stdio: 'pipe',
-      });
+      try {
+        execFileSync('git', [
+          'fetch',
+          '--force',
+          'origin',
+          `${toLocalBranchRef(options.pullRequestBaseBranch)}:${toRemoteTrackingBranchRef(options.pullRequestBaseBranch)}`,
+        ], {
+          cwd: projectDir,
+          stdio: 'pipe',
+        });
+      } catch {
+        throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+      }
     }
 
     if (remoteBranchExists(projectDir, branch)) {
@@ -242,12 +250,16 @@ export class CloneManager {
     try {
       await runGitCommandAbortable(projectDir, [
         'fetch',
+        '--force',
         'origin',
         `${toLocalBranchRef(branch)}:${toRemoteTrackingBranchRef(branch)}`,
       ], abortSignal);
     } catch (err) {
       if (options.pullRequestBaseBranch !== undefined) {
-        throw err;
+        if (isTaskAbortError(err)) {
+          throw err;
+        }
+        throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
       }
       log.info('Failed to prefetch branch from origin, continuing', {
         branch,
@@ -255,11 +267,19 @@ export class CloneManager {
     }
 
     if (options.pullRequestBaseBranch !== undefined) {
-      await runGitCommandAbortable(projectDir, [
-        'fetch',
-        'origin',
-        `${toLocalBranchRef(options.pullRequestBaseBranch)}:${toRemoteTrackingBranchRef(options.pullRequestBaseBranch)}`,
-      ], abortSignal);
+      try {
+        await runGitCommandAbortable(projectDir, [
+          'fetch',
+          '--force',
+          'origin',
+          `${toLocalBranchRef(options.pullRequestBaseBranch)}:${toRemoteTrackingBranchRef(options.pullRequestBaseBranch)}`,
+        ], abortSignal);
+      } catch (err) {
+        if (isTaskAbortError(err)) {
+          throw err;
+        }
+        throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+      }
     }
 
     if (await remoteBranchExistsAbortable(projectDir, branch, abortSignal)) {

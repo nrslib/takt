@@ -26,6 +26,9 @@ const {
   mockLoadAllStandaloneWorkflowsWithSources,
   mockPrepareTaskSpecDirectory,
   mockCleanupPreparedTaskSpec,
+  mockResolveBaseBranch,
+  mockGetCurrentBranch,
+  mockLocalBranchExists,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockReadFileSync: vi.fn(),
@@ -59,6 +62,9 @@ const {
   ])),
   mockPrepareTaskSpecDirectory: vi.fn(),
   mockCleanupPreparedTaskSpec: vi.fn(),
+  mockResolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
+  mockGetCurrentBranch: vi.fn(() => 'takt/826/pr-context'),
+  mockLocalBranchExists: vi.fn(() => true),
 }));
 
 vi.mock('node:fs', async (importOriginal) => ({
@@ -74,6 +80,9 @@ vi.mock('node:child_process', async (importOriginal) => ({
 
 vi.mock('../infra/task/index.js', () => ({
   detectDefaultBranch: vi.fn(() => 'main'),
+  resolveBaseBranch: (...args: unknown[]) => mockResolveBaseBranch(...args),
+  getCurrentBranch: (...args: unknown[]) => mockGetCurrentBranch(...args),
+  localBranchExists: (...args: unknown[]) => mockLocalBranchExists(...args),
   materializePullRequestBase: vi.fn((_projectCwd, _targetCwd, baseBranch: string) =>
     `refs/takt/pr-base/${baseBranch}`),
   TaskRunner: class {
@@ -592,27 +601,27 @@ describe('instructBranch direct execution flow', () => {
     });
 
     expect(mockRunInstructMode).toHaveBeenCalledWith(
-      '/project/.takt/worktrees/done-task',
-      [
-        '## 現在の変更内容（mainからの差分）',
-        '```',
-        'src/index.ts | 2 +-\n 1 file changed',
-        '```',
-        '',
-        '## コミット履歴',
-        '```',
-        'abc123 fix issue',
-        '```',
-        '',
-        '',
-      ].join('\n'),
-      'takt/done-task',
-      'done-task',
-      'done',
-      '',
-      expect.anything(),
-      undefined,
-      null,
+      expect.objectContaining({
+        cwd: '/project/.takt/worktrees/done-task',
+        branchContext: [
+          '## 現在の変更内容（mainからの差分）',
+          '```',
+          'src/index.ts | 2 +-\n 1 file changed',
+          '```',
+          '',
+          '## コミット履歴',
+          '```',
+          'abc123 fix issue',
+          '```',
+          '',
+          '',
+        ].join('\n'),
+        branchName: 'takt/done-task',
+        taskName: 'done-task',
+        taskContent: 'done',
+        retryNote: '',
+        previousOrderContent: null,
+      }),
     );
   });
 
@@ -651,16 +660,15 @@ describe('instructBranch direct execution flow', () => {
       expect.objectContaining({ cwd: '/project/.takt/worktrees/pr-task' }),
     );
     expect(mockRunInstructMode).toHaveBeenCalledWith(
-      '/project/.takt/worktrees/pr-task',
-      expect.stringContaining('## 現在の変更内容（release/2026.07からの差分）'),
-      'takt/826/pr-context',
-      'pr-task',
-      'review PR',
-      '',
-      expect.anything(),
-      undefined,
-      null,
-      {
+      expect.objectContaining({
+        cwd: '/project/.takt/worktrees/pr-task',
+        branchContext: expect.stringContaining('## 現在の変更内容（release/2026.07からの差分）'),
+        branchName: 'takt/826/pr-context',
+        taskName: 'pr-task',
+        taskContent: 'review PR',
+        retryNote: '',
+        previousOrderContent: null,
+        prContext: {
         source: 'pr_review',
         prNumber: 826,
         baseBranch: 'release/2026.07',
@@ -668,8 +676,84 @@ describe('instructBranch direct execution flow', () => {
         baseBranchSource: 'pull_request',
         baseDiffRef: 'refs/takt/pr-base/release/2026.07',
         headDiffRef: 'refs/heads/takt/826/pr-context',
-      },
+        },
+      }),
     );
+  });
+
+  it('should resolve a missing saved PR base through the project base resolver', async () => {
+    await instructBranch('/project', {
+      kind: 'completed',
+      name: 'pr-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'review PR',
+      branch: 'takt/826/pr-context',
+      worktreePath: '/project/.takt/worktrees/pr-task',
+      data: {
+        task: 'review PR',
+        source: 'pr_review',
+        pr_number: 826,
+        branch: 'takt/826/pr-context',
+      },
+    });
+
+    expect(mockResolveBaseBranch).toHaveBeenCalledWith('/project');
+    expect(mockRunInstructMode).toHaveBeenCalledWith(expect.objectContaining({
+      prContext: expect.objectContaining({
+        baseBranch: 'main',
+        baseBranchSource: 'default_branch_fallback',
+      }),
+    }));
+  });
+
+  it('should reject PR instruct context when the worktree head ref is missing', async () => {
+    mockLocalBranchExists.mockReturnValueOnce(false);
+
+    await expect(instructBranch('/project', {
+      kind: 'completed',
+      name: 'pr-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'review PR',
+      branch: 'takt/826/pr-context',
+      worktreePath: '/project/.takt/worktrees/pr-task',
+      data: {
+        task: 'review PR',
+        source: 'pr_review',
+        pr_number: 826,
+        base_branch: 'release/2026.07',
+        branch: 'takt/826/pr-context',
+      },
+    })).rejects.toThrow(
+      'PR review task "pr-task" worktree is missing head ref refs/heads/takt/826/pr-context.',
+    );
+    expect(mockRunInstructMode).not.toHaveBeenCalled();
+  });
+
+  it('should reject PR instruct context when the worktree is on another branch', async () => {
+    mockGetCurrentBranch.mockReturnValueOnce('main');
+
+    await expect(instructBranch('/project', {
+      kind: 'completed',
+      name: 'pr-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'review PR',
+      branch: 'takt/826/pr-context',
+      worktreePath: '/project/.takt/worktrees/pr-task',
+      data: {
+        task: 'review PR',
+        source: 'pr_review',
+        pr_number: 826,
+        base_branch: 'release/2026.07',
+        branch: 'takt/826/pr-context',
+      },
+    })).rejects.toThrow(
+      'PR review task "pr-task" worktree is checked out on "main", expected "takt/826/pr-context".',
+    );
+    expect(mockLocalBranchExists).not.toHaveBeenCalled();
+    expect(mockRunInstructMode).not.toHaveBeenCalled();
   });
 
   it('should call selectWorkflow when previous workflow reuse is declined', async () => {
@@ -767,15 +851,15 @@ describe('instructBranch direct execution flow', () => {
     });
 
     expect(mockRunInstructMode).toHaveBeenCalledWith(
-      '/project/.takt/worktrees/done-task',
-      expect.any(String),
-      'takt/done-task',
-      'done-task',
-      'done',
-      '',
-      expect.anything(),
-      undefined,
-      null,
+      expect.objectContaining({
+        cwd: '/project/.takt/worktrees/done-task',
+        branchContext: expect.any(String),
+        branchName: 'takt/done-task',
+        taskName: 'done-task',
+        taskContent: 'done',
+        retryNote: '',
+        previousOrderContent: null,
+      }),
     );
   });
 
@@ -804,15 +888,16 @@ describe('instructBranch direct execution flow', () => {
     expect(mockSelectRun).toHaveBeenCalledWith('/project/.takt/worktrees/done-task', 'en');
     expect(mockLoadRunSessionContext).toHaveBeenCalledWith('/project/.takt/worktrees/done-task', 'run-1');
     expect(mockRunInstructMode).toHaveBeenCalledWith(
-      '/project/.takt/worktrees/done-task',
-      expect.any(String),
-      'takt/done-task',
-      'done-task',
-      'done',
-      '',
-      expect.anything(),
-      runContext,
-      null,
+      expect.objectContaining({
+        cwd: '/project/.takt/worktrees/done-task',
+        branchContext: expect.any(String),
+        branchName: 'takt/done-task',
+        taskName: 'done-task',
+        taskContent: 'done',
+        retryNote: '',
+        runSessionContext: runContext,
+        previousOrderContent: null,
+      }),
     );
   });
 

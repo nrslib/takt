@@ -8,6 +8,8 @@ import {
   createSharedCloneAbortable,
   resolveBaseBranch,
   branchExists,
+  getCurrentBranch,
+  localBranchExists,
   materializePullRequestBase,
   summarizeTaskName,
   resolveTaskWorkflowValue,
@@ -327,6 +329,18 @@ export async function resolveTaskExecution(
       worktreePath = reusedWorktree.worktreePath;
       isWorktree = reusedWorktree.isWorktree;
       if (prContext) {
+        const checkedOutBranch = getCurrentBranch(reusedWorktree.execCwd);
+        if (checkedOutBranch !== prContext.headBranch) {
+          throw new Error(
+            `PR review task "${task.name}" reused worktree is checked out on "${checkedOutBranch}", expected "${prContext.headBranch}".`,
+          );
+        }
+        const headDiffRef = toLocalBranchRef(prContext.headBranch);
+        if (!localBranchExists(reusedWorktree.execCwd, prContext.headBranch)) {
+          throw new Error(
+            `PR review task "${task.name}" reused worktree is missing head ref ${headDiffRef}.`,
+          );
+        }
         const baseDiffRef = materializePullRequestBase(
           defaultCwd,
           reusedWorktree.execCwd,
@@ -335,7 +349,7 @@ export async function resolveTaskExecution(
         prContext = createPullRequestContext({
           ...prContext,
           baseDiffRef,
-          headDiffRef: toLocalBranchRef(prContext.headBranch),
+          headDiffRef,
         });
       }
     } else {

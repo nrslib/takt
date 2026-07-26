@@ -263,7 +263,7 @@ describe('confirmAndCreateWorktree', () => {
       pullRequestHeadRef: 'refs/heads/fix/pr-branch',
     });
 
-    await confirmAndCreateWorktree(
+    const result = await confirmAndCreateWorktree(
       '/project',
       'fix auth',
       true,
@@ -273,6 +273,11 @@ describe('confirmAndCreateWorktree', () => {
     );
 
     expect(mockResolveBaseBranch).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      baseBranch: 'release/custom',
+      pullRequestBaseRef: 'refs/takt/pr-base/release/custom',
+      pullRequestHeadRef: 'refs/heads/fix/pr-branch',
+    });
     expect(mockCreateSharedClone).toHaveBeenCalledWith('/project', expect.objectContaining({
       baseBranch: 'release/custom',
       pullRequestBaseBranch: 'release/custom',

@@ -12,7 +12,7 @@ import { isTaskAbortError, TASK_EXECUTION_ABORTED_MESSAGE } from './clone-errors
 
 const log = createLogger('clone');
 const CLONE_FAILED_MESSAGE = 'Git clone failed';
-const REMOTE_BRANCH_FETCH_FAILED_MESSAGE = 'Git remote branch fetch failed';
+export const REMOTE_BRANCH_FETCH_FAILED_MESSAGE = 'Git remote branch fetch failed';
 const ISOLATED_GIT_ENV = {
   GIT_CONFIG_COUNT: '1',
   GIT_CONFIG_KEY_0: 'core.logAllRefUpdates',
@@ -143,6 +143,7 @@ export function fetchRemoteBranchIntoIsolatedClone(projectDir: string, clonePath
   try {
     runIsolatedGitCommandSync(clonePath, [
       'fetch',
+      '--force',
       '--no-write-fetch-head',
       projectDir,
       `${toRemoteTrackingBranchRef(branch)}:${toLocalBranchRef(branch)}`,
@@ -162,6 +163,7 @@ export async function fetchRemoteBranchIntoIsolatedCloneAbortable(
   try {
     await runIsolatedGitCommandAbortable(clonePath, [
       'fetch',
+      '--force',
       '--no-write-fetch-head',
       projectDir,
       `${toRemoteTrackingBranchRef(branch)}:${toLocalBranchRef(branch)}`,
@@ -178,6 +180,7 @@ export function fetchBaseBranchIntoIsolatedClone(projectDir: string, clonePath: 
   try {
     runIsolatedGitCommandSync(clonePath, [
       'fetch',
+      '--force',
       '--no-write-fetch-head',
       projectDir,
       `${toRemoteTrackingBranchRef(branch)}:refs/takt/base/${branch}`,
@@ -196,6 +199,7 @@ export async function fetchBaseBranchIntoIsolatedCloneAbortable(
   try {
     await runIsolatedGitCommandAbortable(clonePath, [
       'fetch',
+      '--force',
       '--no-write-fetch-head',
       projectDir,
       `${toRemoteTrackingBranchRef(branch)}:refs/takt/base/${branch}`,
@@ -216,6 +220,7 @@ export function fetchPullRequestBaseIntoIsolatedClone(
   try {
     runIsolatedGitCommandSync(clonePath, [
       'fetch',
+      '--force',
       '--no-write-fetch-head',
       projectDir,
       `${toRemoteTrackingBranchRef(branch)}:${toPullRequestBaseRef(branch)}`,
@@ -234,6 +239,7 @@ export async function fetchPullRequestBaseIntoIsolatedCloneAbortable(
   try {
     await runIsolatedGitCommandAbortable(clonePath, [
       'fetch',
+      '--force',
       '--no-write-fetch-head',
       projectDir,
       `${toRemoteTrackingBranchRef(branch)}:${toPullRequestBaseRef(branch)}`,
