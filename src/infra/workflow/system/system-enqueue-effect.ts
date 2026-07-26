@@ -14,7 +14,6 @@ import { saveEnqueuedTaskFile } from '../../task/enqueuedTaskFile.js';
 import { createIssueFromTaskResult } from '../../task/issueTask.js';
 import { fetchPrContext } from './system-git-context.js';
 import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
-import type { CloseIssueResult } from '../../git/index.js';
 import { existsSync } from 'node:fs';
 import { ActiveTaskTargetConflictError, findActiveTaskTargetConflict } from '../../task/activeTaskTarget.js';
 import { TaskStore } from '../../task/store.js';
@@ -37,32 +36,37 @@ function resolveValidatedBaseBranch(
   return resolveBaseBranch(projectCwd, baseBranch).branch;
 }
 
-function sanitizeCloseIssueResult(result: CloseIssueResult): CloseIssueResult {
-  if (result.success) {
-    return result;
-  }
-  return {
-    ...result,
-    error: safeExternalErrorMessage(result.error),
-  };
-}
-
 function buildIssueEnqueueFailureResult(failure: IssueEnqueueFailure): Record<string, unknown> {
   if (failure.stage === 'issue_creation') {
     return {
       success: false,
       failed: true,
+      issueCreated: false,
+      taskEnqueued: false,
       stage: failure.stage,
+      error: safeExternalErrorMessage(failure.error),
+    };
+  }
+  if (failure.stage === 'issue_number_parsing') {
+    return {
+      success: false,
+      failed: true,
+      issueCreated: true,
+      taskEnqueued: false,
+      stage: failure.stage,
+      ...(failure.issueUrl !== undefined ? { issueUrl: failure.issueUrl } : {}),
       error: safeExternalErrorMessage(failure.error),
     };
   }
   return {
     success: false,
     failed: true,
+    issueCreated: true,
+    taskEnqueued: false,
     stage: failure.stage,
     issueNumber: failure.issueNumber,
+    ...(failure.issueUrl !== undefined ? { issueUrl: failure.issueUrl } : {}),
     error: safeExternalErrorMessage(failure.error),
-    compensation: sanitizeCloseIssueResult(failure.compensation),
   };
 }
 

@@ -9,7 +9,6 @@ import {
   createIssueAndEnqueueTask,
   enqueueTask,
   formatIssueEnqueueFailure,
-  joinIssueEnqueueFailureText,
 } from '../../infra/task/enqueueService.js';
 import type { AcpTaskContext } from './types.js';
 
@@ -79,10 +78,7 @@ export async function createIssueAndEnqueueAcpTask(input: {
     createIssueFromTaskResult: input.createIssueFromTaskResult ?? defaultCreateIssueFromTaskResult,
   });
   if (!result.success) {
-    throw new Error(joinIssueEnqueueFailureText(
-      formatIssueEnqueueFailure(result.failure, safeExternalErrorMessage),
-      '\n',
-    ));
+    throw new Error(formatIssueEnqueueFailure(result.failure, safeExternalErrorMessage));
   }
   return result.created;
 }

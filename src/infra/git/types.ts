@@ -68,7 +68,37 @@ export interface CreateIssueOptions {
 
 export type CreateIssueResult =
   | { success: true; issueNumber: number; url?: string }
-  | { success: false; error: string };
+  | { success: false; issueCreated: true; url?: string; error: string }
+  | { success: false; issueCreated?: false; error: string };
+
+export function normalizePublicIssueUrl(url: string | undefined): string | undefined {
+  if (url === undefined || containsControlCharacter(url)) {
+    return undefined;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.hostname.length === 0) {
+    return undefined;
+  }
+
+  return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+}
+
+function containsControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 31 || code === 127) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export type CloseIssueResult =
   | { success: true; commentCreated?: boolean }

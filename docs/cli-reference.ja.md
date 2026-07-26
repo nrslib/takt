@@ -126,7 +126,7 @@ ACP prompt がタスクを作成または直接実行する場合、会話結果
 
 ## MCP Server
 
-`takt-mcp` は TAKT を stdio Model Context Protocol server として起動します。MCP client から、shell 経由で `takt add` や `takt run` を直接呼ばずに、TAKT タスクの enqueue、設定済み issue provider による Issue 作成付き enqueue、次の pending タスク実行を行いたい場合に登録します。
+`takt-mcp` は TAKT を stdio Model Context Protocol server として起動します。MCP client から shell 経由で `takt add` を直接呼ばずに TAKT タスクを enqueue したい場合に登録します。
 
 ```bash
 takt-mcp
@@ -149,9 +149,7 @@ codex mcp add takt -- takt-mcp
 
 | Tool | 説明 |
 |------|------|
-| `takt_enqueue_task` | pending タスクを `.takt/tasks.yaml` に保存する。 |
-| `takt_create_issue_and_enqueue_task` | 設定済み issue provider で Issue を作成し、作成された Issue 番号付きで pending タスクを保存する。 |
-| `takt_run_next_task` | 次の pending タスクを取得し、TAKT の既存タスク実行経路で実行する。 |
+| `takt_enqueue_task` | pending タスクを `.takt/tasks.yaml` に保存し、既存 Issue の紐付けまたは新規 Issue 作成を任意で行う。 |
 
 各 tool の `cwd` は `realpath` で解決され、MCP server の許可 project root 内にある必要があります。既定の許可 root は `takt-mcp` を起動したディレクトリです。
 
@@ -171,43 +169,19 @@ codex mcp add takt -- takt-mcp
 | フィールド | 型 | 説明 |
 |-----------|----|------|
 | `worktree` | boolean | `true` は自動の隔離 worktree を作成する。省略時は `true`。MCP 入力では任意の worktree パスを受け取りません。 |
+| `issue.number` | 正の safe integer | issue provider を呼ばずに既存 Issue を紐付ける。 |
+| `issue.create` | `true` | enqueue 前に設定済み issue provider で Issue を作成する。 |
+| `issue.title` | string | 新規 Issue 用の任意の非空 title。 |
+| `issue.labels` | string array | 新規 Issue 用の任意の非空 label。 |
 | `taskContext.branch` | string | タスクに保存するローカルブランチ名。 |
 | `taskContext.baseBranch` | string | タスクに保存するベースブランチ名。 |
 | `taskContext.prNumber` | 正の safe integer | タスクに保存する Pull Request 番号。`Number.MAX_SAFE_INTEGER` を超える値は拒否されます。 |
 
 入力上限: `task` は 128 KiB、`workflow` は 128 文字、Issue label は 1 件 100 文字、最大 20 件までです。
 
-### `takt_create_issue_and_enqueue_task`
+`issue` object は `{ "number": 123 }` または `{ "create": true, "title"?: "...", "labels"?: ["..."] }` のいずれかだけを指定します。混在 key、空の title・label、unknown key は拒否されます。Issue 付き enqueue の成功結果には `issueNumber` を含みます。Issue 作成後にタスク保存が失敗またはキャンセルされた場合も Issue は open のまま残り、MCP error result は `issueCreated`、`issueNumber`、任意の `issueUrl`、`taskEnqueued`、`stage`、sanitize 済みの `error` を返します。`{ "issue": { "number": issueNumber } }` で再試行すれば、新しい Issue は作成されません。
 
-この tool は `takt_enqueue_task` と同じフィールドに加えて、次の入力を受け取ります。
-
-| フィールド | 型 | 説明 |
-|-----------|----|------|
-| `labels` | string array | Issue 作成時に要求する label。 |
-
-Issue 作成は設定済み TAKT issue provider を使用し、silent output mode で実行されます。Issue 作成に失敗した場合、tool は MCP error result を返し、タスクは保存しません。Issue 作成後にタスク保存が失敗した場合、TAKT は作成済み Issue に固定の補償コメントを追加して close し、pending タスクのない Issue がリポジトリに残らないようにします。close に成功した場合、MCP error result は Issue が作成後に close されたこととローカルのタスク保存エラーを返します。close に失敗した場合、MCP error result はタスク保存エラーと Issue close エラーの両方を返します。
-
-### `takt_run_next_task`
-
-必須入力:
-
-| フィールド | 型 | 説明 |
-|-----------|----|------|
-| `cwd` | 絶対パス文字列 | `.takt/tasks.yaml` を含む project root。 |
-
-任意入力:
-
-| フィールド | 型 | 説明 |
-|-----------|----|------|
-| `provider` | string | タスク実行時の provider 上書き。 |
-| `model` | string | タスク実行時の model 上書き。 |
-| `taskContext.branch` | string | ローカルブランチ context。 |
-| `taskContext.baseBranch` | string | ベースブランチ context。 |
-| `taskContext.prNumber` | 正の safe integer | Pull Request context。`Number.MAX_SAFE_INTEGER` を超える値は拒否されます。 |
-
-入力上限: `provider` は TAKT の既知 provider identifier のみ、`model` は 128 文字までです。
-
-この tool は最大 1 件の pending タスクだけを実行し、stdio を MCP message 専用に保つため通常の workflow 出力を抑制します。pending タスクがない場合は `{ "ran": false }` を返します。
+MCP はタスクの enqueue だけを担当します。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。
 
 ## Instant Exec モード
 

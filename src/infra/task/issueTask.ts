@@ -1,6 +1,8 @@
 import { info, success, error } from '../../shared/ui/index.js';
 import { getGitProvider, type CreateIssueResult, type GitProvider } from '../git/index.js';
+import { normalizePublicIssueUrl } from '../git/types.js';
 import { createLogger } from '../../shared/utils/index.js';
+import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
 
 const TITLE_MAX_LENGTH = 100;
 const TITLE_TRUNCATE_LENGTH = 97;
@@ -88,10 +90,14 @@ export function extractTitle(task: string): string {
 
 function resolveIssueTitle(
   task: string,
-  structuredTitle: string | undefined,
+  generatedTitle: string | undefined,
+  explicitTitle: string | undefined,
 ): { title: string; usedStructuredOutput: boolean; fallbackReason?: StructuredTitleFallbackReason } {
-  if (structuredTitle !== undefined && isValidGeneratedTitle(structuredTitle)) {
-    return { title: truncateTitle(normalizeTitleCandidate(structuredTitle)), usedStructuredOutput: true };
+  if (explicitTitle !== undefined) {
+    return { title: explicitTitle, usedStructuredOutput: true };
+  }
+  if (generatedTitle !== undefined && isValidGeneratedTitle(generatedTitle)) {
+    return { title: truncateTitle(normalizeTitleCandidate(generatedTitle)), usedStructuredOutput: true };
   }
   const derivedTitle = resolveTaskDerivedIssueTitle(task);
   if (derivedTitle === undefined) {
@@ -100,7 +106,7 @@ function resolveIssueTitle(
   return {
     title: derivedTitle,
     usedStructuredOutput: false,
-    fallbackReason: getStructuredTitleFallbackReason(structuredTitle),
+    fallbackReason: getStructuredTitleFallbackReason(generatedTitle),
   };
 }
 
@@ -108,13 +114,15 @@ type CreateIssueFromTaskOptions = {
   labels?: string[];
   cwd?: string;
   title?: string;
+  explicitTitle?: string;
   outputMode?: 'terminal' | 'silent';
   gitProvider?: Pick<GitProvider, 'createIssue'>;
 };
 
 export type CreateIssueFromTaskResult =
-  | { success: true; issueNumber: number }
-  | { success: false; error: string };
+  | { success: true; issueNumber: number; issueUrl?: string }
+  | { success: false; issueCreated: true; issueUrl?: string; error: string }
+  | { success: false; issueCreated?: false; error: string };
 
 function shouldWriteIssueOutput(options: CreateIssueFromTaskOptions | undefined): boolean {
   return options?.outputMode !== 'silent';
@@ -136,7 +144,7 @@ function resolveCreatedIssueNumber(issueResult: Extract<CreateIssueResult, { suc
 
 function formatIssueNumberExtractionError(extractionError: unknown): string {
   const cause = extractionError instanceof Error ? extractionError.message : String(extractionError);
-  return `Failed to extract issue number: ${cause}`;
+  return safeExternalErrorMessage(`Failed to extract issue number: ${cause}`);
 }
 
 export function createIssueFromTaskResult(
@@ -148,7 +156,7 @@ export function createIssueFromTaskResult(
   }
   let resolvedTitle: ReturnType<typeof resolveIssueTitle>;
   try {
-    resolvedTitle = resolveIssueTitle(task, options?.title);
+    resolvedTitle = resolveIssueTitle(task, options?.title, options?.explicitTitle);
   } catch (titleError) {
     const message = titleError instanceof Error ? titleError.message : String(titleError);
     if (shouldWriteIssueOutput(options)) {
@@ -181,18 +189,48 @@ export function createIssueFromTaskResult(
         used_structured_output: usedStructuredOutput,
         ...(fallbackReason !== undefined ? { fallback_reason: fallbackReason } : {}),
       });
-      return { success: false, error: message };
+      const issueUrl = normalizePublicIssueUrl(issueResult.url);
+      return {
+        success: false,
+        issueCreated: true,
+        ...(issueUrl !== undefined ? { issueUrl } : {}),
+        error: message,
+      };
     }
+    const issueUrl = normalizePublicIssueUrl(issueResult.url);
     if (shouldWriteIssueOutput(options)) {
-      success(issueResult.url ? `Issue created: ${issueResult.url}` : `Issue created: #${issueNumber}`);
+      success(issueUrl ? `Issue created: ${issueUrl}` : `Issue created: #${issueNumber}`);
     }
     log.info('Issue created', {
-      url: issueResult.url,
+      url: issueUrl,
       issueNumber,
       used_structured_output: usedStructuredOutput,
       ...(fallbackReason !== undefined ? { fallback_reason: fallbackReason } : {}),
     });
-    return { success: true, issueNumber };
+    return {
+      success: true,
+      issueNumber,
+      ...(issueUrl !== undefined ? { issueUrl } : {}),
+    };
+  }
+
+  if (issueResult.issueCreated) {
+    const message = requireIssueFailureMessage(issueResult.error);
+    if (shouldWriteIssueOutput(options)) {
+      error(`Issue was created, but its number could not be extracted: ${message}`);
+    }
+    log.error('Issue number extraction failed after issue creation', {
+      error: message,
+      used_structured_output: usedStructuredOutput,
+      ...(fallbackReason !== undefined ? { fallback_reason: fallbackReason } : {}),
+    });
+    const issueUrl = normalizePublicIssueUrl(issueResult.url);
+    return {
+      success: false,
+      issueCreated: true,
+      ...(issueUrl !== undefined ? { issueUrl } : {}),
+      error: message,
+    };
   }
 
   const message = requireIssueFailureMessage(issueResult.error);

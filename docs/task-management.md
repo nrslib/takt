@@ -44,7 +44,7 @@ You can also save tasks from interactive mode. After refining requirements throu
 
 ### Saving Tasks from MCP Clients
 
-MCP clients can use the `takt-mcp` stdio server to save pending tasks without invoking shell commands. `takt_enqueue_task` writes a pending record to `.takt/tasks.yaml`. `takt_create_issue_and_enqueue_task` first creates an issue through the configured TAKT issue provider, then writes the pending record with the issue number. If task saving fails after issue creation, TAKT adds a fixed compensation comment to the created issue and closes it; if that close also fails, the MCP error result reports both failures. Both tools require an absolute `cwd` and a non-empty task body. See [CLI Reference](./cli-reference.md#mcp-server) for setup and tool input details.
+MCP clients can use the `takt-mcp` stdio server to save pending tasks without invoking shell commands. `takt_enqueue_task` writes a pending record to `.takt/tasks.yaml`; its optional `issue` object links an existing issue or creates one through the configured TAKT issue provider. If saving fails after issue creation, the issue remains open and the MCP error result returns its number for retry. The tool requires an absolute `cwd` and a non-empty task body. Use `takt run` to execute pending tasks or `takt watch` to monitor and execute them continuously. See [CLI Reference](./cli-reference.md#mcp-server) for setup and tool input details.
 
 ## Task Directory Format
 
@@ -120,7 +120,7 @@ The `run` command claims pending tasks and executes them through the configured 
 
 When a workflow reaches `max_steps`, the default `takt run` behavior stops the task with `exceeded` status and saves retry metadata such as `exceeded_max_steps`, `exceeded_current_iteration`, and `resume_point`. Passing `--ignore-exceed` makes `takt run` ignore only that iteration limit, continue the workflow, and skip writing exceeded retry metadata.
 
-MCP clients can execute one pending task with `takt_run_next_task`. This uses the same task claiming and execution path as `takt run`, but claims only one task and suppresses normal workflow output for stdio MCP safety.
+MCP clients enqueue tasks only. Use `takt run` to execute pending tasks or `takt watch` for continuous monitoring and execution.
 
 ### Parallel Execution (Concurrency)
 

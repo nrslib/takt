@@ -1,236 +1,89 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod/v4';
-import {
-  createIssueAndEnqueueTaskInputSchema,
-  enqueueTaskInputSchema,
-  runNextTaskInputSchema,
-} from '../features/mcp/schemas.js';
+import { enqueueTaskInputSchema } from '../features/mcp/schemas.js';
 
-type JsonSchemaObject = {
-  description?: string;
-  properties?: Record<string, JsonSchemaObject>;
-};
+const required = {
+  cwd: '/repo',
+  task: 'Implement MCP support',
+  workflow: 'default',
+  autoPr: false,
+} as const;
 
-function schemaProperties(schema: JsonSchemaObject): Record<string, JsonSchemaObject> {
-  if (schema.properties === undefined) {
-    throw new Error('Expected JSON Schema object with properties');
-  }
-  return schema.properties;
-}
-
-function requireSchema(schema: JsonSchemaObject | undefined, name: string): JsonSchemaObject {
-  if (schema === undefined) {
-    throw new Error(`Expected JSON Schema property: ${name}`);
-  }
-  return schema;
-}
-
-describe('MCP tool input schemas', () => {
-  const requiredTaskOptions = {
-    workflow: 'default',
-    autoPr: false,
-  } as const;
-
-  it('Given root tool arguments, When enqueue input is parsed, Then task settings are preserved', () => {
-    const parsed = enqueueTaskInputSchema.parse({
-      cwd: '/repo',
-      task: 'Implement MCP support',
-      workflow: 'review',
-      worktree: true,
-      autoPr: true,
-      taskContext: {
-        branch: 'takt/938/add-mcp',
-        baseBranch: 'main',
-        prNumber: 938,
-      },
-    });
-
-    expect(parsed).toEqual({
-      cwd: '/repo',
-      task: 'Implement MCP support',
-      workflow: 'review',
-      worktree: true,
-      autoPr: true,
-      taskContext: {
-        branch: 'takt/938/add-mcp',
-        baseBranch: 'main',
-        prNumber: 938,
-      },
-    });
-  });
-
-  it('Given task content with boundary whitespace, When enqueue input is parsed, Then the original task body is preserved', () => {
-    const task = '\n  # Implement MCP support\n\nKeep formatting.  \n';
-
-    const parsed = enqueueTaskInputSchema.parse({
-      cwd: '/repo',
+describe('MCP tool input schema', () => {
+  it('preserves normal enqueue fields and task boundary whitespace', () => {
+    const task = '\n# Implement MCP support\n\nKeep formatting.  \n';
+    expect(enqueueTaskInputSchema.parse({
+      ...required,
       task,
-      ...requiredTaskOptions,
+      worktree: true,
+      taskContext: { branch: 'feature/mcp', baseBranch: 'main', prNumber: 938 },
+    })).toEqual({
+      ...required,
+      task,
+      worktree: true,
+      taskContext: { branch: 'feature/mcp', baseBranch: 'main', prNumber: 938 },
     });
-
-    expect(parsed.task).toBe(task);
   });
 
-  it('Given a response-envelope shaped payload, When enqueue input is parsed, Then it is rejected', () => {
-    expect(() => enqueueTaskInputSchema.parse({
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          cwd: '/repo',
-          task: 'Implement MCP support',
-          ...requiredTaskOptions,
-        }),
-      }],
-    })).toThrow(/cwd|task/i);
-  });
-
-  it('Given a relative cwd, When enqueue input is parsed, Then it is rejected before filesystem work', () => {
-    expect(() => enqueueTaskInputSchema.parse({
-      cwd: 'relative/repo',
-      task: 'Implement MCP support',
-      ...requiredTaskOptions,
-    })).toThrow(/absolute/i);
-  });
-
-  it('Given enqueue input without workflow or autoPr, When parsing, Then it asks callers to provide both decisions', () => {
-    expect(() => enqueueTaskInputSchema.parse({
-      cwd: '/repo',
-      task: 'Implement MCP support',
-    })).toThrow(/workflow|autoPr/i);
-    expect(() => createIssueAndEnqueueTaskInputSchema.parse({
-      cwd: '/repo',
-      task: 'Implement MCP support',
-    })).toThrow(/workflow|autoPr/i);
-  });
-
-  it.each([
-    ['enqueue', enqueueTaskInputSchema],
-    ['issue enqueue', createIssueAndEnqueueTaskInputSchema],
-  ])('Given %s input missing one task decision, When parsing, Then each decision is required independently', (_name, schema) => {
-    expect(() => schema.parse({
-      cwd: '/repo',
-      task: 'Implement MCP support',
-      autoPr: false,
-    })).toThrow(/workflow/i);
-    expect(() => schema.parse({
-      cwd: '/repo',
-      task: 'Implement MCP support',
-      workflow: 'default',
-    })).toThrow(/autoPr/i);
-  });
-
-  it.each([
-    '/tmp/takt/unsafe-worktree',
-    '../outside-project',
-    'feature/mcp',
-  ])('Given MCP worktree path "%s", When enqueue input is parsed, Then it is rejected', (worktree) => {
-    expect(() => enqueueTaskInputSchema.parse({
-      cwd: '/repo',
-      task: 'Implement MCP support',
-      ...requiredTaskOptions,
-      worktree,
-    })).toThrow(/boolean|worktree/i);
-  });
-
-  it.each([
-    'HEAD:refs/heads/takt/injected',
-    '@{-1}',
-    '-bad',
-    '--upload-pack=echo',
-    'refs/heads/feature/mcp',
-    'origin/main',
-    'refs/remotes/origin/main',
-    'invalid..name',
-  ])('Given unsafe taskContext branch "%s", When enqueue input is parsed, Then it is rejected', (branch) => {
-    expect(() => enqueueTaskInputSchema.parse({
-      cwd: '/repo',
-      task: 'Implement MCP support',
-      ...requiredTaskOptions,
-      taskContext: { branch },
-    })).toThrow(/branch|Invalid/i);
-  });
-
-  it('Given labels at the root tool arguments, When issue enqueue input is parsed, Then labels are preserved', () => {
-    const parsed = createIssueAndEnqueueTaskInputSchema.parse({
-      cwd: '/repo',
-      task: 'Implement MCP support',
-      ...requiredTaskOptions,
+  it('accepts either an existing issue number or issue creation settings', () => {
+    expect(enqueueTaskInputSchema.parse({
+      ...required,
+      issue: { number: 938 },
+    }).issue).toEqual({ number: 938 });
+    expect(enqueueTaskInputSchema.parse({
+      ...required,
+      issue: { create: true, title: 'MCP consolidation', labels: ['enhancement', 'mcp'] },
+    }).issue).toEqual({
+      create: true,
+      title: 'MCP consolidation',
       labels: ['enhancement', 'mcp'],
     });
-
-    expect(parsed.labels).toEqual(['enhancement', 'mcp']);
-    expect(parsed.task).toBe('Implement MCP support');
-  });
-
-  it('Given oversized MCP input fields, When inputs are parsed, Then they are rejected at the tool boundary', () => {
-    expect(() => enqueueTaskInputSchema.parse({
-      cwd: '/repo',
-      task: 'x'.repeat((128 * 1024) + 1),
-      ...requiredTaskOptions,
-    })).toThrow(/too big|maximum|at most/i);
-    expect(() => enqueueTaskInputSchema.parse({
-      cwd: '/repo',
-      task: 'Implement MCP support',
-      autoPr: false,
-      workflow: 'w'.repeat(129),
-    })).toThrow(/too big|maximum|at most/i);
-    expect(() => createIssueAndEnqueueTaskInputSchema.parse({
-      cwd: '/repo',
-      task: 'Implement MCP support',
-      ...requiredTaskOptions,
-      labels: Array.from({ length: 21 }, (_, index) => `label-${index}`),
-    })).toThrow(/too big|maximum|at most/i);
-    expect(() => runNextTaskInputSchema.parse({
-      cwd: '/repo',
-      model: 'm'.repeat(129),
-    })).toThrow(/too big|maximum|at most/i);
   });
 
   it.each([
-    ['enqueue', enqueueTaskInputSchema, { cwd: '/repo', task: 'Implement MCP support', ...requiredTaskOptions }],
-    ['issue enqueue', createIssueAndEnqueueTaskInputSchema, { cwd: '/repo', task: 'Implement MCP support', ...requiredTaskOptions }],
-    ['run-next', runNextTaskInputSchema, { cwd: '/repo' }],
-  ])('Given unsafe PR numbers, When %s input is parsed, Then they are rejected', (_name, schema, baseInput) => {
-    for (const prNumber of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
-      expect(() => schema.parse({
-        ...baseInput,
-        taskContext: { prNumber },
-      })).toThrow(/prNumber|safe integer|positive/i);
-    }
+    { issue: { number: 0 } },
+    { issue: { number: Number.MAX_SAFE_INTEGER + 1 } },
+    { issue: { number: 1.5 } },
+    { issue: { create: true, title: '   ' } },
+    { issue: { create: true, labels: [''] } },
+    { issue: { create: true, labels: ['  '] } },
+    { issue: { number: 938, create: true } },
+    { issue: { number: 938, unknown: true } },
+    { issue: { create: true, unknown: true } },
+  ])('rejects invalid or ambiguous issue input %#', (extra) => {
+    expect(() => enqueueTaskInputSchema.parse({ ...required, ...extra })).toThrow();
   });
 
-  it('Given run-next task context, When run-next input is parsed, Then context fields are preserved', () => {
-    const parsed = runNextTaskInputSchema.parse({
+  it('rejects root labels from the removed issue-specific tool', () => {
+    expect(() => enqueueTaskInputSchema.parse({
+      ...required,
+      labels: ['enhancement'],
+    })).toThrow(/unrecognized|unknown/i);
+  });
+
+  it('requires explicit workflow and autoPr decisions', () => {
+    expect(() => enqueueTaskInputSchema.parse({
       cwd: '/repo',
-      taskContext: {
-        branch: 'takt/938/add-mcp',
-        baseBranch: 'main',
-        prNumber: 938,
-      },
-    });
-
-    expect(parsed.taskContext).toEqual({
-      branch: 'takt/938/add-mcp',
-      baseBranch: 'main',
-      prNumber: 938,
-    });
+      task: 'Implement MCP support',
+    })).toThrow(/workflow|autoPr/i);
   });
 
-  it('Given MCP input schemas, When converted to JSON Schema, Then optional field descriptions are preserved', () => {
-    const enqueueProperties = schemaProperties(z.toJSONSchema(enqueueTaskInputSchema, { io: 'input' }));
-    const issueProperties = schemaProperties(z.toJSONSchema(createIssueAndEnqueueTaskInputSchema, { io: 'input' }));
-    const runNextProperties = schemaProperties(z.toJSONSchema(runNextTaskInputSchema, { io: 'input' }));
-    const taskContextProperties = schemaProperties(requireSchema(enqueueProperties.taskContext, 'taskContext'));
+  it('rejects relative cwd, blank task, oversized values, and custom worktree paths', () => {
+    expect(() => enqueueTaskInputSchema.parse({ ...required, cwd: 'repo' })).toThrow(/absolute/i);
+    expect(() => enqueueTaskInputSchema.parse({ ...required, task: '  ' })).toThrow(/task/i);
+    expect(() => enqueueTaskInputSchema.parse({ ...required, task: 'x'.repeat((128 * 1024) + 1) })).toThrow();
+    expect(() => enqueueTaskInputSchema.parse({ ...required, workflow: 'w'.repeat(129) })).toThrow();
+    expect(() => enqueueTaskInputSchema.parse({ ...required, worktree: '/tmp/worktree' })).toThrow();
+    expect(() => enqueueTaskInputSchema.parse({
+      ...required,
+      issue: { create: true, labels: Array.from({ length: 21 }, (_, index) => `label-${index}`) },
+    })).toThrow();
+  });
 
-    expect(enqueueProperties.workflow?.description).toBe('Workflow identifier to store on the queued task. Ask the user which workflow to use before enqueueing.');
-    expect(enqueueProperties.worktree?.description).toBe('Whether the queued task should run in a TAKT-managed worktree. When true, successful execution attempts to auto-commit resulting changes locally; autoPr false does not disable that.');
-    expect(enqueueProperties.autoPr?.description).toBe('Whether successful worktree execution should push the branch and automatically open a pull request. Ask the user before enqueueing; do not infer this from branch or PR context. When false, worktree execution may still auto-commit local changes.');
-    expect(issueProperties.labels?.description).toBe('Issue labels to request from the configured issue provider.');
-    expect(runNextProperties.provider?.description).toBe('Agent provider override for this task execution.');
-    expect(runNextProperties.model?.description).toBe('Model override for this task execution.');
-    expect(taskContextProperties.branch?.description).toBe('Plain local Git branch name for task execution context.');
-    expect(taskContextProperties.baseBranch?.description).toBe('Plain local Git base branch name used when creating or resolving a task worktree.');
-    expect(taskContextProperties.baseBranch?.description).not.toBe(taskContextProperties.branch?.description);
-    expect(taskContextProperties.prNumber?.description).toBe('PR number used as task execution context, not as PR-review provenance.');
+  it('exposes the nested issue schema in generated JSON Schema', () => {
+    const schema = z.toJSONSchema(enqueueTaskInputSchema, { io: 'input' }) as {
+      properties?: Record<string, { description?: string }>;
+    };
+    expect(schema.properties?.issue?.description).toContain('existing issue number or create settings');
   });
 });

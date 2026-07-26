@@ -197,9 +197,9 @@ describe('createIssue', () => {
 
     expect(result).toEqual({
       success: false,
-      error: expect.stringContaining(
-        'Issue URL must end with a positive issue number: https://github.com/owner/repo/issues/not-a-number',
-      ),
+      issueCreated: true,
+      url: 'https://github.com/owner/repo/issues/not-a-number',
+      error: 'Failed to extract issue number from created issue URL',
     });
   });
 
@@ -212,9 +212,9 @@ describe('createIssue', () => {
 
     expect(result).toEqual({
       success: false,
-      error: expect.stringContaining(
-        'Issue URL must end with a positive issue number: https://github.com/owner/repo/issues/42/',
-      ),
+      issueCreated: true,
+      url: 'https://github.com/owner/repo/issues/42/',
+      error: 'Failed to extract issue number from created issue URL',
     });
   });
 });

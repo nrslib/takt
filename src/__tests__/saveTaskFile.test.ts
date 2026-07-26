@@ -583,7 +583,7 @@ describe('createIssueAndSaveTask', () => {
     expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('issue-image');
   });
 
-  it('should close the created issue when the user declines saving the issue task', async () => {
+  it('should leave the created issue open when the user declines saving the issue task', async () => {
     mockConfirm.mockResolvedValueOnce(false);
 
     await createIssueAndSaveTask(testDir, 'Create issue only', 'default', {
@@ -594,17 +594,11 @@ describe('createIssueAndSaveTask', () => {
       { title: 'Create issue only', body: 'Create issue only', labels: undefined },
       testDir,
     );
-    expect(mockCloseIssue).toHaveBeenCalledWith(
-      42,
-      expect.stringContaining('task enqueue was cancelled before saving the pending task'),
-      testDir,
-    );
-    const compensationComment = String(mockCloseIssue.mock.calls[0]?.[1]);
-    expect(compensationComment).not.toContain('saving the pending task failed');
+    expect(mockCloseIssue).not.toHaveBeenCalled();
     expectNoTaskArtifacts(testDir);
   });
 
-  it('should close the created issue when interactive task saving fails', async () => {
+  it('should leave the created issue open when interactive task saving fails', async () => {
     const directoryAttachment = path.join(testDir, 'attachment-dir');
     fs.mkdirSync(directoryAttachment);
     mockPromptInput.mockResolvedValueOnce('');
@@ -619,15 +613,14 @@ describe('createIssueAndSaveTask', () => {
       }],
     });
 
-    expect(mockCloseIssue).toHaveBeenCalledWith(
-      42,
-      expect.stringContaining('TAKT created this issue'),
-      testDir,
-    );
+    expect(mockCloseIssue).not.toHaveBeenCalled();
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining(
+      'Issue #42 was created, but task saving failed:',
+    ));
     expectNoTaskArtifacts(testDir);
   });
 
-  it('should report partial success when closing the created issue fails after task saving fails', async () => {
+  it('should not attempt issue close after task saving fails', async () => {
     const directoryAttachment = path.join(testDir, 'attachment-dir');
     fs.mkdirSync(directoryAttachment);
     mockCloseIssue.mockReturnValue({
@@ -647,16 +640,9 @@ describe('createIssueAndSaveTask', () => {
       }],
     });
 
-    expect(mockCloseIssue).toHaveBeenCalledWith(
-      42,
-      expect.stringContaining('TAKT created this issue'),
-      testDir,
-    );
+    expect(mockCloseIssue).not.toHaveBeenCalled();
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining(
       'Issue #42 was created, but task saving failed:',
-    ));
-    expect(mockError).toHaveBeenCalledWith(expect.stringContaining(
-      'Issue compensation comment was created, but issue close failed: glab issue close failed',
     ));
     expectNoTaskArtifacts(testDir);
   });

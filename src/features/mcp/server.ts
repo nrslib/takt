@@ -2,15 +2,9 @@ import * as fs from 'node:fs';
 import * as process from 'node:process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { packageVersion } from '../../shared/package-info.js';
+import { enqueueTaskInputSchema } from './schemas.js';
 import {
-  createIssueAndEnqueueTaskInputSchema,
-  enqueueTaskInputSchema,
-  runNextTaskInputSchema,
-} from './schemas.js';
-import {
-  createIssueAndEnqueueTaktTask,
   enqueueTaktTask,
-  runNextTaktTask,
   type McpOperationDependencies,
 } from './operations.js';
 
@@ -42,30 +36,10 @@ export function createTaktMcpServer(
     'takt_enqueue_task',
     {
       title: 'Enqueue TAKT task',
-      description: 'Save a pending TAKT task into .takt/tasks.yaml.',
+      description: 'Save a pending TAKT task into .takt/tasks.yaml. Optionally link an existing issue or create one. Run queued tasks with `takt run` or monitor continuously with `takt watch`.',
       inputSchema: enqueueTaskInputSchema,
     },
-    (input) => enqueueTaktTask(input, operationDeps),
-  );
-
-  server.registerTool(
-    'takt_create_issue_and_enqueue_task',
-    {
-      title: 'Create issue and enqueue TAKT task',
-      description: 'Create an issue with the configured issue provider, then save a pending TAKT task with the issue number.',
-      inputSchema: createIssueAndEnqueueTaskInputSchema,
-    },
-    (input) => createIssueAndEnqueueTaktTask(input, operationDeps),
-  );
-
-  server.registerTool(
-    'takt_run_next_task',
-    {
-      title: 'Run next TAKT task',
-      description: 'Claim and execute the next pending TAKT task.',
-      inputSchema: runNextTaskInputSchema,
-    },
-    (input) => runNextTaktTask(input, operationDeps),
+    (input, extra) => enqueueTaktTask(input, operationDeps, extra.signal),
   );
 
   return server;

@@ -14,6 +14,7 @@ import type {
   Issue,
   IssueListItem,
 } from '../git/types.js';
+import { normalizePublicIssueUrl } from '../git/types.js';
 import { parseIssueNumberFromUrl } from '../git/format.js';
 
 const log = createLogger('github');
@@ -147,22 +148,38 @@ export function createIssue(options: CreateIssueOptions, cwd: string): CreateIss
 
   log.info('Creating issue', { title: options.title });
 
+  let output: string;
   try {
-    const output = execFileSync('gh', args, {
+    output = execFileSync('gh', args, {
       cwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-
-    const url = output.trim();
-    const issueNumber = parseIssueNumberFromUrl(url);
-    log.info('Issue created', { url, issueNumber });
-
-    return { success: true, issueNumber, url };
   } catch (err) {
     const errorMessage = getErrorMessage(err);
     log.error('Issue creation failed', { error: errorMessage });
     return { success: false, error: errorMessage };
+  }
+
+  const url = output.trim();
+  const publicUrl = normalizePublicIssueUrl(url);
+  try {
+    const issueNumber = parseIssueNumberFromUrl(url);
+    log.info('Issue created', { url: publicUrl, issueNumber });
+    return {
+      success: true,
+      issueNumber,
+      ...(publicUrl !== undefined ? { url: publicUrl } : {}),
+    };
+  } catch {
+    const errorMessage = 'Failed to extract issue number from created issue URL';
+    log.error('Issue number extraction failed after issue creation', { error: errorMessage });
+    return {
+      success: false,
+      issueCreated: true,
+      ...(publicUrl !== undefined ? { url: publicUrl } : {}),
+      error: errorMessage,
+    };
   }
 }
 

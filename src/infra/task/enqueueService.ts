@@ -1,9 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { CloseIssueResult, GitProvider } from '../git/index.js';
+import type { GitProvider } from '../git/index.js';
+import { normalizePublicIssueUrl } from '../git/types.js';
 import { generateReportDir } from '../../shared/utils/index.js';
 
-export type IssueEnqueueGitProvider = Pick<GitProvider, 'createIssue' | 'closeIssue'>;
+export type IssueEnqueueGitProvider = Pick<GitProvider, 'createIssue'>;
 
 export interface SaveEnqueuedTaskFileOptions extends Record<string, unknown> {
   workflow?: string;
@@ -36,6 +37,7 @@ export type SaveEnqueuedTaskFile = (
   taskContent: string,
   options?: SaveEnqueuedTaskFileOptions,
   prepareTaskSpec?: PrepareEnqueuedTaskSpec,
+  abortSignal?: AbortSignal,
 ) => Promise<{ taskName: string; tasksFile: string }>;
 
 export type CreateEnqueueIssueFromTaskResult = (
@@ -44,10 +46,14 @@ export type CreateEnqueueIssueFromTaskResult = (
     labels?: string[];
     cwd?: string;
     title?: string;
+    explicitTitle?: string;
     outputMode?: 'terminal' | 'silent';
     gitProvider?: Pick<IssueEnqueueGitProvider, 'createIssue'>;
   },
-) => { success: true; issueNumber: number } | { success: false; error: string };
+  ) =>
+    | { success: true; issueNumber: number; issueUrl?: string }
+    | { success: false; issueCreated: true; issueUrl?: string; error: string }
+    | { success: false; issueCreated?: false; error: string };
 
 export interface EnqueueTaskContext {
   branch?: string;
@@ -69,27 +75,19 @@ export interface SaveEnqueuedTaskOptions {
 export interface EnqueueTaskRequest extends SaveEnqueuedTaskOptions {
   cwd: string;
   task: string;
+  abortSignal?: AbortSignal;
 }
 
 export interface IssueEnqueueTaskRequest extends EnqueueTaskRequest {
   labels?: string[];
   title?: string;
   gitProvider: IssueEnqueueGitProvider;
-  abortSignal?: AbortSignal;
   issueOutputMode?: 'terminal' | 'silent';
-}
-
-export interface IssueEnqueueCompensationInput {
-  cwd: string;
-  gitProvider: IssueEnqueueGitProvider;
-  issueNumber: number;
-  stage: IssueEnqueueCompensationStage;
 }
 
 export interface IssueEnqueueDependencies {
   saveTaskFile: SaveEnqueuedTaskFile;
   createIssueFromTaskResult: CreateEnqueueIssueFromTaskResult;
-  compensateCreatedIssue?: (input: IssueEnqueueCompensationInput) => CloseIssueResult;
 }
 
 export type EnqueueTaskResult = Awaited<ReturnType<SaveEnqueuedTaskFile>> & {
@@ -98,24 +96,33 @@ export type EnqueueTaskResult = Awaited<ReturnType<SaveEnqueuedTaskFile>> & {
 };
 
 export type IssueEnqueueFailure =
-  | { stage: 'issue_creation'; error: string }
   | {
-    stage: IssueEnqueueCompensationStage;
+    issueCreated: false;
+    taskEnqueued: false;
+    stage: 'issue_creation';
+    error: string;
+  }
+  | {
+    issueCreated: true;
+    taskEnqueued: false;
+    stage: 'issue_number_parsing';
+    issueUrl?: string;
+    error: string;
+  }
+  | {
+    issueCreated: true;
     issueNumber: number;
+    issueUrl?: string;
+    taskEnqueued: false;
+    stage: IssueEnqueueFailureStage;
     error: unknown;
-    compensation: CloseIssueResult;
   };
 
-export type IssueEnqueueCompensationStage = 'task_saving' | 'cancelled_after_issue_creation';
+export type IssueEnqueueFailureStage = 'task_saving' | 'cancelled_after_issue_creation';
 
 export type IssueEnqueueResult =
   | { success: true; created: EnqueueTaskResult }
   | { success: false; failure: IssueEnqueueFailure };
-
-export interface FormattedIssueEnqueueFailure {
-  primary: string;
-  compensationFailure?: string;
-}
 
 export interface PrepareTaskSpecDirectoryOptions {
   orderContent?: string;
@@ -181,52 +188,22 @@ export function prepareTaskSpecDirectory(
 export function formatIssueEnqueueFailure(
   failure: IssueEnqueueFailure,
   formatError: (error: unknown) => string,
-): FormattedIssueEnqueueFailure {
+): string {
   if (failure.stage === 'issue_creation') {
-    return { primary: formatError(failure.error) };
+    return formatError(failure.error);
+  }
+  const issueUrl = failure.issueUrl === undefined ? '' : ` Issue URL: ${failure.issueUrl}.`;
+  if (failure.stage === 'issue_number_parsing') {
+    return `An issue was created, but its number could not be extracted: ${formatError(failure.error)}.${issueUrl}`;
   }
   if (failure.stage === 'cancelled_after_issue_creation') {
-    if (failure.compensation.success) {
-      return {
-        primary: `Issue #${failure.issueNumber} was created and closed because task enqueue was cancelled`,
-      };
-    }
-    return {
-      primary: `Issue #${failure.issueNumber} was created, but task enqueue was cancelled`,
-      compensationFailure: formatIssueCloseFailure(failure.compensation, formatError),
-    };
+    return `Issue #${failure.issueNumber} was created and remains open, but task enqueue was cancelled: ${formatError(failure.error)}${issueUrl}`;
   }
-  if (failure.compensation.success) {
-    return {
-      primary: `Issue #${failure.issueNumber} was created and closed because task saving failed: ${formatError(failure.error)}`,
-    };
-  }
-  return {
-    primary: `Issue #${failure.issueNumber} was created, but task saving failed: ${formatError(failure.error)}`,
-    compensationFailure: formatIssueCloseFailure(failure.compensation, formatError),
-  };
-}
-
-export function joinIssueEnqueueFailureText(
-  formatted: FormattedIssueEnqueueFailure,
-  separator: string,
-): string {
-  return formatted.compensationFailure === undefined
-    ? formatted.primary
-    : `${formatted.primary}${separator}${formatted.compensationFailure}`;
+  return `Issue #${failure.issueNumber} was created, but task saving failed: ${formatError(failure.error)}.${issueUrl} The issue remains open for retry.`;
 }
 
 function isFileExistsError(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'EEXIST';
-}
-
-function formatIssueCloseFailure(
-  compensation: Extract<CloseIssueResult, { success: false }>,
-  formatError: (error: unknown) => string,
-): string {
-  return compensation.commentCreated === true
-    ? `Issue compensation comment was created, but issue close failed: ${formatError(compensation.error)}`
-    : `Issue close failed: ${formatError(compensation.error)}`;
 }
 
 function buildEnqueuedTaskSaveOptions(
@@ -252,11 +229,11 @@ export async function enqueueTask(
   input: EnqueueTaskRequest,
   saveTaskFile: SaveEnqueuedTaskFile,
 ): Promise<EnqueueTaskResult> {
-  const created = await saveTaskFile(
-    input.cwd,
-    input.task,
-    buildEnqueuedTaskSaveOptions(input),
-  );
+  throwIfIssueEnqueueAborted(input.abortSignal);
+  const saveOptions = buildEnqueuedTaskSaveOptions(input);
+  const created = input.abortSignal === undefined
+    ? await saveTaskFile(input.cwd, input.task, saveOptions)
+    : await saveTaskFile(input.cwd, input.task, saveOptions, undefined, input.abortSignal);
   return {
     ...created,
     workflow: input.workflow,
@@ -272,15 +249,39 @@ export async function createIssueAndEnqueueTask(
   const issueResult = deps.createIssueFromTaskResult(input.task, {
     cwd: input.cwd,
     ...(input.labels !== undefined ? { labels: input.labels } : {}),
-    ...(input.title !== undefined ? { title: input.title } : {}),
+    ...(input.title !== undefined ? { explicitTitle: input.title } : {}),
     outputMode: input.issueOutputMode ?? 'silent',
     gitProvider: input.gitProvider,
   });
   if (!issueResult.success) {
-    return { success: false, failure: { stage: 'issue_creation', error: issueResult.error } };
+    if ('issueCreated' in issueResult && issueResult.issueCreated) {
+      const issueUrl = normalizePublicIssueUrl(issueResult.issueUrl);
+      return {
+        success: false,
+        failure: {
+          issueCreated: true,
+          taskEnqueued: false,
+          stage: 'issue_number_parsing',
+          ...(issueUrl !== undefined ? { issueUrl } : {}),
+          error: issueResult.error,
+        },
+      };
+    }
+    return {
+      success: false,
+      failure: {
+        issueCreated: false,
+        taskEnqueued: false,
+        stage: 'issue_creation',
+        error: issueResult.error,
+      },
+    };
   }
 
   try {
+    if (input.abortSignal !== undefined) {
+      await waitForAbortSignalPropagation();
+    }
     throwIfIssueEnqueueAborted(input.abortSignal);
     const created = await enqueueTask(
       {
@@ -292,26 +293,26 @@ export async function createIssueAndEnqueueTask(
     return { success: true, created };
   } catch (error) {
     const stage = resolveIssueEnqueueFailureStage(error);
-    const compensate = deps.compensateCreatedIssue ?? closeCreatedIssueForFailedTaskSave;
-    const compensation = compensate({
-      cwd: input.cwd,
-      gitProvider: input.gitProvider,
-      issueNumber: issueResult.issueNumber,
-      stage,
-    });
+    const issueUrl = normalizePublicIssueUrl(issueResult.issueUrl);
     return {
       success: false,
       failure: {
+        issueCreated: true,
         stage,
         issueNumber: issueResult.issueNumber,
+        ...(issueUrl !== undefined ? { issueUrl } : {}),
+        taskEnqueued: false,
         error,
-        compensation,
       },
     };
   }
 }
 
-function resolveIssueEnqueueFailureStage(error: unknown): IssueEnqueueCompensationStage {
+function waitForAbortSignalPropagation(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+function resolveIssueEnqueueFailureStage(error: unknown): IssueEnqueueFailureStage {
   return error instanceof IssueEnqueueCancelledError
     ? 'cancelled_after_issue_creation'
     : 'task_saving';
@@ -319,7 +320,7 @@ function resolveIssueEnqueueFailureStage(error: unknown): IssueEnqueueCompensati
 
 export class IssueEnqueueCancelledError extends Error {
   constructor() {
-    super('Task enqueue was cancelled after issue creation.');
+    super('Task enqueue was cancelled.');
   }
 }
 
@@ -327,29 +328,4 @@ function throwIfIssueEnqueueAborted(abortSignal: AbortSignal | undefined): void 
   if (abortSignal?.aborted) {
     throw new IssueEnqueueCancelledError();
   }
-}
-
-function buildIssueEnqueueCompensationComment(stage: IssueEnqueueCompensationStage): string {
-  switch (stage) {
-    case 'cancelled_after_issue_creation':
-      return [
-        'TAKT created this issue, but task enqueue was cancelled before saving the pending task.',
-        '',
-        'The issue is being closed to keep the repository state consistent.',
-      ].join('\n');
-    case 'task_saving':
-      return [
-        'TAKT created this issue, but saving the pending task failed.',
-        '',
-        'The issue is being closed to keep the repository state consistent.',
-      ].join('\n');
-  }
-}
-
-function closeCreatedIssueForFailedTaskSave(input: IssueEnqueueCompensationInput): CloseIssueResult {
-  return input.gitProvider.closeIssue(
-    input.issueNumber,
-    buildIssueEnqueueCompensationComment(input.stage),
-    input.cwd,
-  );
 }
