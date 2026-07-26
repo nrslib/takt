@@ -978,7 +978,7 @@ describe('Finding Contract Team Leader contract', () => {
     expect(prompt).toContain('"partId": "latest"');
     expect(prompt.match(/src\/latest\.ts/g)).toHaveLength(1);
     expect(prompt).toContain(
-      'changedPaths の omittedPartCount または omittedChangedPathCount が1以上なら complete にせず',
+      '最新 batch の changedPaths index の omittedPartCount、または parts[] 内のいずれかの omittedChangedPathCount が1以上なら complete にせず',
     );
     expect(prompt).toContain('[truncated; full response is in the audit artifact]');
     expect(prompt).not.toContain('x'.repeat(13_000));
@@ -1035,7 +1035,7 @@ describe('Finding Contract Team Leader contract', () => {
     expect(prompt.match(/"omittedChangedPathCount": 75/g)).toHaveLength(3);
     expect(prompt).toContain('"omittedPartCount": 1');
     expect(prompt).toContain(
-      'If changedPaths omittedPartCount or any omittedChangedPathCount is greater than zero, do not complete',
+      'If the latest-batch changedPaths index has omittedPartCount > 0, or any entry in parts[] has omittedChangedPathCount > 0, do not complete',
     );
     expect(prompt.length).toBeLessThan(40_000);
   });
