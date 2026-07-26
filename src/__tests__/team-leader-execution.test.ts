@@ -38,6 +38,7 @@ describe('runTeamLeaderExecution', () => {
     const requestMoreParts = vi.fn().mockResolvedValue({
       done: true,
       reasoning: 'initial parts cover all work',
+      cancelPartIds: [],
       parts: [],
     });
 
@@ -54,7 +55,7 @@ describe('runTeamLeaderExecution', () => {
     expect(maxActiveParts).toBe(2);
   });
 
-  it('予定済みパートがすべて完了してから追加パートを取り込む', async () => {
+  it('成功したパートの完了後、running partを含めて追加計画する', async () => {
     const part1 = makePart('p1');
     const part2 = makePart('p2');
     const part3 = makePart('p3');
@@ -63,31 +64,44 @@ describe('runTeamLeaderExecution', () => {
       .mockResolvedValueOnce({
         done: false,
         reasoning: 'need one more',
+        cancelPartIds: [],
         parts: [{ id: 'p3', title: 'title-p3', instruction: 'do-p3' }],
       })
       .mockResolvedValueOnce({
         done: true,
         reasoning: 'enough',
+        cancelPartIds: [],
         parts: [],
       });
 
-    const runPart = vi.fn(async (part: PartDefinition) => makeResult(part));
+    let releaseSecondPart: (() => void) | undefined;
+    const secondPartReady = new Promise<void>((resolve) => {
+      releaseSecondPart = resolve;
+    });
+    const runPart = vi.fn(async (part: PartDefinition) => {
+      if (part.id === 'p2') {
+        await secondPartReady;
+      }
+      return makeResult(part);
+    });
 
-    const result = await runTeamLeaderExecution({
+    const execution = runTeamLeaderExecution({
       initialParts: [part1, part2],
       maxConcurrency: 2,
       runPart,
       requestMoreParts,
     });
+    await vi.waitFor(() => expect(requestMoreParts).toHaveBeenCalled());
+    releaseSecondPart?.();
+    const result = await execution;
 
     expect(result.plannedParts.map((p) => p.id)).toEqual(['p1', 'p2', 'p3']);
     expect(result.partResults.map((r) => r.part.id).sort()).toEqual(['p1', 'p2', 'p3']);
     expect(runPart).toHaveBeenCalledTimes(3);
     expect(requestMoreParts).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      partResults: expect.arrayContaining([
-        expect.objectContaining({ part: part1 }),
-        expect.objectContaining({ part: part2 }),
-      ]),
+      partResults: [expect.objectContaining({ part: part1 })],
+      cancellablePartIds: ['p2'],
+      abortSignal: expect.any(AbortSignal),
     }));
     expect(requestMoreParts).toHaveBeenCalledTimes(2);
     expect(result.partResults.some((r) => r.part.id === part3.id)).toBe(true);
@@ -100,11 +114,13 @@ describe('runTeamLeaderExecution', () => {
       .mockResolvedValueOnce({
         done: false,
         reasoning: 'more work remains',
+        cancelPartIds: [],
         parts: [makePart('p3'), makePart('p4')],
       })
       .mockResolvedValueOnce({
         done: true,
         reasoning: 'all work completed',
+        cancelPartIds: [],
         parts: [],
       });
 
@@ -118,17 +134,13 @@ describe('runTeamLeaderExecution', () => {
     expect(result.plannedParts.map((part) => part.id)).toEqual(['p1', 'p2', 'p3', 'p4']);
     expect(runPart).toHaveBeenCalledTimes(4);
     expect(requestMoreParts).toHaveBeenNthCalledWith(1, {
-      partResults: expect.arrayContaining([
-        expect.objectContaining({ part: parts[0] }),
-        expect.objectContaining({ part: parts[1] }),
-      ]),
-      latestBatchResults: expect.arrayContaining([
-        expect.objectContaining({ part: parts[0] }),
-        expect.objectContaining({ part: parts[1] }),
-      ]),
+      partResults: [expect.objectContaining({ part: parts[0] })],
+      latestBatchResults: [expect.objectContaining({ part: parts[0] })],
       completedPartResults: [],
       plannedParts: parts,
       scheduledIds: ['p1', 'p2'],
+      cancellablePartIds: ['p2'],
+      abortSignal: expect.any(AbortSignal),
     });
     expect(requestMoreParts).toHaveBeenCalledTimes(2);
   });
@@ -159,6 +171,7 @@ describe('runTeamLeaderExecution', () => {
     const requestMoreParts = vi.fn().mockResolvedValue({
       done: false,
       reasoning: 'duplicate only',
+      cancelPartIds: [],
       parts: [{ id: 'p1', title: 'dup', instruction: 'dup' }],
     });
 
@@ -182,12 +195,14 @@ describe('runTeamLeaderExecution', () => {
       .mockResolvedValueOnce({
         done: false,
         reasoning: 'continue',
+        cancelPartIds: [],
         parts: [p2],
         findingContractDecision: { decision: 'continue', reasoning: 'continue', parts: [p2] },
       })
       .mockResolvedValueOnce({
         done: true,
         reasoning: 'complete',
+        cancelPartIds: [],
         parts: [],
         findingContractDecision: {
           decision: 'complete',
@@ -222,6 +237,7 @@ describe('runTeamLeaderExecution', () => {
       requestMoreParts: async () => ({
         done: false,
         reasoning: 'duplicate',
+        cancelPartIds: [],
         parts: [part],
         findingContractDecision: { decision: 'continue', reasoning: 'duplicate', parts: [part] },
       }),
@@ -352,6 +368,7 @@ describe('runTeamLeaderExecution', () => {
       requestMoreParts: async () => ({
         done: true,
         reasoning: 'architecture must change',
+        cancelPartIds: [],
         parts: [],
         findingContractDecision: {
           decision: 'replan',
@@ -392,5 +409,165 @@ describe('runTeamLeaderExecution', () => {
     expect(result.partResults).toHaveLength(1);
     expect(result.partResults[0]?.response.status).toBe('rate_limited');
     expect(result.findingContractDecision).toBeUndefined();
+  });
+
+  it('queued partを取消し、取消済みIDを再利用させない', async () => {
+    const startedPartIds: string[] = [];
+    const requestMoreParts = vi.fn()
+      .mockResolvedValueOnce({
+        done: false,
+        reasoning: 'replace obsolete verification',
+        cancelPartIds: ['p2'],
+        parts: [makePart('p2'), makePart('p4')],
+      })
+      .mockResolvedValue({
+        done: true,
+        reasoning: 'complete',
+        cancelPartIds: [],
+        parts: [],
+      });
+
+    const result = await runTeamLeaderExecution({
+      initialParts: ['p1', 'p2', 'p3'].map(makePart),
+      maxConcurrency: 1,
+      runPart: async (part) => {
+        startedPartIds.push(part.id);
+        return makeResult(part);
+      },
+      requestMoreParts,
+    });
+
+    expect(startedPartIds).toEqual(['p1', 'p3', 'p4']);
+    expect(result.plannedParts.map((part) => part.id)).toEqual(['p1', 'p3', 'p4']);
+    expect(requestMoreParts).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      cancellablePartIds: ['p2', 'p3'],
+      scheduledIds: ['p1', 'p2', 'p3'],
+    }));
+  });
+
+  it('doneと同時にrunning partを個別中断し、完了結果として公開しない', async () => {
+    const receivedSignals = new Map<string, AbortSignal>();
+    const result = await runTeamLeaderExecution({
+      initialParts: ['p1', 'p2'].map(makePart),
+      maxConcurrency: 2,
+      runPart: async (part, _partIndex, _publicationFence, signal) => {
+        receivedSignals.set(part.id, signal);
+        if (part.id === 'p1') {
+          return makeResult(part);
+        }
+        await new Promise<void>((resolve) => {
+          signal.addEventListener('abort', resolve, { once: true });
+        });
+        throw signal.reason;
+      },
+      requestMoreParts: async () => ({
+        done: true,
+        reasoning: 'p1 already completed verification',
+        cancelPartIds: ['p2'],
+        parts: [],
+      }),
+    });
+
+    expect(receivedSignals.get('p2')?.aborted).toBe(true);
+    expect(result.plannedParts.map((part) => part.id)).toEqual(['p1']);
+    expect(result.partResults.map((partResult) => partResult.part.id)).toEqual(['p1']);
+  });
+
+  it('doneでrunning partを取消さない場合はsettlementまで待つ', async () => {
+    let releasePart: (() => void) | undefined;
+    const runningPart = new Promise<void>((resolve) => {
+      releasePart = resolve;
+    });
+    const execution = runTeamLeaderExecution({
+      initialParts: ['p1', 'p2'].map(makePart),
+      maxConcurrency: 2,
+      runPart: async (part) => {
+        if (part.id === 'p2') {
+          await runningPart;
+        }
+        return makeResult(part);
+      },
+      requestMoreParts: async () => ({
+        done: true,
+        reasoning: 'no more planning',
+        cancelPartIds: [],
+        parts: [],
+      }),
+    });
+
+    await expect(Promise.race([
+      execution.then(() => 'finished'),
+      Promise.resolve('still-running'),
+    ])).resolves.toBe('still-running');
+    releasePart?.();
+    await expect(execution).resolves.toMatchObject({
+      partResults: expect.arrayContaining([
+        expect.objectContaining({ part: expect.objectContaining({ id: 'p2' }) }),
+      ]),
+    });
+  });
+
+  it('親abortと個別取消が競合した場合は親abort理由を送出する', async () => {
+    const parentController = new AbortController();
+    const parentReason = new Error('parent-stop');
+    let cancellationObserved: (() => void) | undefined;
+    const cancelled = new Promise<void>((resolve) => {
+      cancellationObserved = resolve;
+    });
+
+    const execution = runTeamLeaderExecution({
+      initialParts: ['p1', 'p2'].map(makePart),
+      maxConcurrency: 2,
+      abortSignal: parentController.signal,
+      runPart: async (part, _partIndex, _publicationFence, signal) => {
+        if (part.id === 'p1') return makeResult(part);
+        await new Promise<void>((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+        cancellationObserved?.();
+        await Promise.resolve();
+        throw signal.reason;
+      },
+      requestMoreParts: async () => ({
+        done: true,
+        reasoning: 'cancel p2',
+        cancelPartIds: ['p2'],
+        parts: [],
+      }),
+    });
+
+    await cancelled;
+    parentController.abort(parentReason);
+    await expect(execution).rejects.toBe(parentReason);
+  });
+
+  it('feedback待機中のterminal part失敗でfeedbackを中断する', async () => {
+    const terminal = new Error('terminal failure');
+    let failSecondPart: (() => void) | undefined;
+    let feedbackStarted: (() => void) | undefined;
+    const feedbackReady = new Promise<void>((resolve) => {
+      feedbackStarted = resolve;
+    });
+
+    const execution = runTeamLeaderExecution({
+      initialParts: ['p1', 'p2'].map(makePart),
+      maxConcurrency: 2,
+      runPart: async (part) => {
+        if (part.id === 'p1') return makeResult(part);
+        await new Promise<void>((resolve) => {
+          failSecondPart = resolve;
+        });
+        throw terminal;
+      },
+      requestMoreParts: async ({ abortSignal }) => {
+        feedbackStarted?.();
+        await new Promise<void>((_resolve, reject) => {
+          abortSignal.addEventListener('abort', () => reject(abortSignal.reason), { once: true });
+        });
+        return { done: true, reasoning: 'unreachable', cancelPartIds: [], parts: [] };
+      },
+    });
+
+    await feedbackReady;
+    failSecondPart?.();
+    await expect(execution).rejects.toBe(terminal);
   });
 });

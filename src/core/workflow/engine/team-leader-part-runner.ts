@@ -12,6 +12,7 @@ import { getErrorMessage } from '../../../shared/utils/index.js';
 import { classifyAbortSignalReason } from '../../../shared/types/agent-failure.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildSessionlessPartCompletionInspectionOptions } from './team-leader-part-completion-inspection.js';
+import { isTeamLeaderPartCancellation } from './team-leader-part-cancellation.js';
 import type {
   FindingContractControlValidationIssue,
 } from '../team-leader-finding-contract-control-validation.js';
@@ -96,12 +97,29 @@ export async function runTeamLeaderPart(
       workflowStack: observability.workflowStack,
       sanitizeText: observability.sanitizeText,
       providerInfo: partProviderInfo,
-    }, () => executeAgent(partStep.persona, partInstruction, options), (result) => ({
+    }, async () => {
+      try {
+        const result = await executeAgent(partStep.persona, partInstruction, options);
+        if (isTeamLeaderPartCancellation(signal.reason)) {
+          throw signal.reason;
+        }
+        return result;
+      } catch (error) {
+        if (isTeamLeaderPartCancellation(signal.reason)) {
+          throw signal.reason;
+        }
+        throw error;
+      }
+    }, (result) => ({
       status: result.status,
       content: result.content,
       error: result.error,
       providerUsage: result.providerUsage,
-    }));
+    }), (error) => (
+      isTeamLeaderPartCancellation(error)
+        ? { status: 'cancelled' }
+        : undefined
+    ));
     if (response.sessionId !== undefined) {
       updatePersonaSession(buildPartScopedSessionKey(partStep, partProviderInfo.provider), response.sessionId);
     }
@@ -114,6 +132,9 @@ export async function runTeamLeaderPart(
       },
     };
   } catch (error) {
+    if (isTeamLeaderPartCancellation(error)) {
+      throw error;
+    }
     return {
       ...buildTeamLeaderErrorPartResult(step, part, error, signal),
       providerInfo: partProviderInfo,

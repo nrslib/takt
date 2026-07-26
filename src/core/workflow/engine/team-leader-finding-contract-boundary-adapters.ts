@@ -245,6 +245,7 @@ function toMorePartsResponse(
   return {
     done: decision.decision !== 'continue',
     reasoning: decision.reasoning,
+    cancelPartIds: [],
     parts: decision.parts,
     findingContractDecision: decision,
     ...(response.providerUsage === undefined ? {} : { providerUsage: response.providerUsage }),

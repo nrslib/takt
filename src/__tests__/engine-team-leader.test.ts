@@ -255,7 +255,10 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
     expect(state.status).toBe('aborted');
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
-    expect(vi.mocked(runAgent).mock.calls[2]?.[2]?.abortSignal).toBe(abortController.signal);
+    const feedbackAbortSignal = vi.mocked(runAgent).mock.calls[2]?.[2]?.abortSignal;
+    expect(feedbackAbortSignal).not.toBe(abortController.signal);
+    expect(feedbackAbortSignal?.aborted).toBe(true);
+    expect(feedbackAbortSignal?.reason).toBe(abortController.signal.reason);
     expect(routeBatch).toHaveBeenCalledOnce();
     expect(routeBatch.mock.calls[0]?.[1]).toEqual([
       expect.objectContaining({ id: 'part-1' }),
@@ -893,6 +896,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         structuredOutput: {
           done: false,
           reasoning: 'add test part',
+          cancelPartIds: [],
           parts: [
             { id: 'part-2', title: 'Tests', instruction: 'Add tests' },
           ],
@@ -901,7 +905,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       makeResponse({ persona: 'coder', content: 'Tests done' }),
       makeResponse({
         persona: 'team-leader',
-        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+        structuredOutput: { done: true, reasoning: 'enough', cancelPartIds: [], parts: [] },
       }),
     );
     vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
@@ -1194,6 +1198,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       structuredOutput: {
         done: true,
         reasoning: 'No recovery requested',
+        cancelPartIds: [],
         parts: [],
       },
     }));
@@ -1424,10 +1429,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    expect(state.stepOutputs.get('implement')).toMatchObject({
-      status: 'error',
-      error: 'All team leader parts failed: part-1: external abort: This operation was aborted',
-    });
+    expect(state.stepOutputs.get('implement')).toBeUndefined();
     expect(state.lastOutput).toBeUndefined();
     expect(abortFn).toHaveBeenCalledWith(
       state,
@@ -1593,6 +1595,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         structuredOutput: {
           done: false,
           reasoning: 'Need docs',
+          cancelPartIds: [],
           parts: [
             { id: 'part-3', title: 'Docs', instruction: 'Write docs' },
           ],
@@ -1604,6 +1607,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         structuredOutput: {
           done: true,
           reasoning: 'Enough',
+          cancelPartIds: [],
           parts: [],
         },
       }),

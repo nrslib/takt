@@ -1177,7 +1177,7 @@ steps:
     mockRunAgent.mockResolvedValue({
       persona: 'team-leader',
       status: 'done',
-      content: '```json\n{\"done\":false,\"reasoning\":\"need tests\",\"parts\":[{\"id\":\"part-2\",\"title\":\"Tests\",\"instruction\":\"Add tests\"}]}\n```',
+      content: '```json\n{\"done\":false,\"reasoning\":\"need tests\",\"cancelPartIds\":[],\"parts\":[{\"id\":\"part-2\",\"title\":\"Tests\",\"instruction\":\"Add tests\"}]}\n```',
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
     });
 
@@ -1186,12 +1186,19 @@ steps:
       'break down the work',
       [{ id: 'part-1', title: 'API', status: 'done', content: 'Implemented API' }],
       ['part-1'],
-      { cwd: '/tmp/project', resolvedProvider: 'cursor', resolvedModel: 'cursor-fast', persona: 'team-leader' },
+      {
+        cwd: '/tmp/project',
+        resolvedProvider: 'cursor',
+        resolvedModel: 'cursor-fast',
+        persona: 'team-leader',
+        cancellablePartIds: [],
+      },
     );
 
     expect(result).toEqual({
       done: false,
       reasoning: 'need tests',
+      cancelPartIds: [],
       parts: [{ id: 'part-2', title: 'Tests', instruction: 'Add tests' }],
     });
     const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
@@ -1220,6 +1227,7 @@ steps:
       structuredOutput: {
         done: false,
         reasoning: 'need tests',
+        cancelPartIds: [],
         parts: [{ id: 'part-2', title: 'Tests', instruction: 'Add tests' }],
       },
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
@@ -1230,12 +1238,19 @@ steps:
       'break down the work',
       [{ id: 'part-1', title: 'API', status: 'done', content: 'Implemented API' }],
       ['part-1'],
-      { cwd: '/tmp/project', resolvedProvider: 'claude', resolvedModel: 'sonnet', persona: 'team-leader' },
+      {
+        cwd: '/tmp/project',
+        resolvedProvider: 'claude',
+        resolvedModel: 'sonnet',
+        persona: 'team-leader',
+        cancellablePartIds: [],
+      },
     );
 
     expect(result).toEqual({
       done: false,
       reasoning: 'need tests',
+      cancelPartIds: [],
       parts: [{ id: 'part-2', title: 'Tests', instruction: 'Add tests' }],
     });
     const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];

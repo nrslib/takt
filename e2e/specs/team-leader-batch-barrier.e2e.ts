@@ -28,7 +28,7 @@ function readMockCallRecords(path: string): MockCallRecord[] {
     .map((line) => JSON.parse(line) as MockCallRecord);
 }
 
-describe('E2E: Team leader batch barrier', () => {
+describe('E2E: Team leader running-part cancellation', () => {
   let isolatedEnv: IsolatedEnv;
   let repo: LocalRepo;
 
@@ -43,7 +43,7 @@ describe('E2E: Team leader batch barrier', () => {
     try { isolatedEnv.cleanup(); } catch { /* best-effort */ }
   });
 
-  it('initial_max_parts の初回バッチ完了後にだけ次バッチを計画する', () => {
+  it('最初の正常完了後にfeedbackを開始し、遅いrunning partを集約せず中断する', () => {
     const workflowPath = copyWorkflowFixtureToRepo(
       repo.path,
       resolve(__dirname, '../fixtures/workflows/team-leader-batch-barrier.yaml'),
@@ -54,7 +54,7 @@ describe('E2E: Team leader batch barrier', () => {
       args: [
         '--provider', 'mock',
         '--task',
-        'Create exactly four files: bb-1.txt, bb-2.txt, bb-3.txt, bb-4.txt. Each file must contain its own filename as content. Each part must create exactly one file.',
+        'Create bb-1.txt and bb-2.txt. Each file must contain its own filename as content. Each part must create exactly one file.',
         '--workflow',
         workflowPath,
       ],
@@ -89,11 +89,10 @@ describe('E2E: Team leader batch barrier', () => {
     expect(JSON.parse(String(initialDecomposition?.content ?? '')).parts).toHaveLength(2);
     const content = String(stepComplete?.content ?? '');
     const partSectionCount = countPartSections(content);
-    expect(partSectionCount).toBe(4);
+    expect(partSectionCount).toBe(1);
     expect(content).toContain('## bb-1: Create bb-1.txt');
-    expect(content).toContain('## bb-2: Create bb-2.txt');
-    expect(content).toContain('## bb-3: Create bb-3.txt');
-    expect(content).toContain('## bb-4: Create bb-4.txt');
+    expect(content).not.toContain('## bb-2: Create bb-2.txt');
+    expect(content).not.toContain('Mock response interrupted by abort signal.');
 
     const calls = readMockCallRecords(mockCallLogPath);
     const leaderStartIndexes = calls.flatMap((call, index) =>
@@ -106,11 +105,9 @@ describe('E2E: Team leader batch barrier', () => {
         ? [index]
         : [],
     );
-    const initialMemberCompletionIndexes = memberCompletionIndexes.slice(0, 2);
-
-    expect(leaderStartIndexes).toHaveLength(3);
-    expect(memberCompletionIndexes).toHaveLength(4);
-    expect(leaderStartIndexes[1]).toBeGreaterThan(Math.max(...initialMemberCompletionIndexes));
-    expect(leaderStartIndexes[2]).toBeGreaterThan(Math.max(...memberCompletionIndexes));
+    expect(leaderStartIndexes).toHaveLength(2);
+    expect(memberCompletionIndexes).toHaveLength(2);
+    expect(leaderStartIndexes[1]).toBeGreaterThan(memberCompletionIndexes[0]);
+    expect(leaderStartIndexes[1]).toBeLessThan(memberCompletionIndexes[1]);
   }, 120_000);
 });

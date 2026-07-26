@@ -18,6 +18,7 @@ export function createTimeoutContinuationFeedback(args: {
     return {
       done: true,
       reasoning: buildTimeoutContinuationDoneReason(args.language),
+      cancelPartIds: [],
       parts: [],
     };
   }
@@ -31,6 +32,7 @@ export function createTimeoutContinuationFeedback(args: {
   return {
     done: false,
     reasoning: buildTimeoutContinuationReason(args.language),
+    cancelPartIds: [],
     parts: [buildTimeoutContinuationPart(timedOutPartIds, continuationId, args.language)],
   };
 }

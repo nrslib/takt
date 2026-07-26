@@ -94,11 +94,13 @@ export type MorePartsOptions = Omit<
   'inspectTools' | 'onPromptResolved' | 'findingContract'
 > & {
   findingContract?: FindingContractFeedbackContext;
+  cancellablePartIds: readonly string[];
 };
 
 export interface MorePartsResponse {
   done: boolean;
   reasoning: string;
+  cancelPartIds: string[];
   parts: PartDefinition[];
   providerUsage?: ProviderUsageSnapshot;
   findingContractDecision?: FindingContractTeamLeaderDecision;
@@ -208,6 +210,7 @@ export async function requestMorePartsRawResponse(
     existingIds,
     options.language,
     options.findingContract,
+    options.cancellablePartIds,
   );
 
   let response: AgentResponse;
@@ -269,10 +272,11 @@ export async function requestMoreParts(
       );
   return {
     ...(findingContractDecision === undefined
-      ? toMorePartsResponse(response.structuredOutput)
+      ? toMorePartsResponse(response.structuredOutput, options.cancellablePartIds)
       : {
           done: findingContractDecision.decision !== 'continue',
           reasoning: findingContractDecision.reasoning,
+          cancelPartIds: [],
           parts: findingContractDecision.parts,
           findingContractDecision,
         }),

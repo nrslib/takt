@@ -79,6 +79,8 @@ import {
   validateOrRecoverFindingContractPartCompletion,
 } from './team-leader-finding-contract-part-completion-recovery.js';
 import { FindingContractTeamLeaderCoordinator } from './team-leader-finding-contract-coordinator.js';
+import { createAbortScope } from './abort-signal.js';
+import { isTeamLeaderPartCancellation } from './team-leader-part-cancellation.js';
 
 const log = createLogger('team-leader-runner');
 
@@ -387,7 +389,7 @@ export class TeamLeaderRunner {
     const partIndexById = new Map<string, number>();
     let previousFindingContractDecision: { decision: 'continue'; reasoning: string } | undefined;
     const artifactReferences: TeamLeaderArtifactReference[] = [];
-    const executionAbortScope = createTeamLeaderExecutionAbortScope(leaderBaseOptions.abortSignal);
+    const executionAbortScope = createAbortScope(leaderBaseOptions.abortSignal);
     let executionResult: Awaited<ReturnType<typeof runTeamLeaderExecution>>;
     try {
       executionResult = await runTeamLeaderExecution({
@@ -407,21 +409,22 @@ export class TeamLeaderRunner {
         parallelLogger?.addSubStep(part.id);
       },
       onPartCompleted: (result) => {
-        state.stepOutputs.set(result.response.persona, result.response);
+        const acceptedResult = structuredClone(result) as PartResult;
+        state.stepOutputs.set(acceptedResult.response.persona, acceptedResult.response);
         if (findingContractMode) {
-          const partIndex = partIndexById.get(result.part.id);
-          const partBatchNumber = batchNumberByPartId.get(result.part.id);
+          const partIndex = partIndexById.get(acceptedResult.part.id);
+          const partBatchNumber = batchNumberByPartId.get(acceptedResult.part.id);
           if (
             findingContractCoordinator === undefined
             || partIndex === undefined
             || partBatchNumber === undefined
           ) {
-            throw new Error(`Finding Contract artifact metadata is missing for part "${result.part.id}"`);
+            throw new Error(`Finding Contract artifact metadata is missing for part "${acceptedResult.part.id}"`);
           }
           artifactReferences.push(findingContractCoordinator.writeAcceptedPartArtifact(
             partBatchNumber,
             partIndex,
-            result,
+            acceptedResult,
           ));
         }
       },
@@ -446,7 +449,7 @@ export class TeamLeaderRunner {
           step: step.name,
           addedCount: addedParts.length,
           totalPlannedAfterAdd: totalPlanned,
-          parts: summarizeParts(addedParts),
+          parts: summarizeParts(structuredClone(addedParts) as PartDefinition[]),
           reasoning: reason,
         });
       },
@@ -462,10 +465,18 @@ export class TeamLeaderRunner {
         completedPartResults,
         plannedParts: currentPlannedParts,
         scheduledIds,
+        cancellablePartIds,
+        abortSignal: feedbackAbortSignal,
       }) => {
+        const currentResultsCopy = structuredClone(currentResults) as PartResult[];
+        const latestBatchResultsCopy = structuredClone(latestBatchResults) as PartResult[];
+        const completedPartResultsCopy = structuredClone(completedPartResults) as PartResult[];
+        const currentPlannedPartsCopy = structuredClone(currentPlannedParts) as PartDefinition[];
+        const scheduledIdsCopy = [...scheduledIds];
+        const cancellablePartIdsCopy = [...cancellablePartIds];
         emitTeamLeaderProgressHint(this.deps.engineOptions, 'feedback');
         const feedbackPartResults = findingContractMode
-          ? [...latestBatchResults].sort((left, right) => {
+          ? latestBatchResultsCopy.sort((left, right) => {
               const leftIndex = partIndexById.get(left.part.id);
               const rightIndex = partIndexById.get(right.part.id);
               if (leftIndex === undefined || rightIndex === undefined) {
@@ -473,7 +484,7 @@ export class TeamLeaderRunner {
               }
               return leftIndex - rightIndex;
             })
-          : currentResults;
+          : currentResultsCopy;
         const feedbackResults = feedbackPartResults.map((result) => ({
           id: result.part.id,
           title: result.part.title,
@@ -491,7 +502,7 @@ export class TeamLeaderRunner {
               targetFindingIds: [...findingContractExecution.targetFindingIds],
               actionableFindings: findingContractExecution.actionableFindings,
               completedPartIndex: buildLatestFindingContractDigests(
-                completedPartResults
+                completedPartResultsCopy
                   .map((result) => ({
                     result,
                     index: partIndexById.get(result.part.id),
@@ -506,9 +517,9 @@ export class TeamLeaderRunner {
                     };
                   }),
               ),
-              plannedParts: structuredClone(currentPlannedParts),
+              plannedParts: currentPlannedPartsCopy,
               evidence: buildFindingContractDecisionEvidenceSnapshot(
-                currentResults,
+                currentResultsCopy,
                 findingContractExecution.targetFindingIds,
               ),
               ...(previousFindingContractDecision !== undefined
@@ -518,7 +529,7 @@ export class TeamLeaderRunner {
         try {
           const buildFeedbackOptions = (
             decisionRequest?: {
-              recoveryContext: FindingContractRecoveryPromptContext<FindingContractRejectedDecisionDigest>;
+              recoveryContext?: FindingContractRecoveryPromptContext<FindingContractRejectedDecisionDigest>;
               abortSignal: AbortSignal;
             },
           ) => ({
@@ -533,14 +544,15 @@ export class TeamLeaderRunner {
             mcpServers: leaderMcpServers,
             workflowMeta: leaderWorkflowMeta,
             childProcessEnv: this.deps.engineOptions.childProcessEnv,
-            abortSignal: decisionRequest?.abortSignal ?? leaderBaseOptions.abortSignal,
+            cancellablePartIds: cancellablePartIdsCopy,
+            abortSignal: decisionRequest?.abortSignal ?? feedbackAbortSignal,
             onStream: leaderBaseOptions.onStream,
             onAgentResponse: (response: AgentResponse) => {
               this.recordUsage(
                 leaderStep.name,
                 leaderProviderInfo,
                 response.status === 'done'
-                  && (decisionRequest?.abortSignal ?? leaderBaseOptions.abortSignal)?.aborted !== true,
+                  && (decisionRequest?.abortSignal ?? feedbackAbortSignal).aborted !== true,
                 response.providerUsage,
               );
             },
@@ -552,7 +564,7 @@ export class TeamLeaderRunner {
               : {
                   findingContract: {
                     ...findingContractContext,
-                    ...(decisionRequest === undefined
+                    ...(decisionRequest?.recoveryContext === undefined
                       ? {}
                       : { recovery: decisionRequest.recoveryContext }),
                   },
@@ -561,16 +573,11 @@ export class TeamLeaderRunner {
           const feedbackInstruction = findingContractMode
             ? `${step.instruction}\n\n## Original Task\n${task}`
             : instruction;
-          const requestFeedback = async (
-            decisionRequest?: {
-              recoveryContext: FindingContractRecoveryPromptContext<FindingContractRejectedDecisionDigest>;
-              abortSignal: AbortSignal;
-            },
-          ) => structuredCaller.requestMoreParts(
+          const requestFeedback = async (abortSignal: AbortSignal) => structuredCaller.requestMoreParts(
             feedbackInstruction,
             feedbackResults,
-            scheduledIds,
-            buildFeedbackOptions(decisionRequest),
+            scheduledIdsCopy,
+            buildFeedbackOptions({ abortSignal }),
           );
           const requestRawFeedback = async (
             decisionRequest: {
@@ -580,12 +587,12 @@ export class TeamLeaderRunner {
           ) => structuredCaller.requestMorePartsRawResponse(
             feedbackInstruction,
             feedbackResults,
-            scheduledIds,
+            scheduledIdsCopy,
             buildFeedbackOptions(decisionRequest),
           );
           let moreParts: MorePartsResponse;
           if (!findingContractMode) {
-            moreParts = await requestFeedback();
+            moreParts = await requestFeedback(feedbackAbortSignal);
           } else {
             if (
               findingContractCoordinator === undefined
@@ -595,7 +602,7 @@ export class TeamLeaderRunner {
             }
             moreParts = await findingContractCoordinator.recoverDecision({
               batchNumber: currentBatchNumber,
-              abortSignal: leaderBaseOptions.abortSignal,
+              abortSignal: feedbackAbortSignal,
               validationContext: {
                 targetFindingIds: findingContractContext.targetFindingIds,
                 plannedParts: findingContractContext.plannedParts,
@@ -631,21 +638,21 @@ export class TeamLeaderRunner {
           await this.addPartAutoRouting(routedProviderInfoByPart, step, moreParts.parts, runtime);
           return moreParts;
         } catch (error) {
-          if (leaderBaseOptions.abortSignal?.aborted) {
+          if (feedbackAbortSignal.aborted) {
             throw error;
           }
           if (findingContractMode) {
             throw error;
           }
           const timeoutFallback = createTimeoutContinuationFeedback({
-            partResults: currentResults,
-            scheduledIds,
+            partResults: currentResultsCopy,
+            scheduledIds: scheduledIdsCopy,
             coveredTimedOutPartIds,
             language: this.deps.engineOptions.language,
           });
           if (timeoutFallback) {
             if (timeoutFallback.parts.length > 0) {
-              for (const partId of collectUncoveredPartTimeoutIds(currentResults, coveredTimedOutPartIds)) {
+              for (const partId of collectUncoveredPartTimeoutIds(currentResultsCopy, coveredTimedOutPartIds)) {
                 coveredTimedOutPartIds.add(partId);
               }
             }
@@ -660,7 +667,7 @@ export class TeamLeaderRunner {
           throw error;
         }
       },
-        runPart: async (part, partIndex, publicationFence) => this.runSinglePart(
+        runPart: async (part, partIndex, publicationFence, partAbortSignal) => this.runSinglePart(
         step,
         leaderWorkflowMeta,
         part,
@@ -692,9 +699,10 @@ export class TeamLeaderRunner {
                 event,
               );
             },
-        executionAbortScope.signal,
+        partAbortSignal,
         publicationFence,
         ).catch((error) => {
+          if (isTeamLeaderPartCancellation(error)) throw error;
           if (findingContractMode) throw error;
           return buildTeamLeaderErrorPartResult(step, part, error);
         }),
@@ -1284,23 +1292,5 @@ function hydrateAgentResponse(response: AgentResponse): AgentResponse {
   return {
     ...response,
     timestamp: timestamp instanceof Date ? timestamp : new Date(String(timestamp)),
-  };
-}
-
-function createTeamLeaderExecutionAbortScope(parentSignal: AbortSignal | undefined): {
-  readonly signal: AbortSignal;
-  readonly abort: (reason: unknown) => void;
-  readonly dispose: () => void;
-} {
-  const controller = new AbortController();
-  const onParentAbort = (): void => controller.abort(parentSignal?.reason);
-  parentSignal?.addEventListener('abort', onParentAbort, { once: true });
-  if (parentSignal?.aborted === true) {
-    controller.abort(parentSignal.reason);
-  }
-  return {
-    signal: controller.signal,
-    abort: (reason) => controller.abort(reason),
-    dispose: () => parentSignal?.removeEventListener('abort', onParentAbort),
   };
 }
