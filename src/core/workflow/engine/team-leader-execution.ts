@@ -233,6 +233,9 @@ export async function runTeamLeaderExecution(
         if (options.findingContractMode === true) {
           throw new Error('Finding Contract Team Leader continue decision produced no new unique parts');
         }
+        if (queue.length > 0 || running.size > 0) {
+          return;
+        }
         options.onPlanningNoNewParts?.({
           reason: feedback.reasoning,
           plannedParts: plannedParts.length,

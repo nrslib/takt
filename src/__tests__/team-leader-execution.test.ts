@@ -107,6 +107,61 @@ describe('runTeamLeaderExecution', () => {
     expect(result.partResults.some((r) => r.part.id === part3.id)).toBe(true);
   });
 
+  it('未完了パートがある間の空の追加計画ではリーダー評価を終了しない', async () => {
+    const part1 = makePart('p1');
+    const part2 = makePart('p2');
+    const part3 = makePart('p3');
+    let releaseSecondPart: (() => void) | undefined;
+    const secondPartReady = new Promise<void>((resolve) => {
+      releaseSecondPart = resolve;
+    });
+    const runPart = vi.fn(async (part: PartDefinition) => {
+      if (part.id === part2.id) {
+        await secondPartReady;
+      }
+      return makeResult(part);
+    });
+    const requestMoreParts = vi.fn()
+      .mockResolvedValueOnce({
+        done: false,
+        reasoning: 'wait for the remaining part',
+        cancelPartIds: [],
+        parts: [],
+      })
+      .mockResolvedValueOnce({
+        done: false,
+        reasoning: 'add follow-up work',
+        cancelPartIds: [],
+        parts: [part3],
+      })
+      .mockResolvedValueOnce({
+        done: true,
+        reasoning: 'all work completed',
+        cancelPartIds: [],
+        parts: [],
+      });
+
+    const execution = runTeamLeaderExecution({
+      initialParts: [part1, part2],
+      maxConcurrency: 2,
+      runPart,
+      requestMoreParts,
+    });
+    await vi.waitFor(() => expect(requestMoreParts).toHaveBeenCalledTimes(1));
+    releaseSecondPart?.();
+    const result = await execution;
+
+    expect(requestMoreParts).toHaveBeenCalledTimes(3);
+    expect(requestMoreParts).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      partResults: [
+        expect.objectContaining({ part: part1 }),
+        expect.objectContaining({ part: part2 }),
+      ],
+    }));
+    expect(result.plannedParts.map((part) => part.id)).toEqual(['p1', 'p2', 'p3']);
+    expect(result.partResults.map((result) => result.part.id).sort()).toEqual(['p1', 'p2', 'p3']);
+  });
+
   it('追加パートの総数を制限せずリーダーの完了判断まで実行する', async () => {
     const parts = ['p1', 'p2'].map(makePart);
     const runPart = vi.fn(async (part: PartDefinition) => makeResult(part));
