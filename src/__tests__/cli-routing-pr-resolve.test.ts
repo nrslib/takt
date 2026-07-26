@@ -410,6 +410,19 @@ describe('PR resolution in routing', () => {
       );
     });
 
+    it('should execute without PR context when the fetched PR has no head branch', async () => {
+      mockOpts.pr = 456;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ headRefName: undefined }));
+
+      await executeDefaultAction();
+
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledOnce();
+      const selectOptions = mockSelectAndExecuteTask.mock.calls[0]![2];
+      expect(selectOptions).not.toHaveProperty('prContext');
+      expect(mockCheckoutBranch).not.toHaveBeenCalled();
+    });
+
     it('should checkout PR branch before executing task', async () => {
       // Given
       mockOpts.pr = 456;
