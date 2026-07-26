@@ -312,6 +312,11 @@ export async function createIssueAndEnqueueTask(
   }
 }
 
+/**
+ * Best-effort mitigation for an abort notification racing with issue creation.
+ * One macrotask yield narrows that window, but cannot observe cancellations that
+ * arrive after the yield has completed.
+ */
 function waitForAbortSignalPropagation(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }

@@ -171,15 +171,15 @@ codex mcp add takt -- takt-mcp
 | `worktree` | boolean | `true` は自動の隔離 worktree を作成する。省略時は `true`。MCP 入力では任意の worktree パスを受け取りません。 |
 | `issue.number` | 正の safe integer | issue provider を呼ばずに既存 Issue を紐付ける。 |
 | `issue.create` | `true` | enqueue 前に設定済み issue provider で Issue を作成する。 |
-| `issue.title` | string | 新規 Issue 用の任意の非空 title。 |
+| `issue.title` | string | 新規 Issue 用の任意の非空 title。上限は 255 文字。 |
 | `issue.labels` | string array | 新規 Issue 用の任意の非空 label。 |
 | `taskContext.branch` | string | タスクに保存するローカルブランチ名。 |
 | `taskContext.baseBranch` | string | タスクに保存するベースブランチ名。 |
 | `taskContext.prNumber` | 正の safe integer | タスクに保存する Pull Request 番号。`Number.MAX_SAFE_INTEGER` を超える値は拒否されます。 |
 
-入力上限: `task` は 128 KiB、`workflow` は 128 文字、Issue label は 1 件 100 文字、最大 20 件までです。
+入力上限: `task` は 128 KiB、`workflow` は 128 文字、Issue title は 255 文字、Issue label は 1 件 100 文字、最大 20 件までです。
 
-`issue` object は `{ "number": 123 }` または `{ "create": true, "title"?: "...", "labels"?: ["..."] }` のいずれかだけを指定します。混在 key、空の title・label、unknown key は拒否されます。Issue 付き enqueue の成功結果には `issueNumber` を含みます。Issue 作成後にタスク保存が失敗またはキャンセルされた場合も Issue は open のまま残り、MCP error result は `issueCreated`、`issueNumber`、任意の `issueUrl`、`taskEnqueued`、`stage`、sanitize 済みの `error` を返します。`{ "issue": { "number": issueNumber } }` で再試行すれば、新しい Issue は作成されません。
+`issue` object は `{ "number": 123 }` または `{ "create": true, "title"?: "...", "labels"?: ["..."] }` のいずれかだけを指定します。混在 key、空の title・label、unknown key は拒否されます。Issue 付き enqueue の成功結果には `issueNumber` を含みます。Issue 番号の解決後にタスク保存が失敗またはキャンセルされた場合も Issue は open のまま残り、MCP error result は `issueCreated`、`issueNumber`、任意の `issueUrl`、`taskEnqueued`、`stage`、sanitize 済みの `error` を返します。`{ "issue": { "number": issueNumber } }` で再試行すれば、新しい Issue は作成されません。`stage` が `issue_number_parsing` の場合は `issueNumber` を返せないため、任意の `issueUrl` で作成済み Issue を特定し、番号を確認してから再試行してください。
 
 MCP はタスクの enqueue だけを担当します。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。
 

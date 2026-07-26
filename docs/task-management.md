@@ -44,7 +44,7 @@ You can also save tasks from interactive mode. After refining requirements throu
 
 ### Saving Tasks from MCP Clients
 
-MCP clients can use the `takt-mcp` stdio server to save pending tasks without invoking shell commands. `takt_enqueue_task` writes a pending record to `.takt/tasks.yaml`; its optional `issue` object links an existing issue or creates one through the configured TAKT issue provider. If saving fails after issue creation, the issue remains open and the MCP error result returns its number for retry. The tool requires an absolute `cwd` and a non-empty task body. Use `takt run` to execute pending tasks or `takt watch` to monitor and execute them continuously. See [CLI Reference](./cli-reference.md#mcp-server) for setup and tool input details.
+MCP clients can use the `takt-mcp` stdio server to save pending tasks without invoking shell commands. `takt_enqueue_task` writes a pending record to `.takt/tasks.yaml`; its optional `issue` object links an existing issue or creates one through the configured TAKT issue provider. If saving fails after issue creation and the issue number was resolved, the issue remains open and the MCP error result returns its number for retry. If number extraction fails, the result can provide the issue URL instead. The tool requires an absolute `cwd` and a non-empty task body. Use `takt run` to execute pending tasks or `takt watch` to monitor and execute them continuously. See [CLI Reference](./cli-reference.md#mcp-server) for setup and tool input details.
 
 ## Task Directory Format
 

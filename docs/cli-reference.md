@@ -172,15 +172,15 @@ Optional input:
 | `worktree` | boolean | `true` creates an automatic isolated worktree. Defaults to `true`. MCP input does not accept custom worktree paths. |
 | `issue.number` | positive safe integer | Link an existing issue without calling an issue provider. |
 | `issue.create` | `true` | Create an issue through the configured issue provider before enqueueing. |
-| `issue.title` | string | Optional non-empty title for a newly created issue. |
+| `issue.title` | string | Optional non-empty title for a newly created issue. Limited to 255 characters. |
 | `issue.labels` | string array | Optional non-empty labels for a newly created issue. |
 | `taskContext.branch` | string | Local branch name to save with the task. |
 | `taskContext.baseBranch` | string | Base branch name to save with the task. |
 | `taskContext.prNumber` | positive safe integer | Pull request number to save with the task. Values greater than `Number.MAX_SAFE_INTEGER` are rejected. |
 
-Input limits: `task` is limited to 128 KiB, `workflow` to 128 characters, each issue label to 100 characters, and at most 20 labels.
+Input limits: `task` is limited to 128 KiB, `workflow` to 128 characters, an issue title to 255 characters, each issue label to 100 characters, and at most 20 labels.
 
-The `issue` object must be exactly one of `{ "number": 123 }` or `{ "create": true, "title"?: "...", "labels"?: ["..."] }`; mixed keys, empty titles or labels, and unknown keys are rejected. A successful issue-backed enqueue returns `issueNumber`. If issue creation succeeds but task saving fails or is cancelled, the issue remains open and the MCP error result includes `issueCreated`, `issueNumber`, optional `issueUrl`, `taskEnqueued`, `stage`, and a sanitized `error`. Retry with `{ "issue": { "number": issueNumber } }` to avoid creating another issue.
+The `issue` object must be exactly one of `{ "number": 123 }` or `{ "create": true, "title"?: "...", "labels"?: ["..."] }`; mixed keys, empty titles or labels, and unknown keys are rejected. A successful issue-backed enqueue returns `issueNumber`. If issue creation succeeds but task saving fails or is cancelled after the issue number is resolved, the issue remains open and the MCP error result includes `issueCreated`, `issueNumber`, optional `issueUrl`, `taskEnqueued`, `stage`, and a sanitized `error`. Retry with `{ "issue": { "number": issueNumber } }` to avoid creating another issue. If `stage` is `issue_number_parsing`, `issueNumber` is unavailable; use the optional `issueUrl` to identify the created issue and obtain its number before retrying.
 
 MCP only enqueues tasks. Use `takt run` to execute pending tasks and `takt watch` to monitor and execute them continuously.
 

@@ -9,16 +9,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 
+const { mockLogError } = vi.hoisted(() => ({
+  mockLogError: vi.fn(),
+}));
+
 vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(),
 }));
 
-vi.mock('../../shared/utils/index.js', async (importOriginal) => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({
     info: vi.fn(),
     debug: vi.fn(),
-    error: vi.fn(),
+    error: mockLogError,
   }),
 }));
 
@@ -201,6 +205,13 @@ describe('createIssue', () => {
       url: 'https://github.com/owner/repo/issues/not-a-number',
       error: 'Failed to extract issue number from created issue URL',
     });
+    expect(mockLogError).toHaveBeenCalledWith(
+      'Issue number extraction failed after issue creation',
+      {
+        error: 'Failed to extract issue number from created issue URL',
+        url: 'https://github.com/owner/repo/issues/not-a-number',
+      },
+    );
   });
 
   it('should return error when gh issue create returns a URL with a trailing slash', () => {

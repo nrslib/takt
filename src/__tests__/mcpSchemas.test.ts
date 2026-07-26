@@ -80,6 +80,29 @@ describe('MCP tool input schema', () => {
     })).toThrow();
   });
 
+  it('enforces issue title and label length boundaries', () => {
+    expect(enqueueTaskInputSchema.parse({
+      ...required,
+      issue: {
+        create: true,
+        title: 't'.repeat(255),
+        labels: ['l'.repeat(100)],
+      },
+    }).issue).toEqual({
+      create: true,
+      title: 't'.repeat(255),
+      labels: ['l'.repeat(100)],
+    });
+    expect(() => enqueueTaskInputSchema.parse({
+      ...required,
+      issue: { create: true, title: 't'.repeat(256) },
+    })).toThrow();
+    expect(() => enqueueTaskInputSchema.parse({
+      ...required,
+      issue: { create: true, labels: ['l'.repeat(101)] },
+    })).toThrow();
+  });
+
   it('exposes the nested issue schema in generated JSON Schema', () => {
     const schema = z.toJSONSchema(enqueueTaskInputSchema, { io: 'input' }) as {
       properties?: Record<string, { description?: string }>;

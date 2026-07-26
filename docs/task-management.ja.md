@@ -44,7 +44,7 @@ Issue 参照（例: `#28`）を渡すと、TAKT は GitHub CLI（`gh`）を介�
 
 ### MCP Client からのタスク保存
 
-MCP client は `takt-mcp` stdio server を使って、shell command を直接呼ばずに pending タスクを保存できます。`takt_enqueue_task` は `.takt/tasks.yaml` に pending レコードを書き込み、任意の `issue` object で既存 Issue を紐付けるか、設定済み TAKT issue provider で新規 Issue を作成します。Issue 作成後に保存が失敗しても Issue は open のまま残り、MCP error result は再試行用の番号を返します。この tool は絶対パスの `cwd` と空でないタスク本文を必須入力とします。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。設定方法と tool 入力の詳細は [CLI リファレンス](./cli-reference.ja.md#mcp-server) を参照してください。
+MCP client は `takt-mcp` stdio server を使って、shell command を直接呼ばずに pending タスクを保存できます。`takt_enqueue_task` は `.takt/tasks.yaml` に pending レコードを書き込み、任意の `issue` object で既存 Issue を紐付けるか、設定済み TAKT issue provider で新規 Issue を作成します。Issue 作成後に保存が失敗し、Issue 番号まで解決済みなら、Issue は open のまま残り、MCP error result は再試行用の番号を返します。番号抽出に失敗した場合は、代わりに Issue URL を返すことがあります。この tool は絶対パスの `cwd` と空でないタスク本文を必須入力とします。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。設定方法と tool 入力の詳細は [CLI リファレンス](./cli-reference.ja.md#mcp-server) を参照してください。
 
 ## タスクディレクトリ形式
 

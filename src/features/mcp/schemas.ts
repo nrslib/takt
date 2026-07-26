@@ -7,6 +7,7 @@ import {
 
 const MCP_TASK_MAX_LENGTH = 128 * 1024;
 const MCP_WORKFLOW_MAX_LENGTH = 128;
+const MCP_ISSUE_TITLE_MAX_LENGTH = 255;
 const MCP_LABEL_MAX_LENGTH = 100;
 const MCP_LABEL_MAX_COUNT = 20;
 
@@ -40,7 +41,7 @@ const taskContextSchema = z.object({
 const issueNumberSchema = z.number().int().safe().positive({
   message: 'issue number must be a positive safe integer',
 });
-const issueTitleSchema = z.string().trim().min(1).max(MCP_TASK_MAX_LENGTH);
+const issueTitleSchema = z.string().trim().min(1).max(MCP_ISSUE_TITLE_MAX_LENGTH);
 const issueLabelsSchema = z.array(z.string().trim().min(1).max(MCP_LABEL_MAX_LENGTH))
   .max(MCP_LABEL_MAX_COUNT);
 const issueSchema = z.union([

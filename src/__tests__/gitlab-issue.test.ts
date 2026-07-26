@@ -10,7 +10,10 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockExecFileSync = vi.fn();
+const { mockExecFileSync, mockLogError } = vi.hoisted(() => ({
+  mockExecFileSync: vi.fn(),
+  mockLogError: vi.fn(),
+}));
 vi.mock('node:child_process', () => ({
   execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
 }));
@@ -20,7 +23,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   createLogger: () => ({
     info: vi.fn(),
     debug: vi.fn(),
-    error: vi.fn(),
+    error: mockLogError,
   }),
   getErrorMessage: (e: unknown) => String(e),
 }));
@@ -500,6 +503,13 @@ describe('createIssue', () => {
       url: 'https://gitlab.com/org/repo/-/issues/not-a-number',
       error: 'Failed to extract issue number from created issue URL',
     });
+    expect(mockLogError).toHaveBeenCalledWith(
+      'Issue number extraction failed after issue creation',
+      {
+        error: 'Failed to extract issue number from created issue URL',
+        url: 'https://gitlab.com/org/repo/-/issues/not-a-number',
+      },
+    );
   });
 
   it('glab issue create が trailing slash 付き URL を返した場合は success: false を返す', () => {
