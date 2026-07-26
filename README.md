@@ -13,13 +13,13 @@
   <a href="./docs/README.ja.md">日本語</a>
 </p>
 
-![TAKT workflow control for AI coding agents](./docs/assets/description/01-hero.png)
-
 **Stop babysitting AI coding agents.**
 
 TAKT is an open-source CLI that turns AI coding agents into repeatable development workflows. Define planning, implementation, review, fix loops, human checkpoints, permissions, and output contracts in YAML, then run tasks with isolated worktrees and traceable logs.
 
 Instead of asking one agent to remember the whole process, TAKT gives each step its own role, context, and transition rules. Agents can code, but the workflow decides what happens next.
+
+![TAKT workflow control for AI coding agents](./docs/assets/description/01-hero.png)
 
 - Run plan → implement → review → fix loops as explicit workflow steps
 - Keep context focused with step-specific personas, policies, knowledge, instructions, and output contracts
