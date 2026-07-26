@@ -340,7 +340,7 @@ describe('Pipeline Modes IT: --task + --workflow name (builtin)', () => {
       { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nNo AI-specific issues' },
       { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\napproved' },
       { persona: 'merge-readiness-reviewer', status: 'done', content: '[MERGE-READINESS-REVIEW:1]\n\napproved' },
-      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:1]\n\napproved' },
+      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\napproved' },
     ]);
 
     const exitCode = await executePipeline({
