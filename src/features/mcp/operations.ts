@@ -1,45 +1,25 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { getGitProvider, initGitProvider } from '../../infra/git/index.js';
+import {
+  createIssueAndEnqueueTask,
+  enqueueTask,
+  type IssueEnqueueFailure,
+} from '../../infra/task/enqueueService.js';
 import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
-import { TaskRunner, type TaskInfo } from '../../infra/task/index.js';
-import { getGitProvider, initGitProvider, type CloseIssueResult, type GitProvider } from '../../infra/git/index.js';
 import {
   createIssueFromTaskResult as defaultCreateIssueFromTaskResult,
   saveTaskFile as defaultSaveTaskFile,
 } from '../tasks/add/index.js';
-import {
-  createIssueAndEnqueueTask,
-  enqueueTask,
-  formatIssueEnqueueFailure,
-  joinIssueEnqueueFailureText,
-  type IssueEnqueueCompensationInput,
-  type IssueEnqueueFailure,
-} from '../../infra/task/enqueueService.js';
-import {
-  executeRunTaskAndCompleteWithDetails as defaultExecuteRunTaskAndCompleteWithDetails,
-  type TaskCompletionResult,
-  type RunTaskExecutionContext,
-} from '../tasks/execute/runTaskExecution.js';
-import type { TaskExecutionOptions, TaskExecutionParallelOptions } from '../tasks/execute/types.js';
-import type {
-  CreateIssueAndEnqueueTaskInput,
-  EnqueueTaskInput,
-  RunNextTaskInput,
-} from './schemas.js';
+import type { EnqueueTaskInput } from './schemas.js';
 
 type SaveTaskFile = typeof defaultSaveTaskFile;
 type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
-type ExecuteRunTaskAndCompleteWithDetails = typeof defaultExecuteRunTaskAndCompleteWithDetails;
-type CreateTaskRunner = (cwd: string) => TaskRunner;
-type CompensateCreatedIssue = (input: IssueEnqueueCompensationInput) => CloseIssueResult;
 
 export interface McpOperationDependencies {
   saveTaskFile?: SaveTaskFile;
   createIssueFromTaskResult?: CreateIssueFromTaskResult;
-  compensateCreatedIssue?: CompensateCreatedIssue;
-  createTaskRunner?: CreateTaskRunner;
-  executeRunTaskAndCompleteWithDetails?: ExecuteRunTaskAndCompleteWithDetails;
   allowedProjectRoot?: string;
 }
 
@@ -50,16 +30,12 @@ function textResult(text: string, isError?: boolean): CallToolResult {
   };
 }
 
-function jsonResult(value: Record<string, unknown>): CallToolResult {
-  return textResult(JSON.stringify(value));
-}
-
-function safeMcpErrorCause(error: unknown): string {
-  return safeExternalErrorMessage(error);
+function jsonResult(value: Record<string, unknown>, isError?: boolean): CallToolResult {
+  return textResult(JSON.stringify(value), isError);
 }
 
 function errorResult(action: string, error: unknown): CallToolResult {
-  return textResult(`${action}: ${safeMcpErrorCause(error)}`, true);
+  return textResult(`${action}: ${safeExternalErrorMessage(error)}`, true);
 }
 
 function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: string | undefined): void {
@@ -77,146 +53,75 @@ function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: string | und
   throw new Error(`MCP cwd is outside the allowed project root: ${cwd}`);
 }
 
-function buildTaskExecutionOptions(input: RunNextTaskInput): TaskExecutionOptions | undefined {
-  if (input.provider === undefined && input.model === undefined) {
-    return undefined;
+function issueFailureResult(failure: IssueEnqueueFailure): CallToolResult {
+  if (failure.stage === 'issue_creation') {
+    return jsonResult({
+      issueCreated: false,
+      taskEnqueued: false,
+      stage: failure.stage,
+      error: safeExternalErrorMessage(failure.error),
+    }, true);
   }
-  return {
-    ...(input.provider !== undefined ? { provider: input.provider } : {}),
-    ...(input.model !== undefined ? { model: input.model } : {}),
-  };
-}
-
-function buildSilentParallelOptions(): TaskExecutionParallelOptions {
-  return { outputMode: 'silent' };
-}
-
-function buildRunTaskExecutionContext(
-  input: RunNextTaskInput,
-  gitProvider: GitProvider,
-): RunTaskExecutionContext {
-  return {
-    gitProvider,
-    ...(input.taskContext === undefined ? {} : { taskContext: input.taskContext }),
-  };
-}
-
-function buildTaskFailureText(taskName: string, result: TaskCompletionResult): string {
-  if (result.failureReason === undefined) {
-    throw new Error(`Task failed without failure reason: ${taskName}`);
+  if (failure.stage === 'issue_number_parsing') {
+    return jsonResult({
+      issueCreated: true,
+      ...(failure.issueUrl !== undefined ? { issueUrl: failure.issueUrl } : {}),
+      taskEnqueued: false,
+      stage: failure.stage,
+      error: safeExternalErrorMessage(failure.error),
+    }, true);
   }
-  return `Task failed: ${taskName}\n${safeMcpErrorCause(result.failureReason)}`;
-}
-
-function buildTaskPostExecutionFailureText(taskName: string, result: TaskCompletionResult): string {
-  if (result.postExecutionFailureReason === undefined) {
-    throw new Error(`Task post-execution failed without failure reason: ${taskName}`);
-  }
-  return `Task post-execution failed: ${taskName}\n${safeMcpErrorCause(result.postExecutionFailureReason)}`;
-}
-
-function buildIssueEnqueueFailureResult(failure: IssueEnqueueFailure): CallToolResult {
-  return textResult(joinIssueEnqueueFailureText(
-    formatIssueEnqueueFailure(failure, safeMcpErrorCause),
-    '\n\n',
-  ), true);
+  return jsonResult({
+    issueCreated: true,
+    issueNumber: failure.issueNumber,
+    ...(failure.issueUrl !== undefined ? { issueUrl: failure.issueUrl } : {}),
+    taskEnqueued: false,
+    stage: failure.stage,
+    error: safeExternalErrorMessage(failure.error),
+  }, true);
 }
 
 export async function enqueueTaktTask(
   input: EnqueueTaskInput,
   deps: McpOperationDependencies = {},
+  abortSignal?: AbortSignal,
 ): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const saveTaskFile = deps.saveTaskFile ?? defaultSaveTaskFile;
-    const created = await enqueueTask({
-      cwd: input.cwd,
-      task: input.task,
-      workflow: input.workflow,
-      worktree: input.worktree ?? true,
-      autoPr: input.autoPr,
-      taskContext: input.taskContext,
-    }, saveTaskFile);
-    return jsonResult(created);
-  } catch (error) {
-    return errorResult('Task saving failed', error);
-  }
-}
+    if (input.issue === undefined || 'number' in input.issue) {
+      const created = await enqueueTask({
+        cwd: input.cwd,
+        task: input.task,
+        workflow: input.workflow,
+        worktree: input.worktree ?? true,
+        autoPr: input.autoPr,
+        taskContext: input.taskContext,
+        abortSignal,
+        ...(input.issue !== undefined ? { issueNumber: input.issue.number } : {}),
+      }, saveTaskFile);
+      return jsonResult(created);
+    }
 
-export async function createIssueAndEnqueueTaktTask(
-  input: CreateIssueAndEnqueueTaskInput,
-  deps: McpOperationDependencies = {},
-): Promise<CallToolResult> {
-  try {
-    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     initGitProvider(input.cwd);
-    const gitProvider = getGitProvider();
-    const issueResult = await createIssueAndEnqueueTask({
+    const result = await createIssueAndEnqueueTask({
       cwd: input.cwd,
       task: input.task,
       workflow: input.workflow,
       worktree: input.worktree ?? true,
       autoPr: input.autoPr,
-      labels: input.labels,
       taskContext: input.taskContext,
-      gitProvider,
+      ...(input.issue.title !== undefined ? { explicitTitle: input.issue.title } : {}),
+      ...(input.issue.labels !== undefined ? { labels: input.issue.labels } : {}),
+      gitProvider: getGitProvider(),
+      abortSignal,
+      issueOutputMode: 'silent',
     }, {
-      saveTaskFile: deps.saveTaskFile ?? defaultSaveTaskFile,
+      saveTaskFile,
       createIssueFromTaskResult: deps.createIssueFromTaskResult ?? defaultCreateIssueFromTaskResult,
-      compensateCreatedIssue: deps.compensateCreatedIssue,
     });
-    if (!issueResult.success) {
-      return buildIssueEnqueueFailureResult(issueResult.failure);
-    }
-    return jsonResult(issueResult.created);
+    return result.success ? jsonResult(result.created) : issueFailureResult(result.failure);
   } catch (error) {
-    return errorResult('Issue task enqueue failed', error);
-  }
-}
-
-export async function runNextTaktTask(
-  input: RunNextTaskInput,
-  deps: McpOperationDependencies = {},
-): Promise<CallToolResult> {
-  try {
-    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    initGitProvider(input.cwd);
-    const gitProvider = getGitProvider();
-    const createTaskRunner = deps.createTaskRunner ?? ((cwd: string) => new TaskRunner(cwd));
-    const executeRunTaskAndCompleteWithDetails = deps.executeRunTaskAndCompleteWithDetails
-      ?? defaultExecuteRunTaskAndCompleteWithDetails;
-    const taskRunner = createTaskRunner(input.cwd);
-    taskRunner.failInterruptedRunningTasks();
-    const tasks = taskRunner.claimNextTasks(1);
-    const task = tasks[0];
-    if (!task) {
-      return jsonResult({
-        ran: false,
-        message: 'No pending tasks in .takt/tasks.yaml',
-      });
-    }
-
-    const executionResult = await executeRunTaskAndCompleteWithDetails(
-      task as TaskInfo,
-      taskRunner,
-      input.cwd,
-      buildTaskExecutionOptions(input),
-      buildSilentParallelOptions(),
-      buildRunTaskExecutionContext(input, gitProvider),
-    );
-    if (!executionResult.success) {
-      return textResult(buildTaskFailureText(task.name, executionResult), true);
-    }
-    if (executionResult.prFailed) {
-      return textResult(buildTaskPostExecutionFailureText(task.name, executionResult), true);
-    }
-
-    return jsonResult({
-      ran: true,
-      taskName: task.name,
-      success: executionResult.success,
-    });
-  } catch (error) {
-    return errorResult('Task execution failed', error);
+    return errorResult('Task enqueue failed', error);
   }
 }

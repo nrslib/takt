@@ -72,7 +72,14 @@ export interface RoutingDecisionEvent {
   provider: string;
   model: string;
   selectedCategory: string;
-  selectedCostTier: 'high' | 'medium' | 'low';
+  selectedRoutingTier: 'high' | 'medium' | 'low';
+  requiredRoutingTier: 'high' | 'medium' | 'low';
+  reasonCodes?: string[];
+  fallbackReason?: string;
+  fingerprintChanged?: boolean;
+  retryReason?: 'failed-without-progress' | 'no-progress';
+  estimatorDurationMs?: number;
+  inputTokenBucket?: 'small' | 'medium' | 'large';
   candidateCount: number;
   strategy: 'cost' | 'balanced' | 'performance';
   resolutionSource: string;

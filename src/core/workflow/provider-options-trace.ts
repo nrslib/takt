@@ -8,7 +8,7 @@ export type ProviderOptionsOriginResolver = (path: string) => ProviderOptionsTra
  * Resolution priority (highest first):
  *   cli/env > promotion > step > workflow_call > provider_routing.steps >
  *   provider_routing.tags > provider_routing.personas > persona_providers >
- *   auto.rules/auto.ai/auto.default > workflow > project > global > default
+ *   auto.rules/auto.dynamic/auto.fallback > workflow > project > global > default
  *
  * - `promotion`: step promotion override selected for the current execution
  * - `cli`: --provider / --model CLI flag
@@ -23,8 +23,8 @@ export type ProviderResolutionSource =
   | 'env'
   | 'promotion'
   | 'auto.rules'
-  | 'auto.ai'
-  | 'auto.default'
+  | 'auto.dynamic'
+  | 'auto.fallback'
   | 'cli'
   | 'persona_providers'
   | 'provider_routing.personas'

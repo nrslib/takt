@@ -28,6 +28,10 @@ const {
   mockLoadAllStandaloneWorkflowsWithSources,
   mockPrepareTaskSpecDirectory,
   mockCleanupPreparedTaskSpec,
+  mockDetectDefaultBranch,
+  mockResolveBaseBranch,
+  mockGetCurrentBranch,
+  mockLocalBranchExists,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockReadFileSync: vi.fn(),
@@ -65,6 +69,10 @@ const {
   mockLoadAllStandaloneWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([['default', {}]])),
   mockPrepareTaskSpecDirectory: vi.fn(),
   mockCleanupPreparedTaskSpec: vi.fn(),
+  mockDetectDefaultBranch: vi.fn(() => 'main'),
+  mockResolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
+  mockGetCurrentBranch: vi.fn(() => 'feature/retry-context'),
+  mockLocalBranchExists: vi.fn(() => true),
 }));
 
 vi.mock('node:fs', async (importOriginal) => ({
@@ -120,6 +128,12 @@ vi.mock('../core/workflow/run/run-meta.js', () => ({
 }));
 
 vi.mock('../infra/task/index.js', () => ({
+  detectDefaultBranch: (...args: unknown[]) => mockDetectDefaultBranch(...args),
+  resolveBaseBranch: (...args: unknown[]) => mockResolveBaseBranch(...args),
+  getCurrentBranch: (...args: unknown[]) => mockGetCurrentBranch(...args),
+  localBranchExists: (...args: unknown[]) => mockLocalBranchExists(...args),
+  materializePullRequestBase: vi.fn((_projectCwd, _targetCwd, baseBranch: string) =>
+    `refs/takt/pr-base/${baseBranch}`),
   TaskRunner: class {
     startReExecution(...args: unknown[]) {
       return mockStartReExecution(...args);
@@ -605,6 +619,101 @@ describe('retryFailedTask', () => {
       undefined,
     );
     expect(mockExecuteAndCompleteTask).toHaveBeenCalled();
+    expect((mockRunTaskRetryMode.mock.calls[0]?.[1] as { prContext?: unknown }).prContext).toBeUndefined();
+  });
+
+  it('should pass saved PR context to the retry assistant', async () => {
+    const task = makeFailedTask({
+      data: {
+        task: 'Do something',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 42,
+        base_branch: 'release/2026.07',
+        branch: 'feature/retry-context',
+      },
+    });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockRunTaskRetryMode).toHaveBeenCalledWith(
+      '/project/.takt/worktrees/my-task',
+      expect.objectContaining({
+        prContext: {
+          source: 'pr_review',
+          prNumber: 42,
+          baseBranch: 'release/2026.07',
+          headBranch: 'feature/retry-context',
+          baseBranchSource: 'pull_request',
+          baseDiffRef: 'refs/takt/pr-base/release/2026.07',
+          headDiffRef: 'refs/heads/feature/retry-context',
+        },
+      }),
+    );
+  });
+
+  it('should mark a default-branch base as fallback in retry PR context', async () => {
+    const task = makeFailedTask({
+      data: {
+        task: 'Do something',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 42,
+        branch: 'feature/retry-context',
+      },
+    });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockResolveBaseBranch).toHaveBeenCalledWith('/project');
+    expect(mockRunTaskRetryMode).toHaveBeenCalledWith(
+      '/project/.takt/worktrees/my-task',
+      expect.objectContaining({
+        prContext: expect.objectContaining({
+          baseBranch: 'main',
+          baseBranchSource: 'default_branch_fallback',
+        }),
+      }),
+    );
+  });
+
+  it('should reject retry conversation when the saved PR head ref is missing', async () => {
+    const task = makeFailedTask({
+      data: {
+        task: 'Do something',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 42,
+        branch: 'feature/retry-context',
+        base_branch: 'release/2026.07',
+      },
+    });
+    mockLocalBranchExists.mockReturnValueOnce(false);
+
+    await expect(retryFailedTask(task, '/project')).rejects.toThrow(
+      'PR review task "my-task" worktree is missing head ref refs/heads/feature/retry-context.',
+    );
+    expect(mockRunTaskRetryMode).not.toHaveBeenCalled();
+  });
+
+  it('should reject retry conversation when the worktree is on another branch', async () => {
+    const task = makeFailedTask({
+      data: {
+        task: 'Do something',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 42,
+        branch: 'feature/retry-context',
+        base_branch: 'release/2026.07',
+      },
+    });
+    mockGetCurrentBranch.mockReturnValueOnce('main');
+
+    await expect(retryFailedTask(task, '/project')).rejects.toThrow(
+      'PR review task "my-task" worktree is checked out on "main", expected "feature/retry-context".',
+    );
+    expect(mockLocalBranchExists).not.toHaveBeenCalled();
+    expect(mockRunTaskRetryMode).not.toHaveBeenCalled();
   });
 
   it('should promote image attachments for retry direct execution', async () => {

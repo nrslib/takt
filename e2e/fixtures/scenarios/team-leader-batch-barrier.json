@@ -13,28 +13,14 @@
   {
     "persona": "agents/test-team-leader-batch-barrier",
     "status": "done",
-    "content": "add-second-batch",
-    "structured_output": {
-      "done": false,
-      "reasoning": "The initial batch is complete; schedule the second batch.",
-      "parts": [
-        { "id": "bb-3", "title": "Create bb-3.txt", "instruction": "Create bb-3.txt with content bb-3.txt" },
-        { "id": "bb-4", "title": "Create bb-4.txt", "instruction": "Create bb-4.txt with content bb-4.txt" }
-      ]
-    }
-  },
-  {
-    "persona": "agents/test-team-leader-batch-barrier",
-    "status": "done",
-    "content": "done",
+    "content": "cancel-slow-running-part",
     "structured_output": {
       "done": true,
-      "reasoning": "All tasks planned",
+      "reasoning": "The completed part is sufficient; cancel the obsolete running part.",
+      "cancelPartIds": ["bb-2"],
       "parts": []
     }
   },
-  { "persona": "agents/test-coder", "status": "done", "content": "completed bb-1", "delay_ms": 100 },
-  { "persona": "agents/test-coder", "status": "done", "content": "completed bb-2", "delay_ms": 100 },
-  { "persona": "agents/test-coder", "status": "done", "content": "completed bb-3" },
-  { "persona": "agents/test-coder", "status": "done", "content": "completed bb-4" }
+  { "persona": "agents/test-coder", "status": "done", "content": "completed bb-1" },
+  { "persona": "agents/test-coder", "status": "done", "content": "completed bb-2", "wait_for_abort": true }
 ]

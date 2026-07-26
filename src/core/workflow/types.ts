@@ -25,7 +25,8 @@ import type { ProviderPermissionProfiles } from '../models/provider-profiles.js'
 import type { ProviderUsageSnapshot } from '../models/response.js';
 import type { StepProviderOptions } from '../models/workflow-types.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
-import type { AutoRoutingAiRouter } from '../../agents/auto-routing-usecase.js';
+import type { WorkRequirementEstimator } from './auto-routing/contracts.js';
+import type { RoutingRuntime } from './auto-routing/runtime.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
 import type { StructuredOutputNormalizerRegistry } from './engine/structured-output-normalizer.js';
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
@@ -33,6 +34,7 @@ import type { FindingContractConfig, FindingLedger } from '../models/finding-typ
 import type { RunResumeSource } from './run/run-meta.js';
 import type { FindingLedgerStore } from './findings/store.js';
 import type { OperationJournalStore } from './operations/operation-journal-types.js';
+import type { PullRequestContext } from './pr-context.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 
@@ -108,9 +110,16 @@ export interface StepProviderInfo {
   providerOptionsSources?: Readonly<Record<string, ProviderResolutionSource>>;
   autoRoutingDecision?: {
     candidateName: string;
-    costTier: 'high' | 'medium' | 'low';
+    routingTier: 'high' | 'medium' | 'low';
     strategy: AutoRoutingStrategy;
     candidateCount: number;
+    requiredTier?: 'high' | 'medium' | 'low';
+    reasonCodes?: string[];
+    fallbackReason?: string;
+    fingerprintChanged?: boolean;
+    retryReason?: 'failed-without-progress' | 'no-progress';
+    estimatorDurationMs?: number;
+    inputTokenBucket?: 'small' | 'medium' | 'large';
   };
 }
 
@@ -305,6 +314,8 @@ export type SessionUpdateCallback = (persona: string, sessionId: string | undefi
  */
 export type IterationLimitCallback = (request: IterationLimitRequest) => Promise<number | null>;
 
+export type AutoRoutingEstimatorSource = 'injected' | 'engine-default' | 'absent';
+
 /** Options for workflow engine */
 export interface WorkflowEngineOptions {
   abortSignal?: AbortSignal;
@@ -363,7 +374,12 @@ export interface WorkflowEngineOptions {
   autoStrategyOverride?: AutoRoutingStrategy;
   onEffectiveAutoRoutingReached?: () => void;
   /** Run-scoped AI router for automatic provider/model routing. */
-  autoRoutingAiRouter?: AutoRoutingAiRouter;
+  autoRoutingEstimator?: WorkRequirementEstimator;
+  /** Origin of the run-scoped AI router, propagated to child workflow engines. */
+  autoRoutingEstimatorSource?: AutoRoutingEstimatorSource;
+  routingRuntime?: RoutingRuntime;
+  /** Repository identifiers and other run-local values redacted from routing model input. */
+  routingSensitiveValues?: readonly string[];
   /** Source layer for resolved provider options */
   providerOptionsSource?: ProviderOptionsSource;
   /** Nested origin resolver for provider options traced-config values */
@@ -407,6 +423,8 @@ export interface WorkflowEngineOptions {
   };
   /** Task metadata used only for trace discovery attributes. */
   traceTaskMetadata?: WorkflowTraceTaskMetadata;
+  /** Structured PR context used for all Phase 1 instructions. */
+  prContext?: PullRequestContext;
   phase1ProcessSafetyByStep?: Record<string, { protectedParentRunPid: number }>;
   systemStepServicesFactory?: SystemStepServicesFactory;
   sharedRuntime?: WorkflowSharedRuntimeState;

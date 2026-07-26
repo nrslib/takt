@@ -233,9 +233,11 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    expect(state.personaSessions.has('../personas/arch-review.md:mock')).toBe(false);
-    expect(state.personaSessions.get('../personas/security-review.md:mock')).toBe('security-session');
-    expect(onSessionUpdate).toHaveBeenCalledWith('../personas/arch-review.md:mock', undefined);
+    const archSessionKey = '["../personas/arch-review.md","mock"]';
+    const securitySessionKey = '["../personas/security-review.md","mock"]';
+    expect(state.personaSessions.has(archSessionKey)).toBe(false);
+    expect(state.personaSessions.get(securitySessionKey)).toBe('security-session');
+    expect(onSessionUpdate).toHaveBeenCalledWith(archSessionKey, undefined);
   });
 
   it('should keep a newer sibling session when a shared session key later exhausts rule detection', async () => {
@@ -256,7 +258,7 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     const engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
       provider: 'mock',
-      initialSessions: { 'coder:mock': 'session-old' },
+      initialSessions: { '["coder","mock"]': 'session-old' },
       onSessionUpdate,
     });
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -283,8 +285,8 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    expect(state.personaSessions.get('coder:mock')).toBe('session-newer');
-    expect(onSessionUpdate).not.toHaveBeenCalledWith('coder:mock', undefined);
+    expect(state.personaSessions.get('["coder","mock"]')).toBe('session-newer');
+    expect(onSessionUpdate).not.toHaveBeenCalledWith('["coder","mock"]', undefined);
   });
 
   it('should abort with parent error when one sub-step rejects and another approves', async () => {

@@ -259,6 +259,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       existingIds,
       options.language,
       options.findingContract,
+      options.cancellablePartIds,
     );
 
     return withRetry(async () => {
@@ -298,10 +299,11 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
           );
       return {
         ...(findingContractDecision === undefined
-          ? toMorePartsResponse(raw)
+          ? toMorePartsResponse(raw, options.cancellablePartIds)
           : {
               done: findingContractDecision.decision !== 'continue',
               reasoning: findingContractDecision.reasoning,
+              cancelPartIds: [],
               parts: findingContractDecision.parts,
               findingContractDecision,
             }),
@@ -325,6 +327,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       existingIds,
       options.language,
       options.findingContract,
+      options.cancellablePartIds,
     );
     return withRetry(
       () => this.requestPromptBasedRawResponse(prompt, options, []),

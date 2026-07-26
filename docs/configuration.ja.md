@@ -537,7 +537,7 @@ CLI / 環境変数の明示 override
 > provider_routing.tags.<tag>
 > provider_routing.personas.<raw persona key>
 > persona_providers.<persona display name>  # deprecated legacy
-> effective auto_routing（auto.rules / auto.ai / auto.default）
+> effective auto_routing（auto.rules / auto.dynamic / auto.fallback）
 > workflow_config.provider/model
 > project .takt/config.yaml
 > global ~/.takt/config.yaml
@@ -566,25 +566,31 @@ auto_routing:
       description: Planning, final decisions, requirement-fulfillment judgment, and other advanced reasoning
       provider: codex
       model: gpt-5.6-sol
-      cost_tier: high
+      routing_tier: high
     - name: coding
       description: Implementation, tests, debugging, and refactoring
       provider: codex
       model: gpt-5.6-terra
-      cost_tier: medium
+      routing_tier: medium
     - name: lightweight
       description: Formatting and small mechanical edits
       provider: codex
       model: gpt-5.6-luna
-      cost_tier: low
+      routing_tier: low
   rules:
-    tags:
-      implementation: coding
-      architecture: advanced
     steps:
       security-audit: advanced
-    personas:
-      architect: advanced
+  default_pool: general
+  candidate_pools:
+    general:
+      candidates: [lightweight, coding, advanced]
+      fallback: advanced
+    implementation:
+      candidates: [coding, advanced]
+      fallback: advanced
+  pool_rules:
+    tags:
+      implementation: implementation
 ```
 
 自己完結した workflow では workflow-level block で routing を上書きできます。workflow-level の `auto_routing` block 自体が、その workflow の auto routing を有効にします。
@@ -602,17 +608,22 @@ auto_routing:
     - name: coding
       provider: codex
       model: gpt-5.6-terra
-      cost_tier: medium
+      routing_tier: medium
       description: Implementation, testing, debugging, and refactoring
+  default_pool: general
+  candidate_pools:
+    general:
+      candidates: [coding]
+      fallback: coding
 ```
 
 auto routing の candidate 選択が適用されるのは workflow の step 実行だけです。AI による task slug 生成や sync conflict resolver など workflow step context を持たない内部処理は、解決済みの具体的な top-level provider/model を使用します。`auto_routing.router` と candidates は default として暗黙に使用されません。
 
 assistant 会話（インタラクティブモードの計画会話、既存タスクへの追加指示 (instruct)、リトライ対話）は auto routing を通りません。設定済みなら `takt_providers.assistant`、未設定なら top-level provider/model を解決し、この assistant 設定はその他の内部処理の default にはなりません。CLI の `--provider` / `--model` override が適用されるのはインタラクティブモードの計画会話だけで、instruct / retry には適用されません。解決可能な assistant または top-level provider がない場合、assistant は起動時に `Provider is not configured.` で失敗します。
 
-auto routing の位置は、前述の provider/model の完全な優先順位に従います。auto routing 内では `tags`、`steps`、`personas` の順に rule を確認します。複数の step tag が一致した場合は、step 上で後ろに書かれた tag が優先されます。rule が一致しない場合、TAKT は設定された router model に candidate description から候補を選ばせます。router failure は warning を出し、strategy default にフォールバックします。`cost` は最初の `low` candidate、`balanced` は最初の `medium` candidate、`performance` は最初の `high` candidate を選びます。
+auto routing の位置は、前述の provider/model の完全な優先順位に従います。hard rule は `tags`、`steps`、`personas` の順に確認します。それ以外は `pool_rules` が candidate pool を選び、router は必要な tier だけを推定し、TAKT が candidate を決定的に選びます。推定成功後、`cost` と `balanced` は選択された pool 内で必要 tier を満たす最小の `routing_tier` を選びます。同じ tier の candidate が複数ある場合は、どちらもその pool の `candidates` リストに記載された順序を使います。`performance` は選択された pool 内で最も高い `routing_tier` を選びます。推定失敗時は当該 pool の明示 `fallback` を使用し、推定成功後に必要 tier を満たす candidate がなければ実行エラーになります。
 
-candidate の `cost_tier` は `high`、`medium`、`low` のいずれかです。candidate の `provider_options` は step 優先度で merge されるため、env / CLI 由来の option leaf は引き続き優先されます。`model: auto` はサポートされません。複数 candidate を使ってください。CLI は `--auto-strategy cost|balanced|performance` で strategy を上書きできます。この上書きは、実行が effective `auto_routing` を持つ workflow に到達するまで伝播します。到達しないまま実行が完了した場合は、strategy flag が warning を出して無視されます。
+candidate の `routing_tier` は `high`、`medium`、`low` のいずれかです。すべての設定には `default_pool`、空でない `candidate_pools`、pool 内の `fallback` が必要です。candidate の `provider_options` は step 優先度で merge されるため、env / CLI 由来の option leaf は引き続き優先されます。`model: auto` はサポートされません。複数 candidate を使ってください。CLI は `--auto-strategy cost|balanced|performance` で strategy を上書きできます。この上書きは、実行が effective `auto_routing` を持つ workflow に到達するまで伝播します。到達しないまま実行が完了した場合は、strategy flag が warning を出して無視されます。router には正規化済みの task、raw step instruction、現在の残作業が送信されます。識別子の置換は識別リスクを下げますが、匿名性を保証しません。routing event は local-only であり、routing 本文を保存しません。
 
 Routing decision は local-only telemetry です。`telemetry.routing_decisions` が有効な場合、TAKT は project `.takt/events/` ディレクトリ配下に NDJSON として書き込みます。TAKT は routing decision をアップロードしません。この local recording 設定の確認・変更には `takt telemetry status`、`takt telemetry enable`、`takt telemetry disable` を使います。
 

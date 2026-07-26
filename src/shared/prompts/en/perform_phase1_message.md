@@ -5,7 +5,7 @@
   vars: workingDirectory, hasGitRules, gitRules, editRule, workflowName, workflowDescription,
         hasFallbackNotice, fallbackNotice, hasWorkflowDescription, workflowStructure, iteration, stepIteration, stepName,
         hasReport, reportInfo, phaseNote, hasTaskSection, userRequest, hasPreviousResponse,
-        previousResponse, hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy,
+        previousResponse, hasUserInputs, userInputs, hasRetryNote, retryNote, hasPrContext, prContext, hasPolicy,
         policyContent, hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent,
         instructions
   builder: InstructionBuilder
@@ -55,6 +55,10 @@ Knowledge may be truncated. Always follow Source paths and read original files b
 
 ## Retry Note
 {{retryNote}}
+{{/if}}
+{{#if hasPrContext}}
+
+{{prContext}}
 {{/if}}
 {{#if hasTaskSection}}
 

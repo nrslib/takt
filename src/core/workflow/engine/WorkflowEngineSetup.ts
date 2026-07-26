@@ -7,6 +7,7 @@ import type {
   WorkflowConfig,
   WorkflowMaxSteps,
   WorkflowResumePoint,
+  WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
@@ -42,9 +43,7 @@ const log = createLogger('workflow-engine');
 
 interface WorkflowEngineSetupParams {
   config: WorkflowConfig;
-  state: {
-    personaSessions: Map<string, string>;
-  };
+  state: WorkflowState;
   task: string;
   projectCwd: string;
   getCwd: () => string;
@@ -207,6 +206,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getWorkflowDescription: () => params.config.description,
     getInheritedPeerReportPaths: params.getInheritedPeerReportPaths,
     getRetryNote: () => params.options.retryNote,
+    getPrContext: () => params.options.prContext,
     getObservabilityRunId: () => params.options.observabilityRunId,
     observabilityEnabled: () => params.options.observability?.enabled === true,
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,
@@ -294,6 +294,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     stepExecutor,
     engineOptions: params.options,
     getCwd: params.getCwd,
+    getTask: () => params.task,
+    getState: () => params.state,
     getWorkflowName: () => params.config.name,
     getInteractive: () => params.options.interactive === true,
     getRunPaths: params.getRunPaths,

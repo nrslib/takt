@@ -175,6 +175,35 @@ describe('createIssueFromTask', () => {
 
       expect(result).toBe(42);
     });
+
+    it('returns a sanitized public issue URL with the issue number', () => {
+      mockCreateIssue.mockReturnValue({
+        success: true,
+        issueNumber: 42,
+        url: 'https://user:secret@example.test/issues/42?token=secret#fragment',
+      });
+
+      expect(createIssueFromTaskResult('Test task', { outputMode: 'silent' })).toEqual({
+        success: true,
+        issueNumber: 42,
+        issueUrl: 'https://example.test/issues/42',
+      });
+    });
+
+    it('reports that an issue was created when its number is invalid', () => {
+      mockCreateIssue.mockReturnValue({
+        success: true,
+        issueNumber: 0,
+        url: 'https://example.test/issues/unknown',
+      });
+
+      expect(createIssueFromTaskResult('Test task', { outputMode: 'silent' })).toEqual({
+        success: false,
+        issueCreated: true,
+        issueUrl: 'https://example.test/issues/unknown',
+        error: expect.stringContaining('positive safe integer'),
+      });
+    });
   });
 
   it('should use first line as title and full text as body for multi-line task', () => {
@@ -281,6 +310,20 @@ describe('createIssueFromTask', () => {
   });
 
   describe('structured output title', () => {
+    it('uses an explicit MCP title without generated-title fallback rules', () => {
+      mockCreateIssue.mockReturnValue(createIssueSuccess(7));
+
+      createIssueFromTaskResult('Long task body', {
+        explicitTitle: 'A',
+        outputMode: 'silent',
+      });
+
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: 'A', body: 'Long task body' },
+        undefined,
+      );
+    });
+
     it('uses a valid structured output title as the issue title', () => {
       // Given
       const task = '## Generic task heading\nImplement AI issue title generation';

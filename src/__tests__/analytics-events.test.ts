@@ -99,7 +99,7 @@ describe('analytics event types', () => {
       provider: 'codex',
       model: 'gpt-5',
       selectedCategory: 'coding',
-      selectedCostTier: 'medium',
+      selectedRoutingTier: 'medium',
       candidateCount: 3,
       strategy: 'balanced',
       resolutionSource: 'auto.rules',
@@ -112,7 +112,7 @@ describe('analytics event types', () => {
     };
 
     expect(event.type).toBe('routing_decision');
-    expect(event.selectedCostTier).toBe('medium');
+    expect(event.selectedRoutingTier).toBe('medium');
     expect(event.resolutionSource).toBe('auto.rules');
   });
 
@@ -161,7 +161,7 @@ describe('analytics event types', () => {
         provider: 'codex',
         model: 'gpt-5',
         selectedCategory: 'coding',
-        selectedCostTier: 'medium',
+        selectedRoutingTier: 'medium',
         candidateCount: 3,
         strategy: 'balanced',
         resolutionSource: 'auto.rules',

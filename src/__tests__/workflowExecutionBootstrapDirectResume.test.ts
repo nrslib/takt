@@ -160,23 +160,25 @@ function createAutoRoutingConfig(): NonNullable<WorkflowConfig['autoRouting']> {
         description: 'Reasoning',
         provider: 'claude-sdk',
         model: 'claude-opus-4-20250514',
-        costTier: 'high',
+        routingTier: 'high',
       },
       {
         name: 'coding',
         description: 'Implementation',
         provider: 'codex',
         model: 'gpt-5',
-        costTier: 'medium',
+        routingTier: 'medium',
       },
       {
         name: 'lightweight',
         description: 'Formatting',
         provider: 'claude-sdk',
         model: 'claude-haiku-4-5-20251001',
-        costTier: 'low',
+        routingTier: 'low',
       },
     ],
+    defaultPool: 'general',
+    candidatePools: { general: { candidates: ['reasoning', 'coding', 'lightweight'], fallback: 'reasoning' } },
   };
 }
 
@@ -279,9 +281,11 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
             description: 'Implementation',
             provider: 'codex',
             model: 'gpt-5',
-            costTier: 'medium',
+            routingTier: 'medium',
           },
         ],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['coding'], fallback: 'coding' } },
       },
     }, 'Run auto workflow', '/project', {
       projectCwd: '/project',

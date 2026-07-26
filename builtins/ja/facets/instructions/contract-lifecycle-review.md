@@ -3,3 +3,4 @@
 Knowledge の Source Path が渡されている場合は開き、すべての `##` セクションを適用してください。根拠のある raw finding だけを報告し、最終 finding ID や lifecycle 状態は採番しません。
 
 **これは {step_iteration} 回目のレビューです。**
+{{include:instructions/review-pr-context}}

@@ -7,7 +7,10 @@
 
 import * as fs from 'node:fs';
 import type { TaskFailure, TaskListItem } from '../../../infra/task/index.js';
-import { TaskRunner, resolveTaskWorkflowValue } from '../../../infra/task/index.js';
+import {
+  TaskRunner,
+  resolveTaskWorkflowValue,
+} from '../../../infra/task/index.js';
 import { loadWorkflowByIdentifier, resolveWorkflowConfigValue, getWorkflowDescription } from '../../../infra/config/index.js';
 import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import { info, header, blankLine, status, warn } from '../../../shared/ui/index.js';
@@ -42,6 +45,8 @@ import {
 } from '../retryTaskSpecAttachments.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-reference.js';
+import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
+import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
 
 const log = createLogger('list-tasks');
 
@@ -122,6 +127,32 @@ function buildRetryRunInfo(
     stepLogs: formatted.runStepLogs,
     reports: formatted.runReports,
   };
+}
+
+function resolveTaskRetryPullRequestContext(
+  task: TaskListItem,
+  projectDir: string,
+  worktreePath: string,
+): PullRequestContext | undefined {
+  const data = task.data;
+  if (data?.source !== 'pr_review') {
+    return undefined;
+  }
+  if (data.pr_number === undefined) {
+    throw new Error(`PR review task "${sanitizeTerminalText(task.name)}" is missing pr_number.`);
+  }
+  if (!data.branch?.trim()) {
+    throw new Error(`PR review task "${sanitizeTerminalText(task.name)}" is missing head branch.`);
+  }
+
+  return resolveTaskPullRequestWorktreeContext({
+    projectDir,
+    worktreePath,
+    taskName: task.name,
+    prNumber: data.pr_number,
+    headBranch: data.branch,
+    ...(data.base_branch === undefined ? {} : { savedBaseBranch: data.base_branch }),
+  });
 }
 
 function resolveRetryRunSlug(task: TaskListItem, worktreePath: string): string | null {
@@ -365,6 +396,7 @@ export async function retryFailedTask(
   };
 
   blankLine();
+  const prContext = resolveTaskRetryPullRequestContext(task, projectDir, selection.worktreePath);
   const retryContext: RetryContext = {
     failure: buildRetryFailureInfo(task, selection.failure),
     subject: {
@@ -374,6 +406,7 @@ export async function retryFailedTask(
     workflowContext,
     run: runInfo,
     previousOrderContent: selection.previousOrderContent,
+    ...(prContext ? { prContext } : {}),
   };
 
   const retryResult = await runTaskRetryMode(selection.worktreePath, retryContext);

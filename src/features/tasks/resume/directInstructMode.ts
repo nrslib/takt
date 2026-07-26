@@ -24,6 +24,10 @@ import { loadTemplate } from '../../../shared/prompts/index.js';
 import { blankLine, info } from '../../../shared/ui/index.js';
 import { attachImageAttachmentCleanup } from '../../interactive/imageAttachments.js';
 import type { InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
+import {
+  renderPullRequestContext,
+  type PullRequestContext,
+} from '../../../core/workflow/pr-context.js';
 
 export interface DirectInstructModeOptions {
   readonly cwd: string;
@@ -32,6 +36,7 @@ export interface DirectInstructModeOptions {
   readonly workflowContext: WorkflowContext;
   readonly runSessionContext: RunSessionContext;
   readonly previousOrderContent: string | null;
+  readonly prContext?: PullRequestContext;
 }
 
 const DIRECT_INSTRUCT_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
@@ -55,6 +60,8 @@ function buildDirectInstructTemplateVars(
     ...runPromptVars,
     hasOrderContent: options.previousOrderContent !== null,
     orderContent: options.previousOrderContent ?? '',
+    hasPrContext: options.prContext !== undefined,
+    prContextText: options.prContext ? renderPullRequestContext(options.prContext, lang) : '',
   };
 }
 

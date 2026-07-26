@@ -134,6 +134,7 @@ export async function executeTaskWorkflow(
     maxStepsOverride,
     initialIterationOverride,
     currentTaskIssueNumber,
+    prContext,
   } = options;
   const traceTaskMetadata = resolveTraceTaskMetadata(options);
   const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd, { lookupCwd: cwd });
@@ -195,6 +196,7 @@ export async function executeTaskWorkflow(
     initialIterationOverride,
     currentTaskIssueNumber,
     traceTaskMetadata,
+    ...(prContext ? { prContext } : {}),
   });
 }
 

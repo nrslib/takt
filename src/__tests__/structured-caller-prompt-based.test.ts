@@ -740,6 +740,7 @@ describe('PromptBasedStructuredCaller', () => {
         JSON.stringify({
           done: false,
           reasoning: 'Need one more pass',
+          cancelPartIds: ['p2'],
           parts: [
             { id: 'p2', title: 'Follow up', instruction: 'Handle remaining gap' },
           ],
@@ -753,13 +754,14 @@ describe('PromptBasedStructuredCaller', () => {
     const result = await caller.requestMoreParts(
       'original task',
       [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
-      ['p1'],
-      { cwd: '/tmp/project', provider: 'cursor' },
+      ['p1', 'p2'],
+      { cwd: '/tmp/project', provider: 'cursor', cancellablePartIds: ['p2'] },
     );
 
     expect(result).toEqual({
       done: false,
       reasoning: 'Need one more pass',
+      cancelPartIds: ['p2'],
       parts: [
         { id: 'p2', title: 'Follow up', instruction: 'Handle remaining gap' },
       ],
@@ -826,7 +828,7 @@ describe('PromptBasedStructuredCaller', () => {
       status: 'done',
       content: [
         '```json',
-        JSON.stringify({ done: true, reasoning: 'Enough', parts: [] }),
+        JSON.stringify({ done: true, reasoning: 'Enough', cancelPartIds: [], parts: [] }),
         '```',
       ].join('\n'),
       timestamp: new Date(),
@@ -858,7 +860,7 @@ describe('PromptBasedStructuredCaller', () => {
       status: 'done',
       content: [
         '```json',
-        JSON.stringify({ done: true, reasoning: 'enough', parts: [] }),
+        JSON.stringify({ done: true, reasoning: 'enough', cancelPartIds: [], parts: [] }),
         '```',
       ].join('\n'),
       timestamp: new Date(),
@@ -904,7 +906,7 @@ describe('PromptBasedStructuredCaller', () => {
       status: 'done',
       content: [
         '```json',
-        JSON.stringify({ done: true, reasoning: 'enough', parts: [] }),
+        JSON.stringify({ done: true, reasoning: 'enough', cancelPartIds: [], parts: [] }),
         '```',
       ].join('\n'),
       timestamp: new Date(),
@@ -936,7 +938,7 @@ describe('PromptBasedStructuredCaller', () => {
       status: 'done',
       content: [
         '```json',
-        JSON.stringify({ done: true, reasoning: 'enough', parts: [] }),
+        JSON.stringify({ done: true, reasoning: 'enough', cancelPartIds: [], parts: [] }),
         '```',
       ].join('\n'),
       timestamp: new Date(),
@@ -966,7 +968,7 @@ describe('PromptBasedStructuredCaller', () => {
       status: 'done',
       content: [
         '```json',
-        JSON.stringify({ done: true, reasoning: 'enough', parts: [] }),
+        JSON.stringify({ done: true, reasoning: 'enough', cancelPartIds: [], parts: [] }),
         '```',
       ].join('\n'),
       timestamp: new Date(),
@@ -1010,7 +1012,7 @@ describe('PromptBasedStructuredCaller', () => {
       status: 'done',
       content: [
         '```json',
-        JSON.stringify({ done: true, reasoning: 'enough', parts: [] }),
+        JSON.stringify({ done: true, reasoning: 'enough', cancelPartIds: [], parts: [] }),
         '```',
       ].join('\n'),
       timestamp: new Date(),
@@ -1051,6 +1053,7 @@ describe('PromptBasedStructuredCaller', () => {
           JSON.stringify({
             done: false,
             reasoning: 'retry succeeded',
+            cancelPartIds: [],
             parts: [
               { id: 'p2', title: 'Follow up', instruction: 'Handle remaining gap' },
             ],
@@ -1074,6 +1077,7 @@ describe('PromptBasedStructuredCaller', () => {
     expect(result).toEqual({
       done: false,
       reasoning: 'retry succeeded',
+      cancelPartIds: [],
       parts: [
         { id: 'p2', title: 'Follow up', instruction: 'Handle remaining gap' },
       ],
@@ -1100,6 +1104,7 @@ describe('PromptBasedStructuredCaller', () => {
           JSON.stringify({
             done: true,
             reasoning: 'recovered',
+            cancelPartIds: [],
             parts: [],
           }),
           '```',
@@ -1121,6 +1126,7 @@ describe('PromptBasedStructuredCaller', () => {
     expect(result).toEqual({
       done: true,
       reasoning: 'recovered',
+      cancelPartIds: [],
       parts: [],
     });
   });
@@ -1165,7 +1171,7 @@ describe('PromptBasedStructuredCaller', () => {
         status: 'done',
         content: [
           '```json',
-          JSON.stringify({ done: true, reasoning: 'recovered', parts: [] }),
+          JSON.stringify({ done: true, reasoning: 'recovered', cancelPartIds: [], parts: [] }),
           '```',
         ].join('\n'),
         timestamp: new Date(),
@@ -1182,7 +1188,7 @@ describe('PromptBasedStructuredCaller', () => {
     const result = await promise;
 
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({ done: true, reasoning: 'recovered', parts: [] });
+    expect(result).toEqual({ done: true, reasoning: 'recovered', cancelPartIds: [], parts: [] });
   });
 
   it('should throw requestMoreParts after three consecutive status:error responses with original detail', async () => {
@@ -1256,7 +1262,7 @@ describe('PromptBasedStructuredCaller', () => {
         status: 'done',
         content: [
           '```json',
-          JSON.stringify({ done: true, reasoning: 'late ok', parts: [] }),
+          JSON.stringify({ done: true, reasoning: 'late ok', cancelPartIds: [], parts: [] }),
           '```',
         ].join('\n'),
         timestamp: new Date(),
@@ -1273,7 +1279,7 @@ describe('PromptBasedStructuredCaller', () => {
     const result = await promise;
 
     expect(mockRunAgent).toHaveBeenCalledTimes(3);
-    expect(result).toEqual({ done: true, reasoning: 'late ok', parts: [] });
+    expect(result).toEqual({ done: true, reasoning: 'late ok', cancelPartIds: [], parts: [] });
   });
 
   it('should log two retry attempts when requestMoreParts fails three times', async () => {

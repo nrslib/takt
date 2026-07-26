@@ -138,7 +138,7 @@ describe('routing_decision event assembly', () => {
       modelSource: 'auto.rules',
       autoRoutingDecision: {
         candidateName: 'coding',
-        costTier: 'medium',
+        routingTier: 'medium',
         strategy: 'balanced',
         candidateCount: 2,
       },
@@ -173,10 +173,11 @@ describe('routing_decision event assembly', () => {
       'personaKey',
       'phaseCount',
       'provider',
+      'requiredRoutingTier',
       'resolutionSource',
       'runId',
       'selectedCategory',
-      'selectedCostTier',
+      'selectedRoutingTier',
       'stepName',
       'stepSuccess',
       'stepTags',
@@ -211,7 +212,7 @@ describe('routing_decision event assembly', () => {
       modelSource: 'auto.rules',
       autoRoutingDecision: {
         candidateName: 'coding',
-        costTier: 'medium',
+        routingTier: 'medium',
         strategy: 'balanced',
         candidateCount: 2,
       },
@@ -246,11 +247,11 @@ describe('routing_decision event assembly', () => {
     const providerInfo: StepProviderInfo = {
       provider: 'codex',
       model: 'gpt-5',
-      providerSource: 'auto.ai',
-      modelSource: 'auto.ai',
+      providerSource: 'auto.dynamic',
+      modelSource: 'auto.dynamic',
       autoRoutingDecision: {
         candidateName: 'coding',
-        costTier: 'medium',
+        routingTier: 'medium',
         strategy: 'balanced',
         candidateCount: 2,
       },
@@ -278,7 +279,7 @@ describe('routing_decision event assembly', () => {
       stepName: 'implement.part-1',
       stepType: 'agent',
       durationMs: 900,
-      resolutionSource: 'auto.ai',
+      resolutionSource: 'auto.dynamic',
       iteration: 4,
     });
   });
@@ -307,7 +308,7 @@ describe('routing_decision event assembly', () => {
       modelSource: 'auto.rules',
       autoRoutingDecision: {
         candidateName: 'review',
-        costTier: 'medium',
+        routingTier: 'medium',
         strategy: 'balanced',
         candidateCount: 2,
       },
@@ -348,7 +349,7 @@ describe('routing_decision event assembly', () => {
       modelSource: 'auto.rules',
       autoRoutingDecision: {
         candidateName: 'coding',
-        costTier: 'medium',
+        routingTier: 'medium',
         strategy: 'balanced',
         candidateCount: 2,
       },
@@ -423,7 +424,7 @@ describe('routing_decision event assembly', () => {
       modelSource: 'step',
       autoRoutingDecision: {
         candidateName: 'coding',
-        costTier: 'medium',
+        routingTier: 'medium',
         strategy: 'balanced',
         candidateCount: 2,
       },

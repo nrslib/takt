@@ -37,6 +37,7 @@ export interface WorktreeOptions {
   worktree: boolean | string;
   branch?: string;
   baseBranch?: string;
+  pullRequestBaseBranch?: string;
   taskSlug: string;
   issueNumber?: number;
 }
@@ -44,6 +45,8 @@ export interface WorktreeOptions {
 export interface WorktreeResult {
   path: string;
   branch: string;
+  pullRequestBaseRef?: string;
+  pullRequestHeadRef?: string;
 }
 
 export interface BranchInfo {

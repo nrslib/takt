@@ -468,9 +468,11 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
         description: 'Implementation and tests',
         provider: 'codex',
         model: 'default-candidate-model',
-        costTier: 'medium',
+        routingTier: 'medium',
       },
     ],
+    defaultPool: 'general',
+    candidatePools: { general: { candidates: ['coding'], fallback: 'coding' } },
     rules: { steps: { implement: 'coding' } },
   };
 
@@ -508,7 +510,7 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
     expect(resolved).toMatchObject({
       provider: 'codex',
       model: 'default-candidate-model',
-      providerSource: 'auto.default',
+      providerSource: 'auto.fallback',
     });
     expect(builder.buildAgentOptions(managerStep).resolvedProvider).toBe('codex');
   });
@@ -528,10 +530,10 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
     const builder = createBuilder(step, { provider: 'codex', providerSource: 'global', autoRouting });
 
     const resolved = builder.resolveStepProviderModel(step, {
-      providerInfo: { provider: 'claude', model: 'sonnet', providerSource: 'auto.ai', modelSource: 'auto.ai' },
+      providerInfo: { provider: 'claude', model: 'sonnet', providerSource: 'auto.dynamic', modelSource: 'auto.dynamic' },
     });
 
-    expect(resolved).toMatchObject({ provider: 'claude', model: 'sonnet', providerSource: 'auto.ai' });
+    expect(resolved).toMatchObject({ provider: 'claude', model: 'sonnet', providerSource: 'auto.dynamic' });
   });
 
   it('resolveStepProviderModel does not override a provider resolved by persona providers', () => {

@@ -2,8 +2,8 @@
  * Tests for source / pr_number fields in task schema and mapper
  *
  * Verifies that:
- * - TaskExecutionConfigSchema accepts source and pr_number
- * - TaskFileSchema accepts source and pr_number
+ * - TaskExecutionConfigSchema accepts PR source, number, and head branch
+ * - TaskFileSchema accepts PR source, number, and head branch
  * - toBaseTaskListItem maps source → source, pr_number → prNumber
  * - buildTaskFileData (via toTaskData) passes source/pr_number through
  */
@@ -43,8 +43,12 @@ function makePendingRecord(overrides: Record<string, unknown> = {}): Record<stri
 // ---- Schema: TaskExecutionConfigSchema ----
 
 describe('TaskExecutionConfigSchema — source field', () => {
-  it('accepts source: "pr_review" with pr_number', () => {
-    const result = TaskExecutionConfigSchema.safeParse({ source: 'pr_review', pr_number: 123 });
+  it('accepts source: "pr_review" with pr_number and branch', () => {
+    const result = TaskExecutionConfigSchema.safeParse({
+      source: 'pr_review',
+      pr_number: 123,
+      branch: 'feature/pr-review',
+    });
     expect(result.success).toBe(true);
   });
 
@@ -53,6 +57,58 @@ describe('TaskExecutionConfigSchema — source field', () => {
     expect(result.success).toBe(false);
   });
 
+  it('rejects source: "pr_review" without branch', () => {
+    const result = TaskExecutionConfigSchema.safeParse({ source: 'pr_review', pr_number: 123 });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects source: "pr_review" with an empty branch', () => {
+    const result = TaskExecutionConfigSchema.safeParse({
+      source: 'pr_review',
+      pr_number: 123,
+      branch: '',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it.each(['   ', 'HEAD', 'feature..broken'])('rejects invalid PR head branch %s', (branch) => {
+    expect(TaskExecutionConfigSchema.safeParse({
+      source: 'pr_review',
+      pr_number: 123,
+      branch,
+    }).success).toBe(false);
+  });
+
+  it.each(['', '   ', 'HEAD', 'HEAD:feature/pr-review'])('rejects a specified invalid PR base branch %s', (baseBranch) => {
+    expect(TaskExecutionConfigSchema.safeParse({
+      source: 'pr_review',
+      pr_number: 123,
+      branch: 'feature/pr-review',
+      base_branch: baseBranch,
+    }).success).toBe(false);
+  });
+
+  it('accepts a Git-valid closing bracket in PR branches', () => {
+    expect(TaskExecutionConfigSchema.safeParse({
+      source: 'pr_review',
+      pr_number: 123,
+      branch: 'feature/a]',
+      base_branch: 'feature/a]',
+    }).success).toBe(true);
+  });
+
+  it.each(['origin/feature/pr-review', 'refs/feature/pr-review', 'refs/heads/feature/pr-review', '@'])(
+    'accepts the Git-valid short PR branch name %s',
+    (branch) => {
+      expect(TaskExecutionConfigSchema.safeParse({
+        source: 'pr_review',
+        pr_number: 123,
+        branch,
+        base_branch: branch,
+      }).success).toBe(true);
+    },
+  );
+
   it('accepts source: "issue"', () => {
     const result = TaskExecutionConfigSchema.safeParse({ source: 'issue' });
     expect(result.success).toBe(true);
@@ -60,6 +116,15 @@ describe('TaskExecutionConfigSchema — source field', () => {
 
   it('accepts source: "manual"', () => {
     const result = TaskExecutionConfigSchema.safeParse({ source: 'manual' });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts remote-tracking branch values for a manual task', () => {
+    const result = TaskExecutionConfigSchema.safeParse({
+      source: 'manual',
+      branch: 'origin/feature',
+      base_branch: 'origin/main',
+    });
     expect(result.success).toBe(true);
   });
 
@@ -121,11 +186,12 @@ describe('TaskExecutionConfigSchema — task id safe integer fields', () => {
   });
 });
 
-describe('TaskExecutionConfigSchema — source and pr_number together', () => {
-  it('accepts source: "pr_review" with pr_number', () => {
+describe('TaskExecutionConfigSchema — PR provenance fields', () => {
+  it('accepts source: "pr_review" with pr_number and branch', () => {
     const result = TaskExecutionConfigSchema.safeParse({
       source: 'pr_review',
       pr_number: 456,
+      branch: 'feature/pr-review',
     });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -137,12 +203,13 @@ describe('TaskExecutionConfigSchema — source and pr_number together', () => {
 
 // ---- Schema: TaskFileSchema ----
 
-describe('TaskFileSchema — source and pr_number', () => {
-  it('accepts task file with source: "pr_review" and pr_number', () => {
+describe('TaskFileSchema — PR provenance fields', () => {
+  it('accepts task file with source: "pr_review", pr_number, and branch', () => {
     const result = TaskFileSchema.safeParse({
       task: 'Fix the auth bug',
       source: 'pr_review',
       pr_number: 456,
+      branch: 'feature/pr-review',
     });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -158,6 +225,35 @@ describe('TaskFileSchema — source and pr_number', () => {
       expect(result.data.source).toBeUndefined();
       expect(result.data.pr_number).toBeUndefined();
     }
+  });
+
+  it('rejects an invalid specified PR base branch', () => {
+    expect(TaskFileSchema.safeParse({
+      task: 'Fix the auth bug',
+      source: 'pr_review',
+      pr_number: 456,
+      branch: 'feature/pr-review',
+      base_branch: ' origin/main',
+    }).success).toBe(false);
+  });
+
+  it('rejects HEAD as a specified PR base branch', () => {
+    expect(TaskFileSchema.safeParse({
+      task: 'Fix the auth bug',
+      source: 'pr_review',
+      pr_number: 456,
+      branch: 'feature/pr-review',
+      base_branch: 'HEAD',
+    }).success).toBe(false);
+  });
+
+  it('accepts remote-tracking branch values for a manual task file', () => {
+    expect(TaskFileSchema.safeParse({
+      task: 'Fix the auth bug',
+      source: 'manual',
+      branch: 'origin/feature',
+      base_branch: 'origin/main',
+    }).success).toBe(true);
   });
 
   it('accepts positive safe integer issue, pr_number, and context_pr_number values', () => {
@@ -182,9 +278,9 @@ describe('TaskFileSchema — source and pr_number', () => {
 
 // ---- Schema: TaskRecordSchema ----
 
-describe('TaskRecordSchema — source and pr_number', () => {
-  it('parses a record with source: "pr_review" and pr_number', () => {
-    const raw = makePendingRecord({ source: 'pr_review', pr_number: 456 });
+describe('TaskRecordSchema — PR provenance fields', () => {
+  it('parses a record with source: "pr_review", pr_number, and branch', () => {
+    const raw = makePendingRecord({ source: 'pr_review', pr_number: 456, branch: 'feature/pr-review' });
     const result = TaskRecordSchema.safeParse(raw);
     expect(result.success).toBe(true);
     if (result.success) {
@@ -201,6 +297,31 @@ describe('TaskRecordSchema — source and pr_number', () => {
       expect(result.data.source).toBeUndefined();
       expect(result.data.pr_number).toBeUndefined();
     }
+  });
+
+  it('accepts a refs-prefixed Git-valid short PR head branch', () => {
+    expect(TaskRecordSchema.safeParse(makePendingRecord({
+      source: 'pr_review',
+      pr_number: 456,
+      branch: 'refs/heads/feature/pr-review',
+    })).success).toBe(true);
+  });
+
+  it('rejects HEAD as a specified PR base branch', () => {
+    expect(TaskRecordSchema.safeParse(makePendingRecord({
+      source: 'pr_review',
+      pr_number: 456,
+      branch: 'feature/pr-review',
+      base_branch: 'HEAD',
+    })).success).toBe(false);
+  });
+
+  it('accepts remote-tracking branch values for a manual task record', () => {
+    expect(TaskRecordSchema.safeParse(makePendingRecord({
+      source: 'manual',
+      branch: 'origin/feature',
+      base_branch: 'origin/main',
+    })).success).toBe(true);
   });
 
   it('rejects source_run_slug without resume_mode', () => {
@@ -246,7 +367,7 @@ describe('TaskRecordSchema — source and pr_number', () => {
 describe('toTaskListItem — source and prNumber mapping', () => {
   it('maps source and pr_number from task record to TaskListItem', () => {
     // Given: a pending task record with PR source metadata
-    const raw = makePendingRecord({ source: 'pr_review', pr_number: 456 });
+    const raw = makePendingRecord({ source: 'pr_review', pr_number: 456, branch: 'feature/pr-review' });
     const task = TaskRecordSchema.parse(raw);
 
     // When
@@ -276,7 +397,7 @@ describe('toTaskListItem — source and prNumber mapping', () => {
 describe('toTaskData — source and pr_number pass-through', () => {
   it('includes source and pr_number in the task file data', () => {
     // Given: a task record with PR metadata
-    const raw = makePendingRecord({ source: 'pr_review', pr_number: 456 });
+    const raw = makePendingRecord({ source: 'pr_review', pr_number: 456, branch: 'feature/pr-review' });
     const task = TaskRecordSchema.parse(raw);
 
     // When

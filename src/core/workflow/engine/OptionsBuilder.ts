@@ -49,10 +49,10 @@ type ResolvedRunAgentOptions = RunAgentOptions & {
 
 function isAutoProviderOptionsSource(
   source: ProviderResolutionSource | undefined,
-): source is 'auto.rules' | 'auto.ai' | 'auto.default' {
+): source is 'auto.rules' | 'auto.dynamic' | 'auto.fallback' {
   return source === 'auto.rules'
-    || source === 'auto.ai'
-    || source === 'auto.default';
+    || source === 'auto.dynamic'
+    || source === 'auto.fallback';
 }
 
 function mergeRuntimeAndDirectStepProviderOptions(
@@ -402,7 +402,10 @@ export class OptionsBuilder {
 
   /** Build RunAgentOptions for Phase 1 (main execution) */
   buildAgentOptions(step: WorkflowStep, runtime?: RuntimeStepResolution): RunAgentOptions {
-    const { provider: resolvedProvider } = this.resolveStepProviderModel(step, runtime);
+    const {
+      provider: resolvedProvider,
+      model: resolvedModel,
+    } = this.resolveStepProviderModel(step, runtime);
     const mergedProviderOptions = this.resolveMergedProviderOptions(step, resolvedProvider, runtime);
 
     assertProviderResolvedForCapabilitySensitiveOptions(resolvedProvider, {
@@ -433,7 +436,9 @@ export class OptionsBuilder {
     return {
       ...baseOptions,
       workflowMeta: this.buildPhase1WorkflowMeta(baseOptions.workflowMeta, runtime),
-      sessionId: shouldResumeSession ? this.getSessionId(buildSessionKey(step, resolvedProvider)) : undefined,
+      sessionId: shouldResumeSession
+        ? this.getSessionId(buildSessionKey(step, { provider: resolvedProvider, model: resolvedModel }))
+        : undefined,
       allowedTools,
       mcpServers: this.resolveMcpServersForStep(step, resolvedProvider),
       outputSchema: supportsStructuredOutput === false ? undefined : step.structuredOutput?.schema,
@@ -572,7 +577,10 @@ export class OptionsBuilder {
       buildFindingContractInstructionContext: (step, includeRawFindingsSchema) =>
         this.buildFindingContractInstructionContext(step, includeRawFindingsSchema),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
-      resolveSessionKey: (step) => buildSessionKey(step, this.resolveStepProviderModel(step, runtime).provider),
+      resolveSessionKey: (step) => {
+        const providerInfo = this.resolveStepProviderModel(step, runtime);
+        return buildSessionKey(step, { provider: providerInfo.provider, model: providerInfo.model });
+      },
       buildResumeOptions: (step, sessionId, overrides) => this.buildResumeOptions(step, sessionId, overrides, runtime),
       buildNewSessionReportOptions: (step, overrides) => this.buildNewSessionReportOptions(step, overrides, runtime),
       buildFallbackReportOptions: (step, failedPrimaryOptions, overrides) =>

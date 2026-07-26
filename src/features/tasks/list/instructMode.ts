@@ -29,10 +29,24 @@ import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
+import { renderPullRequestContext, type PullRequestContext } from '../../../core/workflow/pr-context.js';
 
 export type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 
 const INSTRUCT_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
+
+export interface InstructModeOptions {
+  readonly cwd: string;
+  readonly branchContext: string;
+  readonly branchName: string;
+  readonly taskName: string;
+  readonly taskContent: string;
+  readonly retryNote: string;
+  readonly workflowContext?: WorkflowContext;
+  readonly runSessionContext?: RunSessionContext;
+  readonly previousOrderContent?: string | null;
+  readonly prContext?: PullRequestContext;
+}
 
 function toInstructModeResult(result: InteractiveModeResult): InstructModeResult {
   if (result.action === 'cancel') {
@@ -51,16 +65,20 @@ function toInstructModeResult(result: InteractiveModeResult): InstructModeResult
 }
 
 function buildInstructTemplateVars(
-  branchContext: string,
-  branchName: string,
-  taskName: string,
-  taskContent: string,
-  retryNote: string,
+  options: InstructModeOptions,
   lang: 'en' | 'ja',
-  workflowContext?: WorkflowContext,
-  runSessionContext?: RunSessionContext,
-  previousOrderContent?: string | null,
 ): Record<string, string | boolean> {
+  const {
+    branchContext,
+    branchName,
+    taskName,
+    taskContent,
+    retryNote,
+    workflowContext,
+    runSessionContext,
+    previousOrderContent,
+    prContext,
+  } = options;
   const hasWorkflowPreview = !!workflowContext?.stepPreviews?.length;
   const stepDetails = hasWorkflowPreview
     ? formatStepPreviews(workflowContext!.stepPreviews!, lang)
@@ -84,20 +102,19 @@ function buildInstructTemplateVars(
     ...runPromptVars,
     hasOrderContent: !!previousOrderContent,
     orderContent: previousOrderContent ?? '',
+    hasPrContext: prContext !== undefined,
+    prContextText: prContext ? renderPullRequestContext(prContext, lang) : '',
   };
 }
 
 export async function runInstructMode(
-  cwd: string,
-  branchContext: string,
-  branchName: string,
-  taskName: string,
-  taskContent: string,
-  retryNote: string,
-  workflowContext?: WorkflowContext,
-  runSessionContext?: RunSessionContext,
-  previousOrderContent?: string | null,
+  options: InstructModeOptions,
 ): Promise<InstructModeResult> {
+  const {
+    cwd,
+    workflowContext,
+    previousOrderContent,
+  } = options;
   const globalConfig = resolveWorkflowConfigValues(cwd, ['language']);
   const lang = resolveLanguage(globalConfig.language);
 
@@ -108,10 +125,7 @@ export async function runInstructMode(
 
   const ui = getLabelObject<InstructUIText>('instruct.ui', ctx.lang);
 
-  const templateVars = buildInstructTemplateVars(
-    branchContext, branchName, taskName, taskContent, retryNote, lang,
-    workflowContext, runSessionContext, previousOrderContent,
-  );
+  const templateVars = buildInstructTemplateVars(options, lang);
   const systemPrompt = prependSourceContextGuardToSystemPrompt(
     ctx.lang,
     loadTemplate('score_instruct_system_prompt', ctx.lang, templateVars),

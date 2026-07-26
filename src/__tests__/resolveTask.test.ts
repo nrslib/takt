@@ -732,7 +732,134 @@ describe('resolveTaskExecution', () => {
     mockResolveBaseBranch.mockRestore();
   });
 
-  it('should prefer runtime task context over saved branch metadata', async () => {
+  it('should materialize and propagate exact PR diff refs for a worktree task', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        worktree: true,
+        source: 'pr_review',
+        pr_number: 938,
+        branch: 'feature/pr-context',
+        base_branch: 'release/2026.07',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath: undefined,
+    });
+    const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
+      branch: 'release/2026.07',
+    });
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: worktreePath,
+      branch: 'feature/pr-context',
+      pullRequestBaseRef: 'refs/takt/pr-base/release/2026.07',
+      pullRequestHeadRef: 'refs/heads/feature/pr-context',
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(mockCreateSharedClone).toHaveBeenCalledWith(
+      root,
+      expect.objectContaining({
+        branch: 'feature/pr-context',
+        baseBranch: 'release/2026.07',
+        pullRequestBaseBranch: 'release/2026.07',
+      }),
+      undefined,
+    );
+    expect(result.prContext).toMatchObject({
+      baseDiffRef: 'refs/takt/pr-base/release/2026.07',
+      headDiffRef: 'refs/heads/feature/pr-context',
+    });
+    expect(mockResolveBaseBranch).not.toHaveBeenCalled();
+  });
+
+  it('should reject a reused PR worktree whose local head ref is missing', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'pr-task');
+    fs.mkdirSync(worktreePath, { recursive: true });
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        worktree: true,
+        source: 'pr_review',
+        pr_number: 938,
+        branch: 'feature/pr-context',
+        base_branch: 'release/2026.07',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+    });
+    const materializeSpy = vi.spyOn(infraTask, 'materializePullRequestBase').mockReturnValue(
+      'refs/takt/pr-base/release/2026.07',
+    );
+    vi.spyOn(infraTask, 'getCurrentBranch').mockReturnValue('feature/pr-context');
+    vi.spyOn(infraTask, 'localBranchExists').mockReturnValue(false);
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
+      'PR review task "task-name" worktree is missing head ref refs/heads/feature/pr-context.',
+    );
+    expect(materializeSpy).not.toHaveBeenCalled();
+  });
+
+  it('should reject a reused PR worktree checked out on a different branch', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'pr-task');
+    fs.mkdirSync(worktreePath, { recursive: true });
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        worktree: true,
+        source: 'pr_review',
+        pr_number: 938,
+        branch: 'feature/pr-context',
+        base_branch: 'release/2026.07',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+    });
+    const materializeSpy = vi.spyOn(infraTask, 'materializePullRequestBase');
+    vi.spyOn(infraTask, 'getCurrentBranch').mockReturnValue('main');
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
+      'PR review task "task-name" worktree is checked out on "main", expected "feature/pr-context".',
+    );
+    expect(materializeSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: 'pr_number',
+      taskContext: {
+        branch: 'feature/saved-branch',
+        baseBranch: 'release/saved-base',
+        prNumber: 938,
+      },
+      message: 'PR review task "task-name" cannot override saved pr_number 100 with runtime taskContext.prNumber 938.',
+    },
+    {
+      label: 'branch',
+      taskContext: {
+        branch: 'feature/runtime-branch',
+        baseBranch: 'release/saved-base',
+        prNumber: 100,
+      },
+      message: 'PR review task "task-name" cannot override saved branch "feature/saved-branch" with runtime taskContext.branch "feature/runtime-branch".',
+    },
+    {
+      label: 'base_branch',
+      taskContext: {
+        branch: 'feature/saved-branch',
+        baseBranch: 'release/runtime-base',
+        prNumber: 100,
+      },
+      message: 'PR review task "task-name" cannot override saved base_branch "release/saved-base" with runtime taskContext.baseBranch "release/runtime-base".',
+    },
+  ])('should reject a runtime $label that conflicts with saved PR review metadata', async ({
+    taskContext,
+    message,
+  }) => {
     const root = createTempProjectDir();
     const task = createTask({
       data: ({
@@ -747,38 +874,149 @@ describe('resolveTaskExecution', () => {
       status: 'pending',
     });
 
-    const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
-      branch: 'main',
-    });
     const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
       path: '/tmp/shared-clone',
       branch: 'takt/938/add-mcp',
     });
 
-    const result = await resolveTaskExecution(task, root, undefined, {
-      taskContext: {
-        branch: 'takt/938/add-mcp',
-        baseBranch: 'main',
-        prNumber: 938,
-      },
-    });
-
-    expect(mockResolveBaseBranch).toHaveBeenCalledWith(root, 'main');
-    expect(mockCreateSharedClone).toHaveBeenCalledWith(
-      root,
-      expect.objectContaining({
-        worktree: true,
-        branch: 'takt/938/add-mcp',
-        baseBranch: 'main',
-      }),
-      undefined,
-    );
-    expect(result.branch).toBe('takt/938/add-mcp');
-    expect(result.baseBranch).toBe('main');
-    expect(result.prNumber).toBe(938);
+    await expect(resolveTaskExecution(task, root, undefined, {
+      taskContext,
+    })).rejects.toThrow(message);
+    expect(mockCreateSharedClone).not.toHaveBeenCalled();
 
     mockCreateSharedClone.mockRestore();
-    mockResolveBaseBranch.mockRestore();
+  });
+
+  it('should normalize a saved PR review task into prompt context', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 938,
+        base_branch: 'release/2026.07',
+        branch: 'feature/pr-context',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result).toMatchObject({
+      branch: 'feature/pr-context',
+      baseBranch: 'release/2026.07',
+      prNumber: 938,
+      prContext: {
+        source: 'pr_review',
+        prNumber: 938,
+        baseBranch: 'release/2026.07',
+        headBranch: 'feature/pr-context',
+        baseBranchSource: 'pull_request',
+      },
+    });
+  });
+
+  it('should reject a PR review task without a head branch', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 938,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
+      /branch is required when source is \\"pr_review\\"/,
+    );
+  });
+
+  it('should reject a PR review task with an empty head branch', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 938,
+        branch: '',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
+      'branch must be a non-empty branch name without surrounding whitespace.',
+    );
+  });
+
+  it.each([
+    [
+      '   ',
+      'branch must be a non-empty branch name without surrounding whitespace.',
+    ],
+    [
+      'HEAD',
+      'branch must be a branch name, not a pseudo-ref: HEAD',
+    ],
+  ])('should reject a PR review task with invalid head branch %s', async (branch, message) => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 938,
+        branch,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(message);
+  });
+
+  it.each(['refs/heads/feature/pr-context', 'origin/feature/pr-context'])(
+    'should accept the Git-valid short PR branch name %s',
+    async (branch) => {
+      const root = createTempProjectDir();
+      const task = createTask({
+        data: ({
+          task: 'Review the PR changes',
+          workflow: 'default',
+          source: 'pr_review',
+          pr_number: 938,
+          branch,
+        } as unknown) as NonNullable<TaskInfo['data']>,
+      });
+
+      await expect(resolveTaskExecutionStrict(task, root)).resolves.toMatchObject({
+        branch,
+        prContext: { headBranch: branch },
+      });
+    },
+  );
+
+  it('should record default branch fallback in PR prompt context only when saved base is missing', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Review the PR changes',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 938,
+        branch: 'feature/pr-context',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+    });
+    const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({ branch: 'main' });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.prContext).toEqual({
+      source: 'pr_review',
+      prNumber: 938,
+      baseBranch: 'main',
+      headBranch: 'feature/pr-context',
+      baseBranchSource: 'default_branch_fallback',
+    });
+    expect(mockResolveBaseBranch).toHaveBeenCalledWith(root);
   });
 
   it('should resolve saved context_pr_number as runtime PR context when no override is provided', async () => {
@@ -795,6 +1033,7 @@ describe('resolveTaskExecution', () => {
     const result = await resolveTaskExecution(task, root);
 
     expect(result.prNumber).toBe(938);
+    expect(result.prContext).toBeUndefined();
   });
 
   it('should prefer runtime prNumber over saved context_pr_number', async () => {

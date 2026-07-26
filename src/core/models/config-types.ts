@@ -12,15 +12,15 @@ import type { QualityGate, RateLimitFallbackConfig, StepProviderOptions, Workflo
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 import type { VcsProviderType } from './vcs-types.js';
 
-export type CostTier = 'high' | 'medium' | 'low';
+export type RoutingTier = 'high' | 'medium' | 'low';
 export type AutoRoutingStrategy = 'cost' | 'balanced' | 'performance';
 
 export interface AutoRoutingCandidate {
   name: string;
-  description: string;
+  description?: string;
   provider: ProviderType;
   model: string;
-  costTier: CostTier;
+  routingTier: RoutingTier;
   providerOptions?: StepProviderOptions;
 }
 
@@ -31,6 +31,16 @@ export interface AutoRoutingConfig {
     model: string;
   };
   candidates: AutoRoutingCandidate[];
+  defaultPool: string;
+  candidatePools: Record<string, {
+    candidates: string[];
+    fallback: string;
+  }>;
+  poolRules?: {
+    tags?: Record<string, string>;
+    steps?: Record<string, string>;
+    personas?: Record<string, string>;
+  };
   rules?: {
     tags?: Record<string, string>;
     steps?: Record<string, string>;

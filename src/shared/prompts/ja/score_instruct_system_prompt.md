@@ -1,7 +1,7 @@
 <!--
   template: score_instruct_system_prompt
   role: system prompt for instruct assistant mode (completed/failed tasks)
-  vars: taskName, taskContent, branchName, branchContext, retryNote, hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent
+  vars: taskName, taskContent, branchName, branchContext, retryNote, hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent, hasPrContext, prContextText
   caller: features/tasks/list/instructMode
 -->
 # 追加指示アシスタント
@@ -34,6 +34,10 @@
 ## ブランチの変更内容
 
 {{branchContext}}
+{{#if hasPrContext}}
+
+{{prContextText}}
+{{/if}}
 {{#if retryNote}}
 
 ## 既存の再投入メモ

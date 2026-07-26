@@ -19,6 +19,9 @@ const {
   mockFormatRunSessionForPrompt,
   mockRunDirectRetryMode,
   mockRunDirectInstructMode,
+  mockLocalBranchExists,
+  mockMaterializePullRequestBase,
+  mockGetCurrentBranch,
 } = vi.hoisted(() => ({
   mockFindLatestResumableDirectRun: vi.fn(),
   mockSelectOption: vi.fn(),
@@ -32,6 +35,10 @@ const {
   mockFormatRunSessionForPrompt: vi.fn(),
   mockRunDirectRetryMode: vi.fn(),
   mockRunDirectInstructMode: vi.fn(),
+  mockLocalBranchExists: vi.fn(() => true),
+  mockMaterializePullRequestBase: vi.fn((_projectCwd, _targetCwd, baseBranch: string) =>
+    `refs/takt/pr-base/${baseBranch}`),
+  mockGetCurrentBranch: vi.fn(() => 'feature/direct-resume'),
 }));
 
 vi.mock('../features/tasks/resume/directRunFinder.js', () => ({
@@ -78,6 +85,13 @@ vi.mock('../features/tasks/resume/directInstructMode.js', () => ({
   runDirectInstructMode: mockRunDirectInstructMode,
 }));
 
+vi.mock('../infra/task/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getCurrentBranch: (...args: unknown[]) => mockGetCurrentBranch(...args),
+  localBranchExists: (...args: unknown[]) => mockLocalBranchExists(...args),
+  materializePullRequestBase: (...args: unknown[]) => mockMaterializePullRequestBase(...args),
+}));
+
 import { resumeDirectRun } from '../features/tasks/resume/index.js';
 
 const resumePoint: WorkflowResumePoint = {
@@ -98,6 +112,14 @@ const workflow: WorkflowConfig = {
     { name: 'review', personaDisplayName: 'Reviewer', instruction: 'Review', rules: [] },
     { name: 'fix', personaDisplayName: 'Fixer', instruction: 'Fix', rules: [] },
   ],
+};
+
+const pullRequestContext = {
+  source: 'pr_review' as const,
+  prNumber: 861,
+  baseBranch: 'release/2026.07',
+  headBranch: 'feature/direct-resume',
+  baseBranchSource: 'pull_request' as const,
 };
 
 const tempRoots = new Set<string>();
@@ -266,6 +288,98 @@ describe('resumeDirectRun', () => {
         taskSource: 'manual',
       },
     }));
+  });
+
+  it('Given a PR-derived run is requeued, Then execution reuses the persisted PR context', async () => {
+    mockFindLatestResumableDirectRun.mockReturnValue(createRun({ prContext: pullRequestContext }));
+    mockSelectOption.mockResolvedValueOnce('requeue');
+
+    await resumeDirectRun('/project');
+
+    expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
+      prContext: {
+        ...pullRequestContext,
+        baseDiffRef: 'refs/takt/pr-base/release/2026.07',
+        headDiffRef: 'refs/heads/feature/direct-resume',
+      },
+    }));
+  });
+
+  it('Given a PR-derived run is retried, Then retry conversation receives the materialized PR context', async () => {
+    mockFindLatestResumableDirectRun.mockReturnValue(createRun({ prContext: pullRequestContext }));
+    mockSelectOption.mockResolvedValueOnce('retry');
+    mockRunDirectRetryMode.mockResolvedValueOnce({ action: 'cancel', task: '' });
+
+    await resumeDirectRun('/project');
+
+    expect(mockRunDirectRetryMode).toHaveBeenCalledWith(
+      '/project',
+      expect.objectContaining({
+        prContext: {
+          ...pullRequestContext,
+          baseDiffRef: 'refs/takt/pr-base/release/2026.07',
+          headDiffRef: 'refs/heads/feature/direct-resume',
+        },
+      }),
+    );
+  });
+
+  it('Given a PR-derived run is instructed, Then instruct conversation receives the materialized PR context', async () => {
+    mockFindLatestResumableDirectRun.mockReturnValue(createRun({ prContext: pullRequestContext }));
+    mockSelectOption.mockResolvedValueOnce('instruct');
+    mockRunDirectInstructMode.mockResolvedValueOnce({ action: 'cancel', task: '' });
+
+    await resumeDirectRun('/project');
+
+    expect(mockRunDirectInstructMode).toHaveBeenCalledWith(expect.objectContaining({
+      prContext: {
+        ...pullRequestContext,
+        baseDiffRef: 'refs/takt/pr-base/release/2026.07',
+        headDiffRef: 'refs/heads/feature/direct-resume',
+      },
+    }));
+  });
+
+  it('Given a non-PR run is resumed, Then PR context is not inherited by any resume mode', async () => {
+    mockFindLatestResumableDirectRun.mockReturnValue(createRun());
+
+    mockSelectOption.mockResolvedValueOnce('requeue');
+    await resumeDirectRun('/project');
+    expect(mockExecuteTaskWithResult.mock.calls[0]?.[0]).not.toHaveProperty('prContext');
+
+    mockSelectOption.mockResolvedValueOnce('retry');
+    mockRunDirectRetryMode.mockResolvedValueOnce({ action: 'cancel', task: '' });
+    await resumeDirectRun('/project');
+    expect(mockRunDirectRetryMode.mock.calls[0]?.[1]).not.toHaveProperty('prContext');
+
+    mockSelectOption.mockResolvedValueOnce('instruct');
+    mockRunDirectInstructMode.mockResolvedValueOnce({ action: 'cancel', task: '' });
+    await resumeDirectRun('/project');
+    expect(mockRunDirectInstructMode.mock.calls[0]?.[0]).not.toHaveProperty('prContext');
+  });
+
+  it('Given a PR-derived run without its local head ref, Then resume fails before using stale diff refs', async () => {
+    mockFindLatestResumableDirectRun.mockReturnValue(createRun({ prContext: pullRequestContext }));
+    mockSelectOption.mockResolvedValueOnce('requeue');
+    mockLocalBranchExists.mockReturnValueOnce(false);
+
+    await expect(resumeDirectRun('/project')).rejects.toThrow(
+      'Direct run resume is missing PR head ref refs/heads/feature/direct-resume.',
+    );
+    expect(mockMaterializePullRequestBase).not.toHaveBeenCalled();
+    expect(mockExecuteTaskWithResult).not.toHaveBeenCalled();
+  });
+
+  it('Given a PR-derived run checked out on another branch, Then resume fails before materialization', async () => {
+    mockFindLatestResumableDirectRun.mockReturnValue(createRun({ prContext: pullRequestContext }));
+    mockSelectOption.mockResolvedValueOnce('requeue');
+    mockGetCurrentBranch.mockReturnValueOnce('main');
+
+    await expect(resumeDirectRun('/project')).rejects.toThrow(
+      'Direct run resume is checked out on "main", expected PR head "feature/direct-resume".',
+    );
+    expect(mockLocalBranchExists).not.toHaveBeenCalled();
+    expect(mockMaterializePullRequestBase).not.toHaveBeenCalled();
   });
 
   it('Given Requeue is selected without a valid resume point, When currentStep exists in the workflow, Then currentStep is used as startStep', async () => {

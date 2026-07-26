@@ -44,7 +44,7 @@ Issue 参照（例: `#28`）を渡すと、TAKT は GitHub CLI（`gh`）を介�
 
 ### MCP Client からのタスク保存
 
-MCP client は `takt-mcp` stdio server を使って、shell command を直接呼ばずに pending タスクを保存できます。`takt_enqueue_task` は `.takt/tasks.yaml` に pending レコードを書き込みます。`takt_create_issue_and_enqueue_task` は設定済み TAKT issue provider で Issue を作成してから、Issue 番号付きの pending レコードを書き込みます。Issue 作成後にタスク保存が失敗した場合、TAKT は作成済み Issue に固定の補償コメントを追加して close します。その close も失敗した場合、MCP error result はタスク保存エラーと Issue close エラーの両方を返します。どちらの tool も絶対パスの `cwd` と空でないタスク本文を必須入力とします。設定方法と tool 入力の詳細は [CLI リファレンス](./cli-reference.ja.md#mcp-server) を参照してください。
+MCP client は `takt-mcp` stdio server を使って、shell command を直接呼ばずに pending タスクを保存できます。`takt_enqueue_task` は `.takt/tasks.yaml` に pending レコードを書き込み、任意の `issue` object で既存 Issue を紐付けるか、設定済み TAKT issue provider で新規 Issue を作成します。Issue 作成後に保存が失敗し、Issue 番号まで解決済みなら、Issue は open のまま残り、MCP error result は再試行用の番号を返します。番号抽出に失敗した場合は、代わりに Issue URL を返すことがあります。この tool は絶対パスの `cwd` と空でないタスク本文を必須入力とします。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。設定方法と tool 入力の詳細は [CLI リファレンス](./cli-reference.ja.md#mcp-server) を参照してください。
 
 ## タスクディレクトリ形式
 
@@ -120,7 +120,7 @@ takt run --ignore-exceed
 
 workflow が `max_steps` に到達した場合、通常の `takt run` はタスクを `exceeded` として停止し、`exceeded_max_steps`、`exceeded_current_iteration`、`resume_point` などの再実行メタデータを保存します。`--ignore-exceed` を付けると、この iteration limit だけを無視して workflow を継続し、exceeded 用の再実行メタデータは保存しません。
 
-MCP client は `takt_run_next_task` で pending タスクを 1 件実行できます。この tool は `takt run` と同じタスク取得・実行経路を使いますが、1 件だけを取得し、stdio MCP の安全性のため通常の workflow 出力を抑制します。
+MCP client はタスクの enqueue だけを担当します。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。
 
 ### 並列実行（Concurrency）
 

@@ -25,6 +25,7 @@ import type {
   ProviderResolutionSource,
 } from '../../../core/workflow/provider-options-trace.js';
 import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
+import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
 import type { TaskAttachment } from '../attachments.js';
 import type { TraceTaskContext } from './traceTaskMetadata.js';
 
@@ -211,6 +212,8 @@ export interface WorkflowExecutionOptions {
   currentTaskIssueNumber?: number;
   /** Task metadata used only for trace discovery attributes. */
   traceTaskMetadata?: WorkflowTraceTaskMetadata;
+  /** Structured PR context used as prompt input. */
+  prContext?: PullRequestContext;
 }
 
 export interface TaskExecutionOptions {
@@ -294,6 +297,8 @@ export interface ExecuteTaskOptions {
   traceTaskContext?: TraceTaskContext;
   /** Task metadata used only for trace discovery attributes. */
   traceTaskMetadata?: WorkflowTraceTaskMetadata;
+  /** Structured PR context used as prompt input. */
+  prContext?: PullRequestContext;
 }
 
 export interface PipelineExecutionOptions {
@@ -331,6 +336,8 @@ export interface WorktreeConfirmationResult {
   branch?: string;
   baseBranch?: string;
   taskSlug?: string;
+  pullRequestBaseRef?: string;
+  pullRequestHeadRef?: string;
 }
 
 export interface SelectAndExecuteOptions {
@@ -345,6 +352,8 @@ export interface SelectAndExecuteOptions {
   attachments?: TaskAttachment[];
   /** Source metadata for direct trace discovery when no task record exists. */
   traceTaskContext?: TraceTaskContext;
+  /** Structured PR context resolved by the direct CLI boundary. */
+  prContext?: PullRequestContext;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
   /** Provider permission profile overrides supplied by a trusted runtime boundary. */

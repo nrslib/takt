@@ -69,6 +69,26 @@ describe('ScenarioQueue: persona name matching for path-style persona specs', ()
 // ---------------------------------------------------------------------------
 
 describe('callMock: abortSignal propagation during mock delay', () => {
+  it('should remain pending until waitForAbort receives an abort signal', async () => {
+    setMockScenario([{ status: 'done', content: 'Done', waitForAbort: true }]);
+    const controller = new AbortController();
+    const response = callMock('agents/test-coder', 'task text', {
+      cwd: '/tmp/project',
+      abortSignal: controller.signal,
+    });
+    let settled = false;
+    void response.then(() => { settled = true; });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    controller.abort();
+
+    await expect(response).resolves.toMatchObject({
+      status: 'blocked',
+      content: expect.stringContaining('[MOCK:ABORTED]'),
+    });
+  });
+
   it('should return blocked when AbortSignal fires during delayMs', async () => {
     // Given: scenario with a long delay (5s) and no persona restriction
     setMockScenario([{ status: 'done', content: 'Done', delayMs: 5000 }]);

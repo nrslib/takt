@@ -4,6 +4,7 @@ import {
   IssueEnqueueCancelledError,
 } from '../infra/task/enqueueService.js';
 import type { GitProvider, Issue } from '../infra/git/index.js';
+import { createIssueFromTaskResult } from '../infra/task/issueTask.js';
 
 function createTestGitProvider(overrides: Partial<GitProvider> = {}): GitProvider {
   const issue: Issue = {
@@ -41,6 +42,36 @@ function createTestGitProvider(overrides: Partial<GitProvider> = {}): GitProvide
 }
 
 describe('createIssueAndEnqueueTask', () => {
+  it.each([
+    ['a prohibited title', '# Task Order'],
+    ['a title shorter than the minimum', 'abc'],
+  ])('falls back to a task-derived title for %s', async (_case, title) => {
+    const createIssue = vi.fn(() => ({ success: true as const, issueNumber: 913 }));
+    const gitProvider = createTestGitProvider({ createIssue });
+    const saveTaskFile = vi.fn().mockResolvedValue({
+      taskName: 'task-1',
+      tasksFile: '/repo/.takt/tasks.yaml',
+    });
+    const task = '## Implement enqueue title fallback\nDetails';
+
+    const result = await createIssueAndEnqueueTask({
+      cwd: '/repo',
+      task,
+      workflow: 'review',
+      title,
+      gitProvider,
+    }, {
+      createIssueFromTaskResult,
+      saveTaskFile,
+    });
+
+    expect(result.success).toBe(true);
+    expect(createIssue).toHaveBeenCalledWith({
+      title: 'Implement enqueue title fallback',
+      body: task,
+    }, '/repo');
+  });
+
   it('does not create an issue when the abort signal is already aborted', async () => {
     const closeIssue = vi.fn(() => ({ success: true as const }));
     const gitProvider = createTestGitProvider({ closeIssue });
@@ -67,7 +98,7 @@ describe('createIssueAndEnqueueTask', () => {
     expect(closeIssue).not.toHaveBeenCalled();
   });
 
-  it('returns a task_saving failure result when default compensation handles a save failure', async () => {
+  it('returns a task_saving failure and leaves the created issue open', async () => {
     const closeIssue = vi.fn(() => ({ success: true as const }));
     const gitProvider = createTestGitProvider({ closeIssue });
     const createIssueFromTaskResult = vi.fn(() => ({ success: true as const, issueNumber: 913 }));
@@ -89,13 +120,12 @@ describe('createIssueAndEnqueueTask', () => {
     if (!result.success) {
       expect(result.failure.stage).toBe('task_saving');
       expect(result.failure.issueNumber).toBe(913);
-      expect(result.failure.compensation).toEqual({ success: true });
+      expect(result.failure).toEqual(expect.objectContaining({
+        issueCreated: true,
+        taskEnqueued: false,
+      }));
     }
-    expect(closeIssue).toHaveBeenCalledWith(
-      913,
-      expect.stringContaining('TAKT created this issue'),
-      '/repo',
-    );
+    expect(closeIssue).not.toHaveBeenCalled();
   });
 
   it('returns an issue_creation failure result without saving or compensation when issue creation fails', async () => {
@@ -122,6 +152,8 @@ describe('createIssueAndEnqueueTask', () => {
     expect(result).toEqual({
       success: false,
       failure: {
+        issueCreated: false,
+        taskEnqueued: false,
         stage: 'issue_creation',
         error: 'gh issue create failed',
       },
@@ -130,7 +162,7 @@ describe('createIssueAndEnqueueTask', () => {
     expect(closeIssue).not.toHaveBeenCalled();
   });
 
-  it('uses a cancellation compensation comment when enqueue is cancelled after issue creation', async () => {
+  it('returns cancellation details and leaves the created issue open', async () => {
     const closeIssue = vi.fn(() => ({ success: true as const }));
     const gitProvider = createTestGitProvider({ closeIssue });
     const createIssueFromTaskResult = vi.fn(() => ({ success: true as const, issueNumber: 913 }));
@@ -151,17 +183,12 @@ describe('createIssueAndEnqueueTask', () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.failure.stage).toBe('cancelled_after_issue_creation');
+      expect(result.failure).toEqual(expect.objectContaining({
+        issueCreated: true,
+        issueNumber: 913,
+        taskEnqueued: false,
+      }));
     }
-    expect(closeIssue).toHaveBeenCalledWith(
-      913,
-      [
-        'TAKT created this issue, but task enqueue was cancelled before saving the pending task.',
-        '',
-        'The issue is being closed to keep the repository state consistent.',
-      ].join('\n'),
-      '/repo',
-    );
-    const compensationComment = String(closeIssue.mock.calls[0]?.[1]);
-    expect(compensationComment).not.toContain('saving the pending task failed');
+    expect(closeIssue).not.toHaveBeenCalled();
   });
 });

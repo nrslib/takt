@@ -50,7 +50,12 @@ describe('summarizeTaskName non-workflow provider integration', () => {
       '      description: Workflow execution',
       '      provider: opencode',
       '      model: opencode/workflow-candidate-model',
-      '      cost_tier: medium',
+      '      routing_tier: medium',
+      '  default_pool: general',
+      '  candidate_pools:',
+      '    general:',
+      '      candidates: [coding]',
+      '      fallback: coding',
     ].join('\n'), 'utf-8');
     providerMocks.getRuntimeInstructions.mockReturnValue(null);
     providerMocks.call.mockResolvedValue({

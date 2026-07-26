@@ -10,13 +10,14 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   resolveRefToContent,
   type FacetResolutionContext,
 } from '../infra/config/loaders/resource-resolver.js';
+import { getLanguageResourcesDir } from '../infra/resources/index.js';
 
 describe('facet include expansion', () => {
   let tempDir: string;
@@ -43,6 +44,23 @@ describe('facet include expansion', () => {
 
     const content = resolveRefToContent('implement-maintenance', undefined, tempDir, 'instructions', context);
     expect(content).toBe('Do the task.\n\nShared rules content\n\nExtra constraints.');
+  });
+
+  it.each(['en', 'ja'] as const)('should expand the builtin PR review guidance in %s', (lang) => {
+    const partial = readFileSync(
+      join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions', 'review-pr-context.md'),
+      'utf-8',
+    ).trim();
+    const content = resolveRefToContent(
+      'review-coding',
+      undefined,
+      tempDir,
+      'instructions',
+      { projectDir: tempDir, lang },
+    );
+
+    expect(content).toContain(partial);
+    expect(content).not.toContain('{{include:instructions/review-pr-context}}');
   });
 
   it('should expand {{include:policies/<name>}} in a policy facet', () => {

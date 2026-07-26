@@ -248,7 +248,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
 全コマンド・オプションは [CLI Reference](./cli-reference.ja.md) を参照してください。
 
-クライアント連携用のエントリポイントも 2 つ同梱しています。`takt-acp` は TAKT を stdio JSON-RPC 上の [Agent Client Protocol](./cli-reference.ja.md#acp-agent) エージェントとして起動し、`takt-mcp` は stdio の [MCP サーバー](./cli-reference.ja.md#mcp-server) として起動して、MCP クライアント（Codex、Claude Code など）からタスクを積んだり、issue を作成して積んだり、次の pending タスクを実行したりできます。
+クライアント連携用のエントリポイントも 2 つ同梱しています。`takt-acp` は TAKT を stdio JSON-RPC 上の [Agent Client Protocol](./cli-reference.ja.md#acp-agent) エージェントとして起動し、`takt-mcp` は stdio の [MCP サーバー](./cli-reference.ja.md#mcp-server) として起動して、MCP クライアント（Codex、Claude Code など）から既存または新規 Issue を任意で紐付けたタスクを積めます。pending タスクの実行には `takt run` または `takt watch` を使用します。
 
 ### インスタント exec モード
 
@@ -293,20 +293,31 @@ auto_routing:
       description: Planning, final decisions, requirement-fulfillment judgment, and other advanced reasoning
       provider: codex
       model: gpt-5.6-sol
-      cost_tier: high
+      routing_tier: high
     - name: coding
       description: Implementation, tests, debugging, and refactoring
       provider: codex
       model: gpt-5.6-terra
-      cost_tier: medium
+      routing_tier: medium
     - name: lightweight
       description: Formatting and small mechanical edits
       provider: codex
       model: gpt-5.6-luna
-      cost_tier: low
+      routing_tier: low
   rules:
+    steps:
+      security-audit: advanced
+  default_pool: general
+  candidate_pools:
+    general:
+      candidates: [lightweight, coding, advanced]
+      fallback: advanced
+    implementation:
+      candidates: [coding, advanced]
+      fallback: advanced
+  pool_rules:
     tags:
-      implementation: coding
+      implementation: implementation
 ```
 
 AI による task slug 生成など workflow step context を持たない処理は、具体的な top-level provider/model を使用します。`auto_routing.router` と candidates は workflow routing 専用であり、default として暗黙に使用されません。assistant 会話（インタラクティブモードの計画会話、instruct、retry）は auto routing を通らず、設定済みなら `takt_providers.assistant`、未設定なら top-level provider/model を使用します。CLI の provider/model override が適用されるのはインタラクティブモードの計画会話だけで、instruct / retry には適用されません。

@@ -1,6 +1,5 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
-import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import {
   isValidTaskContextBranchName,
   isValidTaskContextPrNumber,
@@ -8,7 +7,7 @@ import {
 
 const MCP_TASK_MAX_LENGTH = 128 * 1024;
 const MCP_WORKFLOW_MAX_LENGTH = 128;
-const MCP_MODEL_MAX_LENGTH = 128;
+const MCP_ISSUE_TITLE_MAX_LENGTH = 255;
 const MCP_LABEL_MAX_LENGTH = 100;
 const MCP_LABEL_MAX_COUNT = 20;
 
@@ -39,6 +38,21 @@ const taskContextSchema = z.object({
   .optional()
   .describe('Optional Git context to pass to the queued or executed task without changing task provenance.');
 
+const issueNumberSchema = z.number().int().safe().positive({
+  message: 'issue number must be a positive safe integer',
+});
+const issueTitleSchema = z.string().trim().min(1).max(MCP_ISSUE_TITLE_MAX_LENGTH);
+const issueLabelsSchema = z.array(z.string().trim().min(1).max(MCP_LABEL_MAX_LENGTH))
+  .max(MCP_LABEL_MAX_COUNT);
+const issueSchema = z.union([
+  z.object({ number: issueNumberSchema }).strict(),
+  z.object({
+    create: z.literal(true),
+    title: issueTitleSchema.optional(),
+    labels: issueLabelsSchema.optional(),
+  }).strict(),
+]).describe('Optional issue linkage. Provide either an existing issue number or create settings.');
+
 const taskSaveOptionsSchema = z.object({
   cwd: absolutePathSchema,
   task: taskContentSchema,
@@ -46,28 +60,10 @@ const taskSaveOptionsSchema = z.object({
   worktree: worktreeSchema,
   autoPr: z.boolean()
     .describe('Whether successful worktree execution should push the branch and automatically open a pull request. Ask the user before enqueueing; do not infer this from branch or PR context. When false, worktree execution may still auto-commit local changes.'),
+  issue: issueSchema.optional(),
   taskContext: taskContextSchema,
 }).strict();
 
 export const enqueueTaskInputSchema = taskSaveOptionsSchema;
 
-export const createIssueAndEnqueueTaskInputSchema = taskSaveOptionsSchema.extend({
-  labels: z.array(z.string().trim().min(1).max(MCP_LABEL_MAX_LENGTH)).max(MCP_LABEL_MAX_COUNT)
-    .optional()
-    .describe('Issue labels to request from the configured issue provider.'),
-}).strict();
-
-export const runNextTaskInputSchema = z.object({
-  cwd: absolutePathSchema,
-  provider: z.enum(PROVIDER_TYPES)
-    .optional()
-    .describe('Agent provider override for this task execution.'),
-  model: z.string().trim().min(1).max(MCP_MODEL_MAX_LENGTH)
-    .optional()
-    .describe('Model override for this task execution.'),
-  taskContext: taskContextSchema,
-}).strict();
-
 export type EnqueueTaskInput = z.infer<typeof enqueueTaskInputSchema>;
-export type CreateIssueAndEnqueueTaskInput = z.infer<typeof createIssueAndEnqueueTaskInputSchema>;
-export type RunNextTaskInput = z.infer<typeof runNextTaskInputSchema>;

@@ -41,4 +41,6 @@ export interface ScenarioEntry {
   failureCategory?: AgentFailureCategory;
   /** Artificial delay in ms before returning (respects abortSignal) */
   delayMs?: number;
+  /** Keep the response pending until the call's abort signal fires. */
+  waitForAbort?: boolean;
 }

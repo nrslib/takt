@@ -4,6 +4,7 @@ import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { StepRunResult } from '../core/workflow/types.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { TeamLeaderPartCancellation } from '../core/workflow/engine/team-leader-part-cancellation.js';
 
 type FakeSpanStatus = {
   code: number;
@@ -1006,6 +1007,38 @@ describe('workflow OpenTelemetry spans', () => {
         'takt.phase.name': 'execute',
         'takt.phase.status': 'done',
       }) as unknown,
+    }));
+  });
+
+  it('Team Leader part cancellationをusage missingなしのcancelled phaseとして記録する', async () => {
+    const { module, spans, metricRecords } = await loadWorkflowSpansWithMockedApi();
+    const cancellation = new TeamLeaderPartCancellation('part-1');
+
+    await expect(module.runWithPhaseSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step: makeStep(),
+      iteration: 1,
+      phase: 1,
+      phaseName: 'execute',
+      phaseExecutionId: 'implement.part-1:1:1:1',
+      getPromptParts: () => ({ systemPrompt: 'system', userInstruction: 'instruction' }),
+      providerInfo: { provider: 'mock', model: 'mock-model' },
+    }, async () => {
+      throw cancellation;
+    }, () => ({ status: 'done' }), (error) => (
+      error instanceof TeamLeaderPartCancellation ? { status: 'cancelled' } : undefined
+    ))).rejects.toBe(cancellation);
+
+    expect(spans[0]?.attributes).toMatchObject({
+      'takt.phase.status': 'cancelled',
+    });
+    expect(spans[0]?.attributes).not.toHaveProperty('takt.usage.missing');
+    expect(spans[0]?.status).toBeUndefined();
+    expect(spans[0]?.exceptions).toEqual([]);
+    expect(metricRecords).toContainEqual(expect.objectContaining({
+      name: 'takt.workflow.phase.runs',
+      attributes: expect.objectContaining({ 'takt.phase.status': 'cancelled' }) as unknown,
     }));
   });
 

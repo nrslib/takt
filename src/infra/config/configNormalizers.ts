@@ -47,13 +47,16 @@ type RawAutoRoutingConfig = {
   };
   candidates: Array<{
     name: string;
-    description: string;
+    description?: string;
     provider: AutoRoutingConfig['candidates'][number]['provider'];
     model: string;
-    cost_tier: AutoRoutingConfig['candidates'][number]['costTier'];
+    routing_tier: AutoRoutingConfig['candidates'][number]['routingTier'];
     provider_options?: Record<string, unknown>;
   }>;
   rules?: AutoRoutingConfig['rules'];
+  default_pool: string;
+  candidate_pools: AutoRoutingConfig['candidatePools'];
+  pool_rules?: AutoRoutingConfig['poolRules'];
 };
 
 function normalizeQualityGate(gate: RawQualityGate): QualityGate {
@@ -155,10 +158,10 @@ export function normalizeAutoRoutingConfig(
       });
       return {
         name: candidate.name,
-        description: candidate.description,
+        ...(candidate.description !== undefined ? { description: candidate.description } : {}),
         provider: candidate.provider,
         model: candidate.model,
-        costTier: candidate.cost_tier,
+        routingTier: candidate.routing_tier,
         providerOptions: normalizeProviderOptions(candidate.provider_options, {
           ...options,
           pathPrefix: `auto_routing.candidates[${index}].provider_options`,
@@ -166,6 +169,9 @@ export function normalizeAutoRoutingConfig(
       };
     }),
     rules: raw.rules,
+    defaultPool: raw.default_pool,
+    candidatePools: raw.candidate_pools,
+    poolRules: raw.pool_rules,
   };
 }
 
@@ -189,14 +195,17 @@ export function denormalizeAutoRoutingConfig(
       }
       return {
         name: candidate.name,
-        description: candidate.description,
+        ...(candidate.description !== undefined ? { description: candidate.description } : {}),
         provider: candidate.provider,
         model: candidate.model,
-        cost_tier: candidate.costTier,
+        routing_tier: candidate.routingTier,
         ...(rawProviderOptions !== undefined ? { provider_options: rawProviderOptions } : {}),
       };
     }),
     ...(config.rules !== undefined ? { rules: config.rules } : {}),
+    default_pool: config.defaultPool,
+    candidate_pools: config.candidatePools,
+    ...(config.poolRules !== undefined ? { pool_rules: config.poolRules } : {}),
   };
 }
 

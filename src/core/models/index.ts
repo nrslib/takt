@@ -69,7 +69,7 @@ export type {
   WorkflowState,
   FindingLedger,
   CustomAgentConfig,
-  CostTier,
+  RoutingTier,
   AutoRoutingStrategy,
   AutoRoutingCandidate,
   AutoRoutingConfig,

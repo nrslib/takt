@@ -77,7 +77,10 @@ vi.mock('../shared/prompts/index.js', () => ({
 }));
 
 import { getProvider } from '../infra/providers/index.js';
-import { runInstructMode } from '../features/tasks/list/instructMode.js';
+import {
+  runInstructMode,
+  type InstructModeOptions,
+} from '../features/tasks/list/instructMode.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { info } from '../shared/ui/index.js';
 import { loadTemplate } from '../shared/prompts/index.js';
@@ -123,12 +126,24 @@ function trackAttachmentSession(tempPath: string): void {
   attachmentSessionDirs.add(path.dirname(path.dirname(tempPath)));
 }
 
+function runTestInstructMode(overrides: Partial<InstructModeOptions> = {}) {
+  return runInstructMode({
+    cwd: '/project',
+    branchContext: 'branch context',
+    branchName: 'feature-branch',
+    taskName: 'my-task',
+    taskContent: 'Do something',
+    retryNote: '',
+    ...overrides,
+  });
+}
+
 describe('runInstructMode', () => {
   it('should return action=cancel when user types /cancel', async () => {
     setupRawStdin(toRawInputs(['/cancel']));
     setupMockProvider([]);
 
-    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
+    const result = await runTestInstructMode();
 
     expect(result.action).toBe('cancel');
     expect(result.task).toBe('');
@@ -138,7 +153,7 @@ describe('runInstructMode', () => {
     setupRawStdin(toRawInputs(['add more tests', '/go']));
     setupMockProvider(['What kind of tests?', 'Add unit tests for the feature.']);
 
-    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
+    const result = await runTestInstructMode();
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Add unit tests for the feature.');
@@ -148,7 +163,7 @@ describe('runInstructMode', () => {
     setupRawStdin(toRawInputs(['/go add more tests', '/cancel']));
     setupMockProvider(['Add unit tests from inline /go task.']);
 
-    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
+    const result = await runTestInstructMode();
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Add unit tests from inline /go task.');
@@ -158,7 +173,7 @@ describe('runInstructMode', () => {
     setupRawStdin(toRawInputs(['add more tests /go', '/cancel']));
     setupMockProvider(['Add unit tests from suffix /go task.']);
 
-    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
+    const result = await runTestInstructMode();
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Add unit tests from suffix /go task.');
@@ -169,7 +184,7 @@ describe('runInstructMode', () => {
     setupMockProvider(['response', 'Summarized task.']);
     mockSelectOption.mockResolvedValue('save_task');
 
-    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
+    const result = await runTestInstructMode();
 
     expect(result.action).toBe('save_task');
     expect(result.task).toBe('Summarized task.');
@@ -182,7 +197,7 @@ describe('runInstructMode', () => {
     ]);
     setupMockProvider(['response', 'Use [Image #1].']);
 
-    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
+    const result = await runTestInstructMode();
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Use [Image #1].');
@@ -197,7 +212,7 @@ describe('runInstructMode', () => {
     setupMockProvider(['response', 'Summarized task.']);
     mockSelectOption.mockResolvedValueOnce('continue');
 
-    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
+    const result = await runTestInstructMode();
 
     expect(result.action).toBe('cancel');
   });
@@ -206,7 +221,7 @@ describe('runInstructMode', () => {
     setupRawStdin(toRawInputs(['/go', '/cancel']));
     setupMockProvider([]);
 
-    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
+    const result = await runTestInstructMode();
 
     expect(result.action).toBe('cancel');
   });
@@ -216,7 +231,7 @@ describe('runInstructMode', () => {
     setupMockProvider(['response', 'Task summary.']);
     mockSelectOption.mockResolvedValue('save_task');
 
-    await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
+    await runTestInstructMode();
 
     const selectCall = mockSelectOption.mock.calls.find((call) =>
       Array.isArray(call[1])
@@ -234,7 +249,7 @@ describe('runInstructMode', () => {
     setupRawStdin(toRawInputs(['/cancel']));
     setupMockProvider([]);
 
-    await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', 'existing note');
+    await runTestInstructMode({ retryNote: 'existing note' });
 
     expect(mockLoadTemplate).toHaveBeenCalledWith(
       'score_instruct_system_prompt',
@@ -245,6 +260,52 @@ describe('runInstructMode', () => {
         branchName: 'feature-branch',
         branchContext: 'branch context',
         retryNote: 'existing note',
+      }),
+    );
+  });
+
+  it('should inject PR context only when supplied by a PR-derived task', async () => {
+    setupRawStdin(toRawInputs(['/cancel']));
+    setupMockProvider([]);
+
+    await runTestInstructMode({
+      branchName: 'feature/pr-context',
+      previousOrderContent: null,
+      prContext: {
+        source: 'pr_review',
+        prNumber: 861,
+        baseBranch: 'release/2026.07',
+        headBranch: 'feature/pr-context',
+        baseBranchSource: 'pull_request',
+        baseDiffRef: 'refs/heads/release/2026.07',
+        headDiffRef: 'refs/heads/feature/pr-context',
+      },
+    });
+
+    expect(mockLoadTemplate).toHaveBeenCalledWith(
+      'score_instruct_system_prompt',
+      'en',
+      expect.objectContaining({
+        hasPrContext: true,
+        prContextText: expect.stringContaining(
+          'refs/heads/release/2026.07...refs/heads/feature/pr-context',
+        ),
+      }),
+    );
+  });
+
+  it('should omit PR context when the task is not PR-derived', async () => {
+    setupRawStdin(toRawInputs(['/cancel']));
+    setupMockProvider([]);
+
+    await runTestInstructMode({ branchName: 'feature/plain' });
+
+    expect(mockLoadTemplate).toHaveBeenCalledWith(
+      'score_instruct_system_prompt',
+      'en',
+      expect.objectContaining({
+        hasPrContext: false,
+        prContextText: '',
       }),
     );
   });
@@ -265,7 +326,7 @@ describe('runInstructMode', () => {
       ],
     };
 
-    await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '', undefined, runSessionContext);
+    await runTestInstructMode({ runSessionContext });
 
     expect(mockLoadTemplate).toHaveBeenCalledWith(
       'score_instruct_system_prompt',
@@ -283,7 +344,7 @@ describe('runInstructMode', () => {
     setupRawStdin(toRawInputs(['/cancel']));
     setupMockProvider([]);
 
-    await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '', undefined, undefined, '# Previous Order\nDo the thing');
+    await runTestInstructMode({ previousOrderContent: '# Previous Order\nDo the thing' });
 
     expect(mockLoadTemplate).toHaveBeenCalledWith(
       'score_instruct_system_prompt',
@@ -299,7 +360,7 @@ describe('runInstructMode', () => {
     setupRawStdin(toRawInputs(['/cancel']));
     setupMockProvider([]);
 
-    await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '', undefined, undefined, null);
+    await runTestInstructMode({ previousOrderContent: null });
 
     expect(mockLoadTemplate).toHaveBeenCalledWith(
       'score_instruct_system_prompt',
@@ -316,10 +377,7 @@ describe('runInstructMode', () => {
     setupMockProvider([]);
 
     const previousOrder = '# Previous Order\nDo the thing';
-    const result = await runInstructMode(
-      '/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '',
-      undefined, undefined, previousOrder,
-    );
+    const result = await runTestInstructMode({ previousOrderContent: previousOrder });
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe(previousOrder);
@@ -329,10 +387,7 @@ describe('runInstructMode', () => {
     setupRawStdin(toRawInputs(['/replay', '/cancel']));
     setupMockProvider([]);
 
-    const result = await runInstructMode(
-      '/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '',
-      undefined, undefined, null,
-    );
+    const result = await runTestInstructMode({ previousOrderContent: null });
 
     expect(result.action).toBe('cancel');
     expect(mockInfo).toHaveBeenCalledWith('Mock label');

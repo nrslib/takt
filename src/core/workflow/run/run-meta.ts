@@ -5,6 +5,10 @@ import { getErrorMessage } from '../../../shared/utils/error.js';
 import type { WorkflowResumePoint } from '../../models/types.js';
 import type { WorkflowTraceDiscovery } from '../observability/traceDiscovery.js';
 import { buildRunPaths } from './run-paths.js';
+import {
+  decodePullRequestContext,
+  type PullRequestContext,
+} from '../pr-context.js';
 
 export interface RunMetaObservability {
   traceDiscovery: WorkflowTraceDiscovery;
@@ -42,28 +46,34 @@ export interface RunMeta {
   resumeArtifacts?: string;
   operationJournalRunSlug?: string;
   operationClaimToken?: string;
+  prContext?: PullRequestContext;
 }
 
-interface RawRunMeta extends RunMeta {
+interface RawRunMeta extends Omit<RunMeta, 'prContext'> {
   resume_point?: WorkflowResumePoint;
   source_run_slug?: string;
   resume_mode?: RunResumeMode;
   resume_artifacts?: string;
   operation_journal_run_slug?: string;
   operation_claim_token?: string;
+  pr_context?: unknown;
 }
 
 export type RunMetaWarningHandler = (warning: string) => void;
 
 function normalizeRunMeta(raw: RawRunMeta): RunMeta {
+  const { pr_context: persistedPrContext, ...baseMeta } = raw;
   return {
-    ...raw,
+    ...baseMeta,
     resumePoint: raw.resumePoint ?? raw.resume_point,
     sourceRunSlug: raw.sourceRunSlug ?? raw.source_run_slug,
     resumeMode: raw.resumeMode ?? raw.resume_mode,
     resumeArtifacts: raw.resumeArtifacts ?? raw.resume_artifacts,
     operationJournalRunSlug: raw.operationJournalRunSlug ?? raw.operation_journal_run_slug,
     operationClaimToken: raw.operationClaimToken ?? raw.operation_claim_token,
+    ...(persistedPrContext === undefined
+      ? {}
+      : { prContext: decodePullRequestContext(persistedPrContext) }),
   };
 }
 

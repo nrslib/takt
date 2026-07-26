@@ -147,6 +147,7 @@ export async function executeTaskAndCompleteWithDetails(
       maxStepsOverride,
       initialIterationOverride,
       prNumber,
+      prContext,
     } = await resolveTaskExecution(task, cwd, taskAbortSignal, {
       ...buildResolveTaskExecutionOptions(parallelOptions, taskContext),
     });
@@ -187,6 +188,7 @@ export async function executeTaskAndCompleteWithDetails(
         issueNumber,
         prNumber,
       }),
+      ...(prContext ? { prContext } : {}),
     });
 
     if (taskRunResult.exceeded && taskRunResult.exceededInfo) {

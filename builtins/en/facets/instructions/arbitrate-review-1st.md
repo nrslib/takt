@@ -12,3 +12,4 @@ Review both outputs and arbitrate which judgment is valid.
 - Whether ai-antipattern-review-1st's findings are specific and point to real issues in the code
 - Whether ai-antipattern-fix's rebuttal has evidence (file verification results, test results)
 - Whether the findings are non-blocking (record only) level or actually require fixes
+{{include:instructions/review-pr-context}}

@@ -213,8 +213,12 @@ describe('ArpeggioRunner integration', () => {
           description: 'Arpeggio batch processing',
           provider: 'mock',
           model: 'candidate-model',
-          costTier: 'medium',
+          routingTier: 'medium',
         }],
+        defaultPool: 'general',
+        candidatePools: {
+          general: { candidates: ['batch'], fallback: 'batch' },
+        },
         rules: { steps: { process: 'batch' } },
       },
     });

@@ -92,7 +92,10 @@ export function toPartDefinitions(
   return parts;
 }
 
-export function toMorePartsResponse(raw: unknown): MorePartsResponse {
+export function toMorePartsResponse(
+  raw: unknown,
+  cancellablePartIds: readonly string[],
+): MorePartsResponse {
   if (typeof raw !== 'object' || raw == null || Array.isArray(raw)) {
     throw new Error('Structured output must be an object');
   }
@@ -104,6 +107,23 @@ export function toMorePartsResponse(raw: unknown): MorePartsResponse {
   if (typeof payload.reasoning !== 'string') {
     throw new Error('Structured output "reasoning" must be a string');
   }
+  if (!Array.isArray(payload.cancelPartIds)) {
+    throw new Error('Structured output "cancelPartIds" must be an array');
+  }
+  if (payload.cancelPartIds.some((partId) => typeof partId !== 'string' || partId.trim().length === 0)) {
+    throw new Error('Structured output "cancelPartIds" entries must be non-empty strings');
+  }
+  const cancelPartIds = payload.cancelPartIds as string[];
+  if (new Set(cancelPartIds).size !== cancelPartIds.length) {
+    throw new Error('Structured output "cancelPartIds" must not contain duplicates');
+  }
+  const cancellablePartIdSet = new Set(cancellablePartIds);
+  const invalidCancellationId = cancelPartIds.find((partId) => !cancellablePartIdSet.has(partId));
+  if (invalidCancellationId !== undefined) {
+    throw new Error(
+      `Structured output "cancelPartIds" contains a non-cancellable part ID: ${invalidCancellationId}`,
+    );
+  }
   if (!Array.isArray(payload.parts)) {
     throw new Error('Structured output "parts" must be an array');
   }
@@ -113,6 +133,7 @@ export function toMorePartsResponse(raw: unknown): MorePartsResponse {
   return {
     done: payload.done,
     reasoning: payload.reasoning,
+    cancelPartIds,
     parts,
   };
 }
@@ -243,6 +264,7 @@ function buildMorePartsBasePrompt(
   existingIds: string[],
   language?: Language,
   findingContract?: FindingContractFeedbackContext,
+  cancellablePartIds: readonly string[] = [],
 ): string {
   if (findingContract !== undefined) {
     let remainingRawLength = LATEST_BATCH_RAW_TOTAL_MAX_LENGTH;
@@ -373,6 +395,9 @@ function buildMorePartsBasePrompt(
       '- 同じバッチ内の part は互いに依存させない',
       '- 実装結果がそろった後にのみ、後続 batch で検証 part を追加する',
       `- 既存IDは再利用しない: ${existingIds.join(', ') || '(なし)'}`,
+      `- 不要な未完了 part だけを cancelPartIds に指定できる: ${cancellablePartIds.join(', ') || '(なし)'}`,
+      '- 完了済み・未知・今回新規追加する part ID は cancelPartIds に指定しない',
+      '- done=true と cancelPartIds は同時に返せる。完了判断時も不要な未完了 part は cancelPartIds に指定する',
     ].join('\n');
   }
 
@@ -395,6 +420,9 @@ function buildMorePartsBasePrompt(
     '- Do not create parts that depend on another unfinished part',
     '- Add a verification part only after its implementation results are complete',
     `- Do not reuse existing IDs: ${existingIds.join(', ') || '(none)'}`,
+    `- You may cancel only obsolete unfinished parts via cancelPartIds: ${cancellablePartIds.join(', ') || '(none)'}`,
+    '- Do not put completed, unknown, or newly added part IDs in cancelPartIds',
+    '- You may return done=true and cancelPartIds together. When work is complete, include every obsolete unfinished part in cancelPartIds',
   ].join('\n');
 }
 
@@ -454,6 +482,7 @@ export function buildMorePartsPrompt(
   existingIds: string[],
   language?: Language,
   findingContract?: FindingContractFeedbackContext,
+  cancellablePartIds: readonly string[] = [],
 ): string {
   return buildMorePartsBasePrompt(
     originalInstruction,
@@ -461,6 +490,7 @@ export function buildMorePartsPrompt(
     existingIds,
     language,
     findingContract,
+    cancellablePartIds,
   );
 }
 
@@ -470,6 +500,7 @@ export function buildPromptBasedMorePartsPrompt(
   existingIds: string[],
   language?: Language,
   findingContract?: FindingContractFeedbackContext,
+  cancellablePartIds: readonly string[] = [],
 ): string {
   const outputInstruction = language === 'ja'
     ? [
@@ -477,7 +508,7 @@ export function buildPromptBasedMorePartsPrompt(
         '出力形式:',
         '- ```json ... ``` ブロックのみを返す',
         `- JSON は ${findingContract === undefined
-          ? '{"done": boolean, "reasoning": string, "parts": []}'
+          ? '{"done": boolean, "reasoning": string, "cancelPartIds": [], "parts": []}'
           : '{"decision","reasoning","parts","fixCoverage","blockers"}'} の形にする`,
       ]
     : [
@@ -485,7 +516,7 @@ export function buildPromptBasedMorePartsPrompt(
         'Output format:',
         '- Return only one ```json ... ``` block',
         `- The JSON must be ${findingContract === undefined
-          ? '{"done": boolean, "reasoning": string, "parts": []}'
+          ? '{"done": boolean, "reasoning": string, "cancelPartIds": [], "parts": []}'
           : '{"decision","reasoning","parts","fixCoverage","blockers"}'}`,
       ];
 
@@ -495,5 +526,6 @@ export function buildPromptBasedMorePartsPrompt(
     existingIds,
     language,
     findingContract,
+    cancellablePartIds,
   )}\n${outputInstruction.join('\n')}`;
 }

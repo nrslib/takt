@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { TeamLeaderRunner } from '../core/workflow/engine/TeamLeaderRunner.js';
-import { runTeamLeaderPart } from '../core/workflow/engine/team-leader-part-runner.js';
+import {
+  buildPartScopedSessionKey,
+  runTeamLeaderPart,
+} from '../core/workflow/engine/team-leader-part-runner.js';
 import type { AgentResponse, WorkflowStep, WorkflowState } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
 import { makeInstructionContext } from './test-helpers.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { TeamLeaderPartCancellation } from '../core/workflow/engine/team-leader-part-cancellation.js';
 
 function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
   return {
@@ -74,6 +78,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
         reasoning: 'enough',
+        cancelPartIds: [],
         parts: [],
       }),
     };
@@ -236,6 +241,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       }),
       expect.any(Function),
       expect.any(Function),
+      expect.any(Function),
     );
   });
 
@@ -349,9 +355,15 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         .mockResolvedValueOnce({
           done: false,
           reasoning: 'run a recovery part',
+          cancelPartIds: [],
           parts: [{ id: 'part-2', title: 'recovery', instruction: 'part-2' }],
         })
-        .mockResolvedValue({ done: true, reasoning: 'recovery completed', parts: [] }),
+        .mockResolvedValue({
+          done: true,
+          reasoning: 'recovery completed',
+          cancelPartIds: [],
+          parts: [],
+        }),
     };
     const applyPostExecutionPhases = vi.fn().mockImplementation(
       async (_step: WorkflowStep, _state: WorkflowState, _iteration: number, response: AgentResponse) => response,
@@ -603,8 +615,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
       sessionId: undefined,
     });
+    const partSessionKey = buildPartScopedSessionKey(
+      { name: 'implement.part-1', instruction: 'Implement API' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
     const sessions = new Map<string, string>([
-      ['coder:opencode', 'existing-part-session'],
+      [partSessionKey, 'existing-part-session'],
     ]);
     const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
       if (sessionId === undefined) {
@@ -614,7 +630,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       }
     });
     const optionsBuilder = {
-      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode' }),
+      resolveStepProviderModel: vi.fn().mockReturnValue({
+        provider: 'opencode',
+        model: 'opencode/zai-coding-plan/glm-5.1',
+      }),
       buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
     } as unknown as OptionsBuilder;
     const step: WorkflowStep = {
@@ -648,7 +667,107 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     );
 
     expect(updatePersonaSession).not.toHaveBeenCalled();
-    expect(sessions.get('coder:opencode')).toBe('existing-part-session');
+    expect(sessions.get(partSessionKey)).toBe('existing-part-session');
+  });
+
+  it.each(['response', 'throw'] as const)(
+    '個別取消の%s経路でsessionを公開しない',
+    async (outcome) => {
+      const cancellation = new TeamLeaderPartCancellation('part-1');
+      const controller = new AbortController();
+      controller.abort(cancellation);
+      mockExecuteAgent.mockImplementation(async () => {
+        if (outcome === 'throw') {
+          throw cancellation;
+        }
+        return {
+          persona: 'coder',
+          status: 'error',
+          content: '',
+          timestamp: new Date('2026-04-01T00:00:00.000Z'),
+          sessionId: 'cancelled-session',
+        };
+      });
+      const updatePersonaSession = vi.fn();
+      const optionsBuilder = {
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode' }),
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+      } as unknown as OptionsBuilder;
+      const step: WorkflowStep = {
+        name: 'implement',
+        persona: 'coder',
+        personaDisplayName: 'coder',
+        instruction: 'Task',
+        passPreviousResponse: false,
+        teamLeader: {
+          maxConcurrency: 1,
+          timeoutMs: 1000,
+          partPersona: 'coder',
+        },
+      };
+
+      await expect(runTeamLeaderPart(
+        optionsBuilder,
+        step,
+        undefined,
+        { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        0,
+        1000,
+        updatePersonaSession,
+        undefined,
+        { enabled: false, workflowName: 'workflow', iteration: 1 },
+        () => 'member instruction',
+        undefined,
+        controller.signal,
+      )).rejects.toBe(cancellation);
+
+      expect(updatePersonaSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it('providerがerrorで終了しても個別取消reasonがあればcancelled phaseとして扱う', async () => {
+    const cancellation = new TeamLeaderPartCancellation('part-1');
+    const controller = new AbortController();
+    controller.abort(cancellation);
+    const providerFailure = new Error('Provider request failed during cancellation');
+    let phaseErrorOutcome: unknown;
+    mockExecuteAgent.mockRejectedValue(providerFailure);
+    mockRunWithPhaseSpan.mockImplementation(async (_params, execute, _getOutcome, getErrorOutcome) => {
+      try {
+        return await execute();
+      } catch (error) {
+        phaseErrorOutcome = getErrorOutcome(error);
+        throw error;
+      }
+    });
+    const optionsBuilder = {
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode' }),
+      buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+    } as unknown as OptionsBuilder;
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      instruction: 'Task',
+      passPreviousResponse: false,
+      teamLeader: { maxConcurrency: 1, timeoutMs: 1000, partPersona: 'coder' },
+    };
+
+    await expect(runTeamLeaderPart(
+      optionsBuilder,
+      step,
+      undefined,
+      { id: 'part-1', title: 'API', instruction: 'Implement API' },
+      0,
+      1000,
+      vi.fn(),
+      undefined,
+      { enabled: true, workflowName: 'workflow', iteration: 1 },
+      () => 'member instruction',
+      undefined,
+      controller.signal,
+    )).rejects.toBe(cancellation);
+
+    expect(phaseErrorOutcome).toEqual({ status: 'cancelled' });
   });
 
   it('Given teamLeader.partTags, When running multiple decomposed parts, Then each part step gets part tags without changing aggregated output', async () => {
@@ -1605,9 +1724,31 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       updatePersonaSession,
     );
 
-    expect(updatePersonaSession).toHaveBeenCalledWith('implement.part-1:opencode', 'session-opencode-1');
-    expect(updatePersonaSession).toHaveBeenCalledWith('implement.part-2:opencode', 'session-opencode-2');
-    expect(sessions.has('coder:opencode')).toBe(false);
+    const partOneSessionKey = buildPartScopedSessionKey(
+      { name: 'implement.part-1', instruction: 'Implement API' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
+    const partTwoSessionKey = buildPartScopedSessionKey(
+      { name: 'implement.part-2', instruction: 'Implement UI' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
+
+    expect(JSON.parse(partOneSessionKey)).toEqual([
+      'implement.part-1',
+      'opencode',
+      'opencode/zai-coding-plan/glm-5.1',
+    ]);
+    expect(JSON.parse(partTwoSessionKey)).toEqual([
+      'implement.part-2',
+      'opencode',
+      'opencode/zai-coding-plan/glm-5.1',
+    ]);
+    expect(updatePersonaSession).toHaveBeenCalledWith(partOneSessionKey, 'session-opencode-1');
+    expect(updatePersonaSession).toHaveBeenCalledWith(partTwoSessionKey, 'session-opencode-2');
+    expect(sessions.has(buildPartScopedSessionKey(
+      { name: 'coder', instruction: 'Task: {task}' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    ))).toBe(false);
   });
 
   it('report phase の有無にかかわらず member session を part-scoped に保存する', async () => {
@@ -1708,8 +1849,17 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       updatePersonaSession,
     );
 
-    expect(updatePersonaSession).toHaveBeenCalledWith('implement.part-1:opencode', 'session-opencode-1');
-    expect(updatePersonaSession).not.toHaveBeenCalledWith('coder:opencode', 'session-opencode-1');
+    const partSessionKey = buildPartScopedSessionKey(
+      { name: 'implement.part-1', instruction: 'Implement API' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
+    const coderSessionKey = buildPartScopedSessionKey(
+      { name: 'coder', instruction: 'Task: {task}' },
+      { provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' },
+    );
+
+    expect(updatePersonaSession).toHaveBeenCalledWith(partSessionKey, 'session-opencode-1');
+    expect(updatePersonaSession).not.toHaveBeenCalledWith(coderSessionKey, 'session-opencode-1');
   });
 
   it('non-Claude part execution でも partAllowedTools をそのまま runtime に渡す（プロバイダ層で log & ignore される）', async () => {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, PartDefinition, WorkflowStep } from '../core/models/types.js';
 import type { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import type { StepExecutor } from '../core/workflow/engine/StepExecutor.js';
@@ -13,10 +13,15 @@ const { requestCorrectionMock } = vi.hoisted(() => ({
   requestCorrectionMock: vi.fn(),
 }));
 
-vi.mock('../core/workflow/engine/team-leader-part-runner.js', () => ({
-  buildPartScopedSessionKey: () => 'part-session',
-  requestTeamLeaderPartCompletionCorrection: requestCorrectionMock,
-}));
+vi.mock('../core/workflow/engine/team-leader-part-runner.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../core/workflow/engine/team-leader-part-runner.js')
+  >();
+  return {
+    ...actual,
+    requestTeamLeaderPartCompletionCorrection: requestCorrectionMock,
+  };
+});
 
 const part: PartDefinition = {
   id: 'repair',
@@ -54,6 +59,69 @@ function response(
 }
 
 describe('Finding Contract part completion recovery', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('updates only the provider-and-model scoped session after a corrected completion', async () => {
+    requestCorrectionMock.mockResolvedValueOnce(response({
+      findingOutcomes: [{
+        findingId: 'F-0001',
+        outcome: 'disputed',
+        evidence: ['src/repair.ts:1'],
+      }],
+      changedPaths: ['src/repair.ts'],
+      checks: [],
+      summary: 'repaired',
+    }, { sessionId: 'session-b' }));
+    const updatePersonaSession = vi.fn();
+    const normalizeStructuredOutputWithDiagnostics = vi.fn((
+      _partStep: WorkflowStep,
+      correctionResponse: AgentResponse,
+    ) => ({ response: correctionResponse }));
+
+    await validateOrRecoverFindingContractPartCompletion(
+      {
+        optionsBuilder: {
+          resolveStepProviderModel: vi.fn().mockReturnValue({
+            provider: 'codex',
+            model: 'gpt-5',
+          }),
+        } as unknown as OptionsBuilder,
+        stepExecutor: {
+          normalizeStructuredOutputWithDiagnostics,
+        } as unknown as StepExecutor,
+        language: 'en',
+        recordUsage: vi.fn(),
+      },
+      {
+        step,
+        part,
+        response: response({
+          findingOutcomes: [{
+            findingId: 'F-0001',
+            outcome: 'disputed',
+            evidence: ['missing location'],
+          }],
+          changedPaths: ['src/repair.ts'],
+          checks: [],
+          summary: 'repaired',
+        }, { sessionId: 'session-a' }),
+        updatePersonaSession,
+        abortSignal: new AbortController().signal,
+      },
+    );
+
+    expect(updatePersonaSession).toHaveBeenCalledWith(
+      JSON.stringify(['fix.repair', 'codex', 'gpt-5']),
+      'session-b',
+    );
+    expect(updatePersonaSession).not.toHaveBeenCalledWith(
+      JSON.stringify(['fix.repair', 'codex']),
+      expect.anything(),
+    );
+  });
+
   it('publishes only late usage after the terminal fence closes', async () => {
     const controller = new AbortController();
     let terminalState: TeamLeaderExecutionTerminalState = 'running';

@@ -775,6 +775,7 @@ describe('agent-usecases', () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       done: false,
       reasoning: 'Need one more part',
+      cancelPartIds: ['p2'],
       parts: [
         { id: 'p3', title: 'Part 3', instruction: 'Do 3' },
       ],
@@ -784,12 +785,13 @@ describe('agent-usecases', () => {
       'original instruction',
       [{ id: 'p1', title: 'Part 1', status: 'done', content: 'done' }],
       ['p1', 'p2'],
-      { cwd: '/repo', persona: 'team-leader' },
+      { cwd: '/repo', persona: 'team-leader', cancellablePartIds: ['p2'] },
     );
 
     expect(result).toEqual({
       done: false,
       reasoning: 'Need one more part',
+      cancelPartIds: ['p2'],
       parts: [{ id: 'p3', title: 'Part 3', instruction: 'Do 3' }],
     });
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.stringContaining('original instruction'), expect.objectContaining({
@@ -805,6 +807,7 @@ describe('agent-usecases', () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       done: true,
       reasoning: 'Enough',
+      cancelPartIds: [],
       parts: [],
     }));
 
@@ -815,6 +818,7 @@ describe('agent-usecases', () => {
       {
         cwd: '/repo',
         persona: 'team-leader',
+        cancellablePartIds: [],
         inspectTools: ['Read', 'Glob', 'Grep'],
       } as Parameters<typeof requestMoreParts>[3] & { inspectTools: string[] },
     );
@@ -839,7 +843,7 @@ describe('agent-usecases', () => {
       'instruction',
       [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
       ['p1'],
-      { cwd: '/repo', persona: 'team-leader' },
+      { cwd: '/repo', persona: 'team-leader', cancellablePartIds: [] },
     )).rejects.toThrow('Team leader feedback failed: timeout');
   });
 
@@ -853,6 +857,7 @@ describe('agent-usecases', () => {
     const response = doneResponse('x', {
       done: true,
       reasoning: 'enough',
+      cancelPartIds: [],
       parts: [],
     });
     response.providerUsage = providerUsage;
@@ -866,6 +871,7 @@ describe('agent-usecases', () => {
       ['p1'],
       {
         cwd: '/repo',
+        cancellablePartIds: [],
         abortSignal: abortController.signal,
         onAgentResponse,
       },
@@ -884,6 +890,7 @@ describe('agent-usecases', () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       done: true,
       reasoning: 'enough',
+      cancelPartIds: [],
       parts: [],
     }));
     const workflowMeta = {
@@ -903,6 +910,7 @@ describe('agent-usecases', () => {
       {
         cwd: '/repo',
         persona: 'team-leader',
+        cancellablePartIds: [],
         workflowMeta,
       } as DecomposeTaskOptions & { workflowMeta: typeof workflowMeta },
     );
@@ -918,6 +926,7 @@ describe('agent-usecases', () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       done: true,
       reasoning: 'enough',
+      cancelPartIds: [],
       parts: [],
     }));
     const mcpServers = {
@@ -931,6 +940,7 @@ describe('agent-usecases', () => {
       {
         cwd: '/repo',
         persona: 'team-leader',
+        cancellablePartIds: [],
         mcpServers,
       },
     );
@@ -946,6 +956,7 @@ describe('agent-usecases', () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       done: true,
       reasoning: 'enough',
+      cancelPartIds: [],
       parts: [],
     }));
 
@@ -956,6 +967,7 @@ describe('agent-usecases', () => {
       {
         cwd: '/repo',
         persona: 'team-leader',
+        cancellablePartIds: [],
         resolvedProvider: 'claude-terminal',
       },
     );

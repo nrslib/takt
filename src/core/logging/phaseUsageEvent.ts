@@ -90,6 +90,9 @@ function mapPhaseSpan(
   if (!phase || !phaseName) {
     return undefined;
   }
+  if (getString(span.attributes, 'takt.phase.status') === 'cancelled') {
+    return undefined;
+  }
 
   const common = buildCommonMeta(span);
   if (!common) {

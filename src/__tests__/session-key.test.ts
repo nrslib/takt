@@ -20,35 +20,35 @@ function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
 describe('buildSessionKey', () => {
   it('should use persona as base key when persona is set', () => {
     const step = createStep({ persona: 'coder', name: 'implement' });
-    expect(buildSessionKey(step)).toBe('coder');
+    expect(buildSessionKey(step)).toBe(JSON.stringify(['coder']));
   });
 
   it('should use explicit session key before persona when session key is set', () => {
     const step = createStep({ sessionKey: 'worker-1', persona: 'coder', provider: 'claude' });
-    expect(buildSessionKey(step)).toBe('worker-1:claude');
+    expect(buildSessionKey(step)).toBe(JSON.stringify(['worker-1', 'claude']));
   });
 
   it('should use name as base key when persona is not set', () => {
     const step = createStep({ persona: undefined, name: 'plan' });
-    expect(buildSessionKey(step)).toBe('plan');
+    expect(buildSessionKey(step)).toBe(JSON.stringify(['plan']));
   });
 
   it('should append provider when provider is specified', () => {
     const step = createStep({ persona: 'coder', provider: 'claude' });
-    expect(buildSessionKey(step)).toBe('coder:claude');
+    expect(buildSessionKey(step)).toBe(JSON.stringify(['coder', 'claude']));
   });
 
   it('should use name with provider when persona is not set', () => {
     const step = createStep({ persona: undefined, name: 'review', provider: 'codex' });
-    expect(buildSessionKey(step)).toBe('review:codex');
+    expect(buildSessionKey(step)).toBe(JSON.stringify(['review', 'codex']));
   });
 
   it('should produce different keys for same persona with different providers', () => {
     const claudeStep = createStep({ persona: 'coder', provider: 'claude', name: 'claude-eye' });
     const codexStep = createStep({ persona: 'coder', provider: 'codex', name: 'codex-eye' });
     expect(buildSessionKey(claudeStep)).not.toBe(buildSessionKey(codexStep));
-    expect(buildSessionKey(claudeStep)).toBe('coder:claude');
-    expect(buildSessionKey(codexStep)).toBe('coder:codex');
+    expect(buildSessionKey(claudeStep)).toBe(JSON.stringify(['coder', 'claude']));
+    expect(buildSessionKey(codexStep)).toBe(JSON.stringify(['coder', 'codex']));
   });
 
   it('should separate claude-sdk from headless claude in session key', () => {
@@ -59,24 +59,59 @@ describe('buildSessionKey', () => {
     });
     const headlessStep = createStep({ persona: 'coder', provider: 'claude', name: 'cli-eye' });
 
-    expect(buildSessionKey(sdkStep)).toBe('coder:claude-sdk');
-    expect(buildSessionKey(headlessStep)).toBe('coder:claude');
+    expect(buildSessionKey(sdkStep)).toBe(JSON.stringify(['coder', 'claude-sdk']));
+    expect(buildSessionKey(headlessStep)).toBe(JSON.stringify(['coder', 'claude']));
     expect(buildSessionKey(sdkStep)).not.toBe(buildSessionKey(headlessStep));
   });
 
   it('should not append provider when provider is undefined', () => {
     const step = createStep({ persona: 'coder', provider: undefined });
-    expect(buildSessionKey(step)).toBe('coder');
+    expect(buildSessionKey(step)).toBe(JSON.stringify(['coder']));
   });
 
   it('should prefer runtime provider override over step provider', () => {
     const step = createStep({ persona: 'coder', provider: 'opencode' });
-    expect(buildSessionKey(step, 'codex')).toBe('coder:codex');
+    expect(buildSessionKey(step, { provider: 'codex' })).toBe(JSON.stringify(['coder', 'codex']));
+  });
+
+  it('should separate sessions resolved to different models of the same provider', () => {
+    const step = createStep({ persona: 'coder', provider: 'codex' });
+
+    const primaryModelKey = buildSessionKey(step, { provider: 'codex', model: 'gpt-5' });
+    const fallbackModelKey = buildSessionKey(step, { provider: 'codex', model: 'gpt-5-mini' });
+
+    expect(primaryModelKey).not.toBe(fallbackModelKey);
+  });
+
+  it('should include the step model when no runtime model override is provided', () => {
+    const step = createStep({ persona: 'coder', provider: 'codex', model: 'gpt-5' });
+
+    expect(buildSessionKey(step)).toBe(JSON.stringify(['coder', 'codex', 'gpt-5']));
+  });
+
+  it('should not reuse the authored model when runtime resolution explicitly clears it', () => {
+    const step = createStep({ persona: 'coder', provider: 'codex', model: 'gpt-5' });
+
+    expect(buildSessionKey(step, { provider: 'claude', model: undefined }))
+      .toBe(JSON.stringify(['coder', 'claude']));
   });
 
   it('should use explicit session key as-is (Zod trims at parse time)', () => {
     const step = createStep({ sessionKey: 'shared reviewer', persona: 'coder', provider: 'claude' });
-    expect(buildSessionKey(step)).toBe('shared reviewer:claude');
+    expect(buildSessionKey(step)).toBe(JSON.stringify(['shared reviewer', 'claude']));
+  });
+
+  it('should keep distinct component tuples separate when values contain delimiters', () => {
+    const provider = 'codex';
+    const firstStep = createStep({ sessionKey: 'worker:codex:mock' });
+    const secondStep = createStep({ sessionKey: 'worker' });
+
+    const firstKey = buildSessionKey(firstStep, { provider, model: 'v1' });
+    const secondKey = buildSessionKey(secondStep, { provider, model: 'mock:codex:v1' });
+
+    expect(firstKey).toBe(JSON.stringify(['worker:codex:mock', provider, 'v1']));
+    expect(secondKey).toBe(JSON.stringify(['worker', provider, 'mock:codex:v1']));
+    expect(firstKey).not.toBe(secondKey);
   });
 
   it('should normalize session_key from top-level and parallel workflow YAML', () => {
@@ -145,8 +180,8 @@ describe('buildSessionKey', () => {
       expect(agentStep?.sessionKey).toBe('shared-agent');
       expect(workerStep?.sessionKey).toBe('worker-session');
       expect(loopMonitor?.judge.sessionKey).toBe('loop-monitor-session');
-      expect(agentStep ? buildSessionKey(agentStep) : undefined).toBe('shared-agent:claude');
-      expect(workerStep ? buildSessionKey(workerStep) : undefined).toBe('worker-session:codex');
+      expect(agentStep ? buildSessionKey(agentStep) : undefined).toBe(JSON.stringify(['shared-agent', 'claude']));
+      expect(workerStep ? buildSessionKey(workerStep) : undefined).toBe(JSON.stringify(['worker-session', 'codex']));
     } finally {
       if (originalConfigDir === undefined) {
         delete process.env.TAKT_CONFIG_DIR;

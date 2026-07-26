@@ -187,36 +187,47 @@ export async function runWithPhaseSpan<T>(
   params: PhaseSpanParams,
   execute: () => Promise<T>,
   getOutcome: (result: T) => PhaseSpanOutcome,
+  getErrorOutcome?: (error: unknown) => PhaseSpanOutcome | undefined,
 ): Promise<T> {
   if (!params.enabled) {
     return execute();
   }
 
   const startedAt = Date.now();
+  const executeWithSpan = async (span: Span): Promise<T> => {
+    try {
+      const result = await execute();
+      const outcome = getOutcome(result);
+      recordPhaseOutcome(span, params, outcome);
+      recordPhaseMetrics(params, outcome, Date.now() - startedAt);
+      return result;
+    } catch (error) {
+      const outcome = getErrorOutcome?.(error) ?? {
+        status: 'error',
+        error: getErrorMessage(error),
+        providerUsage: {
+          usageMissing: true,
+          reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+        },
+      };
+      recordPhaseOutcome(span, params, outcome);
+      recordPhaseMetrics(params, outcome, Date.now() - startedAt);
+      throw error;
+    }
+  };
+  if (getErrorOutcome === undefined) {
+    return runInSpan(
+      buildPhaseSpanName(params),
+      buildPhaseAttributes(params),
+      executeWithSpan,
+    );
+  }
   return runInSpan(
     buildPhaseSpanName(params),
     buildPhaseAttributes(params),
-    async (span) => {
-      try {
-        const result = await execute();
-        const outcome = getOutcome(result);
-        recordPhaseOutcome(span, params, outcome);
-        recordPhaseMetrics(params, outcome, Date.now() - startedAt);
-        return result;
-      } catch (error) {
-        const outcome = {
-          status: 'error',
-          error: getErrorMessage(error),
-          providerUsage: {
-            usageMissing: true,
-            reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
-          },
-        };
-        recordPhaseOutcome(span, params, outcome);
-        recordPhaseMetrics(params, outcome, Date.now() - startedAt);
-        throw error;
-      }
-    },
+    executeWithSpan,
+    context.active(),
+    (error) => getErrorOutcome(error)?.status !== 'cancelled',
   );
 }
 
@@ -350,13 +361,16 @@ async function runInSpan<T>(
   attributes: Attributes,
   execute: (span: Span) => Promise<T>,
   parentContext = context.active(),
+  shouldRecordError: (error: unknown) => boolean = () => true,
 ): Promise<T> {
   const span = tracer.startSpan(name, { attributes }, parentContext);
   return context.with(trace.setSpan(parentContext, span), async () => {
     try {
       return await execute(span);
     } catch (error) {
-      recordSpanError(span, error);
+      if (shouldRecordError(error)) {
+        recordSpanError(span, error);
+      }
       throw error;
     } finally {
       span.end();

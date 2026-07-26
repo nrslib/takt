@@ -92,6 +92,9 @@ vi.mock('../infra/task/index.js', () => ({
   })),
   isStaleRunningTask: (...args: unknown[]) => mockIsStaleRunningTask(...args),
   checkoutBranch: (...args: unknown[]) => mockCheckoutBranch(...args),
+  materializePullRequestBase: vi.fn((_projectCwd, _targetCwd, baseBranch: string) =>
+    `refs/takt/pr-base/${baseBranch}`),
+  resolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -347,6 +350,28 @@ describe('PR resolution in routing', () => {
       );
     });
 
+    it('should exit with a controlled error when a saved PR task has no head branch', async () => {
+      mockOpts.pr = 456;
+      mockInteractiveMode.mockResolvedValue({
+        action: 'save_task',
+        task: 'Saved PR task',
+      });
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ headRefName: undefined }));
+      const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
+        throw new Error('process.exit called');
+      });
+
+      await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
+      expect(mockLogError).toHaveBeenCalledWith(
+        'Fetched PR head branch is required when saving a PR review task.',
+      );
+      expect(mockExit).toHaveBeenCalledWith(1);
+      expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
+
+      mockExit.mockRestore();
+    });
+
     it('should execute task after resolving PR review comments', async () => {
       // Given
       mockOpts.pr = 456;
@@ -371,9 +396,31 @@ describe('PR resolution in routing', () => {
             branch: 'feat/my-pr-branch',
             baseBranch: 'release/main',
           },
+          prContext: {
+            source: 'pr_review',
+            prNumber: 456,
+            baseBranch: 'release/main',
+            headBranch: 'feat/my-pr-branch',
+            baseBranchSource: 'pull_request',
+            baseDiffRef: 'refs/takt/pr-base/release/main',
+            headDiffRef: 'refs/heads/feat/my-pr-branch',
+          },
         }),
         undefined,
       );
+    });
+
+    it('should execute without PR context when the fetched PR has no head branch', async () => {
+      mockOpts.pr = 456;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ headRefName: undefined }));
+
+      await executeDefaultAction();
+
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledOnce();
+      const selectOptions = mockSelectAndExecuteTask.mock.calls[0]![2];
+      expect(selectOptions).not.toHaveProperty('prContext');
+      expect(mockCheckoutBranch).not.toHaveBeenCalled();
     });
 
     it('should checkout PR branch before executing task', async () => {

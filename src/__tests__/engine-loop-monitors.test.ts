@@ -321,8 +321,10 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           description: 'Workflow and loop judge execution',
           provider: 'codex',
           model: 'gpt-5',
-          costTier: 'medium',
+          routingTier: 'medium',
         }],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['workflow-candidate'], fallback: 'workflow-candidate' } },
         rules: {
           steps: {
             implement: 'workflow-candidate',
@@ -1233,8 +1235,12 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const judgeCalls = vi.mocked(runAgent).mock.calls.filter((call) => call[0] === 'supervisor');
       expect(state.status).toBe('completed');
       expect(judgeCalls.map((call) => call[2]?.sessionId)).toEqual([undefined, 'monitor-session-1']);
-      expect(state.personaSessions.get('loop-watch:opencode')).toBe('monitor-session-2');
-      expect(state.personaSessions.has('supervisor:opencode')).toBe(false);
+      expect(state.personaSessions.get(
+        '["loop-watch","opencode","opencode/zai-coding-plan/glm-5.1"]',
+      )).toBe('monitor-session-2');
+      expect(state.personaSessions.has(
+        '["supervisor","opencode","opencode/zai-coding-plan/glm-5.1"]',
+      )).toBe(false);
     });
 
     it('should use the loop monitor judge persona as the default session key base', async () => {
@@ -1275,7 +1281,9 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const state = await engine.run();
 
       expect(state.status).toBe('completed');
-      expect(state.personaSessions.get('supervisor:opencode')).toBe('default-monitor-session');
+      expect(state.personaSessions.get(
+        '["supervisor","opencode","opencode/zai-coding-plan/glm-5.1"]',
+      )).toBe('default-monitor-session');
     });
   });
 
@@ -1405,8 +1413,10 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           description: 'Loop monitor validation',
           provider: 'codex',
           model: 'gpt-5',
-          costTier: 'medium',
+          routingTier: 'medium',
         }],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['loop-candidate'], fallback: 'loop-candidate' } },
         rules: { steps: { ai_fix: 'loop-candidate' } },
       };
 
@@ -1426,8 +1436,10 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           description: 'Loop monitor validation',
           provider: 'codex' as const,
           model: 'gpt-5',
-          costTier: 'medium' as const,
+          routingTier: 'medium' as const,
         }],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['loop-candidate'], fallback: 'loop-candidate' } },
         rules: { steps: { ai_fix: 'loop-candidate' } },
       };
 

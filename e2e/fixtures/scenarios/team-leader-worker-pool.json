@@ -20,6 +20,7 @@
     "structured_output": {
       "done": true,
       "reasoning": "All required files are planned",
+      "cancelPartIds": [],
       "parts": []
     }
   },

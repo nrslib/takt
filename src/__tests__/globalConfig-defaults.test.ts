@@ -471,10 +471,15 @@ describe('loadGlobalConfig', () => {
         '      description: Implementation and tests',
         '      provider: codex',
         '      model: gpt-5',
-        '      cost_tier: medium',
+        '      routing_tier: medium',
         '      provider_options:',
         '        codex:',
         '          reasoning_effort: high',
+        '  default_pool: general',
+        '  candidate_pools:',
+        '    general:',
+        '      candidates: [coding]',
+        '      fallback: coding',
       ].join('\n'),
       'utf-8',
     );
@@ -491,7 +496,9 @@ describe('loadGlobalConfig', () => {
     expect(raw).toContain('provider: mock');
     expect(raw).toContain('model: global-default-model');
     expect(raw).toContain('auto_routing:');
-    expect(raw).toContain('cost_tier: medium');
+    expect(raw).toContain('routing_tier: medium');
+    expect(raw).toContain('default_pool: general');
+    expect(raw).toContain('fallback: coding');
     expect(raw).toContain('provider_options:');
     expect(raw).toContain('reasoning_effort: high');
     expect(raw).not.toContain('autoRouting:');

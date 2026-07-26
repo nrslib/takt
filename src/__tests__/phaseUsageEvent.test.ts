@@ -90,6 +90,20 @@ describe('phase usage event mapper', () => {
     }));
   });
 
+  it('cancelled phaseのusage eventを生成しない', () => {
+    expect(mapSpanEndToPhaseUsageEvent({
+      name: 'phase.implement.execute',
+      attributes: {
+        'takt.provider.name': 'mock',
+        'takt.step.name': 'implement.part-1',
+        'takt.step.type': 'agent',
+        'takt.phase.number': 1,
+        'takt.phase.name': 'execute',
+        'takt.phase.status': 'cancelled',
+      },
+    }, context)).toBeUndefined();
+  });
+
   it('maps judge stage spans into stage-specific phase usage records', () => {
     const span: SpanSnapshot = {
       name: 'judge_stage.implement.3.ai_judge',

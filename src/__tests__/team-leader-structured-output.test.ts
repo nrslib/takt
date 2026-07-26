@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildDecomposePrompt, buildMorePartsPrompt, toPartDefinitions } from '../agents/team-leader-structured-output.js';
+import {
+  buildDecomposePrompt,
+  buildMorePartsPrompt,
+  toMorePartsResponse,
+  toPartDefinitions,
+} from '../agents/team-leader-structured-output.js';
 
 function makeRawPart(id: string): Record<string, string> {
   return {
@@ -57,10 +62,60 @@ describe('Team Leader feedback prompt', () => {
       [{ id: 'part-1', title: 'Implementation', status: 'done', content }],
       ['part-1'],
       'en',
+      undefined,
+      [],
     );
 
     expect(prompt).toContain('x'.repeat(2500));
     expect(prompt).toContain(tailMarker);
     expect(prompt).not.toContain('[truncated]');
+    expect(prompt).toContain('done=true and cancelPartIds together');
+  });
+});
+
+describe('toMorePartsResponse', () => {
+  it('取消対象IDを含む有効な追加計画を解析する', () => {
+    expect(toMorePartsResponse({
+      done: false,
+      reasoning: 'replace obsolete verification',
+      cancelPartIds: ['verify'],
+      parts: [makeRawPart('verify-gates')],
+    }, ['verify'])).toEqual({
+      done: false,
+      reasoning: 'replace obsolete verification',
+      cancelPartIds: ['verify'],
+      parts: [
+        { id: 'verify-gates', title: 'Title verify-gates', instruction: 'Do verify-gates' },
+      ],
+    });
+  });
+
+  it('cancelPartIdsの欠落・空白・重複を拒否する', () => {
+    expect(() => toMorePartsResponse({
+      done: true,
+      reasoning: 'complete',
+      parts: [],
+    }, [])).toThrow('Structured output "cancelPartIds" must be an array');
+    expect(() => toMorePartsResponse({
+      done: true,
+      reasoning: 'complete',
+      cancelPartIds: ['   '],
+      parts: [],
+    }, [])).toThrow('Structured output "cancelPartIds" entries must be non-empty strings');
+    expect(() => toMorePartsResponse({
+      done: true,
+      reasoning: 'complete',
+      cancelPartIds: ['verify', 'verify'],
+      parts: [],
+    }, ['verify'])).toThrow('Structured output "cancelPartIds" must not contain duplicates');
+  });
+
+  it('提示されていないpart IDの取消を拒否する', () => {
+    expect(() => toMorePartsResponse({
+      done: true,
+      reasoning: 'complete',
+      cancelPartIds: ['unknown'],
+      parts: [],
+    }, ['verify'])).toThrow('non-cancellable part ID: unknown');
   });
 });
