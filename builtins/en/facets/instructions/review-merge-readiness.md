@@ -12,3 +12,4 @@ Procedure:
 7. Verify that future maintainers can trace the reason for the change, the affected surface, and the validation path
 8. Judge `resolved` against the original finding's expected result, acceptance criteria, and task requirement, not merely against the patch
 9. Report only quality or maintainability issues that should block the merge, with location, impact, and fix direction
+{{include:instructions/review-pr-context}}

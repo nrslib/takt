@@ -115,7 +115,14 @@ describe('assistant provider entry gates', () => {
   });
 
   it('Given top-level provider is unset, When instruct starts, Then provider resolution is deferred to initializeSession', async () => {
-    await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
+    await runInstructMode({
+      cwd: '/project',
+      branchContext: 'branch context',
+      branchName: 'feature-branch',
+      taskName: 'my-task',
+      taskContent: 'Do something',
+      retryNote: '',
+    });
 
     expect(mockResolveWorkflowConfigValues).toHaveBeenCalledWith('/project', ['language']);
     expect(mockInitializeSession).toHaveBeenCalledWith('/project', 'instruct');
@@ -145,7 +152,14 @@ describe('assistant provider entry gates', () => {
     });
 
     await expect(
-      runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', ''),
+      runInstructMode({
+        cwd: '/project',
+        branchContext: 'branch context',
+        branchName: 'feature-branch',
+        taskName: 'my-task',
+        taskContent: 'Do something',
+        retryNote: '',
+      }),
     ).rejects.toThrow('Provider is not configured.');
 
     expect(mockRunConversationLoop).not.toHaveBeenCalled();

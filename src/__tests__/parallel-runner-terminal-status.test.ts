@@ -362,7 +362,10 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     const step = makeParallelStep();
     const state = makeState();
     const staleSessionId = 'stale-session';
-    state.personaSessions.set('ai-antipattern-review-2nd:claude', staleSessionId);
+    state.personaSessions.set(
+      '["ai-antipattern-review-2nd","claude","claude-sonnet"]',
+      staleSessionId,
+    );
     vi.mocked(deps.optionsBuilder.buildAgentOptions).mockReturnValue({ sessionId: staleSessionId } as never);
     queueAgentResponse(makeAgentResponse({
       persona: 'ai-antipattern-review-2nd',

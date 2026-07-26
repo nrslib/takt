@@ -12,3 +12,4 @@ ai-antipattern-review-1st（レビュアー）と ai-antipattern-fix（コーダ
 - ai-antipattern-review-1st の指摘が具体的で、コード上の実在する問題を指しているか
 - ai-antipattern-fix の反論に根拠（ファイル確認結果、テスト結果）があるか
 - 指摘が非ブロッキング（記録のみ）レベルか、実際に修正が必要か
+{{include:instructions/review-pr-context}}

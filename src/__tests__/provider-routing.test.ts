@@ -232,7 +232,7 @@ describe('provider_routing provider/model resolution', () => {
 });
 
 describe('provider_routing provider_options resolution', () => {
-  it('Given provider_routing resolves the provider, When building agent options, Then session key uses {persona}:{provider}', () => {
+  it('Given provider_routing resolves the provider, When building agent options, Then session key includes persona, provider, and model', () => {
     const step = createStep({
       persona: 'coder',
       providerRoutingPersonaKey: 'coder',
@@ -243,7 +243,7 @@ describe('provider_routing provider_options resolution', () => {
           coder: { provider: 'codex' },
         },
       },
-    }, (key) => (key === 'coder:codex' ? 'session-codex' : undefined));
+    }, (key) => (key === '["coder","codex","project-model"]' ? 'session-codex' : undefined));
 
     const options = builder.buildAgentOptions(step);
 

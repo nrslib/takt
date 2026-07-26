@@ -22,6 +22,7 @@ import {
   preparePolicyContent as preparePolicyContentGeneric,
 } from 'faceted-prompting';
 import { renderFencedJsonBlock } from './fenced-block.js';
+import { renderPullRequestContext } from '../pr-context.js';
 
 const CONTEXT_MAX_CHARS = 2000;
 
@@ -154,6 +155,10 @@ export class InstructionBuilder {
     // Retry note
     const hasRetryNote = !!this.context.retryNote;
     const retryNote = hasRetryNote ? escapeTemplateChars(this.context.retryNote!) : '';
+    const hasPrContext = this.context.prContext !== undefined;
+    const prContext = hasPrContext
+      ? renderPullRequestContext(this.context.prContext!, language)
+      : '';
 
     // Policy facet content
     const policyContents = this.context.policyContents ?? this.step.policyContents;
@@ -203,6 +208,8 @@ export class InstructionBuilder {
       userInputs,
       hasRetryNote,
       retryNote,
+      hasPrContext,
+      prContext,
       hasPolicy,
       policyContent,
       hasKnowledge,

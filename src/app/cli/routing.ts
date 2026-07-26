@@ -1,7 +1,11 @@
 import { info, success, error as logError } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { checkoutBranch } from '../../infra/task/index.js';
+import {
+  checkoutBranch,
+  materializePullRequestBase,
+  resolveBaseBranch,
+} from '../../infra/task/index.js';
 import { selectAndExecuteTask, determineWorkflow, saveTaskFromInteractive, createIssueAndSaveTask, promptLabelSelection, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
 import {
@@ -30,6 +34,8 @@ import { getCliExecutionContext } from './initialization.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
 import { loadTaskHistory } from './taskHistory.js';
 import { resolveIssueInput, resolvePrInput } from './routing-inputs.js';
+import { createPullRequestContext } from '../../core/workflow/pr-context.js';
+import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
 
 export async function executeDefaultAction(task?: string): Promise<void> {
   const { cwd: resolvedCwd, pipelineMode } = getCliExecutionContext();
@@ -116,12 +122,20 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       sourceContext = prResult.initialInput;
       prBranch = prResult.prBranch;
       prBaseBranch = prResult.baseBranch;
+      const resolvedPrBase = prBaseBranch ?? resolveBaseBranch(resolvedCwd).branch;
       selectOptions.traceTaskContext = {
         source: 'pr_review',
         prNumber,
         branch: prBranch,
-        ...(prBaseBranch ? { baseBranch: prBaseBranch } : {}),
+        baseBranch: resolvedPrBase,
       };
+      selectOptions.prContext = createPullRequestContext({
+        source: 'pr_review',
+        prNumber,
+        baseBranch: resolvedPrBase,
+        headBranch: prBranch,
+        baseBranchSource: prBaseBranch === undefined ? 'default_branch_fallback' : 'pull_request',
+      });
     } catch (e) {
       logError(getErrorMessage(e));
       process.exit(1);
@@ -252,6 +266,17 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         if (prBranch) {
           info(`Fetching and checking out PR branch: ${prBranch}`);
           checkoutBranch(resolvedCwd, prBranch);
+          if (selectOptions.prContext) {
+            selectOptions.prContext = createPullRequestContext({
+              ...selectOptions.prContext,
+              baseDiffRef: materializePullRequestBase(
+                resolvedCwd,
+                resolvedCwd,
+                selectOptions.prContext.baseBranch,
+              ),
+              headDiffRef: toLocalBranchRef(prBranch),
+            });
+          }
           success(`Checked out PR branch: ${prBranch}`);
         }
         selectOptions.interactiveUserInput = true;
@@ -272,17 +297,24 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         });
       },
       save_task: async ({ task: confirmedTask }) => {
-        const presetSettings = prBranch
-          ? {
-            worktree: true as const,
-            branch: prBranch,
-            autoPr: true,
-            ...(prBaseBranch ? { baseBranch: prBaseBranch } : {}),
+        if (prNumber !== undefined) {
+          if (prBranch === undefined) {
+            logError('Fetched PR head branch is required when saving a PR review task.');
+            process.exit(1);
           }
-          : undefined;
+          await saveTaskFromInteractive(resolvedCwd, confirmedTask, workflowId, {
+            prNumber,
+            presetSettings: {
+              worktree: true,
+              branch: prBranch,
+              autoPr: true,
+              ...(prBaseBranch ? { baseBranch: prBaseBranch } : {}),
+            },
+            ...(result.attachments ? { attachments: result.attachments } : {}),
+          });
+          return;
+        }
         await saveTaskFromInteractive(resolvedCwd, confirmedTask, workflowId, {
-          presetSettings,
-          ...(prNumber !== undefined ? { prNumber } : {}),
           ...(sourceIssueNumber !== undefined ? { issue: sourceIssueNumber } : {}),
           ...(result.attachments ? { attachments: result.attachments } : {}),
         });

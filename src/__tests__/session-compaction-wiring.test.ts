@@ -256,7 +256,10 @@ describe('session compaction Phase 1 wiring', () => {
       structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
     };
     const state = makeState();
-    state.personaSessions.set('reviewer:opencode', 'session-1');
+    state.personaSessions.set(
+      '["reviewer","opencode","opencode/big-pickle"]',
+      'session-1',
+    );
     const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
       if (sessionId === undefined) state.personaSessions.delete(key);
       else state.personaSessions.set(key, sessionId);
@@ -269,9 +272,19 @@ describe('session compaction Phase 1 wiring', () => {
     expect(vi.mocked(executeAgent)).toHaveBeenCalledWith('reviewer', expect.any(String), expect.objectContaining({
       sessionId: undefined,
     }));
-    expect(updatePersonaSession).toHaveBeenNthCalledWith(1, 'reviewer:opencode', undefined);
-    expect(updatePersonaSession).toHaveBeenNthCalledWith(2, 'reviewer:opencode', 'session-fresh');
-    expect(state.personaSessions.get('reviewer:opencode')).toBe('session-fresh');
+    expect(updatePersonaSession).toHaveBeenNthCalledWith(
+      1,
+      '["reviewer","opencode","opencode/big-pickle"]',
+      undefined,
+    );
+    expect(updatePersonaSession).toHaveBeenNthCalledWith(
+      2,
+      '["reviewer","opencode","opencode/big-pickle"]',
+      'session-fresh',
+    );
+    expect(state.personaSessions.get(
+      '["reviewer","opencode","opencode/big-pickle"]',
+    )).toBe('session-fresh');
   });
 
   it('Given fresh Phase 1 returns no session When relation clarification runs Then it never receives the invalidated session', async () => {
@@ -336,7 +349,10 @@ describe('session compaction Phase 1 wiring', () => {
       getFindingCallNamespace: () => '',
     };
     const state = makeState();
-    state.personaSessions.set('reviewer:opencode', 'session-old');
+    state.personaSessions.set(
+      '["reviewer","opencode","opencode/big-pickle"]',
+      'session-old',
+    );
     compactSessionBeforePhase1Mock.mockResolvedValueOnce('fresh');
     mkdirSync(runPaths.reportsAbs, { recursive: true });
     writeFileSync(join(runPaths.reportsAbs, 'findings.json'), '{}');
@@ -536,7 +552,10 @@ describe('session compaction Phase 1 wiring', () => {
       runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
     };
     const state = makeState();
-    state.personaSessions.set('reviewer:opencode', 'session-1');
+    state.personaSessions.set(
+      '["reviewer","opencode","opencode/big-pickle"]',
+      'session-1',
+    );
     const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
       if (sessionId === undefined) state.personaSessions.delete(key);
       else state.personaSessions.set(key, sessionId);
@@ -549,15 +568,23 @@ describe('session compaction Phase 1 wiring', () => {
     expect(vi.mocked(executeAgent)).toHaveBeenCalledWith('reviewer', expect.any(String), expect.objectContaining({
       sessionId: undefined,
     }));
-    expect(updatePersonaSession).toHaveBeenCalledWith('reviewer:opencode', undefined);
-    expect(state.personaSessions.has('reviewer:opencode')).toBe(false);
+    expect(updatePersonaSession).toHaveBeenCalledWith(
+      '["reviewer","opencode","opencode/big-pickle"]',
+      undefined,
+    );
+    expect(state.personaSessions.has(
+      '["reviewer","opencode","opencode/big-pickle"]',
+    )).toBe(false);
   });
 
   it('Given fresh fallback Phase 1 returns a provider error When a parallel sub-step runs Then it does not execute the side effect twice', async () => {
     const subStep = makeCompactStep({ name: 'api-review' });
     const parentStep = makeStep({ name: 'reviewers', instruction: 'Run reviewers', parallel: [subStep] });
     const state = makeState();
-    state.personaSessions.set('reviewer:opencode', 'session-1');
+    state.personaSessions.set(
+      '["reviewer","opencode","opencode/big-pickle"]',
+      'session-1',
+    );
     compactSessionBeforePhase1Mock.mockResolvedValueOnce('fresh');
     let sideEffectCount = 0;
     vi.mocked(executeAgent).mockImplementationOnce(async (_persona, instruction, options) => {

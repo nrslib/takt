@@ -1,7 +1,7 @@
 <!--
   template: score_direct_instruct_system_prompt
   role: system prompt for direct run instruct assistant mode
-  vars: runSlug, taskContent, hasWorkflowPreview, workflowStructure, stepDetails, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent
+  vars: runSlug, taskContent, hasWorkflowPreview, workflowStructure, stepDetails, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent, hasPrContext, prContextText
   caller: features/tasks/resume/directInstructMode
 -->
 # Direct Run Additional Instruction Assistant
@@ -30,6 +30,10 @@ Review a direct run that is not linked from tasks.yaml and create additional ins
 
 **Run:** {{runSlug}}
 **Original instruction:** {{taskContent}}
+{{#if hasPrContext}}
+
+{{prContextText}}
+{{/if}}
 {{#if hasWorkflowPreview}}
 
 ## Workflow Structure

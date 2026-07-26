@@ -195,6 +195,57 @@ describe('run-meta lookup', () => {
     });
   });
 
+  it('should decode persisted PR context at the read boundary', () => {
+    const metaPath = path.join(projectDir, '.takt', 'runs', '20260409-run-a', 'meta.json');
+    writeMeta(projectDir, '20260409-run-a', {
+      task: 'Review PR changes',
+      workflow: 'default',
+      runSlug: '20260409-run-a',
+      runRoot: '.takt/runs/20260409-run-a',
+      reportDirectory: '.takt/runs/20260409-run-a/reports',
+      contextDirectory: '.takt/runs/20260409-run-a/context',
+      logsDirectory: '.takt/runs/20260409-run-a/logs',
+      status: 'running',
+      startTime: '2026-04-09T00:00:00.000Z',
+      pr_context: {
+        source: 'pr_review',
+        pr_number: 861,
+        base_branch: 'release/2026.07',
+        head_branch: 'feature/pr-context',
+        base_branch_source: 'pull_request',
+      },
+    });
+
+    expect(readRunMeta(metaPath)?.prContext).toEqual({
+      source: 'pr_review',
+      prNumber: 861,
+      baseBranch: 'release/2026.07',
+      headBranch: 'feature/pr-context',
+      baseBranchSource: 'pull_request',
+    });
+  });
+
+  it('should reject malformed persisted PR context with a warning', () => {
+    const metaPath = path.join(projectDir, '.takt', 'runs', '20260409-run-a', 'meta.json');
+    const warnings: string[] = [];
+    writeMeta(projectDir, '20260409-run-a', {
+      task: 'Review PR changes',
+      workflow: 'default',
+      status: 'running',
+      startTime: '2026-04-09T00:00:00.000Z',
+      pr_context: {
+        source: 'pr_review',
+        pr_number: 861,
+        base_branch: 'main',
+        head_branch: 'HEAD',
+        base_branch_source: 'pull_request',
+      },
+    });
+
+    expect(readRunMeta(metaPath, (warning) => warnings.push(warning))).toBeNull();
+    expect(warnings).toEqual([expect.stringContaining('snake_case PR context fields')]);
+  });
+
   it('should return undefined when run slug is invalid', () => {
     writeMeta(projectDir, '20260409-run-z', {
       task: 'Force fail me\nwith full prompt',

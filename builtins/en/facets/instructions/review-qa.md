@@ -8,3 +8,4 @@ Procedure:
 5. Separate verified scope from unverified scope, and do not treat unverified primary paths as functionally checked
 
 **This is review iteration #{step_iteration}.** On the first review, cover the entire cumulative diff and report all locations in the same family in that review. On later reviews, apply every criterion to prior open findings, their fixes, and directly affected paths without restarting untouched-area discovery from scratch each time. If the focused check would return APPROVE, first perform a final review of the entire cumulative diff.
+{{include:instructions/review-pr-context}}

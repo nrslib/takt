@@ -280,6 +280,7 @@ export async function createWorkflowExecutionBootstrap(
         : {}),
       operationJournalRunSlug,
       operationClaimToken,
+      ...(options.prContext ? { prContext: options.prContext } : {}),
     },
   );
   const workflowSessionId = generateSessionId();

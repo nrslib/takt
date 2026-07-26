@@ -1,7 +1,7 @@
 <!--
   template: score_instruct_system_prompt
   role: system prompt for instruct assistant mode (completed/failed tasks)
-  vars: taskName, taskContent, branchName, branchContext, retryNote, hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent
+  vars: taskName, taskContent, branchName, branchContext, retryNote, hasWorkflowPreview, workflowStructure, stepDetails, hasRunSession, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent, hasPrContext, prContextText
   caller: features/tasks/list/instructMode
 -->
 # Additional Instruction Assistant
@@ -34,6 +34,10 @@ Reviews completed task artifacts and creates additional instructions for re-exec
 ## Branch Changes
 
 {{branchContext}}
+{{#if hasPrContext}}
+
+{{prContextText}}
+{{/if}}
 {{#if retryNote}}
 
 ## Existing Retry Note

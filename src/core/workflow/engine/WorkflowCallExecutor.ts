@@ -1,4 +1,5 @@
 import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
+import { createWorkRequirementEstimator } from '../../../agents/auto-routing-usecase.js';
 import type {
   FindingContractConfig,
   WorkflowConfig,
@@ -16,10 +17,13 @@ import type { FindingLedgerStore } from '../findings/store.js';
 import type { RunPaths } from '../run/run-paths.js';
 import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
 import { resolveEffectiveAutoRouting } from '../auto-routing/effective-auto-routing.js';
+import type { WorkRequirementEstimator } from '../auto-routing/contracts.js';
+import { RoutingRuntime } from '../auto-routing/runtime.js';
 import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
 import { buildWorkflowCallNamespaceSegment } from '../workflow-call-namespace.js';
 import type {
   StepProviderInfo,
+  AutoRoutingEstimatorSource,
   WorkflowAbortKind,
   WorkflowCallChildEngine,
   WorkflowCallResolver,
@@ -37,6 +41,12 @@ export type WorkflowCallSessionUpdates = ReadonlyMap<string, WorkflowCallSession
 export interface WorkflowCallIsolatedStateSync {
   iteration: number;
   maxSteps?: WorkflowMaxSteps;
+}
+
+interface ChildRoutingRuntime {
+  estimator: WorkRequirementEstimator;
+  runtime: RoutingRuntime;
+  estimatorSource: Exclude<AutoRoutingEstimatorSource, 'absent'>;
 }
 
 function applyWorkflowCallOverridesToProviderEntries<T extends PersonaProviderEntry>(
@@ -123,6 +133,7 @@ interface WorkflowCallExecutorDeps {
     iteration: number;
     personaSessions: Map<string, string>;
     stepIterations: Map<string, number>;
+    userInputs: string[];
   };
   setActiveResumePoint: (step: WorkflowCallStep, iteration: number) => void;
   /** 自前 or 継承済みの、この engine で有効な Finding Contract。子へ引き継ぐ。 */
@@ -154,7 +165,53 @@ export type WorkflowCallExecutionResult = WorkflowState & {
 };
 
 export class WorkflowCallExecutor {
+  private readonly childRoutingRuntimes = new Map<string, ChildRoutingRuntime>();
+
   constructor(private readonly deps: WorkflowCallExecutorDeps) {}
+
+  private getChildRoutingRuntime(
+    childWorkflow: WorkflowConfig,
+    childAutoRouting: NonNullable<ReturnType<typeof resolveEffectiveAutoRouting>>,
+    options: WorkflowEngineOptions,
+    workflowCallStep: WorkflowCallStep,
+  ): ChildRoutingRuntime {
+    const cacheKey = JSON.stringify({
+      parentWorkflow: this.deps.getConfig().name,
+      workflowCallStep: workflowCallStep.name,
+      parentNamespace: options.runPathNamespace ?? [],
+      childWorkflow: childWorkflow.name,
+      autoRouting: childAutoRouting,
+    });
+    const existing = this.childRoutingRuntimes.get(cacheKey);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const configuredEstimatorSource = options.autoRoutingEstimatorSource;
+    const estimatorSource = configuredEstimatorSource
+      ?? (options.autoRoutingEstimator === undefined ? 'engine-default' : 'injected');
+    const inheritsParentAutoRouting = childWorkflow.autoRouting === undefined;
+    const estimator = estimatorSource === 'injected' || inheritsParentAutoRouting
+      ? options.autoRoutingEstimator
+      : createWorkRequirementEstimator({
+        cwd: this.deps.getCwd(),
+        provider: childAutoRouting.router.provider,
+        model: childAutoRouting.router.model,
+        language: options.language,
+        childProcessEnv: options.childProcessEnv,
+        abortSignal: options.abortSignal,
+      });
+    if (estimator === undefined) {
+      throw new Error(`workflow_call child "${childWorkflow.name}" inherited auto routing without an estimator`);
+    }
+    const runtime = new RoutingRuntime({ autoRouting: childAutoRouting, estimator });
+    const created: ChildRoutingRuntime = {
+      estimator,
+      runtime,
+      estimatorSource: estimatorSource === 'injected' ? 'injected' : 'engine-default',
+    };
+    this.childRoutingRuntimes.set(cacheKey, created);
+    return created;
+  }
 
   /**
    * raw finding id 用の呼び出し名前空間を組み立てる。子エンジンは
@@ -312,10 +369,15 @@ export class WorkflowCallExecutor {
     const inheritedSessions = new Map(this.deps.state.personaSessions);
     const sessionUpdates = new Map<string, WorkflowCallSessionUpdate>();
     const childAutoRouting = resolveEffectiveAutoRouting(request.childWorkflow, options.autoRouting);
+    const childRoutingRuntime = childAutoRouting === undefined
+      ? undefined
+      : this.getChildRoutingRuntime(request.childWorkflow, childAutoRouting, options, request.step);
+    const inheritedEstimatorSource = options.autoRoutingEstimatorSource;
     const childOptions: WorkflowEngineOptions = {
       ...options,
       maxStepsOverride: this.deps.sharedRuntime.maxSteps ?? this.deps.getMaxSteps(),
       initialSessions: Object.fromEntries(this.deps.state.personaSessions),
+      initialUserInputs: [...this.deps.state.userInputs],
       provider: request.childProviderInfo.provider,
       providerSource: request.childProviderInfo.providerSource,
       model: request.childProviderInfo.model,
@@ -326,8 +388,9 @@ export class WorkflowCallExecutor {
       ),
       autoRouting: childAutoRouting,
       autoStrategyOverride: options.autoStrategyOverride,
-      // Child workflows need router prompts scoped to the child workflow name and run namespace.
-      autoRoutingAiRouter: undefined,
+      autoRoutingEstimator: childRoutingRuntime?.estimator,
+      routingRuntime: childRoutingRuntime?.runtime,
+      autoRoutingEstimatorSource: childRoutingRuntime?.estimatorSource ?? inheritedEstimatorSource,
       onSessionUpdate: executeOptions.syncParentState
         ? options.onSessionUpdate
         : (persona, sessionId) => {

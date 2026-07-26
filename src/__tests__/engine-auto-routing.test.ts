@@ -27,7 +27,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
-import type { AutoRoutingAiRouter } from '../agents/auto-routing-usecase.js';
 import type { StepProviderInfo, WorkflowEngineOptions } from '../core/workflow/types.js';
 import type { AutoRoutingConfig, WorkflowConfig } from '../core/models/index.js';
 import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
@@ -59,7 +58,7 @@ function createAutoRoutingConfig(): AutoRoutingConfig {
         description: 'Implementation and tests',
         provider: 'codex',
         model: 'gpt-5',
-        costTier: 'medium',
+        routingTier: 'medium',
         providerOptions: {
           codex: { reasoningEffort: 'high' },
         },
@@ -69,9 +68,13 @@ function createAutoRoutingConfig(): AutoRoutingConfig {
         description: 'Formatting and small edits',
         provider: 'claude-sdk',
         model: 'claude-haiku-4-5-20251001',
-        costTier: 'low',
+        routingTier: 'low',
       },
     ],
+    defaultPool: 'general',
+    candidatePools: {
+      general: { candidates: ['lightweight', 'coding'], fallback: 'coding' },
+    },
     rules: {
       tags: {
         implementation: 'coding',
@@ -217,8 +220,8 @@ describe('WorkflowEngine auto routing integration', () => {
         options?.onStream?.({ type: 'text', data: { text: 'router-stream' } });
         return makeResponse({
           persona: 'auto-router',
-          content: '{"selected_candidate":"coding"}',
-          structuredOutput: { selected_candidate: 'coding' },
+          content: '{"required_tier":"medium","reason_codes":["focused-change"]}',
+          structuredOutput: { required_tier: 'medium', reason_codes: ['focused-change'] },
         });
       }
       options?.onStream?.({
@@ -242,24 +245,12 @@ describe('WorkflowEngine auto routing integration', () => {
     expect(providerRecords).toEqual([
       expect.objectContaining({
         step: 'implement',
-        provider: 'claude-sdk',
-        provider_model: 'claude-haiku-4-5-20251001',
-        data: { text: 'router-stream' },
-      }),
-      expect.objectContaining({
-        step: 'implement',
         provider: 'codex',
         provider_model: 'gpt-5',
         data: expect.objectContaining({ model: 'gpt-5' }),
       }),
     ]);
-    const routerStreamCalls = onStream.mock.calls.filter(([event]) =>
-      event.type === 'text' && event.data.text === 'router-stream');
-    const routerProviderCalls = onProviderStream.mock.calls.filter(([, event]) =>
-      event.type === 'text' && event.data.text === 'router-stream');
-    expect(routerStreamCalls).toHaveLength(1);
-    expect(routerProviderCalls).toHaveLength(1);
-    expect(routerProviderCalls[0]?.[1]).toBe(routerStreamCalls[0]?.[0]);
+    expect(onStream).not.toHaveBeenCalledWith(expect.objectContaining({ data: { text: 'router-stream' } }));
   });
 
   it('Given a CLI provider and model with effective auto_routing, When a step runs, Then the CLI pair wins without a routing decision', async () => {
@@ -402,7 +393,7 @@ describe('WorkflowEngine auto routing integration', () => {
     expect(providerInfo?.autoRoutingDecision).toBeUndefined();
   });
 
-  it('Given a normal step needs AI routing, When the router prompt is built, Then it receives raw step instruction only', async () => {
+  it('Given a normal step needs AI routing, When the estimator prompt is built, Then it receives the normalized work snapshot', async () => {
     const step = makeStep('implement', {
       instruction: 'Route using workflow instruction with {task} and {previous_response}',
       providerRoutingPersonaKey: 'coder',
@@ -427,7 +418,7 @@ describe('WorkflowEngine auto routing integration', () => {
       if (persona === 'auto-router') {
         return makeResponse({
           persona: 'auto-router',
-          content: '{"selected_candidate":"coding"}',
+          content: '{"required_tier":"medium","reason_codes":["focused-change"]}',
         });
       }
       return makeResponse({ persona: step.persona, content: 'done' });
@@ -447,7 +438,7 @@ describe('WorkflowEngine auto routing integration', () => {
     const routerPrompt = vi.mocked(runAgent).mock.calls.find(([persona]) => persona === 'auto-router')?.[1];
 
     expect(state.status).toBe('completed');
-    expect(routerPrompt).toContain('instruction: Route using workflow instruction with {task} and {previous_response}');
+    expect(routerPrompt).toContain('"instruction":"Route using workflow instruction with {task} and {previous_response}"');
     expect(routerPrompt).not.toContain('SECRET_TASK_SHOULD_NOT_REACH_ROUTER');
     expect(routerPrompt).not.toContain('Previous Response');
     expect(routerPrompt).not.toContain('Report Directory');
@@ -496,7 +487,7 @@ describe('WorkflowEngine auto routing integration', () => {
     });
   });
 
-  it('Given direct engine strategy override requires a missing tier, When constructing the engine, Then validation fails fast', () => {
+  it('Given direct engine strategy override, When constructing the engine, Then it does not require a strategy-specific tier', () => {
     const onEffectiveAutoRoutingReached = vi.fn();
     const step = makeStep('implement', {
       tags: ['implementation'],
@@ -518,13 +509,13 @@ describe('WorkflowEngine auto routing integration', () => {
             description: 'Implementation and tests',
             provider: 'codex',
             model: 'gpt-5',
-            costTier: 'medium',
+            routingTier: 'medium',
           },
         ],
       },
       autoStrategyOverride: 'performance',
       onEffectiveAutoRoutingReached,
-    }))).toThrow(/performance|high|candidate/i);
+    }))).not.toThrow();
     expect(onEffectiveAutoRoutingReached).toHaveBeenCalledOnce();
   });
 
@@ -978,40 +969,34 @@ describe('WorkflowEngine auto routing integration', () => {
       maxSteps: 1,
       steps: [step],
     };
-    const routeStep = vi.fn(async () => {
+    const estimate = vi.fn(async () => {
       engine?.abort();
-      return autoRouting.candidates[0];
+      return { requiredTier: 'medium' as const, reasonCodes: ['focused-change'] };
     });
     const stepStart = vi.fn();
 
     engine = new WorkflowEngine(config, tmpDir, 'implement feature', createEngineOptions(tmpDir, {
       autoRouting,
-      autoRoutingAiRouter: {
-        routeStep,
-        routeBatch: vi.fn(),
-      },
+      autoRoutingEstimator: { estimate },
     }));
     engine.on('step:start', stepStart);
 
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    expect(routeStep).toHaveBeenCalledOnce();
+    expect(estimate).toHaveBeenCalledOnce();
     expect(stepStart).not.toHaveBeenCalled();
     expect(runAgent).not.toHaveBeenCalled();
   });
 
-  it('Given parallel sub-steps need AI routing, When the parent runs, Then routeBatch receives raw instructions once', async () => {
+  it('Given parallel sub-steps need AI routing, When the parent runs, Then every snapshot is estimated through the shared contract', async () => {
     const autoRouting = {
       ...createAutoRoutingConfig(),
       rules: undefined,
     };
-    const codingCandidate = autoRouting.candidates[0]!;
-    const lightweightCandidate = autoRouting.candidates[1]!;
-    const routeBatch = vi.fn<AutoRoutingAiRouter['routeBatch']>().mockResolvedValue(new Map([
-      ['api-review', codingCandidate],
-      ['format-review', lightweightCandidate],
-    ]));
+    const estimate = vi.fn()
+      .mockResolvedValueOnce({ requiredTier: 'medium', reasonCodes: ['api-change'] })
+      .mockResolvedValueOnce({ requiredTier: 'low', reasonCodes: ['formatting'] });
     const config: WorkflowConfig = {
       name: 'auto-routing-parallel-ai',
       initialStep: 'reviewers',
@@ -1039,10 +1024,7 @@ describe('WorkflowEngine auto routing integration', () => {
 
     engine = new WorkflowEngine(config, tmpDir, 'review feature', createEngineOptions(tmpDir, {
       autoRouting,
-      autoRoutingAiRouter: {
-        routeStep: vi.fn(),
-        routeBatch,
-      },
+      autoRoutingEstimator: { estimate },
     }));
     mockRunAgentSequence([
       makeResponse({ persona: 'api-review', content: 'approved' }),
@@ -1057,30 +1039,11 @@ describe('WorkflowEngine auto routing integration', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(routeBatch).toHaveBeenCalledOnce();
-    expect(routeBatch.mock.calls[0]?.[1]).toEqual([
-      {
-        id: 'api-review',
-        name: 'api-review',
-        tags: ['implementation'],
-        personaKey: undefined,
-        instruction: 'Review API changes for {task} without expanded context',
-      },
-      {
-        id: 'format-review',
-        name: 'format-review',
-        tags: ['format'],
-        personaKey: undefined,
-        instruction: 'Review formatting for {task} without expanded context',
-      },
-    ]);
-    const routedInstructions = routeBatch.mock.calls[0]?.[1].map((step) => step.instruction);
-    expect(routedInstructions).toEqual([
+    expect(estimate).toHaveBeenCalledTimes(2);
+    expect(estimate.mock.calls.map(([snapshot]) => snapshot.step.instruction)).toEqual([
       'Review API changes for {task} without expanded context',
       'Review formatting for {task} without expanded context',
     ]);
-    expect(routedInstructions?.join('\n')).not.toContain('review feature');
-    expect(routedInstructions?.join('\n')).not.toContain('test-report-dir');
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
       resolvedProvider: 'codex',
       resolvedModel: 'gpt-5',

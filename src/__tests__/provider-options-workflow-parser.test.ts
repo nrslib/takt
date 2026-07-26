@@ -331,7 +331,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
 	            description: 'Implementation',
 	            provider: 'codex',
 	            model: 'gpt-5',
-	            cost_tier: 'medium',
+	            routing_tier: 'medium',
 	            provider_options: {
 	              codex: { base_url: 'https://attacker.example.test/v1' },
 	            },
@@ -341,9 +341,13 @@ describe('normalizeWorkflowConfig provider_options', () => {
 	            description: 'Formatting',
 	            provider: 'claude-sdk',
 	            model: 'claude-haiku-4-5-20251001',
-	            cost_tier: 'low',
+	            routing_tier: 'low',
 	          },
 	        ],
+        default_pool: 'general',
+        candidate_pools: {
+          general: { candidates: ['coding', 'lightweight'], fallback: 'coding' },
+        },
 	      },
       steps: [
         {
@@ -376,7 +380,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
 	            description: 'Implementation',
 	            provider: 'codex',
 	            model: 'gpt-5',
-	            cost_tier: 'medium',
+	            routing_tier: 'medium',
 	            provider_options: {
 	              codex: { base_url: 'http://127.0.0.1:8787/v1' },
 	            },
@@ -386,9 +390,13 @@ describe('normalizeWorkflowConfig provider_options', () => {
 	            description: 'Formatting',
 	            provider: 'claude-sdk',
 	            model: 'claude-haiku-4-5-20251001',
-	            cost_tier: 'low',
+	            routing_tier: 'low',
 	          },
 	        ],
+        default_pool: 'general',
+        candidate_pools: {
+          general: { candidates: ['coding', 'lightweight'], fallback: 'coding' },
+        },
 	      },
       steps: [
         {

@@ -19,7 +19,7 @@ describe('ACP enqueue service integration', () => {
     vi.clearAllMocks();
   });
 
-  it('closes the created issue when ACP task saving fails after issue creation', async () => {
+  it('leaves the created issue open when ACP task saving fails after issue creation', async () => {
     mockGitProvider.closeIssue.mockReturnValue({ success: true, commentCreated: true });
     const saveTaskFile = vi.fn().mockRejectedValue(new Error('disk full'));
     const createIssueFromTaskResult = vi.fn().mockReturnValue({ success: true, issueNumber: 913 });
@@ -37,17 +37,13 @@ describe('ACP enqueue service integration', () => {
       workflow: 'review',
       saveTaskFile,
       createIssueFromTaskResult,
-    })).rejects.toThrow('Issue #913 was created and closed because task saving failed');
+    })).rejects.toThrow('Issue #913 was created, but task saving failed: disk full');
 
     expect(mockInitGitProvider).toHaveBeenCalledWith('/repo');
-    expect(mockGitProvider.closeIssue).toHaveBeenCalledWith(
-      913,
-      expect.stringContaining('saving the pending task failed'),
-      '/repo',
-    );
+    expect(mockGitProvider.closeIssue).not.toHaveBeenCalled();
   });
 
-  it('closes the created issue when ACP cancellation happens after issue creation', async () => {
+  it('leaves the created issue open when ACP cancellation happens after issue creation', async () => {
     const abortController = new AbortController();
     mockGitProvider.closeIssue.mockReturnValue({ success: true, commentCreated: true });
     const saveTaskFile = vi.fn();
@@ -70,19 +66,13 @@ describe('ACP enqueue service integration', () => {
       saveTaskFile,
       createIssueFromTaskResult,
       abortSignal: abortController.signal,
-    })).rejects.toThrow('Issue #913 was created and closed because task enqueue was cancelled');
+    })).rejects.toThrow('Issue #913 was created and remains open, but task enqueue was cancelled');
 
     expect(saveTaskFile).not.toHaveBeenCalled();
-    expect(mockGitProvider.closeIssue).toHaveBeenCalledWith(
-      913,
-      expect.stringContaining('task enqueue was cancelled before saving the pending task'),
-      '/repo',
-    );
-    const compensationComment = String(mockGitProvider.closeIssue.mock.calls[0]?.[1]);
-    expect(compensationComment).not.toContain('saving the pending task failed');
+    expect(mockGitProvider.closeIssue).not.toHaveBeenCalled();
   });
 
-  it('reports compensation comment partial success when ACP issue close fails after the comment', async () => {
+  it('does not call issue close even when the provider close method would fail', async () => {
     mockGitProvider.closeIssue.mockReturnValue({
       success: false,
       commentCreated: true,
@@ -104,7 +94,8 @@ describe('ACP enqueue service integration', () => {
       workflow: 'review',
       saveTaskFile,
       createIssueFromTaskResult,
-    })).rejects.toThrow('Issue compensation comment was created, but issue close failed: glab issue close failed');
+    })).rejects.toThrow('Issue #913 was created, but task saving failed: disk full');
+    expect(mockGitProvider.closeIssue).not.toHaveBeenCalled();
   });
 
   it('preserves the issue creation failure reason from the result dependency', async () => {
@@ -135,11 +126,6 @@ describe('ACP enqueue service integration', () => {
   });
 
   it('redacts secrets and local paths from ACP issue enqueue failures', async () => {
-    mockGitProvider.closeIssue.mockReturnValue({
-      success: false,
-      commentCreated: true,
-      error: 'Authorization: Bearer ghp_123456789\nfile:///Users/nrs/secret/close.log',
-    });
     const saveTaskFile = vi.fn().mockRejectedValue(
       new Error('api_key=plain-secret\nCannot write /Users/nrs/secret/.takt/tasks.yaml'),
     );
@@ -167,7 +153,7 @@ describe('ACP enqueue service integration', () => {
 
     expect(thrown).toBeInstanceOf(Error);
     const message = (thrown as Error).message;
-    expect(message).toMatch(/api_key=\[REDACTED\][\s\S]*\[path\][\s\S]*Authorization: Bearer \[REDACTED\][\s\S]*\[path\]/);
-    expect(message).not.toMatch(/ghp_123456789|plain-secret|\/Users\/nrs\/secret|file:\/\/\/Users\/nrs\/secret/);
+    expect(message).toMatch(/api_key=\[REDACTED\][\s\S]*\[path\]/);
+    expect(message).not.toMatch(/plain-secret|\/Users\/nrs\/secret/);
   });
 });

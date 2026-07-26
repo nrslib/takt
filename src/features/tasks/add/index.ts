@@ -20,7 +20,7 @@ import {
   createIssueAndEnqueueTask,
   formatIssueEnqueueFailure,
   IssueEnqueueCancelledError,
-  joinIssueEnqueueFailureText,
+  type PrepareEnqueuedTaskSpec,
   type SaveEnqueuedTaskFile,
   type SaveEnqueuedTaskFileOptions,
 } from '../../../infra/task/enqueueService.js';
@@ -40,12 +40,14 @@ export async function saveTaskFile(
   cwd: string,
   taskContent: string,
   options?: SaveTaskOptions,
+  prepareTaskSpec?: PrepareEnqueuedTaskSpec,
+  abortSignal?: AbortSignal,
 ): Promise<{ taskName: string; tasksFile: string }> {
   const { attachments, ...saveOptions } = options ?? {};
-  const prepareTaskSpec = attachments !== undefined
+  const attachmentPrepareTaskSpec = attachments !== undefined
     ? (saveCwd: string, saveTaskContent: string) => prepareTaskSpecDirectory(saveCwd, saveTaskContent, attachments)
-    : undefined;
-  return saveEnqueuedTaskFile(cwd, taskContent, saveOptions, prepareTaskSpec);
+    : prepareTaskSpec;
+  return saveEnqueuedTaskFile(cwd, taskContent, saveOptions, attachmentPrepareTaskSpec, abortSignal);
 }
 
 
@@ -143,10 +145,7 @@ export async function createIssueAndSaveTask(
   });
   if (!result.success) {
     if (result.failure.stage !== 'issue_creation') {
-      error(joinIssueEnqueueFailureText(
-        formatIssueEnqueueFailure(result.failure, getErrorMessage),
-        '; ',
-      ));
+      error(formatIssueEnqueueFailure(result.failure, getErrorMessage));
     }
     return;
   }

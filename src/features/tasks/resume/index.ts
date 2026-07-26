@@ -21,6 +21,16 @@ import {
 } from '../../interactive/index.js';
 import { cleanupInteractiveResultAttachments } from '../../interactive/imageAttachments.js';
 import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
+import {
+  createPullRequestContext,
+  type PullRequestContext,
+} from '../../../core/workflow/pr-context.js';
+import {
+  getCurrentBranch,
+  localBranchExists,
+  materializePullRequestBase,
+} from '../../../infra/task/index.js';
+import { toLocalBranchRef } from '../../../shared/utils/gitBranchValidation.js';
 import { executeTaskWithResult } from '../execute/taskExecution.js';
 import { stageTaskSpecForExecution } from '../execute/taskSpecContext.js';
 import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
@@ -169,12 +179,42 @@ function buildWorkflowContext(projectDir: string, workflowIdentifier: string): W
   };
 }
 
+function materializeResumePullRequestContext(
+  projectDir: string,
+  context: PullRequestContext,
+): PullRequestContext {
+  const headDiffRef = toLocalBranchRef(context.headBranch);
+  const checkedOutBranch = getCurrentBranch(projectDir);
+  if (checkedOutBranch !== context.headBranch) {
+    throw new Error(
+      `Direct run resume is checked out on "${checkedOutBranch}", expected PR head "${context.headBranch}".`,
+    );
+  }
+  if (!localBranchExists(projectDir, context.headBranch)) {
+    throw new Error(`Direct run resume is missing PR head ref ${headDiffRef}.`);
+  }
+  return createPullRequestContext({
+    ...context,
+    baseDiffRef: materializePullRequestBase(projectDir, projectDir, context.baseBranch),
+    headDiffRef,
+  });
+}
+
 function buildExecutionContext(projectDir: string, run: ResumableDirectRun): DirectRunResumeExecutionContext {
   const workflowConfig = loadWorkflow(projectDir, run);
   const resumePoint = resolveResumePoint(projectDir, workflowConfig, run);
   const resolvedTask = resolveTaskContent(projectDir, run);
+  const materializedRun = run.meta.prContext === undefined
+    ? run
+    : {
+      ...run,
+      meta: {
+        ...run.meta,
+        prContext: materializeResumePullRequestContext(projectDir, run.meta.prContext),
+      },
+    };
   return {
-    run,
+    run: materializedRun,
     taskContent: resolvedTask.taskContent,
     previousOrderContent: resolvedTask.previousOrderContent,
     startStep: resolveStartStep(workflowConfig, run, resumePoint),
@@ -254,6 +294,7 @@ async function executeDirectResume(
       resumePoint: context.resumePoint,
       resumeSource: buildResumeSource(context.run, resumeMode),
       ...(preparedExecution ? { reportDirName: preparedExecution.reportDirName } : {}),
+      ...(context.run.meta.prContext ? { prContext: context.run.meta.prContext } : {}),
       traceTaskMetadata: buildTraceTaskMetadata({
         taskContent: executionTask,
         taskSlug: context.run.slug,
@@ -309,6 +350,7 @@ function buildRetryContext(
     workflowContext: context.workflowContext,
     run: buildRetryRunInfo(projectDir, context.run),
     previousOrderContent: context.previousOrderContent,
+    ...(context.run.meta.prContext ? { prContext: context.run.meta.prContext } : {}),
   };
 }
 
@@ -348,6 +390,7 @@ async function instructDirectRun(
     workflowContext: context.workflowContext,
     runSessionContext: loadRunSessionContext(projectDir, context.run.slug),
     previousOrderContent: context.previousOrderContent,
+    ...(context.run.meta.prContext ? { prContext: context.run.meta.prContext } : {}),
   });
   try {
     if (result.action === 'cancel') {

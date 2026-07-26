@@ -120,7 +120,7 @@ describe('session: compact contract', () => {
 
     const options = builder.buildAgentOptions(step);
 
-    expect(getSessionId).toHaveBeenCalledWith('reviewer:opencode');
+    expect(getSessionId).toHaveBeenCalledWith('["reviewer","opencode","opencode/big-pickle"]');
     expect(options.sessionId).toBe('saved-opencode-session');
     expect(options.resolvedProvider).toBe('opencode');
     expect(options.resolvedModel).toBe('opencode/big-pickle');

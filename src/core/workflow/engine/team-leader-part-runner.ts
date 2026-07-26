@@ -26,7 +26,10 @@ export interface TeamLeaderPartObservability {
   readonly sanitizeText?: (text: string) => string;
 }
 
-export function buildPartScopedSessionKey(partStep: WorkflowStep, provider: ProviderType | undefined): string {
+export function buildPartScopedSessionKey(
+  partStep: WorkflowStep,
+  resolvedTarget: { provider: ProviderType | undefined; model: string | undefined },
+): string {
   const sessionKeyStep: AgentWorkflowStep = {
     kind: 'agent',
     name: partStep.name,
@@ -34,7 +37,7 @@ export function buildPartScopedSessionKey(partStep: WorkflowStep, provider: Prov
     personaDisplayName: partStep.personaDisplayName,
     instruction: partStep.instruction,
   };
-  return buildSessionKey(sessionKeyStep, provider);
+  return buildSessionKey(sessionKeyStep, resolvedTarget);
 }
 
 export async function runTeamLeaderPart(
@@ -121,7 +124,13 @@ export async function runTeamLeaderPart(
         : undefined
     ));
     if (response.sessionId !== undefined) {
-      updatePersonaSession(buildPartScopedSessionKey(partStep, partProviderInfo.provider), response.sessionId);
+      updatePersonaSession(
+        buildPartScopedSessionKey(partStep, {
+          provider: partProviderInfo.provider,
+          model: partProviderInfo.model,
+        }),
+        response.sessionId,
+      );
     }
     return {
       part,

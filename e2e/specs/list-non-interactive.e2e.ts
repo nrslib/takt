@@ -308,9 +308,16 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
             description: 'Mock coding provider',
             provider: 'mock',
             model: 'mock/workflow-model',
-            cost_tier: 'medium',
+            routing_tier: 'medium',
           },
         ],
+        default_pool: 'general',
+        candidate_pools: {
+          general: {
+            candidates: ['coding'],
+            fallback: 'coding',
+          },
+        },
         rules: {
           steps: { execute: 'coding' },
         },

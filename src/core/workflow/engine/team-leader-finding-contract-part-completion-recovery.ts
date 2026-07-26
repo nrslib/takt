@@ -143,9 +143,12 @@ export async function validateOrRecoverFindingContractPartCompletion(
         && event.envelope?.sessionId !== undefined
       ) {
         latestSessionId = event.envelope.sessionId;
-        const provider = resolvePartProvider(deps, partStep, input.runtime).provider;
+        const providerInfo = resolvePartProvider(deps, partStep, input.runtime);
         input.updatePersonaSession(
-          buildPartScopedSessionKey(partStep, provider),
+          buildPartScopedSessionKey(partStep, {
+            provider: providerInfo.provider,
+            model: providerInfo.model,
+          }),
           latestSessionId,
         );
       }

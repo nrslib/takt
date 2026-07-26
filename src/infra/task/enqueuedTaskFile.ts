@@ -6,6 +6,7 @@ import { summarizeTaskName } from './summarize.js';
 import { firstLine } from './naming.js';
 import {
   cleanupTaskSpecDirectory,
+  IssueEnqueueCancelledError,
   prepareTaskSpecDirectory,
   type PrepareEnqueuedTaskSpec,
   type SaveEnqueuedTaskFileOptions,
@@ -42,14 +43,18 @@ export async function saveEnqueuedTaskFile(
   taskContent: string,
   options?: SaveEnqueuedTaskFileOptions,
   prepareTaskSpec: PrepareEnqueuedTaskSpec = prepareTaskSpecDirectory,
+  abortSignal?: AbortSignal,
 ): Promise<{ taskName: string; tasksFile: string }> {
+  throwIfTaskSaveAborted(abortSignal);
   const runner = new TaskRunner(cwd);
   const config = buildValidatedTaskConfig(options);
   const slug = await summarizeTaskName(taskContent, { cwd });
+  throwIfTaskSaveAborted(abortSignal);
   const summary = firstLine(taskContent);
   const preparedSpec = prepareTaskSpec(cwd, taskContent);
   let created;
   try {
+    throwIfTaskSaveAborted(abortSignal);
     created = runner.addTask(taskContent, {
       ...config,
       task_dir: preparedSpec.taskDirRelative,
@@ -63,4 +68,10 @@ export async function saveEnqueuedTaskFile(
   const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');
   log.info('Task created', { taskName: created.name, tasksFile, config });
   return { taskName: created.name, tasksFile };
+}
+
+function throwIfTaskSaveAborted(abortSignal: AbortSignal | undefined): void {
+  if (abortSignal?.aborted) {
+    throw new IssueEnqueueCancelledError();
+  }
 }

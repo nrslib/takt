@@ -2006,13 +2006,53 @@ describe('DefaultSystemStepServices', () => {
     expect(result).toEqual({
       success: false,
       failed: true,
+      issueCreated: false,
+      taskEnqueued: false,
       stage: 'issue_creation',
       error: 'Failed to create issue from task',
     });
     expect(mockSaveTaskFile).not.toHaveBeenCalled();
   });
 
-  it('closes the created issue when enqueue_task task saving fails after issue creation', async () => {
+  it('returns partial success when an issue is created without a usable number', async () => {
+    mockCreateIssueFromTaskResult.mockReturnValue({
+      success: false,
+      issueCreated: true,
+      issueUrl: 'https://example.test/issues/unknown',
+      error: 'Failed to extract issue number from created issue URL',
+    });
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+    });
+
+    const result = await services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'new',
+      workflow: 'takt-default',
+      task: '{structured:plan.dummy_field}',
+      issue: { create: true },
+    }, {
+      mode: 'new',
+      workflow: 'takt-default',
+      task: 'Implement follow-up effect',
+      issue: { create: true },
+    }, {} as never);
+
+    expect(result).toEqual({
+      success: false,
+      failed: true,
+      issueCreated: true,
+      taskEnqueued: false,
+      stage: 'issue_number_parsing',
+      issueUrl: 'https://example.test/issues/unknown',
+      error: 'Failed to extract issue number from created issue URL',
+    });
+    expect(mockSaveTaskFile).not.toHaveBeenCalled();
+  });
+
+  it('leaves the created issue open when enqueue_task task saving fails after issue creation', async () => {
     mockCreateIssueFromTaskResult.mockReturnValue({ success: true, issueNumber: 586 });
     mockSaveTaskFile.mockRejectedValueOnce(new Error('disk full'));
 
@@ -2035,18 +2075,15 @@ describe('DefaultSystemStepServices', () => {
       issue: { create: true },
     }, {} as never);
 
-    expect(mockCloseIssue).toHaveBeenCalledWith(
-      586,
-      expect.stringContaining('TAKT created this issue'),
-      '/repo',
-    );
+    expect(mockCloseIssue).not.toHaveBeenCalled();
     expect(result).toEqual({
       success: false,
       failed: true,
+      issueCreated: true,
+      taskEnqueued: false,
       stage: 'task_saving',
       issueNumber: 586,
       error: 'disk full',
-      compensation: { success: true },
     });
   });
 
@@ -2083,14 +2120,11 @@ describe('DefaultSystemStepServices', () => {
     expect(result).toEqual({
       success: false,
       failed: true,
+      issueCreated: true,
+      taskEnqueued: false,
       stage: 'task_saving',
       issueNumber: 586,
       error: 'token=[REDACTED]\nCannot write [path]',
-      compensation: {
-        success: false,
-        commentCreated: true,
-        error: 'Authorization: Bearer [REDACTED]\nCannot close [path]',
-      },
     });
   });
 

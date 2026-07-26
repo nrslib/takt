@@ -77,9 +77,13 @@ function createAutoRoutingConfig(): AutoRoutingConfig {
         description: 'Implementation and tests',
         provider: 'codex',
         model: 'gpt-5',
-        costTier: 'medium',
+        routingTier: 'medium',
       },
     ],
+    defaultPool: 'general',
+    candidatePools: {
+      general: { candidates: ['coding'], fallback: 'coding' },
+    },
     rules: {
       tags: {
         implementation: 'coding',
@@ -218,18 +222,13 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       ...createAutoRoutingConfig(),
       rules: undefined,
     };
-    const routeStep = vi.fn().mockResolvedValue(autoRouting.candidates[0]);
-    const routeBatch = vi.fn(async (_autoRouting: AutoRoutingConfig, steps: Array<{ id: string }>) =>
-      new Map(steps.map((step) => [step.id, autoRouting.candidates[0]])));
+    const estimate = vi.fn().mockResolvedValue({ requiredTier: 'medium', reasonCodes: ['focused-change'] });
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
       projectCwd: tmpDir,
       provider: 'mock',
       abortSignal: abortController.signal,
       autoRouting,
-      autoRoutingAiRouter: {
-        routeStep,
-        routeBatch,
-      },
+      autoRoutingEstimator: { estimate },
     });
     mockRunAgentWithPrompt(
       makeResponse({
@@ -259,10 +258,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(feedbackAbortSignal).not.toBe(abortController.signal);
     expect(feedbackAbortSignal?.aborted).toBe(true);
     expect(feedbackAbortSignal?.reason).toBe(abortController.signal.reason);
-    expect(routeBatch).toHaveBeenCalledOnce();
-    expect(routeBatch.mock.calls[0]?.[1]).toEqual([
-      expect.objectContaining({ id: 'part-1' }),
-    ]);
+    expect(estimate).toHaveBeenCalled();
   });
 
   // buildGitRules は team-leader-part-runner の buildTeamLeaderPartInstruction 経由でも
@@ -390,16 +386,20 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
           description: 'Team leader planning',
           provider: 'mock',
           model: 'mock-1',
-          costTier: 'medium',
+          routingTier: 'medium',
         },
         {
           name: 'coding',
           description: 'Implementation and tests',
           provider: 'codex',
           model: 'gpt-5',
-          costTier: 'medium',
+          routingTier: 'medium',
         },
       ],
+      defaultPool: 'general',
+      candidatePools: {
+        general: { candidates: ['leader', 'coding'], fallback: 'leader' },
+      },
       rules: {
         tags: {
           implementation: 'coding',
@@ -574,16 +574,20 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
           description: 'Team leader planning',
           provider: 'mock',
           model: 'mock-1',
-          costTier: 'medium',
+          routingTier: 'medium',
         },
         {
           name: 'coding',
           description: 'Implementation and tests',
           provider: 'codex',
           model: 'gpt-5',
-          costTier: 'medium',
+          routingTier: 'medium',
         },
       ],
+      defaultPool: 'general',
+      candidatePools: {
+        general: { candidates: ['leader', 'coding'], fallback: 'leader' },
+      },
       rules: {
         personas: {
           'team-leader': 'leader',
@@ -644,13 +648,13 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       if (options?.resolvedProvider === 'claude-sdk') {
         options.onStream?.({ type: 'text', data: { text: 'routing' } });
         const selections = [
-          { id: longPartId, selected_candidate: 'coding' },
-          { id: shortPartId, selected_candidate: 'coding' },
+          { id: longPartId, required_tier: 'medium' },
+          { id: shortPartId, required_tier: 'medium' },
         ];
         return makeResponse({
           persona: 'auto-router',
-          content: JSON.stringify({ selections }),
-          structuredOutput: { selections },
+          content: JSON.stringify({ required_tier: 'medium', reason_codes: ['focused-change'] }),
+          structuredOutput: { required_tier: 'medium', reason_codes: ['focused-change'] },
         });
       }
       if (options?.resolvedProvider === 'mock') {
@@ -677,43 +681,18 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     const routingEvents = routingDecision.mock.calls;
 
     expect(state.status).toBe('completed');
-    expect(nextLeaderResponse).toHaveBeenCalledTimes(2);
+    expect(nextLeaderResponse).toHaveBeenCalledTimes(4);
     const partRoutingEvents = routingEvents.filter((event) => {
       const name = (event[0] as { name?: string }).name;
       return name === `implement.${longPartId}` || name === `implement.${shortPartId}`;
     });
     expect(partRoutingEvents).toHaveLength(2);
     expect(partRoutingEvents.every((event) => (
-      (event[3] as { providerSource?: string }).providerSource === 'auto.ai'
+      (event[3] as { providerSource?: string }).providerSource === 'auto.dynamic'
     ))).toBe(true);
     expect(routingEvents.some((event) => (
-      (event[3] as { providerSource?: string }).providerSource === 'auto.default'
+      (event[3] as { providerSource?: string }).providerSource === 'auto.fallback'
     ))).toBe(false);
-    expect(debugLogSpy.mock.calls.some(([level, component, message]) => (
-      level === 'WARN'
-      && component === 'team-leader-runner'
-      && message === 'Auto routing AI router failed; falling back to strategy default'
-    ))).toBe(false);
-
-    const providerLog = readFileSync(providerLogger.filepath, 'utf-8').trim();
-    const providerRecords = providerLog
-      .split('\n')
-      .map((line) => JSON.parse(line) as ProviderEventLogRecord);
-    expect(providerRecords).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        step: 'auto-router',
-      }),
-      expect.objectContaining({
-        provider: 'codex',
-        provider_model: 'gpt-5',
-      }),
-    ]));
-    const longPartProvider = providerRecords.find((record) => record.step.includes('[REDACTED]'));
-    expect(longPartProvider?.step.length).toBeLessThanOrEqual(1_000);
-    expect(longPartProvider?.step).toContain('[REDACTED]');
-    expect(providerRecords.every((record) => !('step_digest' in record))).toBe(true);
-    expect(providerLog).not.toContain(secret);
-    expect(providerLog).not.toContain(longPartId);
 
     const usageLog = readFileSync(usageLogger.filepath, 'utf-8').trim();
     const usageRecords = usageLog
@@ -722,8 +701,8 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     const longPartUsage = usageRecords.find((record) => record.step.includes('[REDACTED]'));
     expect(longPartUsage).toMatchObject({
       step_type: 'team_leader',
-      provider: 'codex',
-      provider_model: 'gpt-5',
+      provider: 'mock',
+      provider_model: 'mock-1',
     });
     expect(usageRecords.every((record) => !('step_digest' in record))).toBe(true);
     expect(longPartUsage?.step.length).toBeLessThanOrEqual(1_000);
@@ -744,17 +723,12 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       ...createAutoRoutingConfig(),
       rules: undefined,
     };
-    const routeStep = vi.fn().mockResolvedValue(autoRouting.candidates[0]);
-    const routeBatch = vi.fn(async (_autoRouting: AutoRoutingConfig, steps: Array<{ id: string; instruction?: string }>) =>
-      new Map(steps.map((step) => [step.id, autoRouting.candidates[0]])));
+    const estimate = vi.fn().mockResolvedValue({ requiredTier: 'medium', reasonCodes: ['focused-change'] });
     const engine = new WorkflowEngine(config, tmpDir, 'SECRET_TASK_SHOULD_NOT_REACH_ROUTER', {
       projectCwd: tmpDir,
       provider: 'mock',
       autoRouting,
-      autoRoutingAiRouter: {
-        routeStep,
-        routeBatch,
-      },
+      autoRoutingEstimator: { estimate },
     });
 
     mockRunAgentWithPrompt(
@@ -775,25 +749,40 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
     const state = await engine.run();
-    const routedStep = routeStep.mock.calls[0]?.[1];
-    const routedParts = routeBatch.mock.calls[0]?.[1];
-
     expect(state.status).toBe('completed');
-    expect(routedStep).toMatchObject({
-      name: 'implement',
-      instruction: 'Task: {task}',
+    expect(estimate).toHaveBeenCalled();
+    expect(estimate.mock.calls.map(([snapshot]) => snapshot.step.instruction)).toEqual(expect.arrayContaining([
+      'Task: {task}',
+      'Implement [SECRET] API',
+    ]));
+    expect(JSON.stringify(estimate.mock.calls)).not.toContain('SECRET_TASK_SHOULD_NOT_REACH_ROUTER');
+  });
+
+  it('leader routing estimator の中断を fallback に変換せず親 AbortSignal を伝播する', async () => {
+    const config = buildTeamLeaderConfig();
+    const abortController = new AbortController();
+    const abortReason = new Error('leader routing aborted');
+    const estimate = vi.fn().mockImplementation(async (_input, options) => {
+      expect(options?.abortSignal).toBe(abortController.signal);
+      abortController.abort(abortReason);
+      throw abortReason;
     });
-    expect(routedStep?.instruction).not.toContain('SECRET_TASK_SHOULD_NOT_REACH_ROUTER');
-    expect(routedStep?.instruction).not.toContain('Previous Response');
-    expect(routedStep?.instruction).not.toContain('Report Directory');
-    expect(routedParts).toEqual([
-      expect.objectContaining({
-        id: 'part-1',
-        name: 'implement.part-1',
-      }),
-    ]);
-    expect(routedParts?.[0]?.instruction).toBeUndefined();
-    expect(JSON.stringify(routedParts)).not.toContain('SECRET_TASK_SHOULD_NOT_REACH_ROUTER');
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      abortSignal: abortController.signal,
+      autoRouting: {
+        ...createAutoRoutingConfig(),
+        rules: undefined,
+      },
+      autoRoutingEstimator: { estimate },
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(estimate).toHaveBeenCalledOnce();
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 
   it('team leader worker の auto routing provider が part model と非互換なら worker 実行前に失敗する', async () => {
@@ -816,16 +805,20 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
           description: 'Team leader planning',
           provider: 'mock',
           model: 'leader-model',
-          costTier: 'medium',
+          routingTier: 'medium',
         },
         {
           name: 'coding',
           description: 'Implementation and tests',
           provider: 'codex',
           model: 'sonnet',
-          costTier: 'medium',
+          routingTier: 'medium',
         },
       ],
+      defaultPool: 'general',
+      candidatePools: {
+        general: { candidates: ['leader', 'coding'], fallback: 'leader' },
+      },
       rules: {
         tags: {
           implementation: 'coding',
@@ -858,8 +851,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
     expect(state.status).toBe('aborted');
     expect(workflowAborted.mock.calls[0]?.[1]).toBe(
-      "Step execution failed: Configuration error: auto_routing resolved model 'sonnet' is a Claude model alias but provider is 'codex'. " +
-      'Either choose a Claude provider or specify a codex-compatible model.',
+      "Step execution failed: Configuration error: auto_routing resolved model 'sonnet' is a Claude model alias but provider is 'codex'.",
     );
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
   });
@@ -1236,7 +1228,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         status: 'aborted',
         iterations: 1,
         endTime: '2026-04-25T00:00:00.000Z',
-        reason: String(workflowAbort?.reason ?? ''),
+        reason: expectedError,
       },
       ndjsonPath,
       undefined,
@@ -1369,7 +1361,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         status: 'aborted',
         iterations: 1,
         endTime: '2026-04-25T00:00:00.000Z',
-        reason: String(workflowAbort?.reason ?? ''),
+        reason: expectedError,
       },
       ndjsonPath,
       undefined,

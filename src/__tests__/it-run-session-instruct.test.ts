@@ -209,16 +209,16 @@ describe('E2E: Run session → instruct mode with interactive flow', () => {
     setupRawStdin(toRawInputs(['fix the token expiry', '/go']));
     const capture = setupProvider(['Sure, I can help with that.', 'Fix token expiry handling in auth middleware.']);
 
-    const result = await runInstructMode(
-      tmpDir,
-      '## Branch: takt/fix-auth\n',
-      'takt/fix-auth',
-      'fix-auth',
-      'Implement JWT auth',
-      '',
-      { name: 'default', description: '', workflowStructure: '', stepPreviews: [] },
-      context,
-    );
+    const result = await runInstructMode({
+      cwd: tmpDir,
+      branchContext: '## Branch: takt/fix-auth\n',
+      branchName: 'takt/fix-auth',
+      taskName: 'fix-auth',
+      taskContent: 'Implement JWT auth',
+      retryNote: '',
+      workflowContext: { name: 'default', description: '', workflowStructure: '', stepPreviews: [] },
+      runSessionContext: context,
+    });
 
     // Verify: interactive flow completed with execute action
     expect(result.action).toBe('execute');
@@ -232,7 +232,14 @@ describe('E2E: Run session → instruct mode with interactive flow', () => {
     setupRawStdin(toRawInputs(['/cancel']));
     setupProvider([]);
 
-    const result = await runInstructMode(tmpDir, '', 'takt/fix', 'fix', '', '', undefined, undefined);
+    const result = await runInstructMode({
+      cwd: tmpDir,
+      branchContext: '',
+      branchName: 'takt/fix',
+      taskName: 'fix',
+      taskContent: '',
+      retryNote: '',
+    });
 
     expect(result.action).toBe('cancel');
   });
@@ -246,9 +253,15 @@ describe('E2E: Run session → instruct mode with interactive flow', () => {
     setupRawStdin(toRawInputs(['some thought', '/cancel']));
     const capture = setupProvider(['I understand.']);
 
-    const result = await runInstructMode(
-      tmpDir, '', 'takt/branch', 'branch', '', '', undefined, context,
-    );
+    const result = await runInstructMode({
+      cwd: tmpDir,
+      branchContext: '',
+      branchName: 'takt/branch',
+      taskName: 'branch',
+      taskContent: '',
+      retryNote: '',
+      runSessionContext: context,
+    });
 
     expect(result.action).toBe('cancel');
     // AI was called once for "some thought", then /cancel exits

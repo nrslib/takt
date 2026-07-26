@@ -118,30 +118,37 @@ function createWorkflowCallAutoRoutingConfig(): AutoRoutingConfig {
         description: 'Workflow call delegation',
         provider: 'mock',
         model: 'parent-model',
-        costTier: 'medium',
+        routingTier: 'medium',
       },
       {
         name: 'reasoning',
         description: 'Architecture and planning',
         provider: 'claude-sdk',
         model: 'claude-opus-4-20250514',
-        costTier: 'high',
+        routingTier: 'high',
       },
       {
         name: 'coding',
         description: 'Implementation and tests',
         provider: 'codex',
         model: 'gpt-5',
-        costTier: 'medium',
+        routingTier: 'medium',
       },
       {
         name: 'lightweight',
         description: 'Formatting',
         provider: 'claude-sdk',
         model: 'claude-haiku-4-5-20251001',
-        costTier: 'low',
+        routingTier: 'low',
       },
     ],
+    defaultPool: 'general',
+    candidatePools: {
+      general: {
+        candidates: ['lightweight', 'delegate-runtime', 'coding', 'reasoning'],
+        fallback: 'reasoning',
+      },
+    },
     rules: {
       steps: {
         delegate: 'delegate-runtime',
@@ -1885,7 +1892,7 @@ steps:
       if (persona === 'auto-router') {
         return makeResponse({
           persona: 'auto-router',
-          content: '{"selected_candidate":"coding"}',
+          content: '{"required_tier":"medium","reason_codes":["focused-change"]}',
         });
       }
       return makeResponse({
@@ -1942,11 +1949,12 @@ steps:
     expect(abortReasons).toEqual([]);
     expect(state.status).toBe('completed');
     expect(routerCalls).toHaveLength(1);
-    expect(routerCall?.[1]).toContain('Workflow: takt/coding');
-    expect(routerCall?.[1]).not.toContain('Workflow: parent');
+    expect(routerCall?.[1]).toContain('"name":"review"');
+    expect(routerCall?.[1]).toContain('"instruction":"Review child workflow"');
+    expect(routerCall?.[1]).not.toContain('parent');
     expect(childCall?.[2]).toEqual(expect.objectContaining({
-      resolvedProvider: 'codex',
-      resolvedModel: 'gpt-5',
+      resolvedProvider: 'mock',
+      resolvedModel: 'parent-model',
     }));
     const records = readFileSync(join(routingEventsDir, '2026-02-18.jsonl'), 'utf-8')
       .trim()
@@ -1959,7 +1967,7 @@ steps:
       type: 'routing_decision',
       stepName: 'review',
       workflowName: 'takt/coding',
-      selectedCategory: 'coding',
+      selectedCategory: 'delegate-runtime',
     });
   });
 
@@ -2005,7 +2013,7 @@ steps:
       if (persona === 'auto-router') {
         return makeResponse({
           persona: 'auto-router',
-          content: '{"selected_candidate":"coding"}',
+          content: '{"required_tier":"medium","reason_codes":["focused-change"]}',
         });
       }
       return makeResponse({
@@ -2026,8 +2034,8 @@ steps:
 
     expect(state.status).toBeDefined();
     expect(childCall?.[2]).toEqual(expect.objectContaining({
-      resolvedProvider: 'codex',
-      resolvedModel: 'gpt-5',
+      resolvedProvider: 'mock',
+      resolvedModel: 'parent-model',
     }));
   });
 
@@ -2046,12 +2054,17 @@ auto_routing:
       description: Workflow call delegation
       provider: mock
       model: mock/parent-model
-      cost_tier: medium
+      routing_tier: medium
     - name: reasoning
       description: Architecture and planning
       provider: claude-sdk
       model: claude-opus-4-20250514
-      cost_tier: high
+      routing_tier: high
+  default_pool: general
+  candidate_pools:
+    general:
+      candidates: [delegate-runtime, reasoning]
+      fallback: reasoning
   rules:
     steps:
       review: reasoning
@@ -2215,100 +2228,6 @@ steps:
         autoRouting: expect.objectContaining({ strategy: 'balanced' }),
       }),
     );
-  });
-
-  it('workflow_call child workflow の strategy override 後に必要 tier が欠ける場合は child engine で拒否する', async () => {
-    const onEffectiveAutoRoutingReached = vi.fn();
-    const parentConfig = createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'delegate',
-      max_steps: 4,
-      steps: [
-        {
-          name: 'delegate',
-          kind: 'workflow_call',
-          call: 'takt/coding',
-          rules: [
-            {
-              condition: 'COMPLETE',
-              next: 'COMPLETE',
-            },
-          ],
-        },
-      ],
-    });
-    const childConfig = {
-      name: 'takt/coding',
-      provider: 'mock',
-      autoRouting: {
-        ...createWorkflowCallAutoRoutingConfig(),
-        candidates: [
-          {
-            name: 'delegate-runtime',
-            description: 'Workflow call delegation',
-            provider: 'mock',
-            model: 'parent-model',
-            costTier: 'medium',
-          },
-        ],
-      },
-      subworkflow: { callable: true },
-      initialStep: 'review',
-      maxSteps: 5,
-      steps: [
-        {
-          name: 'review',
-          persona: 'reviewer',
-          instruction: 'Review child workflow',
-          rules: [makeRule('done', 'COMPLETE')],
-        },
-      ],
-    };
-    const createEngine = vi.fn((
-      workflow: WorkflowConfig,
-      cwd: string,
-      task: string,
-      engineOptions: ConstructorParameters<typeof WorkflowEngine>[3],
-    ) => new WorkflowEngine(workflow, cwd, task, engineOptions));
-    const runner = new WorkflowCallRunner({
-      getConfig: () => parentConfig,
-      state: {
-        workflowName: parentConfig.name,
-        currentStep: 'delegate',
-        iteration: 1,
-        stepOutputs: new Map(),
-        structuredOutputs: new Map(),
-        systemContexts: new Map(),
-        effectResults: new Map(),
-        userInputs: [],
-        personaSessions: new Map(),
-        stepIterations: new Map(),
-        status: 'running',
-      },
-      projectCwd: tmpDir,
-      getMaxSteps: () => parentConfig.maxSteps,
-      updateMaxSteps: vi.fn(),
-      getCwd: () => tmpDir,
-      task: 'Reject child auto strategy',
-      getOptions: () => ({
-        ...createWorkflowCallOptions(tmpDir),
-        provider: 'mock',
-        model: undefined,
-        autoStrategyOverride: 'performance',
-        onEffectiveAutoRoutingReached,
-      }),
-      sharedRuntime: { startedAtMs: Date.now() },
-      resumeStackPrefix: [],
-      runPaths: { slug: 'test-report-dir' } as never,
-      setActiveResumePoint: vi.fn(),
-      emit: vi.fn(),
-      resolveWorkflowCall: () => childConfig as never,
-      createEngine,
-    });
-
-    await expect(runner.run(parentConfig.steps[0] as never)).rejects.toThrow(/performance|high|candidate/i);
-    expect(createEngine).toHaveBeenCalledOnce();
-    expect(onEffectiveAutoRoutingReached).toHaveBeenCalledOnce();
   });
 
   it('callable ではない child workflow を拒否する', async () => {
@@ -5826,7 +5745,7 @@ steps:
     expect(state.status).toBe('completed');
     expect(state.stepOutputs.get('slow-delegate')?.content).toBe('Slow review complete');
     expect(state.stepOutputs.get('fast-delegate')?.content).toBe('Fast review complete');
-    expect(state.personaSessions.get('child-reviewer:mock')).toBe('fast-session');
+    expect(state.personaSessions.get('["child-reviewer","mock","parent-model"]')).toBe('fast-session');
   });
 
   it('parallel 内 workflow_call は更新していない inherited child session を merge しない', async () => {
@@ -5906,7 +5825,7 @@ steps:
     ]);
     engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel reviews', createWorkflowCallOptions(tmpDir, {
       initialSessions: {
-        'child-reviewer:mock': 'initial-session',
+        '["child-reviewer","mock","parent-model"]': 'initial-session',
       },
       onSessionUpdate: sessionUpdates,
     }));
@@ -5916,8 +5835,8 @@ steps:
     expect(state.status).toBe('completed');
     expect(state.stepOutputs.get('update-delegate')?.content).toBe('Session updated');
     expect(state.stepOutputs.get('inherit-delegate')?.content).toBe('Inherited session used');
-    expect(state.personaSessions.get('child-reviewer:mock')).toBe('updated-session');
+    expect(state.personaSessions.get('["child-reviewer","mock","parent-model"]')).toBe('updated-session');
     expect(sessionUpdates).toHaveBeenCalledOnce();
-    expect(sessionUpdates).toHaveBeenCalledWith('child-reviewer:mock', 'updated-session');
+    expect(sessionUpdates).toHaveBeenCalledWith('["child-reviewer","mock","parent-model"]', 'updated-session');
   });
 });

@@ -736,7 +736,7 @@ unexpected_overrides:
               description: 'Implementation and tests',
               provider: 'codex',
               model: 'gpt-5',
-              costTier: 'medium',
+              routingTier: 'medium',
               providerOptions: {
                 codex: {
                   reasoningEffort: 'high',
@@ -744,6 +744,10 @@ unexpected_overrides:
               },
             },
           ],
+          defaultPool: 'general',
+          candidatePools: {
+            general: { candidates: ['coding'], fallback: 'coding' },
+          },
         },
       } as ProjectLocalConfig;
 
@@ -753,7 +757,7 @@ unexpected_overrides:
       expect(raw).toContain('provider: mock');
       expect(raw).toContain('model: project-default-model');
       expect(raw).toContain('auto_routing:');
-      expect(raw).toContain('cost_tier: medium');
+      expect(raw).toContain('routing_tier: medium');
       expect(raw).toContain('provider_options:');
       expect(raw).toContain('reasoning_effort: high');
       expect(raw).not.toContain('autoRouting:');

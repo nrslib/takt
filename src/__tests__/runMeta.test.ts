@@ -311,4 +311,36 @@ describe('RunMetaManager', () => {
       expect(meta).not.toHaveProperty('operationClaimToken');
     }
   });
+
+  it('should persist a validated PR context through finalize', () => {
+    const prContext = {
+      source: 'pr_review' as const,
+      prNumber: 861,
+      baseBranch: 'release/2026.07',
+      headBranch: 'feature/pr-context',
+      baseBranchSource: 'pull_request' as const,
+    };
+    const manager = new RunMetaManager(
+      createRunPaths(),
+      'Review PR changes',
+      'default',
+      undefined,
+      { prContext },
+    );
+
+    manager.updateStep('review', 2);
+    manager.finalize('completed', 2);
+
+    for (const call of vi.mocked(writeFileAtomic).mock.calls) {
+      const meta = JSON.parse(String(call[1])) as Record<string, unknown>;
+      expect(meta.pr_context).toEqual({
+        source: 'pr_review',
+        pr_number: 861,
+        base_branch: 'release/2026.07',
+        head_branch: 'feature/pr-context',
+        base_branch_source: 'pull_request',
+      });
+      expect(meta).not.toHaveProperty('prContext');
+    }
+  });
 });

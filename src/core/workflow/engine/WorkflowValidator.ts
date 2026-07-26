@@ -21,12 +21,12 @@ import {
 import { buildFindingInterpretationStep, buildFindingManagerStep } from '../findings/manager-step.js';
 import { findingContractFormatRef, hasFindingContractFormat } from '../findings/finding-contract-format.js';
 import {
-  matchAutoRoutingRules,
   resolveAutoRoutingCandidateProviderInfo,
   resolveDeterministicAutoRoutingProviderInfo,
   toAutoRoutingStepMetadata,
   validateAutoRoutingResolvedProviderModel,
 } from '../auto-routing/resolver.js';
+import { resolveExecutableRoutingCandidates } from '../auto-routing/selector.js';
 
 type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
 
@@ -48,18 +48,15 @@ function expandAutoRoutingProviderInfos(
     return [{ providerInfo: currentProviderInfo, autoRouted: false }];
   }
 
-  const ruleCandidate = matchAutoRoutingRules(autoRouting, {
+  const resolvedCandidates = resolveExecutableRoutingCandidates(autoRouting, {
     name: step.name,
     tags: step.tags,
     personaKey: step.providerRoutingPersonaKey,
-    instruction: step.instruction,
   });
-  const candidates = ruleCandidate === undefined ? autoRouting.candidates : [ruleCandidate];
-  const source = ruleCandidate === undefined ? 'auto.ai' : 'auto.rules';
-  return candidates.map((candidate) => ({
+  return resolvedCandidates.candidates.map((candidate) => ({
     providerInfo: resolveAutoRoutingCandidateProviderInfo(
       candidate,
-      source,
+      resolvedCandidates.resolutionSource,
       autoRouting,
       currentProviderInfo,
     ),

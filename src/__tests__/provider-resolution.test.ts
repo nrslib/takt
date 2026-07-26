@@ -1247,8 +1247,10 @@ describe('resolveNonWorkflowProviderModelFromConfig', () => {
           description: 'Implementation',
           provider: 'mock',
           model: 'candidate-model',
-          costTier: 'medium',
+          routingTier: 'medium',
         }],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['coding'], fallback: 'coding' } },
       },
     } satisfies ProjectConfig;
     const result = resolveNonWorkflowProviderModelFromConfig({
@@ -1267,7 +1269,15 @@ describe('resolveNonWorkflowProviderModelFromConfig', () => {
       autoRouting: {
         strategy: 'balanced',
         router: { provider: 'codex', model: 'project-router-model' },
-        candidates: [],
+        candidates: [{
+          name: 'coding',
+          description: 'Implementation',
+          provider: 'codex',
+          model: 'candidate-model',
+          routingTier: 'medium',
+        }],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['coding'], fallback: 'coding' } },
       },
     } satisfies ProjectConfig;
     const result = resolveNonWorkflowProviderModelFromConfig({
@@ -1292,9 +1302,11 @@ describe('resolveNonWorkflowProviderModelFromConfig', () => {
             description: 'Implementation',
             provider: 'codex',
             model: 'candidate-model',
-            costTier: 'medium',
+            routingTier: 'medium',
           },
         ],
+        defaultPool: 'general',
+        candidatePools: { general: { candidates: ['coding'], fallback: 'coding' } },
       },
     } satisfies ProjectConfig;
     const result = resolveNonWorkflowProviderModelFromConfig({

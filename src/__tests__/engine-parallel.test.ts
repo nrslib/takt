@@ -198,8 +198,8 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(state.personaSessions.get('coder:codex')).toBe('session-codex-1');
-    expect(state.personaSessions.has('coder:claude')).toBe(false);
+    expect(state.personaSessions.get('["coder","codex","gpt-5"]')).toBe('session-codex-1');
+    expect(state.personaSessions.has('["coder","claude"]')).toBe(false);
   });
 
   it('should keep an existing parallel sub-step session when the response omits sessionId', async () => {
@@ -230,7 +230,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       projectCwd: tmpDir,
       provider: 'claude',
       initialSessions: {
-        'coder:codex': 'existing-codex-session',
+        '["coder","codex","gpt-5"]': 'existing-codex-session',
       },
       onSessionUpdate,
       providerRouting: {
@@ -251,7 +251,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(state.personaSessions.get('coder:codex')).toBe('existing-codex-session');
+    expect(state.personaSessions.get('["coder","codex","gpt-5"]')).toBe('existing-codex-session');
     expect(onSessionUpdate).not.toHaveBeenCalled();
   });
 

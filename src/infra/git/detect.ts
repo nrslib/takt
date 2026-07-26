@@ -41,6 +41,20 @@ function extractHostname(url: string): string | undefined {
   return undefined;
 }
 
+function extractRepositoryPath(url: string): string | undefined {
+  let path: string;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    const match = /^[\w.-]+@[\w.-]+:(.+)$/.exec(url);
+    if (match?.[1] === undefined) return undefined;
+    path = match[1];
+  }
+
+  const normalized = path.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
+  return normalized || undefined;
+}
+
 /**
  * Get the hostname of the `origin` remote URL.
  *
@@ -67,6 +81,34 @@ export function getRemoteHostname(cwd: string): string | undefined {
   }
 
   return extractHostname(url);
+}
+
+/**
+ * Get repository identifiers that must not be sent to an automatic router.
+ *
+ * Both the full owner/group path and the repository basename are returned so
+ * routing text such as "owner/private-repo" and "private-repo" can be redacted.
+ */
+export function getRemoteRepositoryIdentifiers(cwd: string): string[] {
+  let output: string;
+  try {
+    output = String(
+      execFileSync('git', ['remote', 'get-url', 'origin'], {
+        cwd,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }),
+    );
+  } catch {
+    return [];
+  }
+
+  const repositoryPath = extractRepositoryPath(output.trim());
+  if (repositoryPath === undefined) return [];
+  const repositoryName = repositoryPath.split('/').at(-1);
+  return repositoryName === undefined || repositoryName === repositoryPath
+    ? [repositoryPath]
+    : [repositoryPath, repositoryName];
 }
 
 /**

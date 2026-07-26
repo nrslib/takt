@@ -109,7 +109,14 @@ function setupScenarioProvider(...scenarios: Parameters<typeof createScenarioPro
 }
 
 async function runInstruct() {
-  return runInstructMode('/test', '', 'takt/test-branch', 'test-branch', '', '');
+  return runInstructMode({
+    cwd: '/test',
+    branchContext: '',
+    branchName: 'takt/test-branch',
+    taskName: 'test-branch',
+    taskContent: '',
+    retryNote: '',
+  });
 }
 
 beforeEach(() => {

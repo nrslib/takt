@@ -5,6 +5,11 @@
 import { execFileSync } from 'node:child_process';
 import { devNull } from 'node:os';
 import { createLogger } from '../../shared/utils/index.js';
+import {
+  toLocalBranchRef,
+  toPullRequestBaseRef,
+  toRemoteTrackingBranchRef,
+} from '../../shared/utils/gitBranchValidation.js';
 
 const log = createLogger('git');
 
@@ -111,8 +116,47 @@ export function stageAndCommit(cwd: string, message: string, options: StageAndCo
  */
 export function checkoutBranch(cwd: string, branch: string): void {
   log.info('Checking out branch from origin', { branch });
-  execFileSync('git', ['fetch', 'origin', branch], { cwd, stdio: 'pipe' });
-  execFileSync('git', ['checkout', branch], { cwd, stdio: 'pipe' });
+  execFileSync('git', [
+    'fetch',
+    '--force',
+    'origin',
+    `${toLocalBranchRef(branch)}:${toRemoteTrackingBranchRef(branch)}`,
+  ], { cwd, stdio: 'pipe' });
+  execFileSync('git', ['checkout', '-B', branch, toRemoteTrackingBranchRef(branch)], {
+    cwd,
+    stdio: 'pipe',
+  });
+}
+
+export function materializePullRequestBase(
+  projectCwd: string,
+  targetCwd: string,
+  baseBranch: string,
+): string {
+  const baseRef = toPullRequestBaseRef(baseBranch);
+  const remoteTrackingRef = toRemoteTrackingBranchRef(baseBranch);
+  execFileSync('git', [
+    'fetch',
+    '--force',
+    'origin',
+    `${toLocalBranchRef(baseBranch)}:${remoteTrackingRef}`,
+  ], { cwd: projectCwd, stdio: 'pipe' });
+
+  if (projectCwd === targetCwd) {
+    execFileSync('git', ['update-ref', baseRef, remoteTrackingRef], {
+      cwd: targetCwd,
+      stdio: 'pipe',
+    });
+  } else {
+    execFileSync('git', [
+      'fetch',
+      '--force',
+      '--no-write-fetch-head',
+      projectCwd,
+      `${remoteTrackingRef}:${baseRef}`,
+    ], { cwd: targetCwd, stdio: 'pipe' });
+  }
+  return baseRef;
 }
 
 function throwPushFailureWithStderr(err: unknown, extraHint: string): never {

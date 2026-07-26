@@ -731,7 +731,7 @@ describe('TAKT ACP agent adapter', () => {
       worktree: true,
       autoPr: false,
       issue: 913,
-    });
+    }, undefined, expect.any(AbortSignal));
     expect(createIssueFromTaskResult.mock.invocationCallOrder[0]).toBeLessThan(
       saveTaskFile.mock.invocationCallOrder[0],
     );

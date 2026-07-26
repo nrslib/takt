@@ -25,6 +25,8 @@ import type { WorkflowStep, AgentResponse, FindingLedger } from '../../../core/m
 import { formatWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
 import type { StepProviderInfo } from '../../../core/workflow/types.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
+import { validateRoutingReasonCodes } from '../../../core/workflow/auto-routing/contracts.js';
+import { normalizeRoutingDecisionMetadata } from '../../../core/workflow/auto-routing/normalizer.js';
 import { needsStatusJudgmentPhase } from '../../../core/workflow/phase-runner.js';
 import { packageVersion } from '../../../shared/package-info.js';
 
@@ -150,20 +152,39 @@ export class AnalyticsEmitter {
     if (!isConsistentAutoRoutingDecision(input.providerInfo)) {
       return;
     }
-
-    const event: RoutingDecisionEvent = {
-      type: 'routing_decision',
+    if (!hasValidRoutingReasonCodes(decision.reasonCodes)) {
+      return;
+    }
+    const eventMetadata = normalizeRoutingDecisionMetadata({
       stepName: input.step.name,
       stepTags: input.step.tags ?? [],
       personaKey: input.step.providerRoutingPersonaKey ?? input.step.persona ?? input.step.name,
       workflowName: input.workflowName ?? this.currentWorkflowName,
+      provider: input.providerInfo.provider,
+      model: input.providerInfo.model,
+      candidateName: decision.candidateName,
+    });
+
+    const event: RoutingDecisionEvent = {
+      type: 'routing_decision',
+      stepName: eventMetadata.stepName,
+      stepTags: [...eventMetadata.stepTags],
+      personaKey: eventMetadata.personaKey,
+      workflowName: eventMetadata.workflowName,
       stepType: input.stepType,
       instructionTokenCount: input.instructionTokenCount,
       phaseCount: countExpectedPhases(input.step, this.interactive),
-      provider: input.providerInfo.provider,
-      model: input.providerInfo.model,
-      selectedCategory: decision.candidateName,
-      selectedCostTier: decision.costTier,
+      provider: eventMetadata.provider,
+      model: eventMetadata.model,
+      selectedCategory: eventMetadata.candidateName,
+      selectedRoutingTier: decision.routingTier,
+      requiredRoutingTier: decision.requiredTier ?? decision.routingTier,
+      ...(decision.reasonCodes !== undefined ? { reasonCodes: decision.reasonCodes } : {}),
+      ...(decision.fallbackReason !== undefined ? { fallbackReason: decision.fallbackReason } : {}),
+      ...(decision.fingerprintChanged !== undefined ? { fingerprintChanged: decision.fingerprintChanged } : {}),
+      ...(decision.retryReason !== undefined ? { retryReason: decision.retryReason } : {}),
+      ...(decision.estimatorDurationMs !== undefined ? { estimatorDurationMs: decision.estimatorDurationMs } : {}),
+      ...(decision.inputTokenBucket !== undefined ? { inputTokenBucket: decision.inputTokenBucket } : {}),
       candidateCount: decision.candidateCount,
       strategy: decision.strategy,
       resolutionSource: input.providerInfo.providerSource,
@@ -247,6 +268,18 @@ type AutoRoutingProviderInfo = StepProviderInfo & {
 
 function isConsistentAutoRoutingDecision(providerInfo: StepProviderInfo): providerInfo is AutoRoutingProviderInfo {
   return providerInfo.providerSource?.startsWith('auto.') === true;
+}
+
+function hasValidRoutingReasonCodes(reasonCodes: string[] | undefined): boolean {
+  if (reasonCodes === undefined) {
+    return true;
+  }
+  try {
+    validateRoutingReasonCodes(reasonCodes);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function countTextTokens(text: string | undefined): number {

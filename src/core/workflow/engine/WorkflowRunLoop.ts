@@ -15,7 +15,8 @@ import { decrementStepIteration, incrementStepIteration } from './state-manager.
 import { handleBlocked } from './blocked-handler.js';
 import { getWorkflowStepKind, isDelegatedWorkflowStep } from '../step-kind.js';
 import { resolvePromotionRuntime } from '../promotion/promotion-runtime.js';
-import { resolveAutoRoutingRuntime } from '../auto-routing/resolver.js';
+import { createRoutingScope, resolveAutoRoutingRuntime } from '../auto-routing/resolver.js';
+import { buildRoutingWorkSnapshot, type RoutingFindings } from '../auto-routing/snapshot.js';
 import { runWithStepSpan, type StepSpanParams } from '../observability/workflowSpans.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
@@ -36,6 +37,8 @@ interface WorkflowRunLoopDeps {
   state: WorkflowState;
   options: WorkflowEngineOptions;
   getWorkflowName: () => string;
+  getTask: () => string;
+  getRoutingFindings: () => RoutingFindings;
   getCurrentWorkflowStack: () => StepSpanParams['workflowStack'];
   getCwd: () => string;
   getMaxSteps: () => WorkflowMaxSteps;
@@ -140,14 +143,37 @@ async function resolveStepAutoRoutingRuntime(
   const currentProviderInfo = deps.resolveStepProviderModelBeforeAutoRouting(step, runtime);
   const autoRuntime = await resolveAutoRoutingRuntime({
     autoRouting: deps.options.autoRouting,
+    scope: createRoutingScope({
+      workflow: deps.getWorkflowName(),
+      parentStep: step.name,
+      workItem: step.name,
+    }),
     step: {
       name: step.name,
       tags: step.tags,
       personaKey: step.providerRoutingPersonaKey,
       instruction: routingInstruction,
     },
+    snapshot: buildRoutingWorkSnapshot({
+      goal: deps.getTask(),
+      userInputs: deps.state.userInputs,
+      retryNote: deps.options.retryNote,
+      step: {
+        name: step.name,
+        tags: step.tags ?? [],
+        personaKey: step.providerRoutingPersonaKey,
+        instruction: routingInstruction,
+        stepType: 'normal',
+        edit: step.edit,
+        passPreviousResponse: step.passPreviousResponse === true,
+      },
+      lastOutput: deps.state.lastOutput?.content,
+      findings: deps.getRoutingFindings(),
+      sensitiveValues: deps.options.routingSensitiveValues,
+    }),
     currentProviderInfo,
-    routeWithAi: deps.options.autoRoutingAiRouter?.routeStep,
+    estimator: deps.options.autoRoutingEstimator,
+    runtime: deps.options.routingRuntime,
     logger: log,
     abortSignal: deps.options.abortSignal,
   });
@@ -183,6 +209,29 @@ function emitNormalRoutingDecision(
     iteration,
     deps.getWorkflowName(),
   );
+}
+
+function recordNormalRoutingResult(
+  deps: WorkflowRunLoopDeps,
+  step: WorkflowStep,
+  providerInfo: StepProviderInfo,
+  response: AgentResponse,
+): void {
+  if (providerInfo.autoRoutingDecision === undefined) {
+    return;
+  }
+  const scope = createRoutingScope({
+    workflow: deps.getWorkflowName(),
+    parentStep: step.name,
+    workItem: step.name,
+  });
+  if (!deps.options.routingRuntime?.hasResolution(scope)) {
+    return;
+  }
+  deps.options.routingRuntime.recordExecutionResult({
+    scope,
+    status: response.status === 'done' ? 'done' : 'failed',
+  });
 }
 
 function sameFallbackProvider(
@@ -637,6 +686,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
       const { response, instruction, providerInfo: resultProviderInfo } = result;
       const completedProviderInfo = resultProviderInfo ?? providerInfo;
+      recordNormalRoutingResult(deps, step, completedProviderInfo, response);
       emitNormalRoutingDecision(
         deps,
         step,
@@ -917,6 +967,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
   const { response, providerInfo: resultProviderInfo } = result;
   const completedProviderInfo = resultProviderInfo ?? providerInfo;
+  recordNormalRoutingResult(deps, step, completedProviderInfo, response);
   emitNormalRoutingDecision(
     deps,
     step,

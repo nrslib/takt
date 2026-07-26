@@ -10,6 +10,12 @@ import type { RunMeta, RunResumeSource } from '../../../core/workflow/run/run-me
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
 import type { WorkflowResumePoint } from '../../../core/models/index.js';
 import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
+import {
+  createPullRequestContext,
+  encodePullRequestContext,
+  type PersistedPullRequestContext,
+  type PullRequestContext,
+} from '../../../core/workflow/pr-context.js';
 
 export interface RunMetaManagerOptions {
   readonly traceDiscovery?: WorkflowTraceDiscovery;
@@ -17,6 +23,7 @@ export interface RunMetaManagerOptions {
   readonly resumeArtifactsRel?: string;
   readonly operationJournalRunSlug?: string;
   readonly operationClaimToken?: string;
+  readonly prContext?: PullRequestContext;
 }
 
 type PersistedRunMeta = Omit<
@@ -27,6 +34,7 @@ type PersistedRunMeta = Omit<
   | 'resumeArtifacts'
   | 'operationJournalRunSlug'
   | 'operationClaimToken'
+  | 'prContext'
 > & {
   resume_point?: WorkflowResumePoint;
   source_run_slug?: string;
@@ -34,6 +42,7 @@ type PersistedRunMeta = Omit<
   resume_artifacts?: string;
   operation_journal_run_slug?: string;
   operation_claim_token?: string;
+  pr_context?: PersistedPullRequestContext;
 };
 
 export class RunMetaManager {
@@ -70,6 +79,7 @@ export class RunMetaManager {
       ...(options?.operationClaimToken === undefined
         ? {}
         : { operationClaimToken: options.operationClaimToken }),
+      ...(options?.prContext ? { prContext: createPullRequestContext(options.prContext) } : {}),
       ...(options?.traceDiscovery ? {
         observability: {
           traceDiscovery: options.traceDiscovery,
@@ -123,6 +133,7 @@ export class RunMetaManager {
       resumeArtifacts,
       operationJournalRunSlug,
       operationClaimToken,
+      prContext,
       ...baseMeta
     } = meta;
     const serialized: PersistedRunMeta = {
@@ -136,6 +147,7 @@ export class RunMetaManager {
         ? { operation_journal_run_slug: operationJournalRunSlug }
         : {}),
       ...(operationClaimToken ? { operation_claim_token: operationClaimToken } : {}),
+      ...(prContext ? { pr_context: encodePullRequestContext(prContext) } : {}),
     };
     this.runMeta.updatedAt = updatedAt;
     writeFileAtomic(this.metaAbs, JSON.stringify(serialized, null, 2));
