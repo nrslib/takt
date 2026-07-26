@@ -1,7 +1,11 @@
 import { info, success, error as logError } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { checkoutBranch, resolveBaseBranch } from '../../infra/task/index.js';
+import {
+  checkoutBranch,
+  materializePullRequestBase,
+  resolveBaseBranch,
+} from '../../infra/task/index.js';
 import { selectAndExecuteTask, determineWorkflow, saveTaskFromInteractive, createIssueAndSaveTask, promptLabelSelection, type SelectAndExecuteOptions } from '../../features/tasks/index.js';
 import { executePipeline } from '../../features/pipeline/index.js';
 import {
@@ -31,6 +35,7 @@ import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
 import { loadTaskHistory } from './taskHistory.js';
 import { resolveIssueInput, resolvePrInput } from './routing-inputs.js';
 import { createPullRequestContext } from '../../core/workflow/pr-context.js';
+import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
 
 export async function executeDefaultAction(task?: string): Promise<void> {
   const { cwd: resolvedCwd, pipelineMode } = getCliExecutionContext();
@@ -261,6 +266,17 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         if (prBranch) {
           info(`Fetching and checking out PR branch: ${prBranch}`);
           checkoutBranch(resolvedCwd, prBranch);
+          if (selectOptions.prContext) {
+            selectOptions.prContext = createPullRequestContext({
+              ...selectOptions.prContext,
+              baseDiffRef: materializePullRequestBase(
+                resolvedCwd,
+                resolvedCwd,
+                selectOptions.prContext.baseBranch,
+              ),
+              headDiffRef: toLocalBranchRef(prBranch),
+            });
+          }
           success(`Checked out PR branch: ${prBranch}`);
         }
         selectOptions.interactiveUserInput = true;

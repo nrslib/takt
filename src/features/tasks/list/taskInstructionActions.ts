@@ -10,13 +10,13 @@ import { execFileSync } from 'node:child_process';
 import {
   TaskRunner,
   detectDefaultBranch,
+  materializePullRequestBase,
 } from '../../../infra/task/index.js';
 import { resolveWorkflowConfigValues, getWorkflowDescription } from '../../../infra/config/index.js';
 import { info, warn, error as logError } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import {
   toLocalBranchRef,
-  toPullRequestBaseRef,
 } from '../../../shared/utils/gitBranchValidation.js';
 import { runInstructMode } from './instructMode.js';
 import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
@@ -172,7 +172,7 @@ export async function instructBranch(
       baseBranchSource: target.data?.base_branch === undefined
         ? 'default_branch_fallback'
         : 'pull_request',
-      baseDiffRef: toPullRequestBaseRef(baseBranch),
+      baseDiffRef: materializePullRequestBase(projectDir, worktreePath, baseBranch),
       headDiffRef: toLocalBranchRef(branch),
     })
     : undefined;

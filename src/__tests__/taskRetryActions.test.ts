@@ -123,6 +123,8 @@ vi.mock('../core/workflow/run/run-meta.js', () => ({
 
 vi.mock('../infra/task/index.js', () => ({
   detectDefaultBranch: (...args: unknown[]) => mockDetectDefaultBranch(...args),
+  materializePullRequestBase: vi.fn((_projectCwd, _targetCwd, baseBranch: string) =>
+    `refs/takt/pr-base/${baseBranch}`),
   TaskRunner: class {
     startReExecution(...args: unknown[]) {
       return mockStartReExecution(...args);

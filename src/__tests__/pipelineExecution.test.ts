@@ -1331,7 +1331,10 @@ describe('executePipeline', () => {
       expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456, '/tmp/test');
       expect(mockFormatPrReviewAsTask).toHaveBeenCalled();
       const checkoutCall = mockExecFileSync.mock.calls.find(
-        (call: unknown[]) => call[0] === 'git' && (call[1] as string[])[0] === 'checkout' && (call[1] as string[])[1] === 'fix/auth-bug',
+        (call: unknown[]) => call[0] === 'git'
+          && (call[1] as string[])[0] === 'checkout'
+          && (call[1] as string[])[1] === '-B'
+          && (call[1] as string[])[2] === 'fix/auth-bug',
       );
       expect(checkoutCall).toBeDefined();
       const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
@@ -1349,6 +1352,8 @@ describe('executePipeline', () => {
         baseBranch: 'main',
         headBranch: 'fix/auth-bug',
         baseBranchSource: 'pull_request',
+        baseDiffRef: 'refs/takt/pr-base/main',
+        headDiffRef: 'refs/heads/fix/auth-bug',
       });
     });
 
@@ -1432,7 +1437,10 @@ describe('executePipeline', () => {
       expect(checkoutNewBranch).toBeUndefined();
       // Should checkout existing PR branch
       const checkoutPrBranch = mockExecFileSync.mock.calls.find(
-        (call: unknown[]) => call[0] === 'git' && (call[1] as string[])[0] === 'checkout' && (call[1] as string[])[1] === 'fix/auth-bug',
+        (call: unknown[]) => call[0] === 'git'
+          && (call[1] as string[])[0] === 'checkout'
+          && (call[1] as string[])[1] === '-B'
+          && (call[1] as string[])[2] === 'fix/auth-bug',
       );
       expect(checkoutPrBranch).toBeDefined();
     });

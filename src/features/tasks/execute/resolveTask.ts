@@ -8,6 +8,7 @@ import {
   createSharedCloneAbortable,
   resolveBaseBranch,
   branchExists,
+  materializePullRequestBase,
   summarizeTaskName,
   resolveTaskWorkflowValue,
   resolveTaskStartStepValue,
@@ -21,7 +22,6 @@ import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import {
   toLocalBranchRef,
-  toPullRequestBaseRef,
 } from '../../../shared/utils/gitBranchValidation.js';
 import { generateReportDir } from '../../../shared/utils/reportDir.js';
 import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
@@ -325,9 +325,14 @@ export async function resolveTaskExecution(
       worktreePath = reusedWorktree.worktreePath;
       isWorktree = reusedWorktree.isWorktree;
       if (prContext) {
+        const baseDiffRef = materializePullRequestBase(
+          defaultCwd,
+          reusedWorktree.execCwd,
+          prContext.baseBranch,
+        );
         prContext = createPullRequestContext({
           ...prContext,
-          baseDiffRef: toPullRequestBaseRef(prContext.baseBranch),
+          baseDiffRef,
           headDiffRef: toLocalBranchRef(prContext.headBranch),
         });
       }

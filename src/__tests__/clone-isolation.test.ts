@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createSharedClone } from '../infra/task/clone.js';
+import { materializePullRequestBase } from '../infra/task/git.js';
 
 const tempDirs: string[] = [];
 
@@ -139,6 +140,19 @@ describe('shared clone generated metadata isolation', () => {
       clonePath,
       ['diff', '--stat', `${result.pullRequestBaseRef}...${result.pullRequestHeadRef}`],
     )).not.toThrow();
+
+    runGit(clonePath, ['update-ref', '-d', result.pullRequestBaseRef!]);
+    expect(materializePullRequestBase(projectRepo, clonePath, baseBranch)).toBe(
+      `refs/takt/pr-base/${baseBranch}`,
+    );
+    expect(runGit(clonePath, ['rev-parse', result.pullRequestBaseRef!]).toString().trim()).toBe(expectedBase);
+
+    expect(materializePullRequestBase(projectRepo, projectRepo, baseBranch)).toBe(
+      `refs/takt/pr-base/${baseBranch}`,
+    );
+    expect(
+      runGit(projectRepo, ['rev-parse', `refs/takt/pr-base/${baseBranch}`]).toString().trim(),
+    ).toBe(expectedBase);
   });
 
   it('does not leave the source repo path in clone .git metadata for local branch clones', () => {

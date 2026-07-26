@@ -6,7 +6,15 @@ import {
 } from '../../infra/git/index.js';
 import type { Issue } from '../../infra/git/index.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
-import { stageAndCommit, resolveBaseBranch, resolveBaseBranchName, pushBranch, checkoutBranch, getCurrentBranch } from '../../infra/task/index.js';
+import {
+  stageAndCommit,
+  resolveBaseBranch,
+  resolveBaseBranchName,
+  pushBranch,
+  checkoutBranch,
+  getCurrentBranch,
+  materializePullRequestBase,
+} from '../../infra/task/index.js';
 import { executeTask, confirmAndCreateWorktree, type ExecuteTaskOptions, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
 import { info, error, success } from '../../shared/ui/index.js';
 import { statusLine } from '../../shared/ui/StatusLine.js';
@@ -18,7 +26,10 @@ import {
   createPullRequestContext,
   type PullRequestContext,
 } from '../../core/workflow/pr-context.js';
-import { assertValidLocalBranchName } from '../../shared/utils/gitBranchValidation.js';
+import {
+  assertValidLocalBranchName,
+  toLocalBranchRef,
+} from '../../shared/utils/gitBranchValidation.js';
 
 export interface TaskContent {
   task: string;
@@ -296,12 +307,20 @@ export async function resolveExecutionContext(
     checkoutBranch(cwd, prBranch);
     success(`Checked out PR branch: ${safePrBranch}`);
     const baseBranch = resolveExecutionBaseBranch(cwd, prBaseBranch);
-    return attachPipelinePrContext(options.prNumber, prBaseBranch, {
-      execCwd: cwd,
-      branch: prBranch,
-      baseBranch,
-      isWorktree: false,
-    });
+    return attachPipelinePrContext(
+      options.prNumber,
+      prBaseBranch,
+      {
+        execCwd: cwd,
+        branch: prBranch,
+        baseBranch,
+        isWorktree: false,
+      },
+      {
+        baseRef: materializePullRequestBase(cwd, cwd, baseBranch),
+        headRef: toLocalBranchRef(prBranch),
+      },
+    );
   }
   const baseBranch = resolveExecutionBaseBranch(cwd);
   const branch = options.branch ?? generatePipelineBranchName(pipelineConfig, options.issueNumber);

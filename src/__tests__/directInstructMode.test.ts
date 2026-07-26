@@ -157,6 +157,8 @@ describe('runDirectInstructMode', () => {
         baseBranch: 'release/2026.07',
         headBranch: 'feature/pr-context',
         baseBranchSource: 'pull_request',
+        baseDiffRef: 'refs/heads/release/2026.07',
+        headDiffRef: 'refs/heads/feature/pr-context',
       },
     });
 

@@ -7,14 +7,18 @@
 
 import * as fs from 'node:fs';
 import type { TaskFailure, TaskListItem } from '../../../infra/task/index.js';
-import { detectDefaultBranch, TaskRunner, resolveTaskWorkflowValue } from '../../../infra/task/index.js';
+import {
+  detectDefaultBranch,
+  materializePullRequestBase,
+  TaskRunner,
+  resolveTaskWorkflowValue,
+} from '../../../infra/task/index.js';
 import { loadWorkflowByIdentifier, resolveWorkflowConfigValue, getWorkflowDescription } from '../../../infra/config/index.js';
 import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import { info, header, blankLine, status, warn } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import {
   toLocalBranchRef,
-  toPullRequestBaseRef,
 } from '../../../shared/utils/gitBranchValidation.js';
 import type { WorkflowConfig, WorkflowResumePoint } from '../../../core/models/index.js';
 import { readRunMetaBySlug, type RunMeta } from '../../../core/workflow/run/run-meta.js';
@@ -134,6 +138,7 @@ function buildRetryRunInfo(
 
 function resolveTaskRetryPullRequestContext(
   task: TaskListItem,
+  projectDir: string,
   worktreePath: string,
 ): PullRequestContext | undefined {
   const data = task.data;
@@ -155,7 +160,7 @@ function resolveTaskRetryPullRequestContext(
     baseBranch,
     headBranch: data.branch,
     baseBranchSource: hasSavedBaseBranch ? 'pull_request' : 'default_branch_fallback',
-    baseDiffRef: toPullRequestBaseRef(baseBranch),
+    baseDiffRef: materializePullRequestBase(projectDir, worktreePath, baseBranch),
     headDiffRef: toLocalBranchRef(data.branch),
   });
 }
@@ -401,7 +406,7 @@ export async function retryFailedTask(
   };
 
   blankLine();
-  const prContext = resolveTaskRetryPullRequestContext(task, selection.worktreePath);
+  const prContext = resolveTaskRetryPullRequestContext(task, projectDir, selection.worktreePath);
   const retryContext: RetryContext = {
     failure: buildRetryFailureInfo(task, selection.failure),
     subject: {

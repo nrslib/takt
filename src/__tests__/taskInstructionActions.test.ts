@@ -74,6 +74,8 @@ vi.mock('node:child_process', async (importOriginal) => ({
 
 vi.mock('../infra/task/index.js', () => ({
   detectDefaultBranch: vi.fn(() => 'main'),
+  materializePullRequestBase: vi.fn((_projectCwd, _targetCwd, baseBranch: string) =>
+    `refs/takt/pr-base/${baseBranch}`),
   TaskRunner: class {
     startReExecution(...args: unknown[]) {
       return mockStartReExecution(...args);

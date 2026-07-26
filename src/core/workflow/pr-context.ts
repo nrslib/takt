@@ -2,7 +2,6 @@ import type { Language } from '../models/types.js';
 import {
   assertValidLocalBranchName,
   isValidLocalBranchName,
-  toLocalBranchRef,
 } from '../../shared/utils/gitBranchValidation.js';
 
 export interface PullRequestContext {
@@ -179,16 +178,22 @@ export function renderPullRequestContext(
   context: PullRequestContext,
   language: Language,
 ): string {
-  const baseDiffRef = context.baseDiffRef ?? toLocalBranchRef(context.baseBranch);
-  const headDiffRef = context.headDiffRef ?? toLocalBranchRef(context.headBranch);
-  const diffRange = `${baseDiffRef}...${headDiffRef}`;
+  const diffRange = context.baseDiffRef !== undefined && context.headDiffRef !== undefined
+    ? `${context.baseDiffRef}...${context.headDiffRef}`
+    : undefined;
   const fallback = context.baseBranchSource === 'default_branch_fallback'
     ? language === 'ja'
       ? '\n\nPR baseを取得できなかったため、default branchをbaseとして使用しています。'
       : '\n\nThe PR base was unavailable, so the default branch is being used as the base.'
     : '';
   if (language === 'ja') {
-    return `## PR Context\n\nこの実行はPR由来です。単一コミットや現在のworking treeだけでなく、PRのbaseからheadまでの累積差分を判断対象にしてください。\n\n- PR: #${context.prNumber}\n- Base: ${context.baseBranch}\n- Head: ${context.headBranch}\n- Diff range: ${diffRange}\n\n必要な判断は現在の\`${diffRange}\`差分で確認してください。\`review-target.md\`と過去reportはsnapshotであり、最新差分の代替ではありません。${fallback}`;
+    const diffGuidance = diffRange === undefined
+      ? '- Diff range: materializeされていません\n\nこの実行環境ではGit diff rangeを保証できません。存在を確認していないrefを推測して実行しないでください。'
+      : `- Diff range: ${diffRange}\n\n必要な判断は現在の\`${diffRange}\`差分で確認してください。`;
+    return `## PR Context\n\nこの実行はPR由来です。単一コミットや現在のworking treeだけでなく、PRのbaseからheadまでの累積差分を判断対象にしてください。\n\n- PR: #${context.prNumber}\n- Base: ${context.baseBranch}\n- Head: ${context.headBranch}\n${diffGuidance}\n\`review-target.md\`と過去reportはsnapshotであり、最新差分の代替ではありません。${fallback}`;
   }
-  return `## PR Context\n\nThis execution originates from a pull request. Judge the cumulative diff from the PR base to head, not only a single commit or the current working tree.\n\n- PR: #${context.prNumber}\n- Base: ${context.baseBranch}\n- Head: ${context.headBranch}\n- Diff range: ${diffRange}\n\nVerify decisions against the current \`${diffRange}\` diff. \`review-target.md\` and prior reports are snapshots, not replacements for the latest diff.${fallback}`;
+  const diffGuidance = diffRange === undefined
+    ? '- Diff range: not materialized\n\nThis execution context does not guarantee a Git diff range. Do not guess or run refs whose existence has not been verified.'
+    : `- Diff range: ${diffRange}\n\nVerify decisions against the current \`${diffRange}\` diff.`;
+  return `## PR Context\n\nThis execution originates from a pull request. Judge the cumulative diff from the PR base to head, not only a single commit or the current working tree.\n\n- PR: #${context.prNumber}\n- Base: ${context.baseBranch}\n- Head: ${context.headBranch}\n${diffGuidance}\n\`review-target.md\` and prior reports are snapshots, not replacements for the latest diff.${fallback}`;
 }

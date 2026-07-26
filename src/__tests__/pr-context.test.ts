@@ -16,7 +16,11 @@ describe('PullRequestContext', () => {
   };
 
   it.each(['en', 'ja'] as const)('renders the saved base-to-head range in %s', (language) => {
-    const rendered = renderPullRequestContext(context, language);
+    const rendered = renderPullRequestContext({
+      ...context,
+      baseDiffRef: 'refs/heads/release/2026.07',
+      headDiffRef: 'refs/heads/feature/saved-pr-head',
+    }, language);
 
     expect(rendered).toContain('refs/heads/release/2026.07...refs/heads/feature/saved-pr-head');
     expect(rendered).toContain('review-target.md');
