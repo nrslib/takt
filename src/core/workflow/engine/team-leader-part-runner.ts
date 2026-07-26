@@ -143,7 +143,6 @@ export async function requestTeamLeaderPartCompletionCorrection(
       runtime,
     );
     const inspectionOptions = buildSessionlessPartCompletionInspectionOptions(
-      part,
       newSessionOptions.cwd,
       newSessionOptions.resolvedProvider,
       issues,

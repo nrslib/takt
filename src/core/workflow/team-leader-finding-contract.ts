@@ -19,8 +19,6 @@ export {
 } from './team-leader-finding-contract-schema.js';
 import {
   FindingContractInputValidationError,
-  findingContractPathIsWithin,
-  findingContractPathsOverlap,
   normalizeFindingContractPath,
   requireBoundedString,
   requireExactKeys,
@@ -33,8 +31,7 @@ export interface FindingContractPartBatchValidationIssue {
   readonly code:
     | 'missing_assignment'
     | 'unknown_finding'
-    | 'duplicate_repair_assignment'
-    | 'overlapping_write_path';
+    | 'duplicate_repair_assignment';
   readonly message: string;
   readonly partId?: string;
   readonly findingId?: string;
@@ -47,6 +44,8 @@ export interface FindingContractPartIndexEntry {
   findingIds: string[];
   status: string;
   summary: string;
+  changedPaths: string[];
+  omittedChangedPathCount: number;
   outcomes: Array<{
     findingId: string;
     outcome: 'addressed' | 'disputed' | 'blocked';
@@ -80,6 +79,8 @@ export interface SequencedFindingContractPartIndexEntry {
 const COMPACT_SUMMARY_MAX_LENGTH = 300;
 const COMPACT_EVIDENCE_MAX_ITEMS = 3;
 const COMPACT_EVIDENCE_MAX_LENGTH = 300;
+const COMPACT_CHANGED_PATH_MAX_ITEMS = 100;
+const COMPACT_CHANGED_PATH_MAX_LENGTH = 300;
 
 export function parseFindingContractPartDefinition(entry: unknown, index: number): PartDefinition {
   const raw = requireObject(entry, `Part[${index}]`);
@@ -89,16 +90,12 @@ export function parseFindingContractPartDefinition(entry: unknown, index: number
   requireExactKeys(
     assignment,
     `Part[${index}] "findingContract"`,
-    ['findingIds', 'role', 'writePaths', 'readPaths'],
+    ['findingIds', 'role', 'readPaths'],
   );
   const role = requireNonEmptyString(assignment.role, `Part[${index}] "findingContract.role"`);
   if (role !== 'diagnose' && role !== 'repair' && role !== 'verify') {
     throw new FindingContractInputValidationError(`Part[${index}] "findingContract.role" is invalid: ${role}`);
   }
-  const writePaths = requireStringArray(
-    assignment.writePaths,
-    `Part[${index}] "findingContract.writePaths"`,
-  ).map((path, pathIndex) => normalizeFindingContractPath(path, `Part[${index}] writePaths[${pathIndex}]`));
   const readPaths = requireStringArray(
     assignment.readPaths,
     `Part[${index}] "findingContract.readPaths"`,
@@ -112,7 +109,6 @@ export function parseFindingContractPartDefinition(entry: unknown, index: number
         { nonEmpty: true },
       ),
       role,
-      writePaths,
       readPaths,
     },
   };
@@ -135,7 +131,6 @@ export function collectFindingContractPartBatchValidationIssues(
   const targetIds = new Set(targetFindingIds);
   const repairOwners = new Map<string, string>();
   const issues: FindingContractPartBatchValidationIssue[] = [];
-  const writeOwners: Array<{ path: string; partId: string }> = [];
   for (const part of parts) {
     const assignment = part.findingContract;
     if (!assignment) {
@@ -168,18 +163,6 @@ export function collectFindingContractPartBatchValidationIssues(
           repairOwners.set(findingId, part.id);
         }
       }
-    }
-    for (const path of assignment.writePaths) {
-      const conflicts = writeOwners.filter((entry) => findingContractPathsOverlap(entry.path, path));
-      for (const conflict of conflicts) {
-        issues.push({
-          code: 'overlapping_write_path',
-          partId: part.id,
-          message: `Finding Contract part write paths overlap in one batch: `
-            + `"${conflict.partId}:${conflict.path}" and "${part.id}:${path}"`,
-        });
-      }
-      writeOwners.push({ path, partId: part.id });
     }
   }
   return issues;
@@ -269,13 +252,6 @@ export function parseFindingContractPartCompletionClaim(
   });
   const changedPaths = requireStringArray(payload.changedPaths, `Part "${part.id}" changedPaths`)
     .map((path, index) => normalizeFindingContractPath(path, `Part "${part.id}" changedPaths[${index}]`));
-  for (const path of changedPaths) {
-    if (!part.findingContract.writePaths.some((writePath) => findingContractPathIsWithin(path, writePath))) {
-      throw new FindingContractInputValidationError(
-        `Part "${part.id}" changed path is outside its writePaths assignment: ${path}`,
-      );
-    }
-  }
   return {
     findingOutcomes,
     changedPaths,
@@ -296,6 +272,8 @@ export function buildFindingContractPartIndexEntry(result: PartResult): FindingC
       findingIds: [...result.part.findingContract.findingIds],
       status: result.response.status,
       summary: truncateCompactText(result.response.error ?? result.response.content),
+      changedPaths: [],
+      omittedChangedPathCount: 0,
       outcomes: [],
       checks: { passed: 0, failed: 0, notRun: 0 },
     };
@@ -304,6 +282,9 @@ export function buildFindingContractPartIndexEntry(result: PartResult): FindingC
   if (claim === undefined) {
     throw new Error(`Part "${result.part.id}" is missing its validated Finding Contract completion claim`);
   }
+  const changedPaths = claim.changedPaths
+    .slice(0, COMPACT_CHANGED_PATH_MAX_ITEMS)
+    .map((path) => truncateCompactText(path, COMPACT_CHANGED_PATH_MAX_LENGTH));
   return {
     id: result.part.id,
     title: result.part.title,
@@ -311,6 +292,8 @@ export function buildFindingContractPartIndexEntry(result: PartResult): FindingC
     findingIds: [...result.part.findingContract.findingIds],
     status: result.response.status,
     summary: truncateCompactText(claim.summary),
+    changedPaths,
+    omittedChangedPathCount: claim.changedPaths.length - changedPaths.length,
     outcomes: claim.findingOutcomes.map((outcome) => ({
       ...outcome,
       evidence: outcome.evidence
@@ -393,15 +376,17 @@ export function appendFindingContractPartAssignmentInstruction(
   const guidance = language === 'ja'
     ? [
         'これは並列作業の協調契約であり、filesystem sandbox ではありません。',
-        '`findingIds` の範囲だけを扱い、変更は `writePaths` の内側に限定してください。',
-        '`writePaths`、`readPaths`、`changedPaths` はリテラルなパスです。ワイルドカードの `*` と `?` は使えません。',
+        '`findingIds` の範囲だけを扱ってください。',
+        '`readPaths` と `changedPaths` はリテラルなパスです。ワイルドカードの `*` と `?` は使えません。',
         '`readPaths` は調査対象の目安であり、必要な依存関係の読み取りを禁止するものではありません。',
+        '`changedPaths` には実際に変更した全ファイルを報告してください。',
       ]
     : [
         'This is a parallel-work coordination contract, not a filesystem sandbox.',
-        'Handle only the assigned findingIds and keep changes within writePaths.',
-        'writePaths, readPaths, and changedPaths are literal paths; wildcard characters * and ? are not allowed.',
+        'Handle only the assigned findingIds.',
+        'readPaths and changedPaths are literal paths; wildcard characters * and ? are not allowed.',
         'readPaths guide inspection but do not prohibit reading required dependencies.',
+        'Report every file actually changed in changedPaths.',
       ];
   return [
     instruction,

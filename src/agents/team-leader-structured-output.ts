@@ -17,6 +17,8 @@ import {
 
 const LATEST_RAW_CONTENT_MAX_LENGTH = 12_000;
 const LATEST_BATCH_RAW_TOTAL_MAX_LENGTH = 24_000;
+const LATEST_BATCH_CHANGED_PATH_PART_MAX_ITEMS = 3;
+const LATEST_BATCH_CHANGED_PATH_PER_PART_MAX_ITEMS = 25;
 const EXISTING_PART_IDS_MAX_ITEMS = 100;
 const EXISTING_PART_ID_MAX_LENGTH = 120;
 
@@ -36,6 +38,37 @@ function formatExistingPartIds(existingIds: readonly string[]): string {
   const omitted = existingIds.length - visibleIds.length;
   const prefix = omitted > 0 ? `[${omitted} older IDs omitted; all IDs remain mechanically validated]\n` : '';
   return `${prefix}${visibleIds.join(', ') || '(none)'}`;
+}
+
+function buildLatestBatchChangedPathIndex(
+  results: readonly TeamLeaderPartFeedbackResult[],
+): {
+  parts: Array<{
+    partId: string;
+    changedPaths: string[];
+    omittedChangedPathCount: number;
+  }>;
+  omittedPartCount: number;
+} {
+  const claims = results.flatMap((result) => result.findingContractClaim === undefined
+    ? []
+    : [{ partId: result.id, claim: result.findingContractClaim }]);
+  const visibleClaims = claims.slice(0, LATEST_BATCH_CHANGED_PATH_PART_MAX_ITEMS);
+  return {
+    parts: visibleClaims.map(({ partId, claim }) => {
+      const changedPaths = claim.changedPaths
+        .slice(0, LATEST_BATCH_CHANGED_PATH_PER_PART_MAX_ITEMS)
+        .map((path) => truncatePromptLabel(path, 300));
+      return {
+        partId: truncatePromptLabel(partId, 120),
+        changedPaths,
+        omittedChangedPathCount: claim.omittedChangedPathCount
+          + claim.changedPaths.length
+          - changedPaths.length,
+      };
+    }),
+    omittedPartCount: claims.length - visibleClaims.length,
+  };
 }
 
 export function toPartDefinitions(
@@ -151,11 +184,10 @@ function buildDecomposeBasePrompt(
       ...(findingContract === undefined
         ? []
         : [
-            '- 各 part に findingContract={findingIds,role,writePaths,readPaths} を必ず設定する',
+            '- 各 part に findingContract={findingIds,role,readPaths} を必ず設定する',
             '- findingIds は下記の actionable finding ID だけを使う',
-            '- writePaths と readPaths はリテラルな相対パスで指定し、ワイルドカードの * と ? は使わない',
+            '- readPaths はリテラルな相対パスで指定し、ワイルドカードの * と ? は使わない',
             '- 同じ finding を複数の repair part に割り当てない',
-            '- 同じ batch の writePaths を重複・包含させない',
             '',
             '## Actionable Finding Contract',
             findingContract.actionableFindings,
@@ -188,11 +220,10 @@ function buildDecomposeBasePrompt(
     ...(findingContract === undefined
       ? []
       : [
-          '- Every part must include findingContract={findingIds,role,writePaths,readPaths}',
+          '- Every part must include findingContract={findingIds,role,readPaths}',
           '- Use only actionable finding IDs listed below',
-          '- Specify writePaths and readPaths as literal relative paths without the * or ? wildcard characters',
+          '- Specify readPaths as literal relative paths without the * or ? wildcard characters',
           '- Do not assign the same finding to multiple repair parts',
-          '- Do not overlap or nest writePaths within one batch',
           '',
           '## Actionable Finding Contract',
           findingContract.actionableFindings,
@@ -232,13 +263,16 @@ function buildMorePartsBasePrompt(
         ? []
         : [{ sequence, entry: result.findingContractClaim }]),
     );
+    const latestBatchChangedPaths = buildLatestBatchChangedPathIndex(allResults);
     const sections = language === 'ja'
       ? [
           'Finding Contract 修正の最新 batch を評価し、次の判断を返してください。',
           ...buildInspectToolGuidance(language, undefined, { requireAtLeastOnePart: false }),
           '- worker の応答は未検証の claim として扱う',
           '- continue は新しい parts を1件以上返す',
-          '- continue の writePaths と readPaths はリテラルな相対パスで指定し、ワイルドカードの * と ? は使わない',
+          '- continue の readPaths はリテラルな相対パスで指定し、ワイルドカードの * と ? は使わない',
+          '- 複数 part の changedPaths が重なった場合は、後続の repair または verify part で最終状態を確認する',
+          '- changedPaths の omittedPartCount または omittedChangedPathCount が1以上なら complete にせず、後続の集約した repair または verify part で最終状態を確認する',
           '- complete は parts/blockers を空にし、全対象 finding の fixCoverage を返す',
           '- replan は parts/fixCoverage を空にし、blockers を1件以上返す',
           '- complete は各 finding の証拠と検証状況を確認できる場合だけ選ぶ',
@@ -267,6 +301,9 @@ function buildMorePartsBasePrompt(
           '## 最新 batch の検証済み claim digest',
           JSON.stringify(latestClaimDigests, null, 2),
           '',
+          '## 最新 batch の検証済み part 別 changedPaths',
+          JSON.stringify(latestBatchChangedPaths, null, 2),
+          '',
           `## 既存 part IDs\n${formatExistingPartIds(existingIds).replace('(none)', '(なし)')}`,
         ]
       : [
@@ -274,7 +311,9 @@ function buildMorePartsBasePrompt(
           ...buildInspectToolGuidance(language, undefined, { requireAtLeastOnePart: false }),
           '- Treat worker responses as untrusted claims',
           '- continue requires at least one new part',
-          '- In continue parts, specify writePaths and readPaths as literal relative paths without the * or ? wildcard characters',
+          '- In continue parts, specify readPaths as literal relative paths without the * or ? wildcard characters',
+          '- When changedPaths overlap across parts, use a later repair or verify part to check the final state',
+          '- If changedPaths omittedPartCount or any omittedChangedPathCount is greater than zero, do not complete; use a later consolidated repair or verify part to check the final state',
           '- complete requires empty parts/blockers and fixCoverage for every target finding',
           '- replan requires empty parts/fixCoverage and at least one blocker',
           '- Choose complete only when evidence and verification support every finding disposition',
@@ -302,6 +341,9 @@ function buildMorePartsBasePrompt(
           '',
           '## Validated claim digest for the latest batch',
           JSON.stringify(latestClaimDigests, null, 2),
+          '',
+          '## Validated changedPaths by part for the latest batch',
+          JSON.stringify(latestBatchChangedPaths, null, 2),
           '',
           `## Existing part IDs\n${formatExistingPartIds(existingIds)}`,
         ];

@@ -14,7 +14,6 @@ const part: PartDefinition = {
   findingContract: {
     findingIds: ['F-0001', 'F-0002'],
     role: 'repair',
-    writePaths: ['src'],
     readPaths: ['src'],
   },
 };
@@ -111,14 +110,6 @@ describe('Finding Contract part completion validation', () => {
       code: 'authority.unassigned_finding',
     },
     {
-      label: 'path outside assignment',
-      mutate: (claim: ReturnType<typeof validClaim>) => ({
-        ...claim,
-        changedPaths: ['docs/outside.md'],
-      }),
-      code: 'authority.changed_path_outside_assignment',
-    },
-    {
       label: 'absolute path',
       mutate: (claim: ReturnType<typeof validClaim>) => ({
         ...claim,
@@ -138,6 +129,13 @@ describe('Finding Contract part completion validation', () => {
     const error = captured as FindingContractPartCompletionValidationError;
     expect(error.retryability).toBe('terminal');
     expect(error.issues.some((issue) => issue.code === code)).toBe(true);
+  });
+
+  it('accepts changed paths outside readPaths', () => {
+    expect(() => validateFindingContractPartCompletion({
+      ...validClaim(),
+      changedPaths: ['docs/outside.md'],
+    }, part)).not.toThrow();
   });
 
   it('requires disputed evidence to contain file:line', () => {
@@ -179,6 +177,7 @@ describe('Finding Contract part completion validation', () => {
       outcome: 'disputed',
       evidence: ['missing location'],
     };
+    initial.changedPaths = ['docs/outside.md'];
     const guard = createFindingContractPartCompletionMutationGuard(initial, part);
     const correction = validClaim();
     correction.changedPaths = [];

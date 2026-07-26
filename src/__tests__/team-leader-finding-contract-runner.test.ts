@@ -137,7 +137,6 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
         findingContract: {
           findingIds: ['F-0001'],
           role: 'repair' as const,
-          writePaths: ['src/first.ts'],
           readPaths: [],
         },
       },
@@ -148,7 +147,6 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
         findingContract: {
           findingIds: ['F-0002'],
           role: 'repair' as const,
-          writePaths: ['src/second.ts'],
           readPaths: [],
         },
       },
@@ -160,7 +158,6 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
       findingContract: {
         findingIds: ['F-0001'],
         role: 'verify' as const,
-        writePaths: [],
         readPaths: ['src/first.ts'],
       },
     };
@@ -455,6 +452,23 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     const secondFeedbackOptions = structuredCaller.requestMorePartsRawResponse.mock.calls[1]?.[3];
     const thirdFeedbackOptions = structuredCaller.requestMorePartsRawResponse.mock.calls[2]?.[3];
     const fourthFeedbackOptions = structuredCaller.requestMorePartsRawResponse.mock.calls[3]?.[3];
+    const firstFeedbackResults = structuredCaller.requestMorePartsRawResponse.mock.calls[0]?.[1];
+    expect(firstFeedbackResults).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'repair-first',
+        findingContractClaim: expect.objectContaining({
+          changedPaths: ['src/first.ts'],
+          omittedChangedPathCount: 0,
+        }),
+      }),
+      expect.objectContaining({
+        id: 'repair-second',
+        findingContractClaim: expect.objectContaining({
+          changedPaths: ['src/second.ts'],
+          omittedChangedPathCount: 0,
+        }),
+      }),
+    ]));
     expect(firstFeedbackOptions?.findingContract.completedPartIndex).toEqual([]);
     expect(firstFeedbackOptions?.findingContract.recovery).toEqual(expect.objectContaining({
       attempt: 1,
@@ -583,7 +597,6 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
       findingContract: {
         findingIds: ['F-0002'],
         role: 'repair' as const,
-        writePaths: ['src/second.ts'],
         readPaths: [],
       },
     };

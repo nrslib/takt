@@ -26,7 +26,6 @@ const part: PartDefinition = {
     findingIds: ['F-0001'],
     role: 'repair',
     readPaths: ['src'],
-    writePaths: ['src'],
   },
 };
 

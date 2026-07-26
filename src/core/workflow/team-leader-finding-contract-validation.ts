@@ -79,13 +79,3 @@ export function normalizeFindingContractPath(value: string, label: string): stri
   if (normalized === '.' || normalized === './') return '.';
   return normalized.replace(/^\.\//, '').replace(/\/+$/, '');
 }
-
-export function findingContractPathsOverlap(left: string, right: string): boolean {
-  if (left === '.' || right === '.') return true;
-  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
-}
-
-export function findingContractPathIsWithin(path: string, parent: string): boolean {
-  if (parent === '.') return true;
-  return path === parent || path.startsWith(`${parent}/`);
-}

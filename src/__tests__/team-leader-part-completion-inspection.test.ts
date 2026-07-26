@@ -55,7 +55,6 @@ const part: PartDefinition = {
     findingIds: ['F-0001'],
     role: 'repair',
     readPaths: ['src/shared', 'src/exact.ts'],
-    writePaths: ['src/repair', 'src/shared'],
   },
 };
 
@@ -139,7 +138,6 @@ describe('sessionless part completion inspection', () => {
     'requires every Read request to pass path validation for %s',
     (provider) => {
       const options = buildSessionlessPartCompletionInspectionOptions(
-        part,
         '/workspace',
         provider,
         [fileLineIssue],
@@ -150,10 +148,9 @@ describe('sessionless part completion inspection', () => {
     },
   );
 
-  it('allows only Read calls inside readPaths or writePaths', async () => {
+  it('allows only Read calls inside the working directory', async () => {
     const cwd = createWorkspace();
     const options = buildSessionlessPartCompletionInspectionOptions(
-      part,
       cwd,
       'claude-sdk',
       [fileLineIssue],
@@ -172,9 +169,12 @@ describe('sessionless part completion inspection', () => {
       toolName: 'Read',
       input: { file_path: join(cwd, 'src', 'repair', 'claim.ts') },
     })).resolves.toEqual(expect.objectContaining({ behavior: 'allow' }));
+    await expect(handler({
+      toolName: 'Read',
+      input: { file_path: 'outside.ts' },
+    })).resolves.toEqual(expect.objectContaining({ behavior: 'allow' }));
 
     for (const request of [
-      { toolName: 'Read', input: { file_path: 'outside.ts' } },
       { toolName: 'Read', input: { file_path: '../outside.ts' } },
       { toolName: 'Edit', input: { file_path: 'src/shared/inside.ts' } },
       { toolName: 'Bash', input: { command: 'npm test' } },
@@ -186,14 +186,13 @@ describe('sessionless part completion inspection', () => {
     }
   });
 
-  it('denies a symlink that escapes the contract and workspace scopes', async () => {
+  it('denies a symlink that escapes the workspace scope', async () => {
     const cwd = createWorkspace();
     const external = mkdtempSync(join(tmpdir(), 'takt-part-inspection-external-'));
     temporaryDirectories.push(external);
     writeFileSync(join(external, 'secret.ts'), 'secret');
     symlinkSync(external, join(cwd, 'src', 'shared', 'external'));
     const options = buildSessionlessPartCompletionInspectionOptions(
-      part,
       cwd,
       'claude-sdk',
       [fileLineIssue],
@@ -217,7 +216,6 @@ describe('sessionless part completion inspection', () => {
     'kiro',
   ] as const)('fails fast for provider %s without path-scoped inspection capability', (provider) => {
     expect(() => buildSessionlessPartCompletionInspectionOptions(
-      part,
       '/workspace',
       provider,
       [fileLineIssue],
@@ -225,9 +223,8 @@ describe('sessionless part completion inspection', () => {
       .toThrow(`Provider "${provider}" does not support path-scoped sessionless part completion inspection`);
   });
 
-  it('fails fast when inspection paths exist but the provider is unresolved', () => {
+  it('fails fast when inspection is required but the provider is unresolved', () => {
     expect(() => buildSessionlessPartCompletionInspectionOptions(
-      part,
       '/workspace',
       undefined,
       [fileLineIssue],
