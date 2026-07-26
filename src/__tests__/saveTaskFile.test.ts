@@ -471,16 +471,21 @@ describe('saveTaskFromInteractive', () => {
     expect(task.issue).toBe(42);
   });
 
-  it('should record PR review metadata in tasks.yaml when prNumber option is provided', async () => {
-    mockPromptInput.mockResolvedValueOnce('');
-    mockPromptInput.mockResolvedValueOnce('');
-    mockConfirm.mockResolvedValueOnce(false);
-
-    await saveTaskFromInteractive(testDir, 'Fix PR review comments', 'default', { prNumber: 456 });
+  it('should record PR review metadata and the resolved PR head branch in tasks.yaml', async () => {
+    await saveTaskFromInteractive(testDir, 'Fix PR review comments', 'default', {
+      prNumber: 456,
+      presetSettings: {
+        worktree: true,
+        branch: 'feature/fix-pr-review',
+        autoPr: false,
+        draftPr: false,
+      },
+    });
 
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.source).toBe('pr_review');
     expect(task.pr_number).toBe(456);
+    expect(task.branch).toBe('feature/fix-pr-review');
   });
 
   it('should record PR context without PR review metadata when contextPrNumber option is provided', async () => {

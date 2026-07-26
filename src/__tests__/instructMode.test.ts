@@ -249,6 +249,39 @@ describe('runInstructMode', () => {
     );
   });
 
+  it('should inject PR context only when supplied by a PR-derived task', async () => {
+    setupRawStdin(toRawInputs(['/cancel']));
+    setupMockProvider([]);
+
+    await runInstructMode(
+      '/project',
+      'branch context',
+      'feature/pr-context',
+      'my-task',
+      'Do something',
+      '',
+      undefined,
+      undefined,
+      null,
+      {
+        source: 'pr_review',
+        prNumber: 861,
+        baseBranch: 'release/2026.07',
+        headBranch: 'feature/pr-context',
+        baseBranchSource: 'pull_request',
+      },
+    );
+
+    expect(mockLoadTemplate).toHaveBeenCalledWith(
+      'score_instruct_system_prompt',
+      'en',
+      expect.objectContaining({
+        hasPrContext: true,
+        prContextText: expect.stringContaining('release/2026.07...feature/pr-context'),
+      }),
+    );
+  });
+
   it('should inject selected run context into system prompt variables', async () => {
     setupRawStdin(toRawInputs(['/cancel']));
     setupMockProvider([]);

@@ -45,6 +45,22 @@ describe('facet include expansion', () => {
     expect(content).toBe('Do the task.\n\nShared rules content\n\nExtra constraints.');
   });
 
+  it.each([
+    ['en', 'cumulative base-to-head diff'],
+    ['ja', 'baseからheadまでの累積差分'],
+  ] as const)('should expand the builtin PR review guidance in %s', (lang, expectedText) => {
+    const content = resolveRefToContent(
+      'review-coding',
+      undefined,
+      tempDir,
+      'instructions',
+      { projectDir: tempDir, lang },
+    );
+
+    expect(content).toContain(expectedText);
+    expect(content).not.toContain('{{include:instructions/review-pr-context}}');
+  });
+
   it('should expand {{include:policies/<name>}} in a policy facet', () => {
     const policiesDir = join(tempDir, '.takt', 'facets', 'policies');
     const partialsDir = join(tempDir, '.takt', 'facets', 'partials', 'policies');

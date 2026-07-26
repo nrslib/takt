@@ -25,6 +25,10 @@ import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
 import { stageTaskSpecForExecution } from './taskSpecContext.js';
 import { resolveReusedWorktreeExecution } from './reusedWorktree.js';
 import type { ExecuteTaskOptions, TaskExecutionContextOverride } from './types.js';
+import {
+  createPullRequestContext,
+  type PullRequestContext,
+} from '../../../core/workflow/pr-context.js';
 
 const log = createLogger('task');
 
@@ -34,6 +38,73 @@ function resolveTaskDataBaseBranch(taskData: TaskInfo['data']): string | undefin
 
 function resolveTaskBaseBranch(projectDir: string, preferredBaseBranch: string | undefined): string {
   return resolveBaseBranch(projectDir, preferredBaseBranch).branch;
+}
+
+function assertPrReviewTaskContextMatchesSavedIdentity(
+  taskName: string,
+  contextOverride: TaskExecutionContextOverride | undefined,
+  savedIdentity: { prNumber: number; baseBranch?: string; headBranch: string },
+): void {
+  if (contextOverride?.prNumber !== undefined && contextOverride.prNumber !== savedIdentity.prNumber) {
+    throw new Error(
+      `PR review task "${taskName}" cannot override saved pr_number ${savedIdentity.prNumber} with runtime taskContext.prNumber ${contextOverride.prNumber}.`,
+    );
+  }
+  if (contextOverride?.branch !== undefined && contextOverride.branch !== savedIdentity.headBranch) {
+    throw new Error(
+      `PR review task "${taskName}" cannot override saved branch "${savedIdentity.headBranch}" with runtime taskContext.branch "${contextOverride.branch}".`,
+    );
+  }
+  if (contextOverride?.baseBranch !== undefined && contextOverride.baseBranch !== savedIdentity.baseBranch) {
+    throw new Error(
+      `PR review task "${taskName}" cannot override saved base_branch "${savedIdentity.baseBranch ?? '<default branch fallback>'}" with runtime taskContext.baseBranch "${contextOverride.baseBranch}".`,
+    );
+  }
+}
+
+function resolvePrReviewContext(
+  taskName: string,
+  normalizedData: ReturnType<typeof TaskExecutionConfigSchema.parse>,
+  projectCwd: string,
+  contextOverride: TaskExecutionContextOverride | undefined,
+): PullRequestContext | undefined {
+  if (normalizedData.source !== 'pr_review') {
+    return undefined;
+  }
+  if (normalizedData.pr_number === undefined || normalizedData.branch === undefined) {
+    throw new Error(`PR review task "${taskName}" requires pr_number and branch.`);
+  }
+
+  assertPrReviewTaskContextMatchesSavedIdentity(taskName, contextOverride, {
+    prNumber: normalizedData.pr_number,
+    ...(normalizedData.base_branch === undefined ? {} : { baseBranch: normalizedData.base_branch }),
+    headBranch: normalizedData.branch,
+  });
+
+  const baseBranch = normalizedData.base_branch ?? resolveTaskBaseBranch(projectCwd, undefined);
+  return createPullRequestContext({
+    source: 'pr_review',
+    prNumber: normalizedData.pr_number,
+    baseBranch,
+    headBranch: normalizedData.branch,
+    baseBranchSource: normalizedData.base_branch === undefined
+      ? 'default_branch_fallback'
+      : 'pull_request',
+  });
+}
+
+function assertPrReviewExecutionIdentity(
+  taskName: string,
+  prContext: PullRequestContext | undefined,
+  branch: string | undefined,
+  baseBranch: string | undefined,
+): void {
+  if (!prContext) {
+    return;
+  }
+  if (branch !== prContext.headBranch || baseBranch !== prContext.baseBranch) {
+    throw new Error(`PR review task "${taskName}" resolved an execution identity that differs from its PR context.`);
+  }
 }
 
 function assertReusedWorktreeContext(
@@ -87,6 +158,7 @@ export interface ResolvedTaskExecution {
   prNumber?: number;
   maxStepsOverride?: number;
   initialIterationOverride?: number;
+  prContext?: PullRequestContext;
 }
 
 export interface ResolveTaskExecutionOptions {
@@ -197,7 +269,7 @@ export async function resolveTaskExecution(
   const validationData = { ...data } as Record<string, unknown>;
   delete validationData.task;
   delete validationData.baseBranch;
-  const normalizedData = TaskExecutionConfigSchema.parse(validationData) as Record<string, unknown>;
+  const normalizedData = TaskExecutionConfigSchema.parse(validationData);
   const workflowIdentifier = resolveTaskWorkflowValue(normalizedData);
   if (!workflowIdentifier || workflowIdentifier.trim() === '') {
     throw new Error(`Task "${task.name}" is missing required workflow.`);
@@ -205,6 +277,8 @@ export async function resolveTaskExecution(
   const configuredStartStep = resolveTaskStartStepValue(normalizedData);
   const resumePoint = normalizedData.resume_point as WorkflowResumePoint | undefined;
   const retryNote = normalizedData.retry_note;
+  const contextOverride = options?.taskContext;
+  const prContext = resolvePrReviewContext(task.name, normalizedData, defaultCwd, contextOverride);
 
   let execCwd = defaultCwd;
   let isWorktree = false;
@@ -213,13 +287,11 @@ export async function resolveTaskExecution(
   let orderContent: string | undefined;
   let branch: string | undefined;
   let worktreePath: string | undefined;
-  let baseBranch: string | undefined;
-  const contextOverride = options?.taskContext;
-  if (contextOverride?.baseBranch !== undefined) {
-    baseBranch = contextOverride.baseBranch;
-  }
-  const preferredBaseBranch = contextOverride?.baseBranch ?? resolveTaskDataBaseBranch(data);
-  const contextBranch = contextOverride?.branch;
+  let baseBranch: string | undefined = prContext?.baseBranch ?? contextOverride?.baseBranch;
+  const preferredBaseBranch = prContext?.baseBranch
+    ?? contextOverride?.baseBranch
+    ?? resolveTaskDataBaseBranch(data);
+  const contextBranch = prContext?.headBranch ?? contextOverride?.branch;
   if (task.taskDir) {
     const taskSlug = getTaskSlugFromTaskDir(task.taskDir);
     if (!taskSlug) {
@@ -275,9 +347,11 @@ export async function resolveTaskExecution(
       worktreePath = result.path;
       isWorktree = true;
     }
-  } else if (contextBranch !== undefined) {
-    branch = contextBranch;
+  } else if (contextBranch !== undefined || data.branch !== undefined) {
+    branch = contextBranch ?? data.branch;
   }
+
+  assertPrReviewExecutionIdentity(task.name, prContext, branch, baseBranch);
 
   if (task.taskDir) {
     reportDirName = generateExecutionReportDir(execCwd, task.content);
@@ -326,10 +400,13 @@ export async function resolveTaskExecution(
     ...(retryResume.resumePoint ? { resumePoint: retryResume.resumePoint } : {}),
     ...(resumeSource ? { resumeSource } : {}),
     ...(data.issue !== undefined ? { issueNumber: data.issue } : {}),
-    ...(contextOverride?.prNumber !== undefined
+    ...(prContext
+      ? { prNumber: prContext.prNumber }
+      : contextOverride?.prNumber !== undefined
       ? { prNumber: contextOverride.prNumber }
       : data.context_pr_number !== undefined ? { prNumber: data.context_pr_number } : {}),
     ...(maxStepsOverride !== undefined ? { maxStepsOverride } : {}),
     ...(initialIterationOverride !== undefined ? { initialIterationOverride } : {}),
+    ...(prContext ? { prContext } : {}),
   };
 }

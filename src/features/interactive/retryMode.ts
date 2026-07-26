@@ -30,6 +30,10 @@ import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { resolveConfigValues } from '../../infra/config/index.js';
 import type { InstructModeResult, InstructUIText } from './instructModeTypes.js';
 import { attachImageAttachmentCleanup } from './imageAttachments.js';
+import {
+  renderPullRequestContext,
+  type PullRequestContext,
+} from '../../core/workflow/pr-context.js';
 
 /** Failure information for a retry task */
 export interface RetryFailureInfo {
@@ -67,6 +71,7 @@ export interface RetryContext {
   readonly workflowContext: WorkflowContext;
   readonly run: RetryRunInfo | null;
   readonly previousOrderContent: string | null;
+  readonly prContext?: PullRequestContext;
 }
 
 const RETRY_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
@@ -113,6 +118,8 @@ export function buildRetryTemplateVars(ctx: RetryContext, lang: 'en' | 'ja'): Re
     runReports: run !== null ? run.reports : '',
     hasOrderContent: ctx.previousOrderContent !== null,
     orderContent: ctx.previousOrderContent ?? '',
+    hasPrContext: ctx.prContext !== undefined,
+    prContextText: ctx.prContext ? renderPullRequestContext(ctx.prContext, lang) : '',
   };
 }
 

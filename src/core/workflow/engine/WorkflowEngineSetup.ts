@@ -207,6 +207,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getWorkflowDescription: () => params.config.description,
     getInheritedPeerReportPaths: params.getInheritedPeerReportPaths,
     getRetryNote: () => params.options.retryNote,
+    getPrContext: () => params.options.prContext,
     getObservabilityRunId: () => params.options.observabilityRunId,
     observabilityEnabled: () => params.options.observability?.enabled === true,
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,

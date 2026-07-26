@@ -161,6 +161,7 @@ export async function selectAndExecuteTask(
         taskSlug: options?.traceTaskContext?.taskSlug,
         worktreePath: options?.traceTaskContext?.worktreePath,
       }),
+      ...(options?.prContext ? { prContext: options.prContext } : {}),
     });
   } catch (err) {
     const completedAt = new Date().toISOString();

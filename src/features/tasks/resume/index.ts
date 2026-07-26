@@ -254,6 +254,7 @@ async function executeDirectResume(
       resumePoint: context.resumePoint,
       resumeSource: buildResumeSource(context.run, resumeMode),
       ...(preparedExecution ? { reportDirName: preparedExecution.reportDirName } : {}),
+      ...(context.run.meta.prContext ? { prContext: context.run.meta.prContext } : {}),
       traceTaskMetadata: buildTraceTaskMetadata({
         taskContent: executionTask,
         taskSlug: context.run.slug,
@@ -309,6 +310,7 @@ function buildRetryContext(
     workflowContext: context.workflowContext,
     run: buildRetryRunInfo(projectDir, context.run),
     previousOrderContent: context.previousOrderContent,
+    ...(context.run.meta.prContext ? { prContext: context.run.meta.prContext } : {}),
   };
 }
 
@@ -348,6 +350,7 @@ async function instructDirectRun(
     workflowContext: context.workflowContext,
     runSessionContext: loadRunSessionContext(projectDir, context.run.slug),
     previousOrderContent: context.previousOrderContent,
+    ...(context.run.meta.prContext ? { prContext: context.run.meta.prContext } : {}),
   });
   try {
     if (result.action === 'cancel') {

@@ -3,3 +3,4 @@ Review robustness. Read the normal path first, then compare failure, retry, inte
 Open the Knowledge Source Path when available and apply every `##` section. Do not assume partial success when the required outcome is unclear. Report evidence-backed raw findings only; do not assign final finding IDs or lifecycle states.
 
 **This is review iteration {step_iteration}.**
+{{include:instructions/review-pr-context}}

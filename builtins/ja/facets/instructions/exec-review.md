@@ -8,3 +8,4 @@ Worker の結果を独立セッションでレビューする。
 - needs_replan: ユーザーと方針を再計画する必要がある。
 
 根拠と次の具体的な手順を簡潔に含める。
+{{include:instructions/review-pr-context}}

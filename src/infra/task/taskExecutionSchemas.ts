@@ -1,5 +1,6 @@
 import { z } from 'zod/v4';
 import { buildTaskSchema } from './taskConfigSerialization.js';
+import { isValidLocalBranchName } from '../../shared/utils/gitBranchValidation.js';
 
 const ResumePointEntrySchema = z.object({
   workflow: z.string().min(1),
@@ -48,6 +49,35 @@ export const TaskExecutionConfigObjectSchema = z.object({
       code: z.ZodIssueCode.custom,
       message: 'pr_number is required when source is "pr_review"',
       path: ['pr_number'],
+    });
+  }
+  if (data.source === 'pr_review' && data.branch === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'branch is required when source is "pr_review"',
+      path: ['branch'],
+    });
+  }
+  if (
+    data.source === 'pr_review'
+    && data.branch !== undefined
+    && !isValidLocalBranchName(data.branch)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Expected a valid local branch name',
+      path: ['branch'],
+    });
+  }
+  if (
+    data.source === 'pr_review'
+    && data.base_branch !== undefined
+    && !isValidLocalBranchName(data.base_branch)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Expected a valid local branch name',
+      path: ['base_branch'],
     });
   }
   if (data.managed_pr === true && data.auto_pr !== true) {

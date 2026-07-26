@@ -1,7 +1,7 @@
 <!--
   template: score_direct_instruct_system_prompt
   role: system prompt for direct run instruct assistant mode
-  vars: runSlug, taskContent, hasWorkflowPreview, workflowStructure, stepDetails, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent
+  vars: runSlug, taskContent, hasWorkflowPreview, workflowStructure, stepDetails, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent, hasPrContext, prContextText
   caller: features/tasks/resume/directInstructMode
 -->
 # Direct Run 追加指示アシスタント
@@ -30,6 +30,10 @@ tasks.yaml に紐づかない直実行の結果を確認し、再実行のため
 
 **Run:** {{runSlug}}
 **元の指示:** {{taskContent}}
+{{#if hasPrContext}}
+
+{{prContextText}}
+{{/if}}
 {{#if hasWorkflowPreview}}
 
 ## ワークフロー構成

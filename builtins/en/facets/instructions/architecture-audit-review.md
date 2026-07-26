@@ -18,3 +18,4 @@ Re-audit the modules or boundaries that were judged insufficient in the previous
 - Modifying production code
 - Claiming a boundary or dependency direction is valid without file evidence
 - Skipping a flagged module because it "looks standard"
+{{include:instructions/review-pr-context}}

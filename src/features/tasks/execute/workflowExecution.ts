@@ -21,6 +21,7 @@ import {
 } from '../../../shared/telemetry/index.js';
 import type { GitProvider } from '../../../infra/git/index.js';
 import { USAGE_MISSING_REASONS } from '../../../core/logging/contracts.js';
+import { createPullRequestContext } from '../../../core/workflow/pr-context.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -131,11 +132,17 @@ async function executeWorkflowInternal(
   options: WorkflowExecutionOptions,
   runContext?: WorkflowRunContext,
 ): Promise<WorkflowExecutionResult> {
+  const prContext = options.prContext === undefined
+    ? undefined
+    : createPullRequestContext(options.prContext);
+  const executionOptions = prContext === undefined
+    ? options
+    : { ...options, prContext };
   const parentRunPid = process.pid;
   const workflowExecutionContext = createWorkflowExecutionContext(workflowConfig, options.projectCwd);
   const workflowCallResolver = createWorkflowCallResolver(workflowExecutionContext);
   const bootstrap = await createWorkflowExecutionBootstrap(workflowConfig, task, cwd, {
-    ...options,
+    ...executionOptions,
     workflowCallResolver,
   });
   const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(workflowConfig, parentRunPid);
@@ -252,6 +259,7 @@ async function executeWorkflowInternal(
       initialIteration: options.initialIterationOverride,
       currentTask: resolveCurrentTaskContext(options, bootstrap.runSlug),
       traceTaskMetadata: options.traceTaskMetadata,
+      prContext,
       phase1ProcessSafetyByStep,
       systemStepServicesFactory: (serviceOptions) => createDefaultSystemStepServices({
         ...serviceOptions,

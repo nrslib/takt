@@ -29,6 +29,7 @@ import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
+import { renderPullRequestContext, type PullRequestContext } from '../../../core/workflow/pr-context.js';
 
 export type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 
@@ -60,6 +61,7 @@ function buildInstructTemplateVars(
   workflowContext?: WorkflowContext,
   runSessionContext?: RunSessionContext,
   previousOrderContent?: string | null,
+  prContext?: PullRequestContext,
 ): Record<string, string | boolean> {
   const hasWorkflowPreview = !!workflowContext?.stepPreviews?.length;
   const stepDetails = hasWorkflowPreview
@@ -84,6 +86,8 @@ function buildInstructTemplateVars(
     ...runPromptVars,
     hasOrderContent: !!previousOrderContent,
     orderContent: previousOrderContent ?? '',
+    hasPrContext: prContext !== undefined,
+    prContextText: prContext ? renderPullRequestContext(prContext, lang) : '',
   };
 }
 
@@ -97,6 +101,7 @@ export async function runInstructMode(
   workflowContext?: WorkflowContext,
   runSessionContext?: RunSessionContext,
   previousOrderContent?: string | null,
+  prContext?: PullRequestContext,
 ): Promise<InstructModeResult> {
   const globalConfig = resolveWorkflowConfigValues(cwd, ['language']);
   const lang = resolveLanguage(globalConfig.language);
@@ -110,7 +115,7 @@ export async function runInstructMode(
 
   const templateVars = buildInstructTemplateVars(
     branchContext, branchName, taskName, taskContent, retryNote, lang,
-    workflowContext, runSessionContext, previousOrderContent,
+    workflowContext, runSessionContext, previousOrderContent, prContext,
   );
   const systemPrompt = prependSourceContextGuardToSystemPrompt(
     ctx.lang,

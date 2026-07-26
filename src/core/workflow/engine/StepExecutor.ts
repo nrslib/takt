@@ -68,6 +68,7 @@ import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } 
 import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
 import type { InstructionBuildTransaction } from './instruction-build-transaction.js';
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
+import type { PullRequestContext } from '../pr-context.js';
 
 const log = createLogger('step-executor');
 
@@ -85,6 +86,7 @@ export interface StepExecutorDeps {
   readonly getWorkflowDescription: () => string | undefined;
   readonly getInheritedPeerReportPaths: (step: WorkflowStep) => readonly string[];
   readonly getRetryNote: () => string | undefined;
+  readonly getPrContext?: () => PullRequestContext | undefined;
   readonly getObservabilityRunId?: () => string | undefined;
   readonly observabilityEnabled?: () => boolean;
   readonly sanitizeObservabilityText?: (text: string) => string;
@@ -629,6 +631,7 @@ export class StepExecutor {
       workflowName: this.deps.getWorkflowName(),
       workflowDescription: this.deps.getWorkflowDescription(),
       retryNote: this.deps.getRetryNote(),
+      prContext: this.deps.getPrContext?.(),
       policyContents: policySnapshot?.content ?? step.policyContents,
       policySourcePath: policySnapshot?.sourcePath,
       knowledgeContents: knowledgeSnapshot?.content ?? step.knowledgeContents,

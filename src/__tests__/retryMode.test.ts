@@ -169,6 +169,28 @@ describe('buildRetryTemplateVars', () => {
     expect(vars.retryNote).toBe('Added more specific error handling');
   });
 
+  it('should render PR context for PR-derived retries', () => {
+    const vars = buildRetryTemplateVars(createRetryContext({
+      prContext: {
+        source: 'pr_review',
+        prNumber: 861,
+        baseBranch: 'release/2026.07',
+        headBranch: 'feature/pr-context',
+        baseBranchSource: 'pull_request',
+      },
+    }), 'en');
+
+    expect(vars.hasPrContext).toBe(true);
+    expect(vars.prContextText).toContain('release/2026.07...feature/pr-context');
+  });
+
+  it('should omit PR context for normal retries', () => {
+    const vars = buildRetryTemplateVars(createRetryContext(), 'en');
+
+    expect(vars.hasPrContext).toBe(false);
+    expect(vars.prContextText).toBe('');
+  });
+
   it('should set hasOrderContent=false when previousOrderContent is null', () => {
     const ctx = createRetryContext();
     const vars = buildRetryTemplateVars(ctx, 'en');

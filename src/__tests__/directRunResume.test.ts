@@ -100,6 +100,14 @@ const workflow: WorkflowConfig = {
   ],
 };
 
+const pullRequestContext = {
+  source: 'pr_review' as const,
+  prNumber: 861,
+  baseBranch: 'release/2026.07',
+  headBranch: 'feature/direct-resume',
+  baseBranchSource: 'pull_request' as const,
+};
+
 const tempRoots = new Set<string>();
 
 function createRun(overrides?: Record<string, unknown>) {
@@ -265,6 +273,17 @@ describe('resumeDirectRun', () => {
         taskSummary: 'Order file instruction',
         taskSource: 'manual',
       },
+    }));
+  });
+
+  it('Given a PR-derived run is requeued, Then execution reuses the persisted PR context', async () => {
+    mockFindLatestResumableDirectRun.mockReturnValue(createRun({ prContext: pullRequestContext }));
+    mockSelectOption.mockResolvedValueOnce('requeue');
+
+    await resumeDirectRun('/project');
+
+    expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
+      prContext: pullRequestContext,
     }));
   });
 

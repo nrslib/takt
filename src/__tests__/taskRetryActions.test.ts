@@ -28,6 +28,7 @@ const {
   mockLoadAllStandaloneWorkflowsWithSources,
   mockPrepareTaskSpecDirectory,
   mockCleanupPreparedTaskSpec,
+  mockDetectDefaultBranch,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockReadFileSync: vi.fn(),
@@ -65,6 +66,7 @@ const {
   mockLoadAllStandaloneWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([['default', {}]])),
   mockPrepareTaskSpecDirectory: vi.fn(),
   mockCleanupPreparedTaskSpec: vi.fn(),
+  mockDetectDefaultBranch: vi.fn(() => 'main'),
 }));
 
 vi.mock('node:fs', async (importOriginal) => ({
@@ -120,6 +122,7 @@ vi.mock('../core/workflow/run/run-meta.js', () => ({
 }));
 
 vi.mock('../infra/task/index.js', () => ({
+  detectDefaultBranch: (...args: unknown[]) => mockDetectDefaultBranch(...args),
   TaskRunner: class {
     startReExecution(...args: unknown[]) {
       return mockStartReExecution(...args);
@@ -605,6 +608,60 @@ describe('retryFailedTask', () => {
       undefined,
     );
     expect(mockExecuteAndCompleteTask).toHaveBeenCalled();
+    expect((mockRunTaskRetryMode.mock.calls[0]?.[1] as { prContext?: unknown }).prContext).toBeUndefined();
+  });
+
+  it('should pass saved PR context to the retry assistant', async () => {
+    const task = makeFailedTask({
+      data: {
+        task: 'Do something',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 42,
+        base_branch: 'release/2026.07',
+        branch: 'feature/retry-context',
+      },
+    });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockRunTaskRetryMode).toHaveBeenCalledWith(
+      '/project/.takt/worktrees/my-task',
+      expect.objectContaining({
+        prContext: {
+          source: 'pr_review',
+          prNumber: 42,
+          baseBranch: 'release/2026.07',
+          headBranch: 'feature/retry-context',
+          baseBranchSource: 'pull_request',
+        },
+      }),
+    );
+  });
+
+  it('should mark a default-branch base as fallback in retry PR context', async () => {
+    const task = makeFailedTask({
+      data: {
+        task: 'Do something',
+        workflow: 'default',
+        source: 'pr_review',
+        pr_number: 42,
+        branch: 'feature/retry-context',
+      },
+    });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockDetectDefaultBranch).toHaveBeenCalledWith('/project/.takt/worktrees/my-task');
+    expect(mockRunTaskRetryMode).toHaveBeenCalledWith(
+      '/project/.takt/worktrees/my-task',
+      expect.objectContaining({
+        prContext: expect.objectContaining({
+          baseBranch: 'main',
+          baseBranchSource: 'default_branch_fallback',
+        }),
+      }),
+    );
   });
 
   it('should promote image attachments for retry direct execution', async () => {

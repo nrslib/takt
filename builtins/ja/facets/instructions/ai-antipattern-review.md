@@ -13,3 +13,4 @@ AI 特有の問題のレビューを行ってください。
 4. 本文で懸念に触れた場合は、finding table に入れるか、非 finding として分類と根拠を記録する
 
 2回目以降は、再走査で照合した章と根拠をレポートの「再走査証跡」セクションに必ず記録してください（APPROVE でも省略不可）。
+{{include:instructions/review-pr-context}}

@@ -14,6 +14,11 @@ import { getErrorMessage } from '../../shared/utils/index.js';
 import type { PipelineConfig } from '../../core/models/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { expandPipelineTemplate } from './templateExpander.js';
+import {
+  createPullRequestContext,
+  type PullRequestContext,
+} from '../../core/workflow/pr-context.js';
+import { assertValidLocalBranchName } from '../../shared/utils/gitBranchValidation.js';
 
 export interface TaskContent {
   task: string;
@@ -28,6 +33,7 @@ export interface GitExecutionContext {
   branch: string;
   baseBranch: string;
   taskSlug?: string;
+  prContext?: PullRequestContext;
 }
 
 export interface SkipGitExecutionContext {
@@ -35,6 +41,7 @@ export interface SkipGitExecutionContext {
   isWorktree: false;
   branch?: string;
   baseBranch?: string;
+  prContext?: PullRequestContext;
 }
 
 export type ExecutionContext = GitExecutionContext | SkipGitExecutionContext;
@@ -53,6 +60,50 @@ function requireBranch(branch: string | undefined, context: string): string {
     throw new Error(`Branch is required (${context})`);
   }
   return branch;
+}
+
+function validatePrBranches(
+  prNumber: number,
+  prBranch: string | undefined,
+  prBaseBranch: string | undefined,
+): void {
+  if (prBranch === undefined) {
+    throw new Error(`PR #${prNumber} head branch is required.`);
+  }
+  assertValidLocalBranchName(prBranch, {
+    branchLabel: `PR #${prNumber} head branch`,
+    invalidBranchLabel: `Invalid PR #${prNumber} head branch`,
+  });
+  if (prBaseBranch !== undefined) {
+    assertValidLocalBranchName(prBaseBranch, {
+      branchLabel: `PR #${prNumber} base branch`,
+      invalidBranchLabel: `Invalid PR #${prNumber} base branch`,
+    });
+  }
+}
+
+function attachPipelinePrContext(
+  prNumber: number | undefined,
+  prBaseBranch: string | undefined,
+  context: ExecutionContext,
+): ExecutionContext {
+  if (prNumber === undefined) {
+    return context;
+  }
+  const branch = requireBranch(context.branch, `PR #${prNumber} execution`);
+  const baseBranch = requireBaseBranch(context.baseBranch, `PR #${prNumber} execution`);
+  return {
+    ...context,
+    prContext: createPullRequestContext({
+      source: 'pr_review',
+      prNumber,
+      baseBranch,
+      headBranch: branch,
+      baseBranchSource: prBaseBranch === undefined
+        ? 'default_branch_fallback'
+        : 'pull_request',
+    }),
+  };
 }
 
 function generatePipelineBranchName(pipelineConfig: PipelineConfig | undefined, issueNumber?: number): string {
@@ -181,11 +232,14 @@ export function resolveTaskContent(options: PipelineExecutionOptions): TaskConte
 export async function resolveExecutionContext(
   cwd: string,
   task: string,
-  options: Pick<PipelineExecutionOptions, 'createWorktree' | 'skipGit' | 'branch' | 'issueNumber'>,
+  options: Pick<PipelineExecutionOptions, 'createWorktree' | 'skipGit' | 'branch' | 'issueNumber' | 'prNumber'>,
   pipelineConfig: PipelineConfig | undefined,
   prBranch?: string,
   prBaseBranch?: string,
 ): Promise<ExecutionContext> {
+  if (options.prNumber !== undefined) {
+    validatePrBranches(options.prNumber, prBranch, prBaseBranch);
+  }
   if (options.createWorktree) {
     const result = await confirmAndCreateWorktree(cwd, task, options.createWorktree, prBranch, prBaseBranch);
     const branch = requireBranch(result.branch, 'worktree execution');
@@ -193,16 +247,20 @@ export async function resolveExecutionContext(
     if (result.isWorktree) {
       success(`Worktree created: ${sanitizeTerminalText(result.execCwd)}`);
     }
-    return {
+    return attachPipelinePrContext(options.prNumber, prBaseBranch, {
       execCwd: result.execCwd,
       branch,
       baseBranch,
       isWorktree: result.isWorktree,
       taskSlug: result.taskSlug,
-    };
+    });
   }
   if (options.skipGit) {
-    return resolveSkipGitExecutionContext(cwd, prBranch, prBaseBranch);
+    return attachPipelinePrContext(
+      options.prNumber,
+      prBaseBranch,
+      resolveSkipGitExecutionContext(cwd, prBranch, prBaseBranch),
+    );
   }
   if (prBranch) {
     const safePrBranch = sanitizeTerminalText(prBranch);
@@ -210,12 +268,12 @@ export async function resolveExecutionContext(
     checkoutBranch(cwd, prBranch);
     success(`Checked out PR branch: ${safePrBranch}`);
     const baseBranch = resolveExecutionBaseBranch(cwd, prBaseBranch);
-    return {
+    return attachPipelinePrContext(options.prNumber, prBaseBranch, {
       execCwd: cwd,
       branch: prBranch,
       baseBranch,
       isWorktree: false,
-    };
+    });
   }
   const baseBranch = resolveExecutionBaseBranch(cwd);
   const branch = options.branch ?? generatePipelineBranchName(pipelineConfig, options.issueNumber);
@@ -254,6 +312,7 @@ export async function runWorkflow(
       projectCwd,
       agentOverrides,
       traceTaskContext: buildPipelineTraceTaskContext(options, context),
+      ...(context.prContext ? { prContext: context.prContext } : {}),
     });
   } finally {
     statusLine.stop();

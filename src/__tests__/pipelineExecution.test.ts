@@ -291,7 +291,7 @@ describe('executePipeline', () => {
     expect(mockStatus).toHaveBeenCalledWith('Branch', 'feature\\t');
   });
 
-  it('should sanitize PR titles, branch names, and worktree paths in terminal output', async () => {
+  it('should reject an invalid PR head before worktree creation', async () => {
     mockFetchPrReviewComments.mockReturnValueOnce({
       number: 12,
       title: 'PR\x1b[31m\n',
@@ -299,14 +299,6 @@ describe('executePipeline', () => {
       baseRefName: 'main',
       comments: [],
     });
-    mockConfirmAndCreateWorktree.mockResolvedValueOnce({
-      execCwd: '/tmp/worktree\tpath',
-      isWorktree: true,
-      branch: 'feature\x1b[2J',
-      baseBranch: 'main',
-    });
-    mockExecuteTask.mockResolvedValueOnce(true);
-
     const exitCode = await executePipeline({
       prNumber: 12,
       workflow: 'default',
@@ -315,9 +307,10 @@ describe('executePipeline', () => {
       cwd: '/tmp/test',
     });
 
-    expect(exitCode).toBe(0);
+    expect(exitCode).toBe(4);
     expect(mockSuccess).toHaveBeenCalledWith('PR #12 fetched: "PR\\n"');
-    expect(mockSuccess).toHaveBeenCalledWith('Worktree created: /tmp/worktree\\tpath');
+    expect(mockConfirmAndCreateWorktree).not.toHaveBeenCalled();
+    expect(mockExecuteTask).not.toHaveBeenCalled();
   });
 
   it('passes provider/model overrides to task execution', async () => {
@@ -817,12 +810,20 @@ describe('executePipeline', () => {
           branch?: string;
           baseBranch?: string;
         };
+        prContext?: unknown;
       };
       expect(executeArg.traceTaskContext).toEqual(expect.objectContaining({
         prNumber: 456,
         branch: 'fix/auth-bug',
         baseBranch: 'develop',
       }));
+      expect(executeArg.prContext).toEqual({
+        source: 'pr_review',
+        prNumber: 456,
+        baseBranch: 'develop',
+        headBranch: 'fix/auth-bug',
+        baseBranchSource: 'default_branch_fallback',
+      });
     });
 
     it('should ignore --auto-pr when skipGit is true', async () => {
@@ -1325,11 +1326,19 @@ describe('executePipeline', () => {
       expect(checkoutCall).toBeDefined();
       const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
         traceTaskContext?: unknown;
+        prContext?: unknown;
       };
       expect(executeArg.traceTaskContext).toEqual({
         prNumber: 456,
         branch: 'fix/auth-bug',
         baseBranch: 'main',
+      });
+      expect(executeArg.prContext).toEqual({
+        source: 'pr_review',
+        prNumber: 456,
+        baseBranch: 'main',
+        headBranch: 'fix/auth-bug',
+        baseBranchSource: 'pull_request',
       });
     });
 

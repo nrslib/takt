@@ -614,6 +614,60 @@ describe('instructBranch direct execution flow', () => {
     );
   });
 
+  it('should use the saved PR base for Instruct diff context', async () => {
+    mockExecFileSync
+      .mockReturnValueOnce(' src/index.ts | 2 +-\n 1 file changed')
+      .mockReturnValueOnce('abc123 fix issue');
+
+    await instructBranch('/project', {
+      kind: 'completed',
+      name: 'pr-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'review PR',
+      branch: 'takt/826/pr-context',
+      worktreePath: '/project/.takt/worktrees/pr-task',
+      data: {
+        task: 'review PR',
+        source: 'pr_review',
+        pr_number: 826,
+        base_branch: 'release/2026.07',
+        branch: 'takt/826/pr-context',
+      },
+    });
+
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      1,
+      'git',
+      ['diff', '--stat', 'release/2026.07...takt/826/pr-context'],
+      expect.objectContaining({ cwd: '/project/.takt/worktrees/pr-task' }),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      ['log', '--oneline', 'release/2026.07..takt/826/pr-context'],
+      expect.objectContaining({ cwd: '/project/.takt/worktrees/pr-task' }),
+    );
+    expect(mockRunInstructMode).toHaveBeenCalledWith(
+      '/project/.takt/worktrees/pr-task',
+      expect.stringContaining('## 現在の変更内容（release/2026.07からの差分）'),
+      'takt/826/pr-context',
+      'pr-task',
+      'review PR',
+      '',
+      expect.anything(),
+      undefined,
+      null,
+      {
+        source: 'pr_review',
+        prNumber: 826,
+        baseBranch: 'release/2026.07',
+        headBranch: 'takt/826/pr-context',
+        baseBranchSource: 'pull_request',
+      },
+    );
+  });
+
   it('should call selectWorkflow when previous workflow reuse is declined', async () => {
     mockConfirm
       .mockResolvedValueOnce(false);

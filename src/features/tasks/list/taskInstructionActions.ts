@@ -34,52 +34,73 @@ import {
   cleanupPreparedRetryTaskSpec,
   prepareRetryTaskSpecWithAttachments,
 } from '../retryTaskSpecAttachments.js';
+import { createPullRequestContext } from '../../../core/workflow/pr-context.js';
 
 const log = createLogger('list-tasks');
 
-function collectBranchDiffSection(projectDir: string, defaultBranch: string, branch: string): readonly string[] {
+function collectBranchDiffSection(
+  cwd: string,
+  baseBranch: string,
+  branch: string,
+  requirePrDiff: boolean,
+): readonly string[] {
   try {
     const diffStat = execFileSync(
-      'git', ['diff', '--stat', `${defaultBranch}...${branch}`],
-      { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' },
+      'git', ['diff', '--stat', `${baseBranch}...${branch}`],
+      { cwd, encoding: 'utf-8', stdio: 'pipe' },
     ).trim();
     return diffStat
-      ? ['## 現在の変更内容（mainからの差分）', '```', diffStat, '```']
+      ? [`## 現在の変更内容（${baseBranch}からの差分）`, '```', diffStat, '```']
       : [];
   } catch (err) {
+    if (requirePrDiff) {
+      throw new Error(`Failed to collect PR diff ${baseBranch}...${branch}: ${getErrorMessage(err)}`);
+    }
     log.debug('Failed to collect branch diff stat for instruction context', {
       branch,
-      defaultBranch,
+      baseBranch,
       error: getErrorMessage(err),
     });
     return [];
   }
 }
 
-function collectBranchCommitSection(projectDir: string, defaultBranch: string, branch: string): readonly string[] {
+function collectBranchCommitSection(
+  cwd: string,
+  baseBranch: string,
+  branch: string,
+  requirePrDiff: boolean,
+): readonly string[] {
   try {
     const commitLog = execFileSync(
-      'git', ['log', '--oneline', `${defaultBranch}..${branch}`],
-      { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' },
+      'git', ['log', '--oneline', `${baseBranch}..${branch}`],
+      { cwd, encoding: 'utf-8', stdio: 'pipe' },
     ).trim();
     return commitLog
       ? ['', '## コミット履歴', '```', commitLog, '```']
       : [];
   } catch (err) {
+    if (requirePrDiff) {
+      throw new Error(`Failed to collect PR commit log ${baseBranch}..${branch}: ${getErrorMessage(err)}`);
+    }
     log.debug('Failed to collect branch commit log for instruction context', {
       branch,
-      defaultBranch,
+      baseBranch,
       error: getErrorMessage(err),
     });
     return [];
   }
 }
 
-function getBranchContext(projectDir: string, branch: string): string {
-  const defaultBranch = detectDefaultBranch(projectDir);
+function getBranchContext(
+  cwd: string,
+  branch: string,
+  baseBranch: string,
+  requirePrDiff: boolean,
+): string {
   const lines = [
-    ...collectBranchDiffSection(projectDir, defaultBranch, branch),
-    ...collectBranchCommitSection(projectDir, defaultBranch, branch),
+    ...collectBranchDiffSection(cwd, baseBranch, branch, requirePrDiff),
+    ...collectBranchCommitSection(cwd, baseBranch, branch, requirePrDiff),
   ];
 
   return lines.length > 0 ? `${lines.join('\n')}\n\n` : '';
@@ -130,13 +151,41 @@ export async function instructBranch(
     warn(DEPRECATED_PROVIDER_CONFIG_WARNING);
   }
 
-  const branchContext = getBranchContext(projectDir, branch);
-
-  const result = await runInstructMode(
-    worktreePath, branchContext, branch,
-    target.name, target.content, target.data?.retry_note ?? '',
-    workflowContext, runSessionContext, previousOrderContent,
+  const prNumber = target.data?.source === 'pr_review' ? target.data.pr_number : undefined;
+  const isPrReviewTask = prNumber !== undefined;
+  const branchContextCwd = isPrReviewTask ? worktreePath : projectDir;
+  const baseBranch = isPrReviewTask
+    ? target.data?.base_branch ?? detectDefaultBranch(worktreePath)
+    : detectDefaultBranch(projectDir);
+  const prContext = isPrReviewTask
+    ? createPullRequestContext({
+      source: 'pr_review',
+      prNumber,
+      baseBranch,
+      headBranch: branch,
+      baseBranchSource: target.data?.base_branch === undefined
+        ? 'default_branch_fallback'
+        : 'pull_request',
+    })
+    : undefined;
+  const branchContext = getBranchContext(
+    branchContextCwd,
+    branch,
+    baseBranch,
+    prContext !== undefined,
   );
+
+  const result = prContext === undefined
+    ? await runInstructMode(
+      worktreePath, branchContext, branch,
+      target.name, target.content, target.data?.retry_note ?? '',
+      workflowContext, runSessionContext, previousOrderContent,
+    )
+    : await runInstructMode(
+      worktreePath, branchContext, branch,
+      target.name, target.content, target.data?.retry_note ?? '',
+      workflowContext, runSessionContext, previousOrderContent, prContext,
+    );
 
   const executeWithInstruction = async (instruction: string): Promise<boolean> => {
     const retryNote = appendRetryNote(target.data?.retry_note, instruction);

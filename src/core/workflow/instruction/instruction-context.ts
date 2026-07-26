@@ -13,6 +13,7 @@ import type {
   WorkflowStructuredOutput,
 } from '../../models/types.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
+import type { PullRequestContext } from '../pr-context.js';
 
 export interface FindingContractInstructionContext {
   ledgerCopyPath: string;
@@ -103,6 +104,8 @@ export interface InstructionContext {
   workflowDescription?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
+  /** Structured PR context resolved at the execution boundary. */
+  prContext?: PullRequestContext;
   /** Resolved policy content strings for injection into instruction */
   policyContents?: string[];
   /** Source path for policy snapshot */

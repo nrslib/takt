@@ -928,6 +928,40 @@ describe('executeAndCompleteTask', () => {
     });
   });
 
+  it('should forward resolved PR prompt context through task execution to the workflow', async () => {
+    const prContext = {
+      source: 'pr_review' as const,
+      prNumber: 826,
+      baseBranch: 'release/2026.07',
+      headBranch: 'takt/826/pr-context',
+      baseBranchSource: 'pull_request' as const,
+    };
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      workflowIdentifier: 'default',
+      isWorktree: true,
+      autoPr: false,
+      draftPr: false,
+      managedPr: false,
+      shouldPublishBranchToOrigin: false,
+      reportDirName: '20260726-pr-context',
+      branch: prContext.headBranch,
+      baseBranch: prContext.baseBranch,
+      prContext,
+    });
+
+    await executeAndCompleteTaskWithoutWorkflow(
+      createTask('task-with-pr-context'),
+      createTaskRunnerMock() as never,
+      '/project',
+    );
+
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      prContext?: unknown;
+    };
+    expect(workflowExecutionOptions.prContext).toEqual(prContext);
+  });
+
   it('should use saved summary for task_dir task trace metadata', async () => {
     const task = {
       ...createTask('task-dir-trace-metadata'),

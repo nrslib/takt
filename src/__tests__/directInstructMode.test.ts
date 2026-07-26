@@ -148,6 +148,28 @@ describe('runDirectInstructMode', () => {
     );
   });
 
+  it('Given PR run metadata exists, When direct instruct starts, Then the saved diff basis is injected', async () => {
+    await runDirectInstructMode({
+      ...buildOptions(null),
+      prContext: {
+        source: 'pr_review',
+        prNumber: 861,
+        baseBranch: 'release/2026.07',
+        headBranch: 'feature/pr-context',
+        baseBranchSource: 'pull_request',
+      },
+    });
+
+    expect(mockLoadTemplate).toHaveBeenCalledWith(
+      'score_direct_instruct_system_prompt',
+      'en',
+      expect.objectContaining({
+        hasPrContext: true,
+        prContextText: expect.stringContaining('release/2026.07...feature/pr-context'),
+      }),
+    );
+  });
+
   it('Given the conversation continues, When direct instruct runs, Then only direct execution actions are offered', async () => {
     mockSelectOption.mockResolvedValueOnce('execute');
     mockRunConversationLoop.mockImplementationOnce(async (
