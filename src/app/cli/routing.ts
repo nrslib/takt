@@ -129,13 +129,15 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         branch: prBranch,
         baseBranch: resolvedPrBase,
       };
-      selectOptions.prContext = createPullRequestContext({
-        source: 'pr_review',
-        prNumber,
-        baseBranch: resolvedPrBase,
-        headBranch: prBranch,
-        baseBranchSource: prBaseBranch === undefined ? 'default_branch_fallback' : 'pull_request',
-      });
+      if (prBranch !== undefined) {
+        selectOptions.prContext = createPullRequestContext({
+          source: 'pr_review',
+          prNumber,
+          baseBranch: resolvedPrBase,
+          headBranch: prBranch,
+          baseBranchSource: prBaseBranch === undefined ? 'default_branch_fallback' : 'pull_request',
+        });
+      }
     } catch (e) {
       logError(getErrorMessage(e));
       process.exit(1);
