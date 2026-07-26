@@ -639,13 +639,13 @@ describe('instructBranch direct execution flow', () => {
     expect(mockExecFileSync).toHaveBeenNthCalledWith(
       1,
       'git',
-      ['diff', '--stat', 'release/2026.07...takt/826/pr-context'],
+      ['diff', '--stat', 'refs/takt/pr-base/release/2026.07...refs/heads/takt/826/pr-context'],
       expect.objectContaining({ cwd: '/project/.takt/worktrees/pr-task' }),
     );
     expect(mockExecFileSync).toHaveBeenNthCalledWith(
       2,
       'git',
-      ['log', '--oneline', 'release/2026.07..takt/826/pr-context'],
+      ['log', '--oneline', 'refs/takt/pr-base/release/2026.07..refs/heads/takt/826/pr-context'],
       expect.objectContaining({ cwd: '/project/.takt/worktrees/pr-task' }),
     );
     expect(mockRunInstructMode).toHaveBeenCalledWith(
@@ -664,6 +664,8 @@ describe('instructBranch direct execution flow', () => {
         baseBranch: 'release/2026.07',
         headBranch: 'takt/826/pr-context',
         baseBranchSource: 'pull_request',
+        baseDiffRef: 'refs/takt/pr-base/release/2026.07',
+        headDiffRef: 'refs/heads/takt/826/pr-context',
       },
     );
   });

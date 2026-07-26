@@ -57,6 +57,7 @@ export async function confirmAndCreateWorktree(
   createWorktreeOverride?: boolean | undefined,
   branchOverride?: string,
   baseBranchOverride?: string,
+  materializePullRequestDiff: boolean = false,
 ): Promise<WorktreeConfirmationResult> {
   const useWorktree =
     typeof createWorktreeOverride === 'boolean'
@@ -83,10 +84,23 @@ export async function confirmAndCreateWorktree(
           taskSlug,
           ...(baseBranchOverride ? { baseBranch: baseBranchOverride } : {}),
           ...(branchOverride ? { branch: branchOverride } : {}),
+          ...(materializePullRequestDiff ? { pullRequestBaseBranch: baseBranch } : {}),
         }),
       );
 
-  return { execCwd: result.path, isWorktree: true, branch: result.branch, baseBranch, taskSlug };
+  return {
+    execCwd: result.path,
+    isWorktree: true,
+    branch: result.branch,
+    baseBranch,
+    taskSlug,
+    ...(result.pullRequestBaseRef
+      ? {
+        pullRequestBaseRef: result.pullRequestBaseRef,
+        pullRequestHeadRef: result.pullRequestHeadRef,
+      }
+      : {}),
+  };
 }
 
 export async function selectAndExecuteTask(

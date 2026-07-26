@@ -2,6 +2,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import {
+  toLocalBranchRef,
+  toPullRequestBaseRef,
+  toRemoteTrackingBranchRef,
+} from '../../shared/utils/gitBranchValidation.js';
 import { loadProjectConfig } from '../config/index.js';
 import { isTaskAbortError, TASK_EXECUTION_ABORTED_MESSAGE } from './clone-errors.js';
 
@@ -140,7 +145,7 @@ export function fetchRemoteBranchIntoIsolatedClone(projectDir: string, clonePath
       'fetch',
       '--no-write-fetch-head',
       projectDir,
-      `refs/remotes/origin/${branch}:refs/heads/${branch}`,
+      `${toRemoteTrackingBranchRef(branch)}:${toLocalBranchRef(branch)}`,
     ]);
   } catch {
     throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
@@ -159,7 +164,7 @@ export async function fetchRemoteBranchIntoIsolatedCloneAbortable(
       'fetch',
       '--no-write-fetch-head',
       projectDir,
-      `refs/remotes/origin/${branch}:refs/heads/${branch}`,
+      `${toRemoteTrackingBranchRef(branch)}:${toLocalBranchRef(branch)}`,
     ], abortSignal);
   } catch (err) {
     if (isTaskAbortError(err)) {
@@ -175,7 +180,7 @@ export function fetchBaseBranchIntoIsolatedClone(projectDir: string, clonePath: 
       'fetch',
       '--no-write-fetch-head',
       projectDir,
-      `refs/remotes/origin/${branch}:refs/takt/base/${branch}`,
+      `${toRemoteTrackingBranchRef(branch)}:refs/takt/base/${branch}`,
     ]);
   } catch {
     throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
@@ -193,7 +198,45 @@ export async function fetchBaseBranchIntoIsolatedCloneAbortable(
       'fetch',
       '--no-write-fetch-head',
       projectDir,
-      `refs/remotes/origin/${branch}:refs/takt/base/${branch}`,
+      `${toRemoteTrackingBranchRef(branch)}:refs/takt/base/${branch}`,
+    ], abortSignal);
+  } catch (err) {
+    if (isTaskAbortError(err)) {
+      throw err;
+    }
+    throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+  }
+}
+
+export function fetchPullRequestBaseIntoIsolatedClone(
+  projectDir: string,
+  clonePath: string,
+  branch: string,
+): void {
+  try {
+    runIsolatedGitCommandSync(clonePath, [
+      'fetch',
+      '--no-write-fetch-head',
+      projectDir,
+      `${toRemoteTrackingBranchRef(branch)}:${toPullRequestBaseRef(branch)}`,
+    ]);
+  } catch {
+    throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+  }
+}
+
+export async function fetchPullRequestBaseIntoIsolatedCloneAbortable(
+  projectDir: string,
+  clonePath: string,
+  branch: string,
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  try {
+    await runIsolatedGitCommandAbortable(clonePath, [
+      'fetch',
+      '--no-write-fetch-head',
+      projectDir,
+      `${toRemoteTrackingBranchRef(branch)}:${toPullRequestBaseRef(branch)}`,
     ], abortSignal);
   } catch (err) {
     if (isTaskAbortError(err)) {

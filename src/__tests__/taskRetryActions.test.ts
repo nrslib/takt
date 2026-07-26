@@ -634,6 +634,8 @@ describe('retryFailedTask', () => {
           baseBranch: 'release/2026.07',
           headBranch: 'feature/retry-context',
           baseBranchSource: 'pull_request',
+          baseDiffRef: 'refs/takt/pr-base/release/2026.07',
+          headDiffRef: 'refs/heads/feature/retry-context',
         },
       }),
     );

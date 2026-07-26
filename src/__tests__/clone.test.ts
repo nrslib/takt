@@ -528,7 +528,9 @@ describe('resolveBaseBranch', () => {
     expect(fetchCalls.length).toBeGreaterThanOrEqual(1);
     expect(fetchCalls[0]![0]).toBe('fetch');
     expect(fetchCalls[0]![1]).toBe('origin');
-    expect(fetchCalls[0]![2]).toMatch(/^takt\/\d{8}T\d{4}-test-no-fetch$/);
+    expect(fetchCalls[0]![2]).toMatch(
+      /^refs\/heads\/takt\/\d{8}T\d{4}-test-no-fetch:refs\/remotes\/origin\/takt\/\d{8}T\d{4}-test-no-fetch$/,
+    );
   });
 
   it('should use remote default branch as base when no base_branch config', () => {
@@ -863,11 +865,20 @@ describe('branchExists remote tracking branch fallback', () => {
     expect(cloneCalls[0]).not.toContain('--branch');
 
     expect(fetchCalls).toHaveLength(2);
-    expect(fetchCalls[0]).toEqual(['fetch', 'origin', 'feature/remote-only']);
+    expect(fetchCalls[0]).toEqual([
+      'fetch',
+      'origin',
+      'refs/heads/feature/remote-only:refs/remotes/origin/feature/remote-only',
+    ]);
     expect(fetchCalls[1]).toContain('refs/remotes/origin/feature/remote-only:refs/heads/feature/remote-only');
 
     expect(checkoutCalls).toHaveLength(1);
-    expect(checkoutCalls[0]).toEqual(['checkout', 'feature/remote-only']);
+    expect(checkoutCalls[0]).toEqual([
+      'checkout',
+      '-B',
+      'feature/remote-only',
+      'refs/heads/feature/remote-only',
+    ]);
   });
 
   it('should detach HEAD before fetch when clone has the target branch checked out', () => {
@@ -1166,7 +1177,7 @@ describe('branchExists remote tracking branch fallback', () => {
         callOrder.push('fetch');
         return Buffer.from('');
       }
-      if (argsArr[0] === 'checkout' && argsArr[1] === branch) {
+      if (argsArr[0] === 'checkout' && argsArr[1] === '-B' && argsArr[2] === branch) {
         callOrder.push('checkout');
         return Buffer.from('');
       }
@@ -1226,7 +1237,7 @@ describe('branchExists remote tracking branch fallback', () => {
         callOrder.push('fetch');
         detached = callOrder.includes('detach');
       }
-      if (argsArr[0] === 'checkout' && argsArr[1] === branch) {
+      if (argsArr[0] === 'checkout' && argsArr[1] === '-B' && argsArr[2] === branch) {
         callOrder.push('checkout');
       }
 
@@ -1519,7 +1530,7 @@ describe('branchExists remote tracking branch fallback', () => {
     );
     expect(fetchIntoClone.length).toBeGreaterThanOrEqual(1);
     expect(fetchIntoClone[0]!.args.join(' ')).toContain('refs/remotes/origin/feature/both-local-and-remote');
-    expect(checkoutCalls.some((c) => c[0] === 'checkout' && c[1] === 'feature/both-local-and-remote')).toBe(
+    expect(checkoutCalls.some((c) => c[0] === 'checkout' && c[1] === '-B' && c[2] === 'feature/both-local-and-remote')).toBe(
       true,
     );
   });
@@ -1779,7 +1790,9 @@ describe('prefetch existing branch on origin before clone (#557)', () => {
     });
 
     const prefetch = opSequence.find((s) => s.startsWith('project-fetch:'));
-    expect(prefetch).toBe('project-fetch:takt/42/implicit-slug');
+    expect(prefetch).toBe(
+      'project-fetch:refs/heads/takt/42/implicit-slug:refs/remotes/origin/takt/42/implicit-slug',
+    );
     const cloneIdx = opSequence.indexOf('clone');
     const prefetchIdx = opSequence.indexOf(prefetch!);
     expect(prefetchIdx).toBeGreaterThanOrEqual(0);
@@ -1817,7 +1830,11 @@ describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', (
       }
 
       // git rev-parse origin/<branch> (encoding: 'utf-8') — returns fetched commit hash
-      if (argsArr[0] === 'rev-parse' && typeof argsArr[1] === 'string' && argsArr[1].startsWith('origin/')) {
+      if (
+        argsArr[0] === 'rev-parse'
+        && typeof argsArr[1] === 'string'
+        && argsArr[1].startsWith('refs/remotes/origin/')
+      ) {
         revParseOriginCalls.push(argsArr);
         return options?.encoding ? 'abc123def456' : Buffer.from('abc123def456\n');
       }
@@ -1857,7 +1874,9 @@ describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', (
     expect(fetchCalls).toHaveLength(3);
     expect(fetchCalls[0]![0]).toBe('fetch');
     expect(fetchCalls[0]![1]).toBe('origin');
-    expect(fetchCalls[0]![2]).toMatch(/^takt\/\d{8}T\d{4}-autofetch-task$/);
+    expect(fetchCalls[0]![2]).toMatch(
+      /^refs\/heads\/takt\/\d{8}T\d{4}-autofetch-task:refs\/remotes\/origin\/takt\/\d{8}T\d{4}-autofetch-task$/,
+    );
     expect(fetchCalls[1]).toEqual(['fetch', 'origin']);
     expect(fetchCalls[2]).toEqual([
       'fetch',
@@ -1867,7 +1886,7 @@ describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', (
     ]);
 
     expect(revParseOriginCalls).toHaveLength(1);
-    expect(revParseOriginCalls[0]).toEqual(['rev-parse', 'origin/main']);
+    expect(revParseOriginCalls[0]).toEqual(['rev-parse', 'refs/remotes/origin/main']);
 
     expect(resetCalls).toHaveLength(1);
     expect(resetCalls[0]).toEqual(['reset', '--hard', 'abc123def456']);

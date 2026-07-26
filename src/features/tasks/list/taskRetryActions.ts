@@ -12,6 +12,10 @@ import { loadWorkflowByIdentifier, resolveWorkflowConfigValue, getWorkflowDescri
 import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import { info, header, blankLine, status, warn } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
+import {
+  toLocalBranchRef,
+  toPullRequestBaseRef,
+} from '../../../shared/utils/gitBranchValidation.js';
 import type { WorkflowConfig, WorkflowResumePoint } from '../../../core/models/index.js';
 import { readRunMetaBySlug, type RunMeta } from '../../../core/workflow/run/run-meta.js';
 import {
@@ -144,12 +148,15 @@ function resolveTaskRetryPullRequestContext(
   }
 
   const hasSavedBaseBranch = data.base_branch !== undefined;
+  const baseBranch = data.base_branch ?? detectDefaultBranch(worktreePath);
   return createPullRequestContext({
     source: 'pr_review',
     prNumber: data.pr_number,
-    baseBranch: data.base_branch ?? detectDefaultBranch(worktreePath),
+    baseBranch,
     headBranch: data.branch,
     baseBranchSource: hasSavedBaseBranch ? 'pull_request' : 'default_branch_fallback',
+    baseDiffRef: toPullRequestBaseRef(baseBranch),
+    headDiffRef: toLocalBranchRef(data.branch),
   });
 }
 

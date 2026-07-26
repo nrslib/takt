@@ -2,6 +2,7 @@ import type { Language } from '../models/types.js';
 import {
   assertValidLocalBranchName,
   isValidLocalBranchName,
+  toLocalBranchRef,
 } from '../../shared/utils/gitBranchValidation.js';
 
 export interface PullRequestContext {
@@ -10,6 +11,8 @@ export interface PullRequestContext {
   readonly baseBranch: string;
   readonly headBranch: string;
   readonly baseBranchSource: 'pull_request' | 'default_branch_fallback';
+  readonly baseDiffRef?: string;
+  readonly headDiffRef?: string;
 }
 
 export interface PersistedPullRequestContext {
@@ -18,6 +21,8 @@ export interface PersistedPullRequestContext {
   readonly base_branch: string;
   readonly head_branch: string;
   readonly base_branch_source: PullRequestContext['baseBranchSource'];
+  readonly base_diff_ref?: string;
+  readonly head_diff_ref?: string;
 }
 
 export function createPullRequestContext(input: PullRequestContext): PullRequestContext {
@@ -41,6 +46,13 @@ export function createPullRequestContext(input: PullRequestContext): PullRequest
   ) {
     throw new Error('PR context baseBranchSource is invalid.');
   }
+  if ((input.baseDiffRef === undefined) !== (input.headDiffRef === undefined)) {
+    throw new Error('PR context diff refs must provide both baseDiffRef and headDiffRef.');
+  }
+  if (input.baseDiffRef !== undefined && input.headDiffRef !== undefined) {
+    assertValidDiffRef(input.baseDiffRef, 'baseDiffRef');
+    assertValidDiffRef(input.headDiffRef, 'headDiffRef');
+  }
 
   return {
     source: 'pr_review',
@@ -48,7 +60,31 @@ export function createPullRequestContext(input: PullRequestContext): PullRequest
     baseBranch: input.baseBranch,
     headBranch: input.headBranch,
     baseBranchSource: input.baseBranchSource,
+    ...(input.baseDiffRef === undefined
+      ? {}
+      : {
+        baseDiffRef: input.baseDiffRef,
+        headDiffRef: input.headDiffRef!,
+      }),
   };
+}
+
+function assertValidDiffRef(ref: string, label: string): void {
+  if (
+    !ref.startsWith('refs/')
+    || ref.endsWith('/')
+    || ref.endsWith('.')
+    || ref.includes('..')
+    || ref.includes('//')
+    || ref.includes('@{')
+    || [...ref].some((char) => {
+      const code = char.charCodeAt(0);
+      return code <= 32 || code === 127 || '~^:?*[\\'.includes(char);
+    })
+    || ref.split('/').some((part) => part.length === 0 || part.startsWith('.') || part.endsWith('.lock'))
+  ) {
+    throw new Error(`Invalid PR context ${label}: ${ref}`);
+  }
 }
 
 export function encodePullRequestContext(
@@ -61,6 +97,12 @@ export function encodePullRequestContext(
     base_branch: snapshot.baseBranch,
     head_branch: snapshot.headBranch,
     base_branch_source: snapshot.baseBranchSource,
+    ...(snapshot.baseDiffRef === undefined
+      ? {}
+      : {
+        base_diff_ref: snapshot.baseDiffRef,
+        head_diff_ref: snapshot.headDiffRef!,
+      }),
   };
 }
 
@@ -74,6 +116,12 @@ export function decodePullRequestContext(value: unknown): PullRequestContext {
     baseBranch: value.base_branch,
     headBranch: value.head_branch,
     baseBranchSource: value.base_branch_source,
+    ...(value.base_diff_ref === undefined
+      ? {}
+      : {
+        baseDiffRef: value.base_diff_ref,
+        headDiffRef: value.head_diff_ref!,
+      }),
   });
 }
 
@@ -89,9 +137,12 @@ function isPersistedPullRequestContext(value: unknown): value is PersistedPullRe
     'head_branch',
     'base_branch_source',
   ];
+  const optionalDiffKeys = ['base_diff_ref', 'head_diff_ref'];
+  const hasDiffRefs = optionalDiffKeys.every((key) => Object.hasOwn(record, key));
   if (
-    Object.keys(record).length !== expectedKeys.length
+    Object.keys(record).length !== expectedKeys.length + (hasDiffRefs ? optionalDiffKeys.length : 0)
     || !expectedKeys.every((key) => Object.hasOwn(record, key))
+    || (optionalDiffKeys.some((key) => Object.hasOwn(record, key)) && !hasDiffRefs)
   ) {
     return false;
   }
@@ -104,15 +155,33 @@ function isPersistedPullRequestContext(value: unknown): value is PersistedPullRe
     && isValidLocalBranchName(record.base_branch)
     && typeof record.head_branch === 'string'
     && isValidLocalBranchName(record.head_branch)
+    && (!hasDiffRefs
+      || (
+        typeof record.base_diff_ref === 'string'
+        && typeof record.head_diff_ref === 'string'
+        && isValidDiffRef(record.base_diff_ref)
+        && isValidDiffRef(record.head_diff_ref)
+      ))
     && (record.base_branch_source === 'pull_request'
       || record.base_branch_source === 'default_branch_fallback');
+}
+
+function isValidDiffRef(ref: string): boolean {
+  try {
+    assertValidDiffRef(ref, 'diff ref');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function renderPullRequestContext(
   context: PullRequestContext,
   language: Language,
 ): string {
-  const diffRange = `${context.baseBranch}...${context.headBranch}`;
+  const baseDiffRef = context.baseDiffRef ?? toLocalBranchRef(context.baseBranch);
+  const headDiffRef = context.headDiffRef ?? toLocalBranchRef(context.headBranch);
+  const diffRange = `${baseDiffRef}...${headDiffRef}`;
   const fallback = context.baseBranchSource === 'default_branch_fallback'
     ? language === 'ja'
       ? '\n\nPR baseを取得できなかったため、default branchをbaseとして使用しています。'

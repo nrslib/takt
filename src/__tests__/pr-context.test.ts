@@ -18,7 +18,7 @@ describe('PullRequestContext', () => {
   it.each(['en', 'ja'] as const)('renders the saved base-to-head range in %s', (language) => {
     const rendered = renderPullRequestContext(context, language);
 
-    expect(rendered).toContain('release/2026.07...feature/saved-pr-head');
+    expect(rendered).toContain('refs/heads/release/2026.07...refs/heads/feature/saved-pr-head');
     expect(rendered).toContain('review-target.md');
     expect(rendered).not.toContain('release/2026.07...HEAD');
   });
@@ -57,5 +57,24 @@ describe('PullRequestContext', () => {
     expect(decodePullRequestContext(persisted)).toEqual(context);
     expect(() => decodePullRequestContext({ ...persisted, prNumber: 861 })).toThrow(/snake_case/);
     expect(() => decodePullRequestContext({ ...persisted, head_branch: 'HEAD' })).toThrow(/snake_case/);
+  });
+
+  it('persists materialized diff refs and renders the same exact range', () => {
+    const materialized = createPullRequestContext({
+      ...context,
+      baseDiffRef: 'refs/takt/pr-base/release/2026.07',
+      headDiffRef: 'refs/heads/feature/saved-pr-head',
+    });
+
+    const persisted = encodePullRequestContext(materialized);
+
+    expect(persisted).toMatchObject({
+      base_diff_ref: 'refs/takt/pr-base/release/2026.07',
+      head_diff_ref: 'refs/heads/feature/saved-pr-head',
+    });
+    expect(decodePullRequestContext(persisted)).toEqual(materialized);
+    expect(renderPullRequestContext(materialized, 'en')).toContain(
+      'refs/takt/pr-base/release/2026.07...refs/heads/feature/saved-pr-head',
+    );
   });
 });

@@ -14,6 +14,10 @@ import {
 import { resolveWorkflowConfigValues, getWorkflowDescription } from '../../../infra/config/index.js';
 import { info, warn, error as logError } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import {
+  toLocalBranchRef,
+  toPullRequestBaseRef,
+} from '../../../shared/utils/gitBranchValidation.js';
 import { runInstructMode } from './instructMode.js';
 import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
 import type { WorkflowContext } from '../../interactive/interactive.js';
@@ -40,25 +44,26 @@ const log = createLogger('list-tasks');
 
 function collectBranchDiffSection(
   cwd: string,
-  baseBranch: string,
-  branch: string,
+  baseRef: string,
+  headRef: string,
+  baseBranchLabel: string,
   requirePrDiff: boolean,
 ): readonly string[] {
   try {
     const diffStat = execFileSync(
-      'git', ['diff', '--stat', `${baseBranch}...${branch}`],
+      'git', ['diff', '--stat', `${baseRef}...${headRef}`],
       { cwd, encoding: 'utf-8', stdio: 'pipe' },
     ).trim();
     return diffStat
-      ? [`## 現在の変更内容（${baseBranch}からの差分）`, '```', diffStat, '```']
+      ? [`## 現在の変更内容（${baseBranchLabel}からの差分）`, '```', diffStat, '```']
       : [];
   } catch (err) {
     if (requirePrDiff) {
-      throw new Error(`Failed to collect PR diff ${baseBranch}...${branch}: ${getErrorMessage(err)}`);
+      throw new Error(`Failed to collect PR diff ${baseRef}...${headRef}: ${getErrorMessage(err)}`);
     }
     log.debug('Failed to collect branch diff stat for instruction context', {
-      branch,
-      baseBranch,
+      branch: headRef,
+      baseBranch: baseRef,
       error: getErrorMessage(err),
     });
     return [];
@@ -67,13 +72,13 @@ function collectBranchDiffSection(
 
 function collectBranchCommitSection(
   cwd: string,
-  baseBranch: string,
-  branch: string,
+  baseRef: string,
+  headRef: string,
   requirePrDiff: boolean,
 ): readonly string[] {
   try {
     const commitLog = execFileSync(
-      'git', ['log', '--oneline', `${baseBranch}..${branch}`],
+      'git', ['log', '--oneline', `${baseRef}..${headRef}`],
       { cwd, encoding: 'utf-8', stdio: 'pipe' },
     ).trim();
     return commitLog
@@ -81,11 +86,11 @@ function collectBranchCommitSection(
       : [];
   } catch (err) {
     if (requirePrDiff) {
-      throw new Error(`Failed to collect PR commit log ${baseBranch}..${branch}: ${getErrorMessage(err)}`);
+      throw new Error(`Failed to collect PR commit log ${baseRef}..${headRef}: ${getErrorMessage(err)}`);
     }
     log.debug('Failed to collect branch commit log for instruction context', {
-      branch,
-      baseBranch,
+      branch: headRef,
+      baseBranch: baseRef,
       error: getErrorMessage(err),
     });
     return [];
@@ -94,13 +99,14 @@ function collectBranchCommitSection(
 
 function getBranchContext(
   cwd: string,
-  branch: string,
-  baseBranch: string,
+  headRef: string,
+  baseRef: string,
   requirePrDiff: boolean,
+  baseBranchLabel: string = baseRef,
 ): string {
   const lines = [
-    ...collectBranchDiffSection(cwd, baseBranch, branch, requirePrDiff),
-    ...collectBranchCommitSection(cwd, baseBranch, branch, requirePrDiff),
+    ...collectBranchDiffSection(cwd, baseRef, headRef, baseBranchLabel, requirePrDiff),
+    ...collectBranchCommitSection(cwd, baseRef, headRef, requirePrDiff),
   ];
 
   return lines.length > 0 ? `${lines.join('\n')}\n\n` : '';
@@ -166,13 +172,16 @@ export async function instructBranch(
       baseBranchSource: target.data?.base_branch === undefined
         ? 'default_branch_fallback'
         : 'pull_request',
+      baseDiffRef: toPullRequestBaseRef(baseBranch),
+      headDiffRef: toLocalBranchRef(branch),
     })
     : undefined;
   const branchContext = getBranchContext(
     branchContextCwd,
-    branch,
-    baseBranch,
+    prContext?.headDiffRef ?? branch,
+    prContext?.baseDiffRef ?? baseBranch,
     prContext !== undefined,
+    baseBranch,
   );
 
   const result = prContext === undefined

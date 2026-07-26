@@ -86,6 +86,7 @@ function attachPipelinePrContext(
   prNumber: number | undefined,
   prBaseBranch: string | undefined,
   context: ExecutionContext,
+  materializedDiffRefs?: { baseRef?: string; headRef?: string },
 ): ExecutionContext {
   if (prNumber === undefined) {
     return context;
@@ -102,6 +103,12 @@ function attachPipelinePrContext(
       baseBranchSource: prBaseBranch === undefined
         ? 'default_branch_fallback'
         : 'pull_request',
+      ...(materializedDiffRefs?.baseRef && materializedDiffRefs.headRef
+        ? {
+          baseDiffRef: materializedDiffRefs.baseRef,
+          headDiffRef: materializedDiffRefs.headRef,
+        }
+        : {}),
     }),
   };
 }
@@ -241,19 +248,40 @@ export async function resolveExecutionContext(
     validatePrBranches(options.prNumber, prBranch, prBaseBranch);
   }
   if (options.createWorktree) {
-    const result = await confirmAndCreateWorktree(cwd, task, options.createWorktree, prBranch, prBaseBranch);
+    const result = await confirmAndCreateWorktree(
+      cwd,
+      task,
+      options.createWorktree,
+      prBranch,
+      prBaseBranch,
+      options.prNumber !== undefined,
+    );
     const branch = requireBranch(result.branch, 'worktree execution');
     const baseBranch = requireBaseBranch(result.baseBranch, 'worktree execution');
     if (result.isWorktree) {
       success(`Worktree created: ${sanitizeTerminalText(result.execCwd)}`);
     }
-    return attachPipelinePrContext(options.prNumber, prBaseBranch, {
-      execCwd: result.execCwd,
-      branch,
-      baseBranch,
-      isWorktree: result.isWorktree,
-      taskSlug: result.taskSlug,
-    });
+    if (
+      options.prNumber !== undefined
+      && (!result.pullRequestBaseRef || !result.pullRequestHeadRef)
+    ) {
+      throw new Error(`PR #${options.prNumber} worktree did not materialize PR diff refs.`);
+    }
+    return attachPipelinePrContext(
+      options.prNumber,
+      prBaseBranch,
+      {
+        execCwd: result.execCwd,
+        branch,
+        baseBranch,
+        isWorktree: result.isWorktree,
+        taskSlug: result.taskSlug,
+      },
+      {
+        baseRef: result.pullRequestBaseRef,
+        headRef: result.pullRequestHeadRef,
+      },
+    );
   }
   if (options.skipGit) {
     return attachPipelinePrContext(

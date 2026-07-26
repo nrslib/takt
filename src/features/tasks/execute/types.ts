@@ -336,6 +336,8 @@ export interface WorktreeConfirmationResult {
   branch?: string;
   baseBranch?: string;
   taskSlug?: string;
+  pullRequestBaseRef?: string;
+  pullRequestHeadRef?: string;
 }
 
 export interface SelectAndExecuteOptions {

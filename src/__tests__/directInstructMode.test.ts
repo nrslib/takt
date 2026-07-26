@@ -165,7 +165,9 @@ describe('runDirectInstructMode', () => {
       'en',
       expect.objectContaining({
         hasPrContext: true,
-        prContextText: expect.stringContaining('release/2026.07...feature/pr-context'),
+        prContextText: expect.stringContaining(
+          'refs/heads/release/2026.07...refs/heads/feature/pr-context',
+        ),
       }),
     );
   });

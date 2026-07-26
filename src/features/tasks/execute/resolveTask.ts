@@ -19,6 +19,10 @@ import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resu
 import { getGitProvider, type GitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import {
+  toLocalBranchRef,
+  toPullRequestBaseRef,
+} from '../../../shared/utils/gitBranchValidation.js';
 import { generateReportDir } from '../../../shared/utils/reportDir.js';
 import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
@@ -278,7 +282,7 @@ export async function resolveTaskExecution(
   const resumePoint = normalizedData.resume_point as WorkflowResumePoint | undefined;
   const retryNote = normalizedData.retry_note;
   const contextOverride = options?.taskContext;
-  const prContext = resolvePrReviewContext(task.name, normalizedData, defaultCwd, contextOverride);
+  let prContext = resolvePrReviewContext(task.name, normalizedData, defaultCwd, contextOverride);
 
   let execCwd = defaultCwd;
   let isWorktree = false;
@@ -320,6 +324,13 @@ export async function resolveTaskExecution(
       branch = reusedWorktree.branch;
       worktreePath = reusedWorktree.worktreePath;
       isWorktree = reusedWorktree.isWorktree;
+      if (prContext) {
+        prContext = createPullRequestContext({
+          ...prContext,
+          baseDiffRef: toPullRequestBaseRef(prContext.baseBranch),
+          headDiffRef: toLocalBranchRef(prContext.headBranch),
+        });
+      }
     } else {
       const taskSlug = task.slug ?? await runWithTaskProgress(
         options?.outputMode,
@@ -337,6 +348,7 @@ export async function resolveTaskExecution(
           worktree: data.worktree!,
           branch: targetBranch,
           ...(preferredBaseBranch ? { baseBranch: preferredBaseBranch } : {}),
+          ...(prContext ? { pullRequestBaseBranch: prContext.baseBranch } : {}),
           taskSlug,
           issueNumber: data.issue,
         }, abortSignal),
@@ -346,6 +358,16 @@ export async function resolveTaskExecution(
       branch = result.branch;
       worktreePath = result.path;
       isWorktree = true;
+      if (prContext) {
+        if (!result.pullRequestBaseRef || !result.pullRequestHeadRef) {
+          throw new Error(`PR review task "${task.name}" clone did not materialize PR diff refs.`);
+        }
+        prContext = createPullRequestContext({
+          ...prContext,
+          baseDiffRef: result.pullRequestBaseRef,
+          headDiffRef: result.pullRequestHeadRef,
+        });
+      }
     }
   } else if (contextBranch !== undefined || data.branch !== undefined) {
     branch = contextBranch ?? data.branch;

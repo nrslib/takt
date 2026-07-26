@@ -181,7 +181,9 @@ describe('buildRetryTemplateVars', () => {
     }), 'en');
 
     expect(vars.hasPrContext).toBe(true);
-    expect(vars.prContextText).toContain('release/2026.07...feature/pr-context');
+    expect(vars.prContextText).toContain(
+      'refs/heads/release/2026.07...refs/heads/feature/pr-context',
+    );
   });
 
   it('should omit PR context for normal retries', () => {

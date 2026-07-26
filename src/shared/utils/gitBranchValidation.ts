@@ -1,6 +1,4 @@
 const DISALLOWED_BRANCH_CHARACTERS = new Set(['~', '^', ':', '?', '*', '[', '\\']);
-const DISALLOWED_BRANCH_PREFIXES = ['refs/'];
-const REMOTE_TRACKING_REF_PREFIXES = ['origin/', 'refs/remotes/'];
 const PSEUDO_REF_BRANCH_NAMES = new Set(['HEAD']);
 
 export interface BranchValidationLabels {
@@ -47,12 +45,6 @@ function getLocalBranchNameError(
   if (PSEUDO_REF_BRANCH_NAMES.has(branch)) {
     return `${labels.branchLabel} must be a branch name, not a pseudo-ref: ${branch}`;
   }
-  if (DISALLOWED_BRANCH_PREFIXES.some((prefix) => branch.startsWith(prefix))) {
-    return `${labels.branchLabel} must be a plain local branch name, not a full ref: ${branch}`;
-  }
-  if (REMOTE_TRACKING_REF_PREFIXES.some((prefix) => branch.startsWith(prefix))) {
-    return `${labels.branchLabel} must be a branch name, not a remote-tracking ref: ${branch}`;
-  }
   if (!isValidGitBranchRefName(branch)) {
     return `${labels.invalidBranchLabel}: ${branch}`;
   }
@@ -61,8 +53,7 @@ function getLocalBranchNameError(
 
 function isValidGitBranchRefName(branch: string): boolean {
   if (
-    branch === '@'
-    || branch.startsWith('/')
+    branch.startsWith('/')
     || branch.endsWith('/')
     || branch.endsWith('.')
     || branch.includes('//')
@@ -76,6 +67,21 @@ function isValidGitBranchRefName(branch: string): boolean {
     part.length > 0
     && !part.startsWith('.')
     && !part.endsWith('.lock'));
+}
+
+export function toLocalBranchRef(branch: string): string {
+  assertValidLocalBranchName(branch);
+  return `refs/heads/${branch}`;
+}
+
+export function toRemoteTrackingBranchRef(branch: string): string {
+  assertValidLocalBranchName(branch);
+  return `refs/remotes/origin/${branch}`;
+}
+
+export function toPullRequestBaseRef(branch: string): string {
+  assertValidLocalBranchName(branch);
+  return `refs/takt/pr-base/${branch}`;
 }
 
 function hasInvalidGitBranchCharacter(branch: string): boolean {

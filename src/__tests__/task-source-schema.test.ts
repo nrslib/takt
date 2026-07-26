@@ -71,7 +71,7 @@ describe('TaskExecutionConfigSchema — source field', () => {
     expect(result.success).toBe(false);
   });
 
-  it.each(['   ', 'HEAD', 'refs/heads/feature/pr-review', 'origin/feature/pr-review', 'feature..broken'])('rejects invalid PR head branch %s', (branch) => {
+  it.each(['   ', 'HEAD', 'feature..broken'])('rejects invalid PR head branch %s', (branch) => {
     expect(TaskExecutionConfigSchema.safeParse({
       source: 'pr_review',
       pr_number: 123,
@@ -79,7 +79,7 @@ describe('TaskExecutionConfigSchema — source field', () => {
     }).success).toBe(false);
   });
 
-  it.each(['', '   ', 'HEAD', 'HEAD:feature/pr-review', 'origin/main'])('rejects a specified invalid PR base branch %s', (baseBranch) => {
+  it.each(['', '   ', 'HEAD', 'HEAD:feature/pr-review'])('rejects a specified invalid PR base branch %s', (baseBranch) => {
     expect(TaskExecutionConfigSchema.safeParse({
       source: 'pr_review',
       pr_number: 123,
@@ -96,6 +96,18 @@ describe('TaskExecutionConfigSchema — source field', () => {
       base_branch: 'feature/a]',
     }).success).toBe(true);
   });
+
+  it.each(['origin/feature/pr-review', 'refs/feature/pr-review', 'refs/heads/feature/pr-review', '@'])(
+    'accepts the Git-valid short PR branch name %s',
+    (branch) => {
+      expect(TaskExecutionConfigSchema.safeParse({
+        source: 'pr_review',
+        pr_number: 123,
+        branch,
+        base_branch: branch,
+      }).success).toBe(true);
+    },
+  );
 
   it('accepts source: "issue"', () => {
     const result = TaskExecutionConfigSchema.safeParse({ source: 'issue' });
@@ -287,12 +299,12 @@ describe('TaskRecordSchema — PR provenance fields', () => {
     }
   });
 
-  it('rejects an invalid PR head branch', () => {
+  it('accepts a refs-prefixed Git-valid short PR head branch', () => {
     expect(TaskRecordSchema.safeParse(makePendingRecord({
       source: 'pr_review',
       pr_number: 456,
       branch: 'refs/heads/feature/pr-review',
-    })).success).toBe(false);
+    })).success).toBe(true);
   });
 
   it('rejects HEAD as a specified PR base branch', () => {

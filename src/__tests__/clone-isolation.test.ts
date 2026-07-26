@@ -75,6 +75,72 @@ function filesContaining(rootDir: string, needle: string): string[] {
 }
 
 describe('shared clone generated metadata isolation', () => {
+  it('materializes the latest custom PR base and remote head into exact isolated refs', () => {
+    const tempDir = createTempDir();
+    const remoteRepo = path.join(tempDir, 'origin.git');
+    const projectRepo = path.join(tempDir, 'project');
+    const updaterRepo = path.join(tempDir, 'base-updater');
+    const clonePath = path.join(tempDir, 'pr-clone');
+    const baseBranch = 'release/custom';
+    const headBranch = 'feature/pr-head';
+
+    runGit(tempDir, ['init', '--bare', '--quiet', remoteRepo]);
+    runGit(tempDir, ['clone', '--quiet', remoteRepo, projectRepo]);
+    runGit(projectRepo, ['config', 'user.email', 'takt@example.com']);
+    runGit(projectRepo, ['config', 'user.name', 'TAKT Test']);
+    runGit(projectRepo, ['switch', '--quiet', '-c', 'main']);
+    fs.writeFileSync(path.join(projectRepo, 'README.md'), 'initial\n');
+    runGit(projectRepo, ['add', 'README.md']);
+    runGit(projectRepo, ['commit', '--quiet', '-m', 'initial']);
+    runGit(projectRepo, ['push', '--quiet', '-u', 'origin', 'main']);
+
+    runGit(projectRepo, ['switch', '--quiet', '-c', baseBranch]);
+    fs.writeFileSync(path.join(projectRepo, 'base.txt'), 'base v1\n');
+    runGit(projectRepo, ['add', 'base.txt']);
+    runGit(projectRepo, ['commit', '--quiet', '-m', 'base v1']);
+    runGit(projectRepo, ['push', '--quiet', '-u', 'origin', baseBranch]);
+    const staleLocalBase = runGit(projectRepo, ['rev-parse', `refs/heads/${baseBranch}`]).toString().trim();
+
+    runGit(projectRepo, ['switch', '--quiet', '-c', headBranch]);
+    fs.writeFileSync(path.join(projectRepo, 'head.txt'), 'head\n');
+    runGit(projectRepo, ['add', 'head.txt']);
+    runGit(projectRepo, ['commit', '--quiet', '-m', 'head']);
+    runGit(projectRepo, ['push', '--quiet', '-u', 'origin', headBranch]);
+    const expectedHead = runGit(projectRepo, ['rev-parse', `refs/heads/${headBranch}`]).toString().trim();
+    runGit(projectRepo, ['switch', '--quiet', 'main']);
+
+    runGit(tempDir, ['clone', '--quiet', remoteRepo, updaterRepo]);
+    runGit(updaterRepo, ['config', 'user.email', 'takt@example.com']);
+    runGit(updaterRepo, ['config', 'user.name', 'TAKT Test']);
+    runGit(updaterRepo, ['switch', '--quiet', baseBranch]);
+    fs.writeFileSync(path.join(updaterRepo, 'base.txt'), 'base v2\n');
+    runGit(updaterRepo, ['commit', '--quiet', '-am', 'base v2']);
+    runGit(updaterRepo, ['push', '--quiet', 'origin', baseBranch]);
+    const expectedBase = runGit(updaterRepo, ['rev-parse', 'HEAD']).toString().trim();
+    expect(staleLocalBase).not.toBe(expectedBase);
+
+    const result = createSharedClone(projectRepo, {
+      worktree: clonePath,
+      taskSlug: 'pr-custom-base',
+      branch: headBranch,
+      baseBranch,
+      pullRequestBaseBranch: baseBranch,
+    });
+
+    expect(result).toMatchObject({
+      path: clonePath,
+      branch: headBranch,
+      pullRequestBaseRef: `refs/takt/pr-base/${baseBranch}`,
+      pullRequestHeadRef: `refs/heads/${headBranch}`,
+    });
+    expect(runGit(clonePath, ['rev-parse', result.pullRequestBaseRef!]).toString().trim()).toBe(expectedBase);
+    expect(runGit(clonePath, ['rev-parse', result.pullRequestHeadRef!]).toString().trim()).toBe(expectedHead);
+    expect(() => runGit(
+      clonePath,
+      ['diff', '--stat', `${result.pullRequestBaseRef}...${result.pullRequestHeadRef}`],
+    )).not.toThrow();
+  });
+
   it('does not leave the source repo path in clone .git metadata for local branch clones', () => {
     const tempDir = createTempDir();
     const sourceRepo = createSourceRepo(tempDir);

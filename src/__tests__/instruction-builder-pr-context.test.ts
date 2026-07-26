@@ -36,7 +36,9 @@ describe('InstructionBuilder PR context', () => {
     })).build();
 
     expect(instruction).toContain('## PR Context');
-    expect(instruction).toContain('release/2026.07...feature/pr-context');
+    expect(instruction).toContain(
+      'refs/heads/release/2026.07...refs/heads/feature/pr-context',
+    );
     expect(instruction).toContain('review-target.md');
   });
 

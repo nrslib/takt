@@ -882,6 +882,7 @@ describe('executePipeline', () => {
         true,
         undefined,
         undefined,
+        false,
       );
       expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
         task: 'Fix the bug',
@@ -1156,6 +1157,8 @@ describe('executePipeline', () => {
         branch: 'fix/auth-bug',
         baseBranch: 'release/main',
         taskSlug: 'fix-auth-bug',
+        pullRequestBaseRef: 'refs/takt/pr-base/release/main',
+        pullRequestHeadRef: 'refs/heads/fix/auth-bug',
       });
       mockExecuteTask.mockResolvedValueOnce(true);
 
@@ -1174,7 +1177,14 @@ describe('executePipeline', () => {
         true,
         'fix/auth-bug',
         'release/main',
+        true,
       );
+      expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
+        prContext: expect.objectContaining({
+          baseDiffRef: 'refs/takt/pr-base/release/main',
+          headDiffRef: 'refs/heads/fix/auth-bug',
+        }),
+      }));
     });
   });
 
