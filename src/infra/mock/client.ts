@@ -30,7 +30,11 @@ function generateMockSessionId(): string {
   return `mock-session-${randomUUID()}`;
 }
 
-function recordMockCall(event: 'start' | 'complete', personaName: string): void {
+function recordMockCall(
+  event: 'start' | 'complete',
+  personaName: string,
+  outcome?: { status: AgentResponse['status']; aborted: boolean },
+): void {
   const logPath = process.env.TAKT_MOCK_CALL_LOG;
   if (!logPath) {
     return;
@@ -41,7 +45,7 @@ function recordMockCall(event: 'start' | 'complete', personaName: string): void 
       return value === undefined ? [] : [[key, value]];
     }),
   );
-  appendFileSync(logPath, `${JSON.stringify({ event, personaName, runtimeEnvironment })}\n`);
+  appendFileSync(logPath, `${JSON.stringify({ event, personaName, runtimeEnvironment, ...outcome })}\n`);
 }
 
 async function delayWithAbort(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -53,6 +57,21 @@ async function delayWithAbort(ms: number, signal: AbortSignal | undefined): Prom
     const timer = setTimeout(resolve, ms);
     signal?.addEventListener('abort', () => {
       clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    }, { once: true });
+  });
+}
+
+async function waitForAbort(signal: AbortSignal | undefined): Promise<void> {
+  if (signal === undefined) {
+    throw new Error('Mock scenario wait_for_abort requires an abort signal');
+  }
+  return new Promise((_resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    signal.addEventListener('abort', () => {
       reject(new DOMException('Aborted', 'AbortError'));
     }, { once: true });
   });
@@ -72,13 +91,17 @@ export async function callMock(
   const scenarioEntry = getScenarioQueue()?.consume(personaName);
   recordMockCall('start', personaName);
 
-  // Apply artificial delay if specified (respects abortSignal)
-  if (scenarioEntry?.delayMs) {
+  // Apply deterministic abort gating or an artificial delay when requested.
+  if (scenarioEntry?.waitForAbort === true || scenarioEntry?.delayMs) {
     try {
-      await delayWithAbort(scenarioEntry.delayMs, options.abortSignal);
+      if (scenarioEntry.waitForAbort === true) {
+        await waitForAbort(options.abortSignal);
+      } else {
+        await delayWithAbort(scenarioEntry.delayMs!, options.abortSignal);
+      }
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
-        recordMockCall('complete', personaName);
+        recordMockCall('complete', personaName, { status: 'blocked', aborted: true });
         return {
           persona: personaName,
           status: 'blocked',
@@ -120,7 +143,7 @@ export async function callMock(
     options.onStream(resultEvent);
   }
 
-  recordMockCall('complete', personaName);
+  recordMockCall('complete', personaName, { status, aborted: false });
   return {
     persona: personaName,
     status,

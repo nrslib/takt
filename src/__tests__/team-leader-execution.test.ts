@@ -550,10 +550,11 @@ describe('runTeamLeaderExecution', () => {
       }),
     });
 
-    await expect(Promise.race([
-      execution.then(() => 'finished'),
-      Promise.resolve('still-running'),
-    ])).resolves.toBe('still-running');
+    let settled = false;
+    void execution.then(() => { settled = true; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
     releasePart?.();
     await expect(execution).resolves.toMatchObject({
       partResults: expect.arrayContaining([

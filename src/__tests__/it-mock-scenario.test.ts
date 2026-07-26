@@ -192,6 +192,22 @@ describe('loadScenarioFile', () => {
     expect(entries[0].delayMs).toBe(100);
   });
 
+  it('should accept wait_for_abort and expose it as waitForAbort', () => {
+    const filePath = join(tempDir, 'wait-for-abort.json');
+    writeFileSync(filePath, '[{"content": "test", "wait_for_abort": true}]');
+
+    const entries = loadScenarioFile(filePath);
+
+    expect(entries[0].waitForAbort).toBe(true);
+  });
+
+  it('should reject a non-boolean wait_for_abort', () => {
+    const filePath = join(tempDir, 'bad-wait-for-abort.json');
+    writeFileSync(filePath, '[{"content": "test", "wait_for_abort": "yes"}]');
+
+    expect(() => loadScenarioFile(filePath)).toThrow('"wait_for_abort" must be a boolean');
+  });
+
   it('should map error and failure_category from scenario JSON', () => {
     const filePath = join(tempDir, 'valid-failure-category.json');
     writeFileSync(filePath, JSON.stringify([

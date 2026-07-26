@@ -715,14 +715,13 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     },
   );
 
-  it('providerのAbortErrorを個別取消reasonへ復元し、cancelled phaseとして扱う', async () => {
+  it('providerがerrorで終了しても個別取消reasonがあればcancelled phaseとして扱う', async () => {
     const cancellation = new TeamLeaderPartCancellation('part-1');
     const controller = new AbortController();
     controller.abort(cancellation);
-    const providerAbort = new Error('Provider request aborted');
-    providerAbort.name = 'AbortError';
+    const providerFailure = new Error('Provider request failed during cancellation');
     let phaseErrorOutcome: unknown;
-    mockExecuteAgent.mockRejectedValue(providerAbort);
+    mockExecuteAgent.mockRejectedValue(providerFailure);
     mockRunWithPhaseSpan.mockImplementation(async (_params, execute, _getOutcome, getErrorOutcome) => {
       try {
         return await execute();

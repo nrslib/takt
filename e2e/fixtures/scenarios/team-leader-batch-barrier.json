@@ -22,5 +22,5 @@
     }
   },
   { "persona": "agents/test-coder", "status": "done", "content": "completed bb-1" },
-  { "persona": "agents/test-coder", "status": "done", "content": "completed bb-2", "delay_ms": 1000 }
+  { "persona": "agents/test-coder", "status": "done", "content": "completed bb-2", "wait_for_abort": true }
 ]

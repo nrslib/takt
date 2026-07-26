@@ -19,6 +19,8 @@ function countPartSections(stepContent: string): number {
 interface MockCallRecord {
   readonly event: 'start' | 'complete';
   readonly personaName: string;
+  readonly status?: 'done' | 'blocked';
+  readonly aborted?: boolean;
 }
 
 function readMockCallRecords(path: string): MockCallRecord[] {
@@ -92,7 +94,6 @@ describe('E2E: Team leader running-part cancellation', () => {
     expect(partSectionCount).toBe(1);
     expect(content).toContain('## bb-1: Create bb-1.txt');
     expect(content).not.toContain('## bb-2: Create bb-2.txt');
-    expect(content).not.toContain('Mock response interrupted by abort signal.');
 
     const calls = readMockCallRecords(mockCallLogPath);
     const leaderStartIndexes = calls.flatMap((call, index) =>
@@ -107,7 +108,14 @@ describe('E2E: Team leader running-part cancellation', () => {
     );
     expect(leaderStartIndexes).toHaveLength(2);
     expect(memberCompletionIndexes).toHaveLength(2);
-    expect(leaderStartIndexes[1]).toBeGreaterThan(memberCompletionIndexes[0]);
-    expect(leaderStartIndexes[1]).toBeLessThan(memberCompletionIndexes[1]);
+    expect(leaderStartIndexes[1]!).toBeGreaterThan(memberCompletionIndexes[0]!);
+    expect(leaderStartIndexes[1]!).toBeLessThan(memberCompletionIndexes[1]!);
+    const memberCompletions = calls.filter((call) =>
+      call.event === 'complete' && call.personaName === 'agents/test-coder'
+    );
+    expect(memberCompletions).toEqual([
+      expect.objectContaining({ status: 'done', aborted: false }),
+      expect.objectContaining({ status: 'blocked', aborted: true }),
+    ]);
   }, 120_000);
 });

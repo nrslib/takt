@@ -155,6 +155,9 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
   if (obj.delay_ms !== undefined && typeof obj.delay_ms !== 'number') {
     throw new Error(`Scenario entry [${index}] "delay_ms" must be a number if provided`);
   }
+  if (obj.wait_for_abort !== undefined && typeof obj.wait_for_abort !== 'boolean') {
+    throw new Error(`Scenario entry [${index}] "wait_for_abort" must be a boolean if provided`);
+  }
   if (obj.error !== undefined && typeof obj.error !== 'string') {
     throw new Error(`Scenario entry [${index}] "error" must be a string if provided`);
   }
@@ -173,5 +176,6 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
     error: obj.error as string | undefined,
     failureCategory: obj.failure_category as ScenarioEntry['failureCategory'],
     delayMs: obj.delay_ms as number | undefined,
+    waitForAbort: obj.wait_for_abort as boolean | undefined,
   };
 }

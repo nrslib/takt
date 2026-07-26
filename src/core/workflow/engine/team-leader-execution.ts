@@ -135,7 +135,10 @@ export async function runTeamLeaderExecution(
       cancelPartIds.filter((partId) => queue.some((part) => part.id === partId)),
     );
     const runningCancellationIds = new Set(
-      cancelPartIds.filter((partId) => running.get(partId)?.settlement === undefined),
+      cancelPartIds.filter((partId) => {
+        const runningPart = running.get(partId);
+        return runningPart !== undefined && runningPart.settlement === undefined;
+      }),
     );
     if (queuedCancellationIds.size === 0 && runningCancellationIds.size === 0) {
       return;
