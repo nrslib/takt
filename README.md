@@ -73,8 +73,9 @@ If this is your first run, configure a provider in `~/.takt/config.yaml` or use 
 
 Follow the [written tutorial](./docs/tutorial.md) with these hands-on walkthroughs:
 
-- [Chapter 1](https://youtu.be/HUcFFvOy39I)
-- [Chapter 2](https://youtu.be/UIlM2iM-rmA)
+| Chapter 1 | Chapter 2 |
+|-----------|-----------|
+| [![Watch TAKT Video Tutorial Chapter 1](https://i.ytimg.com/vi/HUcFFvOy39I/hqdefault.jpg)](https://youtu.be/HUcFFvOy39I) | [![Watch TAKT Video Tutorial Chapter 2](https://i.ytimg.com/vi/UIlM2iM-rmA/hqdefault.jpg)](https://youtu.be/UIlM2iM-rmA) |
 
 ## TAKT vs Plain AI Coding Agents
 

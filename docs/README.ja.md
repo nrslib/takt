@@ -73,8 +73,9 @@ takt list
 
 [文章版チュートリアル](./tutorial.ja.md)に沿って実際に操作する様子を、次の動画で確認できます。
 
-- [Chapter 1](https://youtu.be/H_L_slDJNqs)
-- [Chapter 2](https://youtu.be/cfM9USMkh2Y)
+| Chapter 1 | Chapter 2 |
+|-----------|-----------|
+| [![TAKT 動画チュートリアル Chapter 1 を見る](https://i.ytimg.com/vi/H_L_slDJNqs/hqdefault.jpg)](https://youtu.be/H_L_slDJNqs) | [![TAKT 動画チュートリアル Chapter 2 を見る](https://i.ytimg.com/vi/cfM9USMkh2Y/hqdefault.jpg)](https://youtu.be/cfM9USMkh2Y) |
 
 ## TAKT と通常の AI コーディングエージェントの違い
 
