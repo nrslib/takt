@@ -1038,7 +1038,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     ]);
   });
 
-  it('prompt-based team leader の retry response と reject を全attempt分記録する', async () => {
+  it('prompt-based team leader の意味的再生成と feedback retry を全attempt分記録する', async () => {
     vi.useFakeTimers();
     try {
       const config = buildTeamLeaderConfig();
@@ -1071,9 +1071,8 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
             systemPrompt: typeof persona === 'string' ? persona : '',
             userInstruction: instruction,
           });
-          return makeResponse({ persona: 'team-leader', status: 'error', error: 'first failed' });
+          return makeResponse({ persona: 'team-leader', content: 'no json' });
         })
-        .mockRejectedValueOnce(new Error('second rejected'))
         .mockImplementationOnce(async (persona, instruction, options) => {
           options?.onPromptResolved?.({
             systemPrompt: typeof persona === 'string' ? persona : '',
@@ -1117,8 +1116,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       expect(state.status).toBe('completed');
       expect(usageRecords).toHaveLength(vi.mocked(runAgent).mock.calls.length);
       expect(leaderRecords.map((record) => record.success)).toEqual([
-        false,
-        false,
+        true,
         true,
         false,
         false,

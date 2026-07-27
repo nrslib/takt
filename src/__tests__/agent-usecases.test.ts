@@ -633,6 +633,41 @@ describe('agent-usecases', () => {
     })).rejects.toThrow('requires structured output');
 
     expect(parseParts).not.toHaveBeenCalled();
+    expect(runAgent).toHaveBeenCalledOnce();
+  });
+
+  it('非Finding Contract decomposition は意味的検証診断付きで全partsを再生成する', async () => {
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce(doneResponse('invalid', { parts: [] }))
+      .mockResolvedValueOnce(doneResponse('valid', {
+        parts: [{ id: 'p1', title: 'Part 1', instruction: 'Do 1' }],
+      }));
+
+    const result = await decomposeTask('instruction', 2, { cwd: '/repo' });
+
+    expect(result.parts).toEqual([
+      { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
+    ]);
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    const secondPrompt = vi.mocked(runAgent).mock.calls[1]?.[1];
+    expect(secondPrompt).toContain('Previously rejected decomposition');
+    expect(secondPrompt).toContain('"code": "decomposition.parts_invalid"');
+    expect(secondPrompt).toContain('regenerate all parts');
+  });
+
+  it('非Finding Contract decomposition は provider 例外を再試行しない', async () => {
+    const providerError = new Error('network unavailable');
+    const onAgentError = vi.fn();
+    vi.mocked(runAgent).mockRejectedValue(providerError);
+
+    await expect(decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      onAgentError,
+    })).rejects.toBe(providerError);
+
+    expect(runAgent).toHaveBeenCalledOnce();
+    expect(onAgentError).toHaveBeenCalledOnce();
+    expect(onAgentError).toHaveBeenCalledWith(providerError);
   });
 
   it('decomposeTask は done 以外をエラーにする', async () => {
@@ -697,6 +732,94 @@ describe('agent-usecases', () => {
     );
     expect(onAgentResponse).toHaveBeenCalledWith(response);
     expect(result.providerUsage).toEqual(providerUsage);
+  });
+
+  it('decomposeTask は応答待ち中の中断後に遅延応答を採用・通知しない', async () => {
+    const abortController = new AbortController();
+    const onAgentResponse = vi.fn();
+    let resolveRunAgent: ((response: ReturnType<typeof doneResponse>) => void) | undefined;
+    vi.mocked(runAgent).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRunAgent = resolve;
+    }));
+
+    const result = decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      abortSignal: abortController.signal,
+      onAgentResponse,
+    });
+    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledOnce());
+
+    abortController.abort(new Error('cancelled while waiting'));
+    await expect(result).rejects.toThrow('cancelled while waiting');
+
+    resolveRunAgent?.(doneResponse('valid', {
+      parts: [{ id: 'p1', title: 'Part 1', instruction: 'Do 1' }],
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onAgentResponse).not.toHaveBeenCalled();
+  });
+
+  it('decomposeTask は再生成attemptの中断後に遅延streamを通知しない', async () => {
+    const abortController = new AbortController();
+    const onStream = vi.fn();
+    const streamPublishers: Array<(text: string) => void> = [];
+    vi.mocked(runAgent)
+      .mockImplementationOnce((_persona, _prompt, runOptions) => {
+        streamPublishers.push(
+          (text) => runOptions.onStream?.({ type: 'text', data: { text } }),
+        );
+        return Promise.resolve(doneResponse('invalid', { parts: [] }));
+      })
+      .mockImplementationOnce((_persona, _prompt, runOptions) => {
+        streamPublishers.push(
+          (text) => runOptions.onStream?.({ type: 'text', data: { text } }),
+        );
+        return new Promise(() => {});
+      });
+
+    const result = decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      abortSignal: abortController.signal,
+      onStream,
+    });
+    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledTimes(2));
+
+    streamPublishers.at(-1)?.('before abort');
+    expect(onStream).toHaveBeenCalledOnce();
+    onStream.mockClear();
+
+    abortController.abort(new Error('cancelled while waiting'));
+    await expect(result).rejects.toThrow('cancelled while waiting');
+    streamPublishers.forEach((publishStream) => publishStream('after abort'));
+
+    expect(onStream).not.toHaveBeenCalled();
+  });
+
+  it('decomposeTask は中断後の遅延 provider error を通知しない', async () => {
+    const abortController = new AbortController();
+    const onAgentError = vi.fn();
+    let rejectRunAgent: ((error: Error) => void) | undefined;
+    vi.mocked(runAgent).mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectRunAgent = reject;
+    }));
+
+    const result = decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      abortSignal: abortController.signal,
+      onAgentError,
+    });
+    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledOnce());
+
+    abortController.abort(new Error('cancelled while waiting'));
+    await expect(result).rejects.toThrow('cancelled while waiting');
+
+    rejectRunAgent?.(new Error('late provider cleanup failure'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onAgentError).not.toHaveBeenCalled();
   });
 
   it('decomposeTask は workflowMeta を runAgent に伝搬する', async () => {

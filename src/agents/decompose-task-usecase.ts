@@ -39,6 +39,12 @@ import {
 import {
   createFindingContractControlValidationIssue,
 } from '../core/workflow/team-leader-finding-contract-control-validation.js';
+import {
+  createPublicationGuardedStreamCallback,
+  requestValidTeamLeaderDecomposition,
+  TeamLeaderDecompositionValidationError,
+  type RejectedTeamLeaderDecomposition,
+} from './team-leader-decomposition-regeneration.js';
 
 export interface FindingContractDecompositionContext {
   readonly targetFindingIds: readonly string[];
@@ -116,6 +122,16 @@ export async function requestDecompositionRawResponse(
   maxInitialParts: number | undefined,
   options: DecomposeTaskOptions,
 ): Promise<AgentResponse> {
+  return requestDecompositionResponse(instruction, maxInitialParts, options);
+}
+
+async function requestDecompositionResponse(
+  instruction: string,
+  maxInitialParts: number | undefined,
+  options: DecomposeTaskOptions,
+  rejectedDecomposition?: RejectedTeamLeaderDecomposition,
+  publicationSignal?: AbortSignal,
+): Promise<AgentResponse> {
   let response: AgentResponse;
   try {
     response = await runAgent(options.persona, buildDecomposePrompt(
@@ -124,6 +140,7 @@ export async function requestDecompositionRawResponse(
       options.language,
       options.inspectTools,
       options.findingContract,
+      rejectedDecomposition,
     ), {
       cwd: options.cwd,
       personaPath: options.personaPath,
@@ -138,16 +155,18 @@ export async function requestDecompositionRawResponse(
       outputSchema: options.findingContract === undefined
         ? loadDecompositionSchema(maxInitialParts)
         : withMaxInitialParts(createFindingContractDecompositionJsonSchema(), maxInitialParts),
-      onStream: options.onStream,
+      onStream: createPublicationGuardedStreamCallback(options.onStream, publicationSignal),
       workflowMeta: options.workflowMeta,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       onPromptResolved: options.onPromptResolved,
     });
   } catch (error) {
+    publicationSignal?.throwIfAborted();
     options.onAgentError?.(error);
     throw error;
   }
+  publicationSignal?.throwIfAborted();
   options.onAgentResponse?.(response);
   return response;
 }
@@ -157,7 +176,23 @@ export async function decomposeTask(
   maxInitialParts: number | undefined,
   options: DecomposeTaskOptions,
 ): Promise<DecomposeTaskResponse> {
-  const response = await requestDecompositionRawResponse(instruction, maxInitialParts, options);
+  if (options.findingContract === undefined) {
+    return requestValidTeamLeaderDecomposition({
+      abortSignal: options.abortSignal,
+      request: async (rejectedDecomposition) => {
+        const response = await requestDecompositionResponse(
+          instruction,
+          maxInitialParts,
+          options,
+          rejectedDecomposition,
+          options.abortSignal,
+        );
+        return parseNonFindingContractDecomposition(response, maxInitialParts);
+      },
+    });
+  }
+
+  const response = await requestDecompositionResponse(instruction, maxInitialParts, options);
 
   if (response.status !== 'done') {
     const detail = response.error || response.content || response.status;
@@ -166,36 +201,53 @@ export async function decomposeTask(
 
   const parts = response.structuredOutput?.parts;
   if (parts != null) {
-    const parsedParts = options.findingContract === undefined
-      ? toPartDefinitions(parts, maxInitialParts, false)
-      : validateFindingContractDecomposition(
-          parts,
-          maxInitialParts,
-          options.findingContract.targetFindingIds,
-        );
+    const parsedParts = validateFindingContractDecomposition(
+      parts,
+      maxInitialParts,
+      options.findingContract.targetFindingIds,
+    );
     return {
       parts: parsedParts,
       ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
     };
   }
 
-  if (options.findingContract !== undefined) {
-    throw new FindingContractDecompositionValidationError([
-      createFindingContractControlValidationIssue({
-        boundaryKind: 'decomposition',
-        code: 'shape.structured_output',
-        category: 'shape',
-        path: '$',
-        message: 'Finding Contract Team Leader decomposition requires structured output',
-        retryability: 'corrective_retry',
-      }),
-    ], response.content);
+  throw new FindingContractDecompositionValidationError([
+    createFindingContractControlValidationIssue({
+      boundaryKind: 'decomposition',
+      code: 'shape.structured_output',
+      category: 'shape',
+      path: '$',
+      message: 'Finding Contract Team Leader decomposition requires structured output',
+      retryability: 'corrective_retry',
+    }),
+  ], response.content);
+}
+
+function parseNonFindingContractDecomposition(
+  response: AgentResponse,
+  maxInitialParts: number | undefined,
+): DecomposeTaskResponse {
+  if (response.status !== 'done') {
+    const detail = response.error || response.content || response.status;
+    throw new Error(`Team leader failed: ${detail}`);
   }
 
-  return {
-    parts: parseParts(response.content, maxInitialParts),
-    ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
-  };
+  try {
+    const parts = response.structuredOutput?.parts;
+    return {
+      parts: parts == null
+        ? parseParts(response.content, maxInitialParts)
+        : toPartDefinitions(parts, maxInitialParts),
+      ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
+    };
+  } catch (error) {
+    throw new TeamLeaderDecompositionValidationError(
+      'decomposition.parts_invalid',
+      response.structuredOutput?.parts == null ? '$' : '$.parts',
+      error,
+    );
+  }
 }
 
 export async function requestMorePartsRawResponse(
