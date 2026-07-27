@@ -145,6 +145,11 @@ steps:
           - WebFetch
     required_permission_mode: edit
     instruction: fix
+    output_contracts:
+      report:
+        - name: fix-report.md
+          format: fix-report
+          use_judge: false
     pass_previous_response: false
     rules:
       - condition: Fix complete

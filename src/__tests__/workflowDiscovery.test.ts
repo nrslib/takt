@@ -1,7 +1,8 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import type { WorkflowConfig } from '../core/models/index.js';
 import {
   loadAllWorkflowsWithSourcesFromDirs,
 } from '../infra/config/loaders/workflowDiscovery.js';
@@ -21,6 +22,35 @@ describe('workflowDiscovery', () => {
 
     expect(onWarning).not.toHaveBeenCalled();
     expect(englishWorkflows.size + japaneseWorkflows.size).toBe(108);
+  });
+
+  it.each(['en', 'ja'] as const)('gives every shared fix step a non-judging fix report in %s workflows', (language) => {
+    const rootDir = process.cwd();
+    const fixInstructions = new Set(['en', 'ja'].map((facetLanguage) => readFileSync(
+      join(rootDir, 'builtins', facetLanguage, 'facets', 'instructions', 'fix.md'),
+      'utf-8',
+    )));
+    const workflows = loadAllWorkflowsWithSourcesFromDirs<WorkflowConfig>(
+      rootDir,
+      [{ dir: join(rootDir, 'builtins', language, 'workflows'), source: 'builtin' }],
+      undefined,
+      undefined,
+      true,
+    );
+    const sharedFixSteps = Array.from(workflows.values())
+      .flatMap(({ config }) => config.steps)
+      .filter((step) => fixInstructions.has(step.instruction));
+
+    expect(sharedFixSteps.length).toBeGreaterThan(0);
+    for (const step of sharedFixSteps) {
+      expect(step.outputContracts).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          name: 'fix-report.md',
+          formatRef: 'fix-report',
+          useJudge: false,
+        }),
+      ]));
+    }
   });
 
   it('repo 直下でも builtin の privileged workflow を discovery で skip しない', () => {
