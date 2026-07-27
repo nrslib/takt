@@ -1,9 +1,11 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
 import {
+  iterateWorkflowDir,
   loadAllWorkflowsWithSourcesFromDirs,
 } from '../infra/config/loaders/workflowDiscovery.js';
 
@@ -26,20 +28,31 @@ describe('workflowDiscovery', () => {
 
   it.each(['en', 'ja'] as const)('gives every shared fix step a non-judging fix report in %s workflows', (language) => {
     const rootDir = process.cwd();
-    const fixInstructions = new Set(['en', 'ja'].map((facetLanguage) => readFileSync(
-      join(rootDir, 'builtins', facetLanguage, 'facets', 'instructions', 'fix.md'),
-      'utf-8',
-    )));
+    const workflowsDir = join(rootDir, 'builtins', language, 'workflows');
     const workflows = loadAllWorkflowsWithSourcesFromDirs<WorkflowConfig>(
       rootDir,
-      [{ dir: join(rootDir, 'builtins', language, 'workflows'), source: 'builtin' }],
+      [{ dir: workflowsDir, source: 'builtin' }],
       undefined,
       undefined,
       true,
     );
-    const sharedFixSteps = Array.from(workflows.values())
-      .flatMap(({ config }) => config.steps)
-      .filter((step) => fixInstructions.has(step.instruction));
+    const sharedFixSteps = Array.from(iterateWorkflowDir(workflowsDir, 'builtin')).flatMap((entry) => {
+      const rawWorkflow = parseYaml(readFileSync(entry.path, 'utf-8')) as {
+        steps?: Array<{ name?: unknown; instruction?: unknown }>;
+      };
+      const rawFixStepNames = (rawWorkflow.steps ?? [])
+        .filter((step) => step.instruction === 'fix')
+        .map((step) => step.name);
+      const workflow = workflows.get(entry.name);
+
+      expect(workflow).toBeDefined();
+      return rawFixStepNames.map((stepName) => {
+        expect(typeof stepName).toBe('string');
+        const step = workflow?.config.steps.find((candidate) => candidate.name === stepName);
+        expect(step).toBeDefined();
+        return step!;
+      });
+    });
 
     expect(sharedFixSteps.length).toBeGreaterThan(0);
     for (const step of sharedFixSteps) {
