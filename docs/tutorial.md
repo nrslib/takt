@@ -6,6 +6,10 @@ This tutorial walks through the basic TAKT flow by improving one small project o
 
 The example project is a **mini expense memo UI**. You will first build a small frontend, then make it more useful, then polish the layout and interaction details. The `default` workflow is the standard workflow and can be relatively heavy because it includes broader review and test-oriented steps, so this first tutorial uses `frontend-mini`.
 
+> **Video tutorial:** Follow the same tutorial in the hands-on walkthroughs:
+> [Chapter 1](https://youtu.be/HUcFFvOy39I) and
+> [Chapter 2](https://youtu.be/UIlM2iM-rmA).
+
 ## Example Project
 
 You will build a small browser-based expense memo.

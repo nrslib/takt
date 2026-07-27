@@ -69,6 +69,13 @@ takt list
 
 初回実行時は `~/.takt/config.yaml` で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。`claude-sdk`、`codex`、`opencode` などの SDK 経由 provider は Node.js と API キーで動きます。CLI 経由 provider を使う場合は、対応する外部 CLI が必要です。
 
+### 動画チュートリアル
+
+[文章版チュートリアル](./tutorial.ja.md)に沿って実際に操作する様子を、次の動画で確認できます。
+
+- [Chapter 1](https://youtu.be/H_L_slDJNqs)
+- [Chapter 2](https://youtu.be/cfM9USMkh2Y)
+
 ## TAKT と通常の AI コーディングエージェントの違い
 
 | 通常の AI コーディングエージェント | TAKT |

@@ -69,6 +69,13 @@ takt list
 
 If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, and `opencode` can run with Node.js and API keys; CLI-based providers require their external CLIs.
 
+### Video Tutorial
+
+Follow the [written tutorial](./docs/tutorial.md) with these hands-on walkthroughs:
+
+- [Chapter 1](https://youtu.be/HUcFFvOy39I)
+- [Chapter 2](https://youtu.be/UIlM2iM-rmA)
+
 ## TAKT vs Plain AI Coding Agents
 
 | Plain AI coding agents | TAKT |
