@@ -130,17 +130,18 @@ async function requestDecompositionResponse(
   maxInitialParts: number | undefined,
   options: DecomposeTaskOptions,
   rejectedDecomposition?: RejectedTeamLeaderDecomposition,
-  publicationSignal?: AbortSignal,
 ): Promise<AgentResponse> {
   let response: AgentResponse;
   try {
     response = await runAgent(options.persona, buildDecomposePrompt(
       instruction,
-      maxInitialParts,
-      options.language,
-      options.inspectTools,
-      options.findingContract,
-      rejectedDecomposition,
+      {
+        maxInitialParts,
+        language: options.language,
+        inspectTools: options.inspectTools,
+        findingContract: options.findingContract,
+        rejectedDecomposition,
+      },
     ), {
       cwd: options.cwd,
       personaPath: options.personaPath,
@@ -155,19 +156,21 @@ async function requestDecompositionResponse(
       outputSchema: options.findingContract === undefined
         ? loadDecompositionSchema(maxInitialParts)
         : withMaxInitialParts(createFindingContractDecompositionJsonSchema(), maxInitialParts),
-      onStream: createPublicationGuardedStreamCallback(options.onStream, publicationSignal),
+      onStream: createPublicationGuardedStreamCallback(options.onStream, options.abortSignal),
       workflowMeta: options.workflowMeta,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       onPromptResolved: options.onPromptResolved,
     });
   } catch (error) {
-    publicationSignal?.throwIfAborted();
-    options.onAgentError?.(error);
+    if (options.abortSignal?.aborted !== true) {
+      options.onAgentError?.(error);
+    }
     throw error;
   }
-  publicationSignal?.throwIfAborted();
-  options.onAgentResponse?.(response);
+  if (options.abortSignal?.aborted !== true) {
+    options.onAgentResponse?.(response);
+  }
   return response;
 }
 
@@ -185,7 +188,6 @@ export async function decomposeTask(
           maxInitialParts,
           options,
           rejectedDecomposition,
-          options.abortSignal,
         );
         return parseNonFindingContractDecomposition(response, maxInitialParts);
       },
@@ -233,8 +235,8 @@ function parseNonFindingContractDecomposition(
     throw new Error(`Team leader failed: ${detail}`);
   }
 
+  const parts = response.structuredOutput?.parts;
   try {
-    const parts = response.structuredOutput?.parts;
     return {
       parts: parts == null
         ? parseParts(response.content, maxInitialParts)
@@ -244,7 +246,7 @@ function parseNonFindingContractDecomposition(
   } catch (error) {
     throw new TeamLeaderDecompositionValidationError(
       'decomposition.parts_invalid',
-      response.structuredOutput?.parts == null ? '$' : '$.parts',
+      parts == null ? '$' : '$.parts',
       error,
     );
   }
@@ -281,16 +283,20 @@ export async function requestMorePartsRawResponse(
       outputSchema: options.findingContract === undefined
         ? loadMorePartsSchema()
         : createFindingContractFeedbackJsonSchema(),
-      onStream: options.onStream,
+      onStream: createPublicationGuardedStreamCallback(options.onStream, options.abortSignal),
       workflowMeta: options.workflowMeta,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
     });
   } catch (error) {
-    options.onAgentError?.(error);
+    if (options.abortSignal?.aborted !== true) {
+      options.onAgentError?.(error);
+    }
     throw error;
   }
-  options.onAgentResponse?.(response);
+  if (options.abortSignal?.aborted !== true) {
+    options.onAgentResponse?.(response);
+  }
   return response;
 }
 

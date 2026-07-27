@@ -13,6 +13,7 @@ import {
   type DecomposeTaskOptions,
 } from '../agents/agent-usecases.js';
 import { runTagJudgeStage } from '../agents/judge-status-usecase.js';
+import { requestDecompositionRawResponse } from '../agents/decompose-task-usecase.js';
 import { loadEvaluationSchema, loadJudgmentSchema } from '../infra/resources/schema-loader.js';
 
 vi.mock('../agents/runner.js', () => ({
@@ -820,6 +821,31 @@ describe('agent-usecases', () => {
     await Promise.resolve();
 
     expect(onAgentError).not.toHaveBeenCalled();
+  });
+
+  it('raw decomposition は中断後の遅延応答を上位境界へ返し、公開通知だけを抑止する', async () => {
+    const abortController = new AbortController();
+    const onAgentResponse = vi.fn();
+    let resolveRunAgent: ((response: ReturnType<typeof doneResponse>) => void) | undefined;
+    vi.mocked(runAgent).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRunAgent = resolve;
+    }));
+
+    const result = requestDecompositionRawResponse('instruction', 2, {
+      cwd: '/repo',
+      abortSignal: abortController.signal,
+      onAgentResponse,
+    });
+    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledOnce());
+
+    abortController.abort(new Error('cancelled while waiting'));
+    const response = doneResponse('late raw response', {
+      parts: [{ id: 'p1', title: 'Part 1', instruction: 'Do 1' }],
+    });
+    resolveRunAgent?.(response);
+
+    await expect(result).resolves.toBe(response);
+    expect(onAgentResponse).not.toHaveBeenCalled();
   });
 
   it('decomposeTask は workflowMeta を runAgent に伝搬する', async () => {

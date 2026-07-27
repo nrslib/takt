@@ -25,6 +25,14 @@ const LATEST_BATCH_CHANGED_PATH_PER_PART_MAX_ITEMS = 25;
 const EXISTING_PART_IDS_MAX_ITEMS = 100;
 const EXISTING_PART_ID_MAX_LENGTH = 120;
 
+export interface DecomposePromptOptions {
+  readonly maxInitialParts: number | undefined;
+  readonly language: Language | undefined;
+  readonly inspectTools: readonly string[] | undefined;
+  readonly findingContract: FindingContractDecompositionContext | undefined;
+  readonly rejectedDecomposition: RejectedTeamLeaderDecomposition | undefined;
+}
+
 function boundLatestRawContent(content: string, remaining: number): string {
   const maxLength = Math.min(LATEST_RAW_CONTENT_MAX_LENGTH, remaining);
   if (content.length <= maxLength) return content;
@@ -185,12 +193,16 @@ function buildInspectToolGuidance(
 
 function buildDecomposeBasePrompt(
   instruction: string,
-  maxInitialParts?: number,
-  language?: Language,
-  inspectTools?: readonly string[],
-  findingContract?: FindingContractDecompositionContext,
-  rejectedDecomposition?: RejectedTeamLeaderDecomposition,
+  options: DecomposePromptOptions,
 ): string {
+  const {
+    maxInitialParts,
+    language,
+    inspectTools,
+    findingContract,
+    rejectedDecomposition,
+  } = options;
+  // Finding Contract recovery is handled at the shared acceptance boundary.
   const regenerationSections = findingContract === undefined
     ? buildRejectedDecompositionPromptSections(language, rejectedDecomposition)
     : [];
@@ -464,30 +476,16 @@ function truncatePromptLabel(value: string, maxLength: number): string {
 
 export function buildDecomposePrompt(
   instruction: string,
-  maxInitialParts?: number,
-  language?: Language,
-  inspectTools?: readonly string[],
-  findingContract?: FindingContractDecompositionContext,
-  rejectedDecomposition?: RejectedTeamLeaderDecomposition,
+  options: DecomposePromptOptions,
 ): string {
-  return buildDecomposeBasePrompt(
-    instruction,
-    maxInitialParts,
-    language,
-    inspectTools,
-    findingContract,
-    rejectedDecomposition,
-  );
+  return buildDecomposeBasePrompt(instruction, options);
 }
 
 export function buildPromptBasedDecomposePrompt(
   instruction: string,
-  maxInitialParts?: number,
-  language?: Language,
-  inspectTools?: readonly string[],
-  findingContract?: FindingContractDecompositionContext,
-  rejectedDecomposition?: RejectedTeamLeaderDecomposition,
+  options: DecomposePromptOptions,
 ): string {
+  const { language, findingContract } = options;
   const outputInstruction = language === 'ja'
     ? [
         '',
@@ -508,14 +506,7 @@ export function buildPromptBasedDecomposePrompt(
           : '{"id","title","instruction","findingContract"}'}`,
       ];
 
-  return `${buildDecomposeBasePrompt(
-    instruction,
-    maxInitialParts,
-    language,
-    inspectTools,
-    findingContract,
-    rejectedDecomposition,
-  )}\n${outputInstruction.join('\n')}`;
+  return `${buildDecomposeBasePrompt(instruction, options)}\n${outputInstruction.join('\n')}`;
 }
 
 export function buildMorePartsPrompt(

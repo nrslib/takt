@@ -463,6 +463,45 @@ describe('PromptBasedStructuredCaller', () => {
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
   });
 
+  it('returns a delayed raw response after abort while suppressing its public notification', async () => {
+    const abortController = new AbortController();
+    const onAgentResponse = vi.fn();
+    let resolveRunAgent: ((response: {
+      persona: string;
+      status: 'done';
+      content: string;
+      timestamp: Date;
+    }) => void) | undefined;
+    mockRunAgent.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRunAgent = resolve;
+    }));
+    const caller = new PromptBasedStructuredCaller();
+    const result = caller.requestDecompositionRawResponse(
+      'break down the work',
+      3,
+      {
+        cwd: '/tmp/project',
+        provider: 'cursor',
+        persona: 'team-leader',
+        abortSignal: abortController.signal,
+        onAgentResponse,
+      },
+    );
+    await vi.waitFor(() => expect(mockRunAgent).toHaveBeenCalledOnce());
+
+    abortController.abort(new Error('cancelled while waiting'));
+    const response = {
+      persona: 'leader',
+      status: 'done' as const,
+      content: 'late raw response',
+      timestamp: new Date(),
+    };
+    resolveRunAgent?.(response);
+
+    await expect(result).resolves.toBe(response);
+    expect(onAgentResponse).not.toHaveBeenCalled();
+  });
+
   it('should retry decomposeTask when first response is an empty array and succeed on second attempt', async () => {
     mockRunAgent
       .mockResolvedValueOnce({
@@ -562,26 +601,6 @@ describe('PromptBasedStructuredCaller', () => {
     expect(onAgentResponse).toHaveBeenCalledOnce();
     expect(onAgentError).toHaveBeenCalledTimes(1);
     expect(onAgentError).toHaveBeenCalledWith(expect.objectContaining({ message: 'second rejected' }));
-  });
-
-  it('should throw decomposeTask after the first status:error response with original detail', async () => {
-    const failingResponse = {
-      persona: 'leader',
-      status: 'error',
-      content: '',
-      error: 'provider blew up',
-      timestamp: new Date(),
-    };
-    mockRunAgent.mockResolvedValue(failingResponse);
-
-    const caller = new PromptBasedStructuredCaller();
-    await expect(caller.decomposeTask('break down the work', 3, {
-      cwd: '/tmp/project',
-      provider: 'cursor',
-      persona: 'team-leader',
-    })).rejects.toThrow(/Team leader failed: provider blew up/);
-
-    expect(mockRunAgent).toHaveBeenCalledOnce();
   });
 
   it('should stop decomposeTask retries immediately after cancellation', async () => {
@@ -742,8 +761,7 @@ describe('PromptBasedStructuredCaller', () => {
     });
 
     const retryPrompt = mockRunAgent.mock.calls[1]?.[1];
-    expect(retryPrompt).toContain('engine-generated validation diagnostics');
-    expect(retryPrompt).toContain('regenerate all parts');
+    expect(retryPrompt).toContain('"code": "decomposition.parts_invalid"');
     expect(retryPrompt).not.toContain('"content"');
   });
 

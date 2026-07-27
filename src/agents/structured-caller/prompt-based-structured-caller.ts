@@ -188,17 +188,18 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         request: async (rejectedDecomposition) => {
           const prompt = buildPromptBasedDecomposePrompt(
             instruction,
-            maxInitialParts,
-            options.language,
-            options.inspectTools,
-            undefined,
-            rejectedDecomposition,
+            {
+              maxInitialParts,
+              language: options.language,
+              inspectTools: options.inspectTools,
+              findingContract: undefined,
+              rejectedDecomposition,
+            },
           );
           const response = await this.requestPromptBasedRawResponse(
             prompt,
             options,
             options.inspectTools ?? [],
-            options.abortSignal,
           );
 
           if (response.status !== 'done') {
@@ -227,10 +228,13 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     const findingContract = options.findingContract;
     const prompt = buildPromptBasedDecomposePrompt(
       instruction,
-      maxInitialParts,
-      options.language,
-      options.inspectTools,
-      findingContract,
+      {
+        maxInitialParts,
+        language: options.language,
+        inspectTools: options.inspectTools,
+        findingContract,
+        rejectedDecomposition: undefined,
+      },
     );
 
     return withRetry(async () => {
@@ -275,10 +279,13 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
   ): Promise<AgentResponse> {
     const prompt = buildPromptBasedDecomposePrompt(
       instruction,
-      maxInitialParts,
-      options.language,
-      options.inspectTools,
-      options.findingContract,
+      {
+        maxInitialParts,
+        language: options.language,
+        inspectTools: options.inspectTools,
+        findingContract: options.findingContract,
+        rejectedDecomposition: undefined,
+      },
     );
     return withRetry(
       () => this.requestPromptBasedRawResponse(prompt, options, options.inspectTools ?? []),
@@ -378,7 +385,6 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     prompt: string,
     options: DecomposeTaskOptions | MorePartsOptions,
     allowedTools: string[],
-    publicationSignal?: AbortSignal,
   ): Promise<AgentResponse> {
     let response: AgentResponse;
     try {
@@ -393,7 +399,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         allowedTools,
         mcpServers: options.mcpServers,
         permissionMode: 'readonly',
-        onStream: createPublicationGuardedStreamCallback(options.onStream, publicationSignal),
+        onStream: createPublicationGuardedStreamCallback(options.onStream, options.abortSignal),
         workflowMeta: options.workflowMeta,
         childProcessEnv: options.childProcessEnv,
         abortSignal: options.abortSignal,
@@ -402,12 +408,14 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
           : {}),
       });
     } catch (error) {
-      publicationSignal?.throwIfAborted();
-      options.onAgentError?.(error);
+      if (options.abortSignal?.aborted !== true) {
+        options.onAgentError?.(error);
+      }
       throw error;
     }
-    publicationSignal?.throwIfAborted();
-    options.onAgentResponse?.(response);
+    if (options.abortSignal?.aborted !== true) {
+      options.onAgentResponse?.(response);
+    }
     return response;
   }
 }

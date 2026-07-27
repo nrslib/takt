@@ -43,7 +43,13 @@ describe('Team Leader decomposition prompt', () => {
     ['en', 'Every part in the same batch must be independently executable', 'Add verification only in a later batch after the implementation results are complete'],
     ['ja', '同じバッチ内の part は互いに独立させる', '検証が必要なら、実装結果がそろった後の後続 batch で追加する'],
   ] as const)('%s prompt requires independent batches and deferred verification', (language, independenceRule, verificationRule) => {
-    const prompt = buildDecomposePrompt('Implement the feature.', 2, language);
+    const prompt = buildDecomposePrompt('Implement the feature.', {
+      maxInitialParts: 2,
+      language,
+      inspectTools: undefined,
+      findingContract: undefined,
+      rejectedDecomposition: undefined,
+    });
 
     expect(prompt).toContain(independenceRule);
     expect(prompt).toContain(verificationRule);

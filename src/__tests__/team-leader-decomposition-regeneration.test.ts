@@ -64,4 +64,17 @@ describe('Team Leader decomposition regeneration', () => {
     await expect(result).rejects.toThrow('cancelled while waiting');
     expect(request).toHaveBeenCalledOnce();
   });
+
+  it('does not invoke the request when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('cancelled before start'));
+    const request = vi.fn();
+
+    await expect(requestValidTeamLeaderDecomposition({
+      abortSignal: controller.signal,
+      request,
+    })).rejects.toThrow('cancelled before start');
+
+    expect(request).not.toHaveBeenCalled();
+  });
 });
