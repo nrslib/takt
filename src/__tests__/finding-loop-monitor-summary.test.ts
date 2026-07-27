@@ -3,7 +3,11 @@ import { buildLoopMonitorFindingsSummaryData, renderLoopMonitorFindingsSummary }
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
 import { computeReviewerStableKey, computeLineageKey, computeProvisionalStableKey } from '../core/workflow/findings/raw-canonicalization.js';
-import type { FindingLedger, FindingLedgerEntry } from '../core/workflow/findings/types.js';
+import type {
+  FindingLedger,
+  FindingLedgerEntry,
+  ReviewerAnomalyEntry,
+} from '../core/workflow/findings/types.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 
 function provisionalEntry(
@@ -50,6 +54,28 @@ function makeLedger(findings: FindingLedgerEntry[], roundMarkers: string[] = [])
   };
 }
 
+function reviewerAnomaly(overrides: Partial<ReviewerAnomalyEntry> = {}): ReviewerAnomalyEntry {
+  const observation = {
+    runId: 'run-1',
+    stepName: 'reviewers',
+    timestamp: '2026-07-01T00:00:00.000Z',
+  };
+  return {
+    id: 'RA-0001',
+    kind: 'quote-mismatch',
+    stableKey: 'reviewer-anomaly-stable-key',
+    lineageKey: 'reviewer-anomaly-lineage-key',
+    sourceRawFindingIds: ['raw-anomaly-1'],
+    reviewers: ['coding-review'],
+    title: 'Unverified reviewer claim',
+    mismatchReason: 'The quoted source did not match',
+    firstObserved: observation,
+    lastObserved: observation,
+    occurrences: 1,
+    ...overrides,
+  };
+}
+
 describe('renderLoopMonitorFindingsSummary', () => {
   it('完了ゲート充足状況・滞留ラウンド数・解消経路を構造として導出する', () => {
     const ledger = makeLedger(
@@ -77,6 +103,10 @@ describe('renderLoopMonitorFindingsSummary', () => {
       activeConflictCount: 0,
       roundsCompleted: 6,
       maxRounds: 40,
+      reviewerAnomalies: {
+        count: 0,
+        budgetExhausted: false,
+      },
     });
     expect(data.openProvisional).toEqual([
       // firstObservedRound=1、6ラウンド完了 → 6ラウンド滞留。locationless は裁定可能
@@ -122,6 +152,111 @@ describe('renderLoopMonitorFindingsSummary', () => {
   it('provisional が無ければ暫定リストは空になる', () => {
     const data = buildLoopMonitorFindingsSummaryData(makeLedger([]), {});
     expect(data.openProvisional).toEqual([]);
+  });
+
+  it('anomaly のみの台帳では未昇格件数を product finding と分離して要約する', () => {
+    const ledger: FindingLedger = {
+      ...makeLedger([]),
+      reviewerAnomalies: [reviewerAnomaly()],
+    };
+
+    const data = buildLoopMonitorFindingsSummaryData(ledger, {});
+    const summary = renderLoopMonitorFindingsSummary(ledger, {});
+
+    expect(data.openCount).toBe(0);
+    expect(data.reviewerAnomalies).toEqual({
+      count: 1,
+      budgetExhausted: false,
+    });
+    expect(summary).toContain('findings.reviewerAnomalies.count: 1');
+  });
+
+  it('promoted/unpromoted anomaly が混在しても未昇格だけを数える', () => {
+    const ledger: FindingLedger = {
+      ...makeLedger([]),
+      reviewerAnomalies: [
+        reviewerAnomaly({ id: 'RA-UNPROMOTED' }),
+        reviewerAnomaly({
+          id: 'RA-PROMOTED',
+          stableKey: 'promoted-stable-key',
+          promotedFindingId: 'F-0001',
+        }),
+      ],
+    };
+
+    const data = buildLoopMonitorFindingsSummaryData(ledger, {});
+    const summary = renderLoopMonitorFindingsSummary(ledger, {});
+
+    expect(data.reviewerAnomalies.count).toBe(1);
+    expect(summary).toContain('findings.reviewerAnomalies.count: 1');
+    expect(summary).not.toContain('RA-UNPROMOTED');
+    expect(summary).not.toContain('RA-PROMOTED');
+  });
+
+  it.each([false, true])(
+    'review-integrity budget exhaustion=%s をそのまま要約する',
+    (budgetExhausted) => {
+      const ledger: FindingLedger = {
+        ...makeLedger([]),
+        reviewerAnomalies: [reviewerAnomaly()],
+        reviewIntegrity: {
+          roundMarkers: ['review-round-1'],
+          firstRoundAt: '2026-07-01T00:00:00.000Z',
+          exhausted: budgetExhausted,
+        },
+      };
+
+      const data = buildLoopMonitorFindingsSummaryData(ledger, {});
+      const summary = renderLoopMonitorFindingsSummary(ledger, {});
+
+      expect(data.reviewerAnomalies.budgetExhausted).toBe(budgetExhausted);
+      expect(summary).toContain(
+        `findings.reviewerAnomalies.budgetExhausted: ${budgetExhausted}`,
+      );
+    },
+  );
+
+  it('anomaly の claimed content と raw reviewer text をプロンプト要約へ出さない', () => {
+    const ledger: FindingLedger = {
+      ...makeLedger([]),
+      reviewerAnomalies: [reviewerAnomaly({
+        id: 'SECRET_ANOMALY_ID',
+        title: 'SECRET_REVIEWER_TITLE',
+        claimedLocation: 'SECRET_CLAIMED_LOCATION',
+        claimedExcerpt: 'SECRET_CLAIMED_EXCERPT',
+        mismatchReason: 'SECRET_MISMATCH_REASON',
+        sourceRawFindingIds: ['SECRET_RAW_FINDING_ID'],
+        reviewers: ['SECRET_REVIEWER_NAME'],
+      })],
+    };
+
+    const summary = renderLoopMonitorFindingsSummary(ledger, {});
+
+    for (const secret of [
+      'SECRET_ANOMALY_ID',
+      'SECRET_REVIEWER_TITLE',
+      'SECRET_CLAIMED_LOCATION',
+      'SECRET_CLAIMED_EXCERPT',
+      'SECRET_MISMATCH_REASON',
+      'SECRET_RAW_FINDING_ID',
+      'SECRET_REVIEWER_NAME',
+    ]) {
+      expect(summary).not.toContain(secret);
+    }
+  });
+
+  it('anomaly を repairable finding と表現せず fix routing を禁止する', () => {
+    const ledger: FindingLedger = {
+      ...makeLedger([]),
+      reviewerAnomalies: [reviewerAnomaly()],
+    };
+
+    const summary = renderLoopMonitorFindingsSummary(ledger, {});
+
+    expect(summary).toContain('reviewer anomalies are unverified reviewer claims');
+    expect(summary).toContain('not repairable product findings');
+    expect(summary).toContain('Never route a reviewer anomaly to fix');
+    expect(summary).toContain('only actionable open findings may be routed to fix');
   });
 });
 
