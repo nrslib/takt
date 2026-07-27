@@ -1096,12 +1096,12 @@ describe('WorkflowEngine structured caller defaults', () => {
       if (schemaText.includes('"rawFindings"')) {
         reviewerCalls += 1;
         if (reviewerCalls === 1) {
-          // 1回目: スキーマ違反（タイポキー）の構造化出力
+          // 1回目: rawFindings の型が契約に違反する構造化出力
           return {
             persona: 'reviewer',
             status: 'done',
             content: 'Review report body.',
-            structuredOutput: { rawFindings: [{ rawFindingId: 'raw-1', efamilyTag: 'bug' }] },
+            structuredOutput: { rawFindings: 'invalid' },
             timestamp: new Date('2026-06-13T00:00:01.000Z'),
           };
         }
@@ -1199,7 +1199,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             persona: 'reviewer',
             status: 'done',
             content: 'Review report body.',
-            structuredOutput: { rawFindings: [{ rawFindingId: 'raw-1', efamilyTag: 'bug' }] },
+            structuredOutput: { rawFindings: 'invalid' },
             timestamp: new Date('2026-06-13T00:00:01.000Z'),
           };
         }
@@ -1312,7 +1312,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             persona: 'reviewer',
             status: 'done',
             content: 'Review report body.',
-            structuredOutput: { rawFindings: [{ rawFindingId: 'raw-1', efamilyTag: 'bug' }] },
+            structuredOutput: { rawFindings: 'invalid' },
             timestamp: new Date('2026-06-13T00:00:01.000Z'),
           };
         }
@@ -1928,7 +1928,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
   });
 
-  it('重複 decision を含む manager output は retry されず、採用分だけが適用されて run が継続する（v2: semantic retry 0回）', async () => {
+  it('重複 decision を含む manager output は retry されず、採用分だけが適用されて run が継続する', async () => {
     const ledgerUpdated = vi.fn();
     let firstManagerRawId = '';
     vi.mocked(runAgent)
@@ -2075,7 +2075,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       `rawDecisions: raw finding "${firstManagerRawId}" (new) rejected: Duplicate decision for raw finding id "${firstManagerRawId}"`,
     ]);
     expect(ledgerUpdated).toHaveBeenCalledTimes(1);
-    // v2: semantic retry は 0 回（reviewer 1回 + manager 1回 + fix 1回）。
+    // semantic retry は 0 回（reviewer 1回 + manager 1回 + fix 1回）。
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
   });
 
@@ -3693,7 +3693,8 @@ describe('WorkflowEngine structured caller defaults', () => {
 
     expect(abortReasons).toEqual([]);
     expect(result.status).toBe('completed');
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
+    // 2件目は1件目と内容が完全一致するため機械照合され、manager の再呼び出しを要しない。
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
 
     const persistedLedger = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as {
       findings: Array<{ title: string; status: string; rawFindingIds: string[] }>;

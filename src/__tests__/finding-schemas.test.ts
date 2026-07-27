@@ -19,6 +19,7 @@ import {
   ReviewerRawFindingSchema,
   createRawFindingsOutputJsonSchema,
   parseFindingLedger,
+  parseFindingManagerDecisions,
   parseFindingManagerOutput,
 } from '../core/models/finding-schemas.js';
 import { compareRfc3339Timestamps } from '../core/models/rfc3339.js';
@@ -577,6 +578,24 @@ describe('finding schemas', () => {
     expect(decisionsProperties.conflictDecisions.items.required).toEqual(Object.keys(decisionsProperties.conflictDecisions.items.properties));
     expect(decisionsProperties.invalidateDecisions.items.required).toEqual(Object.keys(decisionsProperties.invalidateDecisions.items.properties));
     expect(decisionsProperties.duplicateDecisions.items.required).toEqual(Object.keys(decisionsProperties.duplicateDecisions.items.properties));
+  });
+
+  it('omits an empty manager decision findingId from the parsed audit value', () => {
+    const decisions = parseFindingManagerDecisions({
+      rawDecisions: [{
+        rawFindingId: 'raw-1',
+        decision: 'new',
+        findingId: '',
+        evidence: 'No related open finding.',
+      }],
+      disputeDecisions: [],
+      conflictDecisions: [],
+      invalidateDecisions: [],
+      duplicateDecisions: [],
+      dismissDecisions: [],
+    });
+
+    expect(decisions.rawDecisions[0]).not.toHaveProperty('findingId');
   });
 
   it('post-hoc 検証用 schema は item 欠損を per-item ambiguity へ渡す', () => {

@@ -834,9 +834,11 @@ export const FindingManagerOutputSchema = z.object({
 export const FindingManagerRawDecisionSchema = z.object({
   rawFindingId: nonEmptyString,
   decision: z.enum(RAW_DECISION_KINDS),
-  findingId: z.string().optional().transform((value) => (value ? value : undefined)),
+  findingId: z.string().optional(),
   evidence: nonEmptyString,
-}).strict();
+}).strict().transform(({ findingId, ...decision }) => (
+  findingId ? { ...decision, findingId } : decision
+));
 
 export const FindingManagerDisputeDecisionSchema = z.object({
   findingId: nonEmptyString,
