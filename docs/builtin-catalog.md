@@ -8,6 +8,8 @@ A comprehensive catalog of all builtin workflows and personas included with TAKT
 
 | Workflow | Recommended Use |
 |----------|-----------------|
+| `simple` | A simple development workflow that trusts a capable model's judgment. The model selects relevant available skills for plan → write tests → implement → code review → fix loop → final supervision → complete. |
+| `simple-mini` | A lightweight variant that trusts a capable model's judgment. Omits dedicated test writing and final supervision: plan → implement → code review → fix loop → complete. |
 | `default` | Standard development workflow. Test-first with draft implementation, AI antipattern self-review, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → draft → peer-review (specialists → merge-readiness → fix loop) → supervise → complete. |
 | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
 | `default-high` | Full-spec development workflow. Test-first with team-leader implementation, AI antipattern review with arbitration, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → team-leader draft → peer-review (specialists → merge-readiness → fix loop) → supervise → complete. |
@@ -21,22 +23,36 @@ Organized by category.
 
 | Category | Workflow | Description |
 |----------|----------|-------------|
-| 🚀 Quick Start | `default` | Standard development workflow. Test-first with draft implementation, AI antipattern self-review, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → draft → peer-review (specialists → merge-readiness → fix loop) → supervise → complete. |
+| 🚀 Quick Start | `simple` | A simple development workflow that trusts a capable model's judgment. The model selects relevant available skills for plan → write tests → implement → code review → fix loop → final supervision → complete. |
+| | `default` | Standard development workflow. Test-first with draft implementation, AI antipattern self-review, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → draft → peer-review (specialists → merge-readiness → fix loop) → supervise → complete. |
 | | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
 | | `default-high` | Full-spec development workflow. Test-first with team-leader implementation, AI antipattern review with arbitration, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → team-leader draft → peer-review (specialists → merge-readiness → fix loop) → supervise → complete. |
 | | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
 | | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
 | | `dual` | Frontend + backend development workflow: architecture, frontend, security, QA reviews with fix loops. |
-| ⚡ Mini | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
+| Simple | `simple` | A general workflow that trusts a capable model's judgment. The model selects relevant available skills and develops with minimal orchestration. |
+| | `simple-mini` | A lightweight variant for capable models that omits dedicated test writing and final supervision. |
+| | `simple-frontend` | A concise frontend variant for capable models with frontend, React, security, architecture, and testing knowledge and policies. |
+| | `simple-backend` | A concise backend variant for capable models with backend, security, architecture, and testing knowledge and policies. |
+| | `simple-dual` | A concise dual variant for capable models with frontend, React, backend, security, architecture, and testing knowledge and policies. |
+| | `simple-cqrs` | A concise CQRS+ES variant for capable models with backend, CQRS+ES, security, architecture, and testing knowledge and policies. |
+| | `simple-dual-cqrs` | A concise dual CQRS+ES variant for capable models with frontend, React, backend, CQRS+ES, security, architecture, and testing knowledge and policies. |
+| ⚡ Mini | `simple-mini` | A lightweight variant that trusts a capable model's judgment. Omits dedicated test writing and final supervision: plan → implement → code review → fix loop → complete. |
+| | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
 | | `backend-cqrs-mini` | Mini CQRS+ES workflow: plan -> implement -> parallel review (AI antipattern + supervisor) with CQRS+ES knowledge injection. |
 | | `dual-mini` | Mini dual workflow: plan -> implement -> parallel review (AI antipattern + expert supervisor) with frontend + backend knowledge injection. |
 | | `dual-cqrs-mini` | Mini CQRS+ES dual workflow: plan -> implement -> parallel review (AI antipattern + expert supervisor) with CQRS+ES knowledge injection. |
-| 🎨 Frontend | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
+| 🎨 Frontend | `simple-frontend` | For capable models. A simple variant that injects frontend knowledge and policies into `simple-core`. |
+| | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
 | | `frontend-maintenance` | (Experimental) Frontend workflow for modifying existing products: maintenance-scoped plan/implement/test/fix/supervise that respects current conventions and keeps changes within scope. Can be heavy-handed today — use as a starting point and tune. |
-| ⚙️ Backend | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
+| ⚙️ Backend | `simple-backend` | For capable models. A simple variant that injects backend knowledge and policies into `simple-core`. |
+| | `simple-cqrs` | For capable models. A simple variant that injects backend and CQRS+ES knowledge and policies into `simple-core`. |
+| | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
 | | `backend-cqrs` | CQRS+ES-specialized backend development workflow with CQRS+ES, security, and QA expert reviews. |
 | | `backend-maintenance` | Strict backend maintenance workflow with specialist parallel review (architecture, testing, security, QA, coding-review), a merge-readiness gate, loop monitors, and dual-supervisor sign-off. |
-| 🔧 Dual | `dual` | Frontend + backend development workflow: architecture, frontend, security, QA reviews with fix loops. |
+| 🔧 Dual | `simple-dual` | For capable models. A simple variant that injects frontend and backend knowledge and policies into `simple-core`. |
+| | `simple-dual-cqrs` | For capable models. A simple variant that injects frontend, backend, and CQRS+ES knowledge and policies into `simple-core`. |
+| | `dual` | Frontend + backend development workflow: architecture, frontend, security, QA reviews with fix loops. |
 | | `dual-cqrs` | Frontend + backend development workflow (CQRS+ES specialized): CQRS+ES, frontend, security, QA reviews with fix loops. |
 | 🏗️ Infrastructure | `terraform` | Terraform IaC development workflow: plan → implement → parallel review → supervisor validation → fix → complete. |
 | 🔍 Review | `review-default` | Multi-perspective code review: auto-detects PR/branch/working diff, runs specialist parallel review for architecture, security, QA, testing, and coding, then runs a merge-readiness gate and outputs consolidated results. |

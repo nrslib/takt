@@ -23,7 +23,7 @@ describe('workflowDiscovery', () => {
     const japaneseWorkflows = loadLanguageWorkflows('ja');
 
     expect(onWarning).not.toHaveBeenCalled();
-    expect(englishWorkflows.size + japaneseWorkflows.size).toBe(108);
+    expect(englishWorkflows.size + japaneseWorkflows.size).toBe(124);
   });
 
   it.each(['en', 'ja'] as const)('gives every shared fix step a non-judging fix report in %s workflows', (language) => {

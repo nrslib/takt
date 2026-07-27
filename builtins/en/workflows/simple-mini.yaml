@@ -1,0 +1,127 @@
+name: simple-mini
+description: A lightweight development workflow that trusts a capable model's judgment (plan → implement → review ⇄ fix → COMPLETE). It omits dedicated test writing and final supervision while letting the model select relevant available skills.
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+      skills:
+        repo: true
+        user: true
+    opencode:
+      network_access: true
+max_steps: 20
+initial_step: plan
+steps:
+  - name: plan
+    tags:
+      - plan
+    edit: false
+    persona: planner
+    knowledge: architecture
+    provider_options:
+      extends: review-readonly
+    instruction: simple-plan
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+    rules:
+      - condition: Requirements are clear and implementation is feasible
+        next: implement
+      - condition: The user is asking a question rather than requesting implementation
+        next: COMPLETE
+      - condition: Requirements are unclear or information is insufficient
+        next: ABORT
+        appendix: |
+          Questions:
+          - {Question 1}
+          - {Question 2}
+
+  - name: implement
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - architecture
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    instruction: simple-implement
+    output_contracts:
+      report:
+        - name: coder-scope.md
+          format: coder-scope
+          use_judge: false
+        - name: coder-decisions.md
+          format: coder-decisions
+          use_judge: false
+    rules:
+      - condition: Implementation completed
+        next: review
+      - condition: The plan needs revision
+        next: plan
+      - condition: Unable to proceed with implementation
+        next: ABORT
+      - condition: User input is required to resolve a question
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+
+  - name: review
+    tags:
+      - review
+    edit: false
+    persona: coding-reviewer
+    policy:
+      - review
+      - coding
+      - testing
+    knowledge:
+      - architecture
+      - unit-testing
+      - e2e-testing
+    provider_options:
+      extends: review-readonly
+    pass_previous_response: false
+    instruction: simple-review-coding
+    output_contracts:
+      report:
+        - name: coding-review.md
+          format: coding-review
+    rules:
+      - condition: approved
+        next: COMPLETE
+      - condition: needs_fix
+        next: fix
+
+  - name: fix
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - architecture
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    pass_previous_response: false
+    instruction: simple-fix
+    output_contracts:
+      report:
+        - name: fix-report.md
+          format: fix-report
+          use_judge: false
+    rules:
+      - condition: Fix completed
+        next: review
+      - condition: Replanning is required
+        next: plan
+      - condition: Unable to proceed with the fix
+        next: ABORT

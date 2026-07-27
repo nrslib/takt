@@ -1,0 +1,57 @@
+name: simple-dual
+description: 強いモデルの判断力を信頼し、simple-core にフロントエンドとバックエンドのナレッジとポリシーを注入するシンプルな開発ワークフロー。
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 30
+initial_step: develop
+steps:
+  - name: develop
+    kind: workflow_call
+    call: simple-core
+    args:
+      plan_policy:
+        - design-planning
+      testing_policy:
+        - coding
+        - testing
+      development_policy:
+        - coding
+        - testing
+        - design-fidelity
+        - screen-api
+      review_policy:
+        - review
+        - coding
+        - testing
+        - design-fidelity
+        - screen-api
+      development_knowledge:
+        - frontend
+        - react
+        - backend
+        - security
+        - architecture
+      testing_knowledge:
+        - frontend
+        - react
+        - backend
+        - architecture
+        - unit-testing
+        - e2e-testing
+      review_knowledge:
+        - frontend
+        - react
+        - backend
+        - security
+        - architecture
+        - unit-testing
+        - e2e-testing
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT

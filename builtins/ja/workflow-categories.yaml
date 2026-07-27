@@ -1,6 +1,7 @@
 workflow_categories:
   🚀 クイックスタート:
     workflows:
+      - simple
       - default
       - default-mini
       - default-high
@@ -8,8 +9,18 @@ workflow_categories:
       - frontend
       - backend
       - dual
+  Simple:
+    workflows:
+      - simple
+      - simple-mini
+      - simple-frontend
+      - simple-backend
+      - simple-dual
+      - simple-cqrs
+      - simple-dual-cqrs
   ⚡ Mini:
     workflows:
+      - simple-mini
       - default-mini
       - frontend-mini
       - backend-mini
@@ -18,11 +29,14 @@ workflow_categories:
       - dual-cqrs-mini
   🎨 フロントエンド:
     workflows:
+      - simple-frontend
       - frontend
       - frontend-mini
       - frontend-maintenance
   ⚙️ バックエンド:
     workflows:
+      - simple-backend
+      - simple-cqrs
       - backend
       - backend-mini
       - backend-maintenance
@@ -30,6 +44,8 @@ workflow_categories:
       - backend-cqrs-mini
   🔧 デュアル:
     workflows:
+      - simple-dual
+      - simple-dual-cqrs
       - dual
       - dual-mini
       - dual-cqrs

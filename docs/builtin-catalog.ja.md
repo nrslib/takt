@@ -8,6 +8,8 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 
 | Workflow | 推奨用途 |
 |----------|-----------------|
+| `simple` | 強いモデルの判断力を信頼するシンプルな開発 workflow です。モデル自身が関連 SKILL を選び、計画 → テスト作成 → 実装 → コードレビュー → 修正ループ → 最終監督 → 完了。 |
+| `simple-mini` | 強いモデルの判断力を信頼する軽量版です。独立したテスト作成と最終監督を省き、計画 → 実装 → コードレビュー → 修正ループ → 完了。 |
 | `default` | 標準の開発 workflow です。テスト先行、ドラフト実装、AIアンチパターン自己レビュー、専門ピアレビュー、merge-readiness ゲート、監督の構成です。計画 → テスト作成 → draft → peer-review（専門レビュー → merge-readiness → 修正ループ）→ 監督 → 完了。 |
 | `default-mini` | テストなしのミニ開発 workflow です。`default` から `write_tests` を抜き、軽量に回したいタスク向けの構成です。計画 → 実装 → AIアンチパターンレビュー → 並列レビュー → 完了。 |
 | `default-high` | フルスペック開発 workflow です。テスト先行、チームリーダー実装、AIアンチパターンレビュー（仲裁付き）、専門ピアレビュー、merge-readiness ゲート、監督の構成です。計画 → テスト作成 → team-leader draft → peer-review（専門レビュー → merge-readiness → 修正ループ）→ 監督 → 完了。 |
@@ -21,22 +23,36 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 
 | カテゴリ | Workflow | 説明 |
 |---------|----------|-------------|
-| 🚀 クイックスタート | `default` | 標準の開発 workflow です。テスト先行、ドラフト実装、AIアンチパターン自己レビュー、専門ピアレビュー、merge-readiness ゲート、監督の構成です。計画 → テスト作成 → draft → peer-review（専門レビュー → merge-readiness → 修正ループ）→ 監督 → 完了。 |
+| 🚀 クイックスタート | `simple` | 強いモデルの判断力を信頼するシンプルな開発 workflow。モデル自身が関連 SKILL を選び、計画 → テスト作成 → 実装 → コードレビュー → 修正ループ → 最終監督 → 完了。 |
+| | `default` | 標準の開発 workflow です。テスト先行、ドラフト実装、AIアンチパターン自己レビュー、専門ピアレビュー、merge-readiness ゲート、監督の構成です。計画 → テスト作成 → draft → peer-review（専門レビュー → merge-readiness → 修正ループ）→ 監督 → 完了。 |
 | | `default-mini` | テストなしのミニ開発 workflow。`default` から `write_tests` を抜いた軽量版。計画 → 実装 → AIアンチパターンレビュー → 並列レビュー → 完了。 |
 | | `default-high` | フルスペック開発 workflow。テスト先行、チームリーダー実装、AIアンチパターンレビュー（仲裁付き）、専門ピアレビュー、merge-readiness ゲート、監督。計画 → テスト作成 → team-leader draft → peer-review（専門レビュー → merge-readiness → 修正ループ）→ 監督 → 完了。 |
 | | `frontend` | フロントエンド特化開発 workflow。React/Next.js に焦点を当てたレビューとナレッジ注入付き。 |
 | | `backend` | バックエンド特化開発 workflow。バックエンド、セキュリティ、QA エキスパートレビュー付き。 |
 | | `dual` | フロントエンド＋バックエンド開発 workflow: architecture、frontend、security、QA レビューと修正ループ付き。 |
-| ⚡ Mini | `default-mini` | テストなしのミニ開発 workflow。`default` から `write_tests` を抜いた軽量版。計画 → 実装 → AIアンチパターンレビュー → 並列レビュー → 完了。 |
+| Simple | `simple` | 強いモデルの判断力を信頼する汎用版。モデル自身が関連 SKILL を選び、最小限の構成で開発を進める。 |
+| | `simple-mini` | 強いモデルの判断力を信頼し、独立したテスト作成と最終監督を省いた軽量版。 |
+| | `simple-frontend` | 強いモデル向けの簡潔なフロントエンド版。frontend、React、security、architecture、testing のナレッジとポリシーを注入する。 |
+| | `simple-backend` | 強いモデル向けの簡潔なバックエンド版。backend、security、architecture、testing のナレッジとポリシーを注入する。 |
+| | `simple-dual` | 強いモデル向けの簡潔なデュアル版。frontend、React、backend、security、architecture、testing のナレッジとポリシーを注入する。 |
+| | `simple-cqrs` | 強いモデル向けの簡潔な CQRS+ES 版。backend、CQRS+ES、security、architecture、testing のナレッジとポリシーを注入する。 |
+| | `simple-dual-cqrs` | 強いモデル向けの簡潔なデュアル CQRS+ES 版。frontend、React、backend、CQRS+ES、security、architecture、testing のナレッジとポリシーを注入する。 |
+| ⚡ Mini | `simple-mini` | 強いモデルの判断力を信頼する軽量版。独立したテスト作成と最終監督を省き、計画 → 実装 → コードレビュー → 修正ループ → 完了。 |
+| | `default-mini` | テストなしのミニ開発 workflow。`default` から `write_tests` を抜いた軽量版。計画 → 実装 → AIアンチパターンレビュー → 並列レビュー → 完了。 |
 | | `backend-cqrs-mini` | ミニ CQRS+ES workflow: plan -> implement -> 並列レビュー (AI antipattern + supervisor)。CQRS+ES ナレッジ注入付き。 |
 | | `dual-mini` | ミニデュアル workflow: plan -> implement -> 並列レビュー (AI antipattern + expert supervisor)。フロントエンド＋バックエンドナレッジ注入付き。 |
 | | `dual-cqrs-mini` | ミニ CQRS+ES デュアル workflow: plan -> implement -> 並列レビュー (AI antipattern + expert supervisor)。CQRS+ES ナレッジ注入付き。 |
-| 🎨 フロントエンド | `frontend` | フロントエンド特化開発 workflow。React/Next.js に焦点を当てたレビューとナレッジ注入付き。 |
+| 🎨 フロントエンド | `simple-frontend` | 強いモデル向け。`simple-core` にフロントエンド向けナレッジとポリシーを注入するシンプル版。 |
+| | `frontend` | フロントエンド特化開発 workflow。React/Next.js に焦点を当てたレビューとナレッジ注入付き。 |
 | | `frontend-maintenance` | （実験的）既存プロダクト改修向けのフロントエンド workflow。現行の規約を尊重し変更をスコープ内に収める、保守スコープの plan/implement/test/fix/supervise。現状はやや過剰に動くことがあるため、出発点として使い調整する。 |
-| ⚙️ バックエンド | `backend` | バックエンド特化開発 workflow。バックエンド、セキュリティ、QA エキスパートレビュー付き。 |
+| ⚙️ バックエンド | `simple-backend` | 強いモデル向け。`simple-core` にバックエンド向けナレッジとポリシーを注入するシンプル版。 |
+| | `simple-cqrs` | 強いモデル向け。`simple-core` にバックエンドと CQRS+ES のナレッジとポリシーを注入するシンプル版。 |
+| | `backend` | バックエンド特化開発 workflow。バックエンド、セキュリティ、QA エキスパートレビュー付き。 |
 | | `backend-cqrs` | CQRS+ES 特化バックエンド開発 workflow。CQRS+ES、セキュリティ、QA エキスパートレビュー付き。 |
 | | `backend-maintenance` | バックエンド本番保守向け厳密 workflow。専門並列レビュー（アーキテクチャ、テスト、セキュリティ、QA、コーディングレビュー）の後に merge-readiness ゲートを実行し、ループモニターとデュアルスーパーバイザー最終承認を行う。 |
-| 🔧 デュアル | `dual` | フロントエンド＋バックエンド開発 workflow: architecture、frontend、security、QA レビューと修正ループ付き。 |
+| 🔧 デュアル | `simple-dual` | 強いモデル向け。`simple-core` にフロントエンドとバックエンドのナレッジとポリシーを注入するシンプル版。 |
+| | `simple-dual-cqrs` | 強いモデル向け。`simple-core` にフロントエンド、バックエンド、CQRS+ES のナレッジとポリシーを注入するシンプル版。 |
+| | `dual` | フロントエンド＋バックエンド開発 workflow: architecture、frontend、security、QA レビューと修正ループ付き。 |
 | | `dual-cqrs` | フロントエンド＋バックエンド開発 workflow (CQRS+ES 特化): CQRS+ES、frontend、security、QA レビューと修正ループ付き。 |
 | 🏗️ インフラストラクチャ | `terraform` | Terraform IaC 開発 workflow: plan → implement → 並列レビュー → 監督検証 → 修正 → 完了。 |
 | 🔍 レビュー | `review-default` | 多角コードレビュー: PR/ブランチ/作業中の差分を自動判定し、architecture、security、QA、testing、coding を専門並列レビューした後、merge-readiness ゲートを実行して統合結果を出力。 |
