@@ -43,7 +43,7 @@ import { AmbiguousInterpretationsOutputJsonSchema } from '../core/workflow/findi
 import { issueDeterministicSameProofs, verifySameProofAgainstLedger } from '../core/workflow/findings/raw-capabilities.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import { stopBudgetRoundsCompleted } from '../core/workflow/findings/stop-budget.js';
-import { computeRoundMarker } from '../core/workflow/findings/round-marker.js';
+import { addRoundMarker, computeRoundMarker } from '../core/workflow/findings/round-marker.js';
 import { captureFindingPreconditions } from '../core/workflow/findings/finding-preconditions.js';
 import { createFindingAdjudicationReservation } from './helpers/finding-adjudication-reservation.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
@@ -2646,7 +2646,7 @@ describe('ケース10: stop-budget 悪用（churn で fixpoint を回避しつ�
       interceptFresh: (fresh) => ({
         ...fresh,
         stopBudget: {
-          roundMarkers: [...(fresh.stopBudget?.roundMarkers ?? []), concurrentMarker],
+          roundMarkers: addRoundMarker(fresh.stopBudget?.roundMarkers, concurrentMarker),
           firstRoundAt: fresh.stopBudget!.firstRoundAt,
           exhausted: false,
         },

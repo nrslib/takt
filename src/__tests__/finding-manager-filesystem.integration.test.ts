@@ -327,10 +327,10 @@ describe('finding manager filesystem error propagation', () => {
       ): FindingLedgerStore => ({
         ...store,
         ledgerIdentity,
-        updateLedger: async (mutator, revalidateBeforeSave) => {
+        commitManagerLedger: async (mutator) => {
           reached.resolve();
           await release.promise;
-          return store.updateLedger(mutator, revalidateBeforeSave);
+          return store.commitManagerLedger(mutator);
         },
       });
       const run = (
