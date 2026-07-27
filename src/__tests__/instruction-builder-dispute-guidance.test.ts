@@ -33,7 +33,6 @@ function makeContext(options: {
     userInputs: [],
     language: options.language ?? 'en',
     findingContract: {
-      ledgerCopyPath: '/tmp/.takt/findings/ledger.json',
       ledgerSummary: '{}',
       reportLedgerSummary: '{}',
       hasOpenFindings: options.hasOpenFindings,
@@ -62,7 +61,8 @@ describe('dispute guidance injection', () => {
     const instruction = new InstructionBuilder(makeStep(), makeContext({ hasOpenFindings: false })).build();
 
     const section = extractFindingContractSection(instruction);
-    expect(section).toContain('Consolidated ledger copy');
+    expect(section).not.toContain('Consolidated ledger copy');
+    expect(section).not.toContain('/tmp/.takt/findings/ledger.json');
     expect(section).not.toContain('Disputed Findings');
     expect(section).not.toContain('dispute claim');
   });

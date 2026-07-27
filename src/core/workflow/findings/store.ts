@@ -20,13 +20,26 @@ import type {
 import { parseFindingLedger, parseRawFindings } from './schemas.js';
 import { assertFindingLedgerProjectionInvariant } from '../../models/finding-ledger-invariants.js';
 import {
-  assertReportPublication,
+  finalizeReportPublication,
   publishReportFile,
   writeReportFile,
-  type ReportPublicationReceipt,
 } from '../report-writer.js';
+import type { ReportPublicationReceipt } from '../report-publication.js';
 import { runLedgerUpdateExclusive } from './ledger-identity-queue.js';
-import { assertPendingManagerCommitTransition } from './manager-pending-commit.js';
+import {
+  assertFindingManagerLedgerCommit,
+  cloneFindingLedgerMutation,
+  normalizeFindingLedger,
+  normalizeFindingLedgerMutation,
+  normalizePendingManagerCommitFinalization,
+  normalizePendingManagerCommitRebind,
+  normalizePendingManagerCommitStage,
+} from './ledger-mutation.js';
+import {
+  computeFindingManagerReportPublicationId,
+  findingManagerValidationReportFileName,
+  serializeFindingManagerValidationReport,
+} from './manager-report-content.js';
 import { isValidReportDirName } from '../../../shared/utils/taskPaths.js';
 import { runPrivateFileExclusive } from '../../../shared/utils/private-file-lock.js';
 
@@ -43,7 +56,7 @@ const PRIVATE_FILE_MODE = 0o600;
 const READ_ONLY_PRIVATE_FILE_MODE = 0o400;
 
 export interface LedgerRepository {
-  /** 同じ永続台帳を指す store 間で共有する正準パス識別子。 */
+  /** 同じ永続台帳を指す store 間で共有する、永続化方式に依存しない識別子。 */
   readonly ledgerIdentity: string;
   /**
    * この store が束縛する台帳の正準ワークフロー名。workflow_call の子が親から
@@ -53,7 +66,6 @@ export interface LedgerRepository {
    */
   workflowName: string;
   loadLedger: () => FindingLedger;
-  saveLedger: (ledger: FindingLedger) => void;
   /**
    * 「読み込み → 更新関数 → 保存」を、同じ ledgerIdentity を持つ store 間で
    * 排他実行する。各呼び出しが「最初に読んだ台帳」を基準に非同期処理後に
@@ -65,6 +77,8 @@ export interface LedgerRepository {
    * 同時更新はこの直列化の対象外（現状の設計外）。
    * revalidateBeforeSave は atomic publication の直前にも呼ばれる。publish=false
    * の場合、候補の一時ファイルを公開せず、返された安全な mutation を保存する。
+   * 各 callback には永続状態と共有しない clone を渡す。callback は引数を直接
+   * 変更できるが、変更は戻り値に含めた場合だけ候補として検証される。
    */
   updateLedger: <Result>(
     mutator: (current: FindingLedger) => FindingLedgerMutation<Result>,
@@ -75,15 +89,30 @@ export interface LedgerRepository {
   ) => Promise<FindingLedgerMutation<Result>>;
 }
 
+export interface FindingManagerLedgerCommit<Result> {
+  readonly ledger: FindingLedger;
+  readonly result: Result;
+  readonly publication?: {
+    readonly roundMarker: string;
+    readonly report: FindingManagerValidationReport;
+  };
+}
+
+export interface FindingManagerCommitStager {
+  commitManagerLedger: <Result>(
+    mutator: (current: FindingLedger) => FindingManagerLedgerCommit<Result>,
+  ) => Promise<FindingLedgerMutation<Result>>;
+}
+
 export interface AdjudicationReservationRegistry {
   claimAdjudicationReservation: (reservationToken: string) => boolean;
   releaseAdjudicationReservation: (reservationToken: string) => void;
 }
 
 export interface FindingArtifactWriter {
-  createRunCopy: () => string;
-  saveRawFindings: (runId: string, stepName: string, rawFindings: RawFinding[]) => string;
-  saveManagerValidationReport: (report: FindingManagerValidationReport) => string;
+  saveLedgerSnapshot: () => void;
+  saveRawFindings: (runId: string, stepName: string, rawFindings: RawFinding[]) => void;
+  saveManagerValidationReport: (report: FindingManagerValidationReport) => void;
   planManagerValidationPublication: (
     roundMarker: string,
     report: FindingManagerValidationReport,
@@ -95,27 +124,46 @@ export interface FindingArtifactWriter {
   publishManagerValidationPublication: (
     publication: FindingManagerReportPublication,
   ) => ReportPublicationReceipt;
-  assertManagerValidationPublication: (
+  /** Audit trail for the finding-conflict-adjudication synthetic step: discarded decisions (evidence changed between prompt and apply) and other non-applied outcomes. */
+  saveConflictAdjudicationReport: (report: FindingConflictAdjudicationAuditReport) => void;
+}
+
+export interface FindingManagerCommitRebinder {
+  rebindPendingManagerValidationPublication: (
+    publication: FindingManagerReportPublication,
+  ) => Promise<FindingLedger>;
+}
+
+export interface FindingManagerCommitFinalizer {
+  finalizeManagerValidationPublication: (
     publication: FindingManagerReportPublication,
     receipt: ReportPublicationReceipt,
-  ) => void;
-  /** Audit trail for the finding-conflict-adjudication synthetic step: discarded decisions (evidence changed between prompt and apply) and other non-applied outcomes. */
-  saveConflictAdjudicationReport: (report: FindingConflictAdjudicationAuditReport) => string;
+  ) => Promise<FindingManagerCommitFinalization>;
 }
 
 export interface FindingLedgerStore
-  extends LedgerRepository, FindingArtifactWriter, AdjudicationReservationRegistry {}
+  extends
+    LedgerRepository,
+    FindingManagerCommitStager,
+    FindingArtifactWriter,
+    FindingManagerCommitRebinder,
+    FindingManagerCommitFinalizer,
+    AdjudicationReservationRegistry {}
 
-export type FindingManagerStore = LedgerRepository & AdjudicationReservationRegistry & Pick<
-  FindingArtifactWriter,
-  | 'createRunCopy'
-  | 'saveRawFindings'
-  | 'saveManagerValidationReport'
-  | 'planManagerValidationPublication'
-  | 'bindManagerValidationPublication'
-  | 'publishManagerValidationPublication'
-  | 'assertManagerValidationPublication'
->;
+export type FindingManagerStore = LedgerRepository
+  & FindingManagerCommitStager
+  & AdjudicationReservationRegistry
+  & FindingManagerCommitRebinder
+  & FindingManagerCommitFinalizer
+  & Pick<
+    FindingArtifactWriter,
+    | 'saveLedgerSnapshot'
+    | 'saveRawFindings'
+    | 'saveManagerValidationReport'
+    | 'planManagerValidationPublication'
+    | 'bindManagerValidationPublication'
+    | 'publishManagerValidationPublication'
+  >;
 
 export type FindingAdjudicationStore = LedgerRepository
   & AdjudicationReservationRegistry
@@ -124,6 +172,11 @@ export type FindingAdjudicationStore = LedgerRepository
 export interface FindingLedgerMutation<Result> {
   ledger: FindingLedger;
   result: Result;
+}
+
+export interface FindingManagerCommitFinalization {
+  ledger: FindingLedger;
+  completedRoundMarker: string;
 }
 
 export interface FindingLedgerPublicationDecision<Result> {
@@ -365,26 +418,8 @@ function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
-function managerValidationFileName(report: FindingManagerValidationReport): string {
-  return `findings-manager-validation.${sanitizeFileSegment(report.stepName)}.json`;
-}
-
-function canonicalJsonValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(canonicalJsonValue);
-  }
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, canonicalJsonValue(entry)]),
-    );
-  }
-  return value;
-}
-
 function managerReportContent(report: FindingManagerValidationReport): string {
-  return JSON.stringify(canonicalJsonValue(report), null, 2);
+  return serializeFindingManagerValidationReport(report);
 }
 
 function reportRunId(projectCwd: string, reportDir: string): string {
@@ -401,20 +436,17 @@ function reportRunId(projectCwd: string, reportDir: string): string {
   return segments[0]!;
 }
 
-function managerPublicationId(input: {
-  domainId: string;
-  roundMarker: string;
-  originRunId: string;
-  fileName: string;
-  contentSha256: string;
-}): string {
-  return sha256([
-    input.domainId,
-    input.roundMarker,
-    input.originRunId,
-    input.fileName,
-    input.contentSha256,
-  ].join('\0'));
+function sameManagerPublication(
+  left: FindingManagerReportPublication,
+  right: FindingManagerReportPublication,
+): boolean {
+  return left.publicationId === right.publicationId
+    && left.domainId === right.domainId
+    && left.originRunId === right.originRunId
+    && left.destinationRunId === right.destinationRunId
+    && left.fileName === right.fileName
+    && left.contentSha256 === right.contentSha256
+    && managerReportContent(left.report) === managerReportContent(right.report);
 }
 
 export function createFindingLedgerStore(options: FindingLedgerStoreOptions): FindingLedgerStore {
@@ -433,25 +465,21 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
     throw new Error(`Invalid trusted resume source run id: ${options.trustedResumeSourceRunId}`);
   }
 
-  const loadLedgerImpl = (): FindingLedger => {
-    return readProjectLedgerOrEmpty(ledgerRoot, ledgerPath, options.workflowName);
-  };
   const normalizeLedger = (ledger: FindingLedger): FindingLedger => {
-    const parsedLedger = parseFindingLedger(ledger);
+    const parsedLedger = normalizeFindingLedger(ledger, options.workflowName);
     assertLedgerWorkflowName(parsedLedger, options.workflowName, ledgerPath);
-    assertFindingLedgerProjectionInvariant(parsedLedger);
     return parsedLedger;
+  };
+  const loadLedgerImpl = (): FindingLedger => {
+    return normalizeLedger(
+      readProjectLedgerOrEmpty(ledgerRoot, ledgerPath, options.workflowName),
+    );
   };
   const normalizeMutation = <Result>(
     current: FindingLedger,
     mutation: FindingLedgerMutation<Result>,
   ): FindingLedgerMutation<Result> => {
-    const normalized = {
-      ...mutation,
-      ledger: normalizeLedger(mutation.ledger),
-    };
-    assertPendingManagerCommitTransition(current, normalized.ledger);
-    return normalized;
+    return normalizeFindingLedgerMutation(current, mutation, options.workflowName);
   };
   const normalizePublicationDecision = <Result>(
     current: FindingLedger,
@@ -465,24 +493,14 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
     prepareWritableFilePath(ledgerRoot, ledgerPath);
     return JSON.stringify(parsedLedger, null, 2);
   };
-  const saveLedgerImpl = (ledger: FindingLedger, expectedState?: PrivateFileState): void => {
+  const saveLedgerImpl = (ledger: FindingLedger, expectedState: PrivateFileState): void => {
     const content = prepareLedgerSave(ledger);
-    if (expectedState === undefined) {
-      writePrivateFileWithMode(ledgerPath, content, PRIVATE_FILE_MODE);
-      return;
-    }
     writePrivateFileWithModeExpected(
       ledgerPath,
       content,
       PRIVATE_FILE_MODE,
       expectedState,
     );
-  };
-  const saveLedger = (ledger: FindingLedger): void => {
-    const current = loadLedgerImpl();
-    const normalized = normalizeLedger(ledger);
-    assertPendingManagerCommitTransition(current, normalized);
-    saveLedgerImpl(normalized);
   };
   const saveLedgerGuardedImpl = (
     ledger: FindingLedger,
@@ -506,14 +524,130 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
       },
     );
   };
-
   const adjudicationReservations = new Set<string>();
+  const bindManagerValidationPublication = (
+    roundMarker: string,
+    publication: FindingManagerReportPublication,
+  ): FindingManagerReportPublication => {
+    const expectedFileName = findingManagerValidationReportFileName(publication.report);
+    const expectedContentSha256 = sha256(managerReportContent(publication.report));
+    const expectedPublicationId = computeFindingManagerReportPublicationId({
+      roundMarker,
+      originRunId: publication.originRunId,
+      fileName: publication.fileName,
+      contentSha256: publication.contentSha256,
+    });
+    if (publication.domainId !== publicationDomainId
+      || publication.report.runId !== publication.originRunId
+      || publication.fileName !== expectedFileName
+      || publication.contentSha256 !== expectedContentSha256
+      || publication.publicationId !== expectedPublicationId) {
+      throw new Error(`Finding manager publication "${publication.publicationId}" failed integrity validation`);
+    }
+    const currentRunId = reportRunId(options.projectCwd, options.reportDir);
+    if (currentRunId === publication.destinationRunId) {
+      return publication;
+    }
+    if (options.trustedResumeSourceRunId !== publication.destinationRunId) {
+      throw new Error(
+        `Finding manager publication destination "${currentRunId}" is not authorized to inherit `
+        + `"${publication.destinationRunId}"`,
+      );
+    }
+    return {
+      ...publication,
+      destinationRunId: currentRunId,
+    };
+  };
+  const planManagerValidationPublication = (
+    roundMarker: string,
+    report: FindingManagerValidationReport,
+  ): FindingManagerReportPublication => {
+    const originRunId = reportRunId(options.projectCwd, options.reportDir);
+    if (report.runId !== originRunId) {
+      throw new Error(
+        `Finding manager report run id "${report.runId}" does not match publication destination "${originRunId}"`,
+      );
+    }
+    const fileName = findingManagerValidationReportFileName(report);
+    const contentSha256 = sha256(managerReportContent(report));
+    return {
+      publicationId: computeFindingManagerReportPublicationId({
+        roundMarker,
+        originRunId,
+        fileName,
+        contentSha256,
+      }),
+      domainId: publicationDomainId,
+      originRunId,
+      destinationRunId: originRunId,
+      fileName,
+      contentSha256,
+      report,
+    };
+  };
+  const normalizeManagerCommit = <Result>(
+    current: FindingLedger,
+    commit: FindingManagerLedgerCommit<Result>,
+  ): FindingLedgerMutation<Result> => {
+    assertFindingManagerLedgerCommit(commit);
+    const stagedCandidate = commit.ledger.pendingManagerCommit;
+    const requestedStage = commit.publication ?? (
+      stagedCandidate === undefined
+        ? undefined
+        : {
+            roundMarker: stagedCandidate.roundMarker,
+            report: stagedCandidate.publication.report,
+          }
+    );
+    const completedLedger = stagedCandidate === undefined
+      ? commit.ledger
+      : {
+          workflowName: current.workflowName,
+          ...stagedCandidate.completed,
+        };
+    const completed = normalizeFindingLedgerMutation(
+      current,
+      { ledger: completedLedger, result: commit.result },
+      options.workflowName,
+    );
+    if (requestedStage === undefined) {
+      return completed;
+    }
+    const publication = bindManagerValidationPublication(
+      requestedStage.roundMarker,
+      planManagerValidationPublication(
+        requestedStage.roundMarker,
+        requestedStage.report,
+      ),
+    );
+    const stagedLedger = normalizePendingManagerCommitStage(
+      current,
+      completed.ledger,
+      requestedStage.roundMarker,
+      publication,
+      options.workflowName,
+    );
+    if (
+      stagedCandidate !== undefined
+      && (
+        !sameManagerPublication(stagedCandidate.publication, publication)
+        || JSON.stringify(normalizeLedger(commit.ledger))
+          !== JSON.stringify(stagedLedger)
+      )
+    ) {
+      throw new Error('Finding manager commit contains a forged publication stage');
+    }
+    return {
+      ledger: stagedLedger,
+      result: completed.result,
+    };
+  };
 
   return {
     ledgerIdentity,
     workflowName: options.workflowName,
     loadLedger: loadLedgerImpl,
-    saveLedger,
     updateLedger: (mutator, revalidateBeforeSave) => {
       return runLedgerUpdateExclusive(ledgerIdentity, () => {
         return runPrivateFileExclusive(`${ledgerIdentity}.lock`, () => {
@@ -522,8 +656,8 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
             ledgerPath,
             options.workflowName,
           );
-          const current = snapshot.ledger;
-          const mutation = mutator(current);
+          const current = normalizeLedger(snapshot.ledger);
+          const mutation = mutator(structuredClone(current));
           const preparedMutation = normalizeMutation(current, mutation);
           if (revalidateBeforeSave === undefined) {
             saveLedgerImpl(preparedMutation.ledger, snapshot.state);
@@ -531,7 +665,10 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
           }
           const initialDecision = normalizePublicationDecision(
             current,
-            revalidateBeforeSave(current, preparedMutation),
+            revalidateBeforeSave(
+              structuredClone(current),
+              cloneFindingLedgerMutation(preparedMutation),
+            ),
           );
           if (!initialDecision.publish) {
             saveLedgerImpl(initialDecision.mutation.ledger, snapshot.state);
@@ -541,7 +678,10 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
           const published = saveLedgerGuardedImpl(initialDecision.mutation.ledger, snapshot.state, () => {
             publicationDecision = normalizePublicationDecision(
               current,
-              revalidateBeforeSave(current, initialDecision.mutation),
+              revalidateBeforeSave(
+                structuredClone(current),
+                cloneFindingLedgerMutation(initialDecision.mutation),
+              ),
             );
             return publicationDecision;
           });
@@ -549,6 +689,24 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
             saveLedgerImpl(publicationDecision.mutation.ledger, snapshot.state);
           }
           return publicationDecision.mutation;
+        });
+      });
+    },
+    commitManagerLedger: (mutator) => {
+      return runLedgerUpdateExclusive(ledgerIdentity, () => {
+        return runPrivateFileExclusive(`${ledgerIdentity}.lock`, () => {
+          const snapshot = readProjectLedgerSnapshot(
+            ledgerRoot,
+            ledgerPath,
+            options.workflowName,
+          );
+          const current = normalizeLedger(snapshot.ledger);
+          const mutation = normalizeManagerCommit(
+            current,
+            mutator(structuredClone(current)),
+          );
+          saveLedgerImpl(mutation.ledger, snapshot.state);
+          return mutation;
         });
       });
     },
@@ -562,7 +720,7 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
     releaseAdjudicationReservation: (reservationToken) => {
       adjudicationReservations.delete(reservationToken);
     },
-    createRunCopy: () => {
+    saveLedgerSnapshot: () => {
       const ledger = loadLedgerImpl();
       const content = JSON.stringify(ledger, null, 2);
       prepareWritableCopyPath(options.reportDir, copyPath);
@@ -584,7 +742,6 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
           );
         }
       }
-      return copyPath;
     },
     saveRawFindings: (runId, stepName, rawFindings) => {
       const parsedRawFindings = parseRawFindings(rawFindings);
@@ -599,76 +756,54 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
       const rawFindingsFilePath = resolveInside(rawFindingsDir, rawFindingsFile);
       assertNotSymlink(rawFindingsFilePath);
       writePrivateFileWithMode(rawFindingsFilePath, JSON.stringify(parsedRawFindings, null, 2), PRIVATE_FILE_MODE);
-      return rawFindingsFilePath;
     },
     saveManagerValidationReport: (report) => {
-      const fileName = managerValidationFileName(report);
+      const fileName = findingManagerValidationReportFileName(report);
       const content = managerReportContent(report);
       const contentSha256 = sha256(content);
-      return publishReportFile({
+      publishReportFile({
         reportDir: options.reportDir,
         fileName,
         content,
         publicationId: sha256(['manager-validation', fileName, contentSha256].join('\0')),
         contentSha256,
-      }).targetPath;
-    },
-    planManagerValidationPublication: (roundMarker, report) => {
-      const originRunId = reportRunId(options.projectCwd, options.reportDir);
-      if (report.runId !== originRunId) {
-        throw new Error(
-          `Finding manager report run id "${report.runId}" does not match publication destination "${originRunId}"`,
-        );
-      }
-      const fileName = managerValidationFileName(report);
-      const contentSha256 = sha256(managerReportContent(report));
-      return {
-        publicationId: managerPublicationId({
-          domainId: publicationDomainId,
-          roundMarker,
-          originRunId,
-          fileName,
-          contentSha256,
-        }),
-        domainId: publicationDomainId,
-        originRunId,
-        destinationRunId: originRunId,
-        fileName,
-        contentSha256,
-        report,
-      };
-    },
-    bindManagerValidationPublication: (roundMarker, publication) => {
-      const expectedFileName = managerValidationFileName(publication.report);
-      const expectedContentSha256 = sha256(managerReportContent(publication.report));
-      const expectedPublicationId = managerPublicationId({
-        domainId: publicationDomainId,
-        roundMarker,
-        originRunId: publication.originRunId,
-        fileName: publication.fileName,
-        contentSha256: publication.contentSha256,
       });
-      if (publication.domainId !== publicationDomainId
-        || publication.report.runId !== publication.originRunId
-        || publication.fileName !== expectedFileName
-        || publication.contentSha256 !== expectedContentSha256
-        || publication.publicationId !== expectedPublicationId) {
-        throw new Error(`Finding manager publication "${publication.publicationId}" failed integrity validation`);
-      }
-      const currentRunId = reportRunId(options.projectCwd, options.reportDir);
-      if (currentRunId === publication.destinationRunId) {
-        return publication;
-      }
-      if (options.trustedResumeSourceRunId !== publication.destinationRunId) {
-        throw new Error(
-          `Finding manager publication destination "${currentRunId}" is not authorized to inherit `
-          + `"${publication.destinationRunId}"`,
-        );
-      }
-      return {
-        ...publication,
-        destinationRunId: currentRunId,
-      };
+    },
+    planManagerValidationPublication,
+    bindManagerValidationPublication,
+    rebindPendingManagerValidationPublication: (publication) => {
+      return runLedgerUpdateExclusive(ledgerIdentity, () => {
+        return runPrivateFileExclusive(`${ledgerIdentity}.lock`, () => {
+          const snapshot = readProjectLedgerSnapshot(
+            ledgerRoot,
+            ledgerPath,
+            options.workflowName,
+          );
+          const current = normalizeLedger(snapshot.ledger);
+          const pending = current.pendingManagerCommit;
+          if (pending === undefined) {
+            throw new Error(
+              `Pending manager commit CAS failed for publication "${publication.publicationId}"`,
+            );
+          }
+          const authorized = bindManagerValidationPublication(
+            pending.roundMarker,
+            pending.publication,
+          );
+          if (!sameManagerPublication(authorized, publication)) {
+            throw new Error(
+              `Finding manager publication "${publication.publicationId}" is not authorized for pending rebind`,
+            );
+          }
+          const rebound = normalizePendingManagerCommitRebind(
+            current,
+            publication,
+            options.workflowName,
+          );
+          saveLedgerImpl(rebound, snapshot.state);
+          return rebound;
+        });
+      });
     },
     publishManagerValidationPublication: (publication) => {
       const currentRunId = reportRunId(options.projectCwd, options.reportDir);
@@ -686,7 +821,7 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
         contentSha256: publication.contentSha256,
       });
     },
-    assertManagerValidationPublication: (publication, receipt) => {
+    finalizeManagerValidationPublication: (publication, receipt) => {
       const currentRunId = reportRunId(options.projectCwd, options.reportDir);
       if (publication.domainId !== publicationDomainId
         || publication.destinationRunId !== currentRunId) {
@@ -694,15 +829,60 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
           `Finding manager publication "${publication.publicationId}" is not bound to this report directory`,
         );
       }
-      assertReportPublication(receipt, {
-        targetPath: resolveInside(options.reportDir, publication.fileName),
-        publicationId: publication.publicationId,
-        contentSha256: publication.contentSha256,
+      const targetPath = resolveInside(options.reportDir, publication.fileName);
+      return runLedgerUpdateExclusive(ledgerIdentity, () => {
+        return runPrivateFileExclusive(`${ledgerIdentity}.lock`, () => {
+          return finalizeReportPublication(receipt, {
+            reportDir: options.reportDir,
+            targetPath,
+            publicationId: publication.publicationId,
+            contentSha256: publication.contentSha256,
+          }, () => {
+            const snapshot = readProjectLedgerSnapshot(
+              ledgerRoot,
+              ledgerPath,
+              options.workflowName,
+            );
+            const current = normalizeLedger(snapshot.ledger);
+            const pending = current.pendingManagerCommit;
+            if (pending === undefined) {
+              throw new Error(
+                `Pending manager commit CAS failed for publication "${publication.publicationId}"`,
+              );
+            }
+            const expectedPublicationId = computeFindingManagerReportPublicationId({
+              roundMarker: pending.roundMarker,
+              originRunId: publication.originRunId,
+              fileName: publication.fileName,
+              contentSha256: publication.contentSha256,
+            });
+            if (!sameManagerPublication(pending.publication, publication)
+              || publication.publicationId !== expectedPublicationId
+              || publication.report.runId !== publication.originRunId
+              || publication.fileName
+                !== findingManagerValidationReportFileName(publication.report)
+              || publication.contentSha256 !== sha256(managerReportContent(publication.report))) {
+              throw new Error(
+                `Finding manager publication "${publication.publicationId}" failed integrity validation`,
+              );
+            }
+            const finalizedLedger = normalizePendingManagerCommitFinalization(
+              current,
+              publication.publicationId,
+              options.workflowName,
+            );
+            saveLedgerImpl(finalizedLedger, snapshot.state);
+            return {
+              ledger: finalizedLedger,
+              completedRoundMarker: pending.roundMarker,
+            };
+          });
+        });
       });
     },
     saveConflictAdjudicationReport: (report) => {
       const fileName = `findings-adjudication.${sanitizeFileSegment(report.conflictId)}.json`;
-      return writeReportFile(options.reportDir, fileName, JSON.stringify(report, null, 2));
+      writeReportFile(options.reportDir, fileName, JSON.stringify(report, null, 2));
     },
   };
 }

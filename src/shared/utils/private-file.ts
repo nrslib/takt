@@ -424,6 +424,11 @@ function executeWithCleanup(action: () => void, cleanup: () => void, aggregateMe
 
 type PublicationGuardResult = boolean | { publish: boolean; content: string | Buffer };
 
+interface PrivateFileWriteResult {
+  published: boolean;
+  publishedStat?: Stats;
+}
+
 function writeTemporaryPrivateFileContent(
   temporaryPath: string,
   temporaryStat: Stats,
@@ -452,7 +457,7 @@ function writePrivateFileAtomically(
   rejectExisting: boolean,
   publicationGuard?: () => PublicationGuardResult,
   expectedState?: PrivateFileState,
-): boolean {
+): PrivateFileWriteResult {
   const absolute = resolve(filePath);
   const inspection = inspectPrivateArtifactPath(absolute, 'file');
   if (expectedState !== undefined) {
@@ -547,7 +552,12 @@ function writePrivateFileAtomically(
     },
     `Private artifact write and temporary-file cleanup both failed: ${absolute}`,
   );
-  return published;
+  return {
+    published,
+    ...(published && temporaryStat !== undefined
+      ? { publishedStat: temporaryStat }
+      : {}),
+  };
 }
 
 export function readRegularFileNoFollow(filePath: string, expectedStat: Stats): Buffer {
@@ -656,7 +666,7 @@ export function writePrivateFileWithModeGuarded(
   mode: number,
   publicationGuard: () => PublicationGuardResult,
 ): boolean {
-  return writePrivateFileAtomically(filePath, content, mode, false, publicationGuard);
+  return writePrivateFileAtomically(filePath, content, mode, false, publicationGuard).published;
 }
 
 export function writePrivateFileWithModeExpected(
@@ -666,6 +676,26 @@ export function writePrivateFileWithModeExpected(
   expectedState: PrivateFileState,
 ): void {
   writePrivateFileAtomically(filePath, content, mode, false, undefined, expectedState);
+}
+
+export function publishPrivateFileWithModeExpected(
+  filePath: string,
+  content: string | Buffer,
+  mode: number,
+  expectedState: PrivateFileState,
+): Stats {
+  const result = writePrivateFileAtomically(
+    filePath,
+    content,
+    mode,
+    false,
+    undefined,
+    expectedState,
+  );
+  if (!result.published || result.publishedStat === undefined) {
+    throw new Error(`Private artifact was not published: ${resolve(filePath)}`);
+  }
+  return result.publishedStat;
 }
 
 export function writePrivateFileWithModeExpectedGuarded(
@@ -682,7 +712,7 @@ export function writePrivateFileWithModeExpectedGuarded(
     false,
     publicationGuard,
     expectedState,
-  );
+  ).published;
 }
 
 export function writeNewPrivateFileWithMode(filePath: string, content: string | Buffer, mode: number): void {

@@ -34,7 +34,7 @@ import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../core/workflow/findings/manager-runner.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
-import { createFindingManagerPublicationDouble } from './helpers/finding-manager-publication.js';
+import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -57,6 +57,7 @@ beforeEach(() => {
 // 実 takt リポジトリの現在の内容や行数の変化に依存しない）。
 // ---------------------------------------------------------------------------
 const FIXTURE_CWD = mkdtempSync(join(tmpdir(), 'takt-evidence-protocol-fixture-'));
+const REPORT_DIR = mkdtempSync(join(tmpdir(), 'takt-evidence-protocol-reports-'));
 function writeFixtureFile(relativePath: string, lineCount: number): void {
   const fullPath = join(FIXTURE_CWD, relativePath);
   mkdirSync(dirname(fullPath), { recursive: true });
@@ -71,6 +72,7 @@ initializeGitFixture(FIXTURE_CWD, ['src/shared/constants.ts']);
 
 afterAll(() => {
   rmSync(FIXTURE_CWD, { recursive: true, force: true });
+  rmSync(REPORT_DIR, { recursive: true, force: true });
 });
 
 /**
@@ -158,31 +160,27 @@ function makeHarness(initialLedger: FindingLedger): {
   currentLedger: () => FindingLedger;
   run: () => ReturnType<typeof runFindingManagerForStep>;
 } {
-  let ledgerState = initialLedger;
+  const ledgerRepository = new RevisionedFindingLedgerTestRepository(initialLedger);
   const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
     ledgerIdentity: '/test/finding-evidence-protocol-fixture/ledger.json',
     workflowName: 'peer-review',
-    loadLedger: () => ledgerState,
-    saveLedger: (next) => { ledgerState = next; },
-    updateLedger: (mutator) => {
-      const mutation = mutator(ledgerState);
-      ledgerState = mutation.ledger;
-      return Promise.resolve(mutation);
-    },
+    loadLedger: () => ledgerRepository.loadLedger(),
+    updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
     claimAdjudicationReservation: (token) => {
       if (reservations.has(token)) return false;
       reservations.add(token);
       return true;
     },
     releaseAdjudicationReservation: (token) => { reservations.delete(token); },
-    createRunCopy: () => '/tmp/ledger-copy.json',
-    saveRawFindings: () => '/tmp/raw-findings.json',
-    saveManagerValidationReport: () => '/tmp/manager-report.json',
+    saveLedgerSnapshot: () => {},
+    saveRawFindings: () => {},
+    saveManagerValidationReport: () => {},
     ...createFindingManagerPublicationDouble(
-      (report) => `/tmp/findings-manager-validation.${report.stepName}.json`,
+      (report) => join(REPORT_DIR, `findings-manager-validation.${report.stepName}.json`),
+      ledgerRepository,
     ),
-    saveConflictAdjudicationReport: () => '/tmp/adjudication-report.json',
+    saveConflictAdjudicationReport: () => {},
   };
   const optionsBuilder = {
     buildAgentOptions: () => ({}),
@@ -204,7 +202,7 @@ function makeHarness(initialLedger: FindingLedger): {
     },
   };
   return {
-    currentLedger: () => ledgerState,
+    currentLedger: () => ledgerRepository.loadLedger(),
     run: () => {
       const subResults: FindingManagerSubStepResult[] = [{
         subStep: { kind: 'agent', name: 'ai-antipattern-review', persona: 'ai-antipattern-reviewer', edit: false } as WorkflowStep,
@@ -311,6 +309,7 @@ describe('codex 対策#4 red/green fixture: 実測の gemma 架空指摘7件（a
         title: 'A genuine, unrelated pre-existing finding',
         location: 'src/shared/constants.ts:5',
         description: 'Pre-existing finding untouched by this round.',
+        relation: 'new',
       }],
       conflicts: [],
       interpretations: [],

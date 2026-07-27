@@ -1,6 +1,7 @@
 import type { PartResult } from '../models/types.js';
 import { parseFindingContractPartCompletionClaim } from './team-leader-finding-contract.js';
 import { FindingContractInputValidationError } from './team-leader-finding-contract-validation.js';
+import { compareBinaryStrings } from '../../shared/utils/binary-string-comparator.js';
 
 export interface FindingContractEvidenceEntry {
   readonly findingId: string;
@@ -116,10 +117,11 @@ export function buildFindingContractDecisionEvidenceSnapshot(
     }
   }
   const sortedEntries = entries.sort((left, right) => (
-    left.findingId.localeCompare(right.findingId) || left.partId.localeCompare(right.partId)
+    compareBinaryStrings(left.findingId, right.findingId)
+      || compareBinaryStrings(left.partId, right.partId)
   ));
   const findings = [...targetFindingIds]
-    .sort()
+    .sort(compareBinaryStrings)
     .map((findingId): FindingContractEvidenceFinding => {
       const findingEntries = sortedEntries.filter((entry) => entry.findingId === findingId);
       const addressed = findingEntries

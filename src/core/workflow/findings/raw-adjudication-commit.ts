@@ -20,6 +20,7 @@ import type {
   RawFindingDisposition,
 } from './types.js';
 import { matchesProvisionalRecoveryOrigin } from './provisional-recovery-origin.js';
+import { canonicalRawIntegrityDigestOf } from './raw-canonicalization.js';
 
 function filterReplayOutput(input: {
   output: FindingManagerOutput;
@@ -161,6 +162,7 @@ function dispositionForFailure(
   switch (failure.kind) {
     case 'source_missing':
     case 'reviewer_provenance_missing':
+    case 'recovery_contract_mismatch':
     case 'admission_rejected':
     case 'input_budget_exceeded':
     case 'manager_output_rejected':
@@ -301,6 +303,9 @@ export function applyRawAdjudicationRecovery(input: {
     {
       reviewerStableKey: item.canonical.reviewerStableKey,
       lineageKey: item.canonical.lineageKey,
+      claimIdentityHash: item.canonical.evidenceHash,
+      canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(item.canonical),
+      canonicalProvenance: item.canonical.provenance,
     },
   ]));
   const landedRawIds = collectLandedRawIds(settledOutput);

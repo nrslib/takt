@@ -5,6 +5,7 @@ import type {
 } from '../../models/types.js';
 import { resolvePartErrorDetail } from './team-leader-common.js';
 import type { FindingContractPartIndexEntry } from '../team-leader-finding-contract.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 
 export interface TeamLeaderArtifactReference {
   path: string;
@@ -55,18 +56,18 @@ export function buildFindingContractTeamLeaderAggregatedContent(
   const disputes = [...disputesByFindingId.entries()]
     .map(([findingId, dispute]) => ({
       findingId,
-      reason: [...dispute.reasons].sort().join('; '),
-      evidence: [...dispute.evidence].sort(),
+      reason: [...dispute.reasons].sort(compareBinaryStrings).join('; '),
+      evidence: [...dispute.evidence].sort(compareBinaryStrings),
     }))
-    .sort((left, right) => left.findingId.localeCompare(right.findingId));
+    .sort((left, right) => compareBinaryStrings(left.findingId, right.findingId));
 
   const summary = {
     decision: decision.decision,
     reasoning: decision.reasoning,
     ...(decision.decision === 'complete' ? { fixCoverage: decision.fixCoverage } : {}),
     ...(decision.decision === 'replan' ? { blockers: decision.blockers } : {}),
-    partIndex: [...partIndex].sort((left, right) => left.id.localeCompare(right.id)),
-    artifacts: [...artifacts].sort((left, right) => left.path.localeCompare(right.path)),
+    partIndex: [...partIndex].sort((left, right) => compareBinaryStrings(left.id, right.id)),
+    artifacts: [...artifacts].sort((left, right) => compareBinaryStrings(left.path, right.path)),
   };
   const sections = [
     '## Finding Contract Team Leader Decision',

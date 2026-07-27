@@ -524,6 +524,121 @@ describe('workflow_call schema', () => {
     }
   });
 
+  const reportProducer = (name: string, reportName: string) => ({
+    name,
+    persona: 'reviewer',
+    output_contracts: {
+      report: [{ name: reportName, format: 'markdown' }],
+    },
+  });
+
+  it('異なる step が同一 report identity を継続更新することを許可する', () => {
+    expect(WorkflowConfigRawSchema.safeParse({
+      name: 'report-identity',
+      steps: [
+        reportProducer('first', 'review.md'),
+        reportProducer('second', 'review.md'),
+      ],
+    }).success).toBe(true);
+  });
+
+  it.each([
+    ['Unicode full case-fold', 'Straße.md', 'STRASSE.md'],
+    ['NFC/NFD', 'réview.md', 're\u0301view.md'],
+  ])('%s の portable identity 衝突を reject する', (_label, firstName, secondName) => {
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'report-identity',
+      steps: [
+        reportProducer('first', firstName),
+        {
+          name: 'parallel',
+          parallel: [reportProducer('nested', secondName)],
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining('collides with'),
+        }),
+      ]));
+    }
+  });
+
+  it('非canonicalな Windows separator を書き換えず reject する', () => {
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'report-separator',
+      steps: [reportProducer('review', 'nested\\review.md')],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: ['steps', 0, 'output_contracts', 'report', 0, 'name'],
+          message: expect.stringContaining('non-canonical path separator'),
+        }),
+      ]));
+    }
+  });
+
+  it('同一 step 内の同名 report を reject する', () => {
+    const producer = reportProducer('review', 'review.md');
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'report-identity',
+      steps: [{
+        ...producer,
+        output_contracts: {
+          report: [
+            ...producer.output_contracts.report,
+            { name: 'review.md', format: 'markdown' },
+          ],
+        },
+      }],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: ['steps', 0, 'output_contracts', 'report', 1, 'name'],
+          message: expect.stringContaining('collides with'),
+        }),
+      ]));
+    }
+  });
+
+  it('同時実行可能な parallel sibling 間の同名 report を reject する', () => {
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'report-identity',
+      steps: [{
+        name: 'parallel',
+        parallel: [
+          reportProducer('first', 'review.md'),
+          reportProducer('second', 'review.md'),
+        ],
+      }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('parallel block と外側の逐次 step 間では同一 report の継続更新を許可する', () => {
+    expect(WorkflowConfigRawSchema.safeParse({
+      name: 'report-identity',
+      steps: [
+        reportProducer('before', 'review.md'),
+        {
+          name: 'parallel',
+          parallel: [reportProducer('nested', 'review.md')],
+        },
+        reportProducer('after', 'review.md'),
+      ],
+    }).success).toBe(true);
+  });
+
   it('return と next の同時指定を reject する', () => {
     expect(() => normalizeWorkflowConfig(
       {

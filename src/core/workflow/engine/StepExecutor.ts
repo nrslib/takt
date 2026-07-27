@@ -43,7 +43,6 @@ import {
   validateStructuredOutputAgainstSchema,
 } from './structured-output-schema-validator.js';
 import { providerSupportsStructuredOutput } from '../../../infra/providers/provider-capabilities.js';
-import { resolveReportHandles } from '../instruction/report-handles.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { buildStructuredJsonSchemaInstruction } from '../../../shared/prompts/index.js';
@@ -65,6 +64,10 @@ import {
   withFindingContractStructuredOutput,
 } from '../findings/contract-intake.js';
 import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
+import {
+  RAW_FINDINGS_SCHEMA_REF,
+  projectReviewerRawStructuredOutput,
+} from '../findings/raw-canonicalization.js';
 import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
 import type { InstructionBuildTransaction } from './instruction-build-transaction.js';
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
@@ -81,10 +84,8 @@ export interface StepExecutorDeps {
   readonly getLanguage: () => Language | undefined;
   readonly getInteractive: () => boolean;
   readonly getWorkflowSteps: () => ReadonlyArray<{ name: string; description?: string }>;
-  readonly getWorkflowDefinitionSteps: () => ReadonlyArray<WorkflowStep>;
   readonly getWorkflowName: () => string;
   readonly getWorkflowDescription: () => string | undefined;
-  readonly getInheritedPeerReportPaths: (step: WorkflowStep) => readonly string[];
   readonly getRetryNote: () => string | undefined;
   readonly getPrContext?: () => PullRequestContext | undefined;
   readonly getObservabilityRunId?: () => string | undefined;
@@ -203,7 +204,6 @@ export class StepExecutor {
     step: AgentWorkflowStep;
     stepIteration: number;
     response: AgentResponse;
-    ledgerCopyPath: string;
     priorStepResponseText: string | undefined;
     relationClarification?: ReviewerRelationClarification;
   }): Promise<FindingManagerRunResult> {
@@ -235,7 +235,6 @@ export class StepExecutor {
       runId: this.deps.getRunId(),
       callNamespace: this.deps.getFindingCallNamespace(),
       timestamp: new Date().toISOString(),
-      ledgerCopyPath: input.ledgerCopyPath,
       priorStepResponseText: input.priorStepResponseText,
       refreshFindingsState: this.deps.refreshFindingsState,
       emitEvent: this.deps.emitEvent,
@@ -470,6 +469,10 @@ export class StepExecutor {
         structuredOutput = parsed as Record<string, unknown>;
       }
 
+      if (step.structuredOutput.schemaRef === RAW_FINDINGS_SCHEMA_REF) {
+        structuredOutput = projectReviewerRawStructuredOutput(structuredOutput);
+      }
+
       // post-hoc 検証は寛容版（validationSchema）を優先する。provider へ渡る
       // 生成拘束用 schema（strict 様式）とは役割が異なる — 詳細は
       // WorkflowStructuredOutput の doc コメント参照。
@@ -597,18 +600,11 @@ export class StepExecutor {
       transaction,
     );
     const workflowSteps = this.deps.getWorkflowSteps();
-    const workflowDefinitionSteps = this.deps.getWorkflowDefinitionSteps();
     const reportDir = join(this.deps.getCwd(), this.deps.getReportDir());
     // workflow_call の子（subworkflows 名前空間）の {report:X} が親成果物へ
     // read-only フォールバックするための reports ルート。engine の runPaths から
     // 明示的に渡す（リゾルバ側でパス文字列から推測しない）。
     const reportsRootDir = this.deps.getRunPaths().reportsRootAbs;
-    const reportHandles = resolveReportHandles({
-      step,
-      reportDir,
-      workflowSteps: workflowDefinitionSteps,
-      inheritedPeerReportPaths: this.deps.getInheritedPeerReportPaths(step),
-    });
     const instruction = new InstructionBuilder(step, {
       task,
       iteration: state.iteration,
@@ -620,10 +616,6 @@ export class StepExecutor {
       previousOutput: getPreviousOutput(state),
       reportDir,
       reportsRootDir,
-      currentReport: reportHandles.currentReport,
-      previousReport: reportHandles.previousReport,
-      reportHistory: reportHandles.reportHistory,
-      peerReports: reportHandles.peerReports,
       language: this.deps.getLanguage(),
       interactive: this.deps.getInteractive(),
       workflowSteps,
@@ -913,7 +905,6 @@ export class StepExecutor {
         step: findingContractIntakeStep,
         stepIteration,
         response,
-        ledgerCopyPath: findingContractContext.ledgerCopyPath,
         priorStepResponseText,
         relationClarification,
       });

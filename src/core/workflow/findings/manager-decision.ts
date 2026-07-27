@@ -35,8 +35,6 @@ export async function runManagerDecisionStage(params: {
   previousLedger: FindingLedger;
   admission: RawAdmissionEvaluation;
   managerStep: AgentWorkflowStep;
-  ledgerCopyPath: string;
-  rawFindingsPath: string;
   observation: FindingObservation;
   reviewScopeSnapshotId: string;
   stopBudgetRoundMarker: string;
@@ -46,8 +44,6 @@ export async function runManagerDecisionStage(params: {
     previousLedger,
     admission,
     managerStep,
-    ledgerCopyPath,
-    rawFindingsPath,
     observation,
     reviewScopeSnapshotId,
     stopBudgetRoundMarker,
@@ -61,7 +57,6 @@ export async function runManagerDecisionStage(params: {
     runInput: input,
     previousLedger,
     managerStep,
-    ledgerCopyPath,
     observation,
     reviewScopeSnapshotId,
   });
@@ -88,8 +83,6 @@ export async function runManagerDecisionStage(params: {
       const instruction = buildManagerInstruction({
         contract: input.contract,
         previousLedger,
-        ledgerCopyPath,
-        rawFindingsPath,
         residualRawFindings: mechanical.residualRawFindings,
         mechanicallyClassifiedCount: cleanWire.length - mechanical.residualRawFindings.length,
         priorStepResponseText: input.priorStepResponseText,

@@ -16,14 +16,12 @@ import type { RunFindingManagerForStepInput } from './manager-contracts.js';
 
 export interface PreparedFindingManagerRound {
   previousLedger: FindingLedger;
-  ledgerCopyPath: string;
   observation: FindingObservation;
   stopBudgetLimits: ReturnType<typeof resolveStopBudgetLimits>;
   stopBudgetRoundMarker: string;
   reviewIntegrityLimits: ReturnType<typeof resolveReviewIntegrityLimits>;
   intake: ReviewerIntakeResult;
   interpretationRecoveryFailures: InterpretationRecoveryFailure[];
-  rawFindingsPath: string;
   managerStep: AgentWorkflowStep;
   providerInfo: StepProviderInfo;
 }
@@ -33,7 +31,7 @@ export function prepareFindingManagerRound(
   stopBudgetRoundMarker: string,
 ): PreparedFindingManagerRound {
   const previousLedger = input.ledgerStore.loadLedger();
-  const ledgerCopyPath = input.ledgerCopyPath ?? input.ledgerStore.createRunCopy();
+  input.ledgerStore.saveLedgerSnapshot();
   const observation: FindingObservation = {
     runId: input.runId,
     stepName: input.parentStep.name,
@@ -65,7 +63,7 @@ export function prepareFindingManagerRound(
     ...reviewerIntake,
     items: [...interpretationRecovery.items, ...currentItems],
   };
-  const rawFindingsPath = input.ledgerStore.saveRawFindings(
+  input.ledgerStore.saveRawFindings(
     input.runId,
     input.parentStep.name,
     intake.items.map((item) => item.wire),
@@ -96,14 +94,12 @@ export function prepareFindingManagerRound(
   });
   return {
     previousLedger,
-    ledgerCopyPath,
     observation,
     stopBudgetLimits,
     stopBudgetRoundMarker,
     reviewIntegrityLimits,
     intake,
     interpretationRecoveryFailures: interpretationRecovery.failures,
-    rawFindingsPath,
     managerStep,
     providerInfo: input.optionsBuilder.resolveStepProviderModel(managerStep),
   };

@@ -6,10 +6,17 @@ import {
 } from '../core/workflow/findings/reconciler.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import {
+  canonicalizeReviewerRawFinding,
+  canonicalRawIntegrityDigestOf,
   computeLineageKey,
+  computeProvisionalStableKey,
   computeRawEvidenceHash,
   computeReviewerStableKey,
+  createReviewerRawFindingCandidates,
+  toLedgerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
+import { issueOpenConflictOutcomeAuthority } from '../core/workflow/findings/raw-capabilities.js';
+import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
@@ -42,14 +49,15 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
     rawFindingDispositions: [],
     rawProvenanceByRawFindingId: new Map(input.rawFindings.map((rawFinding) => [
       rawFinding.rawFindingId,
-      {
-        reviewerStableKey: computeReviewerStableKey({
+      storedRawReconcileProvenance(
+        rawFinding,
+        computeReviewerStableKey({
           workflowName: input.context.workflowName,
           callNamespace: '',
           parentStepName: input.context.stepName,
           reviewerPersonaKey: rawFinding.reviewer,
         }),
-        lineageKey: computeLineageKey({
+        computeLineageKey({
           ...(rawFinding.targetFindingId !== undefined
             ? { targetFindingId: rawFinding.targetFindingId }
             : {}),
@@ -57,7 +65,7 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
           title: rawFinding.title,
           familyTag: rawFinding.familyTag,
         }),
-      },
+      ),
     ])),
   });
 }
@@ -261,10 +269,359 @@ describe('reconcileFindingLedger', () => {
       rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map([[
         rawFinding.rawFindingId,
-        { reviewerStableKey: 'reviewer-key', lineageKey: 'lineage-manager-and-provisional' },
+        storedRawReconcileProvenance(rawFinding, 'reviewer-key', 'lineage-manager-and-provisional'),
       ]]),
       context: makeContext(),
     })).toThrow(/exactly one reconcile outcome/);
+  });
+
+  it('rejects a forged clean raw conflict + provisional compound outcome', () => {
+    const rawFinding = makeRawFinding({
+      rawFindingId: 'raw-conflict-and-provisional',
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+    });
+
+    expect(() => reconcileFindingLedgerStrict({
+      previousLedger: makeLedgerWithOpenFinding(),
+      rawFindings: [rawFinding],
+      managerOutput: makeManagerOutput({
+        conflicts: [{
+          findingIds: ['F-0001'],
+          rawFindingIds: [rawFinding.rawFindingId],
+          description: 'The observation relates to F-0001 but identity remains ambiguous.',
+        }],
+      }),
+      provisionalFindings: [{
+        kind: 'raw-meaning-ambiguous',
+        stableKey: 'stable-conflict-and-provisional',
+        lineageKey: 'lineage-conflict-and-provisional',
+        sourceRawFindingIds: [rawFinding.rawFindingId],
+        reason: 'Held provisionally while the identity conflict remains active.',
+        title: rawFinding.title,
+        severity: rawFinding.severity,
+        reviewers: [rawFinding.reviewer],
+      }],
+      rawFindingDispositions: [],
+      rawProvenanceByRawFindingId: new Map([[
+        rawFinding.rawFindingId,
+        storedRawReconcileProvenance(rawFinding, 'reviewer-key', 'lineage-conflict-and-provisional'),
+      ]]),
+      context: makeContext(),
+    })).toThrow('unauthorized conflict + provisional compound outcome');
+  });
+
+  it('accepts an engine-authorized correction-tainted open_conflict compound outcome', () => {
+    const baseLedger = makeLedgerWithOpenFinding();
+    const candidate = createReviewerRawFindingCandidates([{
+      rawFindingId: 'corrected-conflict',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Corrected ambiguous observation',
+      description: 'The corrected observation still has uncertain identity.',
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+    }], {
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'peer-review',
+      stepIteration: 1,
+      runId: 'run-2',
+      reviewerStepName: 'coding-review',
+      reviewerPersonaKey: 'coding-reviewer',
+    })[0]!;
+    const canonical = canonicalizeReviewerRawFinding(candidate, {
+      ledger: baseLedger,
+      clarificationAttempted: true,
+      priorAmbiguityCodes: ['relation-target-mismatch'],
+    }).canonical;
+    const rawFinding = toLedgerRawFinding(canonical);
+    const interpretationKey = 'interpretation-corrected-conflict';
+    const provisionalStableKey = computeProvisionalStableKey({
+      reviewerStableKey: canonical.reviewerStableKey,
+      lineageKey: canonical.lineageKey,
+      provisionalKind: 'raw-meaning-ambiguous',
+    });
+    const previousLedger: FindingLedger = {
+      ...baseLedger,
+      interpretations: [{
+        interpretationKey,
+        baseInterpretationKey: 'base-corrected-conflict',
+        attemptOrdinal: 1,
+        reviewerStableKey: canonical.reviewerStableKey,
+        lineageKey: canonical.lineageKey,
+        candidateEvidenceHash: canonical.evidenceHash,
+        canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
+        stage: 'interpretation_completed',
+        reservationToken: 'reservation-corrected-conflict',
+        startedAt: baseLedger.findings[0]!.lastSeen,
+        completedAt: baseLedger.findings[0]!.lastSeen,
+        promptPreconditions: canonical.targetPrecondition === undefined
+          ? []
+          : [canonical.targetPrecondition],
+        validatedDecision: {
+          decision: 'open_conflict',
+          rawFindingId: canonical.rawFindingId,
+          targetFindingId: 'F-0001',
+        },
+      }],
+    };
+    const conflict = {
+      findingIds: ['F-0001'],
+      rawFindingIds: [rawFinding.rawFindingId],
+      description: 'The validated interpretation opened a conflict.',
+    };
+    const provisionalSpec = {
+      kind: 'raw-meaning-ambiguous' as const,
+      stableKey: provisionalStableKey,
+      lineageKey: canonical.lineageKey,
+      sourceRawFindingIds: [rawFinding.rawFindingId],
+      reason: 'The validated interpretation remains provisional while the conflict is active.',
+      title: rawFinding.title,
+      severity: rawFinding.severity,
+      reviewers: [rawFinding.reviewer],
+      recoveryReviewerStableKey: canonical.reviewerStableKey,
+    };
+    const authority = issueOpenConflictOutcomeAuthority({
+      canonical,
+      ledger: previousLedger,
+      interpretationKey,
+      conflict,
+      provisionalSpec,
+    });
+    const reconcileInput = {
+      previousLedger,
+      rawFindings: [rawFinding],
+      managerOutput: makeManagerOutput({
+        conflicts: [conflict],
+      }),
+      provisionalFindings: [provisionalSpec],
+      rawFindingDispositions: [],
+      rawProvenanceByRawFindingId: new Map([[
+        rawFinding.rawFindingId,
+        {
+          reviewerStableKey: canonical.reviewerStableKey,
+          lineageKey: canonical.lineageKey,
+          claimIdentityHash: canonical.evidenceHash,
+          canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
+          canonicalProvenance: canonical.provenance,
+          openConflictOutcomeAuthority: authority,
+        },
+      ]]),
+      context: makeContext(),
+    };
+    expect(() => reconcileFindingLedgerStrict({
+      ...reconcileInput,
+      rawFindings: [{
+        ...rawFinding,
+        description: 'A forged clean wire payload reused the tainted raw id.',
+      }],
+    })).toThrow('canonical integrity digest does not match');
+
+    expect(Object.isFrozen(canonical)).toBe(true);
+    expect(Object.isFrozen(canonical.provenance)).toBe(true);
+    expect(Object.isFrozen(canonical.provenance.ambiguityCodes)).toBe(true);
+    expect(Reflect.set(canonical.provenance, 'ambiguityOrigin', false)).toBe(false);
+
+    const crossCanonical = canonicalizeReviewerRawFinding(candidate, {
+      ledger: baseLedger,
+      priorAmbiguityCodes: ['new-collides-open-finding'],
+    }).canonical;
+    expect(toLedgerRawFinding(crossCanonical)).toEqual(rawFinding);
+    expect(crossCanonical.reviewerStableKey).toBe(canonical.reviewerStableKey);
+    expect(crossCanonical.lineageKey).toBe(canonical.lineageKey);
+    expect(crossCanonical.evidenceHash).toBe(canonical.evidenceHash);
+    expect(() => reconcileFindingLedgerStrict({
+      ...reconcileInput,
+      rawProvenanceByRawFindingId: new Map([[
+        rawFinding.rawFindingId,
+        {
+          reviewerStableKey: crossCanonical.reviewerStableKey,
+          lineageKey: crossCanonical.lineageKey,
+          claimIdentityHash: crossCanonical.evidenceHash,
+          canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(crossCanonical),
+          canonicalProvenance: crossCanonical.provenance,
+          openConflictOutcomeAuthority: authority,
+        },
+      ]]),
+    })).toThrow('issued canonical wire or provenance does not match');
+
+    expect(() => reconcileFindingLedgerStrict({
+      ...reconcileInput,
+      managerOutput: makeManagerOutput({
+        conflicts: [{ ...conflict, description: 'Substituted conflict payload.' }],
+      }),
+    })).toThrow('conflict or provisional payload does not match');
+
+    expect(() => reconcileFindingLedgerStrict({
+      ...reconcileInput,
+      provisionalFindings: [{
+        ...provisionalSpec,
+        reason: 'Substituted provisional payload.',
+      }],
+    })).toThrow('conflict or provisional payload does not match');
+
+    expect(() => reconcileFindingLedgerStrict({
+      ...reconcileInput,
+      rawProvenanceByRawFindingId: new Map([[
+        rawFinding.rawFindingId,
+        {
+          reviewerStableKey: `${canonical.reviewerStableKey}-substituted`,
+          lineageKey: canonical.lineageKey,
+          claimIdentityHash: canonical.evidenceHash,
+          canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
+          canonicalProvenance: canonical.provenance,
+          openConflictOutcomeAuthority: authority,
+        },
+      ]]),
+    })).toThrow('canonical integrity digest does not match');
+
+    expect(() => reconcileFindingLedgerStrict({
+      ...reconcileInput,
+      rawProvenanceByRawFindingId: new Map([[
+        rawFinding.rawFindingId,
+        {
+          reviewerStableKey: canonical.reviewerStableKey,
+          lineageKey: canonical.lineageKey,
+          claimIdentityHash: canonical.evidenceHash,
+          canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
+          canonicalProvenance: canonical.provenance,
+          openConflictOutcomeAuthority: { ...authority } as unknown as typeof authority,
+        },
+      ]]),
+    })).toThrow('authority was not issued by the engine');
+
+    expect(() => reconcileFindingLedgerStrict({
+      ...reconcileInput,
+      managerOutput: makeManagerOutput({ conflicts: [conflict, { ...conflict }] }),
+    })).toThrow(/multiple manager decisions|exactly one conflict/);
+
+    expect(() => reconcileFindingLedgerStrict({
+      ...reconcileInput,
+      provisionalFindings: [provisionalSpec, { ...provisionalSpec }],
+    })).toThrow('authority requires exactly one conflict and one provisional outcome');
+
+    const ledger = reconcileFindingLedgerStrict(reconcileInput);
+
+    expect(ledger.findings).toContainEqual(expect.objectContaining({
+      status: 'open',
+      provisional: expect.objectContaining({ kind: 'raw-meaning-ambiguous' }),
+    }));
+    expect(ledger.conflicts).toContainEqual(expect.objectContaining({
+      status: 'active',
+      findingIds: ['F-0001'],
+      rawFindingIds: [rawFinding.rawFindingId],
+    }));
+  });
+
+  it('rejects non-canonical object graphs without invoking accessors and freezes every canonical node', () => {
+    const baseLedger = makeLedger();
+    const newCandidate = () => createReviewerRawFindingCandidates([{
+      rawFindingId: 'graph-shape',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Graph shape',
+      description: 'Graph shape evidence',
+      relation: 'new',
+      evidenceKind: 'locationless',
+    }], {
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'peer-review',
+      stepIteration: 1,
+      runId: 'run-graph',
+      reviewerStepName: 'coding-review',
+      reviewerPersonaKey: 'coding-reviewer',
+    })[0]!;
+
+    const symbolCandidate = newCandidate();
+    Object.defineProperty(symbolCandidate, Symbol('hidden'), {
+      value: 'hidden',
+      enumerable: true,
+    });
+    expect(() => canonicalizeReviewerRawFinding(symbolCandidate, { ledger: baseLedger }))
+      .toThrow('symbol-keyed');
+
+    const hiddenCandidate = newCandidate();
+    Object.defineProperty(hiddenCandidate, 'hidden', {
+      value: 'hidden',
+      enumerable: false,
+    });
+    expect(() => canonicalizeReviewerRawFinding(hiddenCandidate, { ledger: baseLedger }))
+      .toThrow('non-enumerable');
+
+    let accessorCalls = 0;
+    const accessorCandidate = newCandidate();
+    Object.defineProperty(accessorCandidate, 'title', {
+      get: () => {
+        accessorCalls += 1;
+        return 'accessed';
+      },
+      enumerable: true,
+    });
+    expect(() => canonicalizeReviewerRawFinding(accessorCandidate, { ledger: baseLedger }))
+      .toThrow('accessor');
+    expect(accessorCalls).toBe(0);
+
+    const proxyCandidate = newCandidate();
+    let proxyTrapCalls = 0;
+    Object.defineProperty(proxyCandidate, 'evidence', {
+      value: new Proxy({ kind: 'locationless', explanation: 'proxy' }, {
+        getPrototypeOf: () => {
+          proxyTrapCalls += 1;
+          return Object.prototype;
+        },
+        ownKeys: () => {
+          proxyTrapCalls += 1;
+          return [];
+        },
+        getOwnPropertyDescriptor: () => {
+          proxyTrapCalls += 1;
+          return undefined;
+        },
+      }),
+      enumerable: true,
+    });
+    expect(() => canonicalizeReviewerRawFinding(proxyCandidate, { ledger: baseLedger }))
+      .toThrow('Proxy');
+    expect(proxyTrapCalls).toBe(0);
+
+    const cycleCandidate = newCandidate();
+    Object.defineProperty(cycleCandidate, 'evidence', {
+      value: cycleCandidate,
+      enumerable: true,
+    });
+    expect(() => canonicalizeReviewerRawFinding(cycleCandidate, { ledger: baseLedger }))
+      .toThrow('cyclic values or repeated object references');
+
+    const sharedCandidate = newCandidate();
+    const sharedEvidence = { kind: 'locationless', explanation: 'shared' };
+    Object.defineProperties(sharedCandidate, {
+      evidence: { value: sharedEvidence, enumerable: true },
+      alias: { value: sharedEvidence, enumerable: true },
+    });
+    expect(() => canonicalizeReviewerRawFinding(sharedCandidate, { ledger: baseLedger }))
+      .toThrow('cyclic values or repeated object references');
+
+    const canonical = canonicalizeReviewerRawFinding(newCandidate(), {
+      ledger: baseLedger,
+      priorAmbiguityCodes: ['relation-target-mismatch'],
+    }).canonical;
+    const visited = new Set<object>();
+    const assertFrozenGraph = (value: unknown): void => {
+      if (typeof value !== 'object' || value === null || visited.has(value)) {
+        return;
+      }
+      visited.add(value);
+      expect(Object.isFrozen(value)).toBe(true);
+      for (const key of Reflect.ownKeys(value)) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+        if ('value' in descriptor) {
+          assertFrozenGraph(descriptor.value);
+        }
+      }
+    };
+    assertFrozenGraph(canonical);
   });
 
   it('rejects a raw used by multiple provisional outcomes', () => {
@@ -290,7 +647,7 @@ describe('reconcileFindingLedger', () => {
       rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map([[
         rawFinding.rawFindingId,
-        { reviewerStableKey: 'reviewer-key', lineageKey: baseSpec.lineageKey },
+        storedRawReconcileProvenance(rawFinding, 'reviewer-key', baseSpec.lineageKey),
       ]]),
       context: makeContext(),
     })).toThrow(/exactly one reconcile outcome/);
@@ -551,7 +908,7 @@ describe('reconcileFindingLedger', () => {
         id: 'C-548C1D35CEAA',
         status: 'active',
         findingIds: [],
-        rawFindingIds: ['raw-security', 'raw-architecture'],
+        rawFindingIds: ['raw-architecture', 'raw-security'],
         description: 'Reviewers disagree about whether the cache should remain.',
         firstSeen: { runId: 'run-2', stepName: 'reviewers', timestamp: '2026-06-13T01:00:00.000Z' },
         lastSeen: { runId: 'run-2', stepName: 'reviewers', timestamp: '2026-06-13T01:00:00.000Z' },
@@ -803,7 +1160,7 @@ describe('reconcileFindingLedger', () => {
         timestamp: '2026-06-13T01:00:00.000Z',
       },
     });
-    expect(ledger.findings.find((f) => f.id === 'F-0001')?.rawFindingIds).toEqual(['raw-old', 'raw-current']);
+    expect(ledger.findings.find((f) => f.id === 'F-0001')?.rawFindingIds).toEqual(['raw-current', 'raw-old']);
   });
 
   it('should allow a reopened finding to gain evidence with a different familyTag from previous evidence', () => {
@@ -1301,10 +1658,7 @@ describe('reconcileFindingLedger', () => {
       }],
       rawProvenanceByRawFindingId: new Map([[
         rawFinding.rawFindingId,
-        {
-          reviewerStableKey: 'reviewer-key',
-          lineageKey: 'lineage-key',
-        },
+        storedRawReconcileProvenance(rawFinding, 'reviewer-key', 'lineage-key'),
       ]]),
       context: {
         workflowName: 'peer-review',
@@ -1327,7 +1681,7 @@ describe('reconcileFindingLedger', () => {
       excludedRawFindingIds: new Set([rawFinding.rawFindingId]),
       rawProvenanceByRawFindingId: new Map([[
         rawFinding.rawFindingId,
-        { reviewerStableKey: 'reviewer-key', lineageKey: 'lineage-key' },
+        storedRawReconcileProvenance(rawFinding, 'reviewer-key', 'lineage-key'),
       ]]),
       context: {
         workflowName: 'peer-review',
@@ -1358,7 +1712,7 @@ describe('reconcileFindingLedger', () => {
       }],
       rawProvenanceByRawFindingId: new Map([[
         rawFinding.rawFindingId,
-        { reviewerStableKey: 'reviewer-key', lineageKey: 'lineage-key' },
+        storedRawReconcileProvenance(rawFinding, 'reviewer-key', 'lineage-key'),
       ]]),
       context: {
         workflowName: 'peer-review',
@@ -1447,7 +1801,7 @@ describe('reconcileFindingLedger', () => {
     expect(ledger.conflicts[0]).toMatchObject({
       id: conflictId,
       description: 'Same conflict after reobservation.',
-      rawFindingIds: ['raw-previous-conflict', 'raw-current-conflict'],
+      rawFindingIds: ['raw-current-conflict', 'raw-previous-conflict'],
     });
   });
 
@@ -1518,7 +1872,7 @@ describe('reconcileFindingLedger', () => {
     expect(ledger.conflicts).toHaveLength(1);
     expect(ledger.conflicts[0]).toMatchObject({
       id: conflictId,
-      rawFindingIds: ['raw-previous-conflict', 'raw-generated-conflict', 'raw-current-conflict'],
+      rawFindingIds: ['raw-current-conflict', 'raw-generated-conflict', 'raw-previous-conflict'],
       firstSeen: firstObservation,
     });
     expect(ledger.conflicts[0]!.adjudications?.map((record) => record.evidenceHash)).toEqual([

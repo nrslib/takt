@@ -8,6 +8,7 @@ import {
   createOverflowRawCandidate,
   createReviewerRawFindingCandidates,
   extractLenientRawFields,
+  projectReviewerRawFindingItems,
   toLedgerRawFinding,
   type ReviewerRawIntakeContext,
 } from './raw-canonicalization.js';
@@ -21,6 +22,7 @@ import type { FindingLedger } from './types.js';
 import type { ReviewerIntakeResult } from './manager-admission.js';
 import { isWorkflowCallStep } from '../step-kind.js';
 import { createLogger } from '../../../shared/utils/index.js';
+import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 
 const log = createLogger('finding-manager-intake');
 
@@ -70,7 +72,9 @@ export function intakeReviewerOutputs(input: {
         `Finding contract reviewer "${subResult.subStep.name}" returned structured output without a rawFindings array`,
       );
     }
-    const items = structuredOutput.rawFindings as unknown[];
+    const items = projectReviewerRawFindingItems(
+      structuredOutput.rawFindings as unknown[],
+    );
     const context: ReviewerRawIntakeContext = {
       workflowName: input.workflowName,
       callNamespace: input.callNamespace,
@@ -88,7 +92,7 @@ export function intakeReviewerOutputs(input: {
     }
 
     // envelope 検査は Zod parse の前（65件目を読んだ時点で打ち切る）。
-    const jsonBytes = Buffer.byteLength(JSON.stringify(items), 'utf-8');
+    const jsonBytes = Buffer.byteLength(canonicalJson(items), 'utf-8');
     const envelopeViolation = checkReviewerEnvelope({ itemCount: items.length, jsonBytes });
     const fieldViolation = envelopeViolation === undefined
       ? items.map((item) => findRawFieldLimitViolation(extractLenientRawFields(item))).find((violation) => violation !== undefined)

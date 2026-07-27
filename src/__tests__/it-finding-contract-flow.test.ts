@@ -7,6 +7,7 @@ import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js'
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import type { WorkflowState } from '../core/models/types.js';
 import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
+import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 
 function buildFindingsRuleContext(ledger: FindingLedger) {
   return buildFindingsRuleContextWithCwd(ledger, process.cwd());
@@ -190,19 +191,20 @@ describe('Finding Contract integration flow', () => {
       rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map([[
         rawFinding.rawFindingId,
-        {
-          reviewerStableKey: computeReviewerStableKey({
+        storedRawReconcileProvenance(
+          rawFinding,
+          computeReviewerStableKey({
             workflowName: 'peer-review',
             callNamespace: '',
             parentStepName: 'peer-review',
             reviewerPersonaKey: rawFinding.reviewer,
           }),
-          lineageKey: computeLineageKey({
+          computeLineageKey({
             location: rawFinding.location,
             title: rawFinding.title,
             familyTag: rawFinding.familyTag,
           }),
-        },
+        ),
       ]]),
       context: {
         workflowName: 'peer-review',

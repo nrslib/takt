@@ -1,4 +1,8 @@
-import { reconcileFindingLedger, type ProvisionalFindingSpec } from './reconciler.js';
+import {
+  reconcileFindingLedger,
+  type CanonicalRawReconcileProvenance,
+  type ProvisionalFindingSpec,
+} from './reconciler.js';
 import {
   applyReviewerAnomalySpecsToLedger,
   createReviewerAnomalySpec,
@@ -32,6 +36,10 @@ import { collectActiveConflictFindingIds, normalizeMergedManagerPlan } from './m
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import { collectRegeneratedConflictIds } from '../../models/finding-conflict-identity.js';
 import { collectLandedRawIds } from './manager-utils.js';
+import {
+  applyResolutionRenotificationTransitions,
+  type ResolutionRenotificationTransition,
+} from './resolution-renotification.js';
 
 interface RejectedObservationPlan {
   attachments: Array<{ targetFindingId: string; rawFindingId: string; reason: string }>;
@@ -74,13 +82,14 @@ export function reconcileCommitPlan(input: {
   provisionalSpecs: ProvisionalFindingSpec[];
   anomalySpecs: ReviewerAnomalySpec[];
   pendingRejectedObservations: RawAdmissionEvaluation['pendingRejectedObservations'];
-  rawProvenanceByRawFindingId: Map<string, { reviewerStableKey: string; lineageKey: string }>;
+  rawProvenanceByRawFindingId: Map<string, CanonicalRawReconcileProvenance>;
   cleanWire: RawFinding[];
   explicitResolvedByMapping: ReadonlyMap<string, string>;
   explicitPromotedFindingIds: ReadonlySet<string>;
   recoveryProvisionalRawFindingIds: ReadonlySet<string>;
   staleRawFindingIds: ReadonlySet<string>;
   deferredRawFindingIds: ReadonlySet<string>;
+  resolutionRenotifications: readonly ResolutionRenotificationTransition[];
   unsupportedRawFindingReports: readonly {
     rawFindingId: string;
     evidence: string;
@@ -190,6 +199,17 @@ export function reconcileCommitPlan(input: {
       outcome: 'deferred' as const,
       reason: 'Another live interpretation reservation owns this raw finding',
     })),
+    ...input.resolutionRenotifications.flatMap((transition) => (
+      [...transition.resolutionRawFindingIds, ...transition.renotificationRawFindingIds]
+        .filter((rawFindingId) => input.rawFindings.some(
+          (rawFinding) => rawFinding.rawFindingId === rawFindingId,
+        ))
+        .map((rawFindingId) => ({
+          rawFindingId,
+          outcome: 'resolution_renotification_conflict' as const,
+          reason: `Resolution and verified renotification both observed finding "${transition.findingId}" at revision ${transition.observed.targetRevision}`,
+        }))
+    )),
     ...input.unsupportedRawFindingReports.map((report) => ({
       rawFindingId: report.rawFindingId,
       outcome: 'unsupported' as const,
@@ -236,7 +256,16 @@ export function reconcileCommitPlan(input: {
       timestamp: input.runInput.timestamp,
     },
   });
-  const settled = applyProvisionalSettlement(reconciled, settlement, input.runInput.timestamp);
+  const transitioned = applyResolutionRenotificationTransitions({
+    ledger: reconciled,
+    transitions: input.resolutionRenotifications,
+    observation: {
+      runId: input.runInput.runId,
+      stepName: input.runInput.parentStep.name,
+      timestamp: input.runInput.timestamp,
+    },
+  });
+  const settled = applyProvisionalSettlement(transitioned, settlement, input.runInput.timestamp);
   const attached = attachSuppressedObservationsToDismissed(
     settled,
     suppressedSpecs,
@@ -352,6 +381,7 @@ export function applyCommitLedgerStates(input: {
   pendingRejectedObservations: RawAdmissionEvaluation['pendingRejectedObservations'];
   interpretationResults: Map<string, InterpretationApplicationResult>;
   interpretationReservations: ReadonlyMap<string, string>;
+  interpretationIntegrityDigests: ReadonlyMap<string, string>;
   observation: FindingObservation;
   verifiedEvidenceCandidates: RawAdmissionEvaluation['verifiedEvidenceCandidates'];
   stopBudgetLimits: ReturnType<typeof resolveStopBudgetLimits>;
@@ -382,6 +412,7 @@ export function applyCommitLedgerStates(input: {
     withRejectedObservations,
     input.interpretationResults,
     input.interpretationReservations,
+    input.interpretationIntegrityDigests,
     input.observation,
   );
   const normalized = normalizeProvisionalInterpretationEpochs(applied);

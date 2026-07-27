@@ -17,9 +17,10 @@ import { computeReviewScopeSnapshotId } from './snapshot.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import { REVIEWER_ENVELOPE_RECOVERY_LIMITS } from './raw-finding-limits.js';
 import type { FindingLedger, FindingLedgerFixpointSnapshot, FindingLedgerFixpointState } from './types.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 
 function sortedUnique(values: Iterable<string>): string[] {
-  return [...new Set(values)].sort();
+  return [...new Set(values)].sort(compareBinaryStrings);
 }
 
 function provisionalFixpointKey(

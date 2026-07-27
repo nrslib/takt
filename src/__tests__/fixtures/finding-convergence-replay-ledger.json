@@ -179,6 +179,12 @@
       "description": "`src/app/cli/routing.ts` において、`prCleanupAttachments` の呼び出しが L129, L146, L160, L177, L302 に分散して手動で行われており、リソース管理の責任が各コールサイトに分散している。これは F-0011 で指摘された「脆弱な分散クリーンアップパターン」であり、構造的な改善（セッションスコープのマネージャー導入等）がなされていない。",
       "suggestion": "セッションスコープのリソースマネージャーを導入し、CLI終了時に一括して一時ファイルをクリーンアップする仕組みを導入することで、手動のクリーンアップ呼び出しを排除してください。",
       "targetFindingId": "F-0011",
+      "targetPrecondition": {
+        "targetFindingId": "F-0011",
+        "targetRevision": 6,
+        "targetStatus": "open",
+        "targetEvidenceHash": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
       "reviewer": "ai-antipattern-review",
       "stepName": "ai-antipattern-review",
       "relation": "persists"
@@ -192,6 +198,12 @@
       "description": "`src/app/cli/routing.ts:302` の `finally` ブロックで `prCleanupAttachments` が呼ばれているが、`interactiveSeed` (L192) で注入された PR 添付が `result.attachments` に引き継がれた場合、`cleanupInteractiveResultAttachments(result)` (L303) ではこれらの PR 添付（tempPath）を適切に処理できず、元の PR 添付としてのライフサイクル管理と整合性が取れなくなるリスクがある。特に、`dispatchConversationAction` 内の各アクションが成功/失敗した際のリソース状態が不透明である。",
       "suggestion": "PR添付のリソース管理をセッション添付とは明確に分離し、`dispatchConversationAction` の完了後、結果に関わらず `prCleanupAttachments` が確実に一度だけ呼ばれることを保証する構造にしてください。",
       "targetFindingId": "F-0006",
+      "targetPrecondition": {
+        "targetFindingId": "F-0006",
+        "targetRevision": 1,
+        "targetStatus": "open",
+        "targetEvidenceHash": "6666666666666666666666666666666666666666666666666666666666666666"
+      },
       "reviewer": "ai-antipattern-review",
       "stepName": "ai-antipattern-review",
       "relation": "persists"
@@ -205,6 +217,12 @@
       "description": "`src/app/cli/routing.ts:302` に基づくクリーンアップ構造は、F-0017 で指摘された通り、分散した呼び出し箇所に依存しており、リソース解放のタイミングが不透明である。",
       "suggestion": "F-0011 同様、集中管理されたマネージャーによる一括解放へ移行してください。",
       "targetFindingId": "F-0017",
+      "targetPrecondition": {
+        "targetFindingId": "F-0017",
+        "targetRevision": 1,
+        "targetStatus": "open",
+        "targetEvidenceHash": "7777777777777777777777777777777777777777777777777777777777777777"
+      },
       "reviewer": "ai-antipattern-review",
       "stepName": "ai-antipattern-review",
       "relation": "persists"

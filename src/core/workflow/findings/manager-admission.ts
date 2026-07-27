@@ -12,13 +12,119 @@ import {
   type ReviewerAnomalySpec,
 } from './reviewer-anomalies.js';
 import { isLocationClaimAbsent, verifySourceQuoteEvidence } from './admission-validation.js';
-import type { ProvisionalRecoveryOrigin } from './provisional-recovery-origin.js';
+import {
+  matchesProvisionalRecoveryOrigin,
+  type ProvisionalRecoveryOrigin,
+} from './provisional-recovery-origin.js';
 
-export interface CanonicalIntakeItem {
+interface CanonicalIntakeItemBase {
   canonical: CanonicalRawFinding;
   wire: RawFinding;
-  recoveryOrigins?: ProvisionalRecoveryOrigin[];
-  interpretationRecoveryAttempt?: true;
+}
+
+export type ProvisionalRecoveryOrigins = [
+  ProvisionalRecoveryOrigin,
+  ...ProvisionalRecoveryOrigin[],
+];
+
+export type CanonicalIntakeItem =
+  | (CanonicalIntakeItemBase & {
+      recoveryOrigins?: never;
+      interpretationRecoveryAttempt?: never;
+    })
+  | (CanonicalIntakeItemBase & {
+      recoveryOrigins: ProvisionalRecoveryOrigins;
+      interpretationRecoveryAttempt: true;
+    });
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isProvisionalRecoveryOrigin(value: unknown): value is ProvisionalRecoveryOrigin {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const origin = value as Record<string, unknown>;
+  return isNonEmptyString(origin.provisionalFindingId)
+    && typeof origin.expectedProvisionalRevision === 'number'
+    && Number.isSafeInteger(origin.expectedProvisionalRevision)
+    && origin.expectedProvisionalRevision > 0
+    && isNonEmptyString(origin.expectedProvisionalStableKey)
+    && isNonEmptyString(origin.expectedProvisionalLineageKey)
+    && (
+      origin.expectedRecoveryReviewerStableKey === undefined
+      || isNonEmptyString(origin.expectedRecoveryReviewerStableKey)
+    );
+}
+
+export function assertCanonicalIntakeRecoveryState(
+  item: CanonicalIntakeItem,
+  ledger?: FindingLedger,
+): void {
+  if (item.canonical.rawFindingId !== item.wire.rawFindingId) {
+    throw new Error(
+      `Canonical and wire raw finding identity mismatch: "${item.canonical.rawFindingId}" !== "${item.wire.rawFindingId}"`,
+    );
+  }
+  const origins: unknown = Reflect.get(item, 'recoveryOrigins');
+  const recovery: unknown = Reflect.get(item, 'interpretationRecoveryAttempt');
+  if (origins === undefined && recovery === undefined) {
+    return;
+  }
+  if (
+    recovery !== true
+    || !Array.isArray(origins)
+    || origins.length === 0
+    || !origins.every(isProvisionalRecoveryOrigin)
+  ) {
+    throw new Error(
+      `Raw finding "${item.wire.rawFindingId}" has inconsistent interpretation recovery metadata`,
+    );
+  }
+  const typedOrigins = origins as ProvisionalRecoveryOrigin[];
+  const originIds = new Set<string>();
+  for (const origin of typedOrigins) {
+    if (originIds.has(origin.provisionalFindingId)) {
+      throw new Error(
+        `Raw finding "${item.wire.rawFindingId}" has duplicate recovery origin "${origin.provisionalFindingId}"`,
+      );
+    }
+    originIds.add(origin.provisionalFindingId);
+    if (ledger !== undefined) {
+      const finding = ledger.findings.find(
+        (candidate) => candidate.id === origin.provisionalFindingId,
+      );
+      if (finding !== undefined && matchesProvisionalRecoveryOrigin(finding, origin)) {
+        if (
+          origin.expectedProvisionalLineageKey !== item.canonical.lineageKey
+          || origin.expectedRecoveryReviewerStableKey !== item.canonical.reviewerStableKey
+        ) {
+          throw new Error(
+            `Raw finding "${item.wire.rawFindingId}" recovery origin provenance mismatch`,
+          );
+        }
+      }
+    }
+  }
+}
+
+export function assertCanonicalIntakeRecoveryStates(
+  items: readonly CanonicalIntakeItem[],
+  ledger?: FindingLedger,
+): void {
+  const claimedOriginIds = new Set<string>();
+  for (const item of items) {
+    assertCanonicalIntakeRecoveryState(item, ledger);
+    for (const origin of item.recoveryOrigins ?? []) {
+      if (claimedOriginIds.has(origin.provisionalFindingId)) {
+        throw new Error(
+          `Recovery origin "${origin.provisionalFindingId}" is claimed by multiple raw findings`,
+        );
+      }
+      claimedOriginIds.add(origin.provisionalFindingId);
+    }
+  }
 }
 
 export interface ReviewerIntakeResult {
@@ -207,6 +313,7 @@ export function evaluateRawAdmission(input: {
   previousLedger: FindingLedger;
   intake: ReviewerIntakeResult;
 }): RawAdmissionEvaluation {
+  assertCanonicalIntakeRecoveryStates(input.intake.items, input.previousLedger);
   const nonOverflow = input.intake.items.filter(
     (item) => !input.intake.overflowRawFindingIds.has(item.canonical.rawFindingId),
   );

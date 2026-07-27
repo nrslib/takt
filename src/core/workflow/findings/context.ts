@@ -7,6 +7,7 @@ import {
 } from './types.js';
 import { isLedgerConflictUnadjudicated } from './adjudication-evidence.js';
 import { computeReviewScopeSnapshotId } from './snapshot.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 
 function indexRawFindingFamilyTags(ledger: FindingLedger): ReadonlyMap<string, string> {
   const familyTagsByRawFindingId = new Map<string, string>();
@@ -38,8 +39,8 @@ function deriveFindingFamilyTags(
     }
   }
   return {
-    familyTags: [...familyTags].sort(),
-    unknownRawFindingIds: [...new Set(unknownRawFindingIds)].sort(),
+    familyTags: [...familyTags].sort(compareBinaryStrings),
+    unknownRawFindingIds: [...new Set(unknownRawFindingIds)].sort(compareBinaryStrings),
   };
 }
 

@@ -22,7 +22,11 @@ import type {
   RawFinding,
   RawFindingDispositionOutcome,
 } from './types.js';
-import type { CanonicalIntakeItem, ReviewerIntakeResult } from './manager-admission.js';
+import type {
+  CanonicalIntakeItem,
+  ProvisionalRecoveryOrigins,
+  ReviewerIntakeResult,
+} from './manager-admission.js';
 import type { CapturedFindingPrecondition } from './finding-preconditions.js';
 import type { ProvisionalRecoveryOrigin } from './provisional-recovery-origin.js';
 
@@ -41,14 +45,12 @@ export interface RunFindingManagerForStepInput {
   runId: string;
   callNamespace: string;
   timestamp: string;
-  ledgerCopyPath?: string;
   priorStepResponseText?: string;
 }
 
 export type FindingManagerRunResult =
   | {
       status: 'updated';
-      ledgerPath: string;
       providerInfo: StepProviderInfo;
       ledger: FindingLedger;
     }
@@ -57,33 +59,55 @@ export type FindingManagerRunResult =
       ledger: FindingLedger;
     };
 
-export interface LadderTarget {
+interface LadderTargetBase {
   canonical: CanonicalRawFinding;
   wire: RawFinding;
   baseInterpretationKey: string;
   interpretationKey: string;
   attemptOrdinal: number;
-  interpretationRecoveryAttempt?: boolean;
-  recoveryOrigins?: ProvisionalRecoveryOrigin[];
 }
+
+export type LadderTarget =
+  | (LadderTargetBase & {
+      interpretationRecoveryAttempt?: never;
+      recoveryOrigins?: never;
+    })
+  | (LadderTargetBase & {
+      interpretationRecoveryAttempt: true;
+      recoveryOrigins: ProvisionalRecoveryOrigins;
+    });
+
+type PendingIndependentNew =
+  | {
+      wire: RawFinding;
+      canonical: CanonicalRawFinding;
+      viaInterpretationKey?: string;
+      interpretationRecoveryAttempt?: never;
+      recoveryOrigins?: never;
+    }
+  | {
+      wire: RawFinding;
+      canonical: CanonicalRawFinding;
+      viaInterpretationKey?: string;
+      interpretationRecoveryAttempt: true;
+      recoveryOrigins: ProvisionalRecoveryOrigins;
+    };
 
 export interface LadderResult {
   interpretationReservations: Map<string, string>;
+  interpretationIntegrityDigests: Map<string, string>;
+  integrityStaleInterpretationKeys: Set<string>;
   deferredRawFindingIds: Set<string>;
   pendingSameWithProof: Array<{
     target: LadderTarget;
     proof: DeterministicSameProof;
     viaInterpretationKey?: string;
   }>;
-  pendingIndependentNew: Array<{
-    wire: RawFinding;
-    viaInterpretationKey?: string;
-    recoveryOrigins?: LadderTarget['recoveryOrigins'];
-  }>;
+  pendingIndependentNew: PendingIndependentNew[];
   pendingConflicts: Array<{
     target: LadderTarget;
     targetFindingId: string;
-    viaInterpretationKey?: string;
+    viaInterpretationKey: string;
   }>;
   provisionalSpecs: ProvisionalFindingSpec[];
   provisionalByInterpretationKey: Map<string, ProvisionalFindingSpec>;
@@ -91,7 +115,7 @@ export interface LadderResult {
     target: LadderTarget;
     applicationResult: 'created' | 'matched_with_proof' | 'conflict_created';
   }>;
-  recoveryProvisionalOrigins: Map<string, ProvisionalRecoveryOrigin[]>;
+  recoveryProvisionalOrigins: Map<string, ProvisionalRecoveryOrigins>;
   stats: InterpretationStatsReport;
 }
 
@@ -117,6 +141,7 @@ export interface RawAdjudicationReplayOrigin {
 type AuditOnlyRawAdjudicationFailureKind =
   | 'source_missing'
   | 'reviewer_provenance_missing'
+  | 'recovery_contract_mismatch'
   | 'admission_rejected'
   | 'input_budget_exceeded'
   | 'manager_output_rejected'

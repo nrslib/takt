@@ -12,6 +12,7 @@ import {
   selectActionableFindingEntries,
 } from './findings/context.js';
 import { parsePartDefinitionEntry } from './part-definition-validator.js';
+import { compareBinaryStrings } from '../../shared/utils/binary-string-comparator.js';
 export {
   createFindingContractDecompositionJsonSchema,
   createFindingContractFeedbackJsonSchema,
@@ -338,7 +339,7 @@ export function buildLatestFindingContractDigests(
     }
   }
   return [...latestByFindingId.values()].sort((left, right) => {
-    return left.findingId.localeCompare(right.findingId);
+    return compareBinaryStrings(left.findingId, right.findingId);
   });
 }
 

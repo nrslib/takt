@@ -15,10 +15,16 @@
  * その reviewScopeSnapshotId が実際に admission の結果を左右することは
  * finding-review-scope-snapshot-admission.test.ts で別途確認する。
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterAll, describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import type { AgentResponse, FindingContractConfig, WorkflowState, WorkflowStep } from '../core/models/types.js';
 import type {
@@ -30,7 +36,7 @@ import type { FindingLedger } from '../core/workflow/findings/types.js';
 import type { FindingManagerValidationReport } from '../core/workflow/findings/store.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
-import { createFindingManagerPublicationDouble } from './helpers/finding-manager-publication.js';
+import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -64,6 +70,14 @@ vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) =
 import { executeAgent } from '../agents/agent-usecases.js';
 import { ingestFindingContractResults } from '../core/workflow/findings/contract-intake.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
+
+const DEFAULT_PROJECT_CWD = mkdtempSync(join(tmpdir(), 'takt-snapshot-wiring-default-'));
+const DEFAULT_REPORT_DIR = mkdtempSync(join(tmpdir(), 'takt-snapshot-wiring-reports-'));
+
+afterAll(() => {
+  rmSync(DEFAULT_PROJECT_CWD, { recursive: true, force: true });
+  rmSync(DEFAULT_REPORT_DIR, { recursive: true, force: true });
+});
 
 function makeState(): WorkflowState {
   return {
@@ -132,7 +146,6 @@ function makeFindingContractContext(
   overrides: Partial<FindingContractInstructionContext> = {},
 ): FindingContractInstructionContext {
   return {
-    ledgerCopyPath: '.takt/runs/test/reports/findings-ledger.json',
     ledgerSummary: '{"findings":[]}',
     reportLedgerSummary: '{"ids":[]}',
     hasOpenFindings: false,
@@ -163,18 +176,43 @@ function getSnapshotIdEnum(context: FindingContractInstructionContext): unknown 
 function makeRunner(options: {
   withFindingContract?: boolean;
   projectCwd?: string;
+  reportDir?: string;
   findingContractContext?: FindingContractInstructionContext;
 } = {}): {
   runner: ParallelRunner;
   deps: ParallelRunnerDeps;
 } {
   const withFindingContract = options.withFindingContract ?? true;
-  const projectCwd = options.projectCwd ?? '/tmp/project';
+  const projectCwd = options.projectCwd ?? DEFAULT_PROJECT_CWD;
+  const reportDir = options.reportDir ?? DEFAULT_REPORT_DIR;
   const validationReportWriter = vi.fn(
     (report: FindingManagerValidationReport) => (
-      `/tmp/findings-manager-validation.${report.stepName}.json`
+      join(reportDir, `findings-manager-validation.${report.stepName}.json`)
     ),
   );
+  const ledgerRepository = new RevisionedFindingLedgerTestRepository({
+    workflowName: 'test-workflow',
+    nextId: 1,
+    updatedAt: '2026-07-13T00:00:00.000Z',
+    findings: [],
+    rawFindings: [],
+    conflicts: [],
+    interpretations: [],
+  });
+  let findingLedgerStore: NonNullable<ParallelRunnerDeps['findingLedgerStore']>;
+  findingLedgerStore = {
+    workflowName: 'test-workflow',
+    loadLedger: vi.fn(() => ledgerRepository.loadLedger()),
+    updateLedger: vi.fn((mutator) => ledgerRepository.updateLedger(mutator)),
+    saveLedgerSnapshot: vi.fn(),
+    saveRawFindings: vi.fn(),
+    saveManagerValidationReport: validationReportWriter,
+    ...createFindingManagerPublicationDouble(
+      (report) => validationReportWriter(report),
+      ledgerRepository,
+    ),
+    saveConflictAdjudicationReport: vi.fn(),
+  } as unknown as NonNullable<ParallelRunnerDeps['findingLedgerStore']>;
   const deps: ParallelRunnerDeps = {
     optionsBuilder: {
       buildAgentOptions: vi.fn().mockReturnValue({}),
@@ -198,7 +236,7 @@ function makeRunner(options: {
       projectCwd,
     },
     getCwd: () => projectCwd,
-    getReportDir: () => '.takt/runs/test/reports',
+    getReportDir: () => reportDir,
     getWorkflowName: () => 'test-workflow',
     getInteractive: () => false,
     observabilityEnabled: false,
@@ -211,25 +249,7 @@ function makeRunner(options: {
     refreshFindingsState: vi.fn(),
     emitEvent: vi.fn(),
     ...(withFindingContract ? { findingContract: FINDING_CONTRACT } : {}),
-    findingLedgerStore: {
-      workflowName: 'test-workflow',
-      loadLedger: vi.fn().mockReturnValue({
-        workflowName: 'test-workflow',
-        nextId: 1,
-        updatedAt: '2026-07-13T00:00:00.000Z',
-        findings: [],
-        rawFindings: [],
-        conflicts: [],
-        interpretations: [],
-      } satisfies FindingLedger),
-      saveLedger: vi.fn(),
-      updateLedger: vi.fn(),
-      createRunCopy: vi.fn().mockReturnValue('.takt/runs/test/reports/findings-ledger.json'),
-      saveRawFindings: vi.fn(),
-      saveManagerValidationReport: validationReportWriter,
-      ...createFindingManagerPublicationDouble((report) => validationReportWriter(report)),
-      saveConflictAdjudicationReport: vi.fn(),
-    } as unknown as ParallelRunnerDeps['findingLedgerStore'],
+    findingLedgerStore,
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
     updateMaxSteps: vi.fn(),
     setActiveResumePoint: vi.fn(),
@@ -281,7 +301,6 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       if (findingContractPolicy?.mode !== 'explicit') throw new Error('Expected explicit Finding Contract context');
       expect(findingContractPolicy.context).toBe(builtContext);
       expect(findingContractPolicy.context.reviewScopeSnapshotId).toBe('round-snapshot-abc123');
-      expect(findingContractPolicy.context.ledgerCopyPath).toBe('.takt/runs/test/reports/findings-ledger.json');
       expect(getSnapshotIdEnum(findingContractPolicy.context)).toEqual(['', 'round-snapshot-abc123']);
     }
 
@@ -298,6 +317,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
 
   it('preserves a non-open confirmation as audit-only through the actual parallel intake path', async () => {
     const projectCwd = mkdtempSync(join(tmpdir(), 'takt-parallel-snapshot-wiring-'));
+    const reportDir = mkdtempSync(join(tmpdir(), 'takt-parallel-snapshot-reports-'));
     try {
       mkdirSync(join(projectCwd, 'src'), { recursive: true });
       writeFileSync(join(projectCwd, 'src/fixed.ts'), 'const fixed = true;\n');
@@ -307,7 +327,11 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         rawFindingsStructuredOutput: createRawFindingsStructuredOutput(evidence.snapshotId),
         reviewScopeSnapshotId: evidence.snapshotId,
       });
-      const { runner, deps } = makeRunner({ projectCwd, findingContractContext });
+      const { runner, deps } = makeRunner({
+        projectCwd,
+        reportDir,
+        findingContractContext,
+      });
       const reviewerRawFindings = [{
         rawFindingId: 'confirmation-resolved',
         familyTag: 'bug',
@@ -350,20 +374,9 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         conflicts: [],
         interpretations: [],
       };
-      const reports: FindingManagerValidationReport[] = [];
       const ledgerStore = deps.findingLedgerStore!;
-      vi.mocked(ledgerStore.loadLedger).mockImplementation(() => ledger);
-      vi.mocked(ledgerStore.saveLedger).mockImplementation((next) => { ledger = next; });
-      vi.mocked(ledgerStore.updateLedger).mockImplementation(async (mutator) => {
-        const mutation = mutator(ledger);
-        ledger = mutation.ledger;
-        return mutation;
-      });
+      await ledgerStore.updateLedger(() => ({ ledger, result: undefined }));
       vi.mocked(ledgerStore.saveRawFindings).mockReturnValue(join(projectCwd, 'raw-findings.json'));
-      vi.mocked(ledgerStore.saveManagerValidationReport).mockImplementation((report) => {
-        reports.push(report);
-        return join(projectCwd, `findings-manager-validation.${report.stepName}.json`);
-      });
       queueAgentResponse(makeAgentResponse({
         persona: 'ai-antipattern-review',
         structuredOutput: { rawFindings: reviewerRawFindings },
@@ -379,6 +392,9 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
 
       await runner.runParallelStep(makeParallelStep(), makeState(), 'test task', 5, vi.fn());
 
+      ledger = ledgerStore.loadLedger();
+      const reports = vi.mocked(ledgerStore.saveManagerValidationReport).mock.calls
+        .map(([report]) => report);
       expect(executeAgent).toHaveBeenCalledTimes(2);
       expect(ingestFindingContractResults).toHaveBeenCalledOnce();
       const intake = vi.mocked(ingestFindingContractResults).mock.calls[0]![0];
@@ -393,8 +409,15 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         (entry) => entry.rawFindingId.endsWith(':confirmation-resolved'),
       )?.ambiguityCodes).toContain('confirmation-target-not-open');
       expect(reports.at(-1)?.interpretationStats?.managerCalls).toBe(0);
+      expect(existsSync(
+        join(projectCwd, 'findings-manager-validation.reviewers.json'),
+      )).toBe(false);
+      expect(existsSync(
+        join(reportDir, 'findings-manager-validation.reviewers.json'),
+      )).toBe(true);
     } finally {
       rmSync(projectCwd, { recursive: true, force: true });
+      rmSync(reportDir, { recursive: true, force: true });
     }
   });
 

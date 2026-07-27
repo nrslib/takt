@@ -467,11 +467,11 @@ describe('inheritReviewReports', () => {
     expect(readFileSync(copiedPath, 'utf-8')).toBe('nested review');
   });
 
-  it('should normalize Windows report separators before matching and copying nested reports', () => {
+  it('should reject noncanonical Windows report separators without rewriting them', () => {
     // Given
     const projectDirectory = createProjectDirectory();
     const reportName = win32.join('reviews', 'architect-review.md');
-    const sourcePath = writeSourceReport(
+    writeSourceReport(
       projectDirectory,
       ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       'reviews/architect-review.md',
@@ -480,7 +480,7 @@ describe('inheritReviewReports', () => {
     );
 
     // When
-    const result = inheritReviewReports({
+    const inherit = () => inheritReviewReports({
       cwd: projectDirectory,
       sourceRunSlug,
       currentRunSlug,
@@ -489,11 +489,7 @@ describe('inheritReviewReports', () => {
     });
 
     // Then
-    const copiedPath = join(targetReportDirectory(projectDirectory), 'reviews', 'architect-review.md');
-    expect(result.copied).toEqual([
-      expect.objectContaining({ reportName, sourcePath, targetPath: copiedPath }),
-    ]);
-    expect(readFileSync(copiedPath, 'utf-8')).toBe('architecture review');
+    expect(inherit).toThrow(/non-canonical path separator/);
   });
 
   it('should not write reports or diagnostics through a symlinked current report directory', () => {

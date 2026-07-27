@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { compareBinaryStrings } from '../../shared/utils/binary-string-comparator.js';
 import {
   FindingContractControlValidationError,
   hasFindingContractEvidenceOrReferenceIssue as hasControlEvidenceOrReferenceIssue,
@@ -91,15 +92,15 @@ export function sortFindingContractDecisionValidationIssues(
   issues: readonly FindingContractDecisionValidationIssue[],
 ): FindingContractDecisionValidationIssue[] {
   return [...issues].sort((left, right) => (
-    validationIssueIdentity(left).localeCompare(validationIssueIdentity(right))
-      || left.message.localeCompare(right.message)
+    compareBinaryStrings(validationIssueIdentity(left), validationIssueIdentity(right))
+      || compareBinaryStrings(left.message, right.message)
   ));
 }
 
 export function fingerprintFindingContractDecisionValidationIssues(
   issues: readonly FindingContractDecisionValidationIssue[],
 ): string {
-  const identities = [...new Set(issues.map(validationIssueIdentity))].sort();
+  const identities = [...new Set(issues.map(validationIssueIdentity))].sort(compareBinaryStrings);
   return createHash('sha256').update(JSON.stringify(identities)).digest('hex');
 }
 
@@ -123,13 +124,13 @@ export function createFindingContractRejectedDecisionDigest(
       const findingContract = isRecord(part.findingContract) ? part.findingContract : {};
       return {
         partId: readRawString(part.id) ?? '',
-        findingIds: readRawStringArray(findingContract.findingIds).sort(),
+        findingIds: readRawStringArray(findingContract.findingIds).sort(compareBinaryStrings),
         ...(readRawString(findingContract.role) === undefined
           ? {}
           : { role: readRawString(findingContract.role) }),
       };
     })
-    .sort((left, right) => left.partId.localeCompare(right.partId));
+    .sort((left, right) => compareBinaryStrings(left.partId, right.partId));
   const canonicalFixCoverage = readObjectArray(raw.fixCoverage)
     .map((coverage) => ({
       ...(readRawString(coverage.findingId) === undefined
@@ -138,14 +139,14 @@ export function createFindingContractRejectedDecisionDigest(
       ...(readRawString(coverage.disposition) === undefined
         ? {}
         : { disposition: readRawString(coverage.disposition) }),
-      supportingPartIds: readRawStringArray(coverage.supportingPartIds).sort(),
-      verificationPartIds: readRawStringArray(coverage.verificationPartIds).sort(),
+      supportingPartIds: readRawStringArray(coverage.supportingPartIds).sort(compareBinaryStrings),
+      verificationPartIds: readRawStringArray(coverage.verificationPartIds).sort(compareBinaryStrings),
     }))
     .sort((left, right) => (
-      (left.findingId ?? '').localeCompare(right.findingId ?? '')
-        || (left.disposition ?? '').localeCompare(right.disposition ?? '')
+      compareBinaryStrings(left.findingId ?? '', right.findingId ?? '')
+        || compareBinaryStrings(left.disposition ?? '', right.disposition ?? '')
     ));
-  const canonicalBlockers = readRawStringArray(raw.blockers).sort();
+  const canonicalBlockers = readRawStringArray(raw.blockers).sort(compareBinaryStrings);
   const canonicalSummary = {
     ...(readRawString(raw.decision) === undefined ? {} : { decision: readRawString(raw.decision) }),
     partIds: canonicalAssignments.map((assignment) => assignment.partId),
@@ -231,7 +232,7 @@ function canonicalJson(value: unknown): string {
   if (isRecord(value)) {
     return `{${Object.entries(value)
       .filter(([, item]) => item !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => compareBinaryStrings(left, right))
       .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
       .join(',')}}`;
   }

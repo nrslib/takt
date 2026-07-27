@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type {
   FindingLedger,
@@ -15,6 +18,11 @@ import { runFindingManagerForStep } from '../core/workflow/findings/manager-runn
 import type { FindingManagerDecisions } from '../core/models/finding-types.js';
 import { reconcileCommitPlan } from '../core/workflow/findings/manager-commit-finalization.js';
 import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
+import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import {
+  createFindingManagerPublicationDouble,
+  RevisionedFindingLedgerTestRepository,
+} from './helpers/finding-manager-publication.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -77,14 +85,15 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
     rawFindingDispositions: [],
     rawProvenanceByRawFindingId: new Map(input.rawFindings.map((rawFinding) => [
       rawFinding.rawFindingId,
-      {
-        reviewerStableKey: computeReviewerStableKey({
+      storedRawReconcileProvenance(
+        rawFinding,
+        computeReviewerStableKey({
           workflowName: input.context.workflowName,
           callNamespace: '',
           parentStepName: input.context.stepName,
           reviewerPersonaKey: rawFinding.reviewer,
         }),
-        lineageKey: computeLineageKey({
+        computeLineageKey({
           ...(rawFinding.targetFindingId !== undefined
             ? { targetFindingId: rawFinding.targetFindingId }
             : {}),
@@ -92,7 +101,7 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
           title: rawFinding.title,
           familyTag: rawFinding.familyTag,
         }),
-      },
+      ),
     ])),
   });
 }
@@ -323,15 +332,16 @@ describe('reconcileFindingLedger dismissedFindings', () => {
       pendingRejectedObservations: [],
       rawProvenanceByRawFindingId: new Map([[
         rawFinding.rawFindingId,
-        {
-          reviewerStableKey: computeReviewerStableKey({
+        storedRawReconcileProvenance(
+          rawFinding,
+          computeReviewerStableKey({
             workflowName: currentLedger.workflowName,
             callNamespace: '',
             parentStepName: 'reviewers',
             reviewerPersonaKey: rawFinding.reviewer,
           }),
-          lineageKey: current.provisional!.lineageKey,
-        },
+          current.provisional!.lineageKey,
+        ),
       ]]),
       cleanWire: [],
       explicitResolvedByMapping: new Map(),
@@ -339,6 +349,7 @@ describe('reconcileFindingLedger dismissedFindings', () => {
       recoveryProvisionalRawFindingIds: new Set(),
       staleRawFindingIds: new Set(),
       deferredRawFindingIds: new Set(),
+      resolutionRenotifications: [],
       unsupportedRawFindingReports: [],
       healthyReviewerStableKeys: new Set(),
     });
@@ -391,28 +402,36 @@ describe('fixpoint snapshot with dismissed provisionals', () => {
 
 describe('runFindingManagerForStep dismiss round trip', () => {
   it('残余 raw ゼロでも dismiss 候補があれば manager を起動し、裁定で完了ゲートが開く', async () => {
-    let ledger = makeLedger([provisionalEntry({ revision: 1 })]);
+    const repository = new RevisionedFindingLedgerTestRepository(
+      makeLedger([provisionalEntry({ revision: 1 })]),
+    );
+    const reportDir = mkdtempSync(join(tmpdir(), 'takt-finding-dismiss-'));
     const savedValidationReports: unknown[] = [];
     const reservations = new Set<string>();
+    const publicationDouble = createFindingManagerPublicationDouble(
+      (report) => join(
+        reportDir,
+        `findings-manager-validation.${report.stepName}.json`,
+      ),
+      repository,
+    );
     const ledgerStore: FindingLedgerStore = {
       ledgerIdentity: '/test/finding-dismiss/ledger.json',
       workflowName: 'peer-review',
-      loadLedger: () => ledger,
-      saveLedger: (next) => { ledger = next; },
-      updateLedger: (mutator) => {
-        const mutation = mutator(ledger);
-        ledger = mutation.ledger;
-        return Promise.resolve(mutation);
-      },
+      loadLedger: () => repository.loadLedger(),
+      updateLedger: (mutator, revalidateBeforeSave) => (
+        repository.updateLedger(mutator, revalidateBeforeSave)
+      ),
       claimAdjudicationReservation: (token) => {
         if (reservations.has(token)) return false;
         reservations.add(token);
         return true;
       },
       releaseAdjudicationReservation: (token) => { reservations.delete(token); },
-      createRunCopy: () => '/tmp/ledger-copy.json',
-      saveRawFindings: () => '/tmp/raw-findings.json',
-      saveManagerValidationReport: (report) => { savedValidationReports.push(report); return '/tmp/report.json'; },
+      saveLedgerSnapshot: () => {},
+      saveRawFindings: () => {},
+      saveManagerValidationReport: (report) => { savedValidationReports.push(report); },
+      ...publicationDouble,
     };
     executeAgentMock.mockResolvedValue({
       status: 'done',
@@ -431,7 +450,8 @@ describe('runFindingManagerForStep dismiss round trip', () => {
       },
     } as unknown as AgentResponse);
 
-    const result = await runFindingManagerForStep({
+    try {
+      const result = await runFindingManagerForStep({
       contract: {
         ledgerPath: '.takt/findings/ledger.json',
         rawFindingsPath: '.takt/findings/raw',
@@ -455,13 +475,16 @@ describe('runFindingManagerForStep dismiss round trip', () => {
       runId: 'run-2',
       callNamespace: '',
       timestamp: '2026-07-02T00:00:00.000Z',
-    });
+      });
 
-    expect(executeAgentMock).toHaveBeenCalledTimes(1);
+      expect(executeAgentMock).toHaveBeenCalledTimes(1);
 
-    const dismissed = result.ledger.findings.find((finding) => finding.id === 'F-0001')!;
-    expect(dismissed.status).toBe('dismissed');
-    expect(dismissed.dismissal?.basis).toBe('out_of_scope');
-    expect(result.ledger.findings.filter((finding) => finding.status === 'open')).toEqual([]);
+      const dismissed = result.ledger.findings.find((finding) => finding.id === 'F-0001')!;
+      expect(dismissed.status).toBe('dismissed');
+      expect(dismissed.dismissal?.basis).toBe('out_of_scope');
+      expect(result.ledger.findings.filter((finding) => finding.status === 'open')).toEqual([]);
+    } finally {
+      rmSync(reportDir, { recursive: true, force: true });
+    }
   });
 });

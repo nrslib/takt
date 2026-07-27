@@ -129,7 +129,7 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     const ledger = makeLedger();
     const ledgerStore = {
       loadLedger: vi.fn(() => ledger),
-      createRunCopy: vi.fn(() => join(cwd, '.takt', 'finding-ledger.json')),
+      saveLedgerSnapshot: vi.fn(),
     } as unknown as FindingLedgerStore;
     const findingContract: FindingContractConfig = {
       ledgerPath: '.takt/findings.json',
@@ -590,7 +590,7 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     };
     const ledgerStore = {
       loadLedger: vi.fn(() => ledger),
-      createRunCopy: vi.fn(() => join(cwd, '.takt', 'finding-ledger.json')),
+      saveLedgerSnapshot: vi.fn(),
     } as unknown as FindingLedgerStore;
     const findingContract: FindingContractConfig = {
       ledgerPath: '.takt/findings.json',

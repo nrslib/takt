@@ -20,11 +20,6 @@ import type {
 import type { InterpretationRecoveryFailure } from './interpretation-recovery.js';
 import { releaseRawAdjudicationReservations } from './raw-adjudication-reservation.js';
 import { releaseInterpretationReservations } from './interpretation-wal.js';
-import {
-  finalizePendingManagerCommit,
-  rebindPendingManagerCommit,
-  stagePendingManagerCommit,
-} from './manager-pending-commit.js';
 
 export interface CommitFindingManagerRoundResult {
   applied: boolean;
@@ -59,7 +54,7 @@ export async function commitFindingManagerRound(params: {
   reviewScopeSnapshotId: string;
 }): Promise<CommitFindingManagerRoundResult> {
   try {
-    const mutation = await params.input.ledgerStore.updateLedger((freshLedger) => {
+    const mutation = await params.input.ledgerStore.commitManagerLedger((freshLedger) => {
       const commitMutation = buildFindingManagerCommitMutation(params, freshLedger);
       if (!commitMutation.result.applied) {
         return commitMutation;
@@ -68,18 +63,12 @@ export async function commitFindingManagerRound(params: {
       if (report === undefined) {
         return commitMutation;
       }
-      const publication = params.input.ledgerStore.planManagerValidationPublication(
-        params.stopBudgetRoundMarker,
-        report,
-      );
       return {
         ...commitMutation,
-        ledger: stagePendingManagerCommit({
-          completedLedger: commitMutation.ledger,
-          previousLedger: freshLedger,
+        publication: {
           roundMarker: params.stopBudgetRoundMarker,
-          publication,
-        }),
+          report,
+        },
       };
     });
     const committed: FindingManagerCommitResult = {
@@ -162,15 +151,9 @@ export async function resumePendingManagerCommit(
   );
   let boundLedger = ledger;
   if (boundPublication.destinationRunId !== pending.publication.destinationRunId) {
-    const rebound = await input.ledgerStore.updateLedger((current) => ({
-      ledger: rebindPendingManagerCommit(
-        current,
-        pending.publication.publicationId,
-        boundPublication,
-      ),
-      result: undefined,
-    }));
-    boundLedger = rebound.ledger;
+    boundLedger = await input.ledgerStore.rebindPendingManagerValidationPublication(
+      boundPublication,
+    );
   }
   const boundPending = boundLedger.pendingManagerCommit;
   if (boundPending === undefined) {
@@ -181,28 +164,13 @@ export async function resumePendingManagerCommit(
   const receipt = input.ledgerStore.publishManagerValidationPublication(
     boundPending.publication,
   );
-  const finalized = await input.ledgerStore.updateLedger(
-    (current) => ({
-      ledger: finalizePendingManagerCommit(
-        current,
-        boundPending.publication.publicationId,
-      ),
-      result: undefined,
-    }),
-    (_current, mutation) => {
-      input.ledgerStore.assertManagerValidationPublication(
-        boundPending.publication,
-        receipt,
-      );
-      return {
-        mutation,
-        publish: true,
-      };
-    },
+  const finalized = await input.ledgerStore.finalizeManagerValidationPublication(
+    boundPending.publication,
+    receipt,
   );
   return {
     ledger: finalized.ledger,
-    completedRoundMarker: pending.roundMarker,
+    completedRoundMarker: finalized.completedRoundMarker,
   };
 }
 
@@ -221,12 +189,5 @@ export async function rebindPendingManagerPublicationAtBootstrap(
   if (boundPublication.destinationRunId === pending.publication.destinationRunId) {
     return;
   }
-  await store.updateLedger((current) => ({
-    ledger: rebindPendingManagerCommit(
-      current,
-      pending.publication.publicationId,
-      boundPublication,
-    ),
-    result: undefined,
-  }));
+  await store.rebindPendingManagerValidationPublication(boundPublication);
 }

@@ -49,7 +49,6 @@ function createFakeLedgerStore(): FindingLedgerStore {
       conflicts: [],
       interpretations: [],
     }),
-    saveLedger: () => {},
     updateLedger: (mutator) => Promise.resolve(mutator({
       workflowName: 'fake',
       nextId: 1,
@@ -59,9 +58,9 @@ function createFakeLedgerStore(): FindingLedgerStore {
       conflicts: [],
       interpretations: [],
     })),
-    createRunCopy: () => '/tmp/fake-ledger-copy.json',
-    saveRawFindings: () => '/tmp/fake-raw-findings.json',
-    saveManagerValidationReport: () => '/tmp/fake-validation-report.json',
+    saveLedgerSnapshot: () => {},
+    saveRawFindings: () => {},
+    saveManagerValidationReport: () => {},
   };
 }
 

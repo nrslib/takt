@@ -19,14 +19,288 @@ import type {
   DeterministicSameProof,
   FindingLedger,
   FindingLedgerEntry,
+  FindingManagerOutput,
+  RawFinding,
 } from './types.js';
 import type { ParsedAmbiguousInterpretation } from './schemas.js';
 import { toAmbiguousInterpretation } from './schemas.js';
 import { normalizeFindingText, parseFindingLocation } from './location.js';
-import { assertCanonicalRawFinding } from './raw-canonicalization.js';
+import {
+  assertCanonicalRawFinding,
+  canonicalRawIntegrityDigestOf,
+  computeProvisionalStableKey,
+  toLedgerRawFinding,
+} from './raw-canonicalization.js';
+import { canonicalJson } from '../../../shared/utils/canonical-json.js';
+import type { ProvisionalFindingSpec } from './reconciler.js';
+import { computeCanonicalRawIntegrityDigest } from './finding-integrity.js';
 
 // エンジン発行の証明だけを本物と認めるための runtime 登録簿。
 const SAME_PROOF_REGISTRY = new WeakSet<object>();
+
+interface OpenConflictOutcomeSnapshot {
+  readonly rawFindingId: string;
+  readonly targetFindingId: string;
+  readonly interpretationKey: string;
+  readonly provisionalStableKey: string;
+  readonly canonicalWire: string;
+  readonly evidenceHash: string;
+  readonly canonicalIntegrityDigest: string;
+  readonly provenance: string;
+  readonly outcomeProvenance: string;
+  readonly conflict: string;
+  readonly provisionalSpec: string;
+  readonly validatedDecision: string;
+  readonly issuanceIntegrityDigest: string;
+}
+
+const OPEN_CONFLICT_OUTCOME_AUTHORITY_REGISTRY =
+  new WeakMap<object, OpenConflictOutcomeSnapshot>();
+
+declare const openConflictOutcomeAuthorityBrand: unique symbol;
+
+export interface OpenConflictOutcomeAuthority {
+  readonly [openConflictOutcomeAuthorityBrand]: true;
+  readonly rawFindingId: string;
+  readonly targetFindingId: string;
+  readonly interpretationKey: string;
+  readonly provisionalStableKey: string;
+}
+
+type UnbrandedOpenConflictOutcomeAuthority = {
+  [K in keyof OpenConflictOutcomeAuthority as K extends symbol ? never : K]:
+    OpenConflictOutcomeAuthority[K];
+};
+
+export function issueOpenConflictOutcomeAuthority(input: {
+  canonical: CanonicalRawFinding;
+  ledger: FindingLedger;
+  interpretationKey: string;
+  conflict: FindingManagerOutput['conflicts'][number];
+  provisionalSpec: ProvisionalFindingSpec;
+}): OpenConflictOutcomeAuthority {
+  assertCanonicalRawFinding(input.canonical, 'issueOpenConflictOutcomeAuthority');
+  if (!input.canonical.provenance.ambiguityOrigin) {
+    throw new Error(
+      `Open-conflict compound outcome authority requires an ambiguity-tainted canonical raw finding "${input.canonical.rawFindingId}"`,
+    );
+  }
+  if (input.interpretationKey.length === 0) {
+    throw new Error('Open-conflict compound outcome authority requires an interpretation key');
+  }
+  const targetFindingId = input.conflict.findingIds.length === 1
+    ? input.conflict.findingIds[0]
+    : undefined;
+  if (
+    targetFindingId === undefined
+    || input.conflict.rawFindingIds.length !== 1
+    || input.conflict.rawFindingIds[0] !== input.canonical.rawFindingId
+    || input.provisionalSpec.sourceRawFindingIds.length !== 1
+    || input.provisionalSpec.sourceRawFindingIds[0] !== input.canonical.rawFindingId
+  ) {
+    throw new Error('Open-conflict compound outcome authority requires one exact conflict and provisional raw target');
+  }
+  const provisionalStableKey = computeProvisionalStableKey({
+    reviewerStableKey: input.canonical.reviewerStableKey,
+    lineageKey: input.canonical.lineageKey,
+    provisionalKind: 'raw-meaning-ambiguous',
+  });
+  if (
+    input.provisionalSpec.kind !== 'raw-meaning-ambiguous'
+    || input.provisionalSpec.stableKey !== provisionalStableKey
+  ) {
+    throw new Error('Open-conflict compound outcome authority requires the canonical provisional identity');
+  }
+  const canonicalWire = toLedgerRawFinding(input.canonical);
+  const canonicalIntegrityDigest = canonicalRawIntegrityDigestOf(input.canonical);
+  const validatedDecision = {
+    decision: 'open_conflict' as const,
+    rawFindingId: input.canonical.rawFindingId,
+    targetFindingId,
+  };
+  const interpretations = input.ledger.interpretations.filter((record) => (
+    record.interpretationKey === input.interpretationKey
+  ));
+  const interpretation = interpretations[0];
+  if (
+    interpretations.length !== 1
+    || interpretation?.stage !== 'interpretation_completed'
+    || interpretation.canonicalIntegrityDigest !== canonicalIntegrityDigest
+    || interpretation.candidateEvidenceHash !== input.canonical.evidenceHash
+    || interpretation.reviewerStableKey !== input.canonical.reviewerStableKey
+    || interpretation.lineageKey !== input.canonical.lineageKey
+    || canonicalJson(interpretation.validatedDecision) !== canonicalJson(validatedDecision)
+  ) {
+    throw new Error('Open-conflict compound outcome authority requires the current canonical WAL decision');
+  }
+  const issuanceIntegrityDigest = openConflictIssuanceIntegrityDigest({
+    canonicalWire,
+    typedEvidence: input.canonical.evidence === undefined
+      ? null
+      : input.canonical.evidence,
+    provenance: input.canonical.provenance,
+    stableIdentity: {
+      rawFindingId: input.canonical.rawFindingId,
+      reviewerStableKey: input.canonical.reviewerStableKey,
+      lineageKey: input.canonical.lineageKey,
+      claimIdentityHash: input.canonical.evidenceHash,
+      canonicalIntegrityDigest,
+    },
+    validatedDecision,
+    conflict: input.conflict,
+    provisionalSpec: input.provisionalSpec,
+  });
+  const authority = Object.freeze({
+    rawFindingId: input.canonical.rawFindingId,
+    targetFindingId,
+    interpretationKey: input.interpretationKey,
+    provisionalStableKey,
+  } as UnbrandedOpenConflictOutcomeAuthority) as OpenConflictOutcomeAuthority;
+  OPEN_CONFLICT_OUTCOME_AUTHORITY_REGISTRY.set(authority, Object.freeze({
+    rawFindingId: input.canonical.rawFindingId,
+    targetFindingId,
+    interpretationKey: input.interpretationKey,
+    provisionalStableKey,
+    canonicalWire: canonicalJson(canonicalWire),
+    evidenceHash: input.canonical.evidenceHash,
+    canonicalIntegrityDigest,
+    provenance: canonicalJson(input.canonical.provenance),
+    outcomeProvenance: canonicalJson({
+      reviewerStableKey: input.canonical.reviewerStableKey,
+      lineageKey: input.canonical.lineageKey,
+    }),
+    conflict: canonicalJson(input.conflict),
+    provisionalSpec: canonicalJson(input.provisionalSpec),
+    validatedDecision: canonicalJson(validatedDecision),
+    issuanceIntegrityDigest,
+  }));
+  return authority;
+}
+
+export function verifyOpenConflictOutcomeAuthority(input: {
+  authority: OpenConflictOutcomeAuthority;
+  ledger: FindingLedger;
+  rawFinding: RawFinding;
+  conflicts: readonly FindingManagerOutput['conflicts'][number][];
+  provisionalFindings: readonly ProvisionalFindingSpec[];
+  provenance: {
+    reviewerStableKey: string;
+    lineageKey: string;
+    claimIdentityHash: string;
+    canonicalIntegrityDigest: string;
+    canonicalProvenance: CanonicalRawFinding['provenance'];
+  };
+}): { ok: true } | { ok: false; reason: string } {
+  const snapshot = OPEN_CONFLICT_OUTCOME_AUTHORITY_REGISTRY.get(input.authority);
+  if (snapshot === undefined) {
+    return { ok: false, reason: 'authority was not issued by the engine' };
+  }
+  if (
+    input.authority.rawFindingId !== snapshot.rawFindingId
+    || input.authority.targetFindingId !== snapshot.targetFindingId
+    || input.authority.interpretationKey !== snapshot.interpretationKey
+    || input.authority.provisionalStableKey !== snapshot.provisionalStableKey
+  ) {
+    return { ok: false, reason: 'authority does not match the compound outcome' };
+  }
+  if (
+    canonicalJson(input.rawFinding) !== snapshot.canonicalWire
+    || canonicalJson({
+      reviewerStableKey: input.provenance.reviewerStableKey,
+      lineageKey: input.provenance.lineageKey,
+    }) !== snapshot.outcomeProvenance
+    || canonicalJson(input.provenance.canonicalProvenance) !== snapshot.provenance
+  ) {
+    return { ok: false, reason: 'issued canonical wire or provenance does not match the compound outcome' };
+  }
+  if (input.conflicts.length !== 1 || input.provisionalFindings.length !== 1) {
+    return { ok: false, reason: 'authority requires exactly one conflict and one provisional outcome' };
+  }
+  if (
+    canonicalJson(input.conflicts[0]) !== snapshot.conflict
+    || canonicalJson(input.provisionalFindings[0]) !== snapshot.provisionalSpec
+  ) {
+    return { ok: false, reason: 'conflict or provisional payload does not match the issued outcome snapshot' };
+  }
+  const interpretations = input.ledger.interpretations.filter((record) => (
+    record.interpretationKey === snapshot.interpretationKey
+  ));
+  const interpretation = interpretations[0];
+  const currentCanonicalIntegrityDigest = computeCanonicalRawIntegrityDigest({
+    canonicalWire: input.rawFinding,
+    provenance: input.provenance.canonicalProvenance,
+    reviewerStableKey: input.provenance.reviewerStableKey,
+    lineageKey: input.provenance.lineageKey,
+    claimIdentityHash: input.provenance.claimIdentityHash,
+  });
+  if (
+    interpretations.length !== 1
+    || interpretation?.stage !== 'interpretation_completed'
+    || interpretation.candidateEvidenceHash !== snapshot.evidenceHash
+    || interpretation.canonicalIntegrityDigest !== snapshot.canonicalIntegrityDigest
+    || currentCanonicalIntegrityDigest !== snapshot.canonicalIntegrityDigest
+    || input.provenance.canonicalIntegrityDigest !== snapshot.canonicalIntegrityDigest
+    || canonicalJson(interpretation.validatedDecision) !== snapshot.validatedDecision
+  ) {
+    return { ok: false, reason: 'validated open_conflict interpretation does not match the authority' };
+  }
+  if (
+    interpretation.reviewerStableKey !== input.provenance.reviewerStableKey
+    || interpretation.lineageKey !== input.provenance.lineageKey
+  ) {
+    return { ok: false, reason: 'validated open_conflict interpretation provenance does not match the authority' };
+  }
+  const issuanceIntegrityDigest = openConflictIssuanceIntegrityDigest({
+    canonicalWire: input.rawFinding,
+    typedEvidence: input.rawFinding.evidence === undefined
+      ? null
+      : input.rawFinding.evidence,
+    provenance: input.provenance.canonicalProvenance,
+    stableIdentity: {
+      rawFindingId: input.rawFinding.rawFindingId,
+      reviewerStableKey: input.provenance.reviewerStableKey,
+      lineageKey: input.provenance.lineageKey,
+      claimIdentityHash: input.provenance.claimIdentityHash,
+      canonicalIntegrityDigest: currentCanonicalIntegrityDigest,
+    },
+    validatedDecision: interpretation.validatedDecision,
+    conflict: input.conflicts[0]!,
+    provisionalSpec: input.provisionalFindings[0]!,
+  });
+  if (issuanceIntegrityDigest !== snapshot.issuanceIntegrityDigest) {
+    return { ok: false, reason: 'compound outcome issuance integrity digest does not match' };
+  }
+  return { ok: true };
+}
+
+function openConflictIssuanceIntegrityDigest(input: {
+  canonicalWire: RawFinding;
+  typedEvidence: RawFinding['evidence'] | null;
+  provenance: CanonicalRawFinding['provenance'];
+  stableIdentity: {
+    rawFindingId: string;
+    reviewerStableKey: string;
+    lineageKey: string;
+    claimIdentityHash: string;
+    canonicalIntegrityDigest: string;
+  };
+  validatedDecision: AmbiguousInterpretation;
+  conflict: FindingManagerOutput['conflicts'][number];
+  provisionalSpec: ProvisionalFindingSpec;
+}): string {
+  return createHash('sha256').update(canonicalJson({
+    version: 1,
+    canonicalWire: input.canonicalWire,
+    typedEvidence: input.typedEvidence === null
+      ? null
+      : { ...input.typedEvidence },
+    provenance: input.provenance,
+    stableIdentity: input.stableIdentity,
+    validatedDecision: input.validatedDecision,
+    conflict: input.conflict,
+    provisionalSpec: input.provisionalSpec,
+  })).digest('hex');
+}
 
 export function isEngineIssuedSameProof(value: unknown): value is DeterministicSameProof {
   return typeof value === 'object' && value !== null && SAME_PROOF_REGISTRY.has(value);

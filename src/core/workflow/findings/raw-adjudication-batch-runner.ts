@@ -88,8 +88,6 @@ export async function runRawAdjudicationBatches(input: {
   runInput: Pick<RunFindingManagerForStepInput, 'contract' | 'optionsBuilder' | 'stepExecutor'>;
   previousLedger: FindingLedger;
   managerStep: AgentWorkflowStep;
-  ledgerCopyPath: string;
-  rawFindingsPath: string;
   admission: RawAdmissionEvaluation;
   mechanical: MechanicalClassificationResult;
   mechanicallyClassifiedCount: number;
@@ -111,8 +109,6 @@ export async function runRawAdjudicationBatches(input: {
       queue,
       contract: input.runInput.contract,
       previousLedger: input.previousLedger,
-      ledgerCopyPath: input.ledgerCopyPath,
-      rawFindingsPath: input.rawFindingsPath,
       mechanicallyClassifiedCount: input.mechanicallyClassifiedCount,
       managerStep: rawManagerStep,
       stepExecutor: input.runInput.stepExecutor,

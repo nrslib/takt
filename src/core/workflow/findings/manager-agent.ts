@@ -5,6 +5,7 @@ import {
   createRawFindingsOutputJsonSchema,
   parseFindingManagerDecisions,
 } from './schemas.js';
+import { RAW_FINDINGS_SCHEMA_REF } from './raw-canonicalization.js';
 import { normalizeFindingText, parseFindingLocation, parseFindingLocationRange } from './location.js';
 import type {
   FindingLedger,
@@ -19,7 +20,7 @@ import {
 } from '../instruction/fenced-block.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 
-export const RAW_FINDINGS_SCHEMA_REF = 'takt.findings.raw';
+export { RAW_FINDINGS_SCHEMA_REF };
 export { FINDING_MANAGER_SCHEMA_REF } from './manager-step.js';
 
 export function createRawFindingsStructuredOutput(
@@ -179,8 +180,6 @@ function collectFullDetailFindingIds(ledger: FindingLedger, residualRawFindings:
 export function buildManagerInstruction(input: {
   contract: FindingContractConfig;
   previousLedger: FindingLedger;
-  ledgerCopyPath: string;
-  rawFindingsPath: string;
   residualRawFindings: RawFinding[];
   mechanicallyClassifiedCount: number;
   priorStepResponseText?: string;
@@ -214,9 +213,7 @@ export function buildManagerInstruction(input: {
   return loadTemplate('finding_manager_instruction', 'en', {
     managerInstruction: mechanicalNote,
     outputContract: input.contract.manager.outputContract,
-    ledgerCopyPath: input.ledgerCopyPath,
     managerInputLedger: renderFencedJsonBlock(managerInputLedger),
-    rawFindingsPath: input.rawFindingsPath,
     rawFindings: renderFencedJsonBlock(input.residualRawFindings),
     hasInvalidateCandidates: input.invalidLocationCandidates.size > 0,
     invalidateCandidatesBlock,

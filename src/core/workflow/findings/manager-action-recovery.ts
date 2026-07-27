@@ -10,6 +10,7 @@ import type {
   FindingObservation,
   FindingReconcileContext,
 } from './types.js';
+import { findingMatchesMutationPrecondition } from './finding-preconditions.js';
 
 export interface ManagerActionRecoveryCandidate {
   provisionalFindingId: string;
@@ -20,6 +21,23 @@ interface ActionRecoveryPlan {
   output: FindingManagerOutput;
   settlements: Map<string, string>;
   failures: Map<string, string>;
+}
+
+function recoveryTargetsMatch(
+  ledger: FindingLedger,
+  recovery: FindingActionRecovery,
+): boolean {
+  const targetFindingIds = recovery.action === 'duplicate'
+    ? [recovery.canonicalFindingId, ...recovery.duplicateFindingIds]
+    : [recovery.findingId];
+  const preconditionIds = recovery.targetPreconditions.map(
+    (precondition) => precondition.targetFindingId,
+  );
+  return new Set(preconditionIds).size === targetFindingIds.length
+    && targetFindingIds.every((findingId) => preconditionIds.includes(findingId))
+    && recovery.targetPreconditions.every((precondition) => (
+      findingMatchesMutationPrecondition(ledger, precondition)
+    ));
 }
 
 export function collectManagerActionRecoveryCandidates(
@@ -136,6 +154,15 @@ function buildActionRecoveryPlan(input: {
       return plan;
     }
     const recovery = process.provisional.actionRecovery;
+    if (!recoveryTargetsMatch(input.ledger, recovery)) {
+      return {
+        ...plan,
+        failures: new Map([
+          ...plan.failures,
+          [process.id, 'the engine-issued action precondition no longer matches the current finding head'],
+        ]),
+      };
+    }
     const decision = recovery.action === 'invalidate'
       ? planInvalidate(input.ledger, input.cwd, recovery)
       : recovery.action === 'waive'

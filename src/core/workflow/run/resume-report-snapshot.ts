@@ -4,12 +4,14 @@
  * resume は新しい run slug/dir を作るが、{report:X} は現 run の reportDir への
  * 単純パス置換のため、abort 前に旧 run が生成したレポートを引き継がないと
  * producer 実行後の resume で consumer の参照が必ず壊れる（v3-r4 の resume
- * 境界バグ）。ここでは旧 run の reports/ 全体（バージョン付き履歴を含む）を
- * 新 run の reports/ として原子的に継承する。
+ * 境界バグ）。ここでは旧 run の workflow 成果物全体を新 run の reports/
+ * として原子的に継承する。writer の lock・履歴を保持する
+ * `.takt-report-internal/` は run 内部状態なので継承しない。
  *
  * Finding Contractのポイント:
- * - 選択コピーはしない。静的解析では workflow_call / loop judge / 動的 facet の
- *   参照を把握しきれないため、常に全体をコピーする。
+ * - workflow成果物の選択コピーはしない。静的解析では workflow_call / loop
+ *   judge / 動的 facet の参照を把握しきれないため、内部名前空間を除く全体を
+ *   コピーする。
  * - 祖先探索・fallback はしない。常に source_run_slug の直接の親のみ。
  * - symlink・run 外 path・非通常ファイルは拒否。target reports/ が既に非空なら
  *   fail-fast。失敗時は一時成果物を除去し、半端な reports/ を公開しない。
@@ -49,7 +51,10 @@ import { buildRunPaths } from './run-paths.js';
 // {report:X} リゾルバ / doctor の全境界で拒否されるため、正当な同名レポートは
 // 存在し得ない（除外の無条件性と整合する）。
 export { RESUME_ARTIFACTS_FILE_NAME } from '../../models/reserved-report-names.js';
-import { RESUME_ARTIFACTS_FILE_NAME } from '../../models/reserved-report-names.js';
+import {
+  classifyReportRelativePath,
+  RESUME_ARTIFACTS_FILE_NAME,
+} from '../../models/reserved-report-names.js';
 
 export interface ResumeReportSnapshotFileEntry {
   /** reports/ からの相対パス（POSIX 区切り） */
@@ -107,11 +112,9 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string
 }
 
 function isValidManifestPath(value: string): boolean {
-  if (value.length === 0 || value.includes('\\') || value.startsWith('/')) {
-    return false;
-  }
-  const segments = value.split('/');
-  return segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
+  const classification = classifyReportRelativePath(value);
+  return classification.kind === 'public'
+    && classification.normalizedPath === value;
 }
 
 function parseResumeReportSnapshotManifest(value: unknown, targetRunSlug: string): ResumeReportSnapshotManifest {
@@ -142,7 +145,9 @@ function parseResumeReportSnapshotManifest(value: unknown, targetRunSlug: string
     if (typeof entry.path !== 'string' || !isValidManifestPath(entry.path)) {
       throw new Error(`Resume report snapshot: manifest files[${index}].path is invalid`);
     }
-    if (entry.path === RESUME_ARTIFACTS_FILE_NAME || seenPaths.has(entry.path)) {
+    if (
+      seenPaths.has(entry.path)
+    ) {
       throw new Error(`Resume report snapshot: manifest contains a reserved or duplicate path "${entry.path}"`);
     }
     if (typeof entry.size !== 'number' || !Number.isSafeInteger(entry.size) || entry.size < 0) {
@@ -253,12 +258,10 @@ function copyReportsTree(
   const entryNames = inspectSnapshotSource(() => readdirSync(sourceDirAbs));
   inspectSnapshotSource(() => assertPrivateDirectoryReadSnapshot(directorySnapshot));
   for (const entryName of entryNames) {
-    // 予約名（前回 resume の継承 manifest）はコピーしない — この継承で
-    // 生成する新しい manifest が同名で staged reports に入る。
-    if (relativeDir === '' && entryName === RESUME_ARTIFACTS_FILE_NAME) {
+    const entryRel = relativeDir === '' ? entryName : join(relativeDir, entryName);
+    if (classifyReportRelativePath(toPosixRelative(entryRel)).kind !== 'public') {
       continue;
     }
-    const entryRel = relativeDir === '' ? entryName : join(relativeDir, entryName);
     const entryAbs = resolve(sourceRootAbs, entryRel);
     assertInside(sourceRootAbs, entryAbs, `source entry "${toPosixRelative(entryRel)}"`);
     const stat = inspectSnapshotSource(() => lstatSync(entryAbs));

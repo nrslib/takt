@@ -85,7 +85,7 @@ describe('Nix flake contract', () => {
   it('Given runtime requirements, When package and dev shell are defined, Then Node is shared and Bun is development-only', () => {
     const flake = readRequiredFile('flake.nix');
 
-    expect(flake).toContain('nodejs = pkgs.nodejs_22');
+    expect(flake).toContain('nodejs = pkgs.nodejs_24');
     expect(flake).toContain('nodejs = nodejs');
     expect(flake).toContain('devShells = forAllSystems');
     expect(flake).toContain('pkgs.mkShell');

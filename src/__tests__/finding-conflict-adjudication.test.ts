@@ -25,6 +25,7 @@ import type {
   FindingLedger,
   FindingLedgerConflict,
   FindingLedgerEntry,
+  RawFinding,
 } from '../core/workflow/findings/types.js';
 
 function computeConflictEvidenceHash(
@@ -84,6 +85,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
       title: 'Disputed issue',
       location: 'src/a.ts:10',
       description: 'The bug is present.',
+      relation: 'new',
     }],
     conflicts: [makeConflict()],
     interpretations: [],
@@ -103,7 +105,7 @@ function makeOutput(overrides: Partial<FindingConflictAdjudicationOutput> = {}):
 }
 
 describe('computeConflictEvidenceHash / isConflictUnadjudicated', () => {
-  const makeRaw = (overrides: Partial<import('../core/workflow/findings/types.js').RawFinding> = {}) => ({
+  const makeRaw = (overrides: Partial<RawFinding> = {}): RawFinding => ({
     rawFindingId: 'raw-1',
     stepName: 'reviewers',
     reviewer: 'coding-review',
@@ -112,6 +114,7 @@ describe('computeConflictEvidenceHash / isConflictUnadjudicated', () => {
     title: 'Disputed issue',
     location: 'src/a.ts:10',
     description: 'The bug is present.',
+    relation: 'new',
     ...overrides,
   });
 

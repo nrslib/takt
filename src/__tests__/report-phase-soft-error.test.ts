@@ -98,10 +98,8 @@ function makeStepExecutor(): StepExecutor {
     getLanguage: () => undefined,
     getInteractive: () => false,
     getWorkflowSteps: () => [{ name: 'review' }],
-    getWorkflowDefinitionSteps: () => [makeStep({ name: 'review' })],
     getWorkflowName: () => 'test-workflow',
     getWorkflowDescription: () => undefined,
-    getInheritedPeerReportPaths: () => [],
     getRetryNote: () => undefined,
     structuredCaller: {
       evaluateCondition: vi.fn(),

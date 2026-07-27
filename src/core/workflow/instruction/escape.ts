@@ -76,11 +76,6 @@ export function replaceTemplatePlaceholders(
     result = result.replace(/\{report_dir\}/g, context.reportDir);
   }
 
-  result = result.replace(/\{current_report\}/g, context.currentReport ?? '');
-  result = result.replace(/\{previous_report\}/g, context.previousReport ?? '');
-  result = result.replace(/\{report_history\}/g, context.reportHistory ?? '');
-  result = result.replace(/\{peer_reports\}/g, context.peerReports ?? '');
-
   // Replace {report:filename} with the verified report content.
   // 単純な文字列連結ではなく専用リゾルバを通す: containment / 存在 /
   // 通常ファイルを検証し、欠落時はエージェント起動前に明確なエラーを投げる

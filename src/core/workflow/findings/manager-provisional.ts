@@ -10,6 +10,7 @@ import {
   computeProvisionalStableKey,
   computeReviewerStableKey,
 } from './raw-canonicalization.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 
 interface RawProvisionalSpecInput {
   wire: RawFinding;
@@ -27,7 +28,7 @@ function actionRecoveryLineageTag(action: FindingActionRecovery): string {
       return [
         action.action,
         action.canonicalFindingId,
-        ...[...action.duplicateFindingIds].sort(),
+        ...[...action.duplicateFindingIds].sort(compareBinaryStrings),
       ].join(':');
   }
 }

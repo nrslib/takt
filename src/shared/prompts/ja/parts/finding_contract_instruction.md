@@ -1,5 +1,4 @@
 ## Finding Contract
-- 統合台帳のコピー: {{ledgerCopyPath}}
 {{#if isReportPhase}}- 追跡中の指摘を参照するときは、インラインの台帳サマリにある finding ID を使ってください。
 {{else}}- 追跡中の指摘を参照するときは、台帳にある finding ID を使ってください。
 {{/if}}- 最終的な finding ID を自分で採番しないでください。

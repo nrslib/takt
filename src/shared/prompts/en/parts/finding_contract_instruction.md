@@ -1,5 +1,4 @@
 ## Finding Contract
-- Consolidated ledger copy: {{ledgerCopyPath}}
 {{#if isReportPhase}}- Use existing finding IDs from the inline ledger summary when referring to tracked findings.
 {{else}}- Use existing finding IDs from the ledger when referring to tracked findings.
 {{/if}}- Do not assign final finding IDs.

@@ -8,6 +8,10 @@
 
 ## [0.52.0] - 2026-07-19
 
+### Removed
+
+- **BREAKING:** `{current_report}`、`{previous_report}`、`{peer_reports}`、`{report_history}` のインストラクションプレースホルダーを後方互換なしで削除しました。必要なレポート本文の展開には `{report:filename}` を使用してください。
+
 ### Added
 
 - 自動ルーティングが実際に使えるようになりました (#1040)。0.51.0 で告知した `provider: auto` は実際には機能しておらず、よりシンプルな有効化方式に置き換えました。トップレベルの `provider` には具体的なプロバイダを指定したまま、有効な `auto_routing` candidates を定義すると、その存在によってステップごとの provider/model 自動ルーティングが有効になります。ワークフローステップ文脈のない処理（AI によるタスク slug 生成など）はトップレベルの provider/model を使い、`auto_routing.router` や candidates が暗黙のデフォルトになることはありません。`provider: auto` は受け付けなくなったため、設定していた場合は具体的なプロバイダへ書き換えてください。

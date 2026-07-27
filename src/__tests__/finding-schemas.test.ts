@@ -23,6 +23,8 @@ import {
 } from '../core/models/finding-schemas.js';
 import { compareRfc3339Timestamps } from '../core/models/rfc3339.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
+
+const TEST_INTEGRITY_DIGEST = 'a'.repeat(64);
 import { FINDING_CONFLICT_ADJUDICATION_SCHEMA_REF } from '../core/workflow/findings/adjudication-step.js';
 import { RAW_FINDINGS_SCHEMA_REF } from '../core/workflow/findings/manager-agent.js';
 import {
@@ -137,6 +139,49 @@ describe('finding schemas', () => {
     expect(parseFindingLedger(ledger)).toEqual(ledger);
   });
 
+  it.each([
+    ['stopBudget', ['round-a', 'round-a']],
+    ['stopBudget', ['round-b', 'round-a']],
+    ['reviewIntegrity', ['round-a', 'round-a']],
+    ['reviewIntegrity', ['round-b', 'round-a']],
+  ] as const)('rejects duplicate or binary-unsorted %s.roundMarkers', (field, roundMarkers) => {
+    expect(() => parseFindingLedger({
+      workflowName: 'peer-review',
+      nextId: 1,
+      updatedAt: '2026-07-24T00:00:00.000Z',
+      findings: [],
+      rawFindings: [],
+      conflicts: [],
+      interpretations: [],
+      [field]: {
+        roundMarkers,
+        firstRoundAt: '2026-07-24T00:00:00.000Z',
+        exhausted: false,
+      },
+    })).toThrow(/binary-sorted unique set/);
+  });
+
+  it('accepts canonical binary-sorted unique roundMarkers for both budgets', () => {
+    const state = {
+      roundMarkers: ['round-a', 'round-b'],
+      firstRoundAt: '2026-07-24T00:00:00.000Z',
+      exhausted: false,
+    };
+    const ledger = {
+      workflowName: 'peer-review',
+      nextId: 1,
+      updatedAt: '2026-07-24T00:00:00.000Z',
+      findings: [],
+      rawFindings: [],
+      conflicts: [],
+      interpretations: [],
+      stopBudget: state,
+      reviewIntegrity: state,
+    };
+
+    expect(parseFindingLedger(ledger)).toEqual(ledger);
+  });
+
   it('rejects unexpected fields on the finding ledger root', () => {
     expect(() => parseFindingLedger({
       workflowName: 'peer-review',
@@ -200,6 +245,7 @@ describe('finding schemas', () => {
       reviewerStableKey: 'reviewer-key',
       lineageKey: 'lineage-key',
       candidateEvidenceHash: 'evidence-hash',
+      canonicalIntegrityDigest: TEST_INTEGRITY_DIGEST,
       stage: 'interpretation_started',
       reservationToken: 'reservation-1',
       startedAt: {
@@ -228,6 +274,10 @@ describe('finding schemas', () => {
       ...ledger,
       interpretations: [{ ...record, attemptOrdinal: undefined }],
     })).toThrow();
+    expect(() => parseFindingLedger({
+      ...ledger,
+      interpretations: [{ ...record, canonicalIntegrityDigest: undefined }],
+    })).toThrow();
   });
 
   it('enforces required and contradictory fields for every interpretation WAL stage', () => {
@@ -243,6 +293,7 @@ describe('finding schemas', () => {
       reviewerStableKey: 'reviewer-key',
       lineageKey: 'lineage-key',
       candidateEvidenceHash: 'evidence-hash',
+      canonicalIntegrityDigest: TEST_INTEGRITY_DIGEST,
       startedAt: observation,
       promptPreconditions: [],
     };
@@ -528,16 +579,10 @@ describe('finding schemas', () => {
     expect(decisionsProperties.duplicateDecisions.items.required).toEqual(Object.keys(decisionsProperties.duplicateDecisions.items.properties));
   });
 
-  it('post-hoc 検証用 schema は typed evidence protocol の3フィールドだけを required から外す', () => {
+  it('post-hoc 検証用 schema は item 欠損を per-item ambiguity へ渡す', () => {
     const strictItem = RawFindingsOutputJsonSchema.properties.rawFindings.items;
     const lenientItem = RawFindingsOutputValidationJsonSchema.properties.rawFindings.items;
-    // required は strict 版から evidenceKind/verbatimExcerpt/snapshotId を除いたもの
-    // （codex 対策#4: schema が生成を拘束しない劣化経路のモデルがこれらを省略しても
-    // structured output 全体を無効にしない — finding-schemas.ts の doc コメント参照）。
-    const evidenceFields = ['evidenceKind', 'verbatimExcerpt', 'snapshotId'];
-    expect(lenientItem.required).toEqual(
-      strictItem.required.filter((key) => !evidenceFields.includes(key)),
-    );
+    expect(lenientItem.required).toEqual([]);
     expect(Object.keys(lenientItem.properties).sort()).toEqual(
       Object.keys(strictItem.properties).sort(),
     );
@@ -621,6 +666,43 @@ describe('finding schemas', () => {
       minLength: 1,
       description: 'Structured form of the Observed Findings family_tag value. A classification/search hint only — it is not used to determine whether two findings are the same issue.',
     });
+  });
+
+  it('keeps target mutation authority engine-issued and persisted only', () => {
+    const reviewerTarget = {
+      rawFindingId: 'raw-target',
+      familyTag: 'state',
+      severity: 'high',
+      title: 'State remains invalid',
+      location: 'src/state.ts:1',
+      description: 'The invalid state remains.',
+      suggestion: 'Repair the transition.',
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+    };
+    const targetPrecondition = {
+      targetFindingId: 'F-0001',
+      targetRevision: 4,
+      targetStatus: 'open',
+      targetEvidenceHash: 'a'.repeat(64),
+    };
+
+    expect(ReviewerRawFindingSchema.parse(reviewerTarget)).not.toHaveProperty('targetPrecondition');
+    expect(() => ReviewerRawFindingSchema.parse({
+      ...reviewerTarget,
+      targetPrecondition,
+    })).toThrow();
+    expect(() => RawFindingSchema.parse({
+      ...reviewerTarget,
+      stepName: 'review',
+      reviewer: 'reviewer',
+    })).toThrow();
+    expect(RawFindingSchema.parse({
+      ...reviewerTarget,
+      stepName: 'review',
+      reviewer: 'reviewer',
+      targetPrecondition,
+    }).targetPrecondition).toEqual(targetPrecondition);
   });
 
   // 決定スキーマ（FindingManagerDuplicateDecisionSchema）と対称に、出力側の

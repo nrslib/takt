@@ -1,3 +1,5 @@
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+
 export interface RoundIdentity {
   runId: string;
   callNamespace: string;
@@ -10,5 +12,5 @@ export function computeRoundMarker(identity: RoundIdentity): string {
 }
 
 export function addRoundMarker(existing: readonly string[] | undefined, marker: string): string[] {
-  return [...new Set([...(existing ?? []), marker])].sort();
+  return [...new Set([...(existing ?? []), marker])].sort(compareBinaryStrings);
 }

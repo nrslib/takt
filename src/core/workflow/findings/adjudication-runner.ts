@@ -222,7 +222,7 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
         // lets its unadjudicated-conflict rule route back here for a fresh
         // adjudication of the changed evidence.
         const discardReason = applyMutation.result.reason;
-        const reportPath = deps.ledgerStore.saveConflictAdjudicationReport({
+        deps.ledgerStore.saveConflictAdjudicationReport({
           version: 1,
           runId: deps.runId,
           conflictId: promptConflict.id,
@@ -234,11 +234,12 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
             : {}),
           output,
         });
-        log.info('Adjudication decision discarded', { conflictId: promptConflict.id, reason: discardReason, reportPath });
+        log.info('Adjudication decision discarded', { conflictId: promptConflict.id, reason: discardReason });
         const discardResponse = buildResponse({
           step,
           content: `Adjudication of conflict ${promptConflict.id} was discarded: ${discardReason}. `
-            + `The decision was not applied (audit: ${reportPath}); the conflict remains open for re-adjudication against its current evidence.`,
+            + 'The decision was not applied; an audit record was saved and the conflict remains open '
+            + 'for re-adjudication against its current evidence.',
           matchedRuleIndex: FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.FINDING_CLOSED,
           structuredOutput: output as unknown as Record<string, unknown>,
         });

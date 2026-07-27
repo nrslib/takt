@@ -9,6 +9,7 @@ import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js'
 import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
 import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import type { FindingLedger, FindingManagerOutput, RawFinding } from '../core/workflow/findings/types.js';
+import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 
 const WORKFLOW_NAME = 'peer-review';
 const LEDGER_PATH = '.takt/findings/peer-review.json';
@@ -121,19 +122,20 @@ function reconcileCurrentRaw(): FindingLedger {
     rawFindingDispositions: [],
     rawProvenanceByRawFindingId: new Map([[
       rawFinding.rawFindingId,
-      {
-        reviewerStableKey: computeReviewerStableKey({
+      storedRawReconcileProvenance(
+        rawFinding,
+        computeReviewerStableKey({
           workflowName: WORKFLOW_NAME,
           callNamespace: '',
           parentStepName: 'reviewers',
           reviewerPersonaKey: rawFinding.reviewer,
         }),
-        lineageKey: computeLineageKey({
+        computeLineageKey({
           location: rawFinding.location,
           title: rawFinding.title,
           familyTag: rawFinding.familyTag,
         }),
-      },
+      ),
     ]]),
     context: {
       workflowName: WORKFLOW_NAME,
@@ -179,7 +181,7 @@ describe('reconciled conflict history reservation', () => {
       'older-pending-evidence',
       'newer-pending-evidence',
     ]);
-    store.saveLedger(reconciled);
+    await store.updateLedger(() => ({ ledger: reconciled, result: undefined }));
     expect(store.loadLedger().conflicts[0]?.adjudicationAttempts?.map((attempt) => attempt.startedAt.timestamp)).toEqual([
       '2016-12-31T23:59:60.500Z',
       '2017-01-01T00:00:00.000Z',
@@ -219,11 +221,14 @@ describe('reconciled conflict history reservation', () => {
       rawFindingsPath: RAW_FINDINGS_PATH,
     });
     const reconciled = reconcileCurrentRaw();
-    store.saveLedger(reconciled);
+    await store.updateLedger(() => ({ ledger: reconciled, result: undefined }));
     const ledger = structuredClone(reconciled);
     ledger.conflicts[0]!.adjudicationAttempts![0]!.startedAt.timestamp = '2026-06-12T22:15:00.0001Z';
 
-    expect(() => store.saveLedger(ledger)).toThrow('Expected an RFC 3339 timestamp');
+    await expect(store.updateLedger(() => ({
+      ledger,
+      result: undefined,
+    }))).rejects.toThrow('Expected an RFC 3339 timestamp');
 
     const reservation = await reserveFindingConflictAdjudication({
       ledgerStore: store,

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runReportPhase, type ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
 import type { WorkflowStep } from '../core/models/types.js';
@@ -12,6 +13,21 @@ vi.mock('../agents/runner.js', () => ({
 
 import { runAgent } from '../agents/runner.js';
 import type { AgentResponse } from '../core/models/types.js';
+
+function writerHistoryPaths(reportDir: string, fileName: string): string[] {
+  const targetPath = join(reportDir, fileName);
+  const streamId = createHash('sha256')
+    .update(['filesystem-report', resolve(targetPath)].join('\0'))
+    .digest('hex');
+  const historyDir = join(
+    reportDir,
+    '.takt-report-internal',
+    'history',
+    streamId,
+    'writer',
+  );
+  return readdirSync(historyDir).map((name) => join(historyDir, name)).sort();
+}
 
 function createStep(fileName: string): WorkflowStep {
   return {
@@ -144,11 +160,11 @@ describe('runReportPhase report history behavior', () => {
     const latestContent = readFileSync(latestPath, 'utf-8');
     expect(latestContent).toBe('Second review result');
 
-    const versionedFiles = readdirSync(reportDir).filter(f => f !== '05-architect-review.md');
+    const versionedFiles = writerHistoryPaths(reportDir, '05-architect-review.md');
     expect(versionedFiles).toHaveLength(1);
-    expect(versionedFiles[0]).toMatch(/^05-architect-review\.md\.\d{8}T\d{6}Z$/);
+    expect(basename(versionedFiles[0]!)).toMatch(/^05-architect-review\.md\.\d{8}T\d{6}Z$/);
 
-    const archivedContent = readFileSync(join(reportDir, versionedFiles[0]!), 'utf-8');
+    const archivedContent = readFileSync(versionedFiles[0]!, 'utf-8');
     expect(archivedContent).toBe('First review result');
   });
 
@@ -190,7 +206,8 @@ describe('runReportPhase report history behavior', () => {
     await runReportPhase(step, 3, ctx);
 
     // Then
-    const versionedFiles = readdirSync(reportDir).filter(f => f !== '06-qa-review.md').sort();
+    const versionedFiles = writerHistoryPaths(reportDir, '06-qa-review.md')
+      .map((path) => basename(path));
     expect(versionedFiles).toEqual([
       '06-qa-review.md.20260210T061143Z',
       '06-qa-review.md.20260210T061143Z.1',
@@ -380,10 +397,10 @@ describe('runReportPhase report history behavior', () => {
     const latestPath = join(reportDir, '09-team-leader-report.md');
     expect(readFileSync(latestPath, 'utf-8')).toBe('Second report from new session');
 
-    const versionedFiles = readdirSync(reportDir).filter((file) => file !== '09-team-leader-report.md');
+    const versionedFiles = writerHistoryPaths(reportDir, '09-team-leader-report.md');
     expect(versionedFiles).toHaveLength(1);
 
-    const archivedContent = readFileSync(join(reportDir, versionedFiles[0]!), 'utf-8');
+    const archivedContent = readFileSync(versionedFiles[0]!, 'utf-8');
     expect(archivedContent).toBe('First report from new session');
   });
 });

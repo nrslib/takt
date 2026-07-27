@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { compareBinaryStrings } from '../../shared/utils/binary-string-comparator.js';
 
 export interface ConflictIdentity {
   findingIds: readonly string[];
@@ -8,7 +9,7 @@ export interface ConflictIdentity {
 function formatConflictSignature(conflict: ConflictIdentity): string {
   const namespace = conflict.findingIds.length > 0 ? 'finding' : 'raw';
   const ids = conflict.findingIds.length > 0 ? conflict.findingIds : conflict.rawFindingIds;
-  return JSON.stringify({ namespace, ids: [...ids].sort() });
+  return JSON.stringify({ namespace, ids: [...ids].sort(compareBinaryStrings) });
 }
 
 export function formatConflictId(conflict: ConflictIdentity): string {

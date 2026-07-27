@@ -76,8 +76,8 @@ try {
   // 完了宣言だけの空振りを弾く: 成果物は形ではなく挙動で検証する。
   // リポジトリの typescript devDep でトランスパイルして import 実行し、
   // 要求仕様どおりの戻り値かを直接確認する（正規表現による形の検査は
-  // バイパス可能だった。Node の型ストリップは engines 下限の Node 20 に
-  // 存在しないため使わない）。
+  // バイパス可能だった。製品の TypeScript コンパイル条件と同じ意味で
+  // 検証するため、Node 組み込みの限定的な型ストリップには依存しない）。
   const artifactPath = join(workDir, 'greet.ts');
   let artifactOk = false;
   if (existsSync(artifactPath)) {

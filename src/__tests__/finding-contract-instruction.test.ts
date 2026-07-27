@@ -9,7 +9,6 @@ const renderFencedJsonBlock = (value: unknown): string => `\`\`\`json\n${JSON.st
 
 function makeContract(overrides: Partial<FindingContractInstructionContext> = {}): FindingContractInstructionContext {
   return {
-    ledgerCopyPath: '.takt/runs/r1/reports/findings-ledger.json',
     ledgerSummary: { findings: [] },
     hasOpenFindings: false,
     hasWaivedFindings: false,
@@ -64,7 +63,7 @@ describe('buildFindingContractInstruction', () => {
         contract: { rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT, reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID },
         language: 'ja',
       });
-      expect(rendered).toContain('統合台帳のコピー');
+      expect(rendered).not.toContain('統合台帳のコピー');
       expect(rendered).toContain('構造化 raw finding として報告してください');
     });
 
@@ -205,7 +204,6 @@ describe('buildFindingContractInstruction', () => {
 describe('buildFindingContractReportInstruction', () => {
   function buildReport(language: 'ja' | 'en'): string {
     return buildFindingContractReportInstruction({
-      ledgerCopyPath: '.takt/runs/r1/reports/findings-ledger.json',
       reportLedgerSummary: { ids: ['F-0001'] },
       language,
       renderFencedJsonBlock,

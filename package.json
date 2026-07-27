@@ -4,6 +4,13 @@
   "description": "Workflow control for AI coding agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "takt": "./bin/takt",
     "takt-dev": "./bin/takt",
@@ -17,7 +24,8 @@
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
     "eval:prompts": "npm run eval:prompts:prepare && node eval/scripts/run-evals.mjs",
-    "test": "node scripts/run-npm-test.mjs",
+    "test": "npm run test:type-contracts && node scripts/run-npm-test.mjs",
+    "test:type-contracts": "tsc --noEmit -p tsconfig.type-contracts.json",
     "test:unit": "vitest run --config vitest.config.unit.parallel.ts",
     "test:unit:parallel": "vitest run --config vitest.config.unit.parallel.ts",
     "test:it": "npm run test:it:parallel && npm run test:it:serial",
@@ -85,7 +93,7 @@
   "homepage": "https://github.com/nrslib/takt#readme",
   "type": "module",
   "engines": {
-    "node": "^20.20.0 || >=22.22.0"
+    "node": ">=24.15.0"
   },
   "files": [
     "dist/",
@@ -117,7 +125,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
-    "@types/node": "^20.14.0",
+    "@types/node": "^24.0.0",
     "@types/wanakana": "^4.0.6",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",

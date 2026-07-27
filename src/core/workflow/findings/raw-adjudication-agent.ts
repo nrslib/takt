@@ -15,8 +15,6 @@ export function prepareRawAdjudicationBatch(input: {
   queue: RawFinding[];
   contract: FindingContractConfig;
   previousLedger: FindingLedger;
-  ledgerCopyPath: string;
-  rawFindingsPath: string;
   mechanicallyClassifiedCount: number;
   managerStep: AgentWorkflowStep;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction'>;
@@ -25,8 +23,6 @@ export function prepareRawAdjudicationBatch(input: {
     const instruction = buildManagerInstruction({
       contract: input.contract,
       previousLedger: input.previousLedger,
-      ledgerCopyPath: input.ledgerCopyPath,
-      rawFindingsPath: input.rawFindingsPath,
       residualRawFindings: batch,
       mechanicallyClassifiedCount: input.mechanicallyClassifiedCount,
       priorStepResponseText: undefined,

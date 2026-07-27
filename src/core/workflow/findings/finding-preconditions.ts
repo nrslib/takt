@@ -15,9 +15,10 @@ import type {
   FindingMutationPrecondition,
   RawFinding,
 } from './types.js';
-import { computeRawEvidenceHash } from './raw-canonicalization.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+import { computeRawFindingIntegrityDigest } from './finding-integrity.js';
 
-const EVIDENCE_HASH_ALGORITHM_VERSION = 1;
+const EVIDENCE_HASH_ALGORITHM_VERSION = 2;
 
 export function findingRevision(entry: Pick<FindingLedgerEntry, 'revision'>): number {
   return entry.revision;
@@ -25,28 +26,20 @@ export function findingRevision(entry: Pick<FindingLedgerEntry, 'revision'>): nu
 
 /**
  * finding entry の evidence hash。台帳に紐づく
- * 各 raw の evidence hash（行番号・runId 非依存の computeRawEvidenceHash）を含む
- * ため、prompt 後に同じ target へ raw（persists 等）が追加されると必ず変わる。
+ * 各 raw の完全な永続 wire shape の integrity digest を含むため、prompt 後の
+ * raw 追加だけでなく、既存 raw の typed evidence を含む内容差し替えでも変わる。
  */
 export function computeFindingEvidenceHash(
   entry: FindingLedgerEntry,
   rawFindingsById: ReadonlyMap<string, RawFinding>,
 ): string {
-  const rawEvidenceHashes = entry.rawFindingIds.map((rawFindingId) => {
+  const rawFindingIds = [...entry.rawFindingIds].sort(compareBinaryStrings);
+  const rawEvidenceHashes = rawFindingIds.map((rawFindingId) => {
     const raw = rawFindingsById.get(rawFindingId);
     if (raw === undefined) {
       return `missing:${rawFindingId}`;
     }
-    return computeRawEvidenceHash({
-      relation: raw.relation,
-      ...(raw.targetFindingId !== undefined ? { targetFindingId: raw.targetFindingId } : {}),
-      title: raw.title,
-      description: raw.description,
-      ...(raw.suggestion !== undefined ? { suggestion: raw.suggestion } : {}),
-      severity: raw.severity,
-      familyTag: raw.familyTag,
-      ...(raw.location !== undefined ? { location: raw.location } : {}),
-    });
+    return computeRawFindingIntegrityDigest(raw);
   });
   const payload = JSON.stringify([
     EVIDENCE_HASH_ALGORITHM_VERSION,
@@ -58,7 +51,7 @@ export function computeFindingEvidenceHash(
     entry.location ?? '',
     entry.description ?? '',
     entry.suggestion ?? '',
-    entry.rawFindingIds,
+    rawFindingIds,
     rawEvidenceHashes,
     entry.disputes ?? [],
     entry.waivers ?? [],
@@ -74,22 +67,74 @@ export interface CapturedFindingPrecondition {
   capturedRawFindingIds: ReadonlySet<string>;
 }
 
+export function captureFindingMutationPrecondition(
+  ledger: FindingLedger,
+  targetFindingId: string,
+): FindingMutationPrecondition | undefined {
+  const entry = ledger.findings.find((finding) => finding.id === targetFindingId);
+  if (entry === undefined) {
+    return undefined;
+  }
+  const rawFindingsById = new Map(ledger.rawFindings.map((raw) => [raw.rawFindingId, raw]));
+  return {
+    targetFindingId: entry.id,
+    targetRevision: findingRevision(entry),
+    targetStatus: entry.status,
+    targetEvidenceHash: computeFindingEvidenceHash(entry, rawFindingsById),
+  };
+}
+
+export function sameFindingMutationPrecondition(
+  left: FindingMutationPrecondition,
+  right: FindingMutationPrecondition,
+): boolean {
+  return left.targetFindingId === right.targetFindingId
+    && left.targetRevision === right.targetRevision
+    && left.targetStatus === right.targetStatus
+    && left.targetEvidenceHash === right.targetEvidenceHash;
+}
+
+export function findingMatchesMutationPrecondition(
+  ledger: FindingLedger,
+  precondition: FindingMutationPrecondition,
+): boolean {
+  const current = captureFindingMutationPrecondition(
+    ledger,
+    precondition.targetFindingId,
+  );
+  return current !== undefined
+    && sameFindingMutationPrecondition(current, precondition);
+}
+
 /** prompt / 機械分類時点の全 finding のスナップショット。 */
 export function captureFindingPreconditions(ledger: FindingLedger): Map<string, CapturedFindingPrecondition> {
-  const rawFindingsById = new Map(ledger.rawFindings.map((raw) => [raw.rawFindingId, raw]));
   const preconditions = new Map<string, CapturedFindingPrecondition>();
   for (const entry of ledger.findings) {
+    const precondition = captureFindingMutationPrecondition(ledger, entry.id);
+    if (precondition === undefined) {
+      throw new Error(`Finding "${entry.id}" disappeared while capturing preconditions`);
+    }
     preconditions.set(entry.id, {
-      precondition: {
-        targetFindingId: entry.id,
-        targetRevision: findingRevision(entry),
-        targetStatus: entry.status,
-        targetEvidenceHash: computeFindingEvidenceHash(entry, rawFindingsById),
-      },
+      precondition,
       capturedRawFindingIds: new Set(entry.rawFindingIds),
     });
   }
   return preconditions;
+}
+
+export function captureOpenFindingMutationPreconditions(
+  ledger: FindingLedger,
+): FindingMutationPrecondition[] {
+  return ledger.findings.flatMap((entry) => {
+    if (entry.status !== 'open') {
+      return [];
+    }
+    const precondition = captureFindingMutationPrecondition(ledger, entry.id);
+    if (precondition === undefined) {
+      throw new Error(`Finding "${entry.id}" disappeared while capturing prompt preconditions`);
+    }
+    return [precondition];
+  });
 }
 
 export type FindingPreconditionCheck =

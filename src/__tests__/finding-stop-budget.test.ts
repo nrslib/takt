@@ -34,6 +34,7 @@ import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../c
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -273,6 +274,12 @@ describe('attachStopBudgetState', () => {
 // ---------------------------------------------------------------------------
 
 const FIXTURE_CWD = mkdtempSync(join(tmpdir(), 'takt-stop-budget-fixtures-'));
+const publicationDirs = new Set<string>();
+function makePublicationDir(prefix: string): string {
+  const directory = mkdtempSync(join(tmpdir(), prefix));
+  publicationDirs.add(directory);
+  return directory;
+}
 function writeFixtureFile(relativePath: string, lineCount: number): void {
   const fullPath = join(FIXTURE_CWD, relativePath);
   mkdirSync(dirname(fullPath), { recursive: true });
@@ -285,6 +292,9 @@ execFileSync('git', ['-c', 'user.name=TAKT test', '-c', 'user.email=takt-test@ex
 
 afterAll(() => {
   rmSync(FIXTURE_CWD, { recursive: true, force: true });
+  for (const directory of publicationDirs) {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 function makeRoundHarness(
@@ -298,28 +308,31 @@ function makeRoundHarness(
   currentLedger: () => FindingLedger;
   run: (reviewerRawFindings: Array<Record<string, unknown>>, timestamp: string) => ReturnType<typeof runFindingManagerForStep>;
 } {
-  let ledgerState = initialLedger;
+  const ledgerRepository = new RevisionedFindingLedgerTestRepository(initialLedger);
+  const publicationReportDir = makePublicationDir('takt-stop-budget-publication-');
   const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
     ledgerIdentity: '/test/finding-stop-budget/ledger.json',
     workflowName: 'peer-review',
-    loadLedger: () => ledgerState,
-    saveLedger: (next) => { ledgerState = next; },
-    updateLedger: (mutator) => {
-      const mutation = mutator(ledgerState);
-      ledgerState = mutation.ledger;
-      return Promise.resolve(mutation);
-    },
+    loadLedger: () => ledgerRepository.loadLedger(),
+    updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
     claimAdjudicationReservation: (token) => {
       if (reservations.has(token)) return false;
       reservations.add(token);
       return true;
     },
     releaseAdjudicationReservation: (token) => { reservations.delete(token); },
-    createRunCopy: () => '/tmp/ledger-copy.json',
-    saveRawFindings: () => '/tmp/raw-findings.json',
-    saveManagerValidationReport: () => '/tmp/manager-report.json',
-    saveConflictAdjudicationReport: () => '/tmp/adjudication-report.json',
+    saveLedgerSnapshot: () => {},
+    saveRawFindings: () => {},
+    saveManagerValidationReport: () => {},
+    ...createFindingManagerPublicationDouble(
+      (report) => join(
+        publicationReportDir,
+        `findings-manager-validation.${report.stepName}.json`,
+      ),
+      ledgerRepository,
+    ),
+    saveConflictAdjudicationReport: () => {},
   };
   const optionsBuilder = {
     buildAgentOptions: () => ({}),
@@ -342,7 +355,7 @@ function makeRoundHarness(
   };
   let round = 0;
   return {
-    currentLedger: () => ledgerState,
+    currentLedger: () => ledgerRepository.loadLedger(),
     run: (reviewerRawFindings, timestamp) => {
       round += 1;
       const subResults: FindingManagerSubStepResult[] = [{
@@ -484,6 +497,7 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
         title: 'Real, fixable issue',
         location: 'src/real.ts:10',
         description: 'A genuine issue that the fixer can and will resolve.',
+        relation: 'new',
       }],
       conflicts: [],
       interpretations: [],
@@ -545,28 +559,31 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
     // models the exact "commit the same round twice" crash/replay: the ledger
     // was persisted (round counted), then the identical invocation re-runs and
     // re-commits before the workflow checkpoint advanced.
-    let ledgerState = emptyLedger();
+    const ledgerRepository = new RevisionedFindingLedgerTestRepository(emptyLedger());
+    const publicationReportDir = makePublicationDir('takt-stop-budget-replay-publication-');
     const reservations = new Set<string>();
     const ledgerStore: FindingLedgerStore = {
       ledgerIdentity: '/test/finding-stop-budget/integrity-ledger.json',
       workflowName: 'peer-review',
-      loadLedger: () => ledgerState,
-      saveLedger: (next) => { ledgerState = next; },
-      updateLedger: (mutator) => {
-        const mutation = mutator(ledgerState);
-        ledgerState = mutation.ledger;
-        return Promise.resolve(mutation);
-      },
+      loadLedger: () => ledgerRepository.loadLedger(),
+      updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
       claimAdjudicationReservation: (token) => {
         if (reservations.has(token)) return false;
         reservations.add(token);
         return true;
       },
       releaseAdjudicationReservation: (token) => { reservations.delete(token); },
-      createRunCopy: () => '/tmp/ledger-copy.json',
-      saveRawFindings: () => '/tmp/raw-findings.json',
-      saveManagerValidationReport: () => '/tmp/manager-report.json',
-      saveConflictAdjudicationReport: () => '/tmp/adjudication-report.json',
+      saveLedgerSnapshot: () => {},
+      saveRawFindings: () => {},
+      saveManagerValidationReport: () => {},
+      ...createFindingManagerPublicationDouble(
+        (report) => join(
+          publicationReportDir,
+          `findings-manager-validation.${report.stepName}.json`,
+        ),
+        ledgerRepository,
+      ),
+      saveConflictAdjudicationReport: () => {},
     };
     const contract = {
       ledgerPath: '.takt/findings/ledger.json',
@@ -594,14 +611,14 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
     });
 
     await runSameRound('2026-07-01T00:00:00.000Z');
-    expect(stopBudgetRoundsCompleted(ledgerState)).toBe(1);
+    expect(stopBudgetRoundsCompleted(ledgerRepository.loadLedger())).toBe(1);
     // Replay the identical round (post-crash, pre-checkpoint re-execution).
     await runSameRound('2026-07-01T00:05:00.000Z');
-    expect(stopBudgetRoundsCompleted(ledgerState)).toBe(1);
+    expect(stopBudgetRoundsCompleted(ledgerRepository.loadLedger())).toBe(1);
     // A third replay still does not advance the counter.
     await runSameRound('2026-07-01T00:10:00.000Z');
-    expect(stopBudgetRoundsCompleted(ledgerState)).toBe(1);
-    expect(ledgerState.stopBudget?.roundMarkers).toHaveLength(1);
+    expect(stopBudgetRoundsCompleted(ledgerRepository.loadLedger())).toBe(1);
+    expect(ledgerRepository.loadLedger().stopBudget?.roundMarkers).toHaveLength(1);
   });
 
   it('time budget: a churn series that stays well under the round cap is still stopped once elapsed wall-clock time exceeds maxMinutes', async () => {

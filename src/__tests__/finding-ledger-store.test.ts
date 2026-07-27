@@ -7,7 +7,6 @@ const fsFailure = vi.hoisted(() => ({
   failWriteOnce: undefined as ((path: string) => boolean) | undefined,
   descriptorPaths: new Map<number, string>(),
   beforeOpen: undefined as ((path: string) => void) | undefined,
-  afterClose: undefined as ((path: string) => boolean) | undefined,
   beforePublication: undefined as ((targetPath: string) => void) | undefined,
 }));
 
@@ -45,16 +44,8 @@ vi.mock('node:fs', async (importOriginal) => {
       return descriptor;
     }) as typeof actual.openSync,
     closeSync: ((descriptor: number) => {
-      const path = fsFailure.descriptorPaths.get(descriptor);
       fsFailure.descriptorPaths.delete(descriptor);
-      const result = actual.closeSync(descriptor);
-      if (path !== undefined) {
-        const afterClose = fsFailure.afterClose;
-        if (afterClose?.(path) === true) {
-          fsFailure.afterClose = undefined;
-        }
-      }
-      return result;
+      return actual.closeSync(descriptor);
     }) as typeof actual.closeSync,
     writeFileSync: ((
       path: Parameters<typeof actual.writeFileSync>[0],
@@ -79,24 +70,30 @@ vi.mock('node:fs', async (importOriginal) => {
 
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
 import type {
   FindingLedger,
   FindingManagerReportPublication,
   FindingManagerValidationReport,
+  RawFinding,
 } from '../core/workflow/findings/types.js';
 import { parseFindingLedger } from '../core/models/finding-schemas.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import { runManagerRoundExclusive } from '../core/workflow/findings/manager-round-lock.js';
+import { runLedgerUpdateExclusive } from '../core/workflow/findings/ledger-identity-queue.js';
 import {
   finalizePendingManagerCommit,
   stagePendingManagerCommit,
 } from '../core/workflow/findings/manager-pending-commit.js';
 import { resumePendingManagerCommit } from '../core/workflow/findings/manager-commit.js';
-import { publishReportFile } from '../core/workflow/report-writer.js';
+import {
+  publishReportFile,
+  writeReportFile,
+} from '../core/workflow/report-writer.js';
 import * as privateFile from '../shared/utils/private-file.js';
 
+const TEST_INTEGRITY_DIGEST = 'a'.repeat(64);
 const cleanupDirs = new Set<string>();
 
 function makeTempDir(prefix: string): string {
@@ -161,6 +158,20 @@ function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
+function publicationHistoryPaths(reportDir: string, targetPath: string): string[] {
+  const historyDir = join(
+    reportDir,
+    '.takt-report-internal',
+    'history',
+    sha256(['filesystem-report', resolve(targetPath)].join('\0')),
+    'publication',
+  );
+  if (!existsSync(historyDir)) {
+    return [];
+  }
+  return readdirSync(historyDir).map((name) => join(historyDir, name));
+}
+
 function runChildFileMutation(script: string, args: readonly string[]): void {
   const result = spawnSync(process.execPath, ['-e', script, ...args], {
     encoding: 'utf-8',
@@ -192,7 +203,6 @@ beforeEach(() => {
   fsFailure.failWriteOnce = undefined;
   fsFailure.descriptorPaths.clear();
   fsFailure.beforeOpen = undefined;
-  fsFailure.afterClose = undefined;
   fsFailure.beforePublication = undefined;
 });
 
@@ -200,7 +210,6 @@ afterEach(() => {
   fsFailure.failWriteOnce = undefined;
   fsFailure.descriptorPaths.clear();
   fsFailure.beforeOpen = undefined;
-  fsFailure.afterClose = undefined;
   fsFailure.beforePublication = undefined;
   for (const dir of cleanupDirs) {
     rmSync(dir, { recursive: true, force: true });
@@ -209,12 +218,37 @@ afterEach(() => {
 });
 
 describe('FindingLedgerStore', () => {
-  it('should persist the project ledger under projectCwd, not the run report directory', () => {
+  it.each([
+    ['stopBudget', ['round-a', 'round-a']],
+    ['reviewIntegrity', ['round-b', 'round-a']],
+  ] as const)('rejects noncanonical %s.roundMarkers at the filesystem load boundary', (
+    field,
+    roundMarkers,
+  ) => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const ledgerPath = join(projectCwd, '.takt/findings/peer-review.json');
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    writeFileSync(ledgerPath, JSON.stringify({
+      ...makeLedger(),
+      [field]: {
+        roundMarkers,
+        firstRoundAt: '2026-06-13T00:00:00.000Z',
+        exhausted: false,
+      },
+    }));
+
+    const store = createStore({ projectCwd, reportDir });
+
+    expect(() => store.loadLedger()).toThrow(/binary-sorted unique set/);
+  });
+
+  it('should persist the project ledger under projectCwd, not the run report directory', async () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
 
-    store.saveLedger(makeLedger());
+    await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
 
     const projectLedgerPath = join(projectCwd, '.takt/findings/peer-review.json');
     const reportLedgerPath = join(reportDir, '.takt/findings/peer-review.json');
@@ -225,12 +259,12 @@ describe('FindingLedgerStore', () => {
     );
   });
 
-  it('should reject invalid semantic timestamps without overwriting the persisted ledger', () => {
+  it('should reject invalid semantic timestamps without overwriting the persisted ledger', async () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
     const ledgerPath = join(projectCwd, '.takt/findings/peer-review.json');
-    store.saveLedger(makeLedger());
+    await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
     const persistedContent = readFileSync(ledgerPath, 'utf-8');
     const timestamp = 'not-a-timestamp';
     const invalidLedgers: FindingLedger[] = [
@@ -264,12 +298,15 @@ describe('FindingLedgerStore', () => {
     ];
 
     for (const invalidLedger of invalidLedgers) {
-      expect(() => store.saveLedger(invalidLedger)).toThrow('Expected an RFC 3339 timestamp');
+      await expect(store.updateLedger(() => ({
+        ledger: invalidLedger,
+        result: undefined,
+      }))).rejects.toThrow('Expected an RFC 3339 timestamp');
       expect(readFileSync(ledgerPath, 'utf-8')).toBe(persistedContent);
     }
   });
 
-  it('should normalize every semantic timestamp before saving the ledger', () => {
+  it('should normalize every semantic timestamp before saving the ledger', async () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
@@ -298,7 +335,7 @@ describe('FindingLedgerStore', () => {
       reviewIntegrity: { roundMarkers: ['round-1'], firstRoundAt: '2026-06-13T00:15:00+02:00', exhausted: false },
     };
 
-    store.saveLedger(ledger);
+    await store.updateLedger(() => ({ ledger, result: undefined }));
 
     const saved = parseFindingLedger(JSON.parse(
       readFileSync(join(projectCwd, '.takt/findings/peer-review.json'), 'utf-8'),
@@ -325,7 +362,7 @@ describe('FindingLedgerStore', () => {
     ];
 
     for (const revalidateBeforeSave of revalidators) {
-      store.saveLedger(makeLedger());
+      await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
       const result = await store.updateLedger(
         (current) => ({ ledger: { ...current, updatedAt: offsetTimestamp }, result: 'saved' }),
         revalidateBeforeSave,
@@ -339,7 +376,7 @@ describe('FindingLedgerStore', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
-    store.saveLedger(makeLedger());
+    await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
 
     const result = await store.updateLedger((current) => ({
       ledger: { ...current, updatedAt: '2017-01-01T00:59:60.500+01:00' },
@@ -350,7 +387,7 @@ describe('FindingLedgerStore', () => {
     expect(store.loadLedger()).toEqual(result.ledger);
   });
 
-  it('should not consume a provisional interpretation epoch before the WAL is applied', () => {
+  it('should not consume a provisional interpretation epoch before the WAL is applied', async () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
@@ -378,13 +415,14 @@ describe('FindingLedgerStore', () => {
       reviewerStableKey: 'reviewer-1',
       lineageKey,
       candidateEvidenceHash: 'evidence-1',
+      canonicalIntegrityDigest: TEST_INTEGRITY_DIGEST,
       stage: 'interpretation_started',
       startedAt: ledger.findings[0]!.firstSeen,
       reservationToken: 'reservation-interrupted',
       promptPreconditions: [],
     }];
 
-    store.saveLedger(ledger);
+    await store.updateLedger(() => ({ ledger, result: undefined }));
 
     const saved = store.loadLedger();
     expect(saved.findings[0]?.provisional?.interpretationEpochs).toBe(0);
@@ -417,6 +455,7 @@ describe('FindingLedgerStore', () => {
       reviewerStableKey: 'reviewer-run-copy',
       lineageKey,
       candidateEvidenceHash: 'evidence-run-copy',
+      canonicalIntegrityDigest: TEST_INTEGRITY_DIGEST,
       stage: 'interpretation_started',
       startedAt: ledger.findings[0]!.firstSeen,
       reservationToken: 'reservation-run-copy',
@@ -427,7 +466,8 @@ describe('FindingLedgerStore', () => {
     writeFileSync(projectLedgerPath, JSON.stringify(ledger), 'utf-8');
     const store = createStore({ projectCwd, reportDir });
 
-    const copyPath = store.createRunCopy();
+    const copyPath = join(reportDir, 'findings-ledger.json');
+    store.saveLedgerSnapshot();
 
     const copy = parseFindingLedger(JSON.parse(readFileSync(copyPath, 'utf-8')));
     expect(copy.findings[0]?.provisional?.interpretationEpochs).toBe(0);
@@ -461,12 +501,13 @@ describe('FindingLedgerStore', () => {
       reviewerStableKey: 'reviewer-revalidated',
       lineageKey,
       candidateEvidenceHash: 'evidence-revalidated',
+      canonicalIntegrityDigest: TEST_INTEGRITY_DIGEST,
       stage: 'interpretation_started',
       startedAt: ledger.findings[0]!.firstSeen,
       reservationToken: 'reservation-revalidated',
       promptPreconditions: [],
     }];
-    store.saveLedger(ledger);
+    await store.updateLedger(() => ({ ledger, result: undefined }));
 
     const result = await store.updateLedger(
       (current) => ({ ledger: current, result: undefined }),
@@ -508,7 +549,7 @@ describe('FindingLedgerStore', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
-    store.saveLedger(makeLedger());
+    await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
     let revalidationCount = 0;
 
     const result = await store.updateLedger(
@@ -534,7 +575,7 @@ describe('FindingLedgerStore', () => {
     expect(store.loadLedger()).toEqual(result.ledger);
   });
 
-  it('should protect project ledger and raw findings with owner-only permissions', () => {
+  it('should protect project ledger and raw findings with owner-only permissions', async () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
@@ -549,23 +590,24 @@ describe('FindingLedgerStore', () => {
       relation: 'new' as const,
     };
 
-    store.saveLedger(makeLedger());
-    const rawFindingsPath = store.saveRawFindings('run-1', 'reviewers', [rawFinding]);
+    await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
+    const rawFindingsPath = join(projectCwd, '.takt/findings/raw/run-1.reviewers.json');
+    store.saveRawFindings('run-1', 'reviewers', [rawFinding]);
 
     expect(statSync(join(projectCwd, '.takt/findings/peer-review.json')).mode & 0o777).toBe(0o600);
     expect(statSync(join(projectCwd, '.takt/findings/raw')).mode & 0o777).toBe(0o700);
     expect(statSync(rawFindingsPath).mode & 0o777).toBe(0o600);
   });
 
-  it('should create a run-local copy for agent input without moving the project ledger', () => {
+  it('should create a run-local audit snapshot without moving the project ledger', async () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
 
-    store.saveLedger(makeLedger());
-    const copyPath = store.createRunCopy();
+    await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
+    const copyPath = join(reportDir, 'findings-ledger.json');
+    store.saveLedgerSnapshot();
 
-    expect(copyPath).toBe(join(reportDir, 'findings-ledger.json'));
     expect(JSON.parse(readFileSync(copyPath, 'utf-8'))).toEqual(
       expect.objectContaining({ workflowName: 'peer-review', nextId: 2 }),
     );
@@ -602,22 +644,23 @@ describe('FindingLedgerStore', () => {
     expect(() => store.loadLedger()).toThrow(/reservationToken/);
   });
 
-  it('should create the run-local ledger copy as owner-only read-only', () => {
+  it('should create the run-local ledger copy as owner-only read-only', async () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
 
-    store.saveLedger(makeLedger());
-    const copyPath = store.createRunCopy();
+    await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
+    const copyPath = join(reportDir, 'findings-ledger.json');
+    store.saveLedgerSnapshot();
 
     expect(statSync(copyPath).mode & 0o777).toBe(0o400);
   });
 
-  it('should accept an equivalent run copy published by a concurrent writer', () => {
+  it('should accept an equivalent run copy published by a concurrent writer', async () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
-    store.saveLedger(makeLedger());
+    await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
     const ledger = store.loadLedger();
     const concurrentContent = JSON.stringify({
       ...ledger,
@@ -627,35 +670,40 @@ describe('FindingLedgerStore', () => {
       writeFileSync(targetPath, concurrentContent, { mode: 0o400 });
     };
 
-    const copyPath = store.createRunCopy();
+    const copyPath = join(reportDir, 'findings-ledger.json');
+    store.saveLedgerSnapshot();
 
     expect(readFileSync(copyPath, 'utf-8')).toBe(concurrentContent);
     expect(statSync(copyPath).mode & 0o777).toBe(0o400);
   });
 
-  it('should regenerate an existing read-only run-local ledger copy', () => {
+  it('should regenerate an existing read-only run-local ledger copy', async () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
 
-    store.saveLedger(makeLedger());
-    const copyPath = store.createRunCopy();
-    store.saveLedger({ ...makeLedger(), nextId: 3 });
-    const regeneratedPath = store.createRunCopy();
+    await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
+    const copyPath = join(reportDir, 'findings-ledger.json');
+    store.saveLedgerSnapshot();
+    await store.updateLedger(() => ({
+      ledger: { ...makeLedger(), nextId: 3 },
+      result: undefined,
+    }));
+    store.saveLedgerSnapshot();
 
-    expect(regeneratedPath).toBe(copyPath);
     expect(JSON.parse(readFileSync(copyPath, 'utf-8'))).toEqual(
       expect.objectContaining({ nextId: 3 }),
     );
     expect(statSync(copyPath).mode & 0o777).toBe(0o400);
   });
 
-  it('should preserve a read-only run copy when it is replaced before publication', () => {
+  it('should preserve a read-only run copy when it is replaced before publication', async () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
-    store.saveLedger(makeLedger());
-    const copyPath = store.createRunCopy();
+    await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
+    const copyPath = join(reportDir, 'findings-ledger.json');
+    store.saveLedgerSnapshot();
     const originalCopyPath = join(reportDir, 'original-findings-ledger.json');
     fsFailure.beforeOpen = (path) => {
       if (
@@ -670,7 +718,7 @@ describe('FindingLedgerStore', () => {
       writeFileSync(copyPath, 'substituted', { mode: 0o600 });
     };
 
-    expect(() => store.createRunCopy()).toThrow(/identity changed/);
+    expect(() => store.saveLedgerSnapshot()).toThrow(/identity changed/);
 
     expect(JSON.parse(readFileSync(originalCopyPath, 'utf-8'))).toMatchObject({ nextId: 2 });
     expect(statSync(originalCopyPath).mode & 0o777).toBe(0o400);
@@ -692,7 +740,7 @@ describe('FindingLedgerStore', () => {
     expect(() => store.loadLedger()).toThrow(
       'Finding ledger workflowName mismatch',
     );
-    expect(() => store.createRunCopy()).toThrow(
+    expect(() => store.saveLedgerSnapshot()).toThrow(
       'Finding ledger workflowName mismatch',
     );
   });
@@ -728,18 +776,18 @@ describe('FindingLedgerStore', () => {
       relation: 'new' as const,
     };
 
-    const firstPath = store.saveRawFindings('run-1', 'reviewers', [rawFinding]);
-    const secondPath = store.saveRawFindings('run-1', 'reviewers', [
+    const firstPath = join(projectCwd, '.takt/findings/raw/run-1.reviewers.json');
+    const secondPath = join(projectCwd, '.takt/findings/raw/run-1.reviewers.2.json');
+    store.saveRawFindings('run-1', 'reviewers', [rawFinding]);
+    store.saveRawFindings('run-1', 'reviewers', [
       { ...rawFinding, rawFindingId: 'raw-2' },
     ]);
 
-    expect(firstPath).toBe(join(projectCwd, '.takt/findings/raw/run-1.reviewers.json'));
-    expect(secondPath).toBe(join(projectCwd, '.takt/findings/raw/run-1.reviewers.2.json'));
     expect(JSON.parse(readFileSync(firstPath, 'utf-8'))).toEqual([rawFinding]);
     expect(JSON.parse(readFileSync(secondPath, 'utf-8'))).toEqual([{ ...rawFinding, rawFindingId: 'raw-2' }]);
   });
 
-  it('should reject symlinked ledger files before writing outside the projectCwd', () => {
+  it('should reject symlinked ledger files before writing outside the projectCwd', async () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const outsideDir = makeTempDir('takt-findings-outside-');
@@ -749,7 +797,10 @@ describe('FindingLedgerStore', () => {
     symlinkSync(outsideLedgerPath, join(projectCwd, '.takt', 'findings', 'peer-review.json'));
     const store = createStore({ projectCwd, reportDir });
 
-    expect(() => store.saveLedger(makeLedger())).toThrow('must not be a symbolic link');
+    await expect(store.updateLedger(() => ({
+      ledger: makeLedger(),
+      result: undefined,
+    }))).rejects.toThrow('must not be a symbolic link');
     expect(readFileSync(outsideLedgerPath, 'utf-8')).toBe('outside-ledger');
   });
 
@@ -816,12 +867,12 @@ describe('FindingLedgerStore', () => {
     expect(JSON.parse(readFileSync(join(outsideDir, 'peer-review.json'), 'utf-8'))).toMatchObject({ nextId: 99 });
   });
 
-  it('should reject a ledger parent swap before publishing without changing either ledger', () => {
+  it('should reject a ledger parent swap before publishing without changing either ledger', async () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
     const initialLedger = makeLedger();
-    store.saveLedger(initialLedger);
+    await store.updateLedger(() => ({ ledger: initialLedger, result: undefined }));
     const findingsDir = join(projectCwd, '.takt', 'findings');
     const originalFindingsDir = join(projectCwd, 'original-findings');
     const outsideDir = makeTempDir('takt-findings-outside-');
@@ -836,7 +887,10 @@ describe('FindingLedgerStore', () => {
       symlinkSync(outsideDir, findingsDir, 'dir');
     };
 
-    expect(() => store.saveLedger({ ...initialLedger, nextId: 3 })).toThrow(/identity changed/);
+    await expect(store.updateLedger(() => ({
+      ledger: { ...initialLedger, nextId: 3 },
+      result: undefined,
+    }))).rejects.toThrow(/identity changed/);
 
     expect(JSON.parse(readFileSync(join(originalFindingsDir, 'peer-review.json'), 'utf-8'))).toEqual(initialLedger);
     expect(readFileSync(outsideLedger, 'utf-8')).toBe('outside unchanged');
@@ -852,7 +906,7 @@ describe('FindingLedgerStore', () => {
     symlinkSync(outsideDir, join(projectCwd, '.takt'), 'dir');
     const store = createStore({ projectCwd, reportDir });
 
-    expect(() => store.createRunCopy()).toThrow('Finding ledger path escapes base directory');
+    expect(() => store.saveLedgerSnapshot()).toThrow('Finding ledger path escapes base directory');
     expect(existsSync(join(reportDir, 'findings-ledger.json'))).toBe(false);
   });
 
@@ -874,7 +928,7 @@ describe('FindingLedgerStore', () => {
     symlinkSync(outsideDir, join(projectCwd, '.takt'), 'dir');
     const store = createStore({ projectCwd, reportDir });
 
-    expect(() => store.createRunCopy()).toThrow('Finding ledger path escapes base directory');
+    expect(() => store.saveLedgerSnapshot()).toThrow('Finding ledger path escapes base directory');
     expect(existsSync(join(reportDir, 'findings-ledger.json'))).toBe(false);
     expect(existsSync(join(outsideDir, 'findings', 'peer-review.json'))).toBe(false);
   });
@@ -898,11 +952,11 @@ describe('FindingLedgerStore', () => {
     symlinkSync(join(outsideDir, 'missing-peer-review.json'), join(projectCwd, '.takt', 'findings', 'peer-review.json'));
     const store = createStore({ projectCwd, reportDir });
 
-    expect(() => store.createRunCopy()).toThrow('Finding ledger path must not be a symbolic link');
+    expect(() => store.saveLedgerSnapshot()).toThrow('Finding ledger path must not be a symbolic link');
     expect(existsSync(join(reportDir, 'findings-ledger.json'))).toBe(false);
   });
 
-  it('should overwrite an existing project ledger when saving the project ledger', () => {
+  it('should replace the current project ledger through updateLedger', async () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     mkdirSync(join(projectCwd, '.takt', 'findings'), { recursive: true });
@@ -913,7 +967,7 @@ describe('FindingLedgerStore', () => {
     }), 'utf-8');
     const store = createStore({ projectCwd, reportDir });
 
-    store.saveLedger(makeLedger());
+    await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
 
     expect(store.loadLedger()).toEqual(expect.objectContaining({
       nextId: 2,
@@ -925,7 +979,7 @@ describe('FindingLedgerStore', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
-    store.saveLedger(makeLedger());
+    await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
 
     // ディスク上の台帳を直接書き換える（別の呼び出し元による更新を模す）。
     // updateLedger の mutator が受け取るのは「呼び出し時点で再読込した」台帳
@@ -953,7 +1007,7 @@ describe('FindingLedgerStore', () => {
     const store = createStore({ projectCwd, reportDir });
     const initialLedger = makeLedger();
     const mutatorError = new Error('mutator failed');
-    store.saveLedger(initialLedger);
+    await store.updateLedger(() => ({ ledger: initialLedger, result: undefined }));
 
     const failedUpdate = store.updateLedger(() => {
       throw mutatorError;
@@ -977,7 +1031,7 @@ describe('FindingLedgerStore', () => {
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
     const initialLedger = makeLedger();
-    store.saveLedger(initialLedger);
+    await store.updateLedger(() => ({ ledger: initialLedger, result: undefined }));
     const ledgerPath = join(projectCwd, '.takt/findings/peer-review.json');
     const initialContent = readFileSync(ledgerPath, 'utf-8');
     fsFailure.failWriteOnce = (path) => (
@@ -1016,7 +1070,7 @@ describe('FindingLedgerStore', () => {
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
     });
-    store.saveLedger(makeLedger());
+    await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
 
     // workflow_call の並列子エンジンを模す: 各呼び出し元は「非同期処理
     // （LLM 呼び出し等）を終えたあとに updateLedger を呼ぶ」。旧実装
@@ -1048,7 +1102,7 @@ describe('FindingLedgerStore', () => {
     const reportDir = join(projectCwd, '.takt', 'runs', 'parent', 'reports');
     mkdirSync(reportDir, { recursive: true });
     const store = createStore({ projectCwd, reportDir });
-    store.saveLedger(makeLedger());
+    await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
     const releasePath = join(projectCwd, 'release');
     const fixturePath = fileURLToPath(new URL(
       './fixtures/finding-ledger-concurrent-update.ts',
@@ -1206,6 +1260,7 @@ describe('FindingLedgerStore', () => {
         reviewerStableKey: 'reviewer-stable',
         lineageKey: 'pending-lineage',
         candidateEvidenceHash: 'pending-evidence-hash',
+        canonicalIntegrityDigest: TEST_INTEGRITY_DIGEST,
         stage: 'interpretation_started',
         reservationToken: 'pending-reservation',
         startedAt: conflictWithoutId.firstSeen,
@@ -1297,6 +1352,260 @@ describe('FindingLedgerStore', () => {
     );
   });
 
+  it.each([
+    ['raw deletion', (_raw: RawFinding) => []],
+    ['typed evidence replacement', (raw: RawFinding) => [{
+      ...raw,
+      evidence: { kind: 'locationless' as const, explanation: 'evidence E2' },
+    }]],
+  ])('should reject pending %s at filesystem stage and dedicated finalization', async (
+    _label,
+    attack,
+  ) => {
+    const projectCwd = makeTempDir('takt-findings-pending-raw-integrity-');
+    const runId = 'pending-raw-integrity-run';
+    const reportDir = join(projectCwd, '.takt', 'runs', runId, 'reports');
+    mkdirSync(reportDir, { recursive: true });
+    const store = createStore({ projectCwd, reportDir });
+    const rawE1: RawFinding = {
+      rawFindingId: 'raw-pending-integrity',
+      stepName: 'reviewers',
+      reviewer: 'reviewer',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Pending integrity raw',
+      description: 'Pending integrity description',
+      relation: 'new',
+      evidence: { kind: 'locationless', explanation: 'evidence E1' },
+    };
+    await store.updateLedger((current) => ({
+      ledger: { ...current, rawFindings: [rawE1] },
+      result: undefined,
+    }));
+    const previousLedger = store.loadLedger();
+    const roundMarker = `round-${_label.replaceAll(' ', '-')}`;
+    const publication = store.planManagerValidationPublication(roundMarker, {
+      version: 1,
+      runId,
+      stepName: 'reviewers',
+      retryCount: 0,
+      ledgerUpdated: true,
+      finalErrors: [],
+      attempts: [],
+    });
+    const validStaged = stagePendingManagerCommit({
+      previousLedger,
+      completedLedger: {
+        ...previousLedger,
+        stopBudget: {
+          roundMarkers: [roundMarker],
+          firstRoundAt: previousLedger.updatedAt,
+          exhausted: false,
+        },
+      },
+      roundMarker,
+      publication,
+    });
+    const maliciousStaged: FindingLedger = {
+      ...validStaged,
+      pendingManagerCommit: {
+        ...validStaged.pendingManagerCommit!,
+        completed: {
+          ...validStaged.pendingManagerCommit!.completed,
+          rawFindings: attack(rawE1),
+        },
+      },
+    };
+
+    await expect(Promise.resolve().then(() => store.updateLedger(() => ({
+      ledger: maliciousStaged,
+      result: undefined,
+    })))).rejects.toThrow(/append-only|replaced with different content/);
+
+    await store.commitManagerLedger(() => ({ ledger: validStaged, result: undefined }));
+    const receipt = store.publishManagerValidationPublication(publication);
+    writeFileSync(
+      join(projectCwd, '.takt', 'findings', 'peer-review.json'),
+      JSON.stringify(maliciousStaged, null, 2),
+      'utf-8',
+    );
+
+    await expect(store.finalizeManagerValidationPublication(publication, receipt))
+      .rejects.toThrow(/append-only|replaced with different content/);
+  });
+
+  it('should reject exact pending finalization through general filesystem ledger mutations', async () => {
+    const projectCwd = makeTempDir('takt-findings-general-finalization-project-');
+    const reportDir = join(
+      projectCwd,
+      '.takt',
+      'runs',
+      'general-finalization-run',
+      'reports',
+    );
+    mkdirSync(reportDir, { recursive: true });
+    const store = createStore({ projectCwd, reportDir });
+    const previousLedger = makeLedger();
+    const roundMarker = 'general-finalization-round';
+    const publication = store.planManagerValidationPublication(roundMarker, {
+      version: 1,
+      runId: 'general-finalization-run',
+      stepName: 'reviewers',
+      retryCount: 0,
+      ledgerUpdated: true,
+      finalErrors: [],
+      attempts: [],
+    });
+    const staged = stagePendingManagerCommit({
+      completedLedger: {
+        ...previousLedger,
+        stopBudget: {
+          roundMarkers: [roundMarker],
+          firstRoundAt: previousLedger.updatedAt,
+          exhausted: false,
+        },
+      },
+      previousLedger,
+      roundMarker,
+      publication,
+    });
+    await store.updateLedger(() => ({ ledger: previousLedger, result: undefined }));
+    await expect(store.updateLedger(() => ({
+      ledger: staged,
+      result: undefined,
+    }))).rejects.toThrow(/cannot be staged through the general mutation API/i);
+    await store.commitManagerLedger(() => ({ ledger: staged, result: undefined }));
+    const finalized = finalizePendingManagerCommit(staged, publication.publicationId);
+
+    await expect(store.updateLedger(() => ({
+      ledger: finalized,
+      result: undefined,
+    }))).rejects.toThrow(/pending.*dedicated finalization/i);
+    expect(store.loadLedger()).toEqual(staged);
+  });
+
+  it('should isolate direct callback mutation from the filesystem comparison baseline', async () => {
+    const projectCwd = makeTempDir('takt-findings-callback-isolation-project-');
+    const reportDir = join(
+      projectCwd,
+      '.takt',
+      'runs',
+      'callback-isolation-run',
+      'reports',
+    );
+    mkdirSync(reportDir, { recursive: true });
+    const store = createStore({ projectCwd, reportDir });
+    const previousLedger = makeLedger();
+    const roundMarker = 'callback-isolation-round';
+    const publication = store.planManagerValidationPublication(roundMarker, {
+      version: 1,
+      runId: 'callback-isolation-run',
+      stepName: 'reviewers',
+      retryCount: 0,
+      ledgerUpdated: true,
+      finalErrors: [],
+      attempts: [],
+    });
+    const staged = stagePendingManagerCommit({
+      previousLedger,
+      completedLedger: {
+        ...previousLedger,
+        stopBudget: {
+          roundMarkers: [roundMarker],
+          firstRoundAt: previousLedger.updatedAt,
+          exhausted: false,
+        },
+      },
+      roundMarker,
+      publication,
+    });
+    await store.updateLedger(() => ({ ledger: previousLedger, result: undefined }));
+
+    await expect(store.updateLedger((current) => {
+      current.pendingManagerCommit = staged.pendingManagerCommit;
+      return { ledger: current, result: undefined };
+    })).rejects.toThrow(/cannot be staged through the general mutation API/i);
+
+    await store.commitManagerLedger(() => ({ ledger: staged, result: undefined }));
+
+    await expect(store.updateLedger((current) => {
+      current.pendingManagerCommit!.publication.destinationRunId = 'forged-run';
+      return { ledger: current, result: undefined };
+    })).rejects.toThrow(/pending.*dedicated finalization/i);
+
+    await expect(store.updateLedger((current) => {
+      delete current.pendingManagerCommit;
+      return { ledger: current, result: undefined };
+    })).rejects.toThrow(/pending.*dedicated finalization/i);
+
+    await expect(store.updateLedger(
+      (current) => ({ ledger: current, result: undefined }),
+      (current, mutation) => {
+        delete current.pendingManagerCommit;
+        mutation.ledger = current;
+        return { mutation, publish: true };
+      },
+    )).rejects.toThrow(/pending.*dedicated finalization/i);
+
+    await expect(store.commitManagerLedger((current) => {
+      delete current.pendingManagerCommit;
+      return { ledger: current, result: undefined };
+    })).rejects.toThrow(/pending.*dedicated finalization/i);
+
+    expect(store.loadLedger()).toEqual(staged);
+  });
+
+  it('should allow exactly one competing finalization through the real filesystem store', async () => {
+    const projectCwd = makeTempDir('takt-findings-competing-finalize-project-');
+    const reportDir = join(
+      projectCwd,
+      '.takt',
+      'runs',
+      'competing-finalize-run',
+      'reports',
+    );
+    mkdirSync(reportDir, { recursive: true });
+    const store = createStore({ projectCwd, reportDir });
+    const previousLedger = makeLedger();
+    const roundMarker = 'competing-finalize-round';
+    const report = {
+      version: 1 as const,
+      runId: 'competing-finalize-run',
+      stepName: 'reviewers',
+      retryCount: 0,
+      ledgerUpdated: true,
+      finalErrors: [],
+      attempts: [],
+    };
+    const publication = store.planManagerValidationPublication(roundMarker, report);
+    await store.updateLedger(() => ({ ledger: previousLedger, result: undefined }));
+    const staged = stagePendingManagerCommit({
+      previousLedger,
+      completedLedger: {
+        ...previousLedger,
+        stopBudget: {
+          roundMarkers: [roundMarker],
+          firstRoundAt: previousLedger.updatedAt,
+          exhausted: false,
+        },
+      },
+      roundMarker,
+      publication,
+    });
+    await store.commitManagerLedger(() => ({ ledger: staged, result: undefined }));
+    const receipt = store.publishManagerValidationPublication(publication);
+
+    const results = await Promise.allSettled([
+      store.finalizeManagerValidationPublication(publication, receipt),
+      store.finalizeManagerValidationPublication(publication, receipt),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(store.loadLedger().pendingManagerCommit).toBeUndefined();
+    expect(store.loadLedger().stopBudget?.roundMarkers).toEqual([roundMarker]);
+  });
+
   it('should not publish a persisted pending report through an unrelated report directory', async () => {
     const projectCwd = makeTempDir('takt-findings-pending-domain-project-');
     const reportDirA = join(projectCwd, '.takt', 'runs', 'pending-domain-run', 'reports');
@@ -1316,6 +1625,7 @@ describe('FindingLedgerStore', () => {
       finalErrors: [],
       attempts: [],
     };
+    await storeA.updateLedger(() => ({ ledger: previousLedger, result: undefined }));
     const staged = stagePendingManagerCommit({
       completedLedger: {
         ...previousLedger,
@@ -1329,7 +1639,7 @@ describe('FindingLedgerStore', () => {
       roundMarker,
       publication: storeA.planManagerValidationPublication(roundMarker, report),
     });
-    storeA.saveLedger(staged);
+    await storeA.commitManagerLedger(() => ({ ledger: staged, result: undefined }));
     writeForgedResumeManifest(projectCwd, 'pending-domain-run', 'unrelated-run');
 
     await expect(resumePendingManagerCommit(
@@ -1345,11 +1655,15 @@ describe('FindingLedgerStore', () => {
     const projectCwd = makeTempDir('takt-findings-trusted-resume-project-');
     const sourceRunId = 'trusted-source-run';
     const targetRunId = 'trusted-target-run';
+    const attackerRunId = 'untrusted-attacker-run';
     const sourceReports = join(projectCwd, '.takt', 'runs', sourceRunId, 'reports');
     const targetReports = join(projectCwd, '.takt', 'runs', targetRunId, 'reports');
+    const attackerReports = join(projectCwd, '.takt', 'runs', attackerRunId, 'reports');
     mkdirSync(sourceReports, { recursive: true });
     mkdirSync(targetReports, { recursive: true });
+    mkdirSync(attackerReports, { recursive: true });
     const sourceStore = createStore({ projectCwd, reportDir: sourceReports });
+    const attackerStore = createStore({ projectCwd, reportDir: attackerReports });
     const targetStore = createStore({
       projectCwd,
       reportDir: targetReports,
@@ -1366,19 +1680,45 @@ describe('FindingLedgerStore', () => {
       finalErrors: [],
       attempts: [],
     };
-    sourceStore.saveLedger(stagePendingManagerCommit({
-      completedLedger: {
-        ...previousLedger,
-        stopBudget: {
-          roundMarkers: [roundMarker],
-          firstRoundAt: previousLedger.updatedAt,
-          exhausted: false,
+    await sourceStore.updateLedger(() => ({ ledger: previousLedger, result: undefined }));
+    await sourceStore.commitManagerLedger(() => ({
+      ledger: stagePendingManagerCommit({
+        completedLedger: {
+          ...previousLedger,
+          stopBudget: {
+            roundMarkers: [roundMarker],
+            firstRoundAt: previousLedger.updatedAt,
+            exhausted: false,
+          },
+        },
+        previousLedger,
+        roundMarker,
+        publication: sourceStore.planManagerValidationPublication(roundMarker, report),
+      }),
+      result: undefined,
+    }));
+    const staged = attackerStore.loadLedger();
+    const pending = staged.pendingManagerCommit!;
+    const stolen: FindingLedger = {
+      ...staged,
+      pendingManagerCommit: {
+        ...pending,
+        publication: {
+          ...pending.publication,
+          destinationRunId: attackerRunId,
         },
       },
-      previousLedger,
-      roundMarker,
-      publication: sourceStore.planManagerValidationPublication(roundMarker, report),
-    }));
+    };
+
+    await expect(attackerStore.rebindPendingManagerValidationPublication(
+      stolen.pendingManagerCommit!.publication,
+    )).rejects.toThrow(/not authorized to inherit/i);
+    await expect(attackerStore.updateLedger(() => ({
+      ledger: stolen,
+      result: undefined,
+    }))).rejects.toThrow(/pending.*dedicated.*rebind/i);
+    expect(attackerStore.loadLedger().pendingManagerCommit?.publication.destinationRunId)
+      .toBe(sourceRunId);
 
     await expect(resumePendingManagerCommit(
       { ledgerStore: targetStore } as never,
@@ -1410,18 +1750,22 @@ describe('FindingLedgerStore', () => {
       finalErrors: [],
       attempts: [],
     };
-    storeA.saveLedger(stagePendingManagerCommit({
-      completedLedger: {
-        ...previousLedger,
-        stopBudget: {
-          roundMarkers: [roundMarker],
-          firstRoundAt: previousLedger.updatedAt,
-          exhausted: false,
+    await storeA.updateLedger(() => ({ ledger: previousLedger, result: undefined }));
+    await storeA.commitManagerLedger(() => ({
+      ledger: stagePendingManagerCommit({
+        completedLedger: {
+          ...previousLedger,
+          stopBudget: {
+            roundMarkers: [roundMarker],
+            firstRoundAt: previousLedger.updatedAt,
+            exhausted: false,
+          },
         },
-      },
-      previousLedger,
-      roundMarker,
-      publication: storeA.planManagerValidationPublication(roundMarker, report),
+        previousLedger,
+        roundMarker,
+        publication: storeA.planManagerValidationPublication(roundMarker, report),
+      }),
+      result: undefined,
     }));
     const storeB = createStore({
       projectCwd,
@@ -1453,7 +1797,8 @@ describe('FindingLedgerStore', () => {
     const reportDir = makeTempDir('takt-findings-report-');
     const store = createStore({ projectCwd, reportDir });
 
-    const reportPath = store.saveManagerValidationReport({
+    const reportPath = join(reportDir, 'findings-manager-validation.reviewers.json');
+    store.saveManagerValidationReport({
       version: 1,
       runId: 'run-1',
       stepName: 'reviewers',
@@ -1476,7 +1821,6 @@ describe('FindingLedgerStore', () => {
       ],
     });
 
-    expect(reportPath).toBe(join(reportDir, 'findings-manager-validation.reviewers.json'));
     expect(existsSync(join(projectCwd, 'findings-manager-validation.reviewers.json'))).toBe(false);
     expect(JSON.parse(readFileSync(reportPath, 'utf-8'))).toEqual({
       version: 1,
@@ -1527,15 +1871,13 @@ describe('FindingLedgerStore', () => {
     });
 
     const latestPath = join(reportDir, 'findings-manager-validation.reviewers.json');
-    const historyFiles = readdirSync(reportDir).filter((name) =>
-      /^findings-manager-validation\.reviewers\.json\.history\.[a-f0-9]{64}$/.test(name),
-    );
+    const historyFiles = publicationHistoryPaths(reportDir, latestPath);
     expect(JSON.parse(readFileSync(latestPath, 'utf-8'))).toEqual(expect.objectContaining({
       runId: 'run-2',
       ledgerUpdated: true,
     }));
     expect(historyFiles).toHaveLength(1);
-    expect(JSON.parse(readFileSync(join(reportDir, historyFiles[0]!), 'utf-8'))).toEqual(expect.objectContaining({
+    expect(JSON.parse(readFileSync(historyFiles[0]!, 'utf-8'))).toEqual(expect.objectContaining({
       runId: 'run-1',
       ledgerUpdated: false,
     }));
@@ -1559,24 +1901,20 @@ describe('FindingLedgerStore', () => {
       runId: 'run-history-2',
     };
     store.saveManagerValidationReport(firstReport);
-    let publicationWrites = 0;
     fsFailure.failWriteOnce = (path) => {
       if (!basename(path).startsWith('.findings-manager-validation.reviewers.json')) {
         return false;
       }
-      publicationWrites += 1;
-      return publicationWrites === 2;
+      return true;
     };
 
     expect(() => store.saveManagerValidationReport(secondReport)).toThrow('injected write failure');
     store.saveManagerValidationReport(secondReport);
 
-    const historyFiles = readdirSync(reportDir).filter((name) =>
-      name.startsWith('findings-manager-validation.reviewers.json.')
-      && name !== 'findings-manager-validation.reviewers.json',
-    );
+    const latestPath = join(reportDir, 'findings-manager-validation.reviewers.json');
+    const historyFiles = publicationHistoryPaths(reportDir, latestPath);
     expect(historyFiles).toHaveLength(1);
-    expect(JSON.parse(readFileSync(join(reportDir, historyFiles[0]!), 'utf-8'))).toEqual(firstReport);
+    expect(JSON.parse(readFileSync(historyFiles[0]!, 'utf-8'))).toEqual(firstReport);
     expect(JSON.parse(readFileSync(
       join(reportDir, 'findings-manager-validation.reviewers.json'),
       'utf-8',
@@ -1603,12 +1941,11 @@ describe('FindingLedgerStore', () => {
       store.saveManagerValidationReport(report);
     }
 
-    const historyFiles = readdirSync(reportDir).filter((name) => (
-      name.startsWith('findings-manager-validation.reviewers.json.history.')
-    ));
+    const latestPath = join(reportDir, 'findings-manager-validation.reviewers.json');
+    const historyFiles = publicationHistoryPaths(reportDir, latestPath);
     expect(historyFiles).toHaveLength(3);
-    expect(historyFiles.map((name) => (
-      JSON.parse(readFileSync(join(reportDir, name), 'utf-8')).runId
+    expect(historyFiles.map((path) => (
+      JSON.parse(readFileSync(path, 'utf-8')).runId
     )).sort()).toEqual(['history-a', 'history-b', 'history-c']);
     expect(JSON.parse(readFileSync(
       join(reportDir, 'findings-manager-validation.reviewers.json'),
@@ -1648,76 +1985,136 @@ describe('FindingLedgerStore', () => {
     expect(readFileSync(targetPath, 'utf-8')).toBe(concurrentContent);
   });
 
-  it('should preserve a concurrently replaced report after backing up the verified predecessor', () => {
-    const reportDir = makeTempDir('takt-findings-report-cas-replaced-');
+  it('should hold the publication lock while a normal report writer replaces the target', () => {
+    const reportDir = makeTempDir('takt-findings-report-normal-writer-lock-');
     const targetPath = join(reportDir, 'manager.json');
-    const displacedPath = join(reportDir, 'manager.displaced.json');
-    const replacementPath = join(reportDir, 'manager.replacement.json');
-    const predecessorContent = 'predecessor\n';
-    const concurrentContent = 'concurrent\n';
-    const publicationContent = 'publication\n';
-    writeFileSync(targetPath, predecessorContent, 'utf-8');
-    writeFileSync(replacementPath, concurrentContent, 'utf-8');
-    let targetReadCloses = 0;
-    fsFailure.afterClose = (closedPath) => {
-      if (closedPath !== targetPath) {
-        return false;
+    const publicationLockPath = join(
+      reportDir,
+      '.takt-report-internal',
+      'locks',
+      `${sha256(['filesystem-report', resolve(targetPath)].join('\0'))}.lock`,
+    );
+    let publicationLockWasHeld = false;
+    fsFailure.beforeOpen = (openedPath) => {
+      if (basename(openedPath).startsWith(`.manager.json.${process.pid}.`)) {
+        publicationLockWasHeld = existsSync(publicationLockPath);
       }
-      targetReadCloses += 1;
-      if (targetReadCloses !== 2) {
-        return false;
-      }
-      runChildFileMutation(
-        [
-          "const fs = require('node:fs')",
-          'fs.renameSync(process.argv[1], process.argv[2])',
-          'fs.renameSync(process.argv[3], process.argv[1])',
-        ].join(';'),
-        [targetPath, displacedPath, replacementPath],
-      );
-      return true;
     };
 
-    expect(() => publishReportFile({
-      reportDir,
-      fileName: 'manager.json',
-      content: publicationContent,
-      publicationId: 'b'.repeat(64),
-      contentSha256: sha256(publicationContent),
-    })).toThrow(/identity changed|publication conflict/i);
+    writeReportFile(reportDir, 'manager.json', 'replacement\n');
 
-    expect(readFileSync(targetPath, 'utf-8')).toBe(concurrentContent);
+    expect(publicationLockWasHeld).toBe(true);
   });
 
-  it('should reject a same-content publication when the verified target is externally replaced before return', () => {
-    const projectCwd = makeTempDir('takt-findings-project-');
-    const reportDir = makeTempDir('takt-findings-report-');
+  it('should keep publication history unreachable from normal and cross-stream writers', () => {
+    const reportDir = makeTempDir('takt-findings-report-history-namespace-');
+    const targetPath = join(reportDir, 'manager.json');
+    publishReportFile({
+      reportDir,
+      fileName: 'manager.json',
+      content: 'first\n',
+      publicationId: 'e'.repeat(64),
+      contentSha256: sha256('first\n'),
+    });
+    publishReportFile({
+      reportDir,
+      fileName: 'manager.json',
+      content: 'second\n',
+      publicationId: 'f'.repeat(64),
+      contentSha256: sha256('second\n'),
+    });
+    const historyPath = publicationHistoryPaths(reportDir, targetPath)[0]!;
+    const internalName = relative(reportDir, historyPath);
+
+    expect(() => writeReportFile(reportDir, internalName, 'tampered\n'))
+      .toThrow(/internal report namespace/);
+    expect(() => publishReportFile({
+      reportDir,
+      fileName: internalName,
+      content: 'tampered\n',
+      publicationId: '1'.repeat(64),
+      contentSha256: sha256('tampered\n'),
+    })).toThrow(/internal report namespace/);
+    expect(readFileSync(historyPath, 'utf-8')).toBe('first\n');
+  });
+
+  it('should release the publication lock when a normal report writer fails', () => {
+    const reportDir = makeTempDir('takt-findings-report-writer-release-');
+    const targetPath = join(reportDir, 'manager.json');
+    fsFailure.failWriteOnce = (path) => (
+      basename(path).startsWith(`.manager.json.${process.pid}.`)
+    );
+
+    expect(() => writeReportFile(reportDir, 'manager.json', 'failed\n'))
+      .toThrow('injected write failure');
+    expect(() => writeReportFile(reportDir, 'manager.json', 'recovered\n'))
+      .not.toThrow();
+    expect(readFileSync(targetPath, 'utf-8')).toBe('recovered\n');
+  });
+
+  it('should revalidate the report only after the ledger queue is available', async () => {
+    const projectCwd = makeTempDir('takt-findings-finalize-lock-order-project-');
+    const reportDir = join(
+      projectCwd,
+      '.takt',
+      'runs',
+      'finalize-lock-order-run',
+      'reports',
+    );
+    mkdirSync(reportDir, { recursive: true });
     const store = createStore({ projectCwd, reportDir });
+    const previousLedger = makeLedger();
+    const roundMarker = 'finalize-lock-order-round';
     const report = {
       version: 1 as const,
-      runId: 'run-final-cas',
+      runId: 'finalize-lock-order-run',
       stepName: 'reviewers',
       retryCount: 0,
       ledgerUpdated: true,
       finalErrors: [],
       attempts: [],
     };
-    const latestPath = store.saveManagerValidationReport(report);
-    const displacedPath = join(reportDir, 'displaced-report.json');
-    const replacementPath = join(reportDir, 'replacement-report.json');
-    writeFileSync(replacementPath, readFileSync(latestPath));
-    fsFailure.afterClose = (closedPath) => {
-      if (closedPath !== latestPath) {
-        return false;
-      }
-      renameSync(latestPath, displacedPath);
-      renameSync(replacementPath, latestPath);
-      return true;
-    };
+    const publication = store.planManagerValidationPublication(roundMarker, report);
+    const staged = stagePendingManagerCommit({
+      completedLedger: {
+        ...previousLedger,
+        stopBudget: {
+          roundMarkers: [roundMarker],
+          firstRoundAt: previousLedger.updatedAt,
+          exhausted: false,
+        },
+      },
+      previousLedger,
+      roundMarker,
+      publication,
+    });
+    await store.updateLedger(() => ({ ledger: previousLedger, result: undefined }));
+    await store.commitManagerLedger(() => ({ ledger: staged, result: undefined }));
+    const receipt = store.publishManagerValidationPublication(publication);
+    let releaseQueue!: () => void;
+    let queueEntered!: () => void;
+    const entered = new Promise<void>((resolveEntered) => {
+      queueEntered = resolveEntered;
+    });
+    const queueBlocker = runLedgerUpdateExclusive(store.ledgerIdentity, async () => {
+      queueEntered();
+      await new Promise<void>((resolveQueue) => {
+        releaseQueue = resolveQueue;
+      });
+    });
+    await entered;
 
-    expect(() => store.saveManagerValidationReport(report)).toThrow(
-      /identity changed/,
+    const finalization = store.finalizeManagerValidationPublication(publication, receipt);
+    writeReportFile(
+      reportDir,
+      publication.fileName,
+      JSON.stringify({ ...report, retryCount: 1 }, null, 2),
     );
+    releaseQueue();
+
+    await queueBlocker;
+    await expect(finalization).rejects.toThrow(/changed before manager finalization/);
+    expect(store.loadLedger()).toEqual(staged);
   });
 
   it('should resume after latest publication succeeds but final ledger CAS crashes', async () => {
@@ -1737,26 +2134,29 @@ describe('FindingLedgerStore', () => {
       attempts: [],
     };
     const publication = store.planManagerValidationPublication(roundMarker, report);
-    store.saveLedger(previousLedger);
-    store.saveLedger(stagePendingManagerCommit({
-      completedLedger: {
-        ...previousLedger,
-        stopBudget: {
-          roundMarkers: [roundMarker],
-          firstRoundAt: previousLedger.updatedAt,
-          exhausted: false,
+    await store.updateLedger(() => ({ ledger: previousLedger, result: undefined }));
+    await store.commitManagerLedger(() => ({
+      ledger: stagePendingManagerCommit({
+        completedLedger: {
+          ...previousLedger,
+          stopBudget: {
+            roundMarkers: [roundMarker],
+            firstRoundAt: previousLedger.updatedAt,
+            exhausted: false,
+          },
         },
-      },
-      previousLedger,
-      roundMarker,
-      publication,
+        previousLedger,
+        roundMarker,
+        publication,
+      }),
+      result: undefined,
     }));
-    const assertPublication = store.assertManagerValidationPublication;
-    vi.spyOn(store, 'assertManagerValidationPublication')
-      .mockImplementationOnce(() => {
+    const finalizePublication = store.finalizeManagerValidationPublication;
+    vi.spyOn(store, 'finalizeManagerValidationPublication')
+      .mockImplementationOnce(async () => {
         throw new Error('injected final ledger CAS crash');
       })
-      .mockImplementation(assertPublication);
+      .mockImplementation(finalizePublication);
 
     await expect(resumePendingManagerCommit(
       { ledgerStore: store } as never,
@@ -1808,27 +2208,28 @@ describe('FindingLedgerStore', () => {
     const previousLedger = makeLedger();
     const roundMarker = 'backup-resume-round';
     const publication = store.planManagerValidationPublication(roundMarker, report);
-    store.saveLedger(previousLedger);
-    store.saveLedger(stagePendingManagerCommit({
-      completedLedger: {
-        ...previousLedger,
-        stopBudget: {
-          roundMarkers: [roundMarker],
-          firstRoundAt: previousLedger.updatedAt,
-          exhausted: false,
+    await store.updateLedger(() => ({ ledger: previousLedger, result: undefined }));
+    await store.commitManagerLedger(() => ({
+      ledger: stagePendingManagerCommit({
+        completedLedger: {
+          ...previousLedger,
+          stopBudget: {
+            roundMarkers: [roundMarker],
+            firstRoundAt: previousLedger.updatedAt,
+            exhausted: false,
+          },
         },
-      },
-      previousLedger,
-      roundMarker,
-      publication,
+        previousLedger,
+        roundMarker,
+        publication,
+      }),
+      result: undefined,
     }));
-    let publicationWrites = 0;
     fsFailure.failWriteOnce = (path) => {
       if (!basename(path).startsWith('.findings-manager-validation.reviewers.json')) {
         return false;
       }
-      publicationWrites += 1;
-      return publicationWrites === 2;
+      return true;
     };
 
     await expect(resumePendingManagerCommit(
@@ -1842,11 +2243,12 @@ describe('FindingLedgerStore', () => {
       store.loadLedger(),
     );
 
-    const historyFiles = readdirSync(reportDir).filter((name) =>
-      name.startsWith(`${publication.fileName}.history.`),
+    const historyFiles = publicationHistoryPaths(
+      reportDir,
+      join(reportDir, publication.fileName),
     );
     expect(historyFiles).toHaveLength(1);
-    expect(JSON.parse(readFileSync(join(reportDir, historyFiles[0]!), 'utf-8')))
+    expect(JSON.parse(readFileSync(historyFiles[0]!, 'utf-8')))
       .toEqual(previousReport);
     expect(JSON.parse(readFileSync(join(reportDir, publication.fileName), 'utf-8')))
       .toEqual(report);

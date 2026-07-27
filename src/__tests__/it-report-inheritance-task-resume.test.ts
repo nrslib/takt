@@ -80,7 +80,7 @@ function createEnvironment(withFindingContract: boolean): TestEnvironment {
     '        next: fix',
     '  - name: fix',
     '    persona: ./personas/fixer.md',
-    '    instruction: "Inherited reports: {peer_reports}"',
+    '    instruction: "Inherited report: {report:05-arch-review.md}"',
     '    rules:',
     '      - condition: fix complete',
     '        next: COMPLETE',
@@ -265,7 +265,9 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
 
     expect(success).toBe(true);
     expect(instructions).toHaveLength(1);
-    expect(instructions[0]).toContain(inheritedReportPath);
+    expect(instructions[0]).toContain('Inherited report: previous architecture review');
+    expect(instructions[0]).not.toContain('{report:05-arch-review.md}');
+    expect(instructions[0]).not.toContain(inheritedReportPath);
     expect(instructions[0]).not.toContain(source.sourceReportDir);
     expect(readFileSync(inheritedReportPath, 'utf-8')).toBe('previous architecture review');
     expect(readFileSync(join(source.sourceReportDir, '05-arch-review.md'), 'utf-8')).toBe('previous architecture review');
@@ -303,7 +305,7 @@ describe('IT: missing report source fallback through task resume', () => {
     }
   });
 
-  it('should continue the requeued fix and record unavailable diagnostics when the source run was deleted', async () => {
+  it('should fail before the resumed fix agent runs and record unavailable diagnostics when the source run was deleted', async () => {
     environment = createEnvironment(false);
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
@@ -347,8 +349,8 @@ describe('IT: missing report source fallback through task resume', () => {
       skipped?: Array<{ reason?: string }>;
     };
 
-    expect(success).toBe(true);
-    expect(instructions).toHaveLength(1);
+    expect(success).toBe(false);
+    expect(instructions).toHaveLength(0);
     expect(diagnostic).toEqual(expect.objectContaining({
       sourceRunSlug,
       status: 'unavailable',

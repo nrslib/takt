@@ -4,6 +4,7 @@ import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js'
 import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
 import { computeReviewerStableKey, computeLineageKey, computeProvisionalStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import type { FindingLedger, FindingLedgerEntry } from '../core/workflow/findings/types.js';
+import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 
 function provisionalEntry(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
@@ -132,17 +133,19 @@ describe('provisional firstObservedRound persistence', () => {
       normalizedPathKey: '',
     });
     const lineageKey = computeLineageKey({ reviewer: 'coding-review', normalizedPathKey: '' });
+    const rawFinding = {
+      rawFindingId: 'raw-9',
+      stepName: 'reviewers',
+      reviewer: 'coding-review',
+      familyTag: 'gate',
+      severity: 'medium' as const,
+      title: 'locationless demand',
+      description: 'demand',
+      relation: 'new' as const,
+    };
     const next = reconcileFindingLedger({
       previousLedger: makeLedger([], ['r1', 'r2', 'r3']),
-      rawFindings: [{
-        rawFindingId: 'raw-9',
-        stepName: 'reviewers',
-        reviewer: 'coding-review',
-        familyTag: 'gate',
-        severity: 'medium',
-        title: 'locationless demand',
-        description: 'demand',
-      }],
+      rawFindings: [rawFinding],
       managerOutput: createEmptyManagerOutput(),
       provisionalFindings: [{
         kind: 'unverified-locationless',
@@ -161,7 +164,7 @@ describe('provisional firstObservedRound persistence', () => {
       rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map([[
         'raw-9',
-        { reviewerStableKey, lineageKey },
+        storedRawReconcileProvenance(rawFinding, reviewerStableKey, lineageKey),
       ]]),
       context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-02T00:00:00.000Z' },
     });

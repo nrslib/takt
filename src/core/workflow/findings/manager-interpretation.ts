@@ -2,6 +2,7 @@ import type { FindingContractConfig, WorkflowConfig } from '../../models/types.j
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
 import {
+  canonicalRawIntegrityDigestOf,
   computeProvisionalStableKey,
 } from './raw-canonicalization.js';
 import { MANAGER_INTERPRETATION_LIMITS } from './raw-finding-limits.js';
@@ -25,6 +26,7 @@ import {
   classifyInterpretationWal,
   emptyLadderResult,
 } from './manager-interpretation-plan.js';
+import { captureOpenFindingMutationPreconditions } from './finding-preconditions.js';
 
 export async function runAmbiguousLadder(input: {
   tainted: readonly CanonicalIntakeItem[];
@@ -52,6 +54,7 @@ export async function runAmbiguousLadder(input: {
   const needsInterpretation = initial.needsInterpretation;
   const plannedTargets = needsInterpretation.slice(0, MANAGER_INTERPRETATION_LIMITS.maxInterpretationTargetsPerStep);
   let leftover = needsInterpretation.slice(MANAGER_INTERPRETATION_LIMITS.maxInterpretationTargetsPerStep);
+  const promptPreconditions = captureOpenFindingMutationPreconditions(input.previousLedger);
 
   const begin = await beginInterpretations(
     input.ledgerStore,
@@ -60,7 +63,8 @@ export async function runAmbiguousLadder(input: {
       reviewerStableKey: target.canonical.reviewerStableKey,
       lineageKey: target.canonical.lineageKey,
       candidateEvidenceHash: target.canonical.evidenceHash,
-      promptPreconditions: [],
+      canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(target.canonical),
+      promptPreconditions,
     })),
     input.observation,
     input.stopBudgetRoundMarker,
@@ -77,14 +81,40 @@ export async function runAmbiguousLadder(input: {
       }
       return { ...target, ...attempt };
     });
+    const canonicalIntegrityDigests = new Map(
+      interpretationTargets.map((target) => [
+        target.interpretationKey,
+        canonicalRawIntegrityDigestOf(target.canonical),
+      ]),
+    );
     const wal = classifyInterpretationWal({
       targets: interpretationTargets,
       begin,
       result,
       provisionalOnlyRawFindingIds: input.provisionalOnlyRawFindingIds,
     });
-    result = wal.result;
-    let decidedByKey = wal.decidedByKey;
+    result = {
+      ...wal.result,
+      interpretationIntegrityDigests: new Map([
+        ...wal.result.interpretationIntegrityDigests,
+        ...canonicalIntegrityDigests,
+      ]),
+    };
+    const staleDecisions = new Map(
+      [...wal.decidedByKey].filter(([key]) => begin.integrityStaleKeys.has(key)),
+    );
+    const completedStaleDecisions = await completeInterpretations(
+      input.ledgerStore,
+      staleDecisions,
+      begin.ownedByKey,
+      canonicalIntegrityDigests,
+      input.observation,
+      input.stopBudgetRoundMarker,
+    );
+    let decidedByKey = new Map([
+      ...[...wal.decidedByKey].filter(([key]) => !begin.integrityStaleKeys.has(key)),
+      ...completedStaleDecisions,
+    ]);
 
     const ambiguousByRawId = new Map(input.tainted.map((item) => [item.canonical.rawFindingId, item.canonical]));
     const targetsByRawId = new Map(interpretationTargets.map((target) => [target.canonical.rawFindingId, target]));
@@ -127,6 +157,7 @@ export async function runAmbiguousLadder(input: {
         input.ledgerStore,
         batchResult.decisions,
         begin.ownedByKey,
+        canonicalIntegrityDigests,
         input.observation,
         input.stopBudgetRoundMarker,
       );

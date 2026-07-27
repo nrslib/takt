@@ -5,7 +5,10 @@ import { COMPLETE_STEP, ABORT_STEP } from '../../core/workflow/constants.js';
 // 実行時（escape.ts の {report:X} リゾルバ）と同じ parser を共用し、
 // 静的解析と実行時の構文解釈を揃える。
 import { extractReportReferences } from '../../core/workflow/instruction/report-reference.js';
-import { isReservedReportFileName } from '../../core/models/reserved-report-names.js';
+import {
+  classifyReportRelativePath,
+  reportPathRejectionMessage,
+} from '../../core/models/reserved-report-names.js';
 import { validateWorkflowConfig } from '../../core/workflow/engine/WorkflowValidator.js';
 import {
   formatWorkflowRuleCondition,
@@ -612,21 +615,22 @@ function warnOnUnproducibleReportReferences(
       }
     }
     for (const reference of references) {
-      if (isReservedReportFileName(reference)) {
+      const classification = classifyReportRelativePath(reference);
+      if (classification.kind !== 'public') {
         report.diagnostics.push({
           level: 'error',
-          message: `step "${step.name}" references {report:${reference}}, which is a reserved internal file `
-            + '(resume-artifacts.json holds the resume snapshot manifest) and cannot be used as a report.',
+          message: `step "${step.name}" references an invalid report: ${reportPathRejectionMessage(reference)}.`,
         });
         continue;
       }
-      if (!allProducedReports.has(reference) && !allProducedReports.has(WILDCARD_REPORT)) {
-        warnReference(reference, `step "${step.name}"`, 'no step\'s output_contracts produce that report.');
+      const reportName = classification.normalizedPath;
+      if (!allProducedReports.has(reportName) && !allProducedReports.has(WILDCARD_REPORT)) {
+        warnReference(reportName, `step "${step.name}"`, 'no step\'s output_contracts produce that report.');
         continue;
       }
-      if (!isGuaranteedAt(reference, step.name)) {
+      if (!isGuaranteedAt(reportName, step.name)) {
         warnReference(
-          reference,
+          reportName,
           `step "${step.name}"`,
           'the workflow can reach that step before any step producing the report has run.',
         );
@@ -641,27 +645,28 @@ function warnOnUnproducibleReportReferences(
     }
     for (const reference of extractReportReferences(monitor.judge.instruction)) {
       const location = `loop monitor judge for cycle [${monitor.cycle.join(' -> ')}]`;
-      if (isReservedReportFileName(reference)) {
+      const classification = classifyReportRelativePath(reference);
+      if (classification.kind !== 'public') {
         report.diagnostics.push({
           level: 'error',
-          message: `${location} references {report:${reference}}, which is a reserved internal file `
-            + '(resume-artifacts.json holds the resume snapshot manifest) and cannot be used as a report.',
+          message: `${location} references an invalid report: ${reportPathRejectionMessage(reference)}.`,
         });
         continue;
       }
-      if (!allProducedReports.has(reference) && !allProducedReports.has(WILDCARD_REPORT)) {
-        warnReference(reference, location, 'no step\'s output_contracts produce that report.');
+      const reportName = classification.normalizedPath;
+      if (!allProducedReports.has(reportName) && !allProducedReports.has(WILDCARD_REPORT)) {
+        warnReference(reportName, location, 'no step\'s output_contracts produce that report.');
         continue;
       }
       // The judge fires only after every cycle step has run, so a report
       // produced by a cycle step itself is guaranteed as well.
       const producible = cycleSteps.some((cycleStep) => (
-        isGuaranteedAt(reference, cycleStep)
-        || (producedByStep.get(cycleStep) ?? new Set()).has(reference)
+        isGuaranteedAt(reportName, cycleStep)
+        || (producedByStep.get(cycleStep) ?? new Set()).has(reportName)
       ));
       if (!producible) {
         warnReference(
-          reference,
+          reportName,
           location,
           'the workflow can reach that cycle before any step producing the report has run.',
         );

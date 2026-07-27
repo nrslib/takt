@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.52.0] - 2026-07-19
 
+### Removed
+
+- **BREAKING:** Removed the `{current_report}`, `{previous_report}`, `{peer_reports}`, and `{report_history}` instruction placeholders without backward compatibility. Use `{report:filename}` to inline the required report content instead.
+
 ### Added
 
 - Auto-routing is now actually usable (#1040). The `provider: auto` switch announced in 0.51.0 did not work in practice; it has been replaced with a simpler activation model. Keep a concrete top-level `provider` and define effective `auto_routing` candidates — their presence enables automatic per-step provider/model routing. Operations without workflow-step context (such as AI task-slug generation) use the concrete top-level provider/model; `auto_routing.router` and candidates are never implicit defaults. `provider: auto` is no longer accepted — if you had set it, replace it with a concrete provider.

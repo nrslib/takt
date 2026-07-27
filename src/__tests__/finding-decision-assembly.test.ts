@@ -18,6 +18,7 @@ import type {
   FindingManagerDecisions,
   RawFinding,
 } from '../core/workflow/findings/types.js';
+import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 
 const DEFAULT_CONFLICT_ID = formatConflictId({
   findingIds: ['F-0001'],
@@ -94,14 +95,15 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
     rawFindingDispositions: [],
     rawProvenanceByRawFindingId: new Map(input.rawFindings.map((rawFinding) => [
       rawFinding.rawFindingId,
-      {
-        reviewerStableKey: computeReviewerStableKey({
+      storedRawReconcileProvenance(
+        rawFinding,
+        computeReviewerStableKey({
           workflowName: input.context.workflowName,
           callNamespace: '',
           parentStepName: input.context.stepName,
           reviewerPersonaKey: rawFinding.reviewer,
         }),
-        lineageKey: computeLineageKey({
+        computeLineageKey({
           ...(rawFinding.targetFindingId !== undefined
             ? { targetFindingId: rawFinding.targetFindingId }
             : {}),
@@ -109,7 +111,7 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
           title: rawFinding.title,
           familyTag: rawFinding.familyTag,
         }),
-      },
+      ),
     ])),
   });
 }
@@ -1664,14 +1666,15 @@ describe('assembleManagerOutput carried conflicts', () => {
       })),
       rawProvenanceByRawFindingId: new Map(rawFindings.map((rawFinding) => [
         rawFinding.rawFindingId,
-        {
-          reviewerStableKey: computeReviewerStableKey({
+        storedRawReconcileProvenance(
+          rawFinding,
+          computeReviewerStableKey({
             workflowName: 'peer-review',
             callNamespace: '',
             parentStepName: 'reviewers',
             reviewerPersonaKey: rawFinding.reviewer,
           }),
-          lineageKey: computeLineageKey({
+          computeLineageKey({
             ...(rawFinding.targetFindingId !== undefined
               ? { targetFindingId: rawFinding.targetFindingId }
               : {}),
@@ -1679,7 +1682,7 @@ describe('assembleManagerOutput carried conflicts', () => {
             title: rawFinding.title,
             familyTag: rawFinding.familyTag,
           }),
-        },
+        ),
       ])),
       context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-10T00:00:00.000Z' },
     });

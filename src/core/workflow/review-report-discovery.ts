@@ -44,13 +44,6 @@ export function resolveInheritedReviewReportNamesWithDiagnostics(
   return combineReportNameResults([{ reportNames: [], failures }]);
 }
 
-export function resolveReviewReportSourceSteps(
-  step: WorkflowStep,
-  workflowSteps: ReadonlyArray<WorkflowStep>,
-): WorkflowStep[] {
-  return resolveReviewReportSourceStepGroups(step, workflowSteps)[0] ?? [];
-}
-
 function resolveReviewReportSourceStepGroups(
   step: WorkflowStep,
   workflowSteps: ReadonlyArray<WorkflowStep>,

@@ -9,6 +9,8 @@ import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js'
 import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
 import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import type { FindingLedger, FindingManagerOutput, RawFinding } from '../core/workflow/findings/types.js';
+import { compareBinaryStrings } from '../shared/utils/binary-string-comparator.js';
+import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 
 const WORKFLOW_NAME = 'peer-review';
 const LEDGER_PATH = '.takt/findings/peer-review.json';
@@ -181,19 +183,20 @@ describe('reconciled conflict history order', () => {
       rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map([[
         rawFinding.rawFindingId,
-        {
-          reviewerStableKey: computeReviewerStableKey({
+        storedRawReconcileProvenance(
+          rawFinding,
+          computeReviewerStableKey({
             workflowName: WORKFLOW_NAME,
             callNamespace: '',
             parentStepName: 'reviewers',
             reviewerPersonaKey: rawFinding.reviewer,
           }),
-          lineageKey: computeLineageKey({
+          computeLineageKey({
             location: rawFinding.location,
             title: rawFinding.title,
             familyTag: rawFinding.familyTag,
           }),
-        },
+        ),
       ]]),
       context: {
         workflowName: WORKFLOW_NAME,
@@ -211,7 +214,7 @@ describe('reconciled conflict history order', () => {
         stepName: 'reviewers',
         timestamp: '2016-12-31T23:59:60.500Z',
       },
-      rawFindingIds: ['raw-previous', 'raw-generated', 'raw-current'],
+      rawFindingIds: ['raw-previous', 'raw-generated', 'raw-current'].sort(compareBinaryStrings),
     });
     expect(reconciled.conflicts[0]?.adjudications?.map((record) => record.evidenceHash)).toEqual([
       'previous-adjudication',
@@ -224,7 +227,7 @@ describe('reconciled conflict history order', () => {
       'z-current-attempt',
     ]);
 
-    store.saveLedger(reconciled);
+    await store.updateLedger(() => ({ ledger: reconciled, result: undefined }));
     const reservation = await reserveFindingConflictAdjudication({
       ledgerStore: store,
       conflictId,

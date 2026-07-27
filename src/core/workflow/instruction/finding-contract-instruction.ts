@@ -51,7 +51,6 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
   }
 
   const rendered = loadTemplate('parts/finding_contract_instruction', language, {
-    ledgerCopyPath: contract.ledgerCopyPath,
     ledgerSummary: renderFencedJsonBlock(contract.ledgerSummary),
     isReviewer,
     reviewerHasOpenFindings: isReviewer && contract.hasOpenFindings,
@@ -74,7 +73,6 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
 }
 
 export interface FindingContractReportInstructionInput {
-  ledgerCopyPath: string;
   reportLedgerSummary: unknown;
   language: Language;
   renderFencedJsonBlock: (value: unknown) => string;
@@ -90,10 +88,9 @@ export interface FindingContractReportInstructionInput {
  * とは別の（IDのみの）データだから。
  */
 export function buildFindingContractReportInstruction(input: FindingContractReportInstructionInput): string {
-  const { ledgerCopyPath, reportLedgerSummary, language, renderFencedJsonBlock } = input;
+  const { reportLedgerSummary, language, renderFencedJsonBlock } = input;
 
   const rendered = loadTemplate('parts/finding_contract_instruction', language, {
-    ledgerCopyPath,
     ledgerSummary: renderFencedJsonBlock(reportLedgerSummary),
     isReportPhase: true,
   });

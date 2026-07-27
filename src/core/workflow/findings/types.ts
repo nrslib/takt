@@ -32,6 +32,7 @@ export type {
   ConflictDecisionKind,
   DeterministicSameProof,
   FindingInterpretationRecord,
+  FindingActionProposal,
   FindingActionRecovery,
   FindingActionRecoveryAttempt,
   FindingMutationPrecondition,

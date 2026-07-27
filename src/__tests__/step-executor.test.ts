@@ -123,7 +123,6 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
-      getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
       structuredCaller: {
         evaluateCondition: vi.fn(),
@@ -191,7 +190,6 @@ describe('StepExecutor', () => {
     }];
     expect(structuredOutput.validationSchema).toBe(RawFindingsOutputValidationJsonSchema);
     const findingContractContext = {
-      ledgerCopyPath: '.takt/runs/test-run/reports/findings-ledger.json',
       ledgerSummary: { findings: [] },
       reportLedgerSummary: { ids: [] },
       hasOpenFindings: false,
@@ -239,11 +237,12 @@ describe('StepExecutor', () => {
       ledgerPath: '.takt/findings/ledger.json',
       rawFindingsPath: '.takt/findings/raw',
     });
-    findingLedgerStore.saveLedger({
-      workflowName: 'test-workflow',
-      nextId: 2,
-      updatedAt: '2026-07-22T00:00:00.000Z',
-      findings: [{
+    await findingLedgerStore.updateLedger(() => ({
+      ledger: {
+        workflowName: 'test-workflow',
+        nextId: 2,
+        updatedAt: '2026-07-22T00:00:00.000Z',
+        findings: [{
         id: 'F-0001',
         status: 'resolved',
         lifecycle: 'resolved',
@@ -268,8 +267,10 @@ describe('StepExecutor', () => {
         relation: 'new',
       }],
       conflicts: [],
-      interpretations: [],
-    });
+        interpretations: [],
+      },
+      result: undefined,
+    }));
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions,
@@ -297,10 +298,8 @@ describe('StepExecutor', () => {
       getLanguage: () => 'en',
       getInteractive: () => false,
       getWorkflowSteps: () => [{ name: 'review' }],
-      getWorkflowDefinitionSteps: () => [step],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
-      getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
       structuredCaller: {
         evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
@@ -477,7 +476,6 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
-      getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
       structuredCaller: {
         evaluateCondition: vi.fn(),
@@ -537,7 +535,6 @@ describe('StepExecutor', () => {
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildFindingContractInstructionContext: vi.fn().mockReturnValue({
-          ledgerCopyPath: '.takt/findings/review.json',
           ledgerSummary: { openFinding: 'LEDGER_SUMMARY: preserve this' },
           reportLedgerSummary: {},
           hasOpenFindings: true,
@@ -552,10 +549,8 @@ describe('StepExecutor', () => {
       getLanguage: () => 'en',
       getInteractive: () => false,
       getWorkflowSteps: () => [{ name: 'implement' }],
-      getWorkflowDefinitionSteps: () => [step],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
-      getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
       structuredCaller: {
         evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
@@ -576,7 +571,6 @@ describe('StepExecutor', () => {
 
   it('明示nullでは既定の Finding Contract context を注入しない', () => {
     const buildFindingContractInstructionContext = vi.fn().mockReturnValue({
-      ledgerCopyPath: '.takt/findings/full-ledger.json',
       ledgerSummary: 'OUT_OF_SCOPE_FINDING',
       reportLedgerSummary: {},
       hasOpenFindings: true,
@@ -595,10 +589,8 @@ describe('StepExecutor', () => {
       getLanguage: () => 'en',
       getInteractive: () => false,
       getWorkflowSteps: () => [{ name: 'fix.part' }],
-      getWorkflowDefinitionSteps: () => [step],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
-      getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
       structuredCaller: {
         evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
@@ -669,7 +661,6 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
-      getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
       structuredCaller: {
         evaluateCondition: vi.fn(),
@@ -742,7 +733,6 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
-      getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
       structuredCaller: {
         evaluateCondition: vi.fn(),
@@ -822,7 +812,6 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
-      getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
       structuredCaller: {
         evaluateCondition: vi.fn(),
@@ -897,7 +886,6 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
-      getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
       structuredCaller: {
         evaluateCondition: vi.fn(),
@@ -971,7 +959,6 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
-      getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
       structuredCaller: {
         evaluateCondition: vi.fn(),
@@ -1048,7 +1035,6 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
-      getInheritedPeerReportPaths: () => [],
       getRetryNote: () => undefined,
       structuredCaller: {
         evaluateCondition: vi.fn(),

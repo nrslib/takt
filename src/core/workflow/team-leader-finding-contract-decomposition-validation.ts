@@ -10,6 +10,7 @@ import {
   type FindingContractControlValidationIssue,
   type FindingContractRejectedOutputDigest,
 } from './team-leader-finding-contract-control-validation.js';
+import { compareBinaryStrings } from '../../shared/utils/binary-string-comparator.js';
 
 export interface FindingContractRejectedDecompositionDigest
   extends FindingContractRejectedOutputDigest {
@@ -140,7 +141,7 @@ function canonicalJson(value: unknown): string {
     return `[${value.map(canonicalJson).join(',')}]`;
   }
   if (typeof value === 'object' && value !== null) {
-    return `{${Object.keys(value).sort().map((key) => (
+    return `{${Object.keys(value).sort(compareBinaryStrings).map((key) => (
       `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`
     )).join(',')}}`;
   }

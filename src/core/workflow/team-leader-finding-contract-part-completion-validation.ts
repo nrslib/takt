@@ -14,6 +14,7 @@ import {
   type FindingContractControlValidationIssue,
   type FindingContractRejectedOutputDigest,
 } from './team-leader-finding-contract-control-validation.js';
+import { compareBinaryStrings } from '../../shared/utils/binary-string-comparator.js';
 
 export interface FindingContractRejectedPartCompletionDigest
   extends FindingContractRejectedOutputDigest {
@@ -489,7 +490,7 @@ function collectUnknownKeys(
   issues: FindingContractControlValidationIssue[],
 ): void {
   const allowed = new Set(allowedKeys);
-  for (const key of Object.keys(value).filter((key) => !allowed.has(key)).sort()) {
+  for (const key of Object.keys(value).filter((key) => !allowed.has(key)).sort(compareBinaryStrings)) {
     issues.push(issue({
       code: 'shape.unknown_key',
       category: 'shape',
@@ -543,7 +544,7 @@ function canonicalJson(value: unknown): string {
     return `[${value.map(canonicalJson).join(',')}]`;
   }
   if (isRecord(value)) {
-    return `{${Object.keys(value).sort().map((key) => (
+    return `{${Object.keys(value).sort(compareBinaryStrings).map((key) => (
       `${JSON.stringify(key)}:${canonicalJson(value[key])}`
     )).join(',')}}`;
   }

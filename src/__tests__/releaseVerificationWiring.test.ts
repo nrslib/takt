@@ -71,7 +71,7 @@ fi
 describe('release verification wiring', () => {
   it('should connect each public test entrypoint to its intended runner', () => {
     expect(manifest.scripts).toMatchObject({
-      test: 'node scripts/run-npm-test.mjs',
+      test: 'npm run test:type-contracts && node scripts/run-npm-test.mjs',
       'test:unit': 'vitest run --config vitest.config.unit.parallel.ts',
       'test:unit:parallel': 'vitest run --config vitest.config.unit.parallel.ts',
       'test:it': 'npm run test:it:parallel && npm run test:it:serial',

@@ -68,8 +68,6 @@ export async function runFindingManagerForStep(
       previousLedger: prepared.previousLedger,
       admission,
       managerStep: prepared.managerStep,
-      ledgerCopyPath: prepared.ledgerCopyPath,
-      rawFindingsPath: prepared.rawFindingsPath,
       observation: prepared.observation,
       reviewScopeSnapshotId,
       stopBudgetRoundMarker,
@@ -91,7 +89,6 @@ export async function runFindingManagerForStep(
     if (!committed.applied) {
       return {
         status: 'unchanged',
-        ledgerPath: prepared.ledgerCopyPath,
         providerInfo: prepared.providerInfo,
         ledger: committed.nextLedger,
       };
@@ -109,7 +106,6 @@ export async function runFindingManagerForStep(
     });
     return {
       status: 'updated',
-      ledgerPath: prepared.ledgerCopyPath,
       providerInfo: prepared.providerInfo,
       ledger: committed.nextLedger,
     };

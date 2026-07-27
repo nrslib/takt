@@ -1,4 +1,7 @@
-import type { ProvisionalFindingSpec } from './reconciler.js';
+import type {
+  CanonicalRawReconcileProvenance,
+  ProvisionalFindingSpec,
+} from './reconciler.js';
 import { resolveStopBudgetLimits } from './stop-budget.js';
 import { resolveReviewIntegrityLimits } from './review-integrity.js';
 import { captureFindingPreconditions } from './finding-preconditions.js';
@@ -38,6 +41,9 @@ import {
   collectStaleRecoveryRawFindingIds,
   matchesProvisionalRecoveryOrigin,
 } from './provisional-recovery-origin.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+import { compareCanonicalJsonValues } from '../../../shared/utils/canonical-json.js';
+import { canonicalRawIntegrityDigestOf } from './raw-canonicalization.js';
 export interface CommitMutationResult {
   applied: boolean;
   staleRejections: string[];
@@ -73,10 +79,11 @@ function interpretationRecoveryDispositions(
     );
   }
   return [...failuresByRawFindingId]
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => compareBinaryStrings(left, right))
     .map(([rawFindingId, rawFailures]) => {
       const ordered = [...rawFailures].sort((left, right) => (
-        left.recoveryOrigin.provisionalFindingId.localeCompare(
+        compareBinaryStrings(
+          left.recoveryOrigin.provisionalFindingId,
           right.recoveryOrigin.provisionalFindingId,
         )
       ));
@@ -168,7 +175,7 @@ function buildInterpretationRecoverySettlements(input: {
     }
   }
   return [...settlements.values()].sort((left, right) => (
-    left.provisionalFindingId.localeCompare(right.provisionalFindingId)
+    compareBinaryStrings(left.provisionalFindingId, right.provisionalFindingId)
   ));
 }
 
@@ -306,13 +313,16 @@ function prepareCommitReconciliation(
       ))
       .map((item) => item.wire),
   ];
-  const rawProvenanceByRawFindingId = new Map(
+  const rawProvenanceByRawFindingId = new Map<string, CanonicalRawReconcileProvenance>(
     params.intake.items.flatMap((item) => (
       isolatedRawFindingIds.has(item.canonical.rawFindingId)
         ? []
         : [[item.canonical.rawFindingId, {
             reviewerStableKey: item.canonical.reviewerStableKey,
             lineageKey: item.canonical.lineageKey,
+            claimIdentityHash: item.canonical.evidenceHash,
+            canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(item.canonical),
+            canonicalProvenance: item.canonical.provenance,
           }] as const]
     )),
   );
@@ -441,6 +451,17 @@ export function buildFindingManagerCommitMutation(
     mergeOutputs(output, ladderCommit.output),
     managerEntryIsolation.droppedRawFindingIds,
   );
+  const rawProvenanceByRawFindingId = new Map(
+    [...prepared.rawProvenanceByRawFindingId].map(([rawFindingId, provenance]) => {
+      const authority = ladderCommit.openConflictOutcomeAuthorities.get(rawFindingId);
+      return [
+        rawFindingId,
+        authority === undefined
+          ? provenance
+          : { ...provenance, openConflictOutcomeAuthority: authority },
+      ] as const;
+    }),
+  );
   const reconcilePlan = reconcileCommitPlan({
     runInput: input,
     freshLedger: recoveryLedger,
@@ -449,7 +470,7 @@ export function buildFindingManagerCommitMutation(
     provisionalSpecs: specs,
     anomalySpecs: prepared.anomalySpecs,
     pendingRejectedObservations: admission.pendingRejectedObservations,
-    rawProvenanceByRawFindingId: prepared.rawProvenanceByRawFindingId,
+    rawProvenanceByRawFindingId,
     cleanWire: admission.cleanWire,
     explicitResolvedByMapping: ladderCommit.recoverySettlements,
     explicitPromotedFindingIds: ladderCommit.recoveryPromotions,
@@ -460,6 +481,7 @@ export function buildFindingManagerCommitMutation(
     ),
     staleRawFindingIds: ladderCommit.staleRecoveryRawFindingIds,
     deferredRawFindingIds: ladder.deferredRawFindingIds,
+    resolutionRenotifications: revalidated.resolutionRenotifications,
     unsupportedRawFindingReports: managerDecision.unsupportedRawFindingReports,
     healthyReviewerStableKeys: params.intake.healthyReviewerStableKeys,
   });
@@ -492,6 +514,7 @@ export function buildFindingManagerCommitMutation(
     pendingRejectedObservations: admission.pendingRejectedObservations,
     interpretationResults,
     interpretationReservations: ladder.interpretationReservations,
+    interpretationIntegrityDigests: ladder.interpretationIntegrityDigests,
     observation: params.observation,
     verifiedEvidenceCandidates: admission.verifiedEvidenceCandidates,
     stopBudgetLimits: params.stopBudgetLimits,
@@ -506,7 +529,10 @@ export function buildFindingManagerCommitMutation(
     ),
     ...rawAdjudicationRecovery.rawFindingDispositions,
     ...reconcilePlan.rawFindingDispositions,
-  ];
+  ].sort((left, right) => (
+    compareBinaryStrings(left.rawFindingId, right.rawFindingId)
+    || compareCanonicalJsonValues(left, right)
+  ));
   if (new Set(rawFindingDispositions.map(
     (disposition) => disposition.rawFindingId,
   )).size !== rawFindingDispositions.length) {

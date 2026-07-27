@@ -226,6 +226,28 @@ describe('inheritResumeReportSnapshot', () => {
     expect(persisted).toEqual(manifest);
   });
 
+  it('does not inherit internal or reserved report paths', () => {
+    seedSourceRun('source-run', {
+      'plan.md': 'the plan',
+      '.takt-report-internal/history/private.json': 'internal history',
+      '.takt-report-internal/locks/private.lock': 'internal lock',
+      '.TAKT-REPORT-INTERNAL/history/case-private.json': 'case internal history',
+      'nested/resume-artifacts.json': 'nested internal manifest',
+    });
+
+    const manifest = inheritResumeReportSnapshot({
+      cwd,
+      sourceRunSlug: 'source-run',
+      targetRunSlug: 'target-run',
+    });
+
+    const targetReports = buildRunPaths(cwd, 'target-run').reportsAbs;
+    expect(manifest.files.map((entry) => entry.path)).toEqual(['plan.md']);
+    expect(existsSync(join(targetReports, '.takt-report-internal'))).toBe(false);
+    expect(existsSync(join(targetReports, '.TAKT-REPORT-INTERNAL'))).toBe(false);
+    expect(existsSync(join(targetReports, 'nested', 'resume-artifacts.json'))).toBe(false);
+  });
+
   it('leaves the source run untouched', () => {
     seedSourceRun('source-run', { 'plan.md': 'the plan' });
     const sourceReports = buildRunPaths(cwd, 'source-run').reportsAbs;
@@ -451,6 +473,7 @@ describe('inheritResumeReportSnapshot', () => {
     ['non-canonical ISO timestamp', { version: 1, sourceRunSlug: 'source-run', targetRunSlug: 'target-run', createdAt: '2026-07-17 00:00:00Z', files: [] }],
     ['normalized invalid calendar date', { version: 1, sourceRunSlug: 'source-run', targetRunSlug: 'target-run', createdAt: '2026-02-30T00:00:00.000Z', files: [] }],
     ['invalid file entry', { version: 1, sourceRunSlug: 'source-run', targetRunSlug: 'target-run', createdAt: '2026-07-17T00:00:00.000Z', files: [{ path: '../escape.md', size: -1, sha256: 'bad' }] }],
+    ['internal file entry', { version: 1, sourceRunSlug: 'source-run', targetRunSlug: 'target-run', createdAt: '2026-07-17T00:00:00.000Z', files: [{ path: '.takt-report-internal/history/review.md', size: 0, sha256: '0'.repeat(64) }] }],
     ['extra root field', { version: 1, sourceRunSlug: 'source-run', targetRunSlug: 'target-run', createdAt: '2026-07-17T00:00:00.000Z', files: [], extra: true }],
   ])('rejects a semantically invalid manifest: %s', (_name, manifest) => {
     const reports = buildRunPaths(cwd, 'target-run').reportsAbs;
@@ -476,9 +499,12 @@ describe('inheritResumeReportSnapshot', () => {
     expect(readFileSync(join(runCReports, 'plan.md'), 'utf-8')).toBe('plan updated by B');
     expect(readFileSync(join(runCReports, 'review.md'), 'utf-8')).toBe('review from B');
     expect(manifest.sourceRunSlug).toBe('run-b');
-    // B の上書きで退避された履歴版も継承される。
-    const historyFiles = manifest.files.filter((f) => f.path.startsWith('plan.md.'));
-    expect(historyFiles.length).toBe(1);
+    // B の上書きで退避された内部履歴は run をまたいで継承しない。
+    const historyFiles = manifest.files.filter((f) => (
+      f.path.includes('/writer/plan.md.')
+    ));
+    expect(historyFiles.length).toBe(0);
+    expect(existsSync(join(runCReports, '.takt-report-internal'))).toBe(false);
     // 予約名（B が継承時に受け取った manifest）はコピー対象から除外され、
     // C の manifest.files にも現れない。reports 内の manifest は C 自身のもの。
     expect(manifest.files.some((f) => f.path === 'resume-artifacts.json')).toBe(false);
@@ -507,9 +533,20 @@ describe('inheritResumeReportSnapshot', () => {
     writeReportFile(targetReports, 'plan.md', 'regenerated plan');
 
     expect(readFileSync(join(targetReports, 'plan.md'), 'utf-8')).toBe('regenerated plan');
-    const history = readdirSync(targetReports).filter((n) => n.startsWith('plan.md.'));
+    const planStreamId = sha256([
+      'filesystem-report',
+      join(targetReports, 'plan.md'),
+    ].join('\0'));
+    const historyDir = join(
+      targetReports,
+      '.takt-report-internal',
+      'history',
+      planStreamId,
+      'writer',
+    );
+    const history = readdirSync(historyDir).filter((name) => name.startsWith('plan.md.'));
     expect(history.length).toBe(1);
-    expect(readFileSync(join(targetReports, history[0]!), 'utf-8')).toBe('inherited plan');
+    expect(readFileSync(join(historyDir, history[0]!), 'utf-8')).toBe('inherited plan');
   });
 
   // 予約名の強制（codex 3巡目）: report-writer は予約名への書き込みを
@@ -517,11 +554,31 @@ describe('inheritResumeReportSnapshot', () => {
   it('rejects writing a report with the reserved manifest name at the writer boundary', () => {
     const reportsDir = join(cwd, 'reports');
     mkdirSync(reportsDir, { recursive: true });
-    // Windows 形式の区切り（sub\Resume-Artifacts.JSON）も basename 判定で拒否
-    // される（codex 4巡目: / のみの区切りでは迂回できた）。
-    for (const name of ['resume-artifacts.json', ' Resume-Artifacts.JSON ', 'sub/resume-artifacts.json', 'sub\\Resume-Artifacts.JSON']) {
+    for (const name of ['resume-artifacts.json', 'sub/resume-artifacts.json']) {
       expect(() => writeReportFile(reportsDir, name, 'content')).toThrow(/reserved internal file/);
     }
+    expect(() => writeReportFile(reportsDir, 'sub\\Resume-Artifacts.JSON', 'content'))
+      .toThrow(/non-canonical path separator/);
+    expect(() => writeReportFile(reportsDir, ' Resume-Artifacts.JSON ', 'content'))
+      .toThrow(/leading or trailing whitespace/);
+    expect(() => writeReportFile(
+      reportsDir,
+      '.takt-report-internal/history/review.md',
+      'content',
+    )).toThrow(/internal report namespace/);
+    expect(() => writeReportFile(
+      reportsDir,
+      '.takt-report-internal\\history\\review.md',
+      'content',
+    )).toThrow(/non-canonical path separator/);
+    for (const name of [
+      './.takt-report-internal/history/review.md',
+      'public/../.takt-report-internal/history/review.md',
+    ]) {
+      expect(() => writeReportFile(reportsDir, name, 'content')).toThrow(/dot path segment/);
+    }
+    expect(() => writeReportFile(reportsDir, 'nested/../../outside.md', 'content'))
+      .toThrow(/not a valid report-relative path/);
     // 通常名は従来どおり書ける。
     expect(() => writeReportFile(reportsDir, 'normal-report.md', 'content')).not.toThrow();
   });

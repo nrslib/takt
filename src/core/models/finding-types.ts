@@ -189,7 +189,7 @@ export interface FindingActionRecoveryAttempt {
   at: FindingObservation;
 }
 
-export type FindingActionRecovery =
+export type FindingActionProposal =
   | { action: 'invalidate'; findingId: string; evidence: string }
   | { action: 'waive'; findingId: string; reason: string; evidence: string }
   | {
@@ -199,6 +199,10 @@ export type FindingActionRecovery =
       evidence: string;
     }
   | { action: 'dismiss'; findingId: string; basis: FindingDismissalBasis; reason: string };
+
+export type FindingActionRecovery = FindingActionProposal & {
+  targetPreconditions: FindingMutationPrecondition[];
+};
 
 export interface FindingProvisionalMetadata {
   kind: FindingProvisionalKind;
@@ -502,6 +506,7 @@ interface CanonicalRawFindingBase {
   readonly relation: RawFindingRelation;
   readonly reviewer: string;
   readonly stepName: string;
+  readonly targetPrecondition?: FindingMutationPrecondition;
 
   readonly provenance: CanonicalRawFindingProvenance;
 
@@ -635,6 +640,7 @@ interface FindingInterpretationRecordBase {
   reviewerStableKey: string;
   lineageKey: string;
   candidateEvidenceHash: string;
+  canonicalIntegrityDigest: string;
 
   startedAt: FindingObservation;
   promptPreconditions: FindingMutationPrecondition[];
@@ -677,6 +683,7 @@ export const RAW_FINDING_DISPOSITION_OUTCOMES = [
   'stale',
   'deferred',
   'confirmation_not_applied',
+  'resolution_renotification_conflict',
 ] as const;
 export type RawFindingDispositionOutcome = typeof RAW_FINDING_DISPOSITION_OUTCOMES[number];
 
@@ -691,7 +698,10 @@ export type InterpretationRecoveryOriginSettlement =
       provisionalFindingId: string;
       sourceRawFindingId: string;
       outcome: 'audit_only';
-      failureKind: 'source_missing' | 'reviewer_provenance_missing';
+      failureKind:
+        | 'source_missing'
+        | 'reviewer_provenance_missing'
+        | 'recovery_contract_mismatch';
       reason: string;
     }
   | {
@@ -880,6 +890,8 @@ export interface RawFinding {
   relation: RawFindingRelation;
   /** Ledger finding id this entry references (required for persists/reopened/resolution_confirmation; forbidden for new). */
   targetFindingId?: string;
+  /** Engine-issued snapshot of the referenced target. Reviewer input cannot set this field. */
+  targetPrecondition?: FindingMutationPrecondition;
   /**
    * 証拠契約(review-integrity protocol)。欠損は「evidence なし」として扱う。
    */

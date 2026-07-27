@@ -1,11 +1,13 @@
 import {
   candidateFromStoredRawFinding,
   canonicalizeReviewerRawFinding,
+  computeRawEvidenceHash,
   toLedgerRawFinding,
 } from './raw-canonicalization.js';
 import { classifyProvisionalRecovery, isOpenProvisional } from './provisional-recovery.js';
 import type {
   CanonicalIntakeItem,
+  ProvisionalRecoveryOrigins,
   RawAdmissionEvaluation,
   ReviewerIntakeResult,
 } from './manager-admission.js';
@@ -20,6 +22,7 @@ import {
   snapshotProvisionalRecoveryOrigin,
   type ProvisionalRecoveryOrigin,
 } from './provisional-recovery-origin.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 
 interface InterpretationRecoveryFailureBase {
   recoveryOrigin: ProvisionalRecoveryOrigin;
@@ -35,6 +38,10 @@ export type InterpretationRecoveryFailure =
     }
   | InterpretationRecoveryFailureBase & {
       kind: 'reviewer_provenance_missing';
+      outcome: 'audit_only';
+    }
+  | InterpretationRecoveryFailureBase & {
+      kind: 'recovery_contract_mismatch';
       outcome: 'audit_only';
     };
 
@@ -87,14 +94,19 @@ export function attachInterpretationRecoveryOrigins(input: {
       return item;
     }
     const recoveryOrigins = provenanceMatches
-      .sort((left, right) => left.id.localeCompare(right.id))
+      .sort((left, right) => compareBinaryStrings(left.id, right.id))
       .map((process) => {
         attachedProcessIds.add(process.id);
         return snapshotProvisionalRecoveryOrigin(process);
       });
+    const firstOrigin = recoveryOrigins[0];
+    if (firstOrigin === undefined) {
+      throw new Error(`Interpretation recovery origins disappeared for "${item.wire.rawFindingId}"`);
+    }
     return {
       ...item,
-      recoveryOrigins,
+      recoveryOrigins: [firstOrigin, ...recoveryOrigins.slice(1)],
+      interpretationRecoveryAttempt: true,
     };
   });
 }
@@ -107,6 +119,22 @@ export function collectInterpretationRecoveryItems(input: {
   return collectInterpretationRecoveryPlan(input).items;
 }
 
+function appendRecoveryOrigin(
+  origins: ProvisionalRecoveryOrigins,
+  origin: ProvisionalRecoveryOrigin,
+): ProvisionalRecoveryOrigins {
+  const sorted = [...origins, origin]
+    .sort((left, right) => compareBinaryStrings(
+      left.provisionalFindingId,
+      right.provisionalFindingId,
+    ));
+  const first = sorted[0];
+  if (first === undefined) {
+    throw new Error('Interpretation recovery origin append produced an empty result');
+  }
+  return [first, ...sorted.slice(1)];
+}
+
 export function collectInterpretationRecoveryPlan(input: {
   ledger: FindingLedger;
   currentItems: readonly CanonicalIntakeItem[];
@@ -115,10 +143,15 @@ export function collectInterpretationRecoveryPlan(input: {
   const attachedProcessIds = new Set(input.currentItems.flatMap((item) => (
     item.recoveryOrigins?.map((origin) => origin.provisionalFindingId) ?? []
   )));
-  const itemsByRawFindingId = new Map<string, CanonicalIntakeItem>();
+  const candidatesByRawFindingId = new Map<string, Array<{
+    readonly canonical: CanonicalIntakeItem['canonical'];
+    readonly source: RawFinding;
+    readonly origin: ProvisionalRecoveryOrigin;
+    readonly finding: ReturnType<typeof interpretationProcesses>[number];
+  }>>();
   const failures: InterpretationRecoveryFailure[] = [];
   const processes = interpretationProcesses(input.ledger, input.roundsCompleted)
-    .sort((left, right) => left.id.localeCompare(right.id));
+    .sort((left, right) => compareBinaryStrings(left.id, right.id));
   for (const finding of processes) {
     if (attachedProcessIds.has(finding.id)) {
       continue;
@@ -154,21 +187,6 @@ export function collectInterpretationRecoveryPlan(input: {
       });
       continue;
     }
-    const origin = snapshotProvisionalRecoveryOrigin(finding);
-    const existing = itemsByRawFindingId.get(source.rawFindingId);
-    if (existing !== undefined) {
-      if (existing.recoveryOrigins === undefined) {
-        throw new Error(
-          `Interpretation recovery source "${source.rawFindingId}" lost its recovery origins`,
-        );
-      }
-      itemsByRawFindingId.set(source.rawFindingId, {
-        ...existing,
-        recoveryOrigins: [...existing.recoveryOrigins, origin]
-          .sort((left, right) => left.provisionalFindingId.localeCompare(right.provisionalFindingId)),
-      });
-      continue;
-    }
     const candidate = candidateFromStoredRawFinding(
       source,
       reviewerStableKey,
@@ -177,15 +195,64 @@ export function collectInterpretationRecoveryPlan(input: {
       ledger: input.ledger,
       preserveAmbiguityOrigin: true,
     }).canonical;
-    itemsByRawFindingId.set(source.rawFindingId, {
-      canonical,
-      wire: toLedgerRawFinding(canonical),
-      recoveryOrigins: [origin],
+    const origin = snapshotProvisionalRecoveryOrigin(finding);
+    if (
+      canonical.rawFindingId !== source.rawFindingId
+      || canonical.lineageKey !== origin.expectedProvisionalLineageKey
+      || canonical.reviewerStableKey !== origin.expectedRecoveryReviewerStableKey
+      || canonical.evidenceHash !== computeRawEvidenceHash(source)
+    ) {
+      failures.push({
+        kind: 'recovery_contract_mismatch',
+        outcome: 'audit_only',
+        recoveryOrigin: origin,
+        attempt: (finding.provisional.adjudicationAttempts ?? []).length + 1,
+        sourceRawFindingId: source.rawFindingId,
+        reason: `Interpretation recovery "${finding.provisional.stableKey}" does not match the reconstructed stored raw contract`,
+      });
+      continue;
+    }
+    const existing = candidatesByRawFindingId.get(source.rawFindingId) ?? [];
+    candidatesByRawFindingId.set(source.rawFindingId, [
+      ...existing,
+      { canonical, source, origin, finding },
+    ]);
+  }
+  const items: CanonicalIntakeItem[] = [];
+  for (const candidates of candidatesByRawFindingId.values()) {
+    const contractKeys = new Set(candidates.map(({ canonical }) => (
+      `${canonical.lineageKey}\0${canonical.reviewerStableKey}\0${canonical.evidenceHash}`
+    )));
+    if (contractKeys.size !== 1) {
+      for (const candidate of candidates) {
+        failures.push({
+          kind: 'recovery_contract_mismatch',
+          outcome: 'audit_only',
+          recoveryOrigin: candidate.origin,
+          attempt: (candidate.finding.provisional.adjudicationAttempts ?? []).length + 1,
+          sourceRawFindingId: candidate.source.rawFindingId,
+          reason: `Interpretation recovery "${candidate.finding.provisional.stableKey}" shares a raw payload with a different recovery contract`,
+        });
+      }
+      continue;
+    }
+    const first = candidates[0];
+    if (first === undefined) {
+      continue;
+    }
+    const origins = candidates.slice(1).reduce<ProvisionalRecoveryOrigins>(
+      (collected, candidate) => appendRecoveryOrigin(collected, candidate.origin),
+      [first.origin],
+    );
+    items.push({
+      canonical: first.canonical,
+      wire: toLedgerRawFinding(first.canonical),
+      recoveryOrigins: origins,
       interpretationRecoveryAttempt: true,
     });
   }
   return {
-    items: [...itemsByRawFindingId.values()],
+    items,
     failures,
   };
 }
@@ -220,6 +287,7 @@ export function applyInterpretationRecoveryFailures(input: {
       switch (failure.kind) {
         case 'source_missing':
         case 'reviewer_provenance_missing':
+        case 'recovery_contract_mismatch':
           return [[failure.recoveryOrigin.provisionalFindingId, failure] as const];
         case 'recovery_origin_stale':
           return [];

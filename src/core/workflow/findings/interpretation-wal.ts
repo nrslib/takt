@@ -24,6 +24,7 @@ export interface NewInterpretationInput {
   reviewerStableKey: string;
   lineageKey: string;
   candidateEvidenceHash: string;
+  canonicalIntegrityDigest: string;
   promptPreconditions: FindingMutationPrecondition[];
 }
 
@@ -37,6 +38,7 @@ export interface BeginInterpretationsResult {
     attemptOrdinal: number;
   }>;
   deferredKeys: Set<string>;
+  integrityStaleKeys: Set<string>;
   ownedByKey: Map<string, string>;
 }
 
@@ -75,7 +77,10 @@ export async function beginInterpretations(
         if (latest?.stage === 'interpretation_started' && latest.reservationToken !== undefined) {
           store.releaseAdjudicationReservation(latest.reservationToken);
         }
-        if (latest?.stage === 'interpretation_completed') {
+        if (
+          latest?.stage === 'interpretation_completed'
+          && latest.canonicalIntegrityDigest === input.canonicalIntegrityDigest
+        ) {
           if (latest.reservationToken === undefined || latest.validatedDecision === undefined) {
             throw new Error(`Completed interpretation attempt "${latest.interpretationKey}" is missing its reservation or decision`);
           }
@@ -94,6 +99,7 @@ export async function beginInterpretations(
           reviewerStableKey: input.reviewerStableKey,
           lineageKey: input.lineageKey,
           candidateEvidenceHash: input.candidateEvidenceHash,
+          canonicalIntegrityDigest: input.canonicalIntegrityDigest,
         });
         result.attemptByBaseKey.set(input.baseInterpretationKey, attempt);
         const existing = interpretations.find((record) => record.interpretationKey === attempt.interpretationKey);
@@ -113,7 +119,11 @@ export async function beginInterpretations(
         for (let index = 0; index < interpretations.length; index += 1) {
           const record = interpretations[index]!;
           if (interruptedPriorKeys.has(record.interpretationKey)) {
-            interpretations[index] = { ...record, stage: 'interpretation_interrupted', interruptedAt: observation };
+            interpretations[index] = {
+              ...record,
+              stage: 'interpretation_interrupted',
+              interruptedAt: { ...observation },
+            };
           }
         }
         const reservationToken = randomUUID();
@@ -122,6 +132,12 @@ export async function beginInterpretations(
         }
         claimedTokens.add(reservationToken);
         result.ownedByKey.set(attempt.interpretationKey, reservationToken);
+        if (
+          latest !== undefined
+          && latest.canonicalIntegrityDigest !== input.canonicalIntegrityDigest
+        ) {
+          result.integrityStaleKeys.add(attempt.interpretationKey);
+        }
         interpretations.push({
           interpretationKey: attempt.interpretationKey,
           baseInterpretationKey: input.baseInterpretationKey,
@@ -129,10 +145,13 @@ export async function beginInterpretations(
           reviewerStableKey: input.reviewerStableKey,
           lineageKey: input.lineageKey,
           candidateEvidenceHash: input.candidateEvidenceHash,
+          canonicalIntegrityDigest: input.canonicalIntegrityDigest,
           stage: 'interpretation_started',
-          startedAt: observation,
+          startedAt: { ...observation },
           reservationToken,
-          promptPreconditions: input.promptPreconditions,
+          promptPreconditions: input.promptPreconditions.map((precondition) => ({
+            ...precondition,
+          })),
         });
       }
       return { ledger: { ...ledger, interpretations }, result };
@@ -154,6 +173,7 @@ function emptyBeginInterpretationsResult(roundAlreadyApplied: boolean): BeginInt
     appliedByKey: new Map(),
     attemptByBaseKey: new Map(),
     deferredKeys: new Set(),
+    integrityStaleKeys: new Set(),
     ownedByKey: new Map(),
   };
 }
@@ -186,12 +206,16 @@ export function resolveInterpretationAttempt(input: {
   reviewerStableKey: string;
   lineageKey: string;
   candidateEvidenceHash: string;
+  canonicalIntegrityDigest: string;
 }): { baseInterpretationKey: string; interpretationKey: string; attemptOrdinal: number } {
   const baseInterpretationKey = computeBaseInterpretationKey(input);
   const records = recordsForBaseKey(input.ledger.interpretations, baseInterpretationKey);
   const latest = records.at(-1);
   const latestOrdinal = latest === undefined ? 0 : latest.attemptOrdinal;
-  const advances = latest?.stage === 'interpretation_started'
+  const integrityChanged = latest !== undefined
+    && latest.canonicalIntegrityDigest !== input.canonicalIntegrityDigest;
+  const advances = integrityChanged
+    || latest?.stage === 'interpretation_started'
     || latest?.stage === 'interpretation_interrupted'
     || (latest?.stage === 'ledger_applied'
       && (latest.applicationResult === 'provisional_created'
@@ -214,6 +238,7 @@ export async function completeInterpretations(
   store: FindingManagerStore,
   decisions: ReadonlyMap<string, AmbiguousInterpretation>,
   ownedByKey: ReadonlyMap<string, string>,
+  canonicalIntegrityDigests: ReadonlyMap<string, string>,
   observation: FindingObservation,
   stopBudgetRoundMarker: string,
 ): Promise<Map<string, AmbiguousInterpretation>> {
@@ -231,18 +256,28 @@ export async function completeInterpretations(
     const interpretations = ledger.interpretations.map((record) => {
       const decision = decisions.get(record.interpretationKey);
       const reservationToken = ownedByKey.get(record.interpretationKey);
+      const canonicalIntegrityDigest = canonicalIntegrityDigests.get(record.interpretationKey);
       if (decision === undefined
         || reservationToken === undefined
+        || canonicalIntegrityDigest === undefined
         || record.stage !== 'interpretation_started'
         || record.reservationToken !== reservationToken) {
         return record;
       }
-      completed.set(record.interpretationKey, decision);
+      const completedDecision = record.canonicalIntegrityDigest === canonicalIntegrityDigest
+        ? decision
+        : {
+            decision: 'provisional' as const,
+            rawFindingId: decision.rawFindingId,
+            reason: 'The canonical integrity digest changed before WAL completion; the decision was rejected as stale',
+          };
+      completed.set(record.interpretationKey, completedDecision);
       return {
         ...record,
+        canonicalIntegrityDigest,
         stage: 'interpretation_completed' as const,
-        completedAt: observation,
-        validatedDecision: decision,
+        completedAt: { ...observation },
+        validatedDecision: completedDecision,
       };
     });
     return {
@@ -273,6 +308,7 @@ export function markInterpretationsApplied(
   ledger: FindingLedger,
   results: ReadonlyMap<string, InterpretationApplicationResult>,
   ownedByKey: ReadonlyMap<string, string>,
+  canonicalIntegrityDigests: ReadonlyMap<string, string>,
   observation: FindingObservation,
 ): FindingLedger {
   if (results.size === 0) {
@@ -282,15 +318,21 @@ export function markInterpretationsApplied(
     ...ledger,
     interpretations: ledger.interpretations.map((record) => {
       const applicationResult = results.get(record.interpretationKey);
+      const canonicalIntegrityDigest = canonicalIntegrityDigests.get(record.interpretationKey);
       if (applicationResult === undefined
+        || canonicalIntegrityDigest === undefined
         || record.stage !== 'interpretation_completed'
-        || record.reservationToken !== ownedByKey.get(record.interpretationKey)) {
+        || record.reservationToken !== ownedByKey.get(record.interpretationKey)
+        || (
+          applicationResult !== 'stale_precondition'
+          && record.canonicalIntegrityDigest !== canonicalIntegrityDigest
+        )) {
         return record;
       }
       return {
         ...record,
         stage: 'ledger_applied' as const,
-        appliedAt: observation,
+        appliedAt: { ...observation },
         applicationResult,
       };
     }),

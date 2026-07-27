@@ -1,15 +1,28 @@
 import type { ProvisionalFindingSpec } from './reconciler.js';
-import { verifySameProofAgainstLedger } from './raw-capabilities.js';
+import {
+  issueOpenConflictOutcomeAuthority,
+  verifySameProofAgainstLedger,
+  type OpenConflictOutcomeAuthority,
+} from './raw-capabilities.js';
 import { createEmptyManagerOutput } from './manager-output.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
   InterpretationApplicationResult,
 } from './types.js';
-import type { LadderResult, ManagerDecisionStageResult } from './manager-contracts.js';
+import type {
+  LadderResult,
+  LadderTarget,
+  ManagerDecisionStageResult,
+} from './manager-contracts.js';
 import { provisionalSpecForRaw, provisionalSpecForRawKind } from './manager-provisional.js';
 import { fullIdentityKeyOf } from './manager-provisional-settlement.js';
-import { matchesProvisionalRecoveryOrigin } from './provisional-recovery-origin.js';
+import {
+  matchesProvisionalRecoveryOrigin,
+  type ProvisionalRecoveryOrigin,
+} from './provisional-recovery-origin.js';
+import { findingMatchesMutationPrecondition } from './finding-preconditions.js';
+import { canonicalRawIntegrityDigestOf } from './raw-canonicalization.js';
 
 export interface LadderCommitPlan {
   output: FindingManagerOutput;
@@ -19,6 +32,7 @@ export interface LadderCommitPlan {
   recoveryPromotions: Set<string>;
   recoveryProvisionalRawFindingIds: Set<string>;
   staleRecoveryRawFindingIds: Set<string>;
+  openConflictOutcomeAuthorities: Map<string, OpenConflictOutcomeAuthority>;
 }
 
 function withInterpretationResult(
@@ -40,13 +54,13 @@ function recoveryOriginIsFresh(
 function freshRecoveryOrigins(
   origins: NonNullable<ManagerDecisionStageResult['ladder']['pendingAppliedReattach'][number]['target']['recoveryOrigins']>,
   ledger: FindingLedger,
-): typeof origins {
+): ProvisionalRecoveryOrigin[] {
   return origins.filter((origin) => recoveryOriginIsFresh(origin, ledger));
 }
 
 function addRecoverySettlements(
   current: Map<string, string>,
-  origins: NonNullable<ManagerDecisionStageResult['ladder']['pendingAppliedReattach'][number]['target']['recoveryOrigins']>,
+  origins: readonly ProvisionalRecoveryOrigin[],
   target: string,
 ): Map<string, string> {
   return new Map([
@@ -56,7 +70,7 @@ function addRecoverySettlements(
 }
 
 function primaryRecoveryOrigin(
-  origins: NonNullable<ManagerDecisionStageResult['ladder']['pendingAppliedReattach'][number]['target']['recoveryOrigins']>,
+  origins: readonly ProvisionalRecoveryOrigin[],
 ) {
   const primary = origins[0];
   if (primary === undefined) {
@@ -75,17 +89,91 @@ function ownsCompletedInterpretation(
     record.interpretationKey === interpretationKey
     && record.stage === 'interpretation_completed'
     && record.reservationToken === reservationToken
+    && record.canonicalIntegrityDigest
+      === ladder.interpretationIntegrityDigests.get(interpretationKey)
   )) === true;
+}
+
+function targetForInterpretation(
+  ladder: LadderResult,
+  interpretationKey: string,
+): Pick<LadderTarget, 'wire' | 'canonical'> | undefined {
+  const sameTarget = ladder.pendingSameWithProof.find((pending) => (
+    pending.viaInterpretationKey === interpretationKey
+  ))?.target;
+  if (sameTarget !== undefined) {
+    return sameTarget;
+  }
+  const independent = ladder.pendingIndependentNew.find((pending) => (
+    pending.viaInterpretationKey === interpretationKey
+  ));
+  if (independent !== undefined) {
+    return independent;
+  }
+  return ladder.pendingConflicts.find((pending) => (
+    pending.viaInterpretationKey === interpretationKey
+  ))?.target;
+}
+
+function verifyOpenConflictTargetPrecondition(input: {
+  ledger: FindingLedger;
+  interpretationKey: string;
+  rawFindingId: string;
+  targetFindingId: string;
+  canonicalIntegrityDigest: string;
+}): { ok: true } | { ok: false; reason: string } {
+  const records = input.ledger.interpretations.filter((record) => (
+    record.interpretationKey === input.interpretationKey
+  ));
+  const record = records[0];
+  if (
+    records.length !== 1
+    || record?.stage !== 'interpretation_completed'
+    || record.validatedDecision.decision !== 'open_conflict'
+    || record.canonicalIntegrityDigest !== input.canonicalIntegrityDigest
+    || record.validatedDecision.rawFindingId !== input.rawFindingId
+    || record.validatedDecision.targetFindingId !== input.targetFindingId
+  ) {
+    return { ok: false, reason: 'the validated open_conflict WAL record is missing or ambiguous' };
+  }
+  const matching = record.promptPreconditions.filter((precondition) => (
+    precondition.targetFindingId === input.targetFindingId
+  ));
+  const precondition = matching[0];
+  if (matching.length !== 1 || precondition === undefined) {
+    return { ok: false, reason: `the prompt WAL does not contain exactly one precondition for "${input.targetFindingId}"` };
+  }
+  if (
+    precondition.targetStatus !== 'open'
+    || !findingMatchesMutationPrecondition(input.ledger, precondition)
+  ) {
+    return { ok: false, reason: `conflict target "${input.targetFindingId}" changed after the manager prompt` };
+  }
+  return { ok: true };
 }
 
 export function selectCommittableLadder(
   ladder: LadderResult,
   freshLedger: FindingLedger,
 ): LadderResult {
+  const ownedCompletedKeys = new Set(
+    [...ladder.interpretationReservations].flatMap(([key, reservationToken]) => (
+      freshLedger.interpretations.some((record) => (
+        record.interpretationKey === key
+        && record.stage === 'interpretation_completed'
+        && record.reservationToken === reservationToken
+      ))
+        ? [key]
+        : []
+    )),
+  );
   const committableKeys = new Set(
-    [...ladder.interpretationReservations.keys()].filter((key) => (
+    [...ownedCompletedKeys].filter((key) => (
       ownsCompletedInterpretation(ladder, freshLedger, key)
     )),
+  );
+  const newlyStaleKeys = new Set(
+    [...ownedCompletedKeys].filter((key) => !committableKeys.has(key)),
   );
   const excludedSpecs = new Set(
     [...ladder.provisionalByInterpretationKey]
@@ -96,8 +184,26 @@ export function selectCommittableLadder(
     !ladder.deferredRawFindingIds.has(rawFindingId)
     && (key === undefined || committableKeys.has(key))
   );
+  const staleSpecs = [...newlyStaleKeys].flatMap((key) => {
+    const existing = ladder.provisionalByInterpretationKey.get(key);
+    if (existing !== undefined) {
+      return [existing];
+    }
+    const target = targetForInterpretation(ladder, key);
+    return target === undefined
+      ? []
+      : [provisionalSpecForRaw({
+          wire: target.wire,
+          canonical: target.canonical,
+          reason: 'The canonical integrity digest changed before commit; the interpretation was rejected as stale',
+        })];
+  });
   return {
     ...ladder,
+    integrityStaleInterpretationKeys: new Set([
+      ...ladder.integrityStaleInterpretationKeys,
+      ...newlyStaleKeys,
+    ]),
     pendingSameWithProof: ladder.pendingSameWithProof.filter((pending) => (
       canCommit(pending.viaInterpretationKey, pending.target.wire.rawFindingId)
     )),
@@ -110,7 +216,7 @@ export function selectCommittableLadder(
     provisionalSpecs: ladder.provisionalSpecs.filter((spec) => (
       !excludedSpecs.has(spec)
       && spec.sourceRawFindingIds.every((rawFindingId) => !ladder.deferredRawFindingIds.has(rawFindingId))
-    )),
+    )).concat(staleSpecs),
     provisionalByInterpretationKey: new Map(
       [...ladder.provisionalByInterpretationKey].filter(([key]) => committableKeys.has(key)),
     ),
@@ -126,7 +232,8 @@ export function buildLadderCommitPlan(
   staleRecoveryRawFindingIds: ReadonlySet<string>,
 ): LadderCommitPlan {
   const initialResults = new Map<string, InterpretationApplicationResult>(
-    [...ladder.provisionalByInterpretationKey].map(([key, spec]) => {
+    [
+      ...[...ladder.provisionalByInterpretationKey].map(([key, spec]) => {
       const staleRecovery = ladder.recoveryProvisionalOrigins.has(key)
         && spec.sourceRawFindingIds.some((rawFindingId) => staleRecoveryRawFindingIds.has(rawFindingId));
       const existsOpen = ladder.recoveryProvisionalOrigins.has(key) || freshLedger.findings.some(
@@ -134,11 +241,15 @@ export function buildLadderCommitPlan(
       );
       return [
         key,
-        staleRecovery
+        staleRecovery || ladder.integrityStaleInterpretationKeys.has(key)
           ? 'stale_precondition'
           : existsOpen ? 'provisional_updated' : 'provisional_created',
-      ];
-    }),
+      ] as const;
+      }),
+      ...[...ladder.integrityStaleInterpretationKeys].map((key) => (
+        [key, 'stale_precondition'] as const
+      )),
+    ],
   );
   const initial: LadderCommitPlan = {
     output: createEmptyManagerOutput(),
@@ -154,6 +265,7 @@ export function buildLadderCommitPlan(
       )),
     ),
     staleRecoveryRawFindingIds: new Set(staleRecoveryRawFindingIds),
+    openConflictOutcomeAuthorities: new Map(),
   };
   const withMatches = ladder.pendingSameWithProof.reduce<LadderCommitPlan>((plan, pending) => {
     const origins = pending.target.recoveryOrigins;
@@ -298,45 +410,70 @@ export function buildLadderCommitPlan(
         ),
       };
     }
-    const target = freshLedger.findings.find((finding) => finding.id === pending.targetFindingId);
-    if (target === undefined || target.status !== 'open') {
+    const targetPrecondition = verifyOpenConflictTargetPrecondition({
+      ledger: freshLedger,
+      interpretationKey: pending.viaInterpretationKey,
+      rawFindingId: pending.target.wire.rawFindingId,
+      targetFindingId: pending.targetFindingId,
+      canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(pending.target.canonical),
+    });
+    if (!targetPrecondition.ok) {
       return {
         ...plan,
         provisionalSpecs: [...plan.provisionalSpecs, provisionalSpecForRaw({
           wire: pending.target.wire,
           canonical: pending.target.canonical,
-          reason: `Conflict target "${pending.targetFindingId}" is no longer open; observation kept provisional`,
+          reason: `Open-conflict decision became stale before save: ${targetPrecondition.reason}`,
         })],
         interpretationResults: withInterpretationResult(
           plan.interpretationResults,
           pending.viaInterpretationKey,
-          'provisional_created',
+          'stale_precondition',
         ),
       };
     }
     const origins = freshOrigins;
+    const provisionalSpec = origins === undefined
+      ? provisionalSpecForRaw({
+          wire: pending.target.wire,
+          canonical: pending.target.canonical,
+          reason: `Held as provisional while an active conflict against finding "${pending.targetFindingId}" is adjudicated`,
+        })
+      : undefined;
+    const conflict = {
+      findingIds: origins === undefined
+        ? [pending.targetFindingId]
+        : [
+            pending.targetFindingId,
+            ...origins.map((origin) => origin.provisionalFindingId),
+          ],
+      rawFindingIds: [pending.target.wire.rawFindingId],
+      description: `Ambiguous observation "${pending.target.wire.title}" relates to finding "${pending.targetFindingId}" but its identity could not be determined`,
+    };
+    const authority = provisionalSpec === undefined
+      ? undefined
+      : issueOpenConflictOutcomeAuthority({
+          canonical: pending.target.canonical,
+          ledger: freshLedger,
+          interpretationKey: pending.viaInterpretationKey,
+          conflict,
+          provisionalSpec,
+        });
     return {
       ...plan,
       output: {
         ...plan.output,
-        conflicts: [...plan.output.conflicts, {
-          findingIds: origins === undefined
-            ? [pending.targetFindingId]
-            : [
-                pending.targetFindingId,
-                ...origins.map((origin) => origin.provisionalFindingId),
-              ],
-          rawFindingIds: [pending.target.wire.rawFindingId],
-          description: `Ambiguous observation "${pending.target.wire.title}" relates to finding "${pending.targetFindingId}" but its identity could not be determined`,
-        }],
+        conflicts: [...plan.output.conflicts, conflict],
       },
-      provisionalSpecs: origins === undefined
-        ? [...plan.provisionalSpecs, provisionalSpecForRaw({
-            wire: pending.target.wire,
-            canonical: pending.target.canonical,
-            reason: `Held as provisional while an active conflict against finding "${pending.targetFindingId}" is adjudicated`,
-          })]
-        : plan.provisionalSpecs,
+      provisionalSpecs: provisionalSpec === undefined
+        ? plan.provisionalSpecs
+        : [...plan.provisionalSpecs, provisionalSpec],
+      openConflictOutcomeAuthorities: authority === undefined
+        ? plan.openConflictOutcomeAuthorities
+        : new Map([
+            ...plan.openConflictOutcomeAuthorities,
+            [pending.target.wire.rawFindingId, authority],
+          ]),
       interpretationResults: withInterpretationResult(
         plan.interpretationResults,
         pending.viaInterpretationKey,

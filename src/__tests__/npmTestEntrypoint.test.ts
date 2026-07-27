@@ -64,7 +64,7 @@ describe('npm test execution', () => {
     expect(() => resolveNpmInvocation('/opt/node/bin/node', 'npm-cli.js')).toThrow(/absolute path/);
   });
 
-  it('should run unit shards sequentially when no target is provided', async () => {
+  it('should run unit shards concurrently when no target is provided', async () => {
     const events: string[] = [];
     const run = vi.fn(async (npmArgs: string[]) => {
       const script = npmArgs[1]!;
@@ -78,12 +78,12 @@ describe('npm test execution', () => {
 
     expect(events).toEqual([
       'start:test:unit:parallel',
-      'finish:test:unit:parallel',
+      'start:test:unit:parallel',
+      'start:test:unit:parallel',
       'start:test:unit:parallel',
       'finish:test:unit:parallel',
-      'start:test:unit:parallel',
       'finish:test:unit:parallel',
-      'start:test:unit:parallel',
+      'finish:test:unit:parallel',
       'finish:test:unit:parallel',
     ]);
     expect(run).toHaveBeenCalledTimes(4);
@@ -142,7 +142,7 @@ describe('npm test execution', () => {
 });
 
 describe('npm test entrypoint routing', () => {
-  it('should run the unit suite as sequential shards when no test target is provided', () => {
+  it('should run the unit suite as single-worker shards when no test target is provided', () => {
     expect(selectNpmTestRuns([])).toEqual([
       { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=1/4', '--maxWorkers=1'] },
       { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=2/4', '--maxWorkers=1'] },

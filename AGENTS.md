@@ -20,7 +20,7 @@
 
 ## Coding Style & Naming Conventions
 
-This project uses TypeScript ESM on Node `>=18.19.0`. Use 2-space indentation and follow nearby file style. Prefer simple, readable code over clever abstractions. Avoid `any`; prefix intentionally unused parameters with `_`. File names follow existing conventions, mostly focused `kebab-case` or established module names such as `workflowLoader.ts`. Use ESLint and TypeScript compiler feedback before submitting changes.
+This project uses TypeScript ESM on Node `>=24.15.0`. Use 2-space indentation and follow nearby file style. Prefer simple, readable code over clever abstractions. Avoid `any`; prefix intentionally unused parameters with `_`. File names follow existing conventions, mostly focused `kebab-case` or established module names such as `workflowLoader.ts`. Use ESLint and TypeScript compiler feedback before submitting changes.
 
 ## Testing Guidelines
 

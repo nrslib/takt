@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, AgentWorkflowStep, WorkflowStep } from '../core/models/types.js';
 import type {
   FindingLedger,
@@ -31,7 +34,7 @@ import {
 } from '../core/workflow/findings/raw-canonicalization.js';
 import { captureFindingPreconditions } from '../core/workflow/findings/finding-preconditions.js';
 import { snapshotProvisionalRecoveryOrigin } from '../core/workflow/findings/provisional-recovery-origin.js';
-import { createFindingManagerPublicationDouble } from './helpers/finding-manager-publication.js';
+import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
 vi.mock('../core/workflow/findings/snapshot.js', () => ({
@@ -58,6 +61,11 @@ const actualMechanicalModule = await vi.importActual<typeof mechanicalModule>(
   '../core/workflow/findings/mechanical-classification.js',
 );
 const classifyRawFindingsMechanicallyMock = vi.mocked(mechanicalModule.classifyRawFindingsMechanically);
+const REPORT_DIR = mkdtempSync(join(tmpdir(), 'takt-raw-adjudication-reports-'));
+
+afterAll(() => {
+  rmSync(REPORT_DIR, { recursive: true, force: true });
+});
 
 const observation = {
   runId: 'run-bounded',
@@ -172,6 +180,25 @@ function makeBacklog(input: {
   };
 }
 
+function stampTargetRaw(
+  source: RawFinding,
+  relation: Exclude<RawFinding['relation'], 'new'>,
+  targetFindingId: string,
+  snapshot: FindingLedger,
+): RawFinding {
+  const targetPrecondition = captureFindingPreconditions(snapshot)
+    .get(targetFindingId)?.precondition;
+  if (targetPrecondition === undefined) {
+    throw new Error(`Test target "${targetFindingId}" must exist in the observation snapshot`);
+  }
+  return {
+    ...source,
+    relation,
+    targetFindingId,
+    targetPrecondition,
+  };
+}
+
 interface RecoveryHarness {
   store: FindingManagerStore;
   claimed: Set<string>;
@@ -179,7 +206,7 @@ interface RecoveryHarness {
   savedRawFindings: RawFinding[][];
   savedReports: FindingManagerValidationReport[];
   current: () => FindingLedger;
-  replaceLedger: (replace: (ledger: FindingLedger) => FindingLedger) => void;
+  replaceLedger: (replace: (ledger: FindingLedger) => FindingLedger) => Promise<void>;
   runInput: RunFindingManagerForStepInput;
   managerStep: AgentWorkflowStep;
   runRecovery: () => ReturnType<typeof runRawAdjudicationRecovery>;
@@ -189,7 +216,7 @@ function makeHarness(
   initialLedger: FindingLedger,
   options?: { provider: 'codex' | 'cursor' },
 ): RecoveryHarness {
-  let current = initialLedger;
+  const ledgerRepository = new RevisionedFindingLedgerTestRepository(initialLedger);
   const provider = options?.provider ?? 'codex';
   const claimed = new Set<string>();
   const released: string[] = [];
@@ -198,13 +225,8 @@ function makeHarness(
   const store: FindingManagerStore = {
     ledgerIdentity: '/test/finding-raw-adjudication-bounds/ledger.json',
     workflowName: initialLedger.workflowName,
-    loadLedger: () => current,
-    saveLedger: (ledger) => { current = ledger; },
-    updateLedger: async (mutator) => {
-      const mutation = mutator(current);
-      current = mutation.ledger;
-      return mutation;
-    },
+    loadLedger: () => ledgerRepository.loadLedger(),
+    updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
     claimAdjudicationReservation: (token) => {
       if (claimed.has(token)) {
         return false;
@@ -216,19 +238,17 @@ function makeHarness(
       claimed.delete(token);
       released.push(token);
     },
-    createRunCopy: () => '/tmp/raw-adjudication-ledger.json',
+    saveLedgerSnapshot: () => {},
     saveRawFindings: (_runId, _stepName, rawFindings) => {
       savedRawFindings.push(rawFindings);
-      return '/tmp/raw-adjudication-findings.json';
     },
     saveManagerValidationReport: (report) => {
       savedReports.push(report);
-      return '/tmp/raw-adjudication-report.json';
     },
     ...createFindingManagerPublicationDouble((report) => {
       savedReports.push(report);
-      return `/tmp/findings-manager-validation.${report.stepName}.json`;
-    }),
+      return join(REPORT_DIR, `findings-manager-validation.${report.stepName}.json`);
+    }, ledgerRepository),
   };
   const managerStep: AgentWorkflowStep = {
     kind: 'agent',
@@ -277,15 +297,19 @@ function makeHarness(
     released,
     savedRawFindings,
     savedReports,
-    current: () => current,
-    replaceLedger: (replace) => { current = replace(current); },
+    current: () => ledgerRepository.loadLedger(),
+    replaceLedger: async (replace) => {
+      await ledgerRepository.updateLedger((ledger) => ({
+        ledger: replace(ledger),
+        result: undefined,
+      }));
+    },
     runInput,
     managerStep,
     runRecovery: () => runRawAdjudicationRecovery({
       runInput,
-      previousLedger: current,
+      previousLedger: ledgerRepository.loadLedger(),
       managerStep,
-      ledgerCopyPath: '/tmp/raw-adjudication-ledger.json',
       observation,
       reviewScopeSnapshotId: quote.snapshotId,
     }),
@@ -442,7 +466,7 @@ describe('bounded raw adjudication recovery', () => {
     const harness = makeHarness(makeBacklog({ count: 1, descriptionChars: 100_000, firstObservedRound: 1 }));
     const recovery = await harness.runRecovery();
     const firstCommit = applyRecovery(harness, recovery);
-    harness.replaceLedger(() => firstCommit);
+    await harness.replaceLedger(() => firstCommit);
 
     const duplicateResult = applyRawAdjudicationRecovery({
       freshLedger: harness.current(),
@@ -482,11 +506,11 @@ describe('bounded raw adjudication recovery', () => {
     expect(firstCommit.findings[0]?.provisional?.adjudicationAttempts).toEqual([
       expect.objectContaining({ attempt: 1 }),
     ]);
-    harness.replaceLedger(() => firstCommit);
+    await harness.replaceLedger(() => firstCommit);
 
     const duplicateCommit = applyRecovery(harness, firstRecovery);
     expect(duplicateCommit).toEqual(firstCommit);
-    harness.replaceLedger(() => duplicateCommit);
+    await harness.replaceLedger(() => duplicateCommit);
 
     const secondRecovery = await harness.runRecovery();
     const secondCommit = applyRecovery(harness, secondRecovery);
@@ -586,11 +610,18 @@ describe('bounded raw adjudication recovery', () => {
       ...provisionalFinding({ index: 9000, source: targetRaw, firstObservedRound: 1 }),
       provisional: undefined,
     };
-    const mechanicalSource: RawFinding = {
-      ...sourceRaw(1),
-      relation: 'persists',
-      targetFindingId: target.id,
+    const targetSnapshot: FindingLedger = {
+      ...makeBacklog({ count: 0, firstObservedRound: 1 }),
+      nextId: 9001,
+      rawFindings: [targetRaw],
+      findings: [target],
     };
+    const mechanicalSource = stampTargetRaw(
+      sourceRaw(1),
+      'persists',
+      target.id,
+      targetSnapshot,
+    );
     const residualSource = sourceRaw(2);
     const current: FindingLedger = {
       ...makeBacklog({ count: 0, firstObservedRound: 1 }),
@@ -624,11 +655,18 @@ describe('bounded raw adjudication recovery', () => {
       lifecycle: 'resolved',
       provisional: undefined,
     };
-    const replaySource: RawFinding = {
-      ...sourceRaw(1),
-      relation: 'reopened',
-      targetFindingId: target.id,
+    const targetSnapshot: FindingLedger = {
+      ...makeBacklog({ count: 0, firstObservedRound: 1 }),
+      nextId: 9001,
+      rawFindings: [targetSource],
+      findings: [target],
     };
+    const replaySource = stampTargetRaw(
+      sourceRaw(1),
+      'reopened',
+      target.id,
+      targetSnapshot,
+    );
     const current: FindingLedger = {
       ...makeBacklog({ count: 0, firstObservedRound: 1 }),
       nextId: 9001,
@@ -729,12 +767,18 @@ describe('bounded raw adjudication recovery', () => {
       ...provisionalFinding({ index: 9000, source: targetSource, firstObservedRound: 1 }),
       provisional: undefined,
     };
-    const confirmations = Array.from({ length: 20 }, (_, offset): RawFinding => ({
-      ...sourceRaw(offset + 1),
-      rawFindingId: `confirmation-${offset + 1}`,
-      relation: 'resolution_confirmation',
-      targetFindingId: target.id,
-    }));
+    const targetSnapshot: FindingLedger = {
+      ...makeBacklog({ count: 0, firstObservedRound: 1 }),
+      nextId: 9001,
+      rawFindings: [targetSource],
+      findings: [target],
+    };
+    const confirmations = Array.from({ length: 20 }, (_, offset): RawFinding => (
+      stampTargetRaw({
+        ...sourceRaw(offset + 1),
+        rawFindingId: `confirmation-${offset + 1}`,
+      }, 'resolution_confirmation', target.id, targetSnapshot)
+    ));
     const harness = makeHarness({
       ...makeBacklog({ count: 0, firstObservedRound: 1 }),
       nextId: 9001,
@@ -866,7 +910,7 @@ describe('bounded raw adjudication recovery', () => {
       new Set(first.result.map((reservation) => reservation.reservationToken)),
     );
     const firstIds = new Set(first.result.map((reservation) => reservation.provisionalFindingId));
-    harness.replaceLedger((ledger) => ({
+    await harness.replaceLedger((ledger) => ({
       ...ledger,
       findings: ledger.findings.map((finding) => firstIds.has(finding.id)
         ? {
@@ -889,7 +933,7 @@ describe('bounded raw adjudication recovery', () => {
       new Set(second.result.map((reservation) => reservation.reservationToken)),
     );
     const secondIds = new Set(second.result.map((reservation) => reservation.provisionalFindingId));
-    harness.replaceLedger((ledger) => ({
+    await harness.replaceLedger((ledger) => ({
       ...ledger,
       findings: ledger.findings.map((finding) => secondIds.has(finding.id)
         ? {
@@ -946,7 +990,7 @@ describe('bounded raw adjudication recovery', () => {
   it('rejects a stale revision at commit and releases its reservation token', async () => {
     const harness = makeHarness(makeBacklog({ count: 1, firstObservedRound: 1 }));
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
-      harness.replaceLedger((ledger) => ({
+      await harness.replaceLedger((ledger) => ({
         ...ledger,
         findings: ledger.findings.map((finding) => ({ ...finding, revision: 2 })),
       }));
@@ -973,15 +1017,24 @@ describe('bounded raw adjudication recovery', () => {
         ? { resolvedAt: observation.timestamp, resolvedEvidence: 'Previously fixed.' }
         : {}),
     }));
+    const targetSnapshot: FindingLedger = {
+      workflowName: 'peer-review',
+      nextId: 9004,
+      updatedAt: observation.timestamp,
+      rawFindings: targetSources,
+      conflicts: [],
+      interpretations: [],
+      findings: targets,
+    };
     const actionSources: RawFinding[] = [
       sourceRaw(1),
       sourceRaw(2),
-      { ...sourceRaw(3), relation: 'persists', targetFindingId: targets[0]!.id },
-      { ...sourceRaw(4), relation: 'persists', targetFindingId: targets[0]!.id },
-      { ...sourceRaw(5), relation: 'resolution_confirmation', targetFindingId: targets[1]!.id },
-      { ...sourceRaw(6), relation: 'resolution_confirmation', targetFindingId: targets[1]!.id },
-      { ...sourceRaw(7), relation: 'reopened', targetFindingId: targets[3]!.id },
-      { ...sourceRaw(8), relation: 'reopened', targetFindingId: targets[3]!.id },
+      stampTargetRaw(sourceRaw(3), 'persists', targets[0]!.id, targetSnapshot),
+      stampTargetRaw(sourceRaw(4), 'persists', targets[0]!.id, targetSnapshot),
+      stampTargetRaw(sourceRaw(5), 'resolution_confirmation', targets[1]!.id, targetSnapshot),
+      stampTargetRaw(sourceRaw(6), 'resolution_confirmation', targets[1]!.id, targetSnapshot),
+      stampTargetRaw(sourceRaw(7), 'reopened', targets[3]!.id, targetSnapshot),
+      stampTargetRaw(sourceRaw(8), 'reopened', targets[3]!.id, targetSnapshot),
       sourceRaw(9),
       sourceRaw(10),
     ];
@@ -1136,6 +1189,7 @@ describe('bounded raw adjudication recovery', () => {
     ];
     const harness = makeHarness({
       ...makeBacklog({ count: 0, firstObservedRound: 1 }),
+      nextId: 8,
       rawFindings: sources,
       findings,
     });

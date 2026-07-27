@@ -1,4 +1,5 @@
 import type { FindingManagerOutput, FindingRecord } from './types.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 
 /**
  * 1つの finding に付いた決定の組み合わせを検証する規則。
@@ -43,7 +44,7 @@ const ALLOWED_DECISION_PAIRS: ReadonlySet<string> = new Set([
 ]);
 
 function pairKey(a: DecisionCategory, b: DecisionCategory): string {
-  return [a, b].sort().join('|');
+  return [a, b].sort(compareBinaryStrings).join('|');
 }
 
 export function collectDecisionSets(

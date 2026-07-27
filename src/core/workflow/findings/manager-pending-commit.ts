@@ -4,6 +4,7 @@ import type {
   FindingManagerReportPublication,
 } from './types.js';
 import { assertFindingLedgerProjectionInvariant } from '../../models/finding-ledger-invariants.js';
+import { assertRawFindingsAppendOnly } from './finding-integrity.js';
 
 function projectManagerCommit(ledger: FindingLedger): FindingManagerCommitProjection {
   return {
@@ -46,6 +47,14 @@ function samePublicationIntent(
     && sameValue(current.report, next.report);
 }
 
+function samePublication(
+  current: FindingManagerReportPublication,
+  next: FindingManagerReportPublication,
+): boolean {
+  return samePublicationIntent(current, next)
+    && current.destinationRunId === next.destinationRunId;
+}
+
 export function stagePendingManagerCommit(input: {
   completedLedger: FindingLedger;
   previousLedger: FindingLedger;
@@ -63,6 +72,10 @@ export function stagePendingManagerCommit(input: {
   if (input.completedLedger.pendingManagerCommit !== undefined) {
     throw new Error(`Completed manager round "${input.roundMarker}" contains a nested pending commit`);
   }
+  assertRawFindingsAppendOnly(
+    input.previousLedger.rawFindings,
+    input.completedLedger.rawFindings,
+  );
   const completed = projectManagerCommit(input.completedLedger);
   assertFindingLedgerProjectionInvariant(completed);
   if (completed.stopBudget?.roundMarkers.includes(input.roundMarker) !== true) {
@@ -107,39 +120,40 @@ export function finalizePendingManagerCommit(
   if (pending === undefined || pending.publication.publicationId !== publicationId) {
     throw new Error(`Pending manager commit CAS failed for publication "${publicationId}"`);
   }
-  return {
+  const finalized = {
     workflowName: ledger.workflowName,
     ...pending.completed,
   };
+  assertRawFindingsAppendOnly(ledger.rawFindings, finalized.rawFindings);
+  return finalized;
 }
 
-export function assertPendingManagerCommitTransition(
+export function assertGeneralPendingManagerCommitTransition(
   current: FindingLedger,
   next: FindingLedger,
 ): void {
   const pending = current.pendingManagerCommit;
   if (pending === undefined) {
-    return;
+    if (next.pendingManagerCommit === undefined) {
+      return;
+    }
+    throw new Error(
+      `Finding ledger publication "${next.pendingManagerCommit.publication.publicationId}" `
+      + 'cannot be staged through the general mutation API',
+    );
   }
   const nextPending = next.pendingManagerCommit;
   if (nextPending !== undefined) {
     const topLevelUnchanged = sameValue(withoutPending(current), withoutPending(next));
     const completedUnchanged = sameValue(pending.completed, nextPending.completed);
-    const publicationIntentUnchanged = pending.roundMarker === nextPending.roundMarker
-      && samePublicationIntent(pending.publication, nextPending.publication);
-    if (topLevelUnchanged && completedUnchanged && publicationIntentUnchanged) {
-      return;
-    }
-  } else {
-    const finalized = finalizePendingManagerCommit(
-      current,
-      pending.publication.publicationId,
-    );
-    if (sameValue(finalized, next)) {
+    const pendingUnchanged = pending.roundMarker === nextPending.roundMarker
+      && samePublication(pending.publication, nextPending.publication);
+    if (topLevelUnchanged && completedUnchanged && pendingUnchanged) {
       return;
     }
   }
   throw new Error(
-    `Finding ledger publication "${pending.publication.publicationId}" is pending; only destination rebinding or exact finalization is allowed`,
+    `Finding ledger publication "${pending.publication.publicationId}" is pending; `
+    + 'changes require the dedicated finalization API or authorized rebind API',
   );
 }

@@ -64,7 +64,6 @@ interface WorkflowEngineSetupParams {
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;
   resetCycleDetector: () => void;
-  getInheritedPeerReportPaths: (step: WorkflowStep) => readonly string[];
   emitEvent: (event: string, ...args: unknown[]) => void;
   createEngine: (
     config: WorkflowConfig,
@@ -168,7 +167,6 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       };
     }
     return {
-      ledgerCopyPath: params.findingLedgerStore.createRunCopy(),
       ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
       reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
       hasOpenFindings: ledgerHasOpenFindings(ledger),
@@ -201,10 +199,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getLanguage: () => params.options.language,
     getInteractive: () => params.options.interactive === true,
     getWorkflowSteps: () => params.config.steps.map((step) => ({ name: step.name, description: step.description })),
-    getWorkflowDefinitionSteps: () => params.config.steps,
     getWorkflowName: () => params.config.name,
     getWorkflowDescription: () => params.config.description,
-    getInheritedPeerReportPaths: params.getInheritedPeerReportPaths,
     getRetryNote: () => params.options.retryNote,
     getPrContext: () => params.options.prContext,
     getObservabilityRunId: () => params.options.observabilityRunId,

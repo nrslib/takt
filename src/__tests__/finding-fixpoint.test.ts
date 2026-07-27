@@ -6,7 +6,7 @@
  * - 往復ラウンド: runFindingManagerForStep を実際に複数回呼び、
  *   findings-manager の1ラウンド = 1回の reconcile という前提のもとで、
  *   fixpoint.reached がラウンド跨ぎで正しく機械判定されることを検証する
- *   （実測形の再現、resume/新規走行を跨いだ継続、新観測による解消を含む）
+ *   （実測形の再現、同一 run の process 再起動、新観測による解消を含む）
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,7 +22,7 @@ import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../c
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
-import { createFindingManagerPublicationDouble } from './helpers/finding-manager-publication.js';
+import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -183,6 +183,7 @@ describe('computeFixpointSnapshot', () => {
         severity: 'high',
         title: 'Conflicting claim',
         description: 'One reviewer says X, another says Y.',
+        relation: 'new',
       }, {
         rawFindingId: 'raw-c2',
         stepName: 'reviewers',
@@ -191,6 +192,7 @@ describe('computeFixpointSnapshot', () => {
         severity: 'high',
         title: 'Resolved conflicting claim',
         description: 'A separate conflict was already resolved.',
+        relation: 'new',
       }],
       conflicts: [
         {
@@ -236,6 +238,7 @@ describe('computeFixpointSnapshot', () => {
           severity: 'high',
           title: 'Conflicting claim',
           description: 'One reviewer says X, another says Y.',
+          relation: 'new',
         }],
         conflicts: [{
           id: 'C-2BF240CC0BEC',
@@ -358,6 +361,7 @@ describe('attachFixpointState', () => {
 // ---------------------------------------------------------------------------
 
 const FIXTURE_CWD = mkdtempSync(join(tmpdir(), 'takt-fixpoint-fixtures-'));
+const REPORT_DIR = mkdtempSync(join(tmpdir(), 'takt-fixpoint-reports-'));
 function writeFixtureFile(relativePath: string, lineCount: number): void {
   const fullPath = join(FIXTURE_CWD, relativePath);
   mkdirSync(dirname(fullPath), { recursive: true });
@@ -368,37 +372,38 @@ initializeGitFixture(FIXTURE_CWD, ['src/real.ts']);
 
 afterAll(() => {
   rmSync(FIXTURE_CWD, { recursive: true, force: true });
+  rmSync(REPORT_DIR, { recursive: true, force: true });
 });
 
-function makeRoundHarness(initialLedger: FindingLedger, runIdPrefix = 'run'): {
+function makeRoundHarness(
+  initialLedger: FindingLedger,
+  runId = 'run-1',
+  roundsCompleted = 0,
+): {
   currentLedger: () => FindingLedger;
   run: (reviewerRawFindings: Array<Record<string, unknown>>) => ReturnType<typeof runFindingManagerForStep>;
 } {
-  let ledgerState = initialLedger;
+  const ledgerRepository = new RevisionedFindingLedgerTestRepository(initialLedger);
   const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
     ledgerIdentity: '/test/finding-fixpoint/ledger.json',
     workflowName: 'peer-review',
-    loadLedger: () => ledgerState,
-    saveLedger: (next) => { ledgerState = next; },
-    updateLedger: (mutator) => {
-      const mutation = mutator(ledgerState);
-      ledgerState = mutation.ledger;
-      return Promise.resolve(mutation);
-    },
+    loadLedger: () => ledgerRepository.loadLedger(),
+    updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
     claimAdjudicationReservation: (token) => {
       if (reservations.has(token)) return false;
       reservations.add(token);
       return true;
     },
     releaseAdjudicationReservation: (token) => { reservations.delete(token); },
-    createRunCopy: () => '/tmp/ledger-copy.json',
-    saveRawFindings: () => '/tmp/raw-findings.json',
-    saveManagerValidationReport: () => '/tmp/manager-report.json',
+    saveLedgerSnapshot: () => {},
+    saveRawFindings: () => {},
+    saveManagerValidationReport: () => {},
     ...createFindingManagerPublicationDouble(
-      (report) => `/tmp/findings-manager-validation.${report.stepName}.json`,
+      (report) => join(REPORT_DIR, `findings-manager-validation.${report.stepName}.json`),
+      ledgerRepository,
     ),
-    saveConflictAdjudicationReport: () => '/tmp/adjudication-report.json',
+    saveConflictAdjudicationReport: () => {},
   };
   const optionsBuilder = {
     buildAgentOptions: () => ({}),
@@ -419,9 +424,9 @@ function makeRoundHarness(initialLedger: FindingLedger, runIdPrefix = 'run'): {
       outputContract: 'Return JSON.',
     },
   };
-  let round = 0;
+  let round = roundsCompleted;
   return {
-    currentLedger: () => ledgerState,
+    currentLedger: () => ledgerRepository.loadLedger(),
     run: (reviewerRawFindings) => {
       round += 1;
       const subResults: FindingManagerSubStepResult[] = [{
@@ -442,7 +447,7 @@ function makeRoundHarness(initialLedger: FindingLedger, runIdPrefix = 'run'): {
         stepIteration: round,
         subResults,
         workflowName: 'peer-review',
-        runId: `${runIdPrefix}-${round}`,
+        runId,
         callNamespace: '',
         timestamp: `2026-07-0${round}T00:00:00.000Z`,
       });
@@ -622,6 +627,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
         title: 'Real, fixable issue',
         location: 'src/real.ts:10',
         description: 'A genuine issue that the fixer can and will resolve.',
+        relation: 'new',
       }],
       conflicts: [],
       interpretations: [],
@@ -667,33 +673,29 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     expect(context.provisional.fixpoint).toBe(true);
   });
 
-  it('resume continuity: a fresh harness (simulating a new process) that inherits a ledger already carrying a matching fixpoint snapshot can reach fixpoint on its very first round', async () => {
-    // Round A produced by an earlier "process" (e.g. before a resume).
+  it('fresh process continuity: reopening the same run storage preserves the fixpoint snapshot for the next round', async () => {
+    const runId = 'run-process-continuity';
     const priorProcess = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
       findings: [], rawFindings: [], conflicts: [], interpretations: [],
-    });
+    }, runId);
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const rawId = extractResidualRawIdFromEitherLocalId(
         instruction as string,
-        ['ambiguous-1', 'ambiguous-1-prior-2', 'ambiguous-1-resumed'],
+        ['ambiguous-1', 'ambiguous-1-resumed'],
       );
       return interpretationResponse(rawId);
     });
     await priorProcess.run([ambiguousPersistsRaw()]);
-    await priorProcess.run([ambiguousPersistsRaw({ rawFindingId: 'ambiguous-1-prior-2' })]);
     const ledgerFromPriorProcess = priorProcess.currentLedger();
     expect(ledgerFromPriorProcess.fixpoint?.reached).toBe(false);
 
-    // A brand new harness (simulating a fresh `takt` invocation / resume)
-    // starts from that persisted ledger — not from an empty one — because
-    // the fixpoint comparison lives on the ledger file, not in engine memory.
-    const resumedProcess = makeRoundHarness(ledgerFromPriorProcess, 'resumed-run');
-    await resumedProcess.run([ambiguousPersistsRaw({ rawFindingId: 'ambiguous-1-resumed' })]);
+    const reopenedProcess = makeRoundHarness(ledgerFromPriorProcess, runId, 1);
+    await reopenedProcess.run([ambiguousPersistsRaw({ rawFindingId: 'ambiguous-1-resumed' })]);
 
-    expect(resumedProcess.currentLedger().fixpoint?.snapshot)
+    expect(reopenedProcess.currentLedger().fixpoint?.snapshot)
       .toEqual(ledgerFromPriorProcess.fixpoint?.snapshot);
-    expect(buildFindingsRuleContext(resumedProcess.currentLedger()).provisional.fixpoint).toBe(true);
+    expect(buildFindingsRuleContext(reopenedProcess.currentLedger()).provisional.fixpoint).toBe(true);
   });
 
   it('a human providing new review evidence after a fixpoint breaks it, routing back to replan instead of staying stuck', async () => {

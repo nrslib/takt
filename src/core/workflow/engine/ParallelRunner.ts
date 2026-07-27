@@ -236,9 +236,9 @@ export class ParallelRunner {
       log.debug('Concurrency limit enabled', { step: step.name, concurrency: step.concurrency });
     }
     // WorkflowEngineSetup.buildFindingContractInstructionContext と同じヘルパを
-    // ラウンドの先頭で1回だけ呼ぶ（sub-step ごとに再計算しない）。ledgerCopyPath /
+    // ラウンドの先頭で1回だけ呼ぶ（sub-step ごとに再計算しない）。
     // reviewScopeSnapshotId は「このラウンドの reviewer 全員が同じ値を見る」ことが
-    // 前提の値であり（後者は manager 検証時の再計算と一致する必要がある —
+    // 前提であり（manager 検証時の再計算と一致する必要がある —
     // WorkflowEngineSetup.ts・snapshot.ts 参照）、ここで inline に再実装すると
     // reviewScopeSnapshotId の付与漏れのような配線バグを繰り返す。
     // findingContract 未設定のワークフローが大半のため、クロージャ呼び出し自体を
@@ -247,7 +247,6 @@ export class ParallelRunner {
     const findingContractContext = this.deps.findingContract
       ? this.deps.optionsBuilder.buildFindingContractInstructionContext(step, true)
       : undefined;
-    const findingLedgerCopyPath = findingContractContext?.ledgerCopyPath;
     const rawFindingsStructuredOutput = findingContractContext?.rawFindingsStructuredOutput;
     const agentSubSteps = subSteps.filter(isAgentParallelSubStep);
     const routingLedger = this.deps.engineOptions.autoRouting && agentSubSteps.length > 0
@@ -478,7 +477,7 @@ export class ParallelRunner {
             );
           }
         }
-        if (findingLedgerCopyPath) {
+        if (findingContractContext !== undefined) {
           const normalized = this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
             executableSubStep,
             subResponse,
@@ -823,7 +822,7 @@ export class ParallelRunner {
 
     // v2 梯子設計: 取り込みは常に 'updated' で完了する（manager の壊れた応答・
     // 予算超過は provisional として台帳へ着地し、run-level の失敗経路は無い）。
-    await this.runFindingContractManager(step, stepIteration, subResults, findingLedgerCopyPath, priorStepResponseText);
+    await this.runFindingContractManager(step, stepIteration, subResults, priorStepResponseText);
 
     // Print completion summary
     if (parallelLogger) {
@@ -979,7 +978,6 @@ export class ParallelRunner {
     step: WorkflowStep,
     stepIteration: number,
     subResults: ParallelSubStepResult[],
-    ledgerCopyPath: string | undefined,
     priorStepResponseText: string | undefined,
   ): Promise<FindingManagerRunResult | undefined> {
     if (!this.deps.findingContract) {
@@ -1009,7 +1007,6 @@ export class ParallelRunner {
       runId: this.deps.getRunId(),
       callNamespace: this.deps.getFindingCallNamespace(),
       timestamp: new Date().toISOString(),
-      ledgerCopyPath,
       priorStepResponseText,
       refreshFindingsState: this.deps.refreshFindingsState,
       emitEvent: this.deps.emitEvent,

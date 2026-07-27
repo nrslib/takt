@@ -81,6 +81,8 @@ If this is your first run, configure a provider in `~/.takt/config.yaml` or use 
 
 ## Requirements
 
+TAKT requires Node.js `>=24.15.0`.
+
 The provider you choose determines whether you need to install an external CLI or can run on Node.js alone via a TypeScript SDK.
 
 These providers run via SDK (no CLI required, Node.js only):

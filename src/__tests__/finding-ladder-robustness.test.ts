@@ -44,8 +44,14 @@ import { issueDeterministicSameProofs, verifySameProofAgainstLedger } from '../c
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import { stopBudgetRoundsCompleted } from '../core/workflow/findings/stop-budget.js';
 import { computeRoundMarker } from '../core/workflow/findings/round-marker.js';
+import { captureFindingPreconditions } from '../core/workflow/findings/finding-preconditions.js';
 import { createFindingAdjudicationReservation } from './helpers/finding-adjudication-reservation.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import {
+  createFindingManagerPublicationDouble,
+  observeFindingLedgerMutations,
+  RevisionedFindingLedgerTestRepository,
+} from './helpers/finding-manager-publication.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -61,6 +67,12 @@ const executeAgentMock = vi.mocked(executeAgent);
 // raw admission validation が実 fs を見るため fixture を用意する。
 const TEST_TMPDIR = realpathSync(tmpdir());
 const FIXTURE_CWD = mkdtempSync(join(TEST_TMPDIR, 'takt-ladder-robustness-fixtures-'));
+const publicationDirs = new Set<string>();
+function makePublicationDir(prefix: string): string {
+  const directory = mkdtempSync(join(TEST_TMPDIR, prefix));
+  publicationDirs.add(directory);
+  return directory;
+}
 function writeFixtureFile(relativePath: string, lineCount: number): void {
   const fullPath = join(FIXTURE_CWD, relativePath);
   mkdirSync(dirname(fullPath), { recursive: true });
@@ -74,6 +86,9 @@ execFileSync('git', ['-c', 'user.name=TAKT test', '-c', 'user.email=takt-test@ex
 
 afterAll(() => {
   rmSync(FIXTURE_CWD, { recursive: true, force: true });
+  for (const directory of publicationDirs) {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 function makeFinding(
@@ -110,6 +125,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
       title: 'Existing issue',
       location: 'src/a.ts:10',
       description: 'Existing issue body.',
+      relation: 'new',
     }],
     conflicts: [],
     interpretations: [],
@@ -135,34 +151,41 @@ function makeHarness(
   stopBudget?: { maxRounds?: number; maxMinutes?: number },
   afterUpdate?: (ledger: FindingLedger) => Promise<void>,
 ): Harness {
-  let ledger = initialLedger;
+  const ledgerRepository = new RevisionedFindingLedgerTestRepository(initialLedger);
+  const publicationReportDir = makePublicationDir('takt-ladder-publication-');
   const savedLedgers: FindingLedger[] = [];
   const savedReports: FindingManagerValidationReport[] = [];
-  let intercept: ((fresh: FindingLedger) => FindingLedger) | undefined;
+  const publicationDouble = createFindingManagerPublicationDouble(
+    (report) => {
+      savedReports.push(report);
+      return join(
+        publicationReportDir,
+        `findings-manager-validation.${report.stepName}.json`,
+      );
+    },
+    ledgerRepository,
+  );
+  const observedMutations = observeFindingLedgerMutations(
+    ledgerRepository,
+    publicationDouble,
+    async (ledger) => {
+      savedLedgers.push(ledger);
+      await afterUpdate?.(ledger);
+    },
+  );
   const ledgerStore: FindingLedgerStore = {
     ledgerIdentity: '/test/finding-ladder-robustness/ledger.json',
     workflowName: 'peer-review',
-    loadLedger: () => ledger,
-    saveLedger: (next) => { ledger = next; savedLedgers.push(next); },
-    updateLedger: async (mutator) => {
-      if (intercept !== undefined) {
-        ledger = intercept(ledger);
-        intercept = undefined;
-      }
-      const mutation = mutator(ledger);
-      ledger = mutation.ledger;
-      savedLedgers.push(ledger);
-      await afterUpdate?.(ledger);
-      return mutation;
-    },
+    loadLedger: () => ledgerRepository.loadLedger(),
     ...createFindingAdjudicationReservation(),
-    createRunCopy: () => '/tmp/ledger-copy.json',
-    saveRawFindings: () => '/tmp/raw-findings.json',
+    saveLedgerSnapshot: () => {},
+    saveRawFindings: () => {},
     saveManagerValidationReport: (report) => {
       savedReports.push(report);
-      return '/tmp/manager-report.json';
     },
-    saveConflictAdjudicationReport: () => '/tmp/adjudication-report.json',
+    ...publicationDouble,
+    ...observedMutations,
+    saveConflictAdjudicationReport: () => {},
   };
   const optionsBuilder = {
     buildAgentOptions: () => ({}),
@@ -187,9 +210,11 @@ function makeHarness(
   return {
     savedLedgers,
     savedReports,
-    currentLedger: () => ledger,
+    currentLedger: () => ledgerRepository.loadLedger(),
     run: (input) => {
-      intercept = input.interceptFresh;
+      if (input.interceptFresh !== undefined) {
+        ledgerRepository.commitBeforeNextExclusiveMutation(input.interceptFresh);
+      }
       return runFindingManagerForStep({
         contract: contract as never,
         ledgerStore,
@@ -367,6 +392,7 @@ describe('ケース2: candidate/canonical 型混同（factory を通らない ob
   });
 
   it('保存済み raw も同じ factory（candidateFromStoredRawFinding → canonicalize）を通る', () => {
+    const sourceLedger = makeLedger();
     const storedRaw: RawFinding = {
       rawFindingId: 'raw-stored',
       stepName: 'reviewers',
@@ -378,10 +404,12 @@ describe('ケース2: candidate/canonical 型混同（factory を通らない ob
       description: 'Stored body.',
       relation: 'resolution_confirmation',
       targetFindingId: 'F-0001',
+      targetPrecondition: captureFindingPreconditions(sourceLedger)
+        .get('F-0001')!.precondition,
     };
     const candidate = candidateFromStoredRawFinding(storedRaw, REVIEWER_STABLE_KEY);
     expect(candidate.relation).toBe('resolution_confirmation');
-    const { canonical } = canonicalizeReviewerRawFinding(candidate, { ledger: makeLedger() });
+    const { canonical } = canonicalizeReviewerRawFinding(candidate, { ledger: sourceLedger });
     expect(canonical.relation).toBe('resolution_confirmation');
     expect(() => toLedgerRawFinding(canonical)).not.toThrow();
   });
@@ -391,7 +419,7 @@ describe('ケース2: candidate/canonical 型混同（factory を通らない ob
 // ケース3: stale confirmation（coherent 経路でも成立すること）
 // ---------------------------------------------------------------------------
 describe('ケース3: stale confirmation（prompt 後の persists 保存と競合する形式的に正しい確認）', () => {
-  it('coherent confirmation の snapshot 後に別 caller が persists を保存すると、resolve されず target open + active conflict + provisional になる', async () => {
+  it('coherent confirmation の snapshot 後に別 caller が persists を保存すると、canonical finding が reopened になり一級 conflictへ収束する', async () => {
     const harness = makeHarness(makeLedger());
     // 形式的に正しい confirmation（coherent）→ 機械分類で resolved 候補になる。
     const confirmation = {
@@ -408,32 +436,37 @@ describe('ケース3: stale confirmation（prompt 後の persists 保存と競�
     // 保存の直前に、別の並列 caller が同じ target へ persists を保存した状況を再現。
     const result = await harness.run({
       reviewerRawFindings: [confirmation],
-      interceptFresh: (fresh) => ({
-        ...fresh,
-        findings: fresh.findings.map((finding) => (finding.id === 'F-0001'
-          ? {
-            ...finding,
-            rawFindingIds: [...finding.rawFindingIds, 'raw-concurrent-persists'],
-            revision: finding.revision + 1,
-            lastSeen: { runId: 'other-run', stepName: 'reviewers', timestamp: '2026-06-14T00:00:00.500Z' },
-          }
-          : finding)),
-        rawFindings: [
-          ...fresh.rawFindings,
-          {
-            rawFindingId: 'raw-concurrent-persists',
-            stepName: 'reviewers',
-            reviewer: 'security-review',
-            familyTag: 'bug',
-            severity: 'high',
-            title: 'Existing issue',
-            location: 'src/a.ts:12',
-            description: 'Still observing the issue.',
-            relation: 'persists',
-            targetFindingId: 'F-0001',
-          },
-        ],
-      }),
+      interceptFresh: (fresh) => {
+        const targetPrecondition = captureFindingPreconditions(fresh)
+          .get('F-0001')!.precondition;
+        return {
+          ...fresh,
+          findings: fresh.findings.map((finding) => (finding.id === 'F-0001'
+            ? {
+              ...finding,
+              rawFindingIds: [...finding.rawFindingIds, 'raw-concurrent-persists'],
+              revision: finding.revision + 1,
+              lastSeen: { runId: 'other-run', stepName: 'reviewers', timestamp: '2026-06-14T00:00:00.500Z' },
+            }
+            : finding)),
+          rawFindings: [
+            ...fresh.rawFindings,
+            {
+              rawFindingId: 'raw-concurrent-persists',
+              stepName: 'reviewers',
+              reviewer: 'security-review',
+              familyTag: 'bug',
+              severity: 'high',
+              title: 'Existing issue',
+              location: 'src/a.ts:12',
+              description: 'Still observing the issue.',
+              relation: 'persists',
+              targetFindingId: 'F-0001',
+              targetPrecondition,
+            },
+          ],
+        };
+      },
     });
 
     expect(result.status).toBe('updated');
@@ -442,14 +475,142 @@ describe('ケース3: stale confirmation（prompt 後の persists 保存と競�
 
     const saved = harness.currentLedger();
     const target = saved.findings.find((finding) => finding.id === 'F-0001');
-    // target は open のまま（confirmation は適用されない）。
+    // 解消と再通達の競合は、canonical finding の再openと一級 conflictへ正規化する。
     expect(target?.status).toBe('open');
+    expect(target?.lifecycle).toBe('reopened');
+    expect(target?.rawFindingIds).toContain('raw-concurrent-persists');
     // confirmation と persists を参照する active conflict が立つ。
     const conflict = saved.conflicts.find((entry) => entry.status === 'active' && entry.findingIds.includes('F-0001'));
     expect(conflict).toBeDefined();
-    // confirmation 側の stale-precondition provisional が立つ。
+    expect(conflict?.rawFindingIds.some((rawFindingId) => rawFindingId.endsWith(':c-1'))).toBe(true);
+    // 同じ競合を provisional finding へ二重着地させない。
     const provisional = saved.findings.find((finding) => finding.provisional?.kind === 'stale-precondition');
-    expect(provisional?.status).toBe('open');
+    expect(provisional).toBeUndefined();
+  });
+});
+
+describe('open_conflict target WAL CAS', () => {
+  function conflictLedger(): FindingLedger {
+    return makeLedger({
+      nextId: 3,
+      findings: [
+        makeFinding({ status: 'resolved', lifecycle: 'resolved', revision: 2 }),
+        makeFinding({
+          id: 'F-0002',
+          revision: 1,
+          title: 'Conflict target',
+          description: 'Potentially related open issue.',
+          rawFindingIds: ['raw-f2'],
+        }),
+      ],
+      rawFindings: [
+        ...makeLedger().rawFindings,
+        {
+          rawFindingId: 'raw-f2',
+          stepName: 'reviewers',
+          reviewer: 'security-review',
+          familyTag: 'bug',
+          severity: 'high',
+          title: 'Conflict target',
+          location: 'src/a.ts:20',
+          description: 'Potentially related open issue.',
+          relation: 'new',
+        },
+      ],
+    });
+  }
+
+  function chooseOpenConflict(): void {
+    executeAgentMock.mockImplementationOnce(async (_persona, instruction) => {
+      const rawId = extractResidualRawIdFromInterpretationInstruction(instruction as string, 'p-1');
+      return interpretationResponse([{
+        decision: 'open_conflict',
+        rawFindingId: rawId,
+        targetFindingId: 'F-0002',
+        proofId: '',
+        reason: '',
+      }]);
+    });
+  }
+
+  it('WALに保存したopen targetの全preconditionがfreshならconflictとprovisionalを原子的に作る', async () => {
+    const harness = makeHarness(conflictLedger());
+    chooseOpenConflict();
+
+    const result = await harness.run({ reviewerRawFindings: [AMBIGUOUS_PERSISTS_RAW] });
+
+    expect(result.status).toBe('updated');
+    const saved = harness.currentLedger();
+    expect(saved.interpretations[0]?.promptPreconditions).toEqual([
+      expect.objectContaining({
+        targetFindingId: 'F-0002',
+        targetRevision: 1,
+        targetStatus: 'open',
+        targetEvidenceHash: expect.any(String),
+      }),
+    ]);
+    expect(saved.conflicts).toContainEqual(expect.objectContaining({
+      status: 'active',
+      findingIds: ['F-0002'],
+      rawFindingIds: [expect.stringContaining(':p-1')],
+    }));
+    expect(saved.findings).toContainEqual(expect.objectContaining({
+      status: 'open',
+      provisional: expect.objectContaining({ kind: 'raw-meaning-ambiguous' }),
+    }));
+  });
+
+  it('targetがopenのままrevisionとevidenceを変えた場合はconflict/authorityを作らずstale provisionalへ落とす', async () => {
+    const harness = makeHarness(conflictLedger());
+    chooseOpenConflict();
+
+    const result = await harness.run({
+      reviewerRawFindings: [AMBIGUOUS_PERSISTS_RAW],
+      interceptFresh: (fresh) => ({
+        ...fresh,
+        findings: fresh.findings.map((finding) => (
+          finding.id === 'F-0002'
+            ? {
+                ...finding,
+                revision: finding.revision + 1,
+                rawFindingIds: [...finding.rawFindingIds, 'raw-f2-concurrent'],
+              }
+            : finding
+        )),
+        rawFindings: [
+          ...fresh.rawFindings,
+          {
+            rawFindingId: 'raw-f2-concurrent',
+            stepName: 'reviewers',
+            reviewer: 'security-review',
+            familyTag: 'bug',
+            severity: 'high',
+            title: 'Conflict target changed',
+            location: 'src/a.ts:21',
+            description: 'Concurrent evidence changed the open target.',
+            relation: 'new',
+          },
+        ],
+      }),
+    });
+
+    expect(result.status).toBe('updated');
+    const saved = harness.currentLedger();
+    expect(saved.findings.find((finding) => finding.id === 'F-0002')).toEqual(
+      expect.objectContaining({
+        status: 'open',
+        revision: 2,
+        rawFindingIds: ['raw-f2', 'raw-f2-concurrent'],
+      }),
+    );
+    expect(saved.conflicts.filter((conflict) => conflict.status === 'active')).toEqual([]);
+    expect(saved.findings).toContainEqual(expect.objectContaining({
+      provisional: expect.objectContaining({
+        kind: 'raw-meaning-ambiguous',
+        reason: expect.stringContaining('became stale before save'),
+      }),
+    }));
+    expect(saved.interpretations[0]?.applicationResult).toBe('stale_precondition');
   });
 });
 
@@ -798,21 +959,26 @@ describe('ケース7: resource exhaustion（435 raw・巨大 description・step 
 
   it('複数 reviewer の合算が step 上限（128件）を超えると超過側の reviewer だけが overflow になり、正常 reviewer の raw は処理される', async () => {
     // 2 reviewer を subResults で渡すため、harness ではなく直接構築する。
-    let ledger = makeLedger({ findings: [], rawFindings: [] });
+    const ledgerRepository = new RevisionedFindingLedgerTestRepository(
+      makeLedger({ findings: [], rawFindings: [] }),
+    );
+    const publicationReportDir = makePublicationDir('takt-ladder-overflow-publication-');
     const ledgerStore: FindingLedgerStore = {
       ledgerIdentity: '/test/finding-ladder-robustness/recovery-ledger.json',
       workflowName: 'peer-review',
-      loadLedger: () => ledger,
-      saveLedger: (next) => { ledger = next; },
-      updateLedger: (mutator) => {
-        const mutation = mutator(ledger);
-        ledger = mutation.ledger;
-        return Promise.resolve(mutation);
-      },
+      loadLedger: () => ledgerRepository.loadLedger(),
+      updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
       ...createFindingAdjudicationReservation(),
-      createRunCopy: () => '/tmp/ledger-copy.json',
-      saveRawFindings: () => '/tmp/raw-findings.json',
-      saveManagerValidationReport: () => '/tmp/manager-report.json',
+      saveLedgerSnapshot: () => {},
+      saveRawFindings: () => {},
+      saveManagerValidationReport: () => {},
+      ...createFindingManagerPublicationDouble(
+        (report) => join(
+          publicationReportDir,
+          `findings-manager-validation.${report.stepName}.json`,
+        ),
+        ledgerRepository,
+      ),
     };
     const stepExecutor = {
       buildPhase1Instruction: (instruction: string) => instruction,
@@ -876,6 +1042,7 @@ describe('ケース7: resource exhaustion（435 raw・巨大 description・step 
     });
 
     expect(result.status).toBe('updated');
+    const ledger = ledgerRepository.loadLedger();
     // 正常 reviewer の 3 件は confirmed finding として処理される。
     expect(ledger.findings.filter((finding) => finding.title.startsWith('Legit finding'))).toHaveLength(3);
     // flood reviewer は単一 overflow blocker のみ。
@@ -910,7 +1077,8 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
     lineageKey: LINEAGE_KEY,
     candidateEvidenceHash: EVIDENCE_HASH,
   });
-  const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_KEY, 1);
+const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_KEY, 1);
+  const PRIOR_CANONICAL_INTEGRITY_DIGEST = 'b'.repeat(64);
 
   function resolvedTargetLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     return makeLedger({
@@ -919,7 +1087,7 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
     });
   }
 
-  it('started 保存直後に停止した run の resume は、旧 attempt を interrupted にして次 attempt を実行する', async () => {
+  it('started 保存後に canonical integrity が変わった resume は、旧 attempt を interrupted にして stale provisional にする', async () => {
     const harness = makeHarness(resolvedTargetLedger({
       interpretations: [{
         interpretationKey: INTERPRETATION_KEY,
@@ -928,6 +1096,7 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
         reviewerStableKey: REVIEWER_STABLE_KEY,
         lineageKey: LINEAGE_KEY,
         candidateEvidenceHash: EVIDENCE_HASH,
+        canonicalIntegrityDigest: PRIOR_CANONICAL_INTEGRITY_DIGEST,
         stage: 'interpretation_started',
         startedAt: { runId: 'crashed-run', stepName: 'reviewers', timestamp: '2026-06-13T23:00:00.000Z' },
         reservationToken: 'crashed-reservation',
@@ -947,17 +1116,17 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
 
     const result = await harness.run({ reviewerRawFindings: [AMBIGUOUS_PERSISTS_RAW] });
     expect(result.status).toBe('updated');
-    expect(executeAgentMock).toHaveBeenCalledOnce();
+    expect(executeAgentMock).not.toHaveBeenCalled();
     const saved = harness.currentLedger();
     const provisional = saved.findings.find((finding) => finding.provisional !== undefined);
     expect(provisional?.provisional?.kind).toBe('raw-meaning-ambiguous');
     expect(provisional?.status).toBe('open');
-    expect(provisional?.provisional?.interpretationEpochs).toBe(1);
+    expect(provisional?.provisional?.interpretationEpochs).toBe(0);
     expect(saved.interpretations?.filter((record) => record.lineageKey === LINEAGE_KEY)).toHaveLength(2);
     expect(saved.interpretations?.[0]?.stage).toBe('interpretation_interrupted');
   });
 
-  it('completed 保存後に停止した run の resume は、保存済み decision を再利用して manager を再呼び出さない', async () => {
+  it('completed 保存後に canonical integrity が変わった resume は、保存済み decision を再利用しない', async () => {
     const harness = makeHarness(resolvedTargetLedger({
       interpretations: [{
         interpretationKey: INTERPRETATION_KEY,
@@ -966,6 +1135,7 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
         reviewerStableKey: REVIEWER_STABLE_KEY,
         lineageKey: LINEAGE_KEY,
         candidateEvidenceHash: EVIDENCE_HASH,
+        canonicalIntegrityDigest: PRIOR_CANONICAL_INTEGRITY_DIGEST,
         stage: 'interpretation_completed',
         startedAt: { runId: 'crashed-run', stepName: 'reviewers', timestamp: '2026-06-13T23:00:00.000Z' },
         reservationToken: 'crashed-reservation',
@@ -982,13 +1152,13 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
     expect(result.status).toBe('updated');
     expect(executeAgentMock).not.toHaveBeenCalled();
     const saved = harness.currentLedger();
-    // 保存済み decision（create_independent）が適用され、独立 finding が1件立つ。
-    const independent = saved.findings.filter((finding) => finding.title === 'Existing issue still present');
-    expect(independent).toHaveLength(1);
-    // WAL は ledger_applied へ進む。
-    const record = saved.interpretations?.find((entry) => entry.interpretationKey === INTERPRETATION_KEY);
-    expect(record?.stage).toBe('ledger_applied');
-    expect(record?.applicationResult).toBe('created');
+    const landed = saved.findings.filter((finding) => finding.title === 'Existing issue still present');
+    expect(landed).toHaveLength(1);
+    expect(landed[0]?.provisional?.kind).toBe('raw-meaning-ambiguous');
+    const records = saved.interpretations?.filter((entry) => entry.lineageKey === LINEAGE_KEY);
+    expect(records?.map((record) => record.stage))
+      .toEqual(['interpretation_completed', 'ledger_applied']);
+    expect(records?.[1]?.applicationResult).toBe('stale_precondition');
   });
 
   it('completed decision の live owner が commit するまで並列呼び出しは同じ decision を適用しない', async () => {
@@ -1063,6 +1233,7 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
         reviewerStableKey: REVIEWER_STABLE_KEY,
         lineageKey: LINEAGE_KEY,
         candidateEvidenceHash: EVIDENCE_HASH,
+        canonicalIntegrityDigest: PRIOR_CANONICAL_INTEGRITY_DIGEST,
         stage: 'ledger_applied',
         startedAt: { runId: 'crashed-run', stepName: 'reviewers', timestamp: '2026-06-13T23:00:00.000Z' },
         reservationToken: 'crashed-reservation',
@@ -1111,6 +1282,7 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
         lastObservedAt: { runId: 'crashed-run', stepName: 'reviewers', timestamp: '2026-06-13T23:00:00.000Z' },
         interpretationEpochs: 1,
         gateEffect: 'block',
+        firstObservedRound: 1,
         recoveryReviewerStableKey: REVIEWER_STABLE_KEY,
       },
     });
@@ -1124,6 +1296,7 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
         reviewerStableKey: REVIEWER_STABLE_KEY,
         lineageKey: LINEAGE_KEY,
         candidateEvidenceHash: EVIDENCE_HASH,
+        canonicalIntegrityDigest: PRIOR_CANONICAL_INTEGRITY_DIGEST,
         stage: 'ledger_applied',
         startedAt: { runId: 'crashed-run', stepName: 'reviewers', timestamp: '2026-06-13T23:00:00.000Z' },
         reservationToken: 'crashed-reservation',
@@ -1151,7 +1324,7 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
 
     const result = await harness.run({ reviewerRawFindings: [AMBIGUOUS_PERSISTS_RAW] });
     expect(result.status).toBe('updated');
-    expect(executeAgentMock).toHaveBeenCalledOnce();
+    expect(executeAgentMock).not.toHaveBeenCalled();
     const saved = harness.currentLedger();
     const provisionals = saved.findings.filter((finding) => finding.provisional !== undefined);
     // F-0002 と F-0003 の併存（実測された増殖）が起きない。
@@ -1173,6 +1346,8 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
       description: AMBIGUOUS_PERSISTS_RAW.description,
       relation: AMBIGUOUS_PERSISTS_RAW.relation,
       targetFindingId: AMBIGUOUS_PERSISTS_RAW.targetFindingId,
+      targetPrecondition: captureFindingPreconditions(resolvedTargetLedger())
+        .get('F-0001')!.precondition,
       location: AMBIGUOUS_PERSISTS_RAW.location,
     };
     const recovery = makeFinding({ revision: 1,
@@ -1195,6 +1370,7 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
         lastObservedAt: { runId: 'crashed-run', stepName: 'reviewers', timestamp: '2026-06-13T23:00:00.000Z' },
         interpretationEpochs: 1,
         gateEffect: 'block',
+        firstObservedRound: 1,
         recoveryReviewerStableKey: REVIEWER_STABLE_KEY,
       },
     });
@@ -1209,6 +1385,7 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
         reviewerStableKey: REVIEWER_STABLE_KEY,
         lineageKey: LINEAGE_KEY,
         candidateEvidenceHash: EVIDENCE_HASH,
+        canonicalIntegrityDigest: PRIOR_CANONICAL_INTEGRITY_DIGEST,
         stage: 'ledger_applied',
         startedAt: { runId: 'crashed-run', stepName: 'reviewers', timestamp: '2026-06-13T23:00:00.000Z' },
         reservationToken: 'crashed-reservation',
@@ -1239,10 +1416,10 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
     const records = harness.currentLedger().interpretations?.filter((record) => (
       record.lineageKey === LINEAGE_KEY
     ));
-    expect(executeAgentMock).toHaveBeenCalledOnce();
+    expect(executeAgentMock).not.toHaveBeenCalled();
     expect(records?.map((record) => record.attemptOrdinal)).toEqual([1, 2]);
     expect(records?.map((record) => record.stage)).toEqual(['ledger_applied', 'ledger_applied']);
-    expect(records?.map((record) => record.applicationResult)).toEqual(['provisional_created', 'provisional_updated']);
+    expect(records?.map((record) => record.applicationResult)).toEqual(['provisional_created', 'stale_precondition']);
   });
 
   it('同じ confirmation の再適用は冪等（同じ evidence で resolved 済みなら二重 resolve にならない）', async () => {
@@ -1611,6 +1788,7 @@ describe('解釈梯子の追加必須テスト', () => {
         lastObservedAt: { runId: 'old', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
         interpretationEpochs: 1,
         gateEffect: 'block',
+        firstObservedRound: 1,
       },
     });
     const harness = makeHarness(makeLedger({ nextId: 3, findings: [target, provisionalEntry] }));
@@ -1706,9 +1884,16 @@ describe('解釈梯子の追加必須テスト', () => {
 
   it('正規化監査の write-ahead: intake 後の処理（updateLedger）が例外を投げても、元の主張はディスクの検証レポートから復元できる', async () => {
     const projectCwd = mkdtempSync(join(TEST_TMPDIR, 'takt-ladder-wal-audit-project-'));
-    const reportDir = mkdtempSync(join(TEST_TMPDIR, 'takt-ladder-wal-audit-report-'));
+    const reportDir = join(
+      projectCwd,
+      '.takt',
+      'runs',
+      'crash-run',
+      'reports',
+    );
     try {
       mkdirSync(join(projectCwd, 'src'), { recursive: true });
+      mkdirSync(reportDir, { recursive: true });
       writeFileSync(join(projectCwd, 'src/b.ts'), `${Array.from({ length: 30 }, (_, i) => `// line ${i + 1}`).join('\n')}\n`);
       execFileSync('git', ['init', '--quiet'], { cwd: projectCwd });
       writeFileSync(join(projectCwd, '.gitignore'), '.takt/\n');
@@ -1722,20 +1907,26 @@ describe('解釈梯子の追加必須テスト', () => {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
       });
-      realStore.saveLedger({
-        workflowName: 'peer-review',
-        nextId: 2,
-        updatedAt: '2026-06-13T00:00:00.000Z',
-        findings: [makeFinding({ revision: 1 })],
-        rawFindings: [],
-        conflicts: [],
-        interpretations: [],
-      });
+      await realStore.updateLedger(() => ({
+        ledger: {
+          workflowName: 'peer-review',
+          nextId: 2,
+          updatedAt: '2026-06-13T00:00:00.000Z',
+          findings: [makeFinding({ revision: 1 })],
+          rawFindings: [],
+          conflicts: [],
+          interpretations: [],
+        },
+        result: undefined,
+      }));
       // intake 後の最初の永続化処理（WAL の beginInterpretations / 最終
       // updateLedger）で必ず例外が起きるストア。
       const crashingStore: FindingLedgerStore = {
         ...realStore,
         updateLedger: () => Promise.reject(new Error('simulated crash after intake')),
+        commitManagerLedger: () => (
+          Promise.reject(new Error('simulated crash after intake'))
+        ),
       };
 
       await expect(runFindingManagerForStep({
@@ -1975,6 +2166,7 @@ describe('解釈梯子の追加必須テスト', () => {
         lastObservedAt: { runId: 'old', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
         interpretationEpochs: 1,
         gateEffect: 'block',
+        firstObservedRound: 1,
       },
     });
     const resolvedEntry = makeFinding({ revision: 1,
@@ -2068,8 +2260,9 @@ describe('解釈梯子の追加必須テスト', () => {
 
   it('並列 workflow_call の同時実行でも stable key と WAL が衝突せず lost update が起きない', async () => {
     const projectCwd = mkdtempSync(join(TEST_TMPDIR, 'takt-ladder-parallel-project-'));
-    const reportDir = mkdtempSync(join(TEST_TMPDIR, 'takt-ladder-parallel-report-'));
+    const reportDir = join(projectCwd, '.takt', 'runs', 'shared-run', 'reports');
     try {
+      mkdirSync(reportDir, { recursive: true });
       mkdirSync(join(projectCwd, 'src'), { recursive: true });
       writeFileSync(join(projectCwd, 'src/a.ts'), `${Array.from({ length: 30 }, (_, i) => `// line ${i + 1}`).join('\n')}\n`);
       execFileSync('git', ['init', '--quiet'], { cwd: projectCwd });
@@ -2084,15 +2277,18 @@ describe('解釈梯子の追加必須テスト', () => {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
       });
-      store.saveLedger({
-        workflowName: 'peer-review',
-        nextId: 2,
-        updatedAt: '2026-06-13T00:00:00.000Z',
-        findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })],
-        rawFindings: [],
-        conflicts: [],
-        interpretations: [],
-      });
+      await store.updateLedger(() => ({
+        ledger: {
+          workflowName: 'peer-review',
+          nextId: 2,
+          updatedAt: '2026-06-13T00:00:00.000Z',
+          findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })],
+          rawFindings: [],
+          conflicts: [],
+          interpretations: [],
+        },
+        result: undefined,
+      }));
 
       executeAgentMock.mockImplementation(async (_persona, instruction) => {
         const rawId = extractResidualRawIdFromInterpretationInstruction(instruction as string, 'p-1');
@@ -2185,6 +2381,7 @@ describe('解釈梯子の追加必須テスト', () => {
             lastObservedAt: { runId: 'run-2', stepName: 'reviewers', timestamp: '2026-06-14T00:00:00.000Z' },
             interpretationEpochs: 1,
             gateEffect: 'block',
+            firstObservedRound: 1,
           },
         }),
       ],
@@ -2550,7 +2747,10 @@ describe('codex 検証2巡目#2: 未検証 persists/reopened は既存 finding �
     expect(saved.conflicts.filter((conflict) => conflict.status === 'active' && conflict.findingIds.includes('F-0001'))).toEqual([]);
     // 未検証 persists は resolved target の canonical へも合流しない（product
     // finding は増えない・provisional も無し）。
-    expect(target.rawFindingIds).toEqual(['raw-existing']);
+    expect(target.rawFindingIds).toEqual([
+      'raw-existing',
+      expect.stringContaining(':c-ok'),
+    ]);
     expect(saved.findings.some((finding) => finding.provisional !== undefined)).toBe(false);
     // 同一ラウンドで confirmation が target を閉じたため、persists は resolved
     // target へは添付されず reviewer anomaly（review-integrity 側の監査）へ落ちる
@@ -2607,8 +2807,12 @@ describe('codex 検証3巡目: 明示 locationless は persists/reopened の変�
     expect(target.status).toBe('resolved');
     // locationless persists は conflict を作らない（active conflict 無し = close 非妨害）。
     expect(saved.conflicts.filter((conflict) => conflict.status === 'active' && conflict.findingIds.includes('F-0001'))).toEqual([]);
-    // canonical へも合流しない。監査（reviewer anomaly）へ着地する。
-    expect(target.rawFindingIds).toEqual(['raw-existing']);
+    // locationless persists は canonical へ合流しない。検証済み confirmation
+    // だけが canonical evidence として残る。
+    expect(target.rawFindingIds).toEqual([
+      'raw-existing',
+      expect.stringContaining(':c-ok'),
+    ]);
     expect(saved.findings.some((finding) => finding.provisional !== undefined)).toBe(false);
     const anomaly = saved.reviewerAnomalies?.find((entry) => entry.sourceRawFindingIds.some((id) => id.endsWith(':p-bad')));
     expect(anomaly?.kind).toBe('quote-mismatch');

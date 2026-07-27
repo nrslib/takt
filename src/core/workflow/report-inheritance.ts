@@ -3,6 +3,10 @@ import { join, relative, resolve, sep } from 'node:path';
 import { getErrorMessage, isPathInside, isValidReportDirName } from '../../shared/utils/index.js';
 import { workflowCallNamespacePathsMatch, workflowCallNamespaceSegmentsMatch } from './workflow-call-namespace.js';
 import { scanReportEntries } from './report-file-index.js';
+import {
+  classifyReportRelativePath,
+  reportPathRejectionMessage,
+} from '../models/reserved-report-names.js';
 
 const MAX_REPORT_ENTRIES = 1_024;
 const MAX_REPORT_SIZE_BYTES = 1_048_576;
@@ -38,16 +42,12 @@ function reportRoot(cwd: string, runSlug: string): string {
   return resolve(cwd, '.takt', 'runs', runSlug, 'reports');
 }
 
-function isSafeRelativeReportPath(path: string): boolean {
-  if (!path || path === '.' || path.includes('\0') || /^[A-Za-z]:\//.test(path)) return false;
-  const root = resolve(sep, 'takt-report-path-root');
-  const candidate = resolve(root, path);
-  return !path.startsWith(sep) && isPathInside(root, candidate) && candidate !== root;
-}
-
-function normalizeReportPath(reportName: string): string | undefined {
-  const normalized = reportName.replace(/\\/g, '/');
-  return isSafeRelativeReportPath(normalized) ? normalized : undefined;
+function normalizeReportPath(reportName: string): string {
+  const classification = classifyReportRelativePath(reportName);
+  if (classification.kind !== 'public') {
+    throw new Error(`Cannot inherit report: ${reportPathRejectionMessage(reportName)}`);
+  }
+  return classification.normalizedPath;
 }
 
 function candidateFor(
@@ -57,7 +57,6 @@ function candidateFor(
   reportName: string,
 ): Candidate | undefined {
   const normalizedReportName = normalizeReportPath(reportName);
-  if (!normalizedReportName) return undefined;
   const reportSegments = normalizedReportName.split('/');
   const reportPathSegments = reportPathAfterNamespace(reportSegments, targetNamespace);
   const candidates = entries

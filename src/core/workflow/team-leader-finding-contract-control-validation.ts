@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { compareBinaryStrings } from '../../shared/utils/binary-string-comparator.js';
 
 export type FindingContractControlBoundaryKind =
   | 'decomposition'
@@ -79,15 +80,15 @@ export function sortFindingContractControlValidationIssues(
   issues: readonly FindingContractControlValidationIssue[],
 ): FindingContractControlValidationIssue[] {
   return [...issues].sort((left, right) => (
-    validationIssueIdentity(left).localeCompare(validationIssueIdentity(right))
-      || left.message.localeCompare(right.message)
+    compareBinaryStrings(validationIssueIdentity(left), validationIssueIdentity(right))
+      || compareBinaryStrings(left.message, right.message)
   ));
 }
 
 export function fingerprintFindingContractControlValidationIssues(
   issues: readonly FindingContractControlValidationIssue[],
 ): string {
-  const identities = [...new Set(issues.map(validationIssueIdentity))].sort();
+  const identities = [...new Set(issues.map(validationIssueIdentity))].sort(compareBinaryStrings);
   return createHash('sha256').update(JSON.stringify(identities)).digest('hex');
 }
 

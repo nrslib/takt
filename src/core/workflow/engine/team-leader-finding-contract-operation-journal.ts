@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import type {
   WorkflowOperationJournalContext,
 } from '../types.js';
@@ -566,7 +567,7 @@ function canonicalJson(value: unknown): string {
     return `[${value.map(canonicalJson).join(',')}]`;
   }
   if (typeof value === 'object' && value !== null) {
-    return `{${Object.keys(value).sort().map((key) => (
+    return `{${Object.keys(value).sort(compareBinaryStrings).map((key) => (
       `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`
     )).join(',')}}`;
   }

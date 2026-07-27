@@ -40,7 +40,7 @@ export function matchesProvisionalRecoveryOrigin(
 export function collectStaleRecoveryRawFindingIds(
   items: readonly {
     canonical: { rawFindingId: string };
-    recoveryOrigins?: ProvisionalRecoveryOrigin[];
+    recoveryOrigins?: readonly ProvisionalRecoveryOrigin[];
   }[],
   ledger: { findings: FindingLedgerEntry[] },
 ): Set<string> {

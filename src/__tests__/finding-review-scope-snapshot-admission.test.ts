@@ -40,7 +40,7 @@ import type { AgentResponse, FindingContractConfig, WorkflowStep } from '../core
 import { verifySourceQuoteEvidence } from '../core/workflow/findings/admission-validation.js';
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
-import { createFindingManagerPublicationDouble } from './helpers/finding-manager-publication.js';
+import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
@@ -58,11 +58,13 @@ const FINDING_CONTRACT: FindingContractConfig = {
 
 describe('reviewScopeSnapshotId correctness determines admission outcome (manager-runner.ts)', () => {
   let cwd: string;
+  let reportDir: string;
 
   beforeEach(() => {
     fsControl.beforeOpenPath = undefined;
     fsControl.beforeOpen = undefined;
     cwd = mkdtempSync(join(tmpdir(), 'takt-review-scope-snapshot-admission-'));
+    reportDir = mkdtempSync(join(tmpdir(), 'takt-review-scope-snapshot-reports-'));
     mkdirSync(join(cwd, 'src'), { recursive: true });
     writeFileSync(
       join(cwd, 'src', 'example.ts'),
@@ -75,10 +77,11 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
     fsControl.beforeOpenPath = undefined;
     fsControl.beforeOpen = undefined;
     rmSync(cwd, { recursive: true, force: true });
+    rmSync(reportDir, { recursive: true, force: true });
   });
 
   function makeLedgerStore(): { store: FindingLedgerStore; current: () => FindingLedger } {
-    let ledger: FindingLedger = {
+    const ledgerRepository = new RevisionedFindingLedgerTestRepository({
       workflowName: 'peer-review',
       nextId: 1,
       updatedAt: '2026-07-13T00:00:00.000Z',
@@ -86,33 +89,29 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
       rawFindings: [],
       conflicts: [],
       interpretations: [],
-    };
+    });
     const reservations = new Set<string>();
     const store: FindingLedgerStore = {
       ledgerIdentity: '/test/finding-review-scope-snapshot-admission/ledger.json',
       workflowName: 'peer-review',
-      loadLedger: () => ledger,
-      saveLedger: (next) => { ledger = next; },
-      updateLedger: (mutator) => {
-        const mutation = mutator(ledger);
-        ledger = mutation.ledger;
-        return Promise.resolve(mutation);
-      },
+      loadLedger: () => ledgerRepository.loadLedger(),
+      updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
       claimAdjudicationReservation: (token) => {
         if (reservations.has(token)) return false;
         reservations.add(token);
         return true;
       },
       releaseAdjudicationReservation: (token) => { reservations.delete(token); },
-      createRunCopy: () => '/tmp/ledger-copy.json',
-      saveRawFindings: () => '/tmp/raw-findings.json',
-      saveManagerValidationReport: () => '/tmp/manager-report.json',
+      saveLedgerSnapshot: () => {},
+      saveRawFindings: () => {},
+      saveManagerValidationReport: () => {},
       ...createFindingManagerPublicationDouble(
-        (report) => `/tmp/findings-manager-validation.${report.stepName}.json`,
+        (report) => join(reportDir, `findings-manager-validation.${report.stepName}.json`),
+        ledgerRepository,
       ),
-      saveConflictAdjudicationReport: () => '/tmp/adjudication-report.json',
+      saveConflictAdjudicationReport: () => {},
     };
-    return { store, current: () => ledger };
+    return { store, current: () => ledgerRepository.loadLedger() };
   }
 
   /**

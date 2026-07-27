@@ -197,7 +197,6 @@ export async function runRawAdjudicationRecovery(input: {
   runInput: RunFindingManagerForStepInput;
   previousLedger: FindingLedger;
   managerStep: AgentWorkflowStep;
-  ledgerCopyPath: string;
   observation: FindingObservation;
   reviewScopeSnapshotId: string;
 }): Promise<RawAdjudicationRecoveryResult> {
@@ -220,7 +219,6 @@ async function runReservedRawAdjudicationRecovery(input: {
   runInput: RunFindingManagerForStepInput;
   previousLedger: FindingLedger;
   managerStep: AgentWorkflowStep;
-  ledgerCopyPath: string;
   observation: FindingObservation;
   reviewScopeSnapshotId: string;
   reservations: readonly RawAdjudicationReservation[];
@@ -294,7 +292,7 @@ async function runReservedRawAdjudicationRecovery(input: {
     ...collectLandedRawIds(mechanical.output),
   ]);
   if (mechanical.residualRawFindings.length > 0) {
-    const rawFindingsPath = input.runInput.ledgerStore.saveRawFindings(
+    input.runInput.ledgerStore.saveRawFindings(
       input.runInput.runId,
       `${input.runInput.parentStep.name}-replay`,
       prepared.intake.items.map((item) => item.wire),
@@ -303,8 +301,6 @@ async function runReservedRawAdjudicationRecovery(input: {
       runInput: input.runInput,
       previousLedger: input.previousLedger,
       managerStep: input.managerStep,
-      ledgerCopyPath: input.ledgerCopyPath,
-      rawFindingsPath,
       admission,
       mechanical,
       mechanicallyClassifiedCount: adjudicableWire.length - mechanical.residualRawFindings.length,

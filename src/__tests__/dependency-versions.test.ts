@@ -157,7 +157,8 @@ describe('dependency versions', () => {
       throw new Error('package.json engines.node is required');
     }
 
-    expect(rootNodeRange).toBe('^20.20.0 || >=22.22.0');
+    expect(rootNodeRange).toBe('>=24.15.0');
+    expect(packageJson.devDependencies?.['@types/node']).toBe('^24.0.0');
 
     const rootMinimum = getMinimumNodeVersion(rootNodeRange);
     const incompatibleDependencies = Object.keys(dependencies).sort().flatMap((dependencyName) => {

@@ -14,7 +14,10 @@
 
 import { lstatSync, realpathSync, type Stats } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
-import { isReservedReportFileName, RESUME_ARTIFACTS_FILE_NAME } from '../../models/reserved-report-names.js';
+import {
+  classifyReportRelativePath,
+  reportPathRejectionMessage,
+} from '../../models/reserved-report-names.js';
 import { readResumeReportSnapshotManifest } from '../run/resume-report-snapshot.js';
 import { readRegularFileNoFollow } from '../../../shared/utils/private-file.js';
 
@@ -26,7 +29,7 @@ export function extractReportReferences(text: string | undefined): string[] {
     return [];
   }
   return [...text.matchAll(REPORT_REFERENCE_PATTERN)]
-    .map((match) => (match[1] ?? '').trim())
+    .map((match) => match[1] ?? '')
     .filter((name) => name.length > 0);
 }
 
@@ -208,17 +211,16 @@ export function resolveReportReferenceDetailed(
   reference: string,
   context: ResolveReportReferenceContext,
 ): ResolvedReportReference {
-  // 内部予約名（resume スナップショット manifest）を通常レポートとして
-  // 解決させない — 内部形式への意図しない依存を明示エラーで拒否する。
-  if (isReservedReportFileName(reference)) {
+  const classification = classifyReportRelativePath(reference);
+  if (classification.kind !== 'public') {
     throw new Error(
-      `Report reference "${reference}" for step "${context.stepName}" refers to a reserved internal file `
-      + `(${RESUME_ARTIFACTS_FILE_NAME} holds the resume snapshot manifest) and cannot be used as a report`,
+      `Report reference for step "${context.stepName}" is invalid: ${reportPathRejectionMessage(reference)}`,
     );
   }
-  const targetAbs = assertContained(reportDir, reference, context.stepName);
+  const normalizedReference = classification.normalizedPath;
+  const targetAbs = assertContained(reportDir, normalizedReference, context.stepName);
   if (context.validateExistence === false) {
-    return { content: `${reportDir}/${reference}`, scope: 'step' };
+    return { content: `${reportDir}/${normalizedReference}`, scope: 'step' };
   }
   const reportsRoot = context.reportsRootDir;
   const trustedRoot = reportsRoot ?? reportDir;
@@ -228,7 +230,7 @@ export function resolveReportReferenceDetailed(
     return { content: stepContent, scope: 'step' };
   }
   if (reportsRoot !== undefined && isSubworkflowNamespaceDir(reportDir, reportsRoot)) {
-    const rootTargetAbs = assertContained(reportsRoot, reference, context.stepName);
+    const rootTargetAbs = assertContained(reportsRoot, normalizedReference, context.stepName);
     const parentContent = readRegularReportFile(reportsRoot, rootTargetAbs, reference, context.stepName);
     if (parentContent !== undefined) {
       return { content: parentContent, scope: 'parent-run-readonly' };

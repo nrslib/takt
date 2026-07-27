@@ -80,7 +80,6 @@ export interface FindingContractIntakeInput {
   /** raw finding id 衝突対策の呼び出し名前空間。トップレベルでは空文字列。 */
   callNamespace: string;
   timestamp: string;
-  ledgerCopyPath?: string;
   priorStepResponseText?: string;
   refreshFindingsState: () => void;
   emitEvent: (event: string, ...args: unknown[]) => void;
@@ -110,7 +109,6 @@ export async function ingestFindingContractResults(
     runId: input.runId,
     callNamespace: input.callNamespace,
     timestamp: input.timestamp,
-    ledgerCopyPath: input.ledgerCopyPath,
     priorStepResponseText: input.priorStepResponseText,
   });
   if (result.status === 'updated') {

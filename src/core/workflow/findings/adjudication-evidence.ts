@@ -12,6 +12,8 @@ import type {
   FindingLedgerEntry,
   RawFinding,
 } from './types.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 
 interface AdjudicationConflictEvidence {
   id: string;
@@ -21,6 +23,63 @@ interface AdjudicationConflictEvidence {
   description: string;
   firstSeen: FindingLedgerConflict['firstSeen'];
   lastSeen: FindingLedgerConflict['lastSeen'];
+}
+
+function snapshotFinding(finding: FindingLedgerEntry): FindingLedgerEntry {
+  return structuredClone({
+    id: finding.id,
+    status: finding.status,
+    lifecycle: finding.lifecycle,
+    severity: finding.severity,
+    title: finding.title,
+    ...(finding.location !== undefined ? { location: finding.location } : {}),
+    ...(finding.description !== undefined ? { description: finding.description } : {}),
+    ...(finding.suggestion !== undefined ? { suggestion: finding.suggestion } : {}),
+    reviewers: [...finding.reviewers].sort(compareBinaryStrings),
+    rawFindingIds: [...finding.rawFindingIds].sort(compareBinaryStrings),
+    firstSeen: { ...finding.firstSeen },
+    lastSeen: { ...finding.lastSeen },
+    ...(finding.resolvedAt !== undefined ? { resolvedAt: finding.resolvedAt } : {}),
+    ...(finding.resolvedEvidence !== undefined ? { resolvedEvidence: finding.resolvedEvidence } : {}),
+    ...(finding.reopenedEvidence !== undefined ? { reopenedEvidence: finding.reopenedEvidence } : {}),
+    ...(finding.waivers !== undefined ? { waivers: finding.waivers } : {}),
+    ...(finding.disputes !== undefined ? { disputes: finding.disputes } : {}),
+    ...(finding.invalidatedAt !== undefined ? { invalidatedAt: finding.invalidatedAt } : {}),
+    ...(finding.invalidatedEvidence !== undefined
+      ? { invalidatedEvidence: finding.invalidatedEvidence }
+      : {}),
+    ...(finding.supersededByFindingId !== undefined
+      ? { supersededByFindingId: finding.supersededByFindingId }
+      : {}),
+    ...(finding.dismissal !== undefined ? { dismissal: finding.dismissal } : {}),
+    revision: finding.revision,
+    ...(finding.provisional !== undefined ? { provisional: finding.provisional } : {}),
+    ...(finding.rejectedObservations !== undefined
+      ? { rejectedObservations: finding.rejectedObservations }
+      : {}),
+  });
+}
+
+function snapshotRawFinding(rawFinding: RawFinding): RawFinding {
+  return structuredClone({
+    rawFindingId: rawFinding.rawFindingId,
+    stepName: rawFinding.stepName,
+    reviewer: rawFinding.reviewer,
+    familyTag: rawFinding.familyTag,
+    severity: rawFinding.severity,
+    title: rawFinding.title,
+    ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
+    description: rawFinding.description,
+    ...(rawFinding.suggestion !== undefined ? { suggestion: rawFinding.suggestion } : {}),
+    relation: rawFinding.relation,
+    ...(rawFinding.targetFindingId !== undefined
+      ? { targetFindingId: rawFinding.targetFindingId }
+      : {}),
+    ...(rawFinding.targetPrecondition !== undefined
+      ? { targetPrecondition: rawFinding.targetPrecondition }
+      : {}),
+    ...(rawFinding.evidence !== undefined ? { evidence: rawFinding.evidence } : {}),
+  });
 }
 
 export interface AdjudicationEvidenceSnapshot {
@@ -40,7 +99,8 @@ function selectLedgerEvidence(
   const findings = conflict.findingIds
     .map((findingId) => findingsById.get(findingId))
     .filter((finding): finding is FindingLedgerEntry => finding !== undefined)
-    .sort((left, right) => left.id.localeCompare(right.id));
+    .map(snapshotFinding)
+    .sort((left, right) => compareBinaryStrings(left.id, right.id));
   const rawFindingIds = new Set([
     ...conflict.rawFindingIds,
     ...findings.flatMap((finding) => finding.rawFindingIds),
@@ -49,42 +109,20 @@ function selectLedgerEvidence(
   const rawFindings = [...rawFindingIds]
     .map((rawFindingId) => rawFindingsById.get(rawFindingId))
     .filter((raw): raw is RawFinding => raw !== undefined)
-    .sort((left, right) => left.rawFindingId.localeCompare(right.rawFindingId));
-  return structuredClone({
+    .sort((left, right) => compareBinaryStrings(left.rawFindingId, right.rawFindingId));
+  return {
     conflict: {
       id: conflict.id,
       status: conflict.status,
-      findingIds: [...conflict.findingIds].sort(),
-      rawFindingIds: [...conflict.rawFindingIds].sort(),
+      findingIds: [...conflict.findingIds].sort(compareBinaryStrings),
+      rawFindingIds: [...conflict.rawFindingIds].sort(compareBinaryStrings),
       description: conflict.description,
-      firstSeen: conflict.firstSeen,
-      lastSeen: conflict.lastSeen,
+      firstSeen: { ...conflict.firstSeen },
+      lastSeen: { ...conflict.lastSeen },
     },
     findings,
-    rawFindings,
-  });
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => (
-      item === undefined || typeof item === 'function' || typeof item === 'symbol'
-        ? 'null'
-        : canonicalJson(item)
-    )).join(',')}]`;
-  }
-  if (value !== null && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .filter(([, item]) => item !== undefined && typeof item !== 'function' && typeof item !== 'symbol')
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
-      .join(',')}}`;
-  }
-  const serialized = JSON.stringify(value);
-  if (serialized === undefined) {
-    throw new Error('Adjudication evidence contains a non-serializable value');
-  }
-  return serialized;
+    rawFindings: rawFindings.map(snapshotRawFinding),
+  };
 }
 
 export function computeAdjudicationEvidenceHash(

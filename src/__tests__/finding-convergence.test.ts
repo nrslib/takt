@@ -24,7 +24,12 @@ import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type { FindingLedger, FindingLedgerEntry, FindingLedgerStore, FindingManagerDecisions, RawFinding } from '../core/workflow/findings/types.js';
 import { createFindingAdjudicationReservation } from './helpers/finding-adjudication-reservation.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
-import { createFindingManagerPublicationDouble } from './helpers/finding-manager-publication.js';
+import {
+  createFindingManagerPublicationDouble,
+  observeFindingLedgerMutations,
+  RevisionedFindingLedgerTestRepository,
+} from './helpers/finding-manager-publication.js';
+import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
@@ -97,14 +102,15 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
     rawFindingDispositions: [],
     rawProvenanceByRawFindingId: new Map(input.rawFindings.map((rawFinding) => [
       rawFinding.rawFindingId,
-      {
-        reviewerStableKey: computeReviewerStableKey({
+      storedRawReconcileProvenance(
+        rawFinding,
+        computeReviewerStableKey({
           workflowName: input.context.workflowName,
           callNamespace: '',
           parentStepName: input.context.stepName,
           reviewerPersonaKey: rawFinding.reviewer,
         }),
-        lineageKey: computeLineageKey({
+        computeLineageKey({
           ...(rawFinding.targetFindingId !== undefined
             ? { targetFindingId: rawFinding.targetFindingId }
             : {}),
@@ -112,7 +118,7 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
           title: rawFinding.title,
           familyTag: rawFinding.familyTag,
         }),
-      },
+      ),
     ])),
   });
 }
@@ -271,9 +277,11 @@ describe('item 3/6: duplicateDecisions merges duplicates into a canonical findin
 
 describe('item 1/4: raw admission validation and invalidate', () => {
   let projectDir: string;
+  let reportDir: string;
 
   beforeEach(() => {
     projectDir = mkdtempSync(join(tmpdir(), 'takt-findings-admission-'));
+    reportDir = mkdtempSync(join(tmpdir(), 'takt-findings-admission-reports-'));
     mkdirSync(join(projectDir, 'src'), { recursive: true });
     writeFileSync(join(projectDir, 'src/real.ts'), `${Array.from({ length: 5 }, (_, i) => `// line ${i + 1}`).join('\n')}\n`);
     initializeGitFixture(projectDir, ['src/real.ts']);
@@ -282,6 +290,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
 
   afterEach(() => {
     rmSync(projectDir, { recursive: true, force: true });
+    rmSync(reportDir, { recursive: true, force: true });
   });
 
   it('Given a location whose path does not exist When validated Then it is inadmissible', () => {
@@ -380,35 +389,35 @@ describe('item 1/4: raw admission validation and invalidate', () => {
   function makeHarness(initialLedger: FindingLedger): {
     savedLedgers: FindingLedger[];
     savedValidationReports: unknown[];
+    currentLedger: () => FindingLedger;
     run: (input: { reviewerRawFindings: Array<Record<string, unknown>>; priorStepResponseText?: string }) => ReturnType<typeof runFindingManagerForStep>;
   } {
-    let ledger = initialLedger;
+    const ledgerRepository = new RevisionedFindingLedgerTestRepository(initialLedger);
     const savedLedgers: FindingLedger[] = [];
     const savedValidationReports: unknown[] = [];
+    const publicationDouble = createFindingManagerPublicationDouble((report) => {
+      savedValidationReports.push(report);
+      return join(reportDir, `findings-manager-validation.${report.stepName}.json`);
+    }, ledgerRepository);
+    const observedMutations = observeFindingLedgerMutations(
+      ledgerRepository,
+      publicationDouble,
+      (ledger) => {
+        savedLedgers.push(ledger);
+      },
+    );
     const ledgerStore: FindingLedgerStore = {
       ledgerIdentity: '/test/finding-convergence/ledger.json',
       workflowName: 'peer-review',
-      loadLedger: () => ledger,
-      saveLedger: (next) => { savedLedgers.push(next); },
-      // WAL（beginInterpretations 等）が保存を複数回行うため、double も
-      // 状態を持つ（mutator の結果を次回の読み込みへ引き継ぐ）。
-      updateLedger: (mutator) => {
-        const mutation = mutator(ledger);
-        ledger = mutation.ledger;
-        savedLedgers.push(ledger);
-        return Promise.resolve(mutation);
-      },
+      loadLedger: () => ledgerRepository.loadLedger(),
       ...createFindingAdjudicationReservation(),
-      createRunCopy: () => join(projectDir, 'ledger-copy.json'),
-      saveRawFindings: () => join(projectDir, 'raw-findings.json'),
+      saveLedgerSnapshot: () => {},
+      saveRawFindings: () => {},
       saveManagerValidationReport: (report) => {
         savedValidationReports.push(report);
-        return join(projectDir, 'manager-report.json');
       },
-      ...createFindingManagerPublicationDouble((report) => {
-        savedValidationReports.push(report);
-        return join(projectDir, `findings-manager-validation.${report.stepName}.json`);
-      }),
+      ...publicationDouble,
+      ...observedMutations,
     };
     const optionsBuilder = {
       buildAgentOptions: () => ({}),
@@ -428,6 +437,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     return {
       savedLedgers,
       savedValidationReports,
+      currentLedger: () => ledgerRepository.loadLedger(),
       run: (input) => runFindingManagerForStep({
         contract: contract as never,
         ledgerStore,
@@ -467,7 +477,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
 
     expect(result.status).toBe('updated');
     expect(executeAgentMock).not.toHaveBeenCalled();
-    const savedLedger = harness.savedLedgers.at(-1);
+    const savedLedger = harness.currentLedger();
     // 確定 finding には昇格しない（幻覚 location を confirmed に載せない）。
     // codex 対策#4 以前は「location 証拠の不成立」を product gate 側の
     // provisional として保持していたが、typed evidence protocol 導入後は
@@ -522,7 +532,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
 
     expect(result.status).toBe('updated');
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
-    const savedLedger = harness.savedLedgers.at(-1);
+    const savedLedger = harness.currentLedger();
     const finding = savedLedger?.findings.find((f) => f.id === 'F-0012');
     expect(finding?.status).toBe('invalidated');
     expect(finding?.lifecycle).toBe('invalidated');
@@ -569,7 +579,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     const result = await harness.run({ reviewerRawFindings: [] });
 
     expect(result.status).toBe('updated');
-    const savedLedger = harness.savedLedgers.at(-1);
+    const savedLedger = harness.currentLedger();
     const finding = savedLedger?.findings.find((f) => f.id === 'F-0012');
     expect(finding?.status).toBe('open');
     expect(finding?.invalidatedEvidence).toBeUndefined();
@@ -683,7 +693,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     // この mock は decisions 形しか返さないため解釈 parse に失敗し、raw は
     // provisional として着地する（強制 new 化も drop もされない）。
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
-    const savedLedger = harness.savedLedgers.at(-1);
+    const savedLedger = harness.currentLedger();
     expect(savedLedger?.findings.find((f) => f.id === 'F-0001')?.status).toBe('resolved');
     const landed = savedLedger?.findings.find((f) => f.title === 'Existing issue still present');
     expect(landed?.status).toBe('open');

@@ -290,6 +290,7 @@ export interface SystemWorkflowStep extends WorkflowStepBase {
 
 export interface WorkflowCallStep extends WorkflowStepBase {
   kind: 'workflow_call';
+  passPreviousResponse?: never;
   mode?: never;
   call: string;
   overrides?: WorkflowCallOverrides;

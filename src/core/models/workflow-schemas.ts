@@ -37,6 +37,7 @@ import {
   SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
 } from './workflow-session-constraints.js';
 import { WORKFLOW_SESSION_MODES } from './workflow-types.js';
+import { classifyReportRelativePath } from './reserved-report-names.js';
 
 const RESERVED_WORKFLOW_CALL_RESULTS = ['COMPLETE', 'ABORT'] as const;
 const WorkflowStepNameSchema = z.string().min(1);
@@ -701,6 +702,87 @@ export const LoopMonitorSchema = z.object({
 
 /** Interactive mode schema for workflow-level default */
 export const InteractiveModeSchema = z.enum(INTERACTIVE_MODES);
+
+interface OutputContractStep {
+  readonly output_contracts?: {
+    readonly report?: readonly { readonly name: string }[];
+  };
+  readonly parallel?: readonly OutputContractStep[];
+}
+
+interface OutputContractProducer {
+  readonly reportName: string;
+  readonly stepPath: string;
+  readonly parallelAncestry: ReadonlyMap<string, number>;
+}
+
+function canOutputContractProducersRunConcurrently(
+  left: OutputContractProducer,
+  right: OutputContractProducer,
+): boolean {
+  for (const [blockPath, leftBranch] of left.parallelAncestry) {
+    const rightBranch = right.parallelAncestry.get(blockPath);
+    if (rightBranch !== undefined && rightBranch !== leftBranch) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function validateOutputContractIdentities(
+  steps: readonly OutputContractStep[],
+  ctx: z.RefinementCtx,
+  path: readonly (string | number)[] = ['steps'],
+  identities: Map<string, OutputContractProducer[]> = new Map(),
+  parentParallelAncestry: ReadonlyMap<string, number> = new Map(),
+  parallelBlockPath?: string,
+): void {
+  steps.forEach((step, stepIndex) => {
+    const stepPath = [...path, stepIndex];
+    const parallelAncestry = parallelBlockPath === undefined
+      ? parentParallelAncestry
+      : new Map(parentParallelAncestry).set(parallelBlockPath, stepIndex);
+    const stepPathIdentity = JSON.stringify(stepPath);
+    step.output_contracts?.report?.forEach((contract, contractIndex) => {
+      const classification = classifyReportRelativePath(contract.name);
+      if (classification.kind !== 'public') {
+        return;
+      }
+      const current: OutputContractProducer = {
+        reportName: contract.name,
+        stepPath: stepPathIdentity,
+        parallelAncestry,
+      };
+      const existing = identities.get(classification.portableIdentity) ?? [];
+      const conflict = existing.find((candidate) => (
+        candidate.reportName !== current.reportName
+        || candidate.stepPath === current.stepPath
+        || canOutputContractProducersRunConcurrently(candidate, current)
+      ));
+      if (conflict !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...stepPath, 'output_contracts', 'report', contractIndex, 'name'],
+          message: `output contract report name "${contract.name}" collides with "${conflict.reportName}"`,
+        });
+        return;
+      }
+      identities.set(classification.portableIdentity, [...existing, current]);
+    });
+    if (step.parallel !== undefined) {
+      const childBlockPath = JSON.stringify([...stepPath, 'parallel']);
+      validateOutputContractIdentities(
+        step.parallel,
+        ctx,
+        [...stepPath, 'parallel'],
+        identities,
+        parallelAncestry,
+        childBlockPath,
+      );
+    }
+  });
+}
+
 /** Workflow configuration schema - raw YAML format */
 export const WorkflowConfigRawSchema = z.object({
   name: z.string().min(1),
@@ -722,4 +804,6 @@ export const WorkflowConfigRawSchema = z.object({
   max_steps: z.union([z.number().int().positive(), z.literal('infinite')]).optional().default(10),
   loop_monitors: z.array(LoopMonitorSchema).optional(),
   interactive_mode: InteractiveModeSchema.optional(),
-}).strict();
+}).strict().superRefine((workflow, ctx) => {
+  validateOutputContractIdentities(workflow.steps, ctx);
+});

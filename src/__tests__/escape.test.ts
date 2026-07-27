@@ -13,7 +13,6 @@ import {
   replaceTemplatePlaceholders,
 } from '../core/workflow/instruction/escape.js';
 import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
-import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
 import { makeStep, makeInstructionContext } from './test-helpers.js';
 
 describe('escapeTemplateChars', () => {
@@ -216,7 +215,7 @@ describe('replaceTemplatePlaceholders', () => {
       const template = 'Read {report:../../secrets.md}';
 
       expect(() => replaceTemplatePlaceholders(template, step, ctx)).toThrow(
-        /escapes the report directory/,
+        /not a valid report-relative path: dot path segment/,
       );
     });
 
@@ -288,12 +287,49 @@ describe('replaceTemplatePlaceholders', () => {
       writeFileSync(join(reportDir, 'resume-artifacts.json'), '{}');
       const step = makeStep({ name: 'arbitrate' });
       const ctx = makeInstructionContext({ reportDir });
-      // Windows 形式の区切り（sub\Resume-Artifacts.JSON）も拒否される。
-      for (const reference of ['resume-artifacts.json', ' Resume-Artifacts.JSON ', 'sub\\Resume-Artifacts.JSON']) {
+      for (const reference of ['resume-artifacts.json', ' Resume-Artifacts.JSON ']) {
         expect(() => replaceTemplatePlaceholders(`Read {report:${reference}}`, step, ctx)).toThrow(
           /reserved internal file/,
         );
       }
+      expect(() => replaceTemplatePlaceholders(
+        'Read {report:sub\\Resume-Artifacts.JSON}',
+        step,
+        ctx,
+      )).toThrow(/non-canonical path separator/);
+    });
+
+    it('should reject normalized references into the internal report namespace', () => {
+      const step = makeStep({ name: 'arbitrate' });
+      const ctx = makeInstructionContext({ reportDir });
+      expect(() => replaceTemplatePlaceholders(
+        'Read {report:.takt-report-internal/history/review.md}',
+        step,
+        ctx,
+      )).toThrow(/internal report namespace/);
+      expect(() => replaceTemplatePlaceholders(
+        'Read {report:.takt-report-internal\\history\\review.md}',
+        step,
+        ctx,
+      )).toThrow(/non-canonical path separator/);
+      for (const reference of [
+        './.takt-report-internal/history/review.md',
+        'public/../.takt-report-internal/history/review.md',
+      ]) {
+        expect(() => replaceTemplatePlaceholders(`Read {report:${reference}}`, step, ctx)).toThrow(
+          /not a valid report-relative path: dot path segment/,
+        );
+      }
+    });
+
+    it('should reject report-relative traversal before reading the filesystem', () => {
+      const step = makeStep({ name: 'arbitrate' });
+      const ctx = makeInstructionContext({ reportDir });
+      expect(() => replaceTemplatePlaceholders(
+        'Read {report:nested/../../outside.md}',
+        step,
+        ctx,
+      )).toThrow(/not a valid report-relative path/);
     });
 
     // statSync はリンク先を追うため、reportDir 外を指す symlink の {report:X} を
@@ -311,51 +347,6 @@ describe('replaceTemplatePlaceholders', () => {
       );
       rmSync(outsideDir, { recursive: true, force: true });
     });
-  });
-
-  it('should replace report handle placeholders with resolved paths', () => {
-    const step = makeStep();
-    const ctx = {
-      ...makeInstructionContext(),
-      currentReport: '/tmp/reports/07-fix.md',
-      previousReport: '/tmp/reports/07-fix.md.20260420T010000Z',
-      reportHistory: [
-        '/tmp/reports/07-fix.md.20260420T010000Z',
-        '/tmp/reports/07-fix.md.20260419T230000Z',
-      ].join('\n'),
-      peerReports: [
-        '/tmp/reports/05-arch-review.md',
-        '/tmp/reports/06-security-review.md',
-      ].join('\n'),
-    } as InstructionContext;
-    const template = [
-      'Current: {current_report}',
-      'Previous: {previous_report}',
-      'History: {report_history}',
-      'Peers: {peer_reports}',
-    ].join('\n');
-
-    const result = replaceTemplatePlaceholders(template, step, ctx);
-
-    expect(result).toContain('Current: /tmp/reports/07-fix.md');
-    expect(result).toContain('Previous: /tmp/reports/07-fix.md.20260420T010000Z');
-    expect(result).toContain('/tmp/reports/07-fix.md.20260419T230000Z');
-    expect(result).toContain('/tmp/reports/05-arch-review.md');
-    expect(result).toContain('/tmp/reports/06-security-review.md');
-    expect(result).not.toContain('{current_report}');
-    expect(result).not.toContain('{previous_report}');
-    expect(result).not.toContain('{report_history}');
-    expect(result).not.toContain('{peer_reports}');
-  });
-
-  it('should replace missing report handle placeholders with empty strings', () => {
-    const step = makeStep();
-    const ctx = makeInstructionContext() as InstructionContext;
-    const template = 'Current:{current_report}|Previous:{previous_report}|History:{report_history}|Peers:{peer_reports}';
-
-    const result = replaceTemplatePlaceholders(template, step, ctx);
-
-    expect(result).toBe('Current:|Previous:|History:|Peers:');
   });
 
   it('should handle template with multiple different placeholders', () => {

@@ -11,7 +11,11 @@ import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { computeRoundMarker } from '../core/workflow/findings/round-marker.js';
 import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
-import { createFindingManagerPublicationDouble } from './helpers/finding-manager-publication.js';
+import {
+  createFindingManagerPublicationDouble,
+  observeFindingLedgerMutations,
+  RevisionedFindingLedgerTestRepository,
+} from './helpers/finding-manager-publication.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -25,6 +29,7 @@ const executeAgentMock = vi.mocked(executeAgent);
 // src/dup.ts:10）に対応する実ファイルを1つの共有 fixture ディレクトリへ用意する。
 const TEST_TMPDIR = realpathSync(tmpdir());
 const FIXTURE_CWD = mkdtempSync(join(TEST_TMPDIR, 'takt-findings-runner-fixtures-'));
+const REPORT_DIR = mkdtempSync(join(TEST_TMPDIR, 'takt-findings-runner-reports-'));
 function writeFixtureFile(relativePath: string, lineCount: number): void {
   const fullPath = join(FIXTURE_CWD, relativePath);
   mkdirSync(dirname(fullPath), { recursive: true });
@@ -38,6 +43,7 @@ initializeGitFixture(FIXTURE_CWD, ['src/a.ts', 'src/b.ts', 'src/c.ts', 'src/dup.
 
 afterAll(() => {
   rmSync(FIXTURE_CWD, { recursive: true, force: true });
+  rmSync(REPORT_DIR, { recursive: true, force: true });
 });
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
@@ -55,6 +61,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
         title: 'Existing issue',
         location: 'src/a.ts:10',
         description: 'Existing issue body.',
+        relation: 'new',
       },
     ],
     conflicts: [],
@@ -93,33 +100,36 @@ interface Harness {
 function makeHarness(initialLedger: FindingLedger): Harness {
   // WAL（beginInterpretations / completeInterpretations）が保存を複数回
   // 行うため、テスト double も状態を持つ（mutator の結果を次回の読み込みに使う）。
-  let ledger = initialLedger;
+  const ledgerRepository = new RevisionedFindingLedgerTestRepository(initialLedger);
   const savedLedgers: FindingLedger[] = [];
   const savedRawFindings: RawFinding[][] = [];
   const savedValidationReports: FindingManagerValidationReport[] = [];
-  const saveManagerValidationReport = (report: FindingManagerValidationReport): string => {
+  const saveManagerValidationReport = (report: FindingManagerValidationReport): void => {
     savedValidationReports.push(report);
-    return `/tmp/findings-manager-validation.${report.stepName}.json`;
   };
+  const publicationDouble = createFindingManagerPublicationDouble((report) => {
+    savedValidationReports.push(report);
+    return join(REPORT_DIR, `findings-manager-validation.${report.stepName}.json`);
+  }, ledgerRepository);
+  const observedMutations = observeFindingLedgerMutations(
+    ledgerRepository,
+    publicationDouble,
+    (ledger) => {
+      savedLedgers.push(ledger);
+    },
+  );
   const ledgerStore: FindingLedgerStore = {
     ledgerIdentity: '/test/finding-manager-mechanical-runner/harness-ledger.json',
     workflowName: 'peer-review',
-    loadLedger: () => ledger,
-    saveLedger: (next) => { ledger = next; savedLedgers.push(next); },
-    updateLedger: (mutator) => {
-      const mutation = mutator(ledger);
-      ledger = mutation.ledger;
-      savedLedgers.push(ledger);
-      return Promise.resolve(mutation);
-    },
+    loadLedger: () => ledgerRepository.loadLedger(),
     ...createFindingAdjudicationReservation(),
-    createRunCopy: () => '/tmp/ledger-copy.json',
+    saveLedgerSnapshot: () => {},
     saveRawFindings: (_runId, _stepName, rawFindings) => {
       savedRawFindings.push(rawFindings);
-      return '/tmp/raw-findings.json';
     },
     saveManagerValidationReport,
-    ...createFindingManagerPublicationDouble(saveManagerValidationReport),
+    ...publicationDouble,
+    ...observedMutations,
   };
   const optionsBuilder = {
     buildAgentOptions: () => ({}),
@@ -145,7 +155,7 @@ function makeHarness(initialLedger: FindingLedger): Harness {
     savedRawFindings,
     savedValidationReports,
     ledgerStore,
-    currentLedger: () => ledger,
+    currentLedger: () => ledgerRepository.loadLedger(),
     run: (input) => runFindingManagerForStep({
       // テスト対象が使うメソッドだけを実装した最小 double。
       contract: contract as never,
@@ -382,16 +392,19 @@ describe('runFindingManagerForStep mechanical path', () => {
     });
     const storeA = createStore(reportDirA);
     const storeB = createStore(reportDirB);
-    storeA.saveLedger({
-      workflowName: 'peer-review',
-      nextId: 1,
-      updatedAt: '2026-06-13T00:00:00.000Z',
-      findings: [],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [],
-    });
-    const copySpies = [vi.spyOn(storeA, 'createRunCopy'), vi.spyOn(storeB, 'createRunCopy')];
+    await storeA.updateLedger(() => ({
+      ledger: {
+        workflowName: 'peer-review',
+        nextId: 1,
+        updatedAt: '2026-06-13T00:00:00.000Z',
+        findings: [],
+        rawFindings: [],
+        conflicts: [],
+        interpretations: [],
+      },
+      result: undefined,
+    }));
+    const copySpies = [vi.spyOn(storeA, 'saveLedgerSnapshot'), vi.spyOn(storeB, 'saveLedgerSnapshot')];
     const rawSpies = [vi.spyOn(storeA, 'saveRawFindings'), vi.spyOn(storeB, 'saveRawFindings')];
     const reportSpies = [
       vi.spyOn(storeA, 'saveManagerValidationReport'),
@@ -461,15 +474,18 @@ describe('runFindingManagerForStep mechanical path', () => {
       ...(trustedResumeSourceRunId === undefined ? {} : { trustedResumeSourceRunId }),
     });
     const storeA = createStore(reportDirA);
-    storeA.saveLedger({
-      workflowName: 'peer-review',
-      nextId: 1,
-      updatedAt: '2026-06-13T00:00:00.000Z',
-      findings: [],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [],
-    });
+    await storeA.updateLedger(() => ({
+      ledger: {
+        workflowName: 'peer-review',
+        nextId: 1,
+        updatedAt: '2026-06-13T00:00:00.000Z',
+        findings: [],
+        rawFindings: [],
+        conflicts: [],
+        interpretations: [],
+      },
+      result: undefined,
+    }));
     const reportSpyA = vi.spyOn(storeA, 'publishManagerValidationPublication')
       .mockImplementationOnce(() => {
         throw new Error('injected persisted report failure');
@@ -518,7 +534,7 @@ describe('runFindingManagerForStep mechanical path', () => {
       });
       const reportDirB = join(projectCwd, '.takt', 'runs', 'different-run', 'reports');
       const storeB = createStore(reportDirB, 'pending-run');
-      const copySpyB = vi.spyOn(storeB, 'createRunCopy');
+      const copySpyB = vi.spyOn(storeB, 'saveLedgerSnapshot');
       const rawSpyB = vi.spyOn(storeB, 'saveRawFindings');
       const reportSpyB = vi.spyOn(storeB, 'publishManagerValidationPublication');
       expect(storeB.loadLedger().pendingManagerCommit?.roundMarker).toBe(
@@ -564,7 +580,7 @@ describe('runFindingManagerForStep mechanical path', () => {
 
     expect(executeAgentMock).not.toHaveBeenCalled();
     expect(result.status).toBe('updated');
-    const finding = harness.savedLedgers.at(-1)?.findings.find((entry) => entry.id === 'F-0001');
+    const finding = harness.currentLedger().findings.find((entry) => entry.id === 'F-0001');
     expect(finding?.status).toBe('resolved');
   });
 
@@ -594,7 +610,7 @@ describe('runFindingManagerForStep mechanical path', () => {
     expect(instruction).not.toContain('"run-2:reviewers:2:arch-review:c-1"');
 
     expect(result.status).toBe('updated');
-    const ledger = harness.savedLedgers.at(-1);
+    const ledger = harness.currentLedger();
     expect(ledger?.findings.find((entry) => entry.id === 'F-0001')?.status).toBe('resolved');
     expect(ledger?.findings.some((entry) => entry.title === 'New unmatched issue' && entry.status === 'open')).toBe(true);
   });
@@ -661,7 +677,7 @@ describe('runFindingManagerForStep rejected decisions land as provisional withou
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
 
     expect(result.status).toBe('updated');
-    const ledger = harness.savedLedgers.at(-1);
+    const ledger = harness.currentLedger();
     const accepted = ledger?.findings.find((entry) => entry.title === 'New unmatched issue');
     expect(accepted?.status).toBe('open');
     expect(accepted?.provisional).toBeUndefined();
@@ -689,7 +705,7 @@ describe('runFindingManagerForStep rejected decisions land as provisional withou
     expect(executeAgentMock).not.toHaveBeenCalled();
 
     expect(result.status).toBe('updated');
-    const savedLedger = harness.savedLedgers.at(-1);
+    const savedLedger = harness.currentLedger();
     expect(savedLedger?.findings.find((entry) => entry.id === 'F-0001')?.status).toBe('resolved');
     expect(savedLedger?.findings.every((entry) => entry.provisional === undefined)).toBe(true);
     // 監査には不採用の事実が残る。
@@ -725,7 +741,7 @@ describe('runFindingManagerForStep rejected decisions land as provisional withou
 
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
     expect(result.status).toBe('updated');
-    const ledger = harness.savedLedgers.at(-1);
+    const ledger = harness.currentLedger();
     const landed = ledger?.findings.find((entry) => entry.title === 'New unmatched issue');
     expect(landed?.status).toBe('open');
     expect(landed?.provisional).toMatchObject({ kind: 'raw-adjudication-unresolved' });
@@ -759,7 +775,7 @@ describe('runFindingManagerForStep rejected decisions land as provisional withou
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
 
     expect(result.status).toBe('updated');
-    const savedLedger = harness.savedLedgers.at(-1);
+    const savedLedger = harness.currentLedger();
     expect(savedLedger?.findings.find((entry) => entry.id === 'F-0001')?.status).toBe('resolved');
     const provisionals = savedLedger?.findings.filter((entry) => entry.provisional !== undefined) ?? [];
     expect(provisionals).toHaveLength(1);
@@ -814,7 +830,7 @@ describe('runFindingManagerForStep rejected decisions land as provisional withou
       outcome: 'unsupported',
       reason: expect.stringContaining('cannot serve as resolution evidence'),
     }));
-    expect(harness.savedLedgers.at(-1)?.findings.filter(
+    expect(harness.currentLedger().findings.filter(
       (finding) => finding.rawFindingIds.includes('run-2:reviewers:2:arch-review:c-1'),
     )).toEqual([]);
   });
@@ -932,26 +948,30 @@ describe('runFindingManagerForStep workflow_call sub-steps', () => {
 
     const savedLedgers: FindingLedger[] = [];
     const savedRawFindings: RawFinding[][] = [];
+    const ledgerRepository = new RevisionedFindingLedgerTestRepository(makeLedger());
+    const publicationDouble = createFindingManagerPublicationDouble(
+      (report) => join(REPORT_DIR, `findings-manager-validation.${report.stepName}.json`),
+      ledgerRepository,
+    );
+    const observedMutations = observeFindingLedgerMutations(
+      ledgerRepository,
+      publicationDouble,
+      (ledger) => {
+        savedLedgers.push(ledger);
+      },
+    );
     const ledgerStore: FindingLedgerStore = {
       ledgerIdentity: '/test/finding-manager-mechanical-runner/workflow-call-ledger.json',
       workflowName: 'peer-review',
-      loadLedger: () => makeLedger(),
-      saveLedger: (next) => { savedLedgers.push(next); },
-      updateLedger: (mutator) => {
-        const mutation = mutator(makeLedger());
-        savedLedgers.push(mutation.ledger);
-        return Promise.resolve(mutation);
-      },
+      loadLedger: () => ledgerRepository.loadLedger(),
       ...createFindingAdjudicationReservation(),
-      createRunCopy: () => '/tmp/ledger-copy.json',
+      saveLedgerSnapshot: () => {},
       saveRawFindings: (_runId, _stepName, rawFindings) => {
         savedRawFindings.push(rawFindings);
-        return '/tmp/raw-findings.json';
       },
-      saveManagerValidationReport: () => '/tmp/manager-report.json',
-      ...createFindingManagerPublicationDouble(
-        (report) => `/tmp/findings-manager-validation.${report.stepName}.json`,
-      ),
+      saveManagerValidationReport: () => {},
+      ...publicationDouble,
+      ...observedMutations,
     };
     const optionsBuilder = {
       buildAgentOptions: () => ({}),
@@ -1061,15 +1081,18 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     });
     const storeA = store;
     const storeB = store;
-    storeA.saveLedger({
-      workflowName: 'peer-review',
-      nextId: 1,
-      updatedAt: '2026-06-13T00:00:00.000Z',
-      findings: [],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [],
-    });
+    await storeA.updateLedger(() => ({
+      ledger: {
+        workflowName: 'peer-review',
+        nextId: 1,
+        updatedAt: '2026-06-13T00:00:00.000Z',
+        findings: [],
+        rawFindings: [],
+        conflicts: [],
+        interpretations: [],
+      },
+      result: undefined,
+    }));
 
     // workflow_call の並列子は WorkflowCallExecutor から同じ reportDirName
     // （= 親の runPaths.slug）を渡されるため、実運用では2子の runId は常に
@@ -1202,15 +1225,18 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
     });
-    store.saveLedger({
-      workflowName: 'peer-review',
-      nextId: 1,
-      updatedAt: '2026-06-13T00:00:00.000Z',
-      findings: [],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [],
-    });
+    await store.updateLedger(() => ({
+      ledger: {
+        workflowName: 'peer-review',
+        nextId: 1,
+        updatedAt: '2026-06-13T00:00:00.000Z',
+        findings: [],
+        rawFindings: [],
+        conflicts: [],
+        interpretations: [],
+      },
+      result: undefined,
+    }));
 
     // 上のテストと同じ理由で、2子の runId を揃え、callNamespace だけで区別する。
     const SHARED_RUN_ID = 'shared-run-dup';
@@ -1363,25 +1389,30 @@ describe('runFindingManagerForStep stale rejection isolation', () => {
     const savedValidationReports: FindingManagerValidationReport[] = [];
     const saveManagerValidationReport = (report: FindingManagerValidationReport): string => {
       savedValidationReports.push(report);
-      return `/tmp/findings-manager-validation.${report.stepName}.json`;
+      return join(REPORT_DIR, `findings-manager-validation.${report.stepName}.json`);
     };
-    let updateLedgerState = staleFreshLedger;
+    const ledgerRepository = new RevisionedFindingLedgerTestRepository(staleFreshLedger);
+    const publicationDouble = createFindingManagerPublicationDouble(
+      saveManagerValidationReport,
+      ledgerRepository,
+    );
+    const observedMutations = observeFindingLedgerMutations(
+      ledgerRepository,
+      publicationDouble,
+      (ledger) => {
+        savedLedgers.push(ledger);
+      },
+    );
     const ledgerStore: FindingLedgerStore = {
       ledgerIdentity: '/test/finding-manager-mechanical-runner/stale-ledger.json',
       workflowName: 'peer-review',
       loadLedger: () => initialLedger,
-      saveLedger: (next) => { savedLedgers.push(next); },
-      updateLedger: (mutator) => {
-        const mutation = mutator(updateLedgerState);
-        updateLedgerState = mutation.ledger;
-        savedLedgers.push(mutation.ledger);
-        return Promise.resolve(mutation);
-      },
       ...createFindingAdjudicationReservation(),
-      createRunCopy: () => '/tmp/ledger-copy.json',
-      saveRawFindings: () => '/tmp/raw-findings.json',
+      saveLedgerSnapshot: () => {},
+      saveRawFindings: () => {},
       saveManagerValidationReport,
-      ...createFindingManagerPublicationDouble(saveManagerValidationReport),
+      ...publicationDouble,
+      ...observedMutations,
     };
     const optionsBuilder = {
       buildAgentOptions: () => ({}),
@@ -1441,8 +1472,8 @@ describe('runFindingManagerForStep stale rejection isolation', () => {
     });
 
     expect(result.status).toBe('updated');
-    expect(savedLedgers).toHaveLength(2);
-    const savedLedger = savedLedgers.at(-1);
+    expect(savedLedgers).toHaveLength(1);
+    const savedLedger = ledgerRepository.loadLedger();
     // 不採用になった raw は明示的な計画入力により gate-blocking provisional
     // として着地する（黙って消えてゲートが開くことも
     // 新規 finding として洗浄されることもない）。

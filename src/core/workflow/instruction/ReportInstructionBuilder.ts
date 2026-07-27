@@ -128,7 +128,6 @@ export class ReportInstructionBuilder {
     }
 
     const findingContractInstruction = buildFindingContractReportInstruction({
-      ledgerCopyPath: this.context.findingContract.ledgerCopyPath,
       reportLedgerSummary: this.context.findingContract.reportLedgerSummary,
       language,
       renderFencedJsonBlock,

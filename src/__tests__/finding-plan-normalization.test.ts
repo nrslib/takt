@@ -10,10 +10,13 @@ import { reconcileCommitPlan } from '../core/workflow/findings/manager-commit-fi
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
 import {
+  canonicalizeReviewerRawFinding,
   computeLineageKey,
   computeReviewerStableKey,
   createReviewerRawFindingCandidates,
+  toLedgerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
+import { foldRawFindingEvidence } from '../core/workflow/findings/finding-evidence-fold.js';
 import { detectClarifiableRawMismatches } from '../core/workflow/findings/relation-coherence.js';
 import type {
   FindingLedger,
@@ -24,6 +27,8 @@ import type {
   RawFinding,
 } from '../core/workflow/findings/types.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
+import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.js';
 
 function makeFinding(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
@@ -321,25 +326,29 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
       provisionalSpecs: [],
       anomalySpecs: [],
       pendingRejectedObservations: [],
-      rawProvenanceByRawFindingId: new Map([[ladderRaw.rawFindingId, {
-        reviewerStableKey: computeReviewerStableKey({
+      rawProvenanceByRawFindingId: new Map([[ladderRaw.rawFindingId,
+        storedRawReconcileProvenance(
+          ladderRaw,
+          computeReviewerStableKey({
           workflowName: 'peer-review',
           callNamespace: '',
           parentStepName: 'reviewers',
           reviewerPersonaKey: ladderRaw.reviewer,
-        }),
-        lineageKey: computeLineageKey({
+          }),
+          computeLineageKey({
           location: ladderRaw.location!,
           title: ladderRaw.title,
           familyTag: ladderRaw.familyTag,
-        }),
-      }]]),
+          }),
+        ),
+      ]]),
       cleanWire: [],
       explicitResolvedByMapping: new Map(),
       explicitPromotedFindingIds: new Set(),
       recoveryProvisionalRawFindingIds: new Set(),
       staleRawFindingIds: new Set(),
       deferredRawFindingIds: new Set(),
+      resolutionRenotifications: [],
       unsupportedRawFindingReports: [],
       healthyReviewerStableKeys: new Set(),
     });
@@ -403,20 +412,21 @@ describe('assembleManagerOutput → 保存正規化 → reconciler（ラウン�
       rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map(persistsRaws.map((rawFinding) => [
         rawFinding.rawFindingId,
-        {
-          reviewerStableKey: computeReviewerStableKey({
+        storedRawReconcileProvenance(
+          rawFinding,
+          computeReviewerStableKey({
             workflowName: 'peer-review',
             callNamespace: '',
             parentStepName: 'reviewers',
             reviewerPersonaKey: rawFinding.reviewer,
           }),
-          lineageKey: computeLineageKey({
+          computeLineageKey({
             targetFindingId: rawFinding.targetFindingId!,
             location: rawFinding.location!,
             title: rawFinding.title,
             familyTag: rawFinding.familyTag,
           }),
-        },
+        ),
       ])),
       context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-02T00:00:00.000Z' },
     });
@@ -544,12 +554,72 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
 
     const reviewerIds = candidates.map((candidate) => candidate.reviewerRawFindingId);
     expect(new Set(reviewerIds).size).toBe(3);
-    expect(reviewerIds[0]).toBe('x');
+    expect(reviewerIds).toContain('x');
+    expect(candidates.find((candidate) => candidate.title === 'c')?.reviewerRawFindingId)
+      .toBe('x-dup2');
     const intakeIds = candidates.map((candidate) => candidate.intakeId);
     expect(new Set(intakeIds).size).toBe(3);
   });
 
-  it('内部採番は明示 ID を避け、一意な明示 ID は元の文字列のまま保持する', () => {
+  it('内容の異なる重複明示 ID は入力順を反転しても同じ canonical projection を作る', () => {
+    const rawA = {
+      rawFindingId: 'x',
+      title: 'A',
+      severity: 'low',
+      description: 'A evidence',
+      relation: 'new',
+    };
+    const rawB = {
+      rawFindingId: 'x',
+      title: 'B',
+      severity: 'low',
+      description: 'B evidence',
+      relation: 'new',
+    };
+    const project = (items: readonly unknown[]) => {
+      const candidates = createReviewerRawFindingCandidates(items, context);
+      const rawFindings = candidates
+        .map((candidate) => canonicalizeReviewerRawFinding(candidate, {
+          ledger: makeLedger([]),
+        }).canonical)
+        .map(toLedgerRawFinding);
+      return {
+        titlesInInputOrder: candidates.map((candidate) => candidate.title),
+        idsByTitle: Object.fromEntries(
+          candidates.map((candidate) => [
+            candidate.title,
+            candidate.reviewerRawFindingId,
+          ]),
+        ),
+        evidence: foldRawFindingEvidence(rawFindings),
+      };
+    };
+
+    const forward = project([rawA, rawB]);
+    const reversed = project([rawB, rawA]);
+    expect(forward.titlesInInputOrder).toEqual(['A', 'B']);
+    expect(reversed.titlesInInputOrder).toEqual(['B', 'A']);
+    expect(forward.idsByTitle).toEqual(reversed.idsByTitle);
+    expect(forward.evidence).toEqual(reversed.evidence);
+  });
+
+  it('内容が完全に同じ重複明示 ID も出力順を保ったまま一意化する', () => {
+    const item = {
+      rawFindingId: 'x',
+      title: 'same',
+      severity: 'low',
+      description: 'same',
+    };
+    const candidates = createReviewerRawFindingCandidates([
+      { ...item },
+      { ...item },
+    ], context);
+
+    expect(candidates.map((candidate) => candidate.title)).toEqual(['same', 'same']);
+    expect(new Set(candidates.map((candidate) => candidate.intakeId)).size).toBe(2);
+  });
+
+  it('内容安定の内部 ID と一意な明示 ID をそれぞれ保持する', () => {
     // 明示 ID の改名は clarification の priorAmbiguityCodesByRawId 相関を壊し、
     // 訂正済み raw の taint（ambiguityOrigin）が外れて clean 権限を得てしまう。
     // ずれるのは常に内部採番の側でなければならない。
@@ -560,7 +630,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
 
     expect(candidates[0]!.reviewerRawFindingId).toBeUndefined();
     expect(candidates[1]!.reviewerRawFindingId).toBe('item-1');
-    expect(candidates[0]!.intakeId).toContain('item-1-dup2');
+    expect(candidates[0]!.intakeId).toMatch(/:item-[0-9a-f]{64}$/);
     expect(new Set(candidates.map((candidate) => candidate.intakeId)).size).toBe(2);
   });
 
@@ -572,6 +642,101 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
 
     expect(candidates.every((candidate) => candidate.reviewerRawFindingId === undefined)).toBe(true);
     expect(new Set(candidates.map((candidate) => candidate.intakeId)).size).toBe(2);
+  });
+
+  it('未信頼 provider item の実行コードを呼ばず、悪性 item だけを寛容な rejection に落とす', () => {
+    let getterReads = 0;
+    let toJsonCalls = 0;
+    let proxyReads = 0;
+    const getterItem = Object.defineProperty({
+      rawFindingId: 'getter',
+    }, 'title', {
+      enumerable: true,
+      get() {
+        getterReads += 1;
+        return 'getter title';
+      },
+    });
+    const toJsonItem = {
+      rawFindingId: 'to-json',
+      toJSON() {
+        toJsonCalls += 1;
+        return { rawFindingId: 'forged' };
+      },
+    };
+    const proxyItem = new Proxy({ rawFindingId: 'proxy' }, {
+      get(target, key, receiver) {
+        proxyReads += 1;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const symbolItem = { rawFindingId: 'symbol' };
+    Object.defineProperty(symbolItem, Symbol('hidden'), {
+      enumerable: true,
+      value: 'hidden',
+    });
+    const nonEnumerableItem = { rawFindingId: 'non-enumerable' };
+    Object.defineProperty(nonEnumerableItem, 'hidden', {
+      enumerable: false,
+      value: 'hidden',
+    });
+    const extraItem = { rawFindingId: 'extra', unexpected: 'value' };
+    const cyclicItem: Record<string, unknown> = { rawFindingId: 'cycle' };
+    cyclicItem.description = cyclicItem;
+    const sharedValue = { nested: 'shared' };
+    const sharedReferenceItem = {
+      rawFindingId: 'shared-reference',
+      title: sharedValue,
+      description: sharedValue,
+    };
+    const validItem = {
+      rawFindingId: 'valid',
+      relation: 'new',
+      familyTag: 'bug',
+      severity: 'low',
+      title: 'valid title',
+      description: 'valid description',
+    };
+
+    const intake = intakeReviewerOutputs({
+      subResults: [{
+        subStep: {
+          name: 'arch-review',
+          persona: 'arch-review',
+        } as never,
+        response: {
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            rawFindings: [
+              getterItem,
+              toJsonItem,
+              proxyItem,
+              symbolItem,
+              nonEnumerableItem,
+              extraItem,
+              cyclicItem,
+              sharedReferenceItem,
+              validItem,
+            ],
+          },
+        },
+      }],
+      previousLedger: makeLedger([]),
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      runId: 'run-provider-items',
+    });
+
+    expect(getterReads).toBe(0);
+    expect(toJsonCalls).toBe(0);
+    expect(proxyReads).toBe(0);
+    expect(intake.items).toHaveLength(9);
+    expect(intake.items.filter(({ wire }) => wire.title === 'valid title')).toHaveLength(1);
+    expect(intake.items.filter(({ canonical }) => canonical.provenance.ambiguityOrigin))
+      .toHaveLength(8);
   });
 });
 

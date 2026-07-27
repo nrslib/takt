@@ -22,7 +22,7 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          nodejs = pkgs.nodejs_22;
+          nodejs = pkgs.nodejs_24;
         in
         {
           default = pkgs.buildNpmPackage {
@@ -49,7 +49,7 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          nodejs = pkgs.nodejs_22;
+          nodejs = pkgs.nodejs_24;
         in
         {
           default = pkgs.mkShell {

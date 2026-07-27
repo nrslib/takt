@@ -16,7 +16,6 @@ import { loadTemplate } from '../../../shared/prompts/index.js';
 import type { PullRequestContext } from '../pr-context.js';
 
 export interface FindingContractInstructionContext {
-  ledgerCopyPath: string;
   ledgerSummary: string;
   reportLedgerSummary: string;
   /** Whether the ledger currently has open findings (computed from the ledger, not re-parsed from the summary). */
@@ -82,14 +81,6 @@ export interface InstructionContext {
    * 存在しない文脈のみ）。既定は検証あり。
    */
   validateReportReferences?: boolean;
-  /** Latest report paths for the current step */
-  currentReport?: string;
-  /** Most recent versioned report paths for the current step */
-  previousReport?: string;
-  /** Versioned report history paths for the current step */
-  reportHistory?: string;
-  /** Latest report paths for peer steps */
-  peerReports?: string;
   /** Language for metadata rendering. Defaults to 'en'. */
   language?: Language;
   /** Whether interactive-only rules are enabled */
