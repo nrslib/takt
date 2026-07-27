@@ -19,6 +19,8 @@ TAKT は、AI コーディングエージェントを再現可能な開発ワー
 
 1つのエージェントにプロセス全体を覚えさせるのではなく、TAKT は step ごとに役割、文脈、遷移ルールを与えます。AI はコードを書きますが、次に何をするかは workflow が決めます。
 
+![AI コーディングエージェントのワークフローを制御する TAKT](./assets/description/01-hero.png)
+
 - 計画 → 実装 → レビュー → 修正ループを明示的な workflow step として実行
 - step ごとに persona、policy、knowledge、instruction、output contract を分け、コンテキストを肥大化させない
 - 積んだタスクを隔離された worktree で実行し、後からログとレポートを確認できる
