@@ -46,6 +46,7 @@ function seedFindingLedger(repoPath: string): void {
       rawFindingIds: ['raw-1'],
       firstSeen: { runId: 'seed', stepName: 'reviewers', timestamp: '2026-07-23T00:00:00.000Z' },
       lastSeen: { runId: 'seed', stepName: 'reviewers', timestamp: '2026-07-23T00:00:00.000Z' },
+      revision: 1,
     }],
   }, null, 2), 'utf-8');
 }
