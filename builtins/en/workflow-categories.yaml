@@ -9,7 +9,7 @@ workflow_categories:
       - frontend
       - backend
       - dual
-  Simple:
+  ✨ Simple:
     workflows:
       - simple
       - simple-mini

@@ -30,7 +30,7 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `frontend` | フロントエンド特化開発 workflow。React/Next.js に焦点を当てたレビューとナレッジ注入付き。 |
 | | `backend` | バックエンド特化開発 workflow。バックエンド、セキュリティ、QA エキスパートレビュー付き。 |
 | | `dual` | フロントエンド＋バックエンド開発 workflow: architecture、frontend、security、QA レビューと修正ループ付き。 |
-| Simple | `simple` | 強いモデルの判断力を信頼する汎用版。モデル自身が関連 SKILL を選び、最小限の構成で開発を進める。 |
+| ✨ Simple | `simple` | 強いモデルの判断力を信頼する汎用版。モデル自身が関連 SKILL を選び、最小限の構成で開発を進める。 |
 | | `simple-mini` | 強いモデルの判断力を信頼し、独立したテスト作成と最終監督を省いた軽量版。 |
 | | `simple-frontend` | 強いモデル向けの簡潔なフロントエンド版。frontend、React、security、architecture、testing のナレッジとポリシーを注入する。 |
 | | `simple-backend` | 強いモデル向けの簡潔なバックエンド版。backend、security、architecture、testing のナレッジとポリシーを注入する。 |

@@ -30,7 +30,7 @@ Organized by category.
 | | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
 | | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
 | | `dual` | Frontend + backend development workflow: architecture, frontend, security, QA reviews with fix loops. |
-| Simple | `simple` | A general workflow that trusts a capable model's judgment. The model selects relevant available skills and develops with minimal orchestration. |
+| ✨ Simple | `simple` | A general workflow that trusts a capable model's judgment. The model selects relevant available skills and develops with minimal orchestration. |
 | | `simple-mini` | A lightweight variant for capable models that omits dedicated test writing and final supervision. |
 | | `simple-frontend` | A concise frontend variant for capable models with frontend, React, security, architecture, and testing knowledge and policies. |
 | | `simple-backend` | A concise backend variant for capable models with backend, security, architecture, and testing knowledge and policies. |
