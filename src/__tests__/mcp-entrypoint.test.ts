@@ -23,7 +23,7 @@ describe('MCP package entrypoint', () => {
     expect(entrypoint.connectTaktMcpServerToStdio).toEqual(expect.any(Function));
   });
 
-  it('exposes only takt_enqueue_task with nested issue input', async () => {
+  it('exposes enqueue and read-only task listing tools', async () => {
     const server = createTaktMcpServer();
     const client = new Client({ name: 'takt-mcp-test-client', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -31,13 +31,21 @@ describe('MCP package entrypoint', () => {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
       const tools = await client.listTools();
-      expect(tools.tools.map((tool) => tool.name)).toEqual(['takt_enqueue_task']);
+      expect(tools.tools.map((tool) => tool.name)).toEqual(['takt_enqueue_task', 'takt_list_tasks']);
       expect(tools.tools[0]).toEqual(expect.objectContaining({
         title: 'Enqueue TAKT task',
         inputSchema: expect.objectContaining({
           type: 'object',
           required: expect.arrayContaining(['cwd', 'task', 'workflow', 'autoPr']),
           properties: expect.objectContaining({ issue: expect.any(Object) }),
+        }),
+      }));
+      expect(tools.tools[1]).toEqual(expect.objectContaining({
+        title: 'List TAKT tasks',
+        inputSchema: expect.objectContaining({
+          type: 'object',
+          required: ['cwd'],
+          properties: expect.objectContaining({ cwd: expect.any(Object) }),
         }),
       }));
     } finally {
@@ -66,6 +74,23 @@ describe('MCP package entrypoint', () => {
     try {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
+      const listed = await client.callTool({
+        name: 'takt_list_tasks',
+        arguments: { cwd },
+      });
+      expect(listed.isError).toBeUndefined();
+      expect(JSON.parse(String(listed.content[0]?.text))).toEqual({
+        summary: {
+          total: 0,
+          pending: 0,
+          running: 0,
+          completed: 0,
+          failed: 0,
+          exceeded: 0,
+          pr_failed: 0,
+        },
+        tasks: [],
+      });
       await client.callTool({
         name: 'takt_enqueue_task',
         arguments: { cwd, task: 'Normal', workflow: 'default', autoPr: false },

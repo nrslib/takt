@@ -49,11 +49,20 @@ describe('MCP stdio entrypoint integration', () => {
         },
       });
 
-      expect(tools.tools.map((tool) => tool.name)).toEqual(['takt_enqueue_task']);
+      expect(tools.tools.map((tool) => tool.name)).toEqual(['takt_enqueue_task', 'takt_list_tasks']);
       expect(result.isError).toBeUndefined();
       expect(JSON.parse(String(result.content[0]?.text))).toEqual(expect.objectContaining({
         tasksFile: join(cwd, '.takt', 'tasks.yaml'),
         workflow: 'default',
+      }));
+      const listed = await client.callTool({
+        name: 'takt_list_tasks',
+        arguments: { cwd },
+      });
+      expect(listed.isError).toBeUndefined();
+      expect(JSON.parse(String(listed.content[0]?.text))).toEqual(expect.objectContaining({
+        summary: expect.objectContaining({ total: 1, pending: 1 }),
+        tasks: [expect.objectContaining({ status: 'pending', workflow: 'default' })],
       }));
       const stderr = Buffer.concat(stderrChunks).toString('utf-8');
       expect(stderr).not.toMatch(/(?:^|\n)(?:Error|TypeError|ReferenceError|SyntaxError):/u);

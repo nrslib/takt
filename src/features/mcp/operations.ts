@@ -7,12 +7,14 @@ import {
   enqueueTask,
   type IssueEnqueueFailure,
 } from '../../infra/task/enqueueService.js';
+import type { TaskRecord, TaskStatus } from '../../infra/task/schema.js';
+import { TaskStore } from '../../infra/task/store.js';
 import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
 import {
   createIssueFromTaskResult as defaultCreateIssueFromTaskResult,
   saveTaskFile as defaultSaveTaskFile,
 } from '../tasks/add/index.js';
-import type { EnqueueTaskInput } from './schemas.js';
+import type { EnqueueTaskInput, ListTasksInput } from './schemas.js';
 
 type SaveTaskFile = typeof defaultSaveTaskFile;
 type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
@@ -51,6 +53,38 @@ function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: string | und
   }
 
   throw new Error(`MCP cwd is outside the allowed project root: ${cwd}`);
+}
+
+type TaskSummary = { total: number } & Record<TaskStatus, number>;
+
+function summarizeTasks(tasks: TaskRecord[]): TaskSummary {
+  const counts = {
+    pending: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+    exceeded: 0,
+    pr_failed: 0,
+  } satisfies Record<TaskStatus, number>;
+
+  for (const task of tasks) {
+    counts[task.status] += 1;
+  }
+
+  return { total: tasks.length, ...counts };
+}
+
+function projectTaskForMcp(task: TaskRecord): Record<string, unknown> {
+  return {
+    name: task.name,
+    status: task.status,
+    ...(task.workflow !== undefined ? { workflow: task.workflow } : {}),
+    ...(task.branch !== undefined ? { branch: task.branch } : {}),
+  };
+}
+
+function listTasksErrorResult(): CallToolResult {
+  return errorResult('Task list failed', new Error('Unable to read task history'));
 }
 
 function issueFailureResult(failure: IssueEnqueueFailure): CallToolResult {
@@ -123,5 +157,21 @@ export async function enqueueTaktTask(
     return result.success ? jsonResult(result.created) : issueFailureResult(result.failure);
   } catch (error) {
     return errorResult('Task enqueue failed', error);
+  }
+}
+
+export function listTaktTasks(
+  input: ListTasksInput,
+  deps: McpOperationDependencies = {},
+): CallToolResult {
+  try {
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
+    const state = new TaskStore(input.cwd).readOnly();
+    return jsonResult({
+      summary: summarizeTasks(state.tasks),
+      tasks: state.tasks.map(projectTaskForMcp),
+    });
+  } catch {
+    return listTasksErrorResult();
   }
 }

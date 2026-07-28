@@ -151,6 +151,7 @@ The server exposes these tools:
 | Tool | Description |
 |------|-------------|
 | `takt_enqueue_task` | Save a pending task to `.takt/tasks.yaml`, optionally linking or creating an issue. |
+| `takt_list_tasks` | Read the complete task history and status counts without modifying task storage. |
 
 Every tool `cwd` is resolved with `realpath` and must stay inside the MCP server's allowed project root. By default that root is the directory where `takt-mcp` was started.
 
@@ -182,7 +183,17 @@ Input limits: `task` is limited to 128 KiB, `workflow` to 128 characters, an iss
 
 The `issue` object must be exactly one of `{ "number": 123 }` or `{ "create": true, "title"?: "...", "labels"?: ["..."] }`; mixed keys, empty titles or labels, and unknown keys are rejected. A successful issue-backed enqueue returns `issueNumber`. If issue creation succeeds but task saving fails or is cancelled after the issue number is resolved, the issue remains open and the MCP error result includes `issueCreated`, `issueNumber`, optional `issueUrl`, `taskEnqueued`, `stage`, and a sanitized `error`. Retry with `{ "issue": { "number": issueNumber } }` to avoid creating another issue. If `stage` is `issue_number_parsing`, `issueNumber` is unavailable; use the optional `issueUrl` to identify the created issue and obtain its number before retrying.
 
-MCP only enqueues tasks. Use `takt run` to execute pending tasks and `takt watch` to monitor and execute them continuously.
+MCP enqueues tasks and provides a read-only task history. Use `takt run` to execute pending tasks and `takt watch` to monitor and execute them continuously.
+
+### `takt_list_tasks`
+
+Required input:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cwd` | absolute path string | Project root whose `.takt/tasks.yaml` is read. |
+
+The tool returns every task in history without a status filter or result limit. The `summary` object contains `total`, `pending`, `running`, `completed`, `failed`, `exceeded`, and `pr_failed` counts. Each task contains only `name`, `status`, and the optional `workflow` and `branch` fields. Task bodies, failure details, worktree/run/task-file paths, and other local paths are not returned. If `.takt/tasks.yaml` is absent, the tool returns an empty history and does not create `.takt` or any task file. Reading does not claim, fail, rewrite, or otherwise mutate tasks.
 
 ## Instant Exec Mode
 

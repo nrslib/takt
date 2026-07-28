@@ -2,9 +2,10 @@ import * as fs from 'node:fs';
 import * as process from 'node:process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { packageVersion } from '../../shared/package-info.js';
-import { enqueueTaskInputSchema } from './schemas.js';
+import { enqueueTaskInputSchema, listTasksInputSchema } from './schemas.js';
 import {
   enqueueTaktTask,
+  listTaktTasks,
   type McpOperationDependencies,
 } from './operations.js';
 
@@ -40,6 +41,16 @@ export function createTaktMcpServer(
       inputSchema: enqueueTaskInputSchema,
     },
     (input, extra) => enqueueTaktTask(input, operationDeps, extra.signal),
+  );
+
+  server.registerTool(
+    'takt_list_tasks',
+    {
+      title: 'List TAKT tasks',
+      description: 'Read the complete TAKT task history without modifying .takt/tasks.yaml or claiming any task. Returns only task name, status, workflow, branch, and status counts.',
+      inputSchema: listTasksInputSchema,
+    },
+    (input) => listTaktTasks(input, operationDeps),
   );
 
   return server;

@@ -67,3 +67,9 @@ const taskSaveOptionsSchema = z.object({
 export const enqueueTaskInputSchema = taskSaveOptionsSchema;
 
 export type EnqueueTaskInput = z.infer<typeof enqueueTaskInputSchema>;
+
+export const listTasksInputSchema = z.object({
+  cwd: absolutePathSchema,
+}).strict();
+
+export type ListTasksInput = z.infer<typeof listTasksInputSchema>;

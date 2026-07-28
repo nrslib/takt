@@ -2,7 +2,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { TasksFileSchema, serializeTasksFileData, type TasksFileData } from './schema.js';
-import { createLogger } from '../../shared/utils/index.js';
+import {
+  assertPathSegmentsAreSafe,
+  createLogger,
+  isRealPathInside,
+  lstatIfExists,
+} from '../../shared/utils/index.js';
 
 const log = createLogger('task-store');
 const LOCK_RETRY_DELAY_MS = 25;
@@ -16,6 +21,55 @@ function isFileSystemError(error: unknown, code: string): boolean {
 
 function waitForLockRetry(): void {
   Atomics.wait(lockWaitBuffer, 0, 0, LOCK_RETRY_DELAY_MS);
+}
+
+function buildInvalidTaskStorageError(): Error {
+  return new Error('Task storage must be a regular file without symbolic links');
+}
+
+function assertTaskStoragePath(projectDir: string, tasksFile: string): fs.Stats | null {
+  assertPathSegmentsAreSafe(
+    projectDir,
+    tasksFile,
+    (_violation, _segmentPath) => buildInvalidTaskStorageError(),
+    { rejectSamePath: true },
+  );
+  if (!isRealPathInside(projectDir, path.dirname(tasksFile))) {
+    throw buildInvalidTaskStorageError();
+  }
+
+  const stats = lstatIfExists(tasksFile);
+  if (stats !== null && (stats.isSymbolicLink() || !stats.isFile())) {
+    throw buildInvalidTaskStorageError();
+  }
+  return stats;
+}
+
+function readTaskStorageFile(projectDir: string, tasksFile: string): string | null {
+  let fileDescriptor: number | undefined;
+  try {
+    if (assertTaskStoragePath(projectDir, tasksFile) === null) {
+      return null;
+    }
+    const noFollowFlag = fs.constants.O_NOFOLLOW;
+    if (noFollowFlag === undefined) {
+      throw buildInvalidTaskStorageError();
+    }
+    fileDescriptor = fs.openSync(tasksFile, fs.constants.O_RDONLY | noFollowFlag);
+    if (!fs.fstatSync(fileDescriptor).isFile()) {
+      throw buildInvalidTaskStorageError();
+    }
+    return fs.readFileSync(fileDescriptor, 'utf-8');
+  } catch (error) {
+    if (isFileSystemError(error, 'ELOOP')) {
+      throw buildInvalidTaskStorageError();
+    }
+    throw error;
+  } finally {
+    if (fileDescriptor !== undefined) {
+      fs.closeSync(fileDescriptor);
+    }
+  }
 }
 
 export class TaskStore {
@@ -40,6 +94,22 @@ export class TaskStore {
 
   read(): TasksFileData {
     return this.withLock(() => this.readUnsafe());
+  }
+
+  readOnly(): TasksFileData {
+    let raw: string | null;
+    try {
+      raw = readTaskStorageFile(this.projectDir, this.tasksFile);
+    } catch (error) {
+      if (isFileSystemError(error, 'ENOENT')) {
+        return { tasks: [] };
+      }
+      throw error;
+    }
+    if (raw === null) {
+      return { tasks: [] };
+    }
+    return TasksFileSchema.parse(parseYaml(raw) as unknown);
   }
 
   update(mutator: (current: TasksFileData) => TasksFileData): TasksFileData {

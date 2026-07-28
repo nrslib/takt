@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod/v4';
-import { enqueueTaskInputSchema } from '../features/mcp/schemas.js';
+import { enqueueTaskInputSchema, listTasksInputSchema } from '../features/mcp/schemas.js';
 
 const required = {
   cwd: '/repo',
@@ -10,6 +10,18 @@ const required = {
 } as const;
 
 describe('MCP tool input schema', () => {
+  it('accepts exactly an absolute cwd for task listing', () => {
+    expect(listTasksInputSchema.parse({ cwd: '/repo' })).toEqual({ cwd: '/repo' });
+  });
+
+  it.each([
+    {},
+    { cwd: 'repo' },
+    { cwd: '/repo', status: 'pending' },
+  ])('rejects non-minimal task listing input %#', (input) => {
+    expect(() => listTasksInputSchema.parse(input)).toThrow();
+  });
+
   it('preserves normal enqueue fields and task boundary whitespace', () => {
     const task = '\n# Implement MCP support\n\nKeep formatting.  \n';
     expect(enqueueTaskInputSchema.parse({

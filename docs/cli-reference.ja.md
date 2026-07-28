@@ -150,6 +150,7 @@ codex mcp add takt -- takt-mcp
 | Tool | 説明 |
 |------|------|
 | `takt_enqueue_task` | pending タスクを `.takt/tasks.yaml` に保存し、既存 Issue の紐付けまたは新規 Issue 作成を任意で行う。 |
+| `takt_list_tasks` | タスク履歴と状態別件数を、タスク保存領域を変更せずに読み取る。 |
 
 各 tool の `cwd` は `realpath` で解決され、MCP server の許可 project root 内にある必要があります。既定の許可 root は `takt-mcp` を起動したディレクトリです。
 
@@ -181,7 +182,17 @@ codex mcp add takt -- takt-mcp
 
 `issue` object は `{ "number": 123 }` または `{ "create": true, "title"?: "...", "labels"?: ["..."] }` のいずれかだけを指定します。混在 key、空の title・label、unknown key は拒否されます。Issue 付き enqueue の成功結果には `issueNumber` を含みます。Issue 番号の解決後にタスク保存が失敗またはキャンセルされた場合も Issue は open のまま残り、MCP error result は `issueCreated`、`issueNumber`、任意の `issueUrl`、`taskEnqueued`、`stage`、sanitize 済みの `error` を返します。`{ "issue": { "number": issueNumber } }` で再試行すれば、新しい Issue は作成されません。`stage` が `issue_number_parsing` の場合は `issueNumber` を返せないため、任意の `issueUrl` で作成済み Issue を特定し、番号を確認してから再試行してください。
 
-MCP はタスクの enqueue だけを担当します。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。
+MCP はタスクの enqueue と読み取り専用の履歴参照を担当します。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。
+
+### `takt_list_tasks`
+
+必須入力:
+
+| フィールド | 型 | 説明 |
+|-----------|----|------|
+| `cwd` | 絶対パス文字列 | `.takt/tasks.yaml` を読み取る project root。 |
+
+この tool は status filter も結果件数の上限も設けず、履歴全件を返します。`summary` には `total`、`pending`、`running`、`completed`、`failed`、`exceeded`、`pr_failed` の件数が含まれます。各 task に含まれるのは `name`、`status`、任意の `workflow` と `branch` だけです。タスク本文、failure 詳細、worktree/run/task-file path などのローカル path は返しません。`.takt/tasks.yaml` が存在しない場合は空の履歴を返し、`.takt` や task file などを作成しません。読み取り時に task の claim、fail、書き換えなどの状態変更は行いません。
 
 ## Instant Exec モード
 
