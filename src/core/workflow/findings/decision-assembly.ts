@@ -22,12 +22,12 @@ import type {
 } from './types.js';
 import { FINDING_SEVERITIES } from '../../models/finding-types.js';
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
-import { normalizeFindingText, parseFindingLocation } from './location.js';
 import { hasDisputeClaimFor } from './manager-output-validation.js';
 import { FILE_LINE_EVIDENCE_PATTERN } from './evidence.js';
 import { effectiveRawFindingRelation, mergeFindingManagerOutputs } from './mechanical-classification.js';
 import { collectRegeneratedConflictIds, formatConflictId } from '../../models/finding-conflict-identity.js';
 import { collectActiveConflictFindingIds, rejectConflictTouchedDuplicates } from './manager-plan-normalization.js';
+import { computeClaimIdentityHash } from './evidence-domain.js';
 
 /**
  * findings-manager が最終結果（8配列以上）を自力で組み立てると、台帳の不変条件
@@ -230,33 +230,25 @@ function appendGroupedConflict(
 }
 
 /**
- * 機械的に畳んでよい「疑いようのない重複」の識別キー: 正規化した
- * path + title + description の完全一致。familyTag と行番号は分類・検索
- * ヒントに過ぎず同一性の根拠にしない。
+ * 機械的に畳んでよい「疑いようのない重複」の識別キーは claimIdentityHash。
+ * evidence location・familyTag・suggestion は同一性の根拠にしない。
  *
- * description まで要求するのは、path + タイトルだけで畳むと、同じタイトル・
- * 同じファイルだが failure mode が異なる本当に別の問題まで誤って1つに畳んで
- * しまうため（禁止された「意味なし自動マージ」— regression requirement。
  * 同ラウンド内 new+new のグルーピングと、保存直前の再照合で既存 open finding
- * へ付け替えるリダイレクトの両方が、この同じ厳格キーを使う）。取りこぼした
- * 本当の重複は manager が duplicateDecisions で後から統合できる。
- *
- * 正規化は大小文字を保存する（normalizeFindingText: trim + 空白畳み込みのみ）。
- * 小文字化すると `Wrong identifier PATH` と `Wrong identifier Path` のような
- * 大小文字を区別する識別子への別指摘が「完全一致」扱いで誤統合される
- * （runtime reproductionで再現）。大小文字の表記ゆれ程度の重複は manager が
- * duplicateDecisions で意味判断のうえ統合すればよい。
+ * へ付け替えるリダイレクトの両方が同じ正本を使う。
  */
-function findingIdentityKey(path: string | undefined, title: string, description: string | undefined): string {
-  return JSON.stringify([
-    path ?? '',
-    normalizeFindingText(title),
-    description !== undefined ? normalizeFindingText(description) : '',
-  ]);
+function findingIdentityKey(
+  title: string,
+  description: string | undefined,
+): string {
+  return computeClaimIdentityHash({
+    targetFindingId: null,
+    title,
+    description: description ?? '',
+  });
 }
 
 function newFindingGroupKey(raw: RawFinding): string {
-  return findingIdentityKey(parseFindingLocation(raw.location)?.path, raw.title, raw.description);
+  return findingIdentityKey(raw.title, raw.description);
 }
 
 /** FINDING_SEVERITIES は重い順。畳んだ finding は最も重い severity を採る。 */
@@ -270,10 +262,7 @@ function severityRank(severity: FindingSeverity): number {
  * "new" と判断しても、他の子が直前に立てた finding をこの索引で検出し、
  * "same" として畳み込む（重複作成の防止。boundary requirementの再現ケース: 並列子2つが
  * 同じ問題を new と判断し、F-0001 と F-0002 が重複作成された）。キーは
- * findingIdentityKey（path+title+description の完全一致）— path+title だけの
- * リダイレクトは manager の明示的な new 判断を意味判断なしで same に付け替える
- * 禁止マージだった（regression requirement）。完全同一の raw なら description
- * も一致するため、並列子競合対策としてはこの厳格キーで引き続き成立する。
+ * findingIdentityKey（claimIdentityHash）を使用する。
  */
 function buildOpenFindingKeyIndex(previousLedger: FindingLedger): Map<string, string> {
   const index = new Map<string, string>();
@@ -281,7 +270,7 @@ function buildOpenFindingKeyIndex(previousLedger: FindingLedger): Map<string, st
     if (finding.status !== 'open') {
       continue;
     }
-    const key = findingIdentityKey(parseFindingLocation(finding.location)?.path, finding.title, finding.description);
+    const key = findingIdentityKey(finding.title, finding.description);
     if (!index.has(key)) {
       index.set(key, finding.id);
     }
@@ -340,7 +329,7 @@ function assembleRawDecisions(input: {
         reject(decision, '"unsupported" decisions must not reference a findingId; the target comes from the raw finding\'s own targetFindingId');
         continue;
       }
-      if (raw.targetFindingId === undefined) {
+      if (raw.targetFindingId === null) {
         reject(decision, `Cannot mark raw finding "${raw.rawFindingId}" as unsupported because it has no targetFindingId`);
         continue;
       }
@@ -371,13 +360,17 @@ function assembleRawDecisions(input: {
         continue;
       }
       // 台帳の再照合（保存直前の再読込等）では、LLM が判断した時点では存在
-      // しなかった open finding が既に同じ内容（path+title+description の完全
+      // しなかった open finding が既に同じ claimIdentityHash を持つ
       // 一致）で立っていることがある（並列子が同一の raw を先に "new" と判断
       // したケース）。LLM は他の子の直前の判断を知り得ないため、"new" ではなく
       // "same" として扱い、重複作成を避ける。キーは同ラウンド new+new の
-      // グルーピングと同一の findingIdentityKey — path+title だけのリダイレクトは
+      // グルーピングと同一の findingIdentityKey —
       // manager の明示的な new 判断を覆す禁止マージだった。
       const groupKey = newFindingGroupKey(raw);
+      if (raw.severity === null) {
+        reject(decision, `Cannot create a finding from raw finding "${raw.rawFindingId}" without severity`);
+        continue;
+      }
       const existingOpenFindingId = openFindingKeyIndex.get(groupKey);
       if (existingOpenFindingId !== undefined) {
         appendGroupedFindingDecision(matchesByFindingId, existingOpenFindingId, raw.rawFindingId, decision.evidence);

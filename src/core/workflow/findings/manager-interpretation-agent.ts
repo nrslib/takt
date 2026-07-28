@@ -11,6 +11,10 @@ import { buildManagerInputLedger, runManagerAttempt } from './manager-agent.js';
 import type { AmbiguousInterpretation, DeterministicSameProof, FindingLedger } from './types.js';
 import type { CanonicalIntakeItem } from './manager-admission.js';
 import type { LadderTarget } from './manager-contracts.js';
+import {
+  formatFileQuoteLocation,
+  rawFindingFileQuoteLocations,
+} from './evidence-location.js';
 
 const log = createLogger('finding-manager-interpretation');
 
@@ -34,7 +38,7 @@ function buildInterpretationInstruction(input: {
     targetFindingId: target.canonical.targetFindingId ?? null,
     ambiguityCodes: target.canonical.provenance.ambiguityCodes,
     title: target.wire.title,
-    location: target.wire.location ?? null,
+    locations: rawFindingFileQuoteLocations(target.wire).map(formatFileQuoteLocation),
     severity: target.wire.severity,
     description: target.wire.description,
     availableSameProofId: input.proofsByRawId.get(target.canonical.rawFindingId)?.proofId ?? null,

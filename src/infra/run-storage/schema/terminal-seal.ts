@@ -24,6 +24,7 @@ const SCOPED_AUTHORITY_TABLES = [
   ['finding_ledger_heads', 'scope_id'],
   ['finding_ledger_controls', 'scope_id'],
   ['finding_entries', 'scope_id'],
+  ['finding_evidence_records', 'scope_id'],
   ['finding_raw_entries', 'scope_id'],
   ['finding_conflict_entries', 'scope_id'],
   ['finding_interpretation_entries', 'scope_id'],

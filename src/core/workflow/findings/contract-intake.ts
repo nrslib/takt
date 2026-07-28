@@ -127,7 +127,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function getRawFindingSnapshotIdEnum(structuredOutput: WorkflowStructuredOutput): unknown {
+function getSingleSchemaValue(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (value.const !== undefined) {
+    return value.const;
+  }
+  return Array.isArray(value.enum) && value.enum.length === 1
+    ? value.enum[0]
+    : undefined;
+}
+
+function getFileQuoteSnapshotIdConst(structuredOutput: WorkflowStructuredOutput): unknown {
   const properties = structuredOutput.schema.properties;
   if (!isRecord(properties)) {
     return undefined;
@@ -137,10 +149,33 @@ function getRawFindingSnapshotIdEnum(structuredOutput: WorkflowStructuredOutput)
     return undefined;
   }
   const itemProperties = rawFindings.items.properties;
-  if (!isRecord(itemProperties) || !isRecord(itemProperties.snapshotId)) {
+  if (!isRecord(itemProperties) || !isRecord(itemProperties.evidence)) {
     return undefined;
   }
-  return itemProperties.snapshotId.enum;
+  const evidenceItems = itemProperties.evidence.items;
+  if (!isRecord(evidenceItems)) {
+    return undefined;
+  }
+  const evidenceBranches = Array.isArray(evidenceItems.oneOf)
+    ? evidenceItems.oneOf
+    : evidenceItems.anyOf;
+  if (!Array.isArray(evidenceBranches)) {
+    return undefined;
+  }
+  const fileQuoteBranches = evidenceBranches.filter((branch) => {
+    if (!isRecord(branch) || !isRecord(branch.properties)) return false;
+    const kind = branch.properties.kind;
+    return getSingleSchemaValue(kind) === 'file_quote';
+  });
+  if (fileQuoteBranches.length !== 1) {
+    return undefined;
+  }
+  const fileQuote = fileQuoteBranches[0]!;
+  if (!isRecord(fileQuote) || !isRecord(fileQuote.properties)) {
+    return undefined;
+  }
+  const snapshotId = fileQuote.properties.snapshotId;
+  return getSingleSchemaValue(snapshotId);
 }
 
 function assertReviewerStructuredOutputSnapshot(
@@ -154,16 +189,11 @@ function assertReviewerStructuredOutputSnapshot(
   if (!structuredOutput || !reviewScopeSnapshotId) {
     throw new Error('Finding contract reviewer context requires raw findings structured output and reviewScopeSnapshotId');
   }
-  const snapshotIdEnum = getRawFindingSnapshotIdEnum(structuredOutput);
-  if (
-    !Array.isArray(snapshotIdEnum)
-    || snapshotIdEnum.length !== 2
-    || snapshotIdEnum[0] !== ''
-    || snapshotIdEnum[1] !== reviewScopeSnapshotId
-  ) {
+  const snapshotIdConst = getFileQuoteSnapshotIdConst(structuredOutput);
+  if (snapshotIdConst !== reviewScopeSnapshotId) {
     throw new Error(
-      'Finding contract reviewer context requires rawFindings snapshotId enum to be exactly '
-      + '["", reviewScopeSnapshotId]',
+      'Finding contract reviewer context requires the file_quote evidence snapshotId const '
+      + 'to equal reviewScopeSnapshotId',
     );
   }
 }

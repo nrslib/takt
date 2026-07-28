@@ -9,6 +9,7 @@
 import type { FindingLedger, FindingLedgerEntry } from '../../core/models/finding-types.js';
 import type { FindingStatus, FindingSeverity, FindingDecision, FixActionEvent, FixActionType, ReviewFindingEvent } from './events.js';
 import { writeAnalyticsEvent } from './writer.js';
+import { findingAnalyticsDisplayLocation } from '../../core/workflow/findings/evidence-location.js';
 
 export interface ParsedFinding {
   findingId: string;
@@ -171,7 +172,7 @@ export function buildReviewFindingEventsFromLedger(
     : 'approve';
 
   return ledger.findings.map((finding) => {
-    const { file, line } = parseLocation(finding.location ?? '');
+    const { file, line } = parseLocation(findingAnalyticsDisplayLocation(ledger, finding) ?? '');
     return {
       type: 'review_finding',
       findingId: finding.id,

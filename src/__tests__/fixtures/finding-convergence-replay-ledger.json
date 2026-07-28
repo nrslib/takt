@@ -10,7 +10,9 @@
       "revision": 1,
       "severity": "medium",
       "title": "interactive --pr で PR 画像の一時ディレクトリが解放されない",
-      "location": "src/app/cli/routing.ts:296",
+      "evidenceIds": [
+        "d47330d2c8d6264a9c66a1b1420c68f82dbfd6f69e76a21a4da31394d01d57a3"
+      ],
       "description": "PR 画像は resolvePrReviewImageAttachments() が返す cleanupAttachments でのみ削除されますが、executeDefaultAction() は result.attachments が存在する場合に prCleanupAttachments を呼びません。実際の interactive/quiet 経路では createSessionImageAttachmentStore(initialInput?.attachments) が初期 PR 添付を result.attachments に含め、cleanupInteractiveResultAttachments(result) は sessionDir だけを削除するため、PR 画像の tempPath は残ります。確認箇所: src/features/interactive/imageAttachments.ts:135, src/features/interactive/imageAttachments.ts:163。",
       "suggestion": "dispatchConversationAction 完了後は、result のセッション添付 cleanup と PR 添付 cleanup を別責務として両方実行してください。PR 添付が result.attachments に含まれていても、コピー/実行/保存が終わった後に prCleanupAttachments を必ず await する構造にしてください。",
       "reviewers": [
@@ -37,7 +39,9 @@
       "revision": 7,
       "severity": "medium",
       "title": "Fragile distributed cleanup pattern for image attachments",
-      "location": "src/app/cli/routing.ts:299",
+      "evidenceIds": [
+        "95d9d3df00471e2ba89b458c937c0fee2eb3d7c95fc45e579f5798dc3895ff66"
+      ],
       "description": "I have verified that the distributed cleanup logic for image attachments is still present and fragmented across multiple call sites in `src/app/cli/routing.ts`. Specifically, `prCleanupAttachments` is called manually in several locations (e.g., lines 155, 172, and 299), and it is bundled with `cleanupInteractiveResultAttachments` in a combined `cleanupResult` function. This architecture still relies on each call site correctly implementing the cleanup chain, which is the exact structural weakness described in F-0011. The issue persists despite some improvements in `addTask`.",
       "suggestion": "Implement a centralized resource management system (e.g., a session-scoped attachment manager) that tracks all temporary resources and ensures they are cleaned up exactly once at the end of the CLI session, removing the need for manual `cleanupAttachments` calls across the routing logic.",
       "reviewers": [
@@ -96,7 +100,9 @@
       "revision": 3,
       "severity": "medium",
       "title": "interactive --pr で PR 画像の一時ディレクトリが解放されない",
-      "location": "src/app/cli/routing.ts:302",
+      "evidenceIds": [
+        "2911e88704219321d862e073a44e4f0c526f0f8f57e2e5037989086d666d1815"
+      ],
       "description": "`src/app/cli/routing.ts` において、`prCleanupAttachments` の呼び出しが L129, L146, L160, L177, L302 に分散して手動で行われており、リソース管理の責任が各コールサイトに分散している。これは F-0011 で指摘された「脆弱な分散クリーンアップパターン」であり、構造的な改善（セッションスコープのマネージャー導入等）がなされていない。",
       "suggestion": "セッションスコープのリソースマネージャーを導入し、CLI終了時に一括して一時ファイルをクリーンアップする仕組みを導入することで、手動のクリーンアップ呼び出しを排除してください。",
       "reviewers": [
@@ -137,7 +143,9 @@
       "revision": 2,
       "severity": "medium",
       "title": "Fragile distributed cleanup pattern for image attachments",
-      "location": "src/app/cli/routing.ts:302",
+      "evidenceIds": [
+        "2911e88704219321d862e073a44e4f0c526f0f8f57e2e5037989086d666d1815"
+      ],
       "description": "`src/app/cli/routing.ts` において、`prCleanupAttachments` の呼び出しが L158, L175, L302 に分散しており、コールサイトごとに解放責任を負わせる構造である。これは F-0011 で指摘された「脆弱な分散クリーンアップパターン」そのままであり、構造的な改善がなされていない。",
       "suggestion": "セッションスコープのリソースマネージャーを導入し、CLI終了時に一括して一時ファイルをクリーンアップする仕組みを導入してください。",
       "reviewers": [
@@ -169,13 +177,47 @@
       ]
     }
   ],
+  "evidenceRecords": [
+    {
+      "evidenceId": "d47330d2c8d6264a9c66a1b1420c68f82dbfd6f69e76a21a4da31394d01d57a3",
+      "kind": "file_quote",
+      "path": "src/app/cli/routing.ts",
+      "startLine": 296,
+      "endLine": 296,
+      "verbatimExcerpt": "historical routing evidence line 296",
+      "snapshotId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "claimIdentityHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "fileHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "evidenceId": "95d9d3df00471e2ba89b458c937c0fee2eb3d7c95fc45e579f5798dc3895ff66",
+      "kind": "file_quote",
+      "path": "src/app/cli/routing.ts",
+      "startLine": 299,
+      "endLine": 299,
+      "verbatimExcerpt": "historical routing evidence line 299",
+      "snapshotId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "claimIdentityHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "fileHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "evidenceId": "2911e88704219321d862e073a44e4f0c526f0f8f57e2e5037989086d666d1815",
+      "kind": "file_quote",
+      "path": "src/app/cli/routing.ts",
+      "startLine": 302,
+      "endLine": 302,
+      "verbatimExcerpt": "historical routing evidence line 302",
+      "snapshotId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "claimIdentityHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "fileHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  ],
   "rawFindings": [
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0011-ROUTING",
       "familyTag": "resource-leak",
       "severity": "medium",
       "title": "Fragile distributed cleanup pattern for image attachments persists in routing.ts",
-      "location": "src/app/cli/routing.ts:302",
       "description": "`src/app/cli/routing.ts` において、`prCleanupAttachments` の呼び出しが L129, L146, L160, L177, L302 に分散して手動で行われており、リソース管理の責任が各コールサイトに分散している。これは F-0011 で指摘された「脆弱な分散クリーンアップパターン」であり、構造的な改善（セッションスコープのマネージャー導入等）がなされていない。",
       "suggestion": "セッションスコープのリソースマネージャーを導入し、CLI終了時に一括して一時ファイルをクリーンアップする仕組みを導入することで、手動のクリーンアップ呼び出しを排除してください。",
       "targetFindingId": "F-0011",
@@ -187,14 +229,23 @@
       },
       "reviewer": "ai-antipattern-review",
       "stepName": "ai-antipattern-review",
-      "relation": "persists"
+      "relation": "persists",
+      "evidence": [
+        {
+          "kind": "file_quote",
+          "path": "src/app/cli/routing.ts",
+          "startLine": 302,
+          "endLine": 302,
+          "verbatimExcerpt": "historical routing cleanup fixture",
+          "snapshotId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0006-ROUTING",
       "familyTag": "resource-leak",
       "severity": "medium",
       "title": "interactive --pr mode cleanup consistency risk persists",
-      "location": "src/app/cli/routing.ts:302",
       "description": "`src/app/cli/routing.ts:302` の `finally` ブロックで `prCleanupAttachments` が呼ばれているが、`interactiveSeed` (L192) で注入された PR 添付が `result.attachments` に引き継がれた場合、`cleanupInteractiveResultAttachments(result)` (L303) ではこれらの PR 添付（tempPath）を適切に処理できず、元の PR 添付としてのライフサイクル管理と整合性が取れなくなるリスクがある。特に、`dispatchConversationAction` 内の各アクションが成功/失敗した際のリソース状態が不透明である。",
       "suggestion": "PR添付のリソース管理をセッション添付とは明確に分離し、`dispatchConversationAction` の完了後、結果に関わらず `prCleanupAttachments` が確実に一度だけ呼ばれることを保証する構造にしてください。",
       "targetFindingId": "F-0006",
@@ -206,14 +257,23 @@
       },
       "reviewer": "ai-antipattern-review",
       "stepName": "ai-antipattern-review",
-      "relation": "persists"
+      "relation": "persists",
+      "evidence": [
+        {
+          "kind": "file_quote",
+          "path": "src/app/cli/routing.ts",
+          "startLine": 302,
+          "endLine": 302,
+          "verbatimExcerpt": "historical routing cleanup fixture",
+          "snapshotId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0017-ROUTING",
       "familyTag": "resource-leak",
       "severity": "medium",
       "title": "Opaque resource release timing persists in routing.ts",
-      "location": "src/app/cli/routing.ts:302",
       "description": "`src/app/cli/routing.ts:302` に基づくクリーンアップ構造は、F-0017 で指摘された通り、分散した呼び出し箇所に依存しており、リソース解放のタイミングが不透明である。",
       "suggestion": "F-0011 同様、集中管理されたマネージャーによる一括解放へ移行してください。",
       "targetFindingId": "F-0017",
@@ -225,7 +285,17 @@
       },
       "reviewer": "ai-antipattern-review",
       "stepName": "ai-antipattern-review",
-      "relation": "persists"
+      "relation": "persists",
+      "evidence": [
+        {
+          "kind": "file_quote",
+          "path": "src/app/cli/routing.ts",
+          "startLine": 302,
+          "endLine": 302,
+          "verbatimExcerpt": "historical routing cleanup fixture",
+          "snapshotId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
     }
   ],
   "conflicts": [

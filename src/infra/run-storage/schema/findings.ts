@@ -1,5 +1,6 @@
 const JSON_RECORD_TABLES = [
   ['finding_entries', 'finding_id', '$.id'],
+  ['finding_evidence_records', 'evidence_id', '$.evidenceId'],
   ['finding_raw_entries', 'raw_finding_id', '$.rawFindingId'],
   ['finding_conflict_entries', 'conflict_id', '$.id'],
   ['finding_interpretation_entries', 'interpretation_key', '$.interpretationKey'],
@@ -50,6 +51,7 @@ export const FINDINGS_DDL = [
     workflow_name TEXT NOT NULL CHECK (length(workflow_name) > 0),
     next_id INTEGER NOT NULL CHECK (next_id > 0),
     finding_count INTEGER NOT NULL CHECK (finding_count >= 0),
+    evidence_record_count INTEGER NOT NULL CHECK (evidence_record_count >= 0),
     raw_finding_count INTEGER NOT NULL CHECK (raw_finding_count >= 0),
     conflict_count INTEGER NOT NULL CHECK (conflict_count >= 0),
     interpretation_count INTEGER NOT NULL CHECK (interpretation_count >= 0),
@@ -157,6 +159,11 @@ FINDINGS_DDL.push(
       ), 1)
       AND NEW.finding_count = (
         SELECT count(*) FROM finding_entries
+        WHERE run_id = NEW.run_id AND scope_id = NEW.scope_id
+          AND revision = NEW.revision
+      )
+      AND NEW.evidence_record_count = (
+        SELECT count(*) FROM finding_evidence_records
         WHERE run_id = NEW.run_id AND scope_id = NEW.scope_id
           AND revision = NEW.revision
       )
@@ -293,6 +300,7 @@ export const FINDING_AUTHORITY_TABLES = Object.freeze([
   'finding_ledger_revisions',
   'finding_ledger_heads',
   'finding_entries',
+  'finding_evidence_records',
   'finding_raw_entries',
   'finding_conflict_entries',
   'finding_interpretation_entries',

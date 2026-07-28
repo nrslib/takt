@@ -19,6 +19,7 @@ import type { FindingManagerDecisions } from '../core/models/finding-types.js';
 import { reconcileCommitPlan } from '../core/workflow/findings/manager-commit-finalization.js';
 import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
 import {
   createFindingManagerPublicationDouble,
   RevisionedFindingLedgerTestRepository,
@@ -40,19 +41,20 @@ function provisionalEntry(
     lifecycle: 'new',
     severity: 'medium',
     title: '必須品質ゲートの実行証跡がない',
+    evidenceIds: [],
     reviewers: ['coding-review'],
     rawFindingIds: ['raw-1'],
     firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
     lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
     provisional: {
-      kind: 'unverified-locationless',
+      kind: 'raw-meaning-ambiguous',
       stableKey: 'stable-1',
       lineageKey: 'lineage-1',
       sourceRawFindingIds: ['raw-1'],
-      reason: 'a new locationless claim has no mechanically verifiable source_quote evidence',
+      reason: 'the raw finding meaning requires adjudication',
       firstObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
       lastObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
-      interpretationEpochs: 0,
+      interpretationEpochs: 2,
       gateEffect: 'block',
       firstObservedRound: 1,
     },
@@ -65,6 +67,7 @@ function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLe
     workflowName: 'peer-review',
     nextId: findings.length + 1,
     updatedAt: '2026-07-01T00:00:00.000Z',
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
     interpretations: [],
@@ -75,7 +78,7 @@ function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLe
 
 type TestReconcileInput = Omit<
   Parameters<typeof reconcileFindingLedgerStrict>[0],
-  'provisionalFindings' | 'rawFindingDispositions' | 'rawProvenanceByRawFindingId'
+  'provisionalFindings' | 'rawFindingDispositions' | 'rawProvenanceByRawFindingId' | 'verifiedEvidenceRecordsByRawFindingId'
 >;
 
 function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
@@ -83,6 +86,7 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
     ...input,
     provisionalFindings: [],
     rawFindingDispositions: [],
+    verifiedEvidenceRecordsByRawFindingId: new Map(),
     rawProvenanceByRawFindingId: new Map(input.rawFindings.map((rawFinding) => [
       rawFinding.rawFindingId,
       storedRawReconcileProvenance(
@@ -94,12 +98,10 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
           reviewerPersonaKey: rawFinding.reviewer,
         }),
         computeLineageKey({
-          ...(rawFinding.targetFindingId !== undefined
+          claimIdentityHash: computeClaimIdentityHash(rawFinding),
+          ...(rawFinding.targetFindingId !== null
             ? { targetFindingId: rawFinding.targetFindingId }
             : {}),
-          ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
-          title: rawFinding.title,
-          familyTag: rawFinding.familyTag,
         }),
       ),
     ])),
@@ -143,7 +145,7 @@ describe('computeDismissCandidates', () => {
       }),
       provisionalEntry({ revision: 1,
         id: 'F-0008',
-        provisional: { ...provisionalEntry({ revision: 1 }).provisional!, kind: 'invalid-location-evidence', stableKey: 'stable-8' },
+        provisional: { ...provisionalEntry({ revision: 1 }).provisional!, kind: 'stale-precondition', stableKey: 'stable-8' },
       }),
       provisionalEntry({ revision: 1,
         id: 'F-0009',
@@ -170,13 +172,14 @@ describe('computeDismissCandidates', () => {
       nextId: 11,
       updatedAt: '2026-01-01T00:00:00.000Z',
       findings,
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
     });
 
     expect([...candidates.keys()].sort()).toEqual(['F-0001', 'F-0002', 'F-0009']);
-    expect(candidates.get('F-0001')).toContain('unverified-locationless');
+    expect(candidates.get('F-0001')).toContain('raw-meaning-ambiguous');
   });
 });
 
@@ -220,6 +223,16 @@ describe('assembleManagerOutput dismissDecisions', () => {
         severity: 'medium',
         title: '解消確認',
         description: 'fixed',
+        suggestion: null,
+        relation: 'resolution_confirmation',
+        targetFindingId: 'F-0001',
+        targetPrecondition: {
+          targetFindingId: 'F-0001',
+          targetRevision: 1,
+          targetStatus: 'open',
+          targetEvidenceHash: '0'.repeat(64),
+        },
+        evidence: [],
       }],
     });
     const mechanicalOutput = {
@@ -298,8 +311,10 @@ describe('reconcileFindingLedger dismissedFindings', () => {
       severity: 'medium',
       title: current.title,
       description: current.description ?? 'same claim',
+      suggestion: null,
       relation: 'new',
-      evidence: { kind: 'locationless', explanation: 'same claim' },
+      targetFindingId: null,
+      evidence: [],
     };
 
     const result = reconcileCommitPlan({
@@ -330,6 +345,7 @@ describe('reconcileFindingLedger dismissedFindings', () => {
       }],
       anomalySpecs: [],
       pendingRejectedObservations: [],
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       rawProvenanceByRawFindingId: new Map([[
         rawFinding.rawFindingId,
         storedRawReconcileProvenance(
@@ -380,7 +396,7 @@ describe('fixpoint snapshot with dismissed provisionals', () => {
   it('dismissed になった provisional は provisionalKeys から消え、id:status として substantiveEntries に現れる', () => {
     const cwd = process.cwd();
     const before = computeFixpointSnapshot(makeLedger([provisionalEntry({ revision: 1 })]), cwd);
-    expect(before.provisionalKeys).toEqual(['stable-1']);
+    expect(before.provisionalKeys).toEqual(['stable-1:recovery:2:0:0:0']);
     expect(before.substantiveEntries).toEqual([]);
 
     const after = computeFixpointSnapshot(

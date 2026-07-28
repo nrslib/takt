@@ -29,12 +29,12 @@ export interface FindingContractInstructionContext {
    */
   rawFindingsStructuredOutput?: WorkflowStructuredOutput;
   /**
-   * review-integrity protocol: reviewer が typed evidence protocol の source_quote 主張に
+   * review-integrity protocol: reviewer が typed evidence protocol の file_quote 主張に
    * echo する review scope snapshot id（snapshot.ts の
    * computeReviewScopeSnapshotId）。reviewer step（includeRawFindingsSchema が
    * true）のときだけ設定される — manager-runner.ts の runFindingManagerForStep が
    * 同じ cwd に対して同じ関数を呼び直し、検証時点の値と比較する
-   * （admission-validation.ts の verifySourceQuoteEvidence 参照）。
+   * （admission-validation.ts の verifyFileQuoteEvidence 参照）。
    */
   reviewScopeSnapshotId?: string;
 }

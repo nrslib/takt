@@ -36,6 +36,7 @@ const ledger: FindingLedger = {
   conflicts: [],
   interpretations: [],
   findings: [],
+  evidenceRecords: [],
 };
 
 function project(items: readonly unknown[]) {
@@ -79,26 +80,36 @@ describe('duplicate rawFindingId allocation under hash collision', () => {
     familyTag: 'correctness',
     severity: 'high',
     title: 'Alpha',
-    location: 'src/alpha.ts:1',
     description: 'Alpha evidence',
     suggestion: 'Fix alpha',
     relation: 'new',
-    evidenceKind: 'source_quote',
-    verbatimExcerpt: 'const alpha = true;',
-    snapshotId: 'snapshot-1',
+    targetFindingId: null,
+    evidence: [{
+      kind: 'file_quote',
+      path: 'src/alpha.ts',
+      startLine: 1,
+      endLine: 1,
+      verbatimExcerpt: 'const alpha = true;',
+      snapshotId: '1'.repeat(64),
+    }],
   };
   const second = {
     rawFindingId: 'duplicate',
     familyTag: 'correctness',
     severity: 'medium',
     title: 'Beta',
-    location: 'src/beta.ts:2',
     description: 'Beta evidence',
     suggestion: 'Fix beta',
     relation: 'new',
-    evidenceKind: 'source_quote',
-    verbatimExcerpt: 'const beta = true;',
-    snapshotId: 'snapshot-1',
+    targetFindingId: null,
+    evidence: [{
+      kind: 'file_quote',
+      path: 'src/beta.ts',
+      startLine: 2,
+      endLine: 2,
+      verbatimExcerpt: 'const beta = true;',
+      snapshotId: '1'.repeat(64),
+    }],
   };
   const clarification = {
     rawFindingId: 'z-clarification',
@@ -106,8 +117,10 @@ describe('duplicate rawFindingId allocation under hash collision', () => {
     severity: 'low',
     title: 'Clarification',
     description: 'Clarification evidence',
+    suggestion: null,
     relation: 'new',
-    evidenceKind: 'locationless',
+    targetFindingId: null,
+    evidence: [],
   };
 
   it('uses complete normalized content after the hash before input index', () => {

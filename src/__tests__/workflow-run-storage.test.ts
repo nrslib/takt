@@ -302,7 +302,7 @@ function withOpenFinding(
         lifecycle: 'new',
         severity: 'high',
         title: `${findingId} remains open`,
-        location: 'src/example.ts:1',
+        evidenceIds: [],
         description: 'Resume must preserve this open finding.',
         reviewers: ['reviewer'],
         rawFindingIds: [],

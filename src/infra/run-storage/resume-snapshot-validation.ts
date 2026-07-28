@@ -184,6 +184,8 @@ export function assertFindingEntryRows(rows: readonly SnapshotRow[]): void {
     const record = JSON.parse(row.record) as Record<string, unknown>;
     const idKey = row.entryKind === 'raw'
       ? 'rawFindingId'
+      : row.entryKind === 'evidence'
+        ? 'evidenceId'
       : row.entryKind === 'interpretation'
         ? 'interpretationKey'
         : 'id';

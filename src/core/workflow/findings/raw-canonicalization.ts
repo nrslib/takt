@@ -19,7 +19,6 @@ import { createHash } from 'node:crypto';
 import { types } from 'node:util';
 import {
   FINDING_SEVERITIES,
-  RAW_FINDING_EVIDENCE_KINDS,
   RAW_FINDING_RELATIONS,
 } from '../../models/finding-types.js';
 import type {
@@ -34,11 +33,10 @@ import type {
   RawAmbiguityCode,
   RawFinding,
   RawFindingEvidence,
-  RawFindingEvidenceKind,
   RawFindingRelation,
   ReviewerRawFindingCandidate,
 } from './types.js';
-import { normalizeFindingText, parseFindingLocation, parseFindingLocationRange } from './location.js';
+import { normalizeFindingText } from './location.js';
 import {
   captureFindingMutationPrecondition,
 } from './finding-preconditions.js';
@@ -49,6 +47,15 @@ import {
   deepFreezeCanonicalJsonValue,
 } from '../../../shared/utils/canonical-json.js';
 import { computeCanonicalRawIntegrityDigest } from './finding-integrity.js';
+import {
+  computeClaimIdentityHash,
+  computeEvidenceSetHash,
+  deduplicateRawEvidence,
+} from './evidence-domain.js';
+import {
+  formatFileQuoteLocation,
+  rawEvidenceFileQuoteLocations,
+} from './evidence-location.js';
 
 // ---------------------------------------------------------------------------
 // runtime brand（factory を通らない object を downstream で拒否するための登録簿）
@@ -57,6 +64,7 @@ import { computeCanonicalRawIntegrityDigest } from './finding-integrity.js';
 const CANDIDATE_REGISTRY = new WeakSet<object>();
 const CANDIDATE_ORIGINS = new WeakMap<object, 'reviewer' | 'stored-ledger' | 'system'>();
 const CANDIDATE_TARGET_PRECONDITIONS = new WeakMap<object, FindingMutationPrecondition>();
+const CANDIDATE_INVALID_EVIDENCE_SHAPES = new WeakSet<object>();
 const CANONICAL_REGISTRY = new WeakSet<object>();
 
 export const RAW_FINDINGS_SCHEMA_REF = 'takt.findings.raw';
@@ -93,12 +101,9 @@ export function computeReviewerStableKey(input: {
   return sha256Of('reviewer-stable-key', input.workflowName, input.callNamespace, input.parentStepName, input.reviewerPersonaKey);
 }
 
-function normalizedPathOf(location: string | undefined): string {
-  return parseFindingLocation(location)?.path ?? '';
-}
-
-function normalizedTitleOf(title: string | undefined): string {
-  return title === undefined ? '' : normalizeFindingText(title).toLowerCase();
+function evidenceLocation(evidence: readonly RawFindingEvidence[]): string | undefined {
+  const location = rawEvidenceFileQuoteLocations(evidence)[0];
+  return location === undefined ? undefined : formatFileQuoteLocation(location);
 }
 
 /**
@@ -106,22 +111,17 @@ function normalizedTitleOf(title: string | undefined): string {
  * タイムスタンプ・LLM 説明文全文は入れない。
  */
 export function computeLineageKey(input: {
+  claimIdentityHash: string;
   targetFindingId?: string;
   collidingFindingId?: string;
-  location?: string;
-  title?: string;
-  familyTag?: string;
 }): string {
-  const path = normalizedPathOf(input.location);
-  const title = normalizedTitleOf(input.title);
   if (input.targetFindingId !== undefined) {
-    return sha256Of('target', input.targetFindingId, path, title);
+    return sha256Of('target', input.targetFindingId, input.claimIdentityHash);
   }
   if (input.collidingFindingId !== undefined) {
-    return sha256Of('collision', input.collidingFindingId, path, title);
+    return sha256Of('collision', input.collidingFindingId, input.claimIdentityHash);
   }
-  const familyTag = input.familyTag === undefined ? '' : normalizeFindingText(input.familyTag).toLowerCase();
-  return sha256Of('claim', path, title, familyTag);
+  return sha256Of('claim', input.claimIdentityHash);
 }
 
 /**
@@ -131,26 +131,10 @@ export function computeLineageKey(input: {
  * MAX 2 / lineage は raw-finding-limits.ts が別途強制する）。
  */
 export function computeRawEvidenceHash(fields: {
-  relation?: RawFindingRelation;
-  targetFindingId?: string;
-  title?: string;
-  description?: string;
-  suggestion?: string;
-  severity?: FindingSeverity;
-  familyTag?: string;
-  location?: string;
+  evidence?: readonly RawFindingEvidence[];
 }): string {
-  return sha256Of(
-    'raw-evidence',
-    fields.relation ?? '',
-    fields.targetFindingId ?? '',
-    normalizedPathOf(fields.location),
-    fields.title === undefined ? '' : normalizeFindingText(fields.title),
-    fields.description === undefined ? '' : normalizeFindingText(fields.description),
-    fields.suggestion === undefined ? '' : normalizeFindingText(fields.suggestion),
-    fields.severity ?? '',
-    fields.familyTag === undefined ? '' : normalizeFindingText(fields.familyTag),
-  );
+  const ids = (fields.evidence ?? []).map((item) => sha256Of('raw-evidence-item', canonicalJson(item)));
+  return computeEvidenceSetHash(ids);
 }
 
 export function computeProvisionalStableKey(input: {
@@ -240,12 +224,6 @@ function pickRelation(value: unknown): RawFindingRelation | undefined {
     : undefined;
 }
 
-function pickEvidenceKind(value: unknown): RawFindingEvidenceKind | undefined {
-  return typeof value === 'string' && (RAW_FINDING_EVIDENCE_KINDS as readonly string[]).includes(value)
-    ? value as RawFindingEvidenceKind
-    : undefined;
-}
-
 const REVIEWER_RAW_ITEM_KEYS: ReadonlySet<string> = new Set([
   'rawFindingId',
   'relation',
@@ -253,51 +231,110 @@ const REVIEWER_RAW_ITEM_KEYS: ReadonlySet<string> = new Set([
   'familyTag',
   'severity',
   'title',
-  'location',
-  'evidenceKind',
-  'verbatimExcerpt',
-  'snapshotId',
+  'evidence',
   'description',
   'suggestion',
 ]);
 const REVIEWER_RAW_EMPTY_STRING_KEYS: ReadonlySet<string> = new Set([
-  'targetFindingId',
-  'location',
-  'verbatimExcerpt',
-  'snapshotId',
-  'suggestion',
 ]);
 
-interface ProjectedReviewerRawItem {
-  readonly record: Record<string, unknown>;
-  readonly sourceBytes: number;
+function projectEvidence(value: unknown): RawFindingEvidence[] | undefined {
+  if (!Array.isArray(value) || types.isProxy(value) || value.length > 16) {
+    return undefined;
+  }
+  const projected: RawFindingEvidence[] = [];
+  for (const item of value) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item) || types.isProxy(item)) {
+      return undefined;
+    }
+    const record = item as Record<string, unknown>;
+    const keys = Object.keys(record);
+    if (
+      record.kind === 'file_quote'
+      && keys.length === 6
+      && keys.every((key) => ['kind', 'path', 'startLine', 'endLine', 'verbatimExcerpt', 'snapshotId'].includes(key))
+      && typeof record.path === 'string'
+      && record.path.length > 0
+      && Number.isSafeInteger(record.startLine)
+      && Number(record.startLine) > 0
+      && Number.isSafeInteger(record.endLine)
+      && Number(record.endLine) > 0
+      && typeof record.verbatimExcerpt === 'string'
+      && record.verbatimExcerpt.length > 0
+      && typeof record.snapshotId === 'string'
+      && record.snapshotId.length > 0
+    ) {
+      projected.push({
+        kind: 'file_quote',
+        path: record.path,
+        startLine: Number(record.startLine),
+        endLine: Number(record.endLine),
+        verbatimExcerpt: record.verbatimExcerpt,
+        snapshotId: record.snapshotId,
+      });
+      continue;
+    }
+    if (
+      record.kind === 'engine_proof'
+      && keys.length === 2
+      && keys.every((key) => key === 'kind' || key === 'proofId')
+      && typeof record.proofId === 'string'
+      && record.proofId.length > 0
+    ) {
+      projected.push({ kind: 'engine_proof', proofId: record.proofId });
+      continue;
+    }
+    return undefined;
+  }
+  return deduplicateRawEvidence(projected);
 }
 
-function rejectedReviewerRawItem(): ProjectedReviewerRawItem {
+export interface ProjectedReviewerRawItem {
+  readonly record: Record<string, unknown>;
+  readonly sourceBytes: number;
+  readonly evidenceShapeValid: boolean;
+}
+
+export interface ReviewerRawResourceEnvelope {
+  readonly itemCount: number;
+  readonly jsonBytes: number;
+  readonly itemSourceBytes: readonly number[];
+}
+
+export interface ProjectedReviewerRawStructuredOutput {
+  readonly structuredOutput: Record<string, unknown>;
+  readonly resourceEnvelope: ReviewerRawResourceEnvelope;
+}
+
+function rejectedReviewerRawItem(sourceBytes: number): ProjectedReviewerRawItem {
   return {
     record: {},
-    sourceBytes: Buffer.byteLength('{}', 'utf-8'),
+    sourceBytes,
+    evidenceShapeValid: false,
   };
 }
 
-function projectReviewerRawItem(item: unknown): ProjectedReviewerRawItem {
+function projectReviewerRawItem(
+  item: unknown,
+  sourceBytes: number,
+): ProjectedReviewerRawItem {
   if (
     typeof item !== 'object'
     || item === null
     || Array.isArray(item)
     || types.isProxy(item)
   ) {
-    return rejectedReviewerRawItem();
+    return rejectedReviewerRawItem(sourceBytes);
   }
   try {
     const prototype = Object.getPrototypeOf(item);
     if (prototype !== Object.prototype && prototype !== null) {
-      return rejectedReviewerRawItem();
+      return rejectedReviewerRawItem(sourceBytes);
     }
     const descriptors = Object.getOwnPropertyDescriptors(item);
     for (const key of Reflect.ownKeys(descriptors)) {
       if (typeof key !== 'string' || !REVIEWER_RAW_ITEM_KEYS.has(key)) {
-        return rejectedReviewerRawItem();
+        return rejectedReviewerRawItem(sourceBytes);
       }
       const descriptor = descriptors[key]!;
       if (
@@ -305,18 +342,11 @@ function projectReviewerRawItem(item: unknown): ProjectedReviewerRawItem {
         || 'get' in descriptor
         || 'set' in descriptor
       ) {
-        return rejectedReviewerRawItem();
+        return rejectedReviewerRawItem(sourceBytes);
       }
     }
-    const sourceRecord: Record<string, unknown> = {};
-    for (const key of Object.keys(descriptors)) {
-      const value = descriptors[key]!.value;
-      if (value !== undefined) {
-        sourceRecord[key] = value;
-      }
-    }
-    const serialized = canonicalJson(sourceRecord);
     const record: Record<string, unknown> = {};
+    let evidenceShapeValid = false;
     for (const key of Object.keys(descriptors)) {
       const descriptor = descriptors[key]!;
       const value = descriptor.value;
@@ -334,11 +364,16 @@ function projectReviewerRawItem(item: unknown): ProjectedReviewerRawItem {
         }
         continue;
       }
-      if (key === 'evidenceKind') {
-        const evidenceKind = pickEvidenceKind(value);
-        if (evidenceKind !== undefined) {
-          record[key] = evidenceKind;
+      if (key === 'evidence') {
+        const evidence = projectEvidence(value);
+        if (evidence !== undefined) {
+          record.evidence = evidence;
+          evidenceShapeValid = true;
         }
+        continue;
+      }
+      if (value === null && ['targetFindingId', 'familyTag', 'severity', 'suggestion'].includes(key)) {
+        record[key] = null;
         continue;
       }
       if (
@@ -350,11 +385,39 @@ function projectReviewerRawItem(item: unknown): ProjectedReviewerRawItem {
     }
     return {
       record,
-      sourceBytes: Buffer.byteLength(serialized, 'utf-8'),
+      sourceBytes,
+      evidenceShapeValid,
     };
   } catch {
-    return rejectedReviewerRawItem();
+    return rejectedReviewerRawItem(sourceBytes);
   }
+}
+
+function measureUntrustedRawItemBytes(item: unknown): number {
+  try {
+    return Buffer.byteLength(canonicalJson(item), 'utf-8');
+  } catch {
+    // 安全に直列化できない shape は、projection で小さく見せず必ず
+    // reviewer byte envelope を超過させる。
+    return Number.MAX_SAFE_INTEGER;
+  }
+}
+
+function resourceEnvelopeForSnapshot(items: readonly unknown[]): ReviewerRawResourceEnvelope {
+  const itemSourceBytes = items.map(measureUntrustedRawItemBytes);
+  const separators = Math.max(0, itemSourceBytes.length - 1);
+  const payloadBytes = itemSourceBytes.reduce(
+    (total, sourceBytes) => Math.min(
+      Number.MAX_SAFE_INTEGER,
+      total + sourceBytes,
+    ),
+    0,
+  );
+  return Object.freeze({
+    itemCount: items.length,
+    jsonBytes: Math.min(Number.MAX_SAFE_INTEGER, 2 + separators + payloadBytes),
+    itemSourceBytes: Object.freeze(itemSourceBytes),
+  });
 }
 
 function snapshotReviewerRawItems(items: readonly unknown[]): unknown[] {
@@ -396,13 +459,16 @@ function snapshotReviewerRawItems(items: readonly unknown[]): unknown[] {
 export function projectReviewerRawFindingItems(
   items: readonly unknown[],
 ): Record<string, unknown>[] {
-  return snapshotReviewerRawItems(items)
-    .map((item) => projectReviewerRawItem(item).record);
+  const snapshot = snapshotReviewerRawItems(items);
+  const envelope = resourceEnvelopeForSnapshot(snapshot);
+  return snapshot.map((item, index) => (
+    projectReviewerRawItem(item, envelope.itemSourceBytes[index]!).record
+  ));
 }
 
-export function projectReviewerRawStructuredOutput(
+export function projectReviewerRawStructuredOutputWithEnvelope(
   value: unknown,
-): Record<string, unknown> {
+): ProjectedReviewerRawStructuredOutput {
   if (
     typeof value !== 'object'
     || value === null
@@ -430,61 +496,22 @@ export function projectReviewerRawStructuredOutput(
   ) {
     throw new TypeError('Reviewer structured output rawFindings must be a data-property array');
   }
+  const snapshot = snapshotReviewerRawItems(rawFindings.value as unknown[]);
+  const resourceEnvelope = resourceEnvelopeForSnapshot(snapshot);
   return {
-    rawFindings: projectReviewerRawFindingItems(rawFindings.value as unknown[]),
+    structuredOutput: {
+      rawFindings: snapshot.map((item, index) => (
+        projectReviewerRawItem(item, resourceEnvelope.itemSourceBytes[index]!).record
+      )),
+    },
+    resourceEnvelope,
   };
 }
 
-/**
- * typed evidence protocol(review-integrity protocol)の組み立て。provider-facing の flat wire
- * フィールド(evidenceKind/verbatimExcerpt/snapshotId)と location から、ネスト済み
- * RawFindingEvidence を作る唯一の関数 — candidate factory
- * (createReviewerRawFindingCandidates)だけがここを通す。
- *
- * - locationless: explanation は独立の wire フィールドを持たせず description を
- *   流用する(弱いモデルへ要求する必須フィールドを増やさない設計判断)。location が
- *   非空でも(「存在するはずの path」を主張する claim)組み立てる — 「存在しない
- *   ことが根拠」の claim を無理に source_quote へ押し込めない、という review evidence
- *   要請どおり、verbatimExcerpt 照合の対象にしない。
- * - source_quote: verbatimExcerpt・snapshotId が両方揃い、かつ location が
- *   「path:line」か「path:start-end」のどちらかの形で行範囲を持つ場合のみ組み立てる。
- *   1点でも欠けたら undefined(evidence なし)を返す — 呼び出し元
- *   (admission-validation.ts の呼び出し側)は「evidence なし」を「location 付き
- *   claim なら不採用」として扱う(欠損を有利に解釈しない)。
- */
-export function resolveRawFindingEvidence(fields: {
-  evidenceKind?: RawFindingEvidenceKind;
-  verbatimExcerpt?: string;
-  snapshotId?: string;
-  location?: string;
-  description?: string;
-}): RawFindingEvidence | undefined {
-  if (fields.evidenceKind === 'locationless') {
-    return { kind: 'locationless', explanation: fields.description ?? '(no description)' };
-  }
-  if (fields.evidenceKind !== 'source_quote') {
-    return undefined;
-  }
-  if (fields.verbatimExcerpt === undefined || fields.snapshotId === undefined) {
-    return undefined;
-  }
-  const range = parseFindingLocationRange(fields.location) ?? singleLineRange(fields.location);
-  if (range === undefined) {
-    return undefined;
-  }
-  return {
-    kind: 'source_quote',
-    path: range.path,
-    startLine: range.startLine,
-    endLine: range.endLine,
-    verbatimExcerpt: fields.verbatimExcerpt,
-    snapshotId: fields.snapshotId,
-  };
-}
-
-function singleLineRange(location: string | undefined): { path: string; startLine: number; endLine: number } | undefined {
-  const parsed = parseFindingLocation(location);
-  return parsed?.line !== undefined ? { path: parsed.path, startLine: parsed.line, endLine: parsed.line } : undefined;
+export function projectReviewerRawStructuredOutput(
+  value: unknown,
+): Record<string, unknown> {
+  return projectReviewerRawStructuredOutputWithEnvelope(value).structuredOutput;
 }
 
 /** brand プロパティ（unique symbol）を型レベルで付与する唯一の cast 地点。runtime の同一性は WeakSet/WeakMap 登録が担保する。 */
@@ -540,19 +567,12 @@ interface DuplicateClaimAllocationKey {
 function normalizedDuplicateClaimContent(
   record: Record<string, unknown>,
 ): string {
-  const evidence = resolveRawFindingEvidence({
-    evidenceKind: pickEvidenceKind(record.evidenceKind),
-    verbatimExcerpt: pickString(record.verbatimExcerpt),
-    snapshotId: pickString(record.snapshotId),
-    location: pickString(record.location),
-    description: pickString(record.description),
-  });
+  const evidence = projectEvidence(record.evidence) ?? [];
   return JSON.stringify([
     'duplicate-raw-finding-id-allocation',
     pickString(record.familyTag) ?? '',
     pickSeverity(record.severity) ?? '',
     pickString(record.title) ?? '',
-    pickString(record.location) ?? '',
     pickString(record.description) ?? '',
     pickString(record.suggestion) ?? '',
     pickRelation(record.relation) ?? '',
@@ -640,6 +660,7 @@ function allocateReviewerLocalIds(
 export function createReviewerRawFindingCandidates(
   items: readonly unknown[],
   context: ReviewerRawIntakeContext,
+  resourceEnvelope?: ReviewerRawResourceEnvelope,
 ): ReviewerRawFindingCandidate[] {
   const reviewerStableKey = computeReviewerStableKey({
     workflowName: context.workflowName,
@@ -656,7 +677,20 @@ export function createReviewerRawFindingCandidates(
   // clarification の priorAmbiguityCodesByRawId は素の明示 ID キーで、改名すると
   // 訂正済み raw の taint（ambiguityOrigin）が外れて clean 権限を得てしまう。
   // 内部採番（item-N）と重複明示 ID のサフィックスだけが予約集合を避けて生成される。
-  const projectedItems = snapshotReviewerRawItems(items).map(projectReviewerRawItem);
+  const snapshot = snapshotReviewerRawItems(items);
+  if (
+    resourceEnvelope !== undefined
+    && (
+      resourceEnvelope.itemCount !== snapshot.length
+      || resourceEnvelope.itemSourceBytes.length !== snapshot.length
+    )
+  ) {
+    throw new Error('Reviewer raw resource envelope does not match the projected item count');
+  }
+  const measuredEnvelope = resourceEnvelope ?? resourceEnvelopeForSnapshot(snapshot);
+  const projectedItems = snapshot.map((item, index) => (
+    projectReviewerRawItem(item, measuredEnvelope.itemSourceBytes[index]!)
+  ));
   const records = projectedItems.map((item) => item.record);
   const claimedIds = records.map((record) => pickString(record.rawFindingId));
   const localIds = allocateReviewerLocalIds(records, claimedIds);
@@ -669,30 +703,27 @@ export function createReviewerRawFindingCandidates(
     const intakeId = namespacedRawFindingId(context, localId);
     // 構造化出力の strict 様式では該当なしの欄が空文字で埋まるため、空文字は
     // 未指定として扱う（pickString が弾く）。
-    const evidence = resolveRawFindingEvidence({
-      evidenceKind: pickEvidenceKind(record.evidenceKind),
-      verbatimExcerpt: pickString(record.verbatimExcerpt),
-      snapshotId: pickString(record.snapshotId),
-      location: pickString(record.location),
-      description: pickString(record.description),
-    });
-    return registerCandidate({
+    const evidence = projectEvidence(record.evidence) ?? [];
+    const candidate = registerCandidate({
       intakeId,
       reviewerStableKey,
       ...(reviewerRawFindingId !== undefined ? { reviewerRawFindingId } : {}),
       ...(pickString(record.familyTag) !== undefined ? { familyTag: pickString(record.familyTag)! } : {}),
       ...(pickSeverity(record.severity) !== undefined ? { severity: pickSeverity(record.severity)! } : {}),
       ...(pickString(record.title) !== undefined ? { title: pickString(record.title)! } : {}),
-      ...(pickString(record.location) !== undefined ? { location: pickString(record.location)! } : {}),
       ...(pickString(record.description) !== undefined ? { description: pickString(record.description)! } : {}),
       ...(pickString(record.suggestion) !== undefined ? { suggestion: pickString(record.suggestion)! } : {}),
       ...(pickRelation(record.relation) !== undefined ? { relation: pickRelation(record.relation)! } : {}),
       ...(pickString(record.targetFindingId) !== undefined ? { targetFindingId: pickString(record.targetFindingId)! } : {}),
-      ...(evidence !== undefined ? { evidence } : {}),
+      evidence,
       sourceBytes: projectedItems[index]!.sourceBytes,
       reviewer: context.reviewerStepName,
       stepName: context.reviewerStepName,
     }, 'reviewer');
+    if (!projectedItems[index]!.evidenceShapeValid) {
+      CANDIDATE_INVALID_EVIDENCE_SHAPES.add(candidate);
+    }
+    return candidate;
   });
 }
 
@@ -706,7 +737,7 @@ export function candidateFromStoredRawFinding(
   if (
     raw.relation !== 'new'
     && (
-      raw.targetFindingId === undefined
+      raw.targetFindingId === null
       || raw.targetPrecondition === undefined
       || raw.targetPrecondition.targetFindingId !== raw.targetFindingId
     )
@@ -719,16 +750,15 @@ export function candidateFromStoredRawFinding(
     intakeId: raw.rawFindingId,
     reviewerStableKey,
     reviewerRawFindingId: raw.rawFindingId,
-    familyTag: raw.familyTag,
-    severity: raw.severity,
+    ...(raw.familyTag !== null ? { familyTag: raw.familyTag } : {}),
+    ...(raw.severity !== null ? { severity: raw.severity } : {}),
     title: raw.title,
-    ...(raw.location !== undefined ? { location: raw.location } : {}),
     description: raw.description,
-    ...(raw.suggestion !== undefined ? { suggestion: raw.suggestion } : {}),
+    ...(raw.suggestion !== null ? { suggestion: raw.suggestion } : {}),
     relation: raw.relation,
-    ...(raw.targetFindingId !== undefined ? { targetFindingId: raw.targetFindingId } : {}),
+    ...(raw.targetFindingId !== null ? { targetFindingId: raw.targetFindingId } : {}),
     // すでに組み立て済みのネスト形（wire と同じ形）なのでそのまま引き継ぐ。
-    ...(raw.evidence !== undefined ? { evidence: raw.evidence } : {}),
+    evidence: [...raw.evidence],
     sourceBytes: Buffer.byteLength(JSON.stringify(raw), 'utf-8'),
     reviewer: raw.reviewer,
     stepName: raw.stepName,
@@ -762,6 +792,7 @@ export function createOverflowRawCandidate(input: {
     title: 'Reviewer output exceeded Finding Contract limits',
     description: input.reason,
     relation: 'new',
+    evidence: [],
     sourceBytes: Buffer.byteLength(input.reason, 'utf-8'),
     reviewer: input.context.reviewerStepName,
     stepName: input.context.reviewerStepName,
@@ -800,50 +831,19 @@ export type CanonicalizationResult =
 
 interface OpenFindingIndexes {
   byId: Map<string, FindingLedgerEntry>;
-  openByPathTitle: Map<string, FindingLedgerEntry>;
-  openIdentityKeys: Set<string>;
-}
-
-function pathTitleKey(location: string | undefined, title: string | undefined): string {
-  return JSON.stringify([normalizedPathOf(location), normalizedTitleOf(title)]);
-}
-
-function identityKey(location: string | undefined, title: string | undefined, description: string | undefined): string {
-  return JSON.stringify([
-    normalizedPathOf(location),
-    normalizedTitleOf(title),
-    description === undefined ? '' : normalizeFindingText(description).toLowerCase(),
-  ]);
 }
 
 function indexLedgerFindings(ledger: FindingLedger): OpenFindingIndexes {
   const byId = new Map<string, FindingLedgerEntry>();
-  const openByPathTitle = new Map<string, FindingLedgerEntry>();
-  const openIdentityKeys = new Set<string>();
   for (const finding of ledger.findings) {
     byId.set(finding.id, finding);
-    if (finding.status !== 'open') {
-      continue;
-    }
-    // provisional（意味を確定できなかった観測の placeholder）は 'new' 衝突検出の
-    // 対象にしない: 同じ claim の clean coherent raw こそが provisional を確定・
-    // 解消できる唯一の証拠であり、衝突扱いで ambiguous に落とすと
-    // provisional が永久に確定不能になる。
-    if (finding.provisional !== undefined) {
-      continue;
-    }
-    const key = pathTitleKey(finding.location, finding.title);
-    if (!openByPathTitle.has(key)) {
-      openByPathTitle.set(key, finding);
-    }
-    openIdentityKeys.add(identityKey(finding.location, finding.title, finding.description));
   }
-  return { byId, openByPathTitle, openIdentityKeys };
+  return { byId };
 }
 
 function buildSafeEvidenceExcerpt(candidate: ReviewerRawFindingCandidate): string {
   const title = candidate.title ?? '(no title)';
-  const location = candidate.location ?? '(no location)';
+  const location = evidenceLocation(candidate.evidence) ?? '(no location)';
   const description = candidate.description !== undefined
     ? normalizeFindingText(candidate.description).slice(0, 200)
     : '(no description)';
@@ -858,6 +858,8 @@ export interface RawAmbiguityFields {
   description?: string;
   severity?: FindingSeverity;
   familyTag?: string;
+  evidence?: readonly RawFindingEvidence[];
+  /** Prompt display only. Identity and regeneration checks use evidence. */
   location?: string;
 }
 
@@ -923,24 +925,7 @@ export function detectRawFindingAmbiguities(
     }
   }
 
-  // new の path/title 衝突（完全同一なら決定的 same にできるため ambiguity ではない）。
-  let collidingFindingId: string | undefined;
-  let collidingFindingTitle: string | undefined;
-  if (claimedRelation === 'new' && fields.targetFindingId === undefined) {
-    const collided = indexes.openByPathTitle.get(pathTitleKey(fields.location, fields.title));
-    if (collided !== undefined
-      && !indexes.openIdentityKeys.has(identityKey(fields.location, fields.title, fields.description))) {
-      codes.push('new-collides-open-finding');
-      collidingFindingId = collided.id;
-      collidingFindingTitle = collided.title;
-    }
-  }
-
-  return {
-    codes,
-    ...(collidingFindingId !== undefined ? { collidingFindingId } : {}),
-    ...(collidingFindingTitle !== undefined ? { collidingFindingTitle } : {}),
-  };
+  return { codes };
 }
 
 /**
@@ -949,8 +934,11 @@ export function detectRawFindingAmbiguities(
  */
 export function extractLenientRawFields(
   item: unknown,
-): RawAmbiguityFields & { rawFindingId?: string; suggestion?: string; verbatimExcerpt?: string; snapshotId?: string } {
-  const record = projectReviewerRawItem(item).record;
+): RawAmbiguityFields & { rawFindingId?: string; suggestion?: string } {
+  // フィールド抽出は resource envelope の計測後にも呼ばれるため、
+  // ここでは canonical JSON の byte 計測を繰り返さない。
+  const record = projectReviewerRawItem(item, 0).record;
+  const evidence = projectEvidence(record.evidence) ?? [];
   return {
     ...(pickString(record.rawFindingId) !== undefined ? { rawFindingId: pickString(record.rawFindingId)! } : {}),
     ...(pickRelation(record.relation) !== undefined ? { relation: pickRelation(record.relation)! } : {}),
@@ -959,11 +947,9 @@ export function extractLenientRawFields(
     ...(pickString(record.description) !== undefined ? { description: pickString(record.description)! } : {}),
     ...(pickSeverity(record.severity) !== undefined ? { severity: pickSeverity(record.severity)! } : {}),
     ...(pickString(record.familyTag) !== undefined ? { familyTag: pickString(record.familyTag)! } : {}),
-    ...(pickString(record.location) !== undefined ? { location: pickString(record.location)! } : {}),
+    evidence,
+    ...(evidenceLocation(evidence) !== undefined ? { location: evidenceLocation(evidence) } : {}),
     ...(pickString(record.suggestion) !== undefined ? { suggestion: pickString(record.suggestion)! } : {}),
-    // typed evidence protocol（review-integrity protocol）の envelope 検査対象フィールド。
-    ...(pickString(record.verbatimExcerpt) !== undefined ? { verbatimExcerpt: pickString(record.verbatimExcerpt)! } : {}),
-    ...(pickString(record.snapshotId) !== undefined ? { snapshotId: pickString(record.snapshotId)! } : {}),
   };
 }
 
@@ -981,7 +967,9 @@ export function canonicalizeReviewerRawFinding(
   canonicalJson(candidate);
   const origin = CANDIDATE_ORIGINS.get(candidate) ?? 'reviewer';
   const detection = detectRawFindingAmbiguities(candidate, context.ledger);
-  const codes = detection.codes;
+  const codes: RawAmbiguityCode[] = CANDIDATE_INVALID_EVIDENCE_SHAPES.has(candidate)
+    ? [...detection.codes, 'invalid-evidence-shape']
+    : detection.codes;
   const collidingFindingId = detection.collidingFindingId;
   const claimedRelation = candidate.relation;
   const storedTargetPrecondition = CANDIDATE_TARGET_PRECONDITIONS.get(candidate);
@@ -1014,29 +1002,25 @@ export function canonicalizeReviewerRawFinding(
     );
   }
 
+  const claimIdentityHash = computeClaimIdentityHash({
+    targetFindingId: candidate.targetFindingId,
+    title: candidate.title ?? '',
+    description: candidate.description ?? '',
+  });
+  const displayLocation = evidenceLocation(candidate.evidence);
   const lineageKey = computeLineageKey({
+    claimIdentityHash,
     ...(candidate.targetFindingId !== undefined ? { targetFindingId: candidate.targetFindingId } : {}),
     ...(collidingFindingId !== undefined ? { collidingFindingId } : {}),
-    ...(candidate.location !== undefined ? { location: candidate.location } : {}),
-    ...(candidate.title !== undefined ? { title: candidate.title } : {}),
-    ...(candidate.familyTag !== undefined ? { familyTag: candidate.familyTag } : {}),
   });
-  const evidenceHash = computeRawEvidenceHash({
-    ...(claimedRelation !== undefined ? { relation: claimedRelation } : {}),
-    ...(candidate.targetFindingId !== undefined ? { targetFindingId: candidate.targetFindingId } : {}),
-    ...(candidate.title !== undefined ? { title: candidate.title } : {}),
-    ...(candidate.description !== undefined ? { description: candidate.description } : {}),
-    ...(candidate.suggestion !== undefined ? { suggestion: candidate.suggestion } : {}),
-    ...(candidate.severity !== undefined ? { severity: candidate.severity } : {}),
-    ...(candidate.familyTag !== undefined ? { familyTag: candidate.familyTag } : {}),
-    ...(candidate.location !== undefined ? { location: candidate.location } : {}),
-  });
+  const evidenceSetHash = computeRawEvidenceHash({ evidence: candidate.evidence });
 
   const base = {
     rawFindingId: candidate.intakeId,
     reviewerStableKey: candidate.reviewerStableKey,
     lineageKey,
-    evidenceHash,
+    claimIdentityHash,
+    evidenceSetHash,
     relation,
     reviewer: candidate.reviewer,
     stepName: candidate.stepName,
@@ -1049,11 +1033,8 @@ export function canonicalizeReviewerRawFinding(
     },
     // typed evidence protocol(review-integrity protocol)。coherent/ambiguous どちらの raw も
     // 持ちうる(ambiguity は relation/target の構造的矛盾であり、evidence の有無とは
-    // 直交する — raw-canonicalization.ts のコメント参照)。evidenceHash とは独立に
-    // 保持する(evidenceHash は WAL/epoch 用の「同一 claim 判定」であり、
-    // verbatimExcerpt が変わっても既存の攻撃回帰の前提を壊さないようスコープ外に
-    // 保つ)。
-    ...(candidate.evidence !== undefined ? { evidence: { ...candidate.evidence } } : {}),
+    // 直交する。claim identity と evidence set のハッシュは別ドメインで保持する。
+    evidence: candidate.evidence.map((item) => ({ ...item })),
   };
 
   // 形式が完全（codes 空）なら coherent。ただし taint（priorCodes）は保持する:
@@ -1069,7 +1050,7 @@ export function canonicalizeReviewerRawFinding(
       severity: candidate.severity,
       title: candidate.title,
       description: candidate.description,
-      ...(candidate.location !== undefined ? { location: candidate.location } : {}),
+      ...(displayLocation !== undefined ? { location: displayLocation } : {}),
       ...(candidate.suggestion !== undefined ? { suggestion: candidate.suggestion } : {}),
       ...(candidate.targetFindingId !== undefined ? { targetFindingId: candidate.targetFindingId } : {}),
     });
@@ -1086,7 +1067,7 @@ export function canonicalizeReviewerRawFinding(
     ...(candidate.severity !== undefined ? { severity: candidate.severity } : {}),
     ...(candidate.title !== undefined ? { title: candidate.title } : {}),
     ...(candidate.description !== undefined ? { description: candidate.description } : {}),
-    ...(candidate.location !== undefined ? { location: candidate.location } : {}),
+    ...(displayLocation !== undefined ? { location: displayLocation } : {}),
     ...(candidate.suggestion !== undefined ? { suggestion: candidate.suggestion } : {}),
   });
   return { outcome: 'ambiguous', canonical };
@@ -1110,7 +1091,7 @@ export function toLedgerRawFinding(canonical: CanonicalRawFinding): RawFinding {
   // description は本文のまま保つ（注記を混ぜない）。ambiguity code や正規化で
   // 落ちた targetFindingId 主張の監査情報は canonical.provenance / 検証レポート /
   // provisional.reason 側にあり、description を汚すと provisional entry と後続の
-  // clean raw の完全 identity（path+title+description）照合が壊れ、確定・
+  // clean raw の claimIdentityHash 照合が壊れ、確定・
   // 解消（evidence CAS requirement の決定的照合）が永久に成立しなくなる。
   const description = canonical.description
     ?? (isCoherent ? '(no description)' : (canonical as AmbiguousCanonicalRawFinding).safeEvidenceExcerpt);
@@ -1122,20 +1103,19 @@ export function toLedgerRawFinding(canonical: CanonicalRawFinding): RawFinding {
     rawFindingId: canonical.rawFindingId,
     stepName: canonical.stepName,
     reviewer: canonical.reviewer,
-    familyTag: canonical.familyTag ?? 'raw-meaning-ambiguous',
-    severity: canonical.severity ?? 'high',
+    familyTag: canonical.familyTag ?? null,
+    severity: canonical.severity ?? null,
     title,
-    ...(canonical.location !== undefined ? { location: canonical.location } : {}),
     description,
-    ...(canonical.suggestion !== undefined ? { suggestion: canonical.suggestion } : {}),
+    suggestion: canonical.suggestion ?? null,
     relation: ledgerRelation,
-    ...(ledgerRelation !== 'new' && canonical.targetFindingId !== undefined
-      ? { targetFindingId: canonical.targetFindingId }
-      : {}),
+    targetFindingId: ledgerRelation !== 'new' && canonical.targetFindingId !== undefined
+      ? canonical.targetFindingId
+      : null,
     ...(canonical.targetPrecondition !== undefined
       ? { targetPrecondition: canonical.targetPrecondition }
       : {}),
-    ...(canonical.evidence !== undefined ? { evidence: canonical.evidence } : {}),
+    evidence: canonical.evidence.map((item) => ({ ...item })),
   };
 }
 
@@ -1148,6 +1128,6 @@ export function canonicalRawIntegrityDigestOf(
     provenance: canonical.provenance,
     reviewerStableKey: canonical.reviewerStableKey,
     lineageKey: canonical.lineageKey,
-    claimIdentityHash: canonical.evidenceHash,
+    claimIdentityHash: canonical.claimIdentityHash,
   });
 }

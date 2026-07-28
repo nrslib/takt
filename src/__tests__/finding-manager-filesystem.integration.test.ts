@@ -108,6 +108,7 @@ describe('finding manager filesystem error propagation', () => {
       nextId: 1,
       updatedAt: '2026-07-17T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -144,13 +145,18 @@ describe('finding manager filesystem error propagation', () => {
               familyTag: 'filesystem-error',
               severity: 'high',
               title: 'Source issue',
-              location: 'src/example.ts:1',
               description: 'The source line is problematic.',
               suggestion: 'Fix the source line.',
               relation: 'new',
-              evidenceKind: 'source_quote',
-              verbatimExcerpt: 'export const value = 1;',
-              snapshotId,
+              targetFindingId: null,
+              evidence: [{
+                kind: 'file_quote',
+                path: 'src/example.ts',
+                startLine: 1,
+                endLine: 1,
+                verbatimExcerpt: 'export const value = 1;',
+                snapshotId,
+              }],
             }],
           },
         } as unknown as AgentResponse,
@@ -167,7 +173,7 @@ describe('finding manager filesystem error propagation', () => {
     expect(ledgerStore.loadLedger()).toEqual(initialLedger);
   });
 
-  it('manager 応答待ち中に source quote が古くなった場合は finding を作成しない', async () => {
+  it('manager 応答待ち中に source quote が古くなった場合は provisional に保持する', async () => {
     const ledgerStore = createFindingLedgerStore({
       projectCwd: cwd,
       runId: 'run-1',
@@ -182,6 +188,7 @@ describe('finding manager filesystem error propagation', () => {
         nextId: 1,
         updatedAt: '2026-07-17T00:00:00.000Z',
         findings: [],
+        evidenceRecords: [],
         rawFindings: [],
         conflicts: [],
         interpretations: [],
@@ -233,13 +240,18 @@ describe('finding manager filesystem error propagation', () => {
             familyTag: 'evidence-revalidation',
             severity: 'high',
             title: 'Source issue',
-            location: 'src/example.ts:1',
             description: 'The source line is problematic.',
             suggestion: 'Fix the source line.',
             relation: 'new',
-            evidenceKind: 'source_quote',
-            verbatimExcerpt: 'export const value = 1;',
-            snapshotId,
+            targetFindingId: null,
+            evidence: [{
+              kind: 'file_quote',
+              path: 'src/example.ts',
+              startLine: 1,
+              endLine: 1,
+              verbatimExcerpt: 'export const value = 1;',
+              snapshotId,
+            }],
           }] },
         } as unknown as AgentResponse,
       }],
@@ -250,8 +262,9 @@ describe('finding manager filesystem error propagation', () => {
     });
 
     const ledger = ledgerStore.loadLedger();
-    expect(ledger.findings).toEqual([]);
-    expect(ledger.reviewerAnomalies).toHaveLength(1);
+    expect(ledger.findings).toHaveLength(1);
+    expect(ledger.findings[0]?.provisional?.kind).toBe('raw-adjudication-unresolved');
+    expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
   });
 
   it('同じopen revisionを観測した解消と検証済みpersistsはcommit順に依存せず同じcanonical projectionへ収束する', async () => {
@@ -265,7 +278,7 @@ describe('finding manager filesystem error propagation', () => {
         lifecycle: 'new',
         severity: 'high',
         title: 'Source issue',
-        location: 'src/example.ts:1',
+        evidenceIds: [],
         description: 'The source line remains incorrect.',
         reviewers: ['review'],
         rawFindingIds: ['raw-existing'],
@@ -281,6 +294,7 @@ describe('finding manager filesystem error propagation', () => {
         },
         revision: 1,
       }],
+      evidenceRecords: [],
       rawFindings: [{
         rawFindingId: 'raw-existing',
         stepName: 'reviewers',
@@ -288,9 +302,11 @@ describe('finding manager filesystem error propagation', () => {
         familyTag: 'convergence',
         severity: 'high',
         title: 'Source issue',
-        location: 'src/example.ts:1',
         description: 'The source line remains incorrect.',
+        suggestion: null,
         relation: 'new',
+        targetFindingId: null,
+        evidence: [],
       }],
       conflicts: [],
       interpretations: [],
@@ -368,11 +384,14 @@ describe('finding manager filesystem error propagation', () => {
         callNamespace: '',
         timestamp: '2026-07-17T00:00:01.000Z',
       });
-      const evidence = {
-        evidenceKind: 'source_quote',
+      const evidence = [{
+        kind: 'file_quote',
+        path: 'src/example.ts',
+        startLine: 1,
+        endLine: 1,
         verbatimExcerpt: 'export const value = 1;',
         snapshotId: computeReviewScopeSnapshotId(cwd),
-      };
+      }];
       const resolutionRun = run(
         gateStore(
           resolutionStore,
@@ -387,12 +406,11 @@ describe('finding manager filesystem error propagation', () => {
           familyTag: 'convergence',
           severity: 'high',
           title: 'Source issue fixed',
-          location: 'src/example.ts:1',
           description: 'The source issue is fixed.',
-          suggestion: '',
+          suggestion: null,
           relation: 'resolution_confirmation',
           targetFindingId: 'F-0001',
-          ...evidence,
+          evidence,
         },
       );
       const persistsRun = run(
@@ -409,12 +427,11 @@ describe('finding manager filesystem error propagation', () => {
           familyTag: 'convergence',
           severity: 'high',
           title: 'Source issue',
-          location: 'src/example.ts:1',
           description: 'The source line remains incorrect.',
-          suggestion: '',
+          suggestion: null,
           relation: 'persists',
           targetFindingId: 'F-0001',
-          ...evidence,
+          evidence,
         },
       );
       await Promise.all([resolutionReached.promise, persistsReached.promise]);

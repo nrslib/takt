@@ -200,7 +200,7 @@ export function collectInterpretationRecoveryPlan(input: {
       canonical.rawFindingId !== source.rawFindingId
       || canonical.lineageKey !== origin.expectedProvisionalLineageKey
       || canonical.reviewerStableKey !== origin.expectedRecoveryReviewerStableKey
-      || canonical.evidenceHash !== computeRawEvidenceHash(source)
+      || canonical.evidenceSetHash !== computeRawEvidenceHash(source)
     ) {
       failures.push({
         kind: 'recovery_contract_mismatch',
@@ -221,7 +221,7 @@ export function collectInterpretationRecoveryPlan(input: {
   const items: CanonicalIntakeItem[] = [];
   for (const candidates of candidatesByRawFindingId.values()) {
     const contractKeys = new Set(candidates.map(({ canonical }) => (
-      `${canonical.lineageKey}\0${canonical.reviewerStableKey}\0${canonical.evidenceHash}`
+      `${canonical.lineageKey}\0${canonical.reviewerStableKey}\0${canonical.evidenceSetHash}`
     )));
     if (contractKeys.size !== 1) {
       for (const candidate of candidates) {
@@ -345,11 +345,11 @@ export function retainInterpretationRecoveryForLadder(
     admissionAnomalySpecs: admission.admissionAnomalySpecs.filter(
       (spec) => spec.sourceRawFindingIds.every((rawFindingId) => !recoveryRawIds.has(rawFindingId)),
     ),
+    admissionProvisionalSpecs: admission.admissionProvisionalSpecs.filter(
+      (spec) => spec.sourceRawFindingIds.every((rawFindingId) => !recoveryRawIds.has(rawFindingId)),
+    ),
     admissionRejectedItems: admission.admissionRejectedItems.filter(
       (item) => !recoveryRawIds.has(item.wire.rawFindingId),
-    ),
-    locationlessProvisionalItems: admission.locationlessProvisionalItems.filter(
-      ({ item }) => !recoveryRawIds.has(item.wire.rawFindingId),
     ),
     pendingRejectedObservations: admission.pendingRejectedObservations.filter(
       ({ item }) => !recoveryRawIds.has(item.wire.rawFindingId),
@@ -357,6 +357,11 @@ export function retainInterpretationRecoveryForLadder(
     taintedAdmitted: [...admission.taintedAdmitted, ...restrictedItems],
     ladderAnomalySpecs: admission.ladderAnomalySpecs.filter(
       (spec) => spec.sourceRawFindingIds.every((rawFindingId) => !recoveryRawIds.has(rawFindingId)),
+    ),
+    verifiedEvidenceRecordsByRawFindingId: new Map(
+      [...admission.verifiedEvidenceRecordsByRawFindingId].filter(
+        ([rawFindingId]) => !restrictedRawIds.has(rawFindingId),
+      ),
     ),
     provisionalOnlyLadderRawIds: new Set([
       ...admission.provisionalOnlyLadderRawIds,

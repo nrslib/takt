@@ -47,6 +47,7 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -112,6 +113,7 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -133,6 +135,7 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -154,6 +157,7 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -199,6 +203,7 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -267,6 +272,7 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -338,6 +344,7 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -362,6 +369,7 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -407,6 +415,7 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -433,6 +442,7 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -461,6 +471,7 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -475,7 +486,7 @@ describe('Finding manager publication contract double', () => {
       },
     });
 
-    expect(() => repository.loadLedger()).toThrow(/binary-sorted unique set/);
+    expect(() => repository.loadLedger()).toThrow(/binary-sorted unique string set/);
   });
 
   it('rejects content tampering after publication', async () => {

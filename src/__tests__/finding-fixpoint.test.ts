@@ -21,7 +21,9 @@ import {
 import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../core/workflow/findings/manager-runner.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
-import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import {
+  verifiedSourceQuoteFields,
+} from './helpers/finding-evidence.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
@@ -48,20 +50,9 @@ beforeEach(() => {
   executeAgentMock.mockReset();
 });
 
-/** Finds the namespaced rawFindingId ending with `:localId` inside a manager/interpretation instruction. */
-function extractRawFindingId(instruction: string, localId: string): string {
-  const matches = [...instruction.matchAll(/"rawFindingId":\s*"([^"]+)"/g)].map((match) => match[1]!);
-  const found = matches.find((id) => id.endsWith(`:${localId}`));
-  if (found === undefined) {
-    throw new Error(`Test setup error: raw id ending with :${localId} not found in instruction: ${instruction}`);
-  }
-  return found;
-}
-
 /**
- * Same as extractRawFindingId, but for a generic mockImplementation shared
- * across multiple rounds/local ids: tries each candidate local id in order
- * and returns whichever one actually appears in this call's instruction.
+ * A generic mockImplementation shared across multiple rounds/local ids:
+ * tries each candidate local id in order and returns the one in the instruction.
  */
 function extractResidualRawIdFromEitherLocalId(instruction: string, localIds: readonly string[]): string {
   for (const localId of localIds) {
@@ -91,16 +82,17 @@ function provisionalFinding(
     lifecycle: 'new',
     severity: 'high',
     title: 'Hallucinated issue',
+    evidenceIds: [],
     reviewers: ['arch-review'],
     rawFindingIds: ['raw-1'],
     firstSeen: observation(),
     lastSeen: observation(),
     provisional: {
-      kind: 'invalid-location-evidence',
+      kind: 'raw-adjudication-unresolved',
       stableKey: 'stable-key-a',
       lineageKey: 'lineage-a',
       sourceRawFindingIds: ['raw-1'],
-      reason: 'Location does not exist',
+      reason: 'No mechanically verifiable evidence was supplied',
       firstObservedAt: observation(),
       lastObservedAt: observation(),
       interpretationEpochs: 0,
@@ -119,6 +111,7 @@ function substantiveFinding(
     lifecycle: 'new',
     severity: 'medium',
     title: 'Real issue',
+    evidenceIds: [],
     reviewers: ['arch-review'],
     rawFindingIds: ['raw-2'],
     firstSeen: observation(),
@@ -133,6 +126,7 @@ function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     nextId: 3,
     updatedAt: '2026-07-01T00:00:00.000Z',
     findings: [],
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
     interpretations: [],
@@ -183,7 +177,10 @@ describe('computeFixpointSnapshot', () => {
         severity: 'high',
         title: 'Conflicting claim',
         description: 'One reviewer says X, another says Y.',
+        suggestion: null,
         relation: 'new',
+        targetFindingId: null,
+        evidence: [],
       }, {
         rawFindingId: 'raw-c2',
         stepName: 'reviewers',
@@ -192,7 +189,10 @@ describe('computeFixpointSnapshot', () => {
         severity: 'high',
         title: 'Resolved conflicting claim',
         description: 'A separate conflict was already resolved.',
+        suggestion: null,
         relation: 'new',
+        targetFindingId: null,
+        evidence: [],
       }],
       conflicts: [
         {
@@ -238,7 +238,10 @@ describe('computeFixpointSnapshot', () => {
           severity: 'high',
           title: 'Conflicting claim',
           description: 'One reviewer says X, another says Y.',
+          suggestion: null,
           relation: 'new',
+          targetFindingId: null,
+          evidence: [],
         }],
         conflicts: [{
           id: 'C-2BF240CC0BEC',
@@ -383,7 +386,9 @@ function makeRoundHarness(
   currentLedger: () => FindingLedger;
   run: (reviewerRawFindings: Array<Record<string, unknown>>) => ReturnType<typeof runFindingManagerForStep>;
 } {
-  const ledgerRepository = new RevisionedFindingLedgerTestRepository(initialLedger);
+  const ledgerRepository = new RevisionedFindingLedgerTestRepository(
+    initialLedger,
+  );
   const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
     ledgerIdentity: '/test/finding-fixpoint/ledger.json',
@@ -455,32 +460,30 @@ function makeRoundHarness(
   };
 }
 
-/**
- * codex 対策#4: 幻覚 location（存在しないファイルへの claim）は
- * verbatimExcerpt 機械照合により reviewer anomaly（review-integrity 側、
- * product gate 非ブロッキング）へ隔離されるようになった — 実測の架空指摘が
- * product gate を誤って塞いでいたバグそのものの修正。GREEN の直接的な固定は
- * finding-evidence-protocol-fixture.test.ts（実測 ledger データを使った
- * 決定的 red/green fixture）が担う。ここでは fixpoint 機構自体の往復ラウンド
- * 検証を維持するため、同じ「gate-blocking な provisional を作る」役割を
- * 構造的に矛盾した persists 参照（raw-meaning-ambiguous）で代替する。
- */
 function hallucinatedRaw(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     rawFindingId: 'hallucinated-1',
     familyTag: 'bug',
     severity: 'high',
     title: 'Nonexistent file has a null check bug',
-    location: 'src/does-not-exist.ts:5',
     description: 'This describes a bug in a file that does not exist in the reviewed tree.',
     suggestion: 'Add a null check.',
     relation: 'new',
+    targetFindingId: null,
+    evidence: [{
+      kind: 'file_quote',
+      path: 'src/does-not-exist.ts',
+      startLine: 5,
+      endLine: 5,
+      verbatimExcerpt: 'missing fixture line',
+      snapshotId: verifiedSourceQuoteFields(FIXTURE_CWD, 'src/real.ts', 1).snapshotId,
+    }],
     ...overrides,
   };
 }
 
-/** ambiguous ladder の interpretation 呼び出しへの汎用応答（'provisional' 提案）。 */
-function interpretationResponse(rawFindingId: string): AgentResponse {
+/** Recovery が substantive outcome を返せない状況を再現する応答。 */
+function unresolvedRecoveryResponse(rawFindingId: string): AgentResponse {
   return {
     persona: 'findings-manager',
     status: 'done',
@@ -494,33 +497,26 @@ function interpretationResponse(rawFindingId: string): AgentResponse {
   } as unknown as AgentResponse;
 }
 
-/**
- * 構造的に矛盾した persists 参照（存在しない finding id への再報告）。
- * targetFindingId を変えると lineageKey が変わり churn を再現できる
- * （computeLineageKey は targetFindingId を最優先で使う）。executeAgentMock は
- * 汎用実装にしてあるので、このヘルパーを何回呼んでも manager 呼び出しの
- * mock 追加は不要（interpretation 応答は instruction から rawFindingId を
- * 抽出して動的に返す）。
- */
-function ambiguousPersistsRaw(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function unverifiedClaimRaw(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     rawFindingId: 'ambiguous-1',
     familyTag: 'bug',
     severity: 'high',
-    title: 'Re-report of a finding that was never actually opened',
-    description: 'Claims to persist a finding id the ledger has never seen.',
+    title: 'A claim without mechanical evidence',
+    description: 'The reviewer supplied an explicit claim identity but no evidence.',
     suggestion: '',
-    relation: 'persists',
-    targetFindingId: 'F-9001',
+    relation: 'new',
+    targetFindingId: null,
+    evidence: [],
     ...overrides,
   };
 }
 
-describe('runFindingManagerForStep: hallucinated location lands as a non-blocking reviewer anomaly (codex 対策#4)', () => {
-  it('a hallucinated finding against a nonexistent file is isolated as a reviewer anomaly, not a gate-blocking provisional, and needs no manager call', async () => {
+describe('runFindingManagerForStep: failed file_quote evidence is isolated from product findings', () => {
+  it('a nonexistent file_quote is recorded as a reviewer anomaly and needs no manager call', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], rawFindings: [], conflicts: [], interpretations: [],
+      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
     });
 
     const result = await harness.run([hallucinatedRaw()]);
@@ -532,42 +528,40 @@ describe('runFindingManagerForStep: hallucinated location lands as a non-blockin
     expect(context.provisional.count).toBe(0);
     expect(context.open.count).toBe(0);
     expect(context.reviewerAnomalies.count).toBe(1);
+    expect(result.ledger.reviewerAnomalies).toHaveLength(1);
     expect(result.ledger.reviewerAnomalies?.[0]?.kind).toBe('quote-mismatch');
   });
 });
 
-describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics (structurally ambiguous re-report vehicle)', () => {
+describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics', () => {
   it('is not a fixpoint on the first round, even though a provisional is already open', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], rawFindings: [], conflicts: [], interpretations: [],
+      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
     });
 
-    executeAgentMock.mockImplementationOnce(async (_persona, instruction) => {
-      const rawId = extractRawFindingId(instruction as string, 'ambiguous-1');
-      return interpretationResponse(rawId);
-    });
-    await harness.run([ambiguousPersistsRaw()]);
+    await harness.run([unverifiedClaimRaw()]);
 
     expect(buildFindingsRuleContext(harness.currentLedger()).provisional.fixpoint).toBe(false);
   });
 
-  it('reaches fixpoint after the repeated claim consumes its second interpretation attempt', async () => {
+  it('reaches fixpoint after bounded raw-adjudication recovery is exhausted and the claim stabilizes', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], rawFindings: [], conflicts: [], interpretations: [],
+      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
     });
 
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const rawId = extractResidualRawIdFromEitherLocalId(
         instruction as string,
-        ['ambiguous-1', 'ambiguous-1-again', 'ambiguous-1-final'],
+        ['ambiguous-1', 'ambiguous-1-again', 'ambiguous-1-final', 'ambiguous-1-stable'],
       );
-      return interpretationResponse(rawId);
+      return unresolvedRecoveryResponse(rawId);
     });
-    await harness.run([ambiguousPersistsRaw()]);
-    await harness.run([ambiguousPersistsRaw({ rawFindingId: 'ambiguous-1-again' })]);
-    await harness.run([ambiguousPersistsRaw({ rawFindingId: 'ambiguous-1-final' })]);
+    await harness.run([unverifiedClaimRaw()]);
+    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-again' })]);
+    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-final' })]);
+    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-stable' })]);
 
     const context = buildFindingsRuleContext(harness.currentLedger());
     expect(context.provisional.count).toBe(1);
@@ -577,28 +571,27 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
   it('does not reach fixpoint when a different claim shows up on the second round instead', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], rawFindings: [], conflicts: [], interpretations: [],
+      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
     });
 
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const rawId = extractResidualRawIdFromEitherLocalId(instruction as string, ['ambiguous-1', 'ambiguous-2']);
-      return interpretationResponse(rawId);
+      return unresolvedRecoveryResponse(rawId);
     });
-    await harness.run([ambiguousPersistsRaw()]);
-    await harness.run([ambiguousPersistsRaw({
+    await harness.run([unverifiedClaimRaw()]);
+    await harness.run([unverifiedClaimRaw({
       rawFindingId: 'ambiguous-2',
-      title: 'A completely different structurally ambiguous claim',
-      targetFindingId: 'F-9002',
+      title: 'A completely different unverified claim',
+      description: 'This distinct explicit claim also has no evidence.',
     })]);
 
-    // Both the round-1 and round-2 observations stay open (nothing resolved
-    // them) — the provisional set grew, which is real change, not stagnation.
+    // Both explicit claims stay open because neither has verified evidence.
     const context = buildFindingsRuleContext(harness.currentLedger());
     expect(context.provisional.count).toBe(2);
     expect(context.provisional.fixpoint).toBe(false);
   });
 
-  it('a measured substantive finding resolving across rounds blocks fixpoint until it stabilizes, then the persistent ambiguous claim triggers it', async () => {
+  it('a measured substantive finding resolving across rounds blocks fixpoint until the unverified claim stabilizes', async () => {
     // F-0001 pre-seeded as an already-open substantive finding (as if an
     // earlier round created it) — round 1 below is the round where it is
     // confirmed resolved by a mechanically-handled resolution_confirmation.
@@ -610,14 +603,15 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
         lifecycle: 'new',
         severity: 'medium',
         title: 'Real, fixable issue',
-        location: 'src/real.ts:10',
         description: 'A genuine issue that the fixer can and will resolve.',
+        evidenceIds: [],
         reviewers: ['arch-review'],
         rawFindingIds: ['raw-seed'],
         firstSeen: observation('run-0'),
         lastSeen: observation('run-0'),
         revision: 1,
       }],
+      evidenceRecords: [],
       rawFindings: [{
         rawFindingId: 'raw-seed',
         stepName: 'reviewers',
@@ -625,28 +619,33 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
         familyTag: 'bug',
         severity: 'medium',
         title: 'Real, fixable issue',
-        location: 'src/real.ts:10',
         description: 'A genuine issue that the fixer can and will resolve.',
+        suggestion: null,
         relation: 'new',
+        targetFindingId: null,
+        evidence: [],
       }],
       conflicts: [],
       interpretations: [],
     });
 
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
-      const rawId = extractResidualRawIdFromEitherLocalId(instruction as string, ['ambiguous-1', 'ambiguous-1-r2', 'ambiguous-1-r3']);
-      return interpretationResponse(rawId);
+      const rawId = extractResidualRawIdFromEitherLocalId(
+        instruction as string,
+        ['ambiguous-1', 'ambiguous-1-r2', 'ambiguous-1-r3', 'ambiguous-1-r4'],
+      );
+      return unresolvedRecoveryResponse(rawId);
     });
 
-    // Round 1: the ambiguous claim is first observed; the substantive finding
+    // Round 1: the unverified claim is first observed; the substantive finding
     // is untouched this round (still open — carried over from the seed).
-    await harness.run([ambiguousPersistsRaw()]);
+    await harness.run([unverifiedClaimRaw()]);
     expect(buildFindingsRuleContext(harness.currentLedger()).provisional.fixpoint).toBe(false);
 
-    // The substantive resolution and the second interpretation attempt both
+    // The substantive resolution and the first adjudication recovery attempt both
     // represent real progress, so this round cannot be a fixpoint.
     await harness.run([
-      ambiguousPersistsRaw({ rawFindingId: 'ambiguous-1-r2' }),
+      unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r2' }),
       {
         rawFindingId: 'confirm-1',
         familyTag: 'bug',
@@ -655,75 +654,81 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
         description: 'Verified: the fix removes the issue.',
         relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
-        // codex 検証ブロッカー#2: confirmation は検証済み source_quote 証跡が
+        // confirmation は検証済み file_quote 証跡が
         // 無いと resolve できない（機械照合を通らず finding を閉じさせない）。
-        ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/real.ts', 10),
+        evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/real.ts', 10)],
       },
     ]);
     const afterRound2 = harness.currentLedger();
     expect(afterRound2.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('resolved');
     expect(buildFindingsRuleContext(afterRound2).provisional.fixpoint).toBe(false);
 
-    // Recovery is exhausted before round 3, so the unchanged blocker can now
-    // form a stable snapshot instead of being mistaken for progress.
-    await harness.run([ambiguousPersistsRaw({ rawFindingId: 'ambiguous-1-r3' })]);
+    // The second bounded recovery attempt is still progress.
+    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r3' })]);
     const afterRound3 = harness.currentLedger();
-    const context = buildFindingsRuleContext(afterRound3);
+    expect(buildFindingsRuleContext(afterRound3).provisional.fixpoint).toBe(false);
+
+    // Once recovery is exhausted, an unchanged blocker forms a stable snapshot.
+    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r4' })]);
+    const context = buildFindingsRuleContext(harness.currentLedger());
     expect(context.provisional.count).toBe(1);
     expect(context.provisional.fixpoint).toBe(true);
   });
 
-  it('fresh process continuity: reopening the same run storage preserves the fixpoint snapshot for the next round', async () => {
+  it('fresh process continuity: reopening the same run storage continues bounded recovery progress toward fixpoint', async () => {
     const runId = 'run-process-continuity';
     const priorProcess = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], rawFindings: [], conflicts: [], interpretations: [],
+      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
     }, runId);
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const rawId = extractResidualRawIdFromEitherLocalId(
         instruction as string,
-        ['ambiguous-1', 'ambiguous-1-resumed'],
+        ['ambiguous-1', 'ambiguous-1-resumed', 'ambiguous-1-resumed-again', 'ambiguous-1-resumed-stable'],
       );
-      return interpretationResponse(rawId);
+      return unresolvedRecoveryResponse(rawId);
     });
-    await priorProcess.run([ambiguousPersistsRaw()]);
+    await priorProcess.run([unverifiedClaimRaw()]);
     const ledgerFromPriorProcess = priorProcess.currentLedger();
     expect(ledgerFromPriorProcess.fixpoint?.reached).toBe(false);
 
     const reopenedProcess = makeRoundHarness(ledgerFromPriorProcess, runId, 1);
-    await reopenedProcess.run([ambiguousPersistsRaw({ rawFindingId: 'ambiguous-1-resumed' })]);
+    await reopenedProcess.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-resumed' })]);
 
-    expect(reopenedProcess.currentLedger().fixpoint?.snapshot)
-      .toEqual(ledgerFromPriorProcess.fixpoint?.snapshot);
+    expect(reopenedProcess.currentLedger().fixpoint?.snapshot.provisionalKeys[0])
+      .toContain(':recovery:0:1:0:0');
+    await reopenedProcess.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-resumed-again' })]);
+    await reopenedProcess.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-resumed-stable' })]);
     expect(buildFindingsRuleContext(reopenedProcess.currentLedger()).provisional.fixpoint).toBe(true);
   });
 
-  it('a human providing new review evidence after a fixpoint breaks it, routing back to replan instead of staying stuck', async () => {
+  it('a new explicit claim after a fixpoint breaks it, routing back to replan instead of staying stuck', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], rawFindings: [], conflicts: [], interpretations: [],
+      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
     });
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const rawId = extractResidualRawIdFromEitherLocalId(
         instruction as string,
-        ['ambiguous-1', 'ambiguous-1-r2', 'ambiguous-1-r3', 'ambiguous-1-r4', 'new-observation'],
+        ['ambiguous-1', 'ambiguous-1-r2', 'ambiguous-1-r3', 'ambiguous-1-r4', 'ambiguous-1-r5', 'new-observation'],
       );
-      return interpretationResponse(rawId);
+      return unresolvedRecoveryResponse(rawId);
     });
-    await harness.run([ambiguousPersistsRaw()]);
-    await harness.run([ambiguousPersistsRaw({ rawFindingId: 'ambiguous-1-r2' })]);
-    await harness.run([ambiguousPersistsRaw({ rawFindingId: 'ambiguous-1-r3' })]);
+    await harness.run([unverifiedClaimRaw()]);
+    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r2' })]);
+    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r3' })]);
+    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r4' })]);
     expect(buildFindingsRuleContext(harness.currentLedger()).provisional.fixpoint).toBe(true);
 
     // A new, different observation arrives (e.g. the human adjusted
     // something and a reviewer now reports something new) — the fixpoint
     // must not stay latched; it re-evaluates fresh each round.
     await harness.run([
-      ambiguousPersistsRaw({ rawFindingId: 'ambiguous-1-r4' }),
-      ambiguousPersistsRaw({
+      unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r5' }),
+      unverifiedClaimRaw({
         rawFindingId: 'new-observation',
-        title: 'A newly reported, different structurally ambiguous claim',
-        targetFindingId: 'F-9099',
+        title: 'A newly reported, different unverified claim',
+        description: 'This is a new explicit claim without evidence.',
       }),
     ]);
 

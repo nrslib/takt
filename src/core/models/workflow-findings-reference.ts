@@ -66,7 +66,7 @@ const FINDINGS_RULE_CONTEXT_SHAPE = freezeFindingsDescriptor({
               id: { kind: 'string' },
               severity: { kind: 'string' },
               title: { kind: 'string' },
-              location: { kind: 'string' },
+              locations: { kind: 'array', item: { kind: 'string' } },
               description: { kind: 'string' },
               suggestion: { kind: 'string' },
               reviewers: { kind: 'array', item: { kind: 'string' } },

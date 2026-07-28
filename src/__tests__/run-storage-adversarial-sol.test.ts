@@ -308,10 +308,10 @@ describe('run storage adversarial SOL contracts', () => {
       database.prepare(`
         INSERT INTO finding_ledger_revisions (
           run_id, scope_id, revision, workflow_name, next_id,
-          finding_count, raw_finding_count, conflict_count,
+          finding_count, evidence_record_count, raw_finding_count, conflict_count,
           interpretation_count, reviewer_anomaly_count, control_count,
           projection_digest, updated_at
-        ) VALUES (?, 'root', 2, 'default', 1, 0, 0, 0, 0, 0, 0, ?, 2000)
+        ) VALUES (?, 'root', 2, 'default', 1, 0, 0, 0, 0, 0, 0, 0, ?, 2000)
       `).run(runId, '0'.repeat(64));
       database.exec('COMMIT');
     } catch (error) {
@@ -325,10 +325,10 @@ describe('run storage adversarial SOL contracts', () => {
     expect(() => database.prepare(`
       INSERT INTO finding_ledger_revisions (
         run_id, scope_id, revision, workflow_name, next_id,
-        finding_count, raw_finding_count, conflict_count,
+        finding_count, evidence_record_count, raw_finding_count, conflict_count,
         interpretation_count, reviewer_anomaly_count, control_count,
         projection_digest, updated_at
-      ) VALUES (?, 'root', 2, 'default', 2, 1, 0, 0, 0, 0, 0, ?, 2000)
+      ) VALUES (?, 'root', 2, 'default', 2, 1, 0, 0, 0, 0, 0, 0, ?, 2000)
     `).run(runId, '0'.repeat(64))).toThrow(/incomplete/i);
     expect(() => database.prepare(`
       INSERT INTO finding_entries (
@@ -375,10 +375,10 @@ describe('run storage adversarial SOL contracts', () => {
     database.prepare(`
       INSERT INTO finding_ledger_revisions (
         run_id, scope_id, revision, workflow_name, next_id,
-        finding_count, raw_finding_count, conflict_count,
+        finding_count, evidence_record_count, raw_finding_count, conflict_count,
         interpretation_count, reviewer_anomaly_count, control_count,
         projection_digest, updated_at
-      ) VALUES (?, 'root', 2, 'default', 2, 1, 0, 0, 0, 0, 0, ?, 2000)
+      ) VALUES (?, 'root', 2, 'default', 2, 1, 0, 0, 0, 0, 0, 0, ?, 2000)
     `).run(runId, '0'.repeat(64));
     database.exec('COMMIT');
     database.close();

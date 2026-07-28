@@ -1,5 +1,4 @@
 import type { AgentResponse, WorkflowStep } from '../../models/types.js';
-import { classifyLocationAdmissionNormalization } from './admission-validation.js';
 import type { ReviewerRelationClarification } from './relation-coherence.js';
 import {
   canonicalizeReviewerRawFinding,
@@ -8,8 +7,9 @@ import {
   createOverflowRawCandidate,
   createReviewerRawFindingCandidates,
   extractLenientRawFields,
-  projectReviewerRawFindingItems,
+  projectReviewerRawStructuredOutputWithEnvelope,
   toLedgerRawFinding,
+  type ReviewerRawResourceEnvelope,
   type ReviewerRawIntakeContext,
 } from './raw-canonicalization.js';
 import {
@@ -22,7 +22,6 @@ import type { FindingLedger } from './types.js';
 import type { ReviewerIntakeResult } from './manager-admission.js';
 import { isWorkflowCallStep } from '../step-kind.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 
 const log = createLogger('finding-manager-intake');
 
@@ -30,6 +29,7 @@ export interface FindingManagerSubStepResult {
   subStep: WorkflowStep;
   response: AgentResponse;
   relationClarification?: ReviewerRelationClarification;
+  reviewerRawResourceEnvelope?: ReviewerRawResourceEnvelope;
 }
 
 export function intakeReviewerOutputs(input: {
@@ -72,9 +72,19 @@ export function intakeReviewerOutputs(input: {
         `Finding contract reviewer "${subResult.subStep.name}" returned structured output without a rawFindings array`,
       );
     }
-    const items = projectReviewerRawFindingItems(
-      structuredOutput.rawFindings as unknown[],
-    );
+    const items = structuredOutput.rawFindings as unknown[];
+    const resourceEnvelope = subResult.reviewerRawResourceEnvelope
+      ?? projectReviewerRawStructuredOutputWithEnvelope({
+        rawFindings: items,
+      }).resourceEnvelope;
+    if (
+      resourceEnvelope.itemCount !== items.length
+      || resourceEnvelope.itemSourceBytes.length !== items.length
+    ) {
+      throw new Error(
+        `Finding contract reviewer "${subResult.subStep.name}" resource envelope does not match rawFindings`,
+      );
+    }
     const context: ReviewerRawIntakeContext = {
       workflowName: input.workflowName,
       callNamespace: input.callNamespace,
@@ -92,8 +102,11 @@ export function intakeReviewerOutputs(input: {
     }
 
     // envelope 検査は Zod parse の前（65件目を読んだ時点で打ち切る）。
-    const jsonBytes = Buffer.byteLength(canonicalJson(items), 'utf-8');
-    const envelopeViolation = checkReviewerEnvelope({ itemCount: items.length, jsonBytes });
+    const jsonBytes = resourceEnvelope.jsonBytes;
+    const envelopeViolation = checkReviewerEnvelope({
+      itemCount: resourceEnvelope.itemCount,
+      jsonBytes,
+    });
     const fieldViolation = envelopeViolation === undefined
       ? items.map((item) => findRawFieldLimitViolation(extractLenientRawFields(item))).find((violation) => violation !== undefined)
       : undefined;
@@ -145,7 +158,7 @@ export function intakeReviewerOutputs(input: {
       parentStepName: input.parentStepName,
       reviewerPersonaKey: context.reviewerPersonaKey,
     }));
-    const candidates = createReviewerRawFindingCandidates(items, context);
+    const candidates = createReviewerRawFindingCandidates(items, context, resourceEnvelope);
     const clarification = subResult.relationClarification;
     for (const candidate of candidates) {
       const priorCodes = clarification !== undefined
@@ -168,12 +181,7 @@ export function intakeReviewerOutputs(input: {
       if (candidate.relation !== canonical.relation) {
         normalizations.push('relation-normalized');
       }
-      // location の機械正規化（行範囲解釈 / N/A → locationless）の適用事実。
-      const locationNormalization = classifyLocationAdmissionNormalization(candidate.location);
-      if (locationNormalization !== undefined) {
-        normalizations.push(locationNormalization);
-      }
-      if (candidate.targetFindingId !== undefined && wire.targetFindingId === undefined) {
+      if (candidate.targetFindingId !== undefined && wire.targetFindingId === null) {
         normalizations.push('target-dropped-from-wire');
       }
       if (candidate.title === undefined || candidate.description === undefined
@@ -187,7 +195,7 @@ export function intakeReviewerOutputs(input: {
           ...(candidate.relation !== undefined ? { claimedRelation: candidate.relation } : {}),
           ...(candidate.targetFindingId !== undefined ? { claimedTargetFindingId: candidate.targetFindingId } : {}),
           normalizedRelation: canonical.relation,
-          ...(wire.targetFindingId !== undefined ? { wireTargetFindingId: wire.targetFindingId } : {}),
+          ...(wire.targetFindingId !== null ? { wireTargetFindingId: wire.targetFindingId } : {}),
           ambiguityCodes: [...canonical.provenance.ambiguityCodes],
           normalizations,
         });

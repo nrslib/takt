@@ -15,6 +15,9 @@ import type {
 import type { RuntimeStepResolution } from '../core/workflow/types.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { evaluateWhenExpression } from '../core/workflow/evaluation/when-evaluator.js';
+import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
+import type { FindingEvidenceRecord } from '../core/models/finding-types.js';
+import { compareBinaryStrings } from '../shared/utils/binary-string-comparator.js';
 
 const { executeAgentMock } = vi.hoisted(() => ({ executeAgentMock: vi.fn() }));
 
@@ -31,12 +34,31 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+function fileQuoteEvidenceRecord(path: string, line: number): FindingEvidenceRecord {
+  const payload = {
+    kind: 'file_quote' as const,
+    path,
+    startLine: line,
+    endLine: line,
+    verbatimExcerpt: 'fixture evidence',
+    snapshotId: 'a'.repeat(64),
+    claimIdentityHash: 'b'.repeat(64),
+    fileHash: 'c'.repeat(64),
+  };
+  return {
+    evidenceId: computeFileQuoteEvidenceRecordId(payload),
+    ...payload,
+  };
+}
+
 function makeLedger(): FindingLedger {
   const observedAt = {
     runId: 'run-1',
     stepName: 'reviewers',
     timestamp: '2026-07-24T00:00:00.000Z',
   };
+  const firstEvidence = fileQuoteEvidenceRecord('src/first.ts', 10);
+  const secondEvidence = fileQuoteEvidenceRecord('src/second.ts', 20);
   return {
     workflowName: 'workflow',
     nextId: 3,
@@ -49,7 +71,7 @@ function makeLedger(): FindingLedger {
         revision: 1,
         severity: 'high',
         title: 'First defect',
-        location: 'src/first.ts:10',
+        evidenceIds: [firstEvidence.evidenceId],
         description: 'first description',
         suggestion: 'fix first',
         reviewers: ['reviewer'],
@@ -64,7 +86,7 @@ function makeLedger(): FindingLedger {
         revision: 1,
         severity: 'medium',
         title: 'Second defect',
-        location: 'src/second.ts:20',
+        evidenceIds: [secondEvidence.evidenceId],
         description: 'second description',
         suggestion: 'fix second',
         reviewers: ['reviewer'],
@@ -73,6 +95,9 @@ function makeLedger(): FindingLedger {
         lastSeen: observedAt,
       },
     ],
+    evidenceRecords: [firstEvidence, secondEvidence].sort(
+      (left, right) => compareBinaryStrings(left.evidenceId, right.evidenceId),
+    ),
     rawFindings: [
       {
         rawFindingId: 'R-0001',
@@ -82,7 +107,17 @@ function makeLedger(): FindingLedger {
         severity: 'high',
         title: 'First defect',
         description: 'first description',
+        suggestion: 'fix first',
         relation: 'new',
+        targetFindingId: null,
+        evidence: [{
+          kind: 'file_quote',
+          path: 'src/first.ts',
+          startLine: 10,
+          endLine: 10,
+          verbatimExcerpt: 'fixture evidence',
+          snapshotId: 'a'.repeat(64),
+        }],
       },
       {
         rawFindingId: 'R-0002',
@@ -92,7 +127,17 @@ function makeLedger(): FindingLedger {
         severity: 'medium',
         title: 'Second defect',
         description: 'second description',
+        suggestion: 'fix second',
         relation: 'new',
+        targetFindingId: null,
+        evidence: [{
+          kind: 'file_quote',
+          path: 'src/second.ts',
+          startLine: 20,
+          endLine: 20,
+          verbatimExcerpt: 'fixture evidence',
+          snapshotId: 'a'.repeat(64),
+        }],
       },
     ],
     conflicts: [],

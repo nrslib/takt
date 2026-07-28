@@ -4,7 +4,13 @@ const FINDING_ID_PATTERN = /^F-(\d{4})$/;
 
 export interface FindingLedgerProjectionInvariantInput {
   nextId: number;
-  findings: readonly { id: string }[];
+  findings: readonly {
+    id: string;
+    status: string;
+    evidenceIds: readonly string[];
+    supersededByFindingId?: string;
+  }[];
+  evidenceRecords: readonly { evidenceId: string }[];
   conflicts: readonly (ConflictIdentity & { id: string })[];
 }
 
@@ -22,6 +28,16 @@ export function collectFindingLedgerProjectionInvariantViolations(
 ): FindingLedgerProjectionInvariantViolation[] {
   const violations: FindingLedgerProjectionInvariantViolation[] = [];
   const seen = new Set<string>();
+  const evidenceIds = new Set<string>();
+  projection.evidenceRecords.forEach((record, index) => {
+    if (evidenceIds.has(record.evidenceId)) {
+      violations.push({
+        path: ['evidenceRecords', index, 'evidenceId'],
+        message: `Duplicate evidence id "${record.evidenceId}"`,
+      });
+    }
+    evidenceIds.add(record.evidenceId);
+  });
   let maxFindingId = 0;
   projection.findings.forEach((finding, index) => {
     if (seen.has(finding.id)) {
@@ -41,6 +57,38 @@ export function collectFindingLedgerProjectionInvariantViolations(
       return;
     }
     maxFindingId = Math.max(maxFindingId, Number(match[1]));
+    finding.evidenceIds.forEach((evidenceId, evidenceIndex) => {
+      if (!evidenceIds.has(evidenceId)) {
+        violations.push({
+          path: ['findings', index, 'evidenceIds', evidenceIndex],
+          message: `Finding "${finding.id}" references unknown evidence id "${evidenceId}"`,
+        });
+      }
+    });
+  });
+  const findingsById = new Map(projection.findings.map((finding) => [finding.id, finding]));
+  projection.findings.forEach((finding, index) => {
+    if (finding.status !== 'superseded' || finding.supersededByFindingId === undefined) {
+      return;
+    }
+    const canonical = findingsById.get(finding.supersededByFindingId);
+    if (canonical === undefined) {
+      violations.push({
+        path: ['findings', index, 'supersededByFindingId'],
+        message: `Superseded finding "${finding.id}" references unknown canonical finding "${finding.supersededByFindingId}"`,
+      });
+      return;
+    }
+    const canonicalEvidenceIds = new Set(canonical.evidenceIds);
+    const missingEvidenceId = finding.evidenceIds.find(
+      (evidenceId) => !canonicalEvidenceIds.has(evidenceId),
+    );
+    if (missingEvidenceId !== undefined) {
+      violations.push({
+        path: ['findings', index, 'evidenceIds'],
+        message: `Superseded finding "${finding.id}" evidence id "${missingEvidenceId}" must also be referenced by canonical finding "${canonical.id}"`,
+      });
+    }
   });
   if (projection.nextId <= maxFindingId) {
     violations.push({

@@ -6,6 +6,10 @@ import type {
   FindingLedger,
 } from '../../core/workflow/findings/types.js';
 import {
+  assertFindingLedgerAppendOnlyProjection,
+  assertFindingLedgerAppendOnlyTransition,
+} from '../../core/workflow/findings/finding-integrity.js';
+import {
   assertResumePublicationProvenance,
 } from './finding-manager-adapter-contract.js';
 import type {
@@ -29,6 +33,7 @@ export interface ValidatedResumeImportSnapshot {
 
 const FINDING_ENTRY_KINDS = new Set([
   'finding',
+  'evidence',
   'raw',
   'conflict',
   'interpretation',
@@ -218,12 +223,24 @@ function validateFindingContractEnabled(
   const controls = indexFindingControls(source.findingControls, expectedRevisionKeys);
   validateFindingRevisionCounts(revisions, entries, controls);
   validateFindingReservations(source.findingReservations, heads);
-  const currentLedgers = reconstructCurrentFindingLedgers(
-    heads,
+  const allLedgers = reconstructFindingLedgerHistory(
     revisions,
     entries,
     controls,
   );
+  assertReconstructedFindingLedgerHistoryAppendOnly(revisions, allLedgers);
+  const currentLedgers = new Map<string, FindingLedger>();
+  for (const [scopeId, head] of heads) {
+    const revision = requiredPositiveInteger(
+      head.current_revision,
+      `Finding head "${scopeId}" revision`,
+    );
+    const ledger = allLedgers.get(findingKey(scopeId, revision));
+    if (ledger === undefined) {
+      throw new Error(`Run resume Finding revision "${scopeId}/${revision}" is missing`);
+    }
+    currentLedgers.set(scopeId, ledger);
+  }
   validateRootFindingProjection(
     source,
     heads,
@@ -236,6 +253,52 @@ function validateFindingContractEnabled(
     currentLedgers,
   );
   return { heads, revisions, publications, entries, controls };
+}
+
+function assertReconstructedFindingLedgerHistoryAppendOnly(
+  revisions: ReadonlyMap<string, SnapshotRow>,
+  ledgers: ReadonlyMap<string, FindingLedger>,
+): void {
+  const revisionsByScope = new Map<string, Array<{
+    revision: number;
+    ledger: FindingLedger;
+  }>>();
+  for (const [revisionKey, row] of revisions) {
+    const scopeId = requiredString(
+      row.scope_id,
+      `Finding revision "${revisionKey}" scope`,
+    );
+    const revision = requiredPositiveInteger(
+      row.revision,
+      `Finding revision "${revisionKey}" number`,
+    );
+    const ledger = ledgers.get(revisionKey);
+    if (ledger === undefined) {
+      throw new Error(`Run resume Finding revision "${revisionKey}" is missing`);
+    }
+    const scopeRevisions = revisionsByScope.get(scopeId) ?? [];
+    scopeRevisions.push({ revision, ledger });
+    revisionsByScope.set(scopeId, scopeRevisions);
+  }
+  for (const [scopeId, scopeRevisions] of revisionsByScope) {
+    scopeRevisions.sort((left, right) => left.revision - right.revision);
+    let previous: FindingLedger | undefined;
+    for (const current of scopeRevisions) {
+      assertFindingLedgerAppendOnlyProjection(current.ledger);
+      if (previous !== undefined) {
+        try {
+          assertFindingLedgerAppendOnlyTransition(previous, current.ledger);
+        } catch (error) {
+          throw new Error(
+            `Run resume Finding history for scope "${scopeId}" violates append-only integrity at revision ${current.revision}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+      previous = current.ledger;
+    }
+  }
 }
 
 function validateFindingHeadScopes(
@@ -424,6 +487,7 @@ function validateFindingRevisionCounts(
 ): void {
   const countFields = new Map([
     ['finding', 'finding_count'],
+    ['evidence', 'evidence_record_count'],
     ['raw', 'raw_finding_count'],
     ['conflict', 'conflict_count'],
     ['interpretation', 'interpretation_count'],
@@ -510,27 +574,28 @@ function validateRootFindingProjection(
   }
 }
 
-function reconstructCurrentFindingLedgers(
-  heads: ReadonlyMap<string, SnapshotRow>,
+function reconstructFindingLedgerHistory(
   revisions: ReadonlyMap<string, SnapshotRow>,
   entries: ReadonlyMap<string, readonly SnapshotRow[]>,
   controls: ReadonlyMap<string, readonly SnapshotRow[]>,
 ): ReadonlyMap<string, FindingLedger> {
   const ledgers = new Map<string, FindingLedger>();
-  for (const [scopeId, head] of heads) {
-    const revision = requiredPositiveInteger(
-      head.current_revision,
-      `Finding head "${scopeId}" revision`,
+  for (const [revisionKey, revisionRow] of revisions) {
+    const scopeId = requiredString(
+      revisionRow.scope_id,
+      `Finding revision "${revisionKey}" scope`,
     );
-    const revisionKey = findingKey(scopeId, revision);
-    const revisionRow = revisions.get(revisionKey);
-    if (revisionRow === undefined) {
-      throw new Error(`Run resume Finding revision "${revisionKey}" is missing`);
+    const revision = requiredPositiveInteger(
+      revisionRow.revision,
+      `Finding revision "${revisionKey}" number`,
+    );
+    if (findingKey(scopeId, revision) !== revisionKey) {
+      throw new Error(`Run resume Finding revision "${revisionKey}" identity is invalid`);
     }
     const projection: Record<string, unknown> = {
       workflowName: requiredString(
-        head.workflow_name,
-        `Finding head "${scopeId}" workflow`,
+        revisionRow.workflow_name,
+        `Finding revision "${revisionKey}" workflow`,
       ),
       nextId: requiredPositiveInteger(
         revisionRow.next_id,
@@ -543,6 +608,7 @@ function reconstructCurrentFindingLedgers(
         ),
       ),
       findings: recordsForKind(entries.get(revisionKey), 'finding'),
+      evidenceRecords: recordsForKind(entries.get(revisionKey), 'evidence'),
       rawFindings: recordsForKind(entries.get(revisionKey), 'raw'),
       conflicts: recordsForKind(entries.get(revisionKey), 'conflict'),
       interpretations: recordsForKind(
@@ -590,7 +656,7 @@ function reconstructCurrentFindingLedgers(
         `Run resume Finding projection "${revisionKey}" digest mismatch`,
       );
     }
-    ledgers.set(scopeId, ledger);
+    ledgers.set(revisionKey, ledger);
   }
   return ledgers;
 }
@@ -680,6 +746,8 @@ function validateJsonRecord(
   }
   const identityField = kind === 'raw'
     ? 'rawFindingId'
+    : kind === 'evidence'
+      ? 'evidenceId'
     : kind === 'interpretation'
       ? 'interpretationKey'
       : 'id';

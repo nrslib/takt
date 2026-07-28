@@ -17,6 +17,7 @@ import {
   toLedgerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
 import { foldRawFindingEvidence } from '../core/workflow/findings/finding-evidence-fold.js';
+import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
 import { detectClarifiableRawMismatches } from '../core/workflow/findings/relation-coherence.js';
 import type {
   FindingLedger,
@@ -33,18 +34,21 @@ import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.
 function makeFinding(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
 ): FindingLedgerEntry {
+  const { location: _location, ...currentOverrides } = overrides as typeof overrides & {
+    location?: string;
+  };
   return {
     id: 'F-0001',
     status: 'open',
     lifecycle: 'new',
     severity: 'medium',
     title: '候補にない初期値が確定結果へ混入する',
-    location: 'src/multi-select.ts:34',
+    evidenceIds: [],
     reviewers: ['arch-review'],
     rawFindingIds: ['raw-old-1'],
     firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
     lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
-    ...overrides,
+    ...currentOverrides,
   };
 }
 
@@ -53,6 +57,7 @@ function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLe
     workflowName: 'peer-review',
     nextId: 100,
     updatedAt: '2026-07-01T00:00:00.000Z',
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
     interpretations: [],
@@ -75,6 +80,12 @@ function makeConflict(overrides: Partial<FindingLedgerConflict> = {}): FindingLe
 }
 
 function makeRaw(overrides: Partial<RawFinding> = {}): RawFinding {
+  const { location = 'src/multi-select.ts:34', ...currentOverrides } = overrides as Partial<RawFinding> & {
+    location?: string;
+  };
+  const match = /^(.*):(\d+)$/u.exec(location);
+  const path = match?.[1] ?? location;
+  const line = Number(match?.[2] ?? 1);
   return {
     rawFindingId: 'raw-1',
     stepName: 'arch-review',
@@ -82,9 +93,19 @@ function makeRaw(overrides: Partial<RawFinding> = {}): RawFinding {
     familyTag: 'bug',
     severity: 'medium',
     title: '候補にない初期値が確定結果へ混入する',
-    location: 'src/multi-select.ts:34',
     description: '初期値が候補と照合されないまま確定される。',
-    ...overrides,
+    suggestion: null,
+    relation: 'new',
+    targetFindingId: null,
+    evidence: [{
+      kind: 'file_quote',
+      path,
+      startLine: line,
+      endLine: line,
+      verbatimExcerpt: `evidence at ${location}`,
+      snapshotId: '1'.repeat(64),
+    }],
+    ...currentOverrides,
   };
 }
 
@@ -326,6 +347,7 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
       provisionalSpecs: [],
       anomalySpecs: [],
       pendingRejectedObservations: [],
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       rawProvenanceByRawFindingId: new Map([[ladderRaw.rawFindingId,
         storedRawReconcileProvenance(
           ladderRaw,
@@ -336,9 +358,7 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
           reviewerPersonaKey: ladderRaw.reviewer,
           }),
           computeLineageKey({
-          location: ladderRaw.location!,
-          title: ladderRaw.title,
-          familyTag: ladderRaw.familyTag,
+          claimIdentityHash: computeClaimIdentityHash(ladderRaw),
           }),
         ),
       ]]),
@@ -410,6 +430,7 @@ describe('assembleManagerOutput → 保存正規化 → reconciler（ラウン�
       managerOutput: normalized.output,
       provisionalFindings: [],
       rawFindingDispositions: [],
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       rawProvenanceByRawFindingId: new Map(persistsRaws.map((rawFinding) => [
         rawFinding.rawFindingId,
         storedRawReconcileProvenance(
@@ -421,10 +442,8 @@ describe('assembleManagerOutput → 保存正規化 → reconciler（ラウン�
             reviewerPersonaKey: rawFinding.reviewer,
           }),
           computeLineageKey({
-            targetFindingId: rawFinding.targetFindingId!,
-            location: rawFinding.location!,
-            title: rawFinding.title,
-            familyTag: rawFinding.familyTag,
+            targetFindingId: rawFinding.targetFindingId,
+            claimIdentityHash: computeClaimIdentityHash(rawFinding),
           }),
         ),
       ])),
@@ -644,7 +663,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
     expect(new Set(candidates.map((candidate) => candidate.intakeId)).size).toBe(2);
   });
 
-  it('未信頼 provider item の実行コードを呼ばず、悪性 item だけを寛容な rejection に落とす', () => {
+  it('未信頼 provider item の実行コードを呼ばず、unsafe な reviewer 出力全体を単一 overflow に置換する', () => {
     let getterReads = 0;
     let toJsonCalls = 0;
     let proxyReads = 0;
@@ -696,6 +715,14 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
       severity: 'low',
       title: 'valid title',
       description: 'valid description',
+      evidence: [{
+        kind: 'file_quote',
+        path: 'src/valid.ts',
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: 'valid evidence',
+        snapshotId: '1'.repeat(64),
+      }],
     };
 
     const intake = intakeReviewerOutputs({
@@ -733,10 +760,16 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
     expect(getterReads).toBe(0);
     expect(toJsonCalls).toBe(0);
     expect(proxyReads).toBe(0);
-    expect(intake.items).toHaveLength(9);
-    expect(intake.items.filter(({ wire }) => wire.title === 'valid title')).toHaveLength(1);
-    expect(intake.items.filter(({ canonical }) => canonical.provenance.ambiguityOrigin))
-      .toHaveLength(8);
+    expect(intake.items).toHaveLength(1);
+    expect(intake.overflowRawFindingIds).toEqual(new Set([
+      intake.items[0]!.wire.rawFindingId,
+    ]));
+    expect(intake.overflowSpecs).toHaveLength(1);
+    expect(intake.overflowReports).toEqual([{
+      reviewer: 'arch-review',
+      reason: expect.stringContaining('exceed'),
+    }]);
+    expect(intake.items.some(({ wire }) => wire.title === 'valid title')).toBe(false);
   });
 });
 

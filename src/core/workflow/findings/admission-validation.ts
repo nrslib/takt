@@ -3,7 +3,7 @@ import { lstatSync, realpathSync, type Stats } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { readRegularFileNoFollow } from '../../../shared/utils/private-file.js';
 import { parseFindingLocation, parseFindingLocationRange } from './location.js';
-import type { SourceQuoteEvidence } from '../../models/finding-types.js';
+import type { FileQuoteEvidence } from '../../models/finding-types.js';
 
 /**
  * Deterministic, cwd-based verification that a "path:line" location string
@@ -29,40 +29,6 @@ export type LocationAdmissionResult =
 
 const NO_LOCATION_RESULT: LocationAdmissionResult = { ok: true };
 
-/**
- * admission 前段の機械正規化。実運用のレビュア表現が一律
- * 「存在しないパス」化していた実測への対処:
- * - 行範囲 `path:start-end` → path として実在検証する（行は範囲情報として扱い、
- *   行検証はしない — Finding Contract）
- * - `N/A`（大文字小文字・前後空白許容の厳密一致）と空文字 → locationless
- *   （空文字は従来から admissible なので、N/A → none は新しい権限ではない）
- * - カンマ区切り複数 location → 曖昧なので正規化しない（従来どおり invalid）
- */
-const NOT_APPLICABLE_PATTERN = /^n\/a$/i;
-
-export type LocationAdmissionNormalization = 'location-line-range-interpreted' | 'location-not-applicable';
-
-/**
- * この location に正規化が適用されるかの分類（監査記録用）。適用事実は
- * rawNormalizations（store.ts）に記録される。空文字は従来から locationless で
- * あり正規化イベントではないため undefined を返す。
- */
-export function classifyLocationAdmissionNormalization(
-  location: string | undefined,
-): LocationAdmissionNormalization | undefined {
-  if (location === undefined) {
-    return undefined;
-  }
-  const trimmed = location.trim();
-  if (trimmed.length > 0 && NOT_APPLICABLE_PATTERN.test(trimmed)) {
-    return 'location-not-applicable';
-  }
-  if (parseFindingLocationRange(trimmed) !== undefined) {
-    return 'location-line-range-interpreted';
-  }
-  return undefined;
-}
-
 function isInsideBase(base: string, path: string): boolean {
   const basePrefix = base.endsWith(sep) ? base : base + sep;
   return path === base || path.startsWith(basePrefix);
@@ -80,6 +46,47 @@ function countLines(content: string): number {
   }
   const segments = content.split('\n');
   return content.endsWith('\n') ? segments.length - 1 : segments.length;
+}
+
+function decodeUtf8Fatal(content: Buffer): string {
+  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content);
+}
+
+function countBufferLines(content: Buffer): number {
+  if (content.length === 0) return 0;
+  let lineFeeds = 0;
+  for (const byte of content) {
+    if (byte === 0x0a) lineFeeds += 1;
+  }
+  return content[content.length - 1] === 0x0a ? lineFeeds : lineFeeds + 1;
+}
+
+/**
+ * 行末は引用範囲に含めず、範囲内の行間 separator は元 bytes のまま保持する。
+ * これにより LF/CRLF を暗黙変換せずに byte-exact な照合ができる。
+ */
+function lineRangeBytes(
+  content: Buffer,
+  startLine: number,
+  endLine: number,
+): Buffer {
+  let currentLine = 1;
+  let startOffset = 0;
+  let endOffset = content.length;
+  for (let index = 0; index < content.length; index += 1) {
+    if (content[index] !== 0x0a) continue;
+    if (currentLine < startLine) {
+      startOffset = index + 1;
+    }
+    if (currentLine === endLine) {
+      endOffset = index > startOffset && content[index - 1] === 0x0d
+        ? index - 1
+        : index;
+      break;
+    }
+    currentLine += 1;
+  }
+  return content.subarray(startOffset, endOffset);
 }
 
 type RealPathResolution =
@@ -100,7 +107,7 @@ function evidenceFileLimitReason(path: string, size: number): string {
 /**
  * project 境界内かつ symlink 脱出していない実体ファイルへ path を解決する。
  * validateLocationAdmission（行範囲チェックなしの寛容版）と
- * verifySourceQuoteEvidence（verbatimExcerpt 機械照合、review-integrity protocol）の両方が
+ * verifyFileQuoteEvidence（verbatimExcerpt 機械照合、review-integrity protocol）の両方が
  * 使う唯一の実装。node_modules/... のようなプロジェクト外実体を受理しない規則を
  * 一元化し、検証経路間の不一致を防ぐ。
  */
@@ -167,24 +174,8 @@ function resolveRealPathWithinProject(cwd: string, path: string): RealPathResolu
   return { ok: true, realPath, stat };
 }
 
-/**
- * true if this location string asserts no location at all — either genuinely
- * empty/undefined, or the N/A marker. Shared by manager-runner.ts's
- * evidence admission gate (review-integrity protocol) so a claim that normalizes to
- * "no location" isn't held to the source_quote verbatim-evidence bar, which
- * only makes sense for claims that assert code exists at a specific site.
- */
-export function isLocationClaimAbsent(location: string | undefined): boolean {
-  const trimmed = location?.trim() ?? '';
-  return trimmed.length === 0 || NOT_APPLICABLE_PATTERN.test(trimmed);
-}
-
 export function validateLocationAdmission(cwd: string, location: string | undefined): LocationAdmissionResult {
-  // N/A は locationless、行範囲は path + 範囲として解釈する。
   const trimmed = location?.trim() ?? '';
-  if (trimmed.length > 0 && NOT_APPLICABLE_PATTERN.test(trimmed)) {
-    return NO_LOCATION_RESULT;
-  }
   const rangeMatch = parseFindingLocationRange(trimmed);
   const parsed = rangeMatch !== undefined
     // 行範囲の実在検証は path で行う（行番号の範囲チェックはしない — Finding Contract）。
@@ -211,7 +202,9 @@ export function validateLocationAdmission(cwd: string, location: string | undefi
     }
     let content: string;
     try {
-      content = readRegularFileNoFollow(resolution.realPath, resolution.stat).toString('utf-8');
+      content = decodeUtf8Fatal(
+        readRegularFileNoFollow(resolution.realPath, resolution.stat),
+      );
     } catch (error) {
       return {
         ok: false,
@@ -229,6 +222,38 @@ export function validateLocationAdmission(cwd: string, location: string | undefi
     }
   }
 
+  return { ok: true };
+}
+
+/**
+ * finding の location 集合を順序非依存で検証する。1件だけを代表として選ばない。
+ * invalidation に使えるのは全 location が決定的に invalid の場合だけであり、
+ * 1件でも unverifiable なら判断を閉じる。
+ */
+export function validateLocationSetAdmission(
+  cwd: string,
+  locations: readonly string[],
+): LocationAdmissionResult {
+  if (locations.length === 0) return NO_LOCATION_RESULT;
+  const results = locations.map((location) => validateLocationAdmission(cwd, location));
+  const unverifiable = results.find(
+    (result): result is Extract<LocationAdmissionResult, { ok: false }> => (
+      !result.ok && result.outcome === 'unverifiable'
+    ),
+  );
+  if (unverifiable !== undefined) return unverifiable;
+  const invalid = results.filter(
+    (result): result is Extract<LocationAdmissionResult, { ok: false }> => (
+      !result.ok && result.outcome === 'invalid'
+    ),
+  );
+  if (invalid.length === locations.length) {
+    return {
+      ok: false,
+      outcome: 'invalid',
+      reason: invalid.map((result) => result.reason).join(' | '),
+    };
+  }
   return { ok: true };
 }
 
@@ -267,9 +292,9 @@ export type SourceQuoteVerificationOutcome =
  * 「reviewer が見た時点」の真偽を証明しない — 誤って match/quote-mismatch と
  * 確定させないため、内容比較より先に判定して return する。
  */
-export function verifySourceQuoteEvidence(
+export function verifyFileQuoteEvidence(
   cwd: string,
-  evidence: SourceQuoteEvidence,
+  evidence: FileQuoteEvidence,
   expectedSnapshotId: string,
 ): SourceQuoteVerificationOutcome {
   if (evidence.snapshotId !== expectedSnapshotId) {
@@ -314,17 +339,18 @@ export function verifySourceQuoteEvidence(
     };
   }
 
-  let content: string;
+  let contentBytes: Buffer;
   try {
-    content = readRegularFileNoFollow(resolution.realPath, resolution.stat).toString('utf-8');
+    contentBytes = readRegularFileNoFollow(resolution.realPath, resolution.stat);
+    decodeUtf8Fatal(contentBytes);
   } catch (error) {
     return {
       outcome: 'unverifiable',
-      reason: `source quote path "${evidence.path}" could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      reason: `source quote path "${evidence.path}" could not be read as valid UTF-8: ${error instanceof Error ? error.message : String(error)}`,
       ...(!isMissingPathError(error) ? { error } : {}),
     };
   }
-  const lineCount = countLines(content);
+  const lineCount = countBufferLines(contentBytes);
   if (evidence.startLine < 1 || evidence.endLine > lineCount) {
     return {
       outcome: 'quote-mismatch',
@@ -334,13 +360,25 @@ export function verifySourceQuoteEvidence(
 
   // 完全一致のみ採用（部分行・空白緩和なし）。行全体を要求するため
   // 「部分行だけの恣意的引用」は構造的に排除される。
-  const actualExcerpt = content.split('\n').slice(evidence.startLine - 1, evidence.endLine).join('\n');
-  if (actualExcerpt !== evidence.verbatimExcerpt) {
+  const actualExcerptBytes = lineRangeBytes(
+    contentBytes,
+    evidence.startLine,
+    evidence.endLine,
+  );
+  const actualExcerpt = decodeUtf8Fatal(actualExcerptBytes);
+  const claimedExcerptBytes = Buffer.from(evidence.verbatimExcerpt, 'utf8');
+  if (
+    actualExcerpt !== evidence.verbatimExcerpt
+    || !actualExcerptBytes.equals(claimedExcerptBytes)
+  ) {
     return {
       outcome: 'quote-mismatch',
       reason: `verbatimExcerpt does not exactly match "${evidence.path}" lines ${evidence.startLine}-${evidence.endLine}`,
     };
   }
 
-  return { outcome: 'match', fileHash: createHash('sha256').update(content).digest('hex') };
+  return {
+    outcome: 'match',
+    fileHash: createHash('sha256').update(contentBytes).digest('hex'),
+  };
 }

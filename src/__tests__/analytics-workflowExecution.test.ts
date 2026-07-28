@@ -25,6 +25,25 @@ import type {
 } from '../features/analytics/index.js';
 import type { StepProviderInfo } from '../core/workflow/types.js';
 import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
+import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
+import type { FindingEvidenceRecord } from '../core/models/finding-types.js';
+
+function fileQuoteEvidenceRecord(path: string, line: number): FindingEvidenceRecord {
+  const payload = {
+    kind: 'file_quote' as const,
+    path,
+    startLine: line,
+    endLine: line,
+    verbatimExcerpt: 'fixture evidence',
+    snapshotId: 'a'.repeat(64),
+    claimIdentityHash: 'b'.repeat(64),
+    fileHash: 'c'.repeat(64),
+  };
+  return {
+    evidenceId: computeFileQuoteEvidenceRecordId(payload),
+    ...payload,
+  };
+}
 
 describe('workflow execution analytics initialization', () => {
   let testDir: string;
@@ -529,6 +548,10 @@ describe('AnalyticsEmitter findings ledger integration', () => {
   it('writes review_finding events from findings ledger updates to JSONL', () => {
     initAnalyticsWriter(true, testDir);
     const emitter = new AnalyticsEmitter('run-ledger', false);
+    const evidenceRecord = fileQuoteEvidenceRecord(
+      'src/core/workflow/evaluation/RuleEvaluator.ts',
+      48,
+    );
     const ledger: FindingLedger = {
       workflowName: 'peer-review',
       nextId: 2,
@@ -541,7 +564,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
           revision: 1,
           severity: 'high',
           title: 'Secret token should not become ruleId',
-          location: 'src/core/workflow/evaluation/RuleEvaluator.ts:48',
+          evidenceIds: [evidenceRecord.evidenceId],
           description: 'The workflow cannot route on open findings.',
           suggestion: 'Read the consolidated finding ledger in deterministic rules.',
           reviewers: ['architecture-reviewer'],
@@ -550,6 +573,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
           lastSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
         },
       ],
+      evidenceRecords: [evidenceRecord],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -598,12 +622,14 @@ describe('AnalyticsEmitter findings ledger integration', () => {
           revision: 1,
           severity: 'high',
           title: 'Analytics write should not abort workflow',
+          evidenceIds: [],
           reviewers: ['architecture-reviewer'],
           rawFindingIds: ['run:reviewers:1:architecture-review:raw-1'],
           firstSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
           lastSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
         },
       ],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -674,6 +700,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
         revision: 1,
         severity: 'high',
         title: `${workflowName} finding`,
+        evidenceIds: [],
         reviewers: ['reviewer'],
         rawFindingIds: [`${workflowName}:raw-1`],
         firstSeen: {
@@ -687,6 +714,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
           timestamp: '2026-06-13T04:00:00.000Z',
         },
       }],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],

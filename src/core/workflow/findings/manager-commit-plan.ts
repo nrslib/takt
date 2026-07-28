@@ -257,6 +257,8 @@ function prepareCommitReconciliation(
   const evaluatedAdmission = retainInterpretationRecoveryForLadder(evaluateRawAdmission({
     cwd: params.input.cwd,
     reviewScopeSnapshotId: params.reviewScopeSnapshotId,
+    runId: params.input.ledgerStore.runId,
+    scopeIdentity: params.input.ledgerStore.ledgerIdentity,
     previousLedger: freshLedger,
     intake: params.intake,
   }), params.intake);
@@ -271,10 +273,8 @@ function prepareCommitReconciliation(
       (rejection) => !isolatedRawFindingIds.has(rejection.rawFindingId),
     ),
     admissionAnomalySpecs: evaluatedAdmission.admissionAnomalySpecs.filter(retainSpec),
+    admissionProvisionalSpecs: evaluatedAdmission.admissionProvisionalSpecs.filter(retainSpec),
     admissionRejectedItems: evaluatedAdmission.admissionRejectedItems.filter(retainItem),
-    locationlessProvisionalItems: evaluatedAdmission.locationlessProvisionalItems.filter(
-      ({ item }) => retainItem(item),
-    ),
     pendingRejectedObservations: evaluatedAdmission.pendingRejectedObservations.filter(
       ({ item }) => retainItem(item),
     ),
@@ -293,18 +293,18 @@ function prepareCommitReconciliation(
     cleanWire: evaluatedAdmission.cleanWire.filter(
       (wire) => !isolatedRawFindingIds.has(wire.rawFindingId),
     ),
+    verifiedEvidenceRecordsByRawFindingId: new Map(
+      [...evaluatedAdmission.verifiedEvidenceRecordsByRawFindingId].filter(
+        ([rawFindingId]) => !isolatedRawFindingIds.has(rawFindingId),
+      ),
+    ),
   };
   const freshAdmittedItems = [...admission.cleanAdmitted, ...admission.taintedAdmitted];
   const freshAdmittedRawIds = new Set(freshAdmittedItems.map((item) => item.wire.rawFindingId));
-  const locationlessProvisionalRawIds = new Set(
-    admission.locationlessProvisionalItems.map(({ item }) => item.wire.rawFindingId),
-  );
   const reconcileRawFindings = [
     ...admission.cleanWire,
-    ...admission.locationlessProvisionalItems.map(({ item }) => item.wire),
     ...admission.admissionRejectedItems.map((item) => item.wire),
-    ...admission.tainted
-      .filter((item) => !locationlessProvisionalRawIds.has(item.wire.rawFindingId))
+    ...admission.taintedAdmitted
       .map((item) => item.wire),
     ...params.intake.items
       .filter((item) => (
@@ -320,7 +320,7 @@ function prepareCommitReconciliation(
         : [[item.canonical.rawFindingId, {
             reviewerStableKey: item.canonical.reviewerStableKey,
             lineageKey: item.canonical.lineageKey,
-            claimIdentityHash: item.canonical.evidenceHash,
+            claimIdentityHash: item.canonical.claimIdentityHash,
             canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(item.canonical),
             canonicalProvenance: item.canonical.provenance,
           }] as const]
@@ -328,10 +328,7 @@ function prepareCommitReconciliation(
   );
   const baseSpecs: ProvisionalFindingSpec[] = [
     ...params.intake.overflowSpecs.filter(retainSpec),
-    ...admission.locationlessProvisionalItems.map(({ item, reason }) => provisionalSpecForRawKind(
-      { wire: item.wire, canonical: item.canonical, reason },
-      'unverified-locationless',
-    )),
+    ...admission.admissionProvisionalSpecs.filter(retainSpec),
     ...params.managerDecision.cleanProvisionalSpecs.filter((spec) => (
       retainSpec(spec)
       && spec.sourceRawFindingIds.every((rawFindingId) => freshAdmittedRawIds.has(rawFindingId))
@@ -484,6 +481,7 @@ export function buildFindingManagerCommitMutation(
     resolutionRenotifications: revalidated.resolutionRenotifications,
     unsupportedRawFindingReports: managerDecision.unsupportedRawFindingReports,
     healthyReviewerStableKeys: params.intake.healthyReviewerStableKeys,
+    verifiedEvidenceRecordsByRawFindingId: admission.verifiedEvidenceRecordsByRawFindingId,
   });
   const settled = applyManagerActionRecovery({
     ledger: reconcilePlan.ledger,

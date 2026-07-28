@@ -42,7 +42,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function readSnapshotIdEnum(schema: unknown): unknown[] {
+function readSingleSchemaValue(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (value.const !== undefined) {
+    return value.const;
+  }
+  return Array.isArray(value.enum) && value.enum.length === 1
+    ? value.enum[0]
+    : undefined;
+}
+
+function readSnapshotIdConst(schema: unknown): string {
   if (!isRecord(schema) || !isRecord(schema.properties)) {
     throw new Error('Expected raw findings schema properties');
   }
@@ -51,14 +63,27 @@ function readSnapshotIdEnum(schema: unknown): unknown[] {
     throw new Error('Expected raw findings item schema');
   }
   const itemProperties = rawFindings.items.properties;
-  if (!isRecord(itemProperties) || !isRecord(itemProperties.snapshotId)) {
-    throw new Error('Expected raw findings snapshotId schema');
+  const evidence = isRecord(itemProperties) ? itemProperties.evidence : undefined;
+  const evidenceItems = isRecord(evidence) ? evidence.items : undefined;
+  const branches = isRecord(evidenceItems) && Array.isArray(evidenceItems.anyOf)
+    ? evidenceItems.anyOf
+    : isRecord(evidenceItems)
+      ? evidenceItems.oneOf
+      : undefined;
+  const fileQuote = Array.isArray(branches)
+    ? branches.find((branch) => (
+        isRecord(branch)
+        && isRecord(branch.properties)
+        && readSingleSchemaValue(branch.properties.kind) === 'file_quote'
+      ))
+    : undefined;
+  const evidenceProperties = isRecord(fileQuote) ? fileQuote.properties : undefined;
+  const snapshotId = isRecord(evidenceProperties) ? evidenceProperties.snapshotId : undefined;
+  const snapshotIdValue = readSingleSchemaValue(snapshotId);
+  if (typeof snapshotIdValue !== 'string') {
+    throw new Error('Expected file quote snapshotId binding');
   }
-  const snapshotIdEnum = itemProperties.snapshotId.enum;
-  if (!Array.isArray(snapshotIdEnum)) {
-    throw new Error('Expected raw findings snapshotId enum');
-  }
-  return snapshotIdEnum;
+  return snapshotIdValue;
 }
 
 function hasSchemaProperty(schema: unknown, property: string): boolean {
@@ -94,7 +119,7 @@ function makeFindingContract() {
 }
 
 function makeSourceQuoteFinding(persona: string | undefined, schema: unknown): Record<string, unknown> {
-  const snapshotId = readSnapshotIdEnum(schema)[1];
+  const snapshotId = readSnapshotIdConst(schema);
   if (typeof snapshotId !== 'string' || snapshotId.length === 0) {
     throw new Error('Expected provider schema to require a non-empty snapshotId');
   }
@@ -103,14 +128,18 @@ function makeSourceQuoteFinding(persona: string | undefined, schema: unknown): R
     familyTag: 'snapshot-ordering',
     severity: 'high',
     title: `Source quote from ${persona ?? 'reviewer'}`,
-    location: 'src/reviewed.ts:1',
     description: 'The reviewer identified the tracked source line.',
     suggestion: 'Keep the finding for admission verification.',
     relation: 'new',
-    targetFindingId: '',
-    evidenceKind: 'source_quote',
-    verbatimExcerpt: 'export const reviewed = true;',
-    snapshotId,
+    targetFindingId: null,
+    evidence: [{
+      kind: 'file_quote',
+      path: 'src/reviewed.ts',
+      startLine: 1,
+      endLine: 1,
+      verbatimExcerpt: 'export const reviewed = true;',
+      snapshotId,
+    }],
   };
 }
 
@@ -316,10 +345,8 @@ describe('finding reviewer observability wiring', () => {
     expect(reviewerCalls).toHaveLength(1);
     const [, providerPrompt, providerOptions] = reviewerCalls[0]!;
     const providerSchema = providerOptions?.outputSchema;
-    const snapshotIdEnum = readSnapshotIdEnum(providerSchema);
-    expect(snapshotIdEnum).toHaveLength(2);
-    expect(snapshotIdEnum[0]).toBe('');
-    expect(snapshotIdEnum[1]).toBe(readPromptSnapshotId(providerPrompt));
+    const snapshotId = readSnapshotIdConst(providerSchema);
+    expect(snapshotId).toBe(readPromptSnapshotId(providerPrompt));
     expect(providerPrompt).toContain(JSON.stringify(providerSchema, null, 2));
 
     const phaseSpan = exporter.spans.find((span) =>
@@ -360,14 +387,12 @@ describe('finding reviewer observability wiring', () => {
     );
     expect(reviewerCalls).toHaveLength(2);
     const sharedProviderSchema = reviewerCalls[0]?.[2]?.outputSchema;
-    const snapshotIdEnum = readSnapshotIdEnum(sharedProviderSchema);
-    expect(snapshotIdEnum).toHaveLength(2);
-    expect(snapshotIdEnum[0]).toBe('');
+    const snapshotId = readSnapshotIdConst(sharedProviderSchema);
 
     for (const [persona, providerPrompt, providerOptions] of reviewerCalls) {
       expect(providerOptions?.outputSchema).toBe(sharedProviderSchema);
       expect(providerPrompt).toContain(JSON.stringify(sharedProviderSchema, null, 2));
-      expect(snapshotIdEnum[1]).toBe(readPromptSnapshotId(providerPrompt));
+      expect(snapshotId).toBe(readPromptSnapshotId(providerPrompt));
       const stepName = persona === 'architecture-reviewer' ? 'architecture-review' : 'security-review';
       const phaseSpan = exporter.spans.find((span) =>
         span.name === `phase.${stepName}.execute` && span.attributes['takt.phase.number'] === 1,
@@ -383,7 +408,7 @@ describe('finding reviewer observability wiring', () => {
     expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
   });
 
-  it('reviewer 実行中に source が変わると provider schema の旧 snapshot は stale として拒否される', async () => {
+  it('reviewer 実行中に source が変わると旧 snapshot の finding を reviewer anomaly に隔離する', async () => {
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       if (hasSchemaProperty(options?.outputSchema, 'rawFindings')) {
@@ -415,8 +440,7 @@ describe('finding reviewer observability wiring', () => {
 
     const ledger = readFindingLedger(cwd);
     expect(ledger.findings).toHaveLength(0);
-    expect(ledger.reviewerAnomalies).toEqual([
-      expect.objectContaining({ kind: 'stale-snapshot' }),
-    ]);
+    expect(ledger.reviewerAnomalies).toHaveLength(1);
+    expect(ledger.reviewerAnomalies?.[0]?.kind).toBe('stale-snapshot');
   });
 });

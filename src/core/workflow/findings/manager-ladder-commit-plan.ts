@@ -331,6 +331,9 @@ export function buildLadderCommitPlan(
     };
   }, initial);
   const withIndependent = ladder.pendingIndependentNew.reduce<LadderCommitPlan>((plan, pending) => {
+    if (pending.wire.severity === null) {
+      throw new Error(`Independent raw finding "${pending.wire.rawFindingId}" has no severity`);
+    }
     const origins = pending.recoveryOrigins;
     const freshOrigins = origins === undefined
       ? undefined
@@ -521,7 +524,6 @@ export function buildLadderCommitPlan(
       }
     }
     const identity = fullIdentityKeyOf(
-      pending.target.wire.location,
       pending.target.wire.title,
       pending.target.wire.description,
     );
@@ -532,12 +534,18 @@ export function buildLadderCommitPlan(
       if (finding.status !== 'open') {
         return false;
       }
-      if (fullIdentityKeyOf(finding.location, finding.title, finding.description) === identity) {
+      if (fullIdentityKeyOf(
+        finding.title,
+        finding.description,
+      ) === identity) {
         return true;
       }
       return finding.rawFindingIds.some((rawFindingId) => {
         const raw = freshRawsById.get(rawFindingId);
-        return raw !== undefined && fullIdentityKeyOf(raw.location, raw.title, raw.description) === identity;
+        return raw !== undefined && fullIdentityKeyOf(
+          raw.title,
+          raw.description,
+        ) === identity;
       });
     });
     if (candidates.length !== 1) {

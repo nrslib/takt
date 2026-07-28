@@ -515,9 +515,9 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
         description: 'Verified: the fix removes the issue.',
         relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
-        // codex 検証ブロッカー#2: confirmation は検証済み source_quote 証跡が
+        // confirmation は検証済み file_quote 証跡が
         // 無いと resolve できない。
-        ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/real.ts', 10),
+        evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/real.ts', 10)],
       },
     ], '2026-07-01T00:00:00.000Z');
     expect(harness.currentLedger().findings.find((f) => f.id === 'F-0001')?.status).toBe('resolved');

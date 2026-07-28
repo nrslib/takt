@@ -48,7 +48,7 @@ export function computeFindingEvidenceHash(
     entry.lifecycle,
     entry.severity,
     entry.title,
-    entry.location ?? '',
+    [...entry.evidenceIds].sort(compareBinaryStrings),
     entry.description ?? '',
     entry.suggestion ?? '',
     rawFindingIds,

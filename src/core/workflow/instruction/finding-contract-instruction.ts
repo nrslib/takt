@@ -29,8 +29,7 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
   // includeRawFindingsSchema 条件下で必ずセットで生成される（WorkflowEngineSetup.ts
   // の buildFindingContractInstructionContext 参照）。reviewer 用の
   // FindingContractInstructionContext を組む経路が reviewScopeSnapshotId の配線を
-  // 落とすと、reviewer は空文字列の snapshotId を source_quote evidence に echo し、
-  // manager 側の決定的検証（verifySourceQuoteEvidence）が必ず stale-snapshot で弾く
+  // 落とすと reviewer の file_quote を現在の review scope に束縛できない。
   // ようになる。引用が完全に正確でも product finding へ絶対に昇格できず、reviewer
   // anomaly に落ち続けるという重大な machine-detectable な配線バグであるにも
   // かかわらず、`?? ''` によるサイレントな空文字 fallback はこれを不可視にする

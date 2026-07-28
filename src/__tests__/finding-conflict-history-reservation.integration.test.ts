@@ -8,6 +8,7 @@ import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
 import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
+import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
 import type { FindingLedger, FindingManagerOutput, RawFinding } from '../core/workflow/findings/types.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 
@@ -23,9 +24,11 @@ function makeRawFinding(rawFindingId: string): RawFinding {
     familyTag: 'bug',
     severity: 'high',
     title: 'Conflicting review conclusion',
-    location: 'src/example.ts:1',
     description: 'The review evidence conflicts.',
+    suggestion: null,
     relation: 'new',
+    targetFindingId: null,
+    evidence: [],
   };
 }
 
@@ -76,12 +79,13 @@ function makeLedger(): FindingLedger {
       revision: 1,
       severity: 'high',
       title: 'Conflicting review conclusion',
-      location: 'src/example.ts:1',
+      evidenceIds: [],
       reviewers: ['coding-review'],
       rawFindingIds: ['raw-previous'],
       firstSeen: olderObservation,
       lastSeen: newerObservation,
     }],
+    evidenceRecords: [],
     rawFindings: [
       makeRawFinding('raw-previous'),
       makeRawFinding('raw-generated'),
@@ -120,6 +124,7 @@ function reconcileCurrentRaw(): FindingLedger {
     managerOutput: makeManagerOutput(rawFinding.rawFindingId),
     provisionalFindings: [],
     rawFindingDispositions: [],
+    verifiedEvidenceRecordsByRawFindingId: new Map(),
     rawProvenanceByRawFindingId: new Map([[
       rawFinding.rawFindingId,
       storedRawReconcileProvenance(
@@ -131,9 +136,7 @@ function reconcileCurrentRaw(): FindingLedger {
           reviewerPersonaKey: rawFinding.reviewer,
         }),
         computeLineageKey({
-          location: rawFinding.location,
-          title: rawFinding.title,
-          familyTag: rawFinding.familyTag,
+          claimIdentityHash: computeClaimIdentityHash(rawFinding),
         }),
       ),
     ]]),

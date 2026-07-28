@@ -32,7 +32,7 @@ function snapshotFinding(finding: FindingLedgerEntry): FindingLedgerEntry {
     lifecycle: finding.lifecycle,
     severity: finding.severity,
     title: finding.title,
-    ...(finding.location !== undefined ? { location: finding.location } : {}),
+    evidenceIds: [...finding.evidenceIds],
     ...(finding.description !== undefined ? { description: finding.description } : {}),
     ...(finding.suggestion !== undefined ? { suggestion: finding.suggestion } : {}),
     reviewers: [...finding.reviewers].sort(compareBinaryStrings),
@@ -68,17 +68,14 @@ function snapshotRawFinding(rawFinding: RawFinding): RawFinding {
     familyTag: rawFinding.familyTag,
     severity: rawFinding.severity,
     title: rawFinding.title,
-    ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
     description: rawFinding.description,
-    ...(rawFinding.suggestion !== undefined ? { suggestion: rawFinding.suggestion } : {}),
+    suggestion: rawFinding.suggestion,
     relation: rawFinding.relation,
-    ...(rawFinding.targetFindingId !== undefined
-      ? { targetFindingId: rawFinding.targetFindingId }
-      : {}),
+    targetFindingId: rawFinding.targetFindingId,
     ...(rawFinding.targetPrecondition !== undefined
       ? { targetPrecondition: rawFinding.targetPrecondition }
       : {}),
-    ...(rawFinding.evidence !== undefined ? { evidence: rawFinding.evidence } : {}),
+    evidence: rawFinding.evidence,
   });
 }
 

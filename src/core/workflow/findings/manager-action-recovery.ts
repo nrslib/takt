@@ -1,4 +1,8 @@
-import { validateLocationAdmission } from './admission-validation.js';
+import { validateLocationSetAdmission } from './admission-validation.js';
+import {
+  findingFileQuoteLocations,
+  formatFileQuoteLocation,
+} from './evidence-location.js';
 import { createEmptyManagerOutput } from './manager-output.js';
 import { applyProvisionalSettlement } from './manager-provisional-settlement.js';
 import { classifyProvisionalRecovery, isOpenProvisional } from './provisional-recovery.js';
@@ -61,10 +65,13 @@ function planInvalidate(
   if (target?.status === 'invalidated') {
     return { apply: false, settled: true, reason: `finding "${recovery.findingId}" is already invalidated` };
   }
-  if (target === undefined || target.status !== 'open' || target.location === undefined) {
+  const targetLocations = target === undefined
+    ? []
+    : findingFileQuoteLocations(ledger, target).map(formatFileQuoteLocation);
+  if (target === undefined || target.status !== 'open' || targetLocations.length === 0) {
     return { apply: false, settled: false, reason: `finding "${recovery.findingId}" is not an open located finding` };
   }
-  const admission = validateLocationAdmission(cwd, target.location);
+  const admission = validateLocationSetAdmission(cwd, targetLocations);
   return !admission.ok && admission.outcome === 'invalid'
     ? { apply: true, settled: false, reason: admission.reason }
     : { apply: false, settled: false, reason: 'the finding location still passes deterministic admission' };

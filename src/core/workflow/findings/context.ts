@@ -8,10 +8,22 @@ import {
 import { isLedgerConflictUnadjudicated } from './adjudication-evidence.js';
 import { computeReviewScopeSnapshotId } from './snapshot.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+import {
+  findingFileQuoteLocations,
+  formatFileQuoteLocation,
+} from './evidence-location.js';
+
+function findingLocations(
+  ledger: FindingLedger,
+  finding: FindingLedgerEntry,
+): string[] {
+  return findingFileQuoteLocations(ledger, finding).map(formatFileQuoteLocation);
+}
 
 function indexRawFindingFamilyTags(ledger: FindingLedger): ReadonlyMap<string, string> {
   const familyTagsByRawFindingId = new Map<string, string>();
   for (const finding of ledger.rawFindings) {
+    if (finding.familyTag === null) continue;
     const existingFamilyTag = familyTagsByRawFindingId.get(finding.rawFindingId);
     if (existingFamilyTag !== undefined && existingFamilyTag !== finding.familyTag) {
       throw new Error(
@@ -60,7 +72,7 @@ function buildActionableFindingLedgerInstructionSummary(
     lifecycle: FindingLedgerEntry['lifecycle'];
     severity: FindingSeverity;
     title: string;
-    location: string | undefined;
+    locations: string[];
     description: string | undefined;
     suggestion: string | undefined;
     rawFindingIds: string[];
@@ -78,7 +90,7 @@ function buildActionableFindingLedgerInstructionSummary(
         lifecycle: finding.lifecycle,
         severity: finding.severity,
         title: finding.title,
-        location: finding.location,
+        locations: findingLocations(ledger, finding),
         description: finding.description,
         suggestion: finding.suggestion,
         rawFindingIds: finding.rawFindingIds,
@@ -118,7 +130,7 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
           lifecycle: finding.lifecycle,
           severity: finding.severity,
           title: finding.title,
-          location: finding.location,
+          locations: findingLocations(ledger, finding),
           description: finding.description,
           suggestion: finding.suggestion,
           reviewers: finding.reviewers,
@@ -252,7 +264,7 @@ export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): Fi
         id: finding.id,
         severity: finding.severity,
         title: finding.title,
-        location: finding.location,
+        locations: findingLocations(ledger, finding),
         description: finding.description,
         suggestion: finding.suggestion,
         reviewers: finding.reviewers,

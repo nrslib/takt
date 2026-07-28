@@ -20,6 +20,7 @@ import type {
   FindingLedger,
   FindingReconcileContext,
   RawFinding,
+  RawFindingEvidence,
   ReviewerAnomalyEntry,
   ReviewerAnomalyKind,
 } from './types.js';
@@ -42,7 +43,11 @@ export function createReviewerAnomalySpec(input: {
   canonical: Pick<CanonicalRawFinding, 'reviewerStableKey' | 'lineageKey'>;
   anomalyKind: ReviewerAnomalyKind;
   reason: string;
+  failedEvidence?: RawFindingEvidence;
 }): ReviewerAnomalySpec {
+  const fileQuote = input.failedEvidence?.kind === 'file_quote'
+    ? input.failedEvidence
+    : undefined;
   return {
     kind: input.anomalyKind,
     stableKey: computeReviewerAnomalyStableKey({
@@ -54,9 +59,11 @@ export function createReviewerAnomalySpec(input: {
     sourceRawFindingIds: [input.wire.rawFindingId],
     reviewers: [input.wire.reviewer],
     title: input.wire.title,
-    ...(input.wire.location !== undefined ? { claimedLocation: input.wire.location } : {}),
-    ...(input.wire.evidence?.kind === 'source_quote'
-      ? { claimedExcerpt: input.wire.evidence.verbatimExcerpt }
+    ...(fileQuote?.kind === 'file_quote'
+      ? {
+        claimedLocation: fileQuote.path,
+        claimedExcerpt: fileQuote.verbatimExcerpt,
+      }
       : {}),
     mismatchReason: input.reason,
   };

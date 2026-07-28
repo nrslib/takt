@@ -42,6 +42,7 @@ import {
   withFindingContractStructuredOutput,
 } from '../findings/contract-intake.js';
 import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
+import type { ReviewerRawResourceEnvelope } from '../findings/raw-canonicalization.js';
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallIsolatedStateSync, WorkflowCallSessionUpdates } from './WorkflowCallExecutor.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
@@ -50,6 +51,7 @@ import { recordAgentUsageEvent } from './agent-usage-event.js';
 import { formatWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import { buildScopedStepIterationIdentity } from '../step-iteration-identity.js';
+import { correctStructuredOutputOnce } from './structured-output-correction.js';
 
 const log = createLogger('parallel-runner');
 
@@ -58,6 +60,7 @@ type ParallelSubStepResult = {
   response: AgentResponse;
   /** レビュア1回突き返しの実施記録（engine 発行の taint 根拠。manager-runner が canonicalization へ渡す）。 */
   relationClarification?: ReviewerRelationClarification;
+  reviewerRawResourceEnvelope?: ReviewerRawResourceEnvelope;
   instruction: string;
   providerInfo?: StepRunResult['providerInfo'];
   durationMs?: number;
@@ -71,26 +74,6 @@ type ParallelTerminalStatus = 'error' | 'blocked' | 'rate_limited';
 
 function isAgentParallelSubStep(step: WorkflowStep): step is AgentWorkflowStep {
   return !isWorkflowCallStep(step) && step.kind !== 'system';
-}
-
-function mergeTerminalCorrectionResponse(
-  originalResponse: AgentResponse,
-  correctionResponse: AgentResponse,
-): AgentResponse {
-  const baseResponse = { ...originalResponse };
-  delete baseResponse.error;
-  delete baseResponse.errorKind;
-  delete baseResponse.rateLimitInfo;
-  return {
-    ...baseResponse,
-    status: correctionResponse.status,
-    timestamp: correctionResponse.timestamp,
-    ...(correctionResponse.error !== undefined ? { error: correctionResponse.error } : {}),
-    ...(correctionResponse.errorKind !== undefined ? { errorKind: correctionResponse.errorKind } : {}),
-    ...(correctionResponse.rateLimitInfo !== undefined ? { rateLimitInfo: correctionResponse.rateLimitInfo } : {}),
-    ...(correctionResponse.sessionId !== undefined ? { sessionId: correctionResponse.sessionId } : {}),
-    ...(correctionResponse.providerUsage !== undefined ? { providerUsage: correctionResponse.providerUsage } : {}),
-  };
 }
 
 /**
@@ -419,6 +402,7 @@ export class ParallelRunner {
           didEmitPhaseStart = true;
         };
         let subRelationClarification: ReviewerRelationClarification | undefined;
+        let reviewerRawResourceEnvelope: ReviewerRawResourceEnvelope | undefined;
         let subResponse = await runWithPhaseSpan({
           enabled: this.deps.observabilityEnabled,
           runId: this.deps.observabilityRunId,
@@ -504,62 +488,47 @@ export class ParallelRunner {
           }
         }
         if (findingContractContext !== undefined) {
-          const normalized = this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
+          let normalized = this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
             executableSubStep,
             subResponse,
             subRuntime,
           );
-          subResponse = normalized.response;
-          if (normalized.invalidDetail !== undefined) {
-            // 弱いモデルは大きな構造化出力で JSON を壊しやすい。1回だけ
-            // 同一セッションで是正を求め、直れば元の応答（レポート本文）に
-            // 構造化出力だけをマージして続行する。
+          if (normalized.invalidKind === 'model_output') {
             log.info('Structured output invalid for parallel sub-step, requesting one correction', {
               step: subStep.name,
               detail: normalized.invalidDetail,
             });
-            const correctionInstruction = [
-              'Your structured output failed schema validation:',
-              normalized.invalidDetail,
-              '',
-              'Re-emit ONLY the corrected structured output matching the schema.',
-              'Do not repeat the report text. Do not add commentary.',
-            ].join('\n');
-            // 是正は JSON 再出力のみ: ツール・編集権限は不要なので絞り、
-            // Phase 1 のイベントコールバックも引き継がない。
-            const correctiveResponse = await this.executeSubStepAgent(executableSubStep, subPm, correctionInstruction, {
-              ...agentOptions,
-              permissionMode: 'readonly',
-              allowedTools: [],
-              onPromptResolved: undefined,
-              onStream: undefined,
-              ...(subResponse.sessionId !== undefined ? { sessionId: subResponse.sessionId } : {}),
-            });
-            // 非ネイティブ構造化出力プロバイダでは是正 JSON が content に入る
-            // ため、是正応答をそのまま正規化する（本文の差し替えはマージ時）。
-            const renormalized = this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
-              executableSubStep,
-              correctiveResponse,
-              subRuntime,
-            );
-            if (correctiveResponse.status === 'rate_limited' || correctiveResponse.status === 'blocked') {
-              // レート制限・ブロックは専用フロー（メタデータ伝播・バックオフ）
-              // が上位にあるため、error に潰さず、Phase 1 本文を保持して伝える。
-              subResponse = mergeTerminalCorrectionResponse(subResponse, correctiveResponse);
-            } else if (renormalized.invalidDetail !== undefined || renormalized.response.status !== 'done') {
-              subResponse = {
-                ...subResponse,
-                status: 'error',
-                error: `Step "${subStep.name}" structured output remained invalid after one correction: ${renormalized.invalidDetail ?? renormalized.response.error ?? 'correction failed'}`,
-              };
-            } else {
-              subResponse = {
-                ...subResponse,
-                structuredOutput: renormalized.response.structuredOutput,
-                ...(correctiveResponse.sessionId !== undefined ? { sessionId: correctiveResponse.sessionId } : {}),
-              };
-            }
           }
+          normalized = await correctStructuredOutputOnce({
+            stepName: subStep.name,
+            initial: normalized,
+            executeCorrection: (correctionInstruction, sessionId) => this.executeSubStepAgent(
+              executableSubStep,
+              subPm,
+              correctionInstruction,
+              {
+                ...agentOptions,
+                permissionMode: 'readonly',
+                allowedTools: [],
+                onPromptResolved: undefined,
+                onStream: undefined,
+                sessionId,
+              },
+            ),
+            normalize: (candidate) => this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
+              executableSubStep,
+              candidate,
+              subRuntime,
+            ),
+          });
+          if (normalized.invalidDetail !== undefined) {
+            const provider = this.deps.optionsBuilder.resolveStepProviderModel(executableSubStep, subRuntime).provider;
+            throw new Error(
+              `Step "${executableSubStep.name}" requires structured_output for provider "${provider}": ${normalized.invalidDetail}`,
+            );
+          }
+          subResponse = normalized.response;
+          reviewerRawResourceEnvelope = normalized.reviewerRawResourceEnvelope;
           // レビュア1回突き返し: relation/target/kind の意味
           // 矛盾がある raw について同一セッションで1回だけ明確化を求める。
           // 直らなかった raw は drop せず ambiguous のまま manager 解釈 /
@@ -577,8 +546,10 @@ export class ParallelRunner {
                 candidate,
                 subRuntime,
               ),
+              reviewerRawResourceEnvelope,
             });
             subResponse = clarified.response;
+            reviewerRawResourceEnvelope = clarified.reviewerRawResourceEnvelope;
             subRelationClarification = clarified.clarification;
           }
         }
@@ -602,6 +573,9 @@ export class ParallelRunner {
           return {
             subStep,
             response: subResponse,
+            ...(reviewerRawResourceEnvelope !== undefined
+              ? { reviewerRawResourceEnvelope }
+              : {}),
             ...(subRelationClarification !== undefined ? { relationClarification: subRelationClarification } : {}),
             instruction: phase1Instruction,
             providerInfo: subPm,
@@ -735,6 +709,9 @@ export class ParallelRunner {
         return {
           subStep,
           response: finalResponse,
+          ...(reviewerRawResourceEnvelope !== undefined
+            ? { reviewerRawResourceEnvelope }
+            : {}),
           ...(subRelationClarification !== undefined ? { relationClarification: subRelationClarification } : {}),
           instruction: phase1Instruction,
           providerInfo: subPm,

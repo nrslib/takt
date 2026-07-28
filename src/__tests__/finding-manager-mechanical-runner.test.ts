@@ -59,11 +59,14 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
         familyTag: 'bug',
         severity: 'high',
         title: 'Existing issue',
-        location: 'src/a.ts:10',
         description: 'Existing issue body.',
+        suggestion: null,
         relation: 'new',
+        targetFindingId: null,
+        evidence: [],
       },
     ],
+    evidenceRecords: [],
     conflicts: [],
     interpretations: [],
     findings: [
@@ -74,7 +77,8 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
         revision: 1,
         severity: 'high',
         title: 'Existing issue',
-        location: 'src/a.ts:10',
+        evidenceIds: [],
+        description: 'Existing issue body.',
         reviewers: ['arch-review'],
         rawFindingIds: ['raw-existing'],
         firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
@@ -194,7 +198,7 @@ const CONFIRMATION_RAW = {
   suggestion: '',
   relation: 'resolution_confirmation',
   targetFindingId: 'F-0001',
-  ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 10),
+  evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 10)],
 };
 
 const UNMATCHED_ISSUE_RAW = {
@@ -206,7 +210,7 @@ const UNMATCHED_ISSUE_RAW = {
   suggestion: 'Fix it.',
   relation: 'new',
   targetFindingId: '',
-  ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/b.ts', 5),
+  evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/b.ts', 5)],
 };
 
 const ANOTHER_UNMATCHED_ISSUE_RAW = {
@@ -218,7 +222,7 @@ const ANOTHER_UNMATCHED_ISSUE_RAW = {
   suggestion: 'Fix it too.',
   relation: 'new',
   targetFindingId: '',
-  ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/c.ts', 1),
+  evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/c.ts', 1)],
 };
 
 function runFindingManagerWithStore(input: {
@@ -399,6 +403,7 @@ describe('runFindingManagerForStep mechanical path', () => {
         nextId: 1,
         updatedAt: '2026-06-13T00:00:00.000Z',
         findings: [],
+        evidenceRecords: [],
         rawFindings: [],
         conflicts: [],
         interpretations: [],
@@ -437,7 +442,7 @@ describe('runFindingManagerForStep mechanical path', () => {
       stepIteration: 1,
       reviewerRawFindings: [{
         ...UNMATCHED_ISSUE_RAW,
-        ...verifiedSourceQuoteFields(projectCwd, 'src/b.ts', 5),
+        evidence: [verifiedSourceQuoteFields(projectCwd, 'src/b.ts', 5)],
       }],
     });
 
@@ -486,6 +491,7 @@ describe('runFindingManagerForStep mechanical path', () => {
         nextId: 1,
         updatedAt: '2026-06-13T00:00:00.000Z',
         findings: [],
+        evidenceRecords: [],
         rawFindings: [],
         conflicts: [],
         interpretations: [],
@@ -499,12 +505,12 @@ describe('runFindingManagerForStep mechanical path', () => {
     const reviewerRawFindings = [
       {
         ...UNMATCHED_ISSUE_RAW,
-        ...verifiedSourceQuoteFields(projectCwd, 'src/b.ts', 5),
+        evidence: [verifiedSourceQuoteFields(projectCwd, 'src/b.ts', 5)],
       },
       {
         ...ANOTHER_UNMATCHED_ISSUE_RAW,
         rawFindingId: 'quote-mismatch',
-        ...verifiedSourceQuoteFields(projectCwd, 'src/c.ts', 1),
+        evidence: [verifiedSourceQuoteFields(projectCwd, 'src/c.ts', 1)],
         verbatimExcerpt: 'not the current source line',
       },
     ];
@@ -563,7 +569,7 @@ describe('runFindingManagerForStep mechanical path', () => {
         stepIteration: 1,
         reviewerRawFindings: [{
           ...CONFIRMATION_RAW,
-          ...verifiedSourceQuoteFields(projectCwd, 'src/b.ts', 5),
+          evidence: [verifiedSourceQuoteFields(projectCwd, 'src/b.ts', 5)],
           targetFindingId: 'F-0001',
         }],
       });
@@ -906,7 +912,7 @@ describe('runFindingManagerForStep conflict handling', () => {
           revision: 1,
           severity: 'high',
           title: 'Existing issue',
-          location: 'src/a.ts:10',
+          evidenceIds: [],
           description: 'Original detailed description of the conflicted finding.',
           reviewers: ['arch-review'],
           rawFindingIds: ['raw-existing'],
@@ -1098,6 +1104,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         nextId: 1,
         updatedAt: '2026-06-13T00:00:00.000Z',
         findings: [],
+        evidenceRecords: [],
         rawFindings: [],
         conflicts: [],
         interpretations: [],
@@ -1185,7 +1192,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         description: 'Reported by concurrent child A.',
         suggestion: '',
         relation: 'new',
-        ...verifiedSourceQuoteFields(projectCwd, 'src/a.ts', 10),
+        evidence: [verifiedSourceQuoteFields(projectCwd, 'src/a.ts', 10)],
       }),
       runCall(storeB, 'child-b', {
         rawFindingId: 'i-1',
@@ -1195,7 +1202,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         description: 'Reported by concurrent child B.',
         suggestion: '',
         relation: 'new',
-        ...verifiedSourceQuoteFields(projectCwd, 'src/b.ts', 20),
+        evidence: [verifiedSourceQuoteFields(projectCwd, 'src/b.ts', 20)],
       }),
     ]);
 
@@ -1231,7 +1238,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
 
     const store = createFindingLedgerStore({
       projectCwd,
-      runId: 'shared-run',
+      runId: 'shared-run-dup',
       reportDir,
       workflowName: 'peer-review',
       ledgerPath: '.takt/findings/peer-review.json',
@@ -1243,6 +1250,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         nextId: 1,
         updatedAt: '2026-06-13T00:00:00.000Z',
         findings: [],
+        evidenceRecords: [],
         rawFindings: [],
         conflicts: [],
         interpretations: [],
@@ -1324,7 +1332,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         description: 'The handle opened at src/dup.ts:10 is never released.',
         suggestion: '',
         relation: 'new',
-        ...verifiedSourceQuoteFields(projectCwd, 'src/dup.ts', 10),
+        evidence: [verifiedSourceQuoteFields(projectCwd, 'src/dup.ts', 10)],
       }),
       runCall('child-b', {
         rawFindingId: 'i-1',
@@ -1337,7 +1345,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         description: 'The handle opened at src/dup.ts:10 is never released.',
         suggestion: '',
         relation: 'new',
-        ...verifiedSourceQuoteFields(projectCwd, 'src/dup.ts', 10),
+        evidence: [verifiedSourceQuoteFields(projectCwd, 'src/dup.ts', 10)],
       }),
     ]);
 
@@ -1345,7 +1353,18 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     expect(resultB.status).toBe('updated');
 
     const finalLedger = store.loadLedger();
-    const openAtLocation = finalLedger.findings.filter((f) => f.location === 'src/dup.ts:10' && f.status === 'open');
+    const evidenceIdsAtLocation = new Set(finalLedger.evidenceRecords.flatMap((record) => (
+      record.kind === 'file_quote'
+      && record.path === 'src/dup.ts'
+      && record.startLine === 10
+      && record.endLine === 10
+        ? [record.evidenceId]
+        : []
+    )));
+    const openAtLocation = finalLedger.findings.filter((finding) => (
+      finding.status === 'open'
+      && finding.evidenceIds.some((evidenceId) => evidenceIdsAtLocation.has(evidenceId))
+    ));
     // F-0001 と F-0002 の重複が起きない: 1件だけ立つ。
     expect(openAtLocation).toHaveLength(1);
     // 両方の raw finding id がその1件に紐づく（片方は "new" から "same" へ
@@ -1456,7 +1475,7 @@ describe('runFindingManagerForStep stale rejection isolation', () => {
       description: 'Same bug, reported again at a nearby line.',
       suggestion: '',
       relation: 'new',
-      ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 11),
+      evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 11)],
     };
 
     const result = await runFindingManagerForStep({

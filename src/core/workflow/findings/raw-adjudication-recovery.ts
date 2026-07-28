@@ -132,7 +132,7 @@ function buildReplayIntake(input: {
     const canonical = canonicalizeReviewerRawFinding(candidate, { ledger: input.ledger }).canonical;
     const wire = toLedgerRawFinding(canonical);
     intake.items.push({ canonical, wire });
-    if (wire.targetFindingId !== undefined
+    if (wire.targetFindingId !== null
       && !input.ledger.findings.some((entry) => entry.id === wire.targetFindingId)) {
       failures.set(replayRawId, {
         kind: 'target_missing',
@@ -248,6 +248,8 @@ async function runReservedRawAdjudicationRecovery(input: {
   const admission = evaluateRawAdmission({
     cwd: input.runInput.cwd,
     reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+    runId: input.runInput.ledgerStore.runId,
+    scopeIdentity: input.runInput.ledgerStore.ledgerIdentity,
     previousLedger: input.previousLedger,
     intake: prepared.intake,
   });

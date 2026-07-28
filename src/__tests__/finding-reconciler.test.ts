@@ -15,6 +15,10 @@ import {
   createReviewerRawFindingCandidates,
   toLedgerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
+import {
+  computeClaimIdentityHash,
+  computeFileQuoteEvidenceId,
+} from '../core/workflow/findings/evidence-domain.js';
 import { issueOpenConflictOutcomeAuthority } from '../core/workflow/findings/raw-capabilities.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 import type {
@@ -23,23 +27,34 @@ import type {
   RawFinding,
   ReviewerAnomalyEntry,
 } from '../core/workflow/findings/types.js';
+import { compareBinaryStrings } from '../shared/utils/binary-string-comparator.js';
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
+  const {
+    findings: overrideFindings = [],
+    evidenceRecords = [],
+    ...ledgerOverrides
+  } = overrides;
+  const findings = overrideFindings.map((finding) => ({
+    ...finding,
+    evidenceIds: finding.evidenceIds ?? [],
+  }));
   return {
     workflowName: 'peer-review',
     nextId: 1,
-    findings: [],
+    findings,
+    evidenceRecords,
     rawFindings: [],
     conflicts: [],
     interpretations: [],
     updatedAt: '2026-06-13T00:00:00.000Z',
-    ...overrides,
+    ...ledgerOverrides,
   };
 }
 
 type TestReconcileInput = Omit<
   Parameters<typeof reconcileFindingLedgerStrict>[0],
-  'provisionalFindings' | 'rawFindingDispositions' | 'rawProvenanceByRawFindingId'
+  'provisionalFindings' | 'rawFindingDispositions' | 'rawProvenanceByRawFindingId' | 'verifiedEvidenceRecordsByRawFindingId'
 >;
 
 function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
@@ -47,6 +62,7 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
     ...input,
     provisionalFindings: [],
     rawFindingDispositions: [],
+    verifiedEvidenceRecordsByRawFindingId: new Map(),
     rawProvenanceByRawFindingId: new Map(input.rawFindings.map((rawFinding) => [
       rawFinding.rawFindingId,
       storedRawReconcileProvenance(
@@ -58,12 +74,10 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
           reviewerPersonaKey: rawFinding.reviewer,
         }),
         computeLineageKey({
-          ...(rawFinding.targetFindingId !== undefined
+          claimIdentityHash: computeClaimIdentityHash(rawFinding),
+          ...(rawFinding.targetFindingId !== null
             ? { targetFindingId: rawFinding.targetFindingId }
             : {}),
-          ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
-          title: rawFinding.title,
-          familyTag: rawFinding.familyTag,
         }),
       ),
     ])),
@@ -78,10 +92,11 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
     familyTag: 'bug',
     severity: 'high',
     title: 'Rule evaluation ignores finding state',
-    location: 'src/core/workflow/evaluation/RuleEvaluator.ts:48',
     description: 'The workflow cannot route on open findings.',
     suggestion: 'Read the consolidated finding ledger in deterministic rules.',
     relation: 'new',
+    targetFindingId: null,
+    evidence: [],
     ...overrides,
   };
 }
@@ -152,6 +167,87 @@ function makeContext() {
 }
 
 describe('dispute/waiver transitions', () => {
+  it('unions duplicate evidence IDs into the canonical finding without erasing duplicate audit evidence', () => {
+    const evidenceRecord = (path: string) => {
+      const payload = {
+        kind: 'file_quote' as const,
+        path,
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: `evidence from ${path}`,
+        snapshotId: '1'.repeat(64),
+        claimIdentityHash: '2'.repeat(64),
+        fileHash: '3'.repeat(64),
+      };
+      return {
+        evidenceId: computeFileQuoteEvidenceId(payload),
+        ...payload,
+      };
+    };
+    const canonicalEvidence = evidenceRecord('src/a.ts');
+    const duplicateEvidence = evidenceRecord('src/b.ts');
+    const observation = {
+      runId: 'run-1',
+      stepName: 'peer-review',
+      timestamp: '2026-06-13T00:00:00.000Z',
+    };
+    const previousLedger = makeLedger({
+      nextId: 3,
+      evidenceRecords: [canonicalEvidence, duplicateEvidence]
+        .sort((left, right) => compareBinaryStrings(left.evidenceId, right.evidenceId)),
+      findings: [
+        {
+          id: 'F-0001',
+          status: 'open',
+          lifecycle: 'new',
+          revision: 1,
+          severity: 'high',
+          title: 'Canonical',
+          evidenceIds: [canonicalEvidence.evidenceId],
+          reviewers: ['reviewer-a'],
+          rawFindingIds: [],
+          firstSeen: observation,
+          lastSeen: observation,
+        },
+        {
+          id: 'F-0002',
+          status: 'open',
+          lifecycle: 'new',
+          revision: 1,
+          severity: 'high',
+          title: 'Duplicate',
+          evidenceIds: [duplicateEvidence.evidenceId],
+          reviewers: ['reviewer-b'],
+          rawFindingIds: [],
+          firstSeen: observation,
+          lastSeen: observation,
+        },
+      ],
+    });
+
+    const result = reconcileFindingLedger({
+      previousLedger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        duplicateFindings: [{
+          canonicalFindingId: 'F-0001',
+          duplicateFindingIds: ['F-0002'],
+          evidence: 'Same underlying issue.',
+        }],
+      }),
+      context: makeContext(),
+    });
+
+    expect(result.findings.find((finding) => finding.id === 'F-0001')?.evidenceIds)
+      .toEqual(
+        [canonicalEvidence.evidenceId, duplicateEvidence.evidenceId].sort(compareBinaryStrings),
+      );
+    expect(result.findings.find((finding) => finding.id === 'F-0002')).toMatchObject({
+      status: 'superseded',
+      evidenceIds: [duplicateEvidence.evidenceId],
+    });
+  });
+
   it('should move an open finding to waived with an audit record', () => {
     const ledger = makeLedgerWithOpenFinding();
     const result = reconcileFindingLedger({
@@ -271,8 +367,287 @@ describe('reconcileFindingLedger', () => {
         rawFinding.rawFindingId,
         storedRawReconcileProvenance(rawFinding, 'reviewer-key', 'lineage-manager-and-provisional'),
       ]]),
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       context: makeContext(),
     })).toThrow(/exactly one reconcile outcome/);
+  });
+
+  it('rejects a content-addressed evidence record that is bound to different raw evidence', () => {
+    const rawFinding = makeRawFinding({
+      rawFindingId: 'raw-evidence-binding',
+      evidence: [{
+        kind: 'file_quote',
+        path: 'src/actual.ts',
+        startLine: 4,
+        endLine: 4,
+        verbatimExcerpt: 'actual line',
+        snapshotId: '1'.repeat(64),
+      }],
+    });
+    const provenance = storedRawReconcileProvenance(
+      rawFinding,
+      'reviewer-key',
+      'lineage-evidence-binding',
+    );
+    const claimIdentityHash = provenance.claimIdentityHash;
+    const mismatchedRecordPayload = {
+      kind: 'file_quote' as const,
+      path: 'src/different.ts',
+      startLine: 9,
+      endLine: 9,
+      verbatimExcerpt: 'different line',
+      snapshotId: '1'.repeat(64),
+      claimIdentityHash,
+      fileHash: '2'.repeat(64),
+    };
+    const mismatchedRecord = {
+      evidenceId: computeFileQuoteEvidenceId(mismatchedRecordPayload),
+      ...mismatchedRecordPayload,
+    };
+
+    expect(() => reconcileFindingLedgerStrict({
+      previousLedger: makeLedger(),
+      rawFindings: [rawFinding],
+      managerOutput: makeManagerOutput(),
+      provisionalFindings: [],
+      rawFindingDispositions: [{
+        rawFindingId: rawFinding.rawFindingId,
+        outcome: 'audit_only',
+        reason: 'Evidence binding validation runs before the finite disposition is applied.',
+      }],
+      rawProvenanceByRawFindingId: new Map([[
+        rawFinding.rawFindingId,
+        provenance,
+      ]]),
+      verifiedEvidenceRecordsByRawFindingId: new Map([[
+        rawFinding.rawFindingId,
+        [mismatchedRecord],
+      ]]),
+      context: makeContext(),
+    })).toThrow(/is not bound to raw finding "raw-evidence-binding" evidence/);
+  });
+
+  it('allows identical content-addressed evidence to support duplicate raws with the same claim', () => {
+    const evidence = {
+      kind: 'file_quote' as const,
+      path: 'src/shared.ts',
+      startLine: 3,
+      endLine: 3,
+      verbatimExcerpt: 'shared line',
+      snapshotId: '1'.repeat(64),
+    };
+    const firstRaw = makeRawFinding({
+      rawFindingId: 'raw-shared-a',
+      title: 'Shared claim',
+      description: 'Same claim body.',
+      evidence: [evidence],
+    });
+    const secondRaw = makeRawFinding({
+      rawFindingId: 'raw-shared-b',
+      title: firstRaw.title,
+      description: firstRaw.description,
+      evidence: [evidence],
+    });
+    const firstProvenance = storedRawReconcileProvenance(
+      firstRaw,
+      'reviewer-key',
+      'lineage-shared-a',
+    );
+    const secondProvenance = storedRawReconcileProvenance(
+      secondRaw,
+      'reviewer-key',
+      'lineage-shared-b',
+    );
+    expect(secondProvenance.claimIdentityHash).toBe(firstProvenance.claimIdentityHash);
+    const recordPayload = {
+      ...evidence,
+      claimIdentityHash: firstProvenance.claimIdentityHash,
+      fileHash: '2'.repeat(64),
+    };
+    const record = {
+      evidenceId: computeFileQuoteEvidenceId(recordPayload),
+      ...recordPayload,
+    };
+
+    const result = reconcileFindingLedgerStrict({
+      previousLedger: makeLedger(),
+      rawFindings: [firstRaw, secondRaw],
+      managerOutput: makeManagerOutput({
+        newFindings: [{
+          rawFindingIds: [firstRaw.rawFindingId, secondRaw.rawFindingId],
+          title: firstRaw.title,
+          severity: firstRaw.severity,
+        }],
+      }),
+      provisionalFindings: [],
+      rawFindingDispositions: [],
+      rawProvenanceByRawFindingId: new Map([
+        [firstRaw.rawFindingId, firstProvenance],
+        [secondRaw.rawFindingId, secondProvenance],
+      ]),
+      verifiedEvidenceRecordsByRawFindingId: new Map([
+        [firstRaw.rawFindingId, [record]],
+        [secondRaw.rawFindingId, [record]],
+      ]),
+      context: makeContext(),
+    });
+
+    expect(result.evidenceRecords).toEqual([record]);
+    expect(result.findings[0]?.evidenceIds).toEqual([record.evidenceId]);
+  });
+
+  it('rejects a shared evidence record when the second raw has a different claim', () => {
+    const evidence = {
+      kind: 'file_quote' as const,
+      path: 'src/shared.ts',
+      startLine: 3,
+      endLine: 3,
+      verbatimExcerpt: 'shared line',
+      snapshotId: '1'.repeat(64),
+    };
+    const firstRaw = makeRawFinding({
+      rawFindingId: 'raw-claim-a',
+      title: 'First claim',
+      evidence: [evidence],
+    });
+    const secondRaw = makeRawFinding({
+      rawFindingId: 'raw-claim-b',
+      title: 'Different claim',
+      evidence: [evidence],
+    });
+    const firstProvenance = storedRawReconcileProvenance(
+      firstRaw,
+      'reviewer-key',
+      'lineage-claim-a',
+    );
+    const secondProvenance = storedRawReconcileProvenance(
+      secondRaw,
+      'reviewer-key',
+      'lineage-claim-b',
+    );
+    const recordPayload = {
+      ...evidence,
+      claimIdentityHash: firstProvenance.claimIdentityHash,
+      fileHash: '2'.repeat(64),
+    };
+    const record = {
+      evidenceId: computeFileQuoteEvidenceId(recordPayload),
+      ...recordPayload,
+    };
+
+    expect(() => reconcileFindingLedgerStrict({
+      previousLedger: makeLedger(),
+      rawFindings: [firstRaw, secondRaw],
+      managerOutput: makeManagerOutput(),
+      provisionalFindings: [],
+      rawFindingDispositions: [
+        { rawFindingId: firstRaw.rawFindingId, outcome: 'audit_only', reason: 'No mutation.' },
+        { rawFindingId: secondRaw.rawFindingId, outcome: 'audit_only', reason: 'No mutation.' },
+      ],
+      rawProvenanceByRawFindingId: new Map([
+        [firstRaw.rawFindingId, firstProvenance],
+        [secondRaw.rawFindingId, secondProvenance],
+      ]),
+      verifiedEvidenceRecordsByRawFindingId: new Map([
+        [firstRaw.rawFindingId, [record]],
+        [secondRaw.rawFindingId, [record]],
+      ]),
+      context: makeContext(),
+    })).toThrow(/claim identity does not match raw finding "raw-claim-b"/);
+  });
+
+  it('rejects conflicting content that reuses a verified evidence id', () => {
+    const evidence = {
+      kind: 'file_quote' as const,
+      path: 'src/shared.ts',
+      startLine: 3,
+      endLine: 3,
+      verbatimExcerpt: 'shared line',
+      snapshotId: '1'.repeat(64),
+    };
+    const firstRaw = makeRawFinding({ rawFindingId: 'raw-content-a', evidence: [evidence] });
+    const secondRaw = makeRawFinding({ rawFindingId: 'raw-content-b', evidence: [evidence] });
+    const firstProvenance = storedRawReconcileProvenance(
+      firstRaw,
+      'reviewer-key',
+      'lineage-content-a',
+    );
+    const secondProvenance = storedRawReconcileProvenance(
+      secondRaw,
+      'reviewer-key',
+      'lineage-content-b',
+    );
+    const recordPayload = {
+      ...evidence,
+      claimIdentityHash: firstProvenance.claimIdentityHash,
+      fileHash: '2'.repeat(64),
+    };
+    const record = {
+      evidenceId: computeFileQuoteEvidenceId(recordPayload),
+      ...recordPayload,
+    };
+    const conflictingRecord = {
+      ...record,
+      fileHash: '3'.repeat(64),
+    };
+
+    expect(() => reconcileFindingLedgerStrict({
+      previousLedger: makeLedger(),
+      rawFindings: [firstRaw, secondRaw],
+      managerOutput: makeManagerOutput(),
+      provisionalFindings: [],
+      rawFindingDispositions: [
+        { rawFindingId: firstRaw.rawFindingId, outcome: 'audit_only', reason: 'No mutation.' },
+        { rawFindingId: secondRaw.rawFindingId, outcome: 'audit_only', reason: 'No mutation.' },
+      ],
+      rawProvenanceByRawFindingId: new Map([
+        [firstRaw.rawFindingId, firstProvenance],
+        [secondRaw.rawFindingId, secondProvenance],
+      ]),
+      verifiedEvidenceRecordsByRawFindingId: new Map([
+        [firstRaw.rawFindingId, [record]],
+        [secondRaw.rawFindingId, [conflictingRecord]],
+      ]),
+      context: makeContext(),
+    })).toThrow(/does not match its canonical content address/);
+  });
+
+  it('rejects verified evidence bindings for unknown current raw ids', () => {
+    const rawFinding = makeRawFinding({ rawFindingId: 'raw-current' });
+    const claimIdentityHash = computeClaimIdentityHash(rawFinding);
+    const recordPayload = {
+      kind: 'file_quote' as const,
+      path: 'src/a.ts',
+      startLine: 1,
+      endLine: 1,
+      verbatimExcerpt: 'line',
+      snapshotId: '1'.repeat(64),
+      claimIdentityHash,
+      fileHash: '2'.repeat(64),
+    };
+    expect(() => reconcileFindingLedgerStrict({
+      previousLedger: makeLedger(),
+      rawFindings: [rawFinding],
+      managerOutput: makeManagerOutput(),
+      provisionalFindings: [],
+      rawFindingDispositions: [{
+        rawFindingId: rawFinding.rawFindingId,
+        outcome: 'audit_only',
+        reason: 'No product mutation.',
+      }],
+      rawProvenanceByRawFindingId: new Map([[
+        rawFinding.rawFindingId,
+        storedRawReconcileProvenance(rawFinding, 'reviewer-key', 'lineage-current'),
+      ]]),
+      verifiedEvidenceRecordsByRawFindingId: new Map([[
+        'raw-unknown',
+        [{
+          evidenceId: computeFileQuoteEvidenceId(recordPayload),
+          ...recordPayload,
+        }],
+      ]]),
+      context: makeContext(),
+    })).toThrow(/references unknown current raw finding "raw-unknown"/);
   });
 
   it('rejects a forged clean raw conflict + provisional compound outcome', () => {
@@ -307,6 +682,7 @@ describe('reconcileFindingLedger', () => {
         rawFinding.rawFindingId,
         storedRawReconcileProvenance(rawFinding, 'reviewer-key', 'lineage-conflict-and-provisional'),
       ]]),
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       context: makeContext(),
     })).toThrow('unauthorized conflict + provisional compound outcome');
   });
@@ -350,7 +726,7 @@ describe('reconcileFindingLedger', () => {
         attemptOrdinal: 1,
         reviewerStableKey: canonical.reviewerStableKey,
         lineageKey: canonical.lineageKey,
-        candidateEvidenceHash: canonical.evidenceHash,
+        candidateEvidenceHash: canonical.evidenceSetHash,
         canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
         stage: 'interpretation_completed',
         reservationToken: 'reservation-corrected-conflict',
@@ -402,12 +778,13 @@ describe('reconcileFindingLedger', () => {
         {
           reviewerStableKey: canonical.reviewerStableKey,
           lineageKey: canonical.lineageKey,
-          claimIdentityHash: canonical.evidenceHash,
+          claimIdentityHash: canonical.claimIdentityHash,
           canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
           canonicalProvenance: canonical.provenance,
           openConflictOutcomeAuthority: authority,
         },
       ]]),
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       context: makeContext(),
     };
     expect(() => reconcileFindingLedgerStrict({
@@ -430,7 +807,7 @@ describe('reconcileFindingLedger', () => {
     expect(toLedgerRawFinding(crossCanonical)).toEqual(rawFinding);
     expect(crossCanonical.reviewerStableKey).toBe(canonical.reviewerStableKey);
     expect(crossCanonical.lineageKey).toBe(canonical.lineageKey);
-    expect(crossCanonical.evidenceHash).toBe(canonical.evidenceHash);
+    expect(crossCanonical.evidenceSetHash).toBe(canonical.evidenceSetHash);
     expect(() => reconcileFindingLedgerStrict({
       ...reconcileInput,
       rawProvenanceByRawFindingId: new Map([[
@@ -438,7 +815,7 @@ describe('reconcileFindingLedger', () => {
         {
           reviewerStableKey: crossCanonical.reviewerStableKey,
           lineageKey: crossCanonical.lineageKey,
-          claimIdentityHash: crossCanonical.evidenceHash,
+          claimIdentityHash: crossCanonical.claimIdentityHash,
           canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(crossCanonical),
           canonicalProvenance: crossCanonical.provenance,
           openConflictOutcomeAuthority: authority,
@@ -468,7 +845,7 @@ describe('reconcileFindingLedger', () => {
         {
           reviewerStableKey: `${canonical.reviewerStableKey}-substituted`,
           lineageKey: canonical.lineageKey,
-          claimIdentityHash: canonical.evidenceHash,
+          claimIdentityHash: canonical.claimIdentityHash,
           canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
           canonicalProvenance: canonical.provenance,
           openConflictOutcomeAuthority: authority,
@@ -483,7 +860,7 @@ describe('reconcileFindingLedger', () => {
         {
           reviewerStableKey: canonical.reviewerStableKey,
           lineageKey: canonical.lineageKey,
-          claimIdentityHash: canonical.evidenceHash,
+          claimIdentityHash: canonical.claimIdentityHash,
           canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
           canonicalProvenance: canonical.provenance,
           openConflictOutcomeAuthority: { ...authority } as unknown as typeof authority,
@@ -522,8 +899,10 @@ describe('reconcileFindingLedger', () => {
       severity: 'high',
       title: 'Graph shape',
       description: 'Graph shape evidence',
+      suggestion: null,
       relation: 'new',
-      evidenceKind: 'locationless',
+      targetFindingId: null,
+      evidence: [],
     }], {
       workflowName: 'peer-review',
       callNamespace: '',
@@ -566,7 +945,7 @@ describe('reconcileFindingLedger', () => {
     const proxyCandidate = newCandidate();
     let proxyTrapCalls = 0;
     Object.defineProperty(proxyCandidate, 'evidence', {
-      value: new Proxy({ kind: 'locationless', explanation: 'proxy' }, {
+      value: new Proxy([], {
         getPrototypeOf: () => {
           proxyTrapCalls += 1;
           return Object.prototype;
@@ -595,7 +974,7 @@ describe('reconcileFindingLedger', () => {
       .toThrow('cyclic values or repeated object references');
 
     const sharedCandidate = newCandidate();
-    const sharedEvidence = { kind: 'locationless', explanation: 'shared' };
+    const sharedEvidence: unknown[] = [];
     Object.defineProperties(sharedCandidate, {
       evidence: { value: sharedEvidence, enumerable: true },
       alias: { value: sharedEvidence, enumerable: true },
@@ -649,6 +1028,7 @@ describe('reconcileFindingLedger', () => {
         rawFinding.rawFindingId,
         storedRawReconcileProvenance(rawFinding, 'reviewer-key', baseSpec.lineageKey),
       ]]),
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       context: makeContext(),
     })).toThrow(/exactly one reconcile outcome/);
   });
@@ -670,6 +1050,7 @@ describe('reconcileFindingLedger', () => {
       }],
       rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map(),
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       context: makeContext(),
     })).toThrow(/unknown raw finding/i);
   });
@@ -753,7 +1134,6 @@ describe('reconcileFindingLedger', () => {
         status: 'open',
         lifecycle: 'new',
         revision: 1,
-        location: 'src/core/workflow/evaluation/RuleEvaluator.ts:48',
         description: 'The workflow cannot route on open findings.',
         suggestion: 'Read the consolidated finding ledger in deterministic rules.',
         reviewers: ['coding-reviewer'],
@@ -1656,6 +2036,7 @@ describe('reconcileFindingLedger', () => {
         outcome: 'confirmation_not_applied',
         reason: 'The target does not exist, so this confirmation cannot be applied',
       }],
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       rawProvenanceByRawFindingId: new Map([[
         rawFinding.rawFindingId,
         storedRawReconcileProvenance(rawFinding, 'reviewer-key', 'lineage-key'),
@@ -1683,6 +2064,7 @@ describe('reconcileFindingLedger', () => {
         rawFinding.rawFindingId,
         storedRawReconcileProvenance(rawFinding, 'reviewer-key', 'lineage-key'),
       ]]),
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       context: {
         workflowName: 'peer-review',
         stepName: 'peer-review',
@@ -1714,6 +2096,7 @@ describe('reconcileFindingLedger', () => {
         rawFinding.rawFindingId,
         storedRawReconcileProvenance(rawFinding, 'reviewer-key', 'lineage-key'),
       ]]),
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       context: {
         workflowName: 'peer-review',
         stepName: 'peer-review',
@@ -1926,10 +2309,13 @@ describe('reconcileFindingLedger', () => {
   it('should keep NUL-delimited conflict and raw identity inputs distinct', () => {
     expect(formatConflictId({ findingIds: [], rawFindingIds: ['a\0b'] }))
       .not.toBe(formatConflictId({ findingIds: [], rawFindingIds: ['a', 'b'] }));
-    expect(computeLineageKey({ targetFindingId: 't\0x', location: 'p:1', title: 'same' }))
-      .not.toBe(computeLineageKey({ targetFindingId: 't', location: 'x\0p:1', title: 'same' }));
-    expect(computeRawEvidenceHash({ targetFindingId: 't\0x', location: 'p:1', title: 'same' }))
-      .not.toBe(computeRawEvidenceHash({ targetFindingId: 't', location: 'x\0p:1', title: 'same' }));
+    expect(computeLineageKey({ targetFindingId: 't\0x', claimIdentityHash: 'p' }))
+      .not.toBe(computeLineageKey({ targetFindingId: 't', claimIdentityHash: 'x\0p' }));
+    expect(computeRawEvidenceHash({
+      evidence: [{ kind: 'engine_proof', proofId: 't\0x' }],
+    })).not.toBe(computeRawEvidenceHash({
+      evidence: [{ kind: 'engine_proof', proofId: 't' }],
+    }));
   });
 
 });

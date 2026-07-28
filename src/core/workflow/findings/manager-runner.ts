@@ -60,6 +60,8 @@ export async function runFindingManagerForStep(
     const admission = retainInterpretationRecoveryForLadder(evaluateRawAdmission({
       cwd: input.cwd,
       reviewScopeSnapshotId,
+      runId: input.ledgerStore.runId,
+      scopeIdentity: input.ledgerStore.ledgerIdentity,
       previousLedger: prepared.previousLedger,
       intake: prepared.intake,
     }), prepared.intake);

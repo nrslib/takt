@@ -57,9 +57,6 @@ export function classifyProvisionalRecovery(
   roundsCompleted: number,
 ): ProvisionalRecoveryClass {
   switch (provisional.kind) {
-    case 'unverified-locationless':
-      // locationless は機械検証も replay も成立しない主張 — 最初から管轄裁定。
-      return 'terminal-adjudication';
     case 'raw-meaning-ambiguous':
       // WAL attempt があれば解釈を前進し、まだ無ければ保存済み raw を再裁定する。
       // どちらも再裁定 attempt の上限に達したら管轄裁定へ移す。

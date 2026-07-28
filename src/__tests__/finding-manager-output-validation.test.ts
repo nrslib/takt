@@ -871,8 +871,8 @@ describe('finding raw schemas', () => {
     ])).toThrow();
   });
 
-  it('should treat empty location and suggestion from structured output as unset', () => {
-    const parsed = parseReviewerRawFindings([
+  it('should reject the removed flat location field', () => {
+    expect(() => parseReviewerRawFindings([
       {
         rawFindingId: 'raw-confirm',
         familyTag: 'bug',
@@ -882,15 +882,13 @@ describe('finding raw schemas', () => {
         relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
         location: '',
-        suggestion: '',
+        suggestion: null,
+        evidence: [],
       },
-    ]);
-
-    expect(parsed[0]?.location).toBeUndefined();
-    expect(parsed[0]?.suggestion).toBeUndefined();
+    ])).toThrow();
   });
 
-  it('should treat an empty targetFindingId from structured output as unset', () => {
+  it('should accept an explicit null targetFindingId for a new finding', () => {
     const parsed = parseReviewerRawFindings([
       {
         rawFindingId: 'raw-1',
@@ -898,12 +896,14 @@ describe('finding raw schemas', () => {
         severity: 'low',
         title: 'Issue entry',
         description: 'Strict structured output fills every field.',
+        suggestion: null,
         relation: 'new',
-        targetFindingId: '',
+        targetFindingId: null,
+        evidence: [],
       },
     ]);
 
     expect(parsed[0]?.relation).toBe('new');
-    expect(parsed[0]?.targetFindingId).toBeUndefined();
+    expect(parsed[0]?.targetFindingId).toBeNull();
   });
 });

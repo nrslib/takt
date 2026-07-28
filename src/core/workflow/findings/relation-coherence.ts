@@ -26,9 +26,14 @@ import { createLogger } from '../../../shared/utils/index.js';
 import {
   detectRawFindingAmbiguities,
   extractLenientRawFields,
+  type ReviewerRawResourceEnvelope,
 } from './raw-canonicalization.js';
 import { RAW_FINDING_LIMITS, estimateTokens } from './raw-finding-limits.js';
 import type { FindingLedger, RawAmbiguityCode } from './types.js';
+import {
+  formatFileQuoteLocation,
+  rawEvidenceFileQuoteLocations,
+} from './evidence-location.js';
 
 const log = createLogger('finding-relation-coherence');
 
@@ -52,7 +57,7 @@ const CLARIFIABLE_AMBIGUITY_CODES: ReadonlySet<RawAmbiguityCode> = new Set([
 export interface AmbiguousRawMismatch {
   rawFindingId: string;
   title?: string;
-  location?: string;
+  locations: string[];
   codes: RawAmbiguityCode[];
   targetFindingId?: string;
   collidingFindingId?: string;
@@ -109,7 +114,8 @@ export function detectClarifiableRawMismatches(
     mismatches.push({
       rawFindingId: fields.rawFindingId,
       ...(fields.title !== undefined ? { title: fields.title } : {}),
-      ...(fields.location !== undefined ? { location: fields.location } : {}),
+      locations: rawEvidenceFileQuoteLocations(fields.evidence ?? [])
+        .map(formatFileQuoteLocation),
       codes: clarifiable,
       ...(fields.targetFindingId !== undefined ? { targetFindingId: fields.targetFindingId } : {}),
       ...(detection.collidingFindingId !== undefined ? { collidingFindingId: detection.collidingFindingId } : {}),
@@ -164,14 +170,14 @@ export function buildRelationCoherenceRegenerationInstruction(
   mismatches: readonly AmbiguousRawMismatch[],
 ): string {
   const mismatchBlock = mismatches.map((mismatch) => [
-    `- rawFindingId "${mismatch.rawFindingId}"${mismatch.title !== undefined ? ` ("${mismatch.title}"${mismatch.location !== undefined ? `, ${mismatch.location}` : ''})` : ''}`,
+    `- rawFindingId "${mismatch.rawFindingId}"${mismatch.title !== undefined ? ` ("${mismatch.title}"${mismatch.locations.length > 0 ? `, ${mismatch.locations.join(', ')}` : ''})` : ''}`,
     `  problem: ${describeMismatch(mismatch)}`,
   ].join('\n'));
   return [
     'Some of your raw findings have contradictory relation/targetFindingId labeling against the current finding ledger:',
     ...mismatchBlock,
     '',
-    'Fix ONLY the relation and targetFindingId fields of the raw findings listed above. Do NOT change any other field (title, description, severity, suggestion, familyTag, location), do NOT add or remove raw findings, and do NOT touch raw findings that are not listed.',
+    'Fix ONLY the relation and targetFindingId fields of the raw findings listed above. Do NOT change any other field (title, description, severity, suggestion, familyTag, evidence), do NOT add or remove raw findings, and do NOT touch raw findings that are not listed.',
     'Re-emit ONLY the corrected structured output matching the schema, including ALL raw findings from your previous output (corrected where needed). Do not repeat the report text. Do not add commentary.',
   ].join('\n');
 }
@@ -184,11 +190,17 @@ export interface ClarifyAmbiguousRawRelationsInput {
   ledger: FindingLedger;
   /** The runner's Phase 1 agent options; tool permissions are narrowed here (readonly, no tools) since the re-query only re-emits JSON. */
   agentOptions: RunAgentOptions;
-  normalize: (response: AgentResponse) => { response: AgentResponse; invalidDetail?: string };
+  normalize: (response: AgentResponse) => {
+    response: AgentResponse;
+    invalidDetail?: string;
+    reviewerRawResourceEnvelope?: ReviewerRawResourceEnvelope;
+  };
+  reviewerRawResourceEnvelope?: ReviewerRawResourceEnvelope;
 }
 
 export interface ClarifyAmbiguousRawRelationsResult {
   response: AgentResponse;
+  reviewerRawResourceEnvelope?: ReviewerRawResourceEnvelope;
   /** 意味矛盾が1件でも検出された場合に付く。correction の成否に関わらず taint の根拠。 */
   clarification?: ReviewerRelationClarification;
 }
@@ -204,15 +216,24 @@ export async function clarifyAmbiguousRawRelationsOnce(
   input: ClarifyAmbiguousRawRelationsInput,
 ): Promise<ClarifyAmbiguousRawRelationsResult> {
   if (input.response.status !== 'done') {
-    return { response: input.response };
+    return {
+      response: input.response,
+      reviewerRawResourceEnvelope: input.reviewerRawResourceEnvelope,
+    };
   }
   const rawItems = input.response.structuredOutput?.rawFindings;
   if (!Array.isArray(rawItems)) {
-    return { response: input.response };
+    return {
+      response: input.response,
+      reviewerRawResourceEnvelope: input.reviewerRawResourceEnvelope,
+    };
   }
   const mismatches = detectClarifiableRawMismatches(rawItems, input.ledger);
   if (mismatches.length === 0) {
-    return { response: input.response };
+    return {
+      response: input.response,
+      reviewerRawResourceEnvelope: input.reviewerRawResourceEnvelope,
+    };
   }
 
   const clarification: ReviewerRelationClarification = {
@@ -229,7 +250,11 @@ export async function clarifyAmbiguousRawRelationsOnce(
   });
   const instruction = buildRelationCoherenceRegenerationInstruction(mismatches);
   let regenerated: AgentResponse;
-  let renormalized: { response: AgentResponse; invalidDetail?: string };
+  let renormalized: {
+    response: AgentResponse;
+    invalidDetail?: string;
+    reviewerRawResourceEnvelope?: ReviewerRawResourceEnvelope;
+  };
   try {
     regenerated = await executeAgent(input.persona, instruction, {
       ...input.agentOptions,
@@ -245,7 +270,11 @@ export async function clarifyAmbiguousRawRelationsOnce(
       step: input.stepName,
       error: error instanceof Error ? error.message : String(error),
     });
-    return { response: input.response, clarification };
+    return {
+      response: input.response,
+      reviewerRawResourceEnvelope: input.reviewerRawResourceEnvelope,
+      clarification,
+    };
   }
   if (
     renormalized.invalidDetail !== undefined
@@ -256,7 +285,11 @@ export async function clarifyAmbiguousRawRelationsOnce(
       step: input.stepName,
       detail: renormalized.invalidDetail ?? renormalized.response.error,
     });
-    return { response: input.response, clarification };
+    return {
+      response: input.response,
+      reviewerRawResourceEnvelope: input.reviewerRawResourceEnvelope,
+      clarification,
+    };
   }
   // correction 出力の hard budget（2,048 output tokens 相当）。
   const outputTokens = estimateTokens(JSON.stringify(renormalized.response.structuredOutput ?? {}));
@@ -265,7 +298,11 @@ export async function clarifyAmbiguousRawRelationsOnce(
       step: input.stepName,
       outputTokens,
     });
-    return { response: input.response, clarification };
+    return {
+      response: input.response,
+      reviewerRawResourceEnvelope: input.reviewerRawResourceEnvelope,
+      clarification,
+    };
   }
   const regeneratedItems = renormalized.response.structuredOutput!.rawFindings as unknown[];
   const violation = findRegenerationContractViolation(rawItems, regeneratedItems, mismatches);
@@ -274,7 +311,11 @@ export async function clarifyAmbiguousRawRelationsOnce(
       step: input.stepName,
       violation,
     });
-    return { response: input.response, clarification };
+    return {
+      response: input.response,
+      reviewerRawResourceEnvelope: input.reviewerRawResourceEnvelope,
+      clarification,
+    };
   }
   return {
     response: {
@@ -282,6 +323,7 @@ export async function clarifyAmbiguousRawRelationsOnce(
       structuredOutput: renormalized.response.structuredOutput,
       ...(regenerated.sessionId !== undefined ? { sessionId: regenerated.sessionId } : {}),
     },
+    reviewerRawResourceEnvelope: renormalized.reviewerRawResourceEnvelope,
     clarification,
   };
 }
@@ -291,7 +333,7 @@ function rawContentKey(fields: ReturnType<typeof extractLenientRawFields>): stri
   return JSON.stringify([
     fields.title ?? '',
     fields.description ?? '',
-    fields.location ?? '',
+    fields.evidence ?? [],
     fields.severity ?? '',
     fields.suggestion ?? '',
     fields.familyTag ?? '',

@@ -116,11 +116,6 @@ export interface FindingDisputeRecord {
  */
 export const FINDING_PROVISIONAL_KINDS = [
   'raw-meaning-ambiguous',
-  /**
-   * 新規 locationless claim は source_quote で機械検証できないため、確定
-   * product finding に昇格せず観測として gate-blocking に保持する。
-   */
-  'unverified-locationless',
   'reviewer-output-overflow',
   'manager-budget-exhausted',
   'interpretation-interrupted',
@@ -154,7 +149,6 @@ export type FindingProvisionalKind = typeof FINDING_PROVISIONAL_KINDS[number];
  */
 export const DISMISSABLE_PROVISIONAL_KINDS = [
   'raw-meaning-ambiguous',
-  'unverified-locationless',
   'raw-adjudication-unresolved',
 ] as const satisfies readonly FindingProvisionalKind[];
 
@@ -231,7 +225,8 @@ export interface FindingLedgerEntry {
   lifecycle: FindingLifecycle;
   severity: FindingSeverity;
   title: string;
-  location?: string;
+  /** この finding を裏づける検証済み証拠。実体は ledger.evidenceRecords に追記される。 */
+  evidenceIds: string[];
   description?: string;
   suggestion?: string;
   reviewers: string[];
@@ -361,6 +356,8 @@ export interface FindingLedger {
   nextId: number;
   updatedAt: string;
   findings: FindingLedgerEntry[];
+  /** 検証済み証拠の追記専用レジストリ。finding は evidenceIds で参照する。 */
+  evidenceRecords: FindingEvidenceRecord[];
   rawFindings: RawFinding[];
   conflicts: FindingLedgerConflict[];
   /**
@@ -427,18 +424,19 @@ export const RAW_AMBIGUITY_CODES = [
   'confirmation-target-unknown',
   /** resolution_confirmation が open でない target を指す。 */
   'confirmation-target-not-open',
-  /** new だが既存 open finding と path/title が衝突し、完全同一性は証明できない。 */
+  /** new だが既存 open finding と意味衝突し、完全同一性は証明できない。 */
   'new-collides-open-finding',
   /** 必須文字列（title/description/severity 等）が欠損しているが provisional として監査できる。 */
   'missing-required-field',
+  /** reviewer が typed evidence protocol に一致しない evidence を返した。 */
+  'invalid-evidence-shape',
 ] as const;
 export type RawAmbiguityCode = typeof RAW_AMBIGUITY_CODES[number];
 
 /**
- * review-integrity evidence の種別。現在の Finding Contract が受理するのは、
- * 実ファイル引用と locationless 根拠の2種だけである。
+ * review-integrity evidence の種別。検証不能な自由文 claim は受理しない。
  */
-export const RAW_FINDING_EVIDENCE_KINDS = ['source_quote', 'locationless'] as const;
+export const RAW_FINDING_EVIDENCE_KINDS = ['file_quote', 'engine_proof'] as const;
 export type RawFindingEvidenceKind = typeof RAW_FINDING_EVIDENCE_KINDS[number];
 
 declare const candidateBrand: unique symbol;
@@ -462,7 +460,6 @@ export interface ReviewerRawFindingCandidate {
   readonly familyTag?: string;
   readonly severity?: FindingSeverity;
   readonly title?: string;
-  readonly location?: string;
   readonly description?: string;
   readonly suggestion?: string;
 
@@ -470,13 +467,10 @@ export interface ReviewerRawFindingCandidate {
   readonly targetFindingId?: string;
 
   /**
-   * typed evidence protocol(review-integrity protocol)。candidate factory
-   * (createReviewerRawFindingCandidates)が provider-facing の flat wire
-   * フィールド(evidenceKind/verbatimExcerpt/snapshotId)を location と合わせて
-   * 組み立て済みの discriminated union にしてから保持する — location と違い
-   * candidate 段階でも既にネスト形（wire/canonical と同じ形）。
+   * typed evidence protocol。provider-facing でも nested union の配列であり、
+   * candidate は検証済みの構造だけを保持する。
    */
-  readonly evidence?: RawFindingEvidence;
+  readonly evidence: readonly RawFindingEvidence[];
 
   readonly sourceBytes: number;
 
@@ -501,7 +495,8 @@ interface CanonicalRawFindingBase {
   readonly rawFindingId: string;
   readonly reviewerStableKey: string;
   readonly lineageKey: string;
-  readonly evidenceHash: string;
+  readonly claimIdentityHash: string;
+  readonly evidenceSetHash: string;
 
   readonly relation: RawFindingRelation;
   readonly reviewer: string;
@@ -511,14 +506,9 @@ interface CanonicalRawFindingBase {
   readonly provenance: CanonicalRawFindingProvenance;
 
   /**
-   * typed evidence protocol(review-integrity protocol)。candidate の flat evidenceKind/
-   * verbatimExcerpt/snapshotId と location から canonicalizeReviewerRawFinding が
-   * 組み立てた discriminated union。欠損は「evidence なし」— location 付き claim
-   * なら admission-validation.ts の verifySourceQuoteEvidence が無条件で
-   * 不採用(reviewer anomaly)側に倒す。coherent/ambiguous どちらの raw も持ちうる
-   * (ambiguity は relation/target の構造的矛盾であり、evidence の有無とは直交する)。
+   * typed evidence protocol。claim と独立した nested union の配列。
    */
-  readonly evidence?: RawFindingEvidence;
+  readonly evidence: readonly RawFindingEvidence[];
 }
 
 export interface CoherentCanonicalRawFinding extends CanonicalRawFindingBase {
@@ -757,8 +747,6 @@ export interface RawNormalizationAuditRecord {
     | 'relation-normalized'
     | 'target-dropped-from-wire'
     | 'required-fields-missing'
-    | 'location-line-range-interpreted'
-    | 'location-not-applicable'
   >;
 }
 
@@ -810,6 +798,7 @@ export interface FindingManagerCommitProjection {
   nextId: number;
   updatedAt: string;
   findings: FindingLedgerEntry[];
+  evidenceRecords: FindingEvidenceRecord[];
   rawFindings: RawFinding[];
   conflicts: FindingLedgerConflict[];
   interpretations: FindingInterpretationRecord[];
@@ -848,8 +837,8 @@ export interface FindingManagerPendingCommit {
  * そのまま echo させたもの — 検証時に再計算した現在値と食い違えば、レビュー後に
  * 対象が変化した(stale)と判定し、一致/不一致のどちらとも判定しない。
  */
-export interface SourceQuoteEvidence {
-  kind: 'source_quote';
+export interface FileQuoteEvidence {
+  kind: 'file_quote';
   path: string;
   startLine: number;
   endLine: number;
@@ -858,44 +847,78 @@ export interface SourceQuoteEvidence {
   snapshotId: string;
 }
 
-/**
- * 「存在しないこと」が根拠の claim(欠落ファイル・配線漏れ等)の evidence。
- * verbatimExcerpt で機械照合できないことを型で表現する — この kind の raw を
- * source_quote の verbatimExcerpt 照合にかけない(存在しないものを引用させない)。
- * explanation は自由文の根拠説明で、機械検証の対象ではない(reviewer の主張を
- * そのまま product finding へ昇格させる権限は持たない)。
- */
-export interface LocationlessEvidence {
-  kind: 'locationless';
-  explanation: string;
+/** engine が発行した proof registry レコードへの参照。 */
+export interface EngineProofEvidence {
+  kind: 'engine_proof';
+  proofId: string;
 }
 
-/**
- * 省略した raw は evidence なしとして扱われ、location 付き claim は
- * admission-validation.ts で reviewer anomaly に分類される。
- */
-export type RawFindingEvidence = SourceQuoteEvidence | LocationlessEvidence;
+/** reviewer が提示できる証拠の閉じた union。 */
+export type RawFindingEvidence = FileQuoteEvidence | EngineProofEvidence;
+
+export interface VerifiedFileQuoteEvidenceRecord extends FileQuoteEvidence {
+  evidenceId: string;
+  claimIdentityHash: string;
+  fileHash: string;
+}
+
+export type EngineProofSubject =
+  | {
+      kind: 'path_absent';
+      path: string;
+    }
+  | {
+      kind: 'named_structural_check';
+      checkId: string;
+      parameters: Record<string, string>;
+    }
+  | {
+      kind: 'execution_result';
+      executionId: string;
+      expectedOutcome: 'passed' | 'failed';
+    };
+
+export interface EngineProofRecord {
+  evidenceId: string;
+  proofId: string;
+  kind: 'engine_proof';
+  verifierId: string;
+  verifierVersion: string;
+  workflowName: string;
+  runId: string;
+  scopeIdentity: string;
+  snapshotId: string;
+  claimIdentityHash: string;
+  targetFindingId: string | null;
+  subject: EngineProofSubject;
+  dependencyDigests: string[];
+  resultDigest: string;
+  issuedAt: string;
+}
+
+export type FindingEvidenceRecord =
+  | VerifiedFileQuoteEvidenceRecord
+  | EngineProofRecord;
 
 export interface RawFinding {
   rawFindingId: string;
   stepName: string;
   reviewer: string;
-  familyTag: string;
-  severity: FindingSeverity;
+  familyTag: string | null;
+  severity: FindingSeverity | null;
   title: string;
-  location?: string;
   description: string;
-  suggestion?: string;
+  suggestion: string | null;
   /** This raw finding's relationship to the ledger. */
   relation: RawFindingRelation;
   /** Ledger finding id this entry references (required for persists/reopened/resolution_confirmation; forbidden for new). */
-  targetFindingId?: string;
+  targetFindingId: string | null;
   /** Engine-issued snapshot of the referenced target. Reviewer input cannot set this field. */
   targetPrecondition?: FindingMutationPrecondition;
   /**
    * 証拠契約(review-integrity protocol)。欠損は「evidence なし」として扱う。
    */
-  evidence?: RawFindingEvidence;
+  evidence: RawFindingEvidence[];
 }
 
 // ---------------------------------------------------------------------------
@@ -904,8 +927,13 @@ export interface RawFinding {
 
 export const REVIEWER_ANOMALY_KINDS = [
   /**
-   * evidence.kind === 'source_quote' の claim が機械照合(admission-validation.ts
-   * の verifySourceQuoteEvidence)に落ちた — path が存在しない/範囲外/
+   * typed evidence record の shape または content address が壊れており、
+   * 主張の真偽を検証する前提となる engine protocol が成立していない。
+   */
+  'protocol-anomaly',
+  /**
+   * file_quote claim が機械照合(admission-validation.ts
+   * の verifyFileQuoteEvidence)に落ちた — path が存在しない/範囲外/
    * verbatimExcerpt が現在のファイル内容と一致しない、または location 付き
    * claim なのに評価可能な evidence が一切無い(欠損は無条件で不採用側)。
    * 「引用が不成立」であって「欠陥が虚偽」ではない — 安全側の分類名。
@@ -1220,7 +1248,7 @@ export interface FindingsRuleContext {
       id: string;
       severity: FindingSeverity;
       title: string;
-      location: string | undefined;
+      locations: string[];
       description: string | undefined;
       suggestion: string | undefined;
       reviewers: string[];

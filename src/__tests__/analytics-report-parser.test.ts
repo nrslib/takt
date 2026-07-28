@@ -17,10 +17,28 @@ import {
 import { initAnalyticsWriter } from '../features/analytics/writer.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import type { FixActionEvent } from '../features/analytics/events.js';
-import type { FindingLedger } from '../core/models/types.js';
+import type { FindingEvidenceRecord, FindingLedger } from '../core/models/types.js';
+import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
 
 const ANALYTICS_WORKFLOW_NAME = 'peer-review';
 const ANALYTICS_SCOPE_IDENTITY = '{"workflow":"peer-review","stack":[]}';
+
+function fileQuoteEvidenceRecord(path: string, line: number): FindingEvidenceRecord {
+  const payload = {
+    kind: 'file_quote' as const,
+    path,
+    startLine: line,
+    endLine: line,
+    verbatimExcerpt: 'fixture evidence',
+    snapshotId: 'a'.repeat(64),
+    claimIdentityHash: 'b'.repeat(64),
+    fileHash: 'c'.repeat(64),
+  };
+  return {
+    evidenceId: computeFileQuoteEvidenceRecordId(payload),
+    ...payload,
+  };
+}
 
 describe('parseFindingsFromReport', () => {
   it('should extract new findings from a review report', () => {
@@ -223,10 +241,12 @@ describe('inferSeverity', () => {
 
 describe('buildReviewFindingEventsFromLedger', () => {
   it('should build review_finding events from a Finding Contract ledger', () => {
+    const evidenceRecord = fileQuoteEvidenceRecord('src/security.ts', 12);
     const ledger: FindingLedger = {
       workflowName: 'peer-review',
       nextId: 2,
       updatedAt: '2026-06-13T01:00:00.000Z',
+      evidenceRecords: [evidenceRecord],
       rawFindings: [
         {
           rawFindingId: 'raw-security-review-1',
@@ -235,9 +255,18 @@ describe('buildReviewFindingEventsFromLedger', () => {
           reviewer: 'security-reviewer',
           severity: 'high',
           title: 'api_key=sk-secret123456 is logged',
-          location: 'src/security.ts:12',
           description: 'The token is written to logs.',
           suggestion: 'Mask the token before logging.',
+          relation: 'new',
+          targetFindingId: null,
+          evidence: [{
+            kind: 'file_quote',
+            path: 'src/security.ts',
+            startLine: 12,
+            endLine: 12,
+            verbatimExcerpt: 'fixture evidence',
+            snapshotId: 'a'.repeat(64),
+          }],
         },
       ],
       conflicts: [],
@@ -250,7 +279,7 @@ describe('buildReviewFindingEventsFromLedger', () => {
           revision: 1,
           severity: 'high',
           title: 'Token is logged',
-          location: 'src/security.ts:12',
+          evidenceIds: [evidenceRecord.evidenceId],
           description: 'The token is written to logs.',
           suggestion: 'Mask the token before logging.',
           reviewers: ['security-reviewer'],
@@ -294,6 +323,7 @@ describe('buildReviewFindingEventsFromLedger', () => {
       workflowName: 'peer-review',
       nextId: 2,
       updatedAt: '2026-06-13T01:00:00.000Z',
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -305,6 +335,7 @@ describe('buildReviewFindingEventsFromLedger', () => {
           revision: 1,
           severity: 'high',
           title: 'api_key=sk-secret123456 should not be logged',
+          evidenceIds: [],
           reviewers: ['security-reviewer'],
           rawFindingIds: ['run:reviewers:security-review:raw-1'],
           firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T01:00:00.000Z' },

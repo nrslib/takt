@@ -34,7 +34,7 @@ vi.mock('../infra/providers/index.js', () => ({
 }));
 
 vi.mock('../core/workflow/findings/snapshot.js', () => ({
-  computeReviewScopeSnapshotId: vi.fn(() => 'test-review-snapshot'),
+  computeReviewScopeSnapshotId: vi.fn(() => '1'.repeat(64)),
 }));
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
@@ -79,11 +79,18 @@ const HALLUCINATED_RAW = {
   familyTag: 'security',
   severity: 'high',
   title: 'Hallucinated issue in a nonexistent file',
-  location: 'src/does-not-exist.ts:99',
   description: 'Claims a bug in a file that is not part of the reviewed tree.',
-  suggestion: '',
+  suggestion: null,
   relation: 'new',
-  targetFindingId: '',
+  targetFindingId: null,
+  evidence: [{
+    kind: 'file_quote',
+    path: 'src/does-not-exist.ts',
+    startLine: 99,
+    endLine: 99,
+    verbatimExcerpt: 'hallucinated source line',
+    snapshotId: '1'.repeat(64),
+  }],
 };
 
 function mockReviewerEmitsHallucination(): void {

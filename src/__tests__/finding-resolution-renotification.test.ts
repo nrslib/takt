@@ -28,9 +28,11 @@ function raw(overrides: Partial<RawFinding> & Pick<RawFinding, 'rawFindingId'>):
     familyTag: 'bug',
     severity: 'high',
     title: 'Issue',
-    location: 'src/a.ts:1',
     description: 'Issue evidence.',
+    suggestion: null,
     relation: 'new',
+    targetFindingId: null,
+    evidence: [],
     ...overrides,
   };
 }
@@ -46,7 +48,7 @@ function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
       lifecycle: 'new',
       severity: 'high',
       title: 'Issue',
-      location: 'src/a.ts:1',
+      evidenceIds: [],
       description: 'Issue evidence.',
       reviewers: ['reviewer'],
       rawFindingIds: ['raw-original'],
@@ -54,6 +56,7 @@ function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
       lastSeen: OBSERVATION,
       revision: 1,
     }],
+    evidenceRecords: [],
     rawFindings: [raw({ rawFindingId: 'raw-original' })],
     conflicts: [],
     interpretations: [],
@@ -109,7 +112,6 @@ describe('resolution/renotification exact authority', () => {
         targetFindingId: 'F-0001',
         targetPrecondition: observed,
         reviewer: 'reviewer-a',
-        location: 'src/a.ts:10',
         description: 'Canonical primary evidence.',
         suggestion: 'Apply the canonical fix.',
       });
@@ -119,7 +121,6 @@ describe('resolution/renotification exact authority', () => {
         targetFindingId: 'F-0001',
         targetPrecondition: observed,
         reviewer: 'reviewer-z',
-        location: 'src/z.ts:20',
         description: 'Lexically later evidence.',
         suggestion: 'Apply another fix.',
       });
@@ -147,6 +148,7 @@ describe('resolution/renotification exact authority', () => {
           },
           provisionalFindings: [],
           rawFindingDispositions: [],
+          verifiedEvidenceRecordsByRawFindingId: new Map(),
           rawProvenanceByRawFindingId: new Map([
             [
               rawA.rawFindingId,
@@ -167,7 +169,6 @@ describe('resolution/renotification exact authority', () => {
       expect(forward.findings[0]).toMatchObject({
         status: 'open',
         lifecycle: mode === 'match' ? 'persists' : 'reopened',
-        location: rawA.location,
         description: rawA.description,
         suggestion: rawA.suggestion,
         reviewers: ['reviewer', 'reviewer-a', 'reviewer-z'],
@@ -178,7 +179,7 @@ describe('resolution/renotification exact authority', () => {
 
   it.each([
     {
-      name: 'B→A does not treat a locationless anomaly raw outside canonical finding evidence as a resolution',
+      name: 'B→A does not treat an evidence-free anomaly raw outside canonical finding evidence as a resolution',
       managerOutput: {
         ...createEmptyManagerOutput(),
         matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-persists'] }],
@@ -192,7 +193,7 @@ describe('resolution/renotification exact authority', () => {
         rawFindingId: 'raw-anomaly-confirmation',
         relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
-        evidence: { kind: 'locationless', explanation: 'Unverified.' },
+        evidence: [],
       }),
       freshStatus: 'resolved' as const,
       freshLifecycle: 'resolved' as const,
@@ -217,7 +218,7 @@ describe('resolution/renotification exact authority', () => {
         rawFindingId: 'raw-anomaly-persists',
         relation: 'persists',
         targetFindingId: 'F-0001',
-        evidence: { kind: 'locationless', explanation: 'Unverified.' },
+        evidence: [],
       }),
       freshStatus: 'open' as const,
       freshLifecycle: 'persists' as const,
@@ -322,7 +323,6 @@ describe('resolution/renotification exact authority', () => {
       targetFindingId: 'F-0001',
       targetPrecondition: observed,
       reviewer: 'reviewer-a',
-      location: 'src/a.ts:10',
       description: 'Deterministic primary evidence.',
       suggestion: 'Apply the deterministic fix.',
     });
@@ -332,7 +332,6 @@ describe('resolution/renotification exact authority', () => {
       targetFindingId: 'F-0001',
       targetPrecondition: observed,
       reviewer: 'reviewer-z',
-      location: 'src/z.ts:20',
       description: 'Later lexical evidence.',
       suggestion: 'Apply another fix.',
     });
@@ -386,7 +385,6 @@ describe('resolution/renotification exact authority', () => {
       status: 'open',
       lifecycle: 'reopened',
       revision: 3,
-      location: persistsA.location,
       description: persistsA.description,
       suggestion: persistsA.suggestion,
       reviewers: ['reviewer', 'reviewer-a', 'reviewer-z'],

@@ -11,6 +11,17 @@ import type {
   RawFinding,
 } from '../core/workflow/findings/types.js';
 
+function quote(path: string, line: number) {
+  return {
+    kind: 'file_quote' as const,
+    path,
+    startLine: line,
+    endLine: line,
+    verbatimExcerpt: `evidence at ${path}:${line}`,
+    snapshotId: '1'.repeat(64),
+  };
+}
+
 function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
   return {
     rawFindingId: 'raw-current',
@@ -20,7 +31,10 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
     severity: 'high',
     title: 'Current issue',
     description: 'The issue is present in the current review.',
+    suggestion: null,
     relation: 'new',
+    targetFindingId: null,
+    evidence: [quote('src/a.ts', 10)],
     ...overrides,
   };
 }
@@ -34,7 +48,7 @@ function makeFinding(
     lifecycle: 'new',
     severity: 'high',
     title: 'Existing issue',
-    location: 'src/a.ts:10',
+    evidenceIds: [],
     reviewers: ['architecture-review'],
     rawFindingIds: ['raw-existing'],
     firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
@@ -48,7 +62,8 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
-    rawFindings: [makeRawFinding({ rawFindingId: 'raw-existing', location: 'src/a.ts:10' })],
+    evidenceRecords: [],
+    rawFindings: [makeRawFinding({ rawFindingId: 'raw-existing' })],
     conflicts: [],
     interpretations: [],
     findings: [makeFinding({ revision: 1 })],
@@ -106,7 +121,7 @@ describe('classifyRawFindingsMechanically explicit reference (case 2)', () => {
       relation: 'persists',
       targetFindingId: 'F-0001',
       familyTag: 'race-condition',
-      location: 'src/a.ts:99',
+      evidence: [quote('src/a.ts', 99)],
       title: 'A totally different-sounding title',
       description: 'Still seeing the distributed lock cleanup gap, now at a different line.',
     });
@@ -144,7 +159,7 @@ describe('classifyRawFindingsMechanically exact duplicate content (case 1)', () 
   it('Given a relation "new" raw whose title/description/path/suggestion exactly match an open finding\'s existing raw When classified Then it lands in matches', () => {
     const existingRaw = makeRawFinding({
       rawFindingId: 'raw-existing',
-      location: 'src/a.ts:10',
+      evidence: [quote('src/a.ts', 10)],
       title: 'Handle is never closed',
       description: 'The file handle opened at line 10 is never released.',
       suggestion: 'Add a finally block that calls close().',
@@ -154,7 +169,7 @@ describe('classifyRawFindingsMechanically exact duplicate content (case 1)', () 
       rawFindingId: 'raw-dup',
       relation: 'new',
       familyTag: 'style', // familyTag differs — not part of the identity key.
-      location: 'src/a.ts:10',
+      evidence: [quote('src/a.ts', 10)],
       title: 'Handle is never closed',
       description: 'The file handle opened at line 10 is never released.',
       suggestion: 'Add a finally block that calls close().',
@@ -172,7 +187,7 @@ describe('classifyRawFindingsMechanically exact duplicate content (case 1)', () 
     const existingRaw = makeRawFinding({
       rawFindingId: 'raw-existing',
       familyTag: 'resource-leak',
-      location: 'src/a.ts:10',
+      evidence: [quote('src/a.ts', 10)],
       title: 'Handle is never closed',
       description: 'A specific file descriptor leak on the error path.',
     });
@@ -181,7 +196,7 @@ describe('classifyRawFindingsMechanically exact duplicate content (case 1)', () 
       rawFindingId: 'raw-different-meaning',
       relation: 'new',
       familyTag: 'resource-leak',
-      location: 'src/a.ts:10',
+      evidence: [quote('src/a.ts', 10)],
       title: 'Handle is never closed',
       description: 'A distinct concern about goroutine cleanup, unrelated to the file descriptor leak.',
     });
@@ -192,18 +207,22 @@ describe('classifyRawFindingsMechanically exact duplicate content (case 1)', () 
   });
 
   it('Given a raw whose content matches a RESOLVED finding\'s raw (not open) When classified Then it goes to residual as a reopen candidate', () => {
-    const existingRaw = makeRawFinding({ rawFindingId: 'raw-existing', location: 'src/a.ts:10' });
+    const existingRaw = makeRawFinding({ rawFindingId: 'raw-existing' });
     const ledger = makeLedger({ rawFindings: [existingRaw], findings: [makeFinding({ revision: 1, status: 'resolved' })] });
-    const raw = makeRawFinding({ rawFindingId: 'raw-issue', relation: 'new', location: 'src/a.ts:10' });
+    const raw = makeRawFinding({ rawFindingId: 'raw-issue', relation: 'new' });
     const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
     expect(result.output.matches).toEqual([]);
     expect(result.residualRawFindings).toEqual([raw]);
   });
 
-  it('Given an issue without location When classified Then it goes to residual', () => {
-    const raw = makeRawFinding({ rawFindingId: 'raw-issue', relation: 'new', location: undefined });
+  it('Given an issue without evidence location but the same claim identity When classified Then it still matches', () => {
+    const raw = makeRawFinding({ rawFindingId: 'raw-issue', relation: 'new', evidence: [] });
     const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: [raw] });
-    expect(result.residualRawFindings).toEqual([raw]);
+    expect(result.residualRawFindings).toEqual([]);
+    expect(result.output.matches).toEqual([{
+      findingId: 'F-0001',
+      rawFindingIds: ['raw-issue'],
+    }]);
   });
 
   it('Given a fully mechanical round When validated with the real validator Then the output passes', () => {

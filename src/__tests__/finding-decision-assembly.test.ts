@@ -19,6 +19,7 @@ import type {
   RawFinding,
 } from '../core/workflow/findings/types.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
 
 const DEFAULT_CONFLICT_ID = formatConflictId({
   findingIds: ['F-0001'],
@@ -26,6 +27,12 @@ const DEFAULT_CONFLICT_ID = formatConflictId({
 });
 
 function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
+  const { location = 'src/a.ts:10', ...currentOverrides } = overrides as Partial<RawFinding> & {
+    location?: string;
+  };
+  const match = /^(.*):(\d+)$/u.exec(location);
+  const path = match?.[1] ?? location;
+  const line = Number(match?.[2] ?? 1);
   return {
     rawFindingId: 'raw-current',
     stepName: 'architecture-review',
@@ -34,26 +41,39 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
     severity: 'high',
     title: 'Current issue',
     description: 'The issue is present in the current review.',
+    suggestion: null,
     relation: 'new',
-    ...overrides,
+    targetFindingId: null,
+    evidence: [{
+      kind: 'file_quote',
+      path,
+      startLine: line,
+      endLine: line,
+      verbatimExcerpt: `evidence at ${location}`,
+      snapshotId: '1'.repeat(64),
+    }],
+    ...currentOverrides,
   };
 }
 
 function makeFinding(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
 ): FindingLedgerEntry {
+  const { location: _location, ...currentOverrides } = overrides as typeof overrides & {
+    location?: string;
+  };
   return {
     id: 'F-0001',
     status: 'open',
     lifecycle: 'new',
     severity: 'high',
     title: 'Existing issue',
-    location: 'src/a.ts:10',
+    evidenceIds: [],
     reviewers: ['architecture-review'],
     rawFindingIds: ['raw-existing'],
     firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
     lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
-    ...overrides,
+    ...currentOverrides,
   };
 }
 
@@ -75,6 +95,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
+    evidenceRecords: [],
     rawFindings: [makeRawFinding({ rawFindingId: 'raw-existing', familyTag: 'bug' })],
     conflicts: [],
     interpretations: [],
@@ -93,6 +114,7 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
     ...input,
     provisionalFindings: [],
     rawFindingDispositions: [],
+    verifiedEvidenceRecordsByRawFindingId: new Map(),
     rawProvenanceByRawFindingId: new Map(input.rawFindings.map((rawFinding) => [
       rawFinding.rawFindingId,
       storedRawReconcileProvenance(
@@ -104,12 +126,10 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
           reviewerPersonaKey: rawFinding.reviewer,
         }),
         computeLineageKey({
-          ...(rawFinding.targetFindingId !== undefined
+          ...(rawFinding.targetFindingId !== null
             ? { targetFindingId: rawFinding.targetFindingId }
             : {}),
-          ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
-          title: rawFinding.title,
-          familyTag: rawFinding.familyTag,
+          claimIdentityHash: computeClaimIdentityHash(rawFinding),
         }),
       ),
     ])),
@@ -792,8 +812,8 @@ describe('assembleManagerOutput combined decision kinds', () => {
   });
 });
 
-// identity は familyTag + location ではなく path + 正規化タイトルで決まる
-// （item 2: familyTag と行番号は分類・検索ヒントに過ぎない）。
+// identity は evidence location や familyTag ではなく、
+// 正規化 title + description + targetFindingId で決まる。
 describe('assembleManagerOutput new-finding grouping', () => {
   it('Given two reviewers reporting the same title and path (different familyTags) When assembled Then they collapse into one new finding', () => {
     const first = makeRawFinding({
@@ -824,7 +844,7 @@ describe('assembleManagerOutput new-finding grouping', () => {
     ]);
   });
 
-  it('Given the same title at different paths When assembled Then they stay separate', () => {
+  it('Given the same claim at different evidence paths When assembled Then they collapse by claim identity', () => {
     const first = makeRawFinding({ rawFindingId: 'raw-1', location: 'src/a.ts:10', title: 'Leak' });
     const second = makeRawFinding({ rawFindingId: 'raw-2', location: 'src/b.ts:20', title: 'Leak' });
 
@@ -839,7 +859,9 @@ describe('assembleManagerOutput new-finding grouping', () => {
       }),
     });
 
-    expect(result.output.newFindings).toHaveLength(2);
+    expect(result.output.newFindings).toEqual([
+      { rawFindingIds: ['raw-1', 'raw-2'], title: 'Leak', severity: 'high' },
+    ]);
   });
 
   it('Given different titles at the same path When assembled Then they stay separate', () => {
@@ -860,10 +882,9 @@ describe('assembleManagerOutput new-finding grouping', () => {
     expect(result.output.newFindings).toHaveLength(2);
   });
 
-  // B3 追補（codex 直接実行の再現）: 同一性キーの正規化は大小文字を保存する。
-  // 小文字化すると、大小文字を区別する識別子への別指摘（`PATH` と `Path`）が
-  // 「正規化後の完全一致」扱いで1件に誤統合される。
-  it('Given two "new" raws whose titles differ only by identifier case (PATH vs Path) When assembled Then they stay separate findings', () => {
+  // claim identity は title を小文字化するが、description は原文を保存する。
+  // title が大小文字だけ異なっても、failure mode の説明が異なれば別 claim になる。
+  it('Given case-normalized titles with different descriptions When assembled Then they stay separate findings', () => {
     const upper = makeRawFinding({
       rawFindingId: 'raw-upper',
       location: 'src/a.ts:10',
@@ -905,9 +926,9 @@ describe('assembleManagerOutput new-finding grouping', () => {
     expect(next.findings).toHaveLength(2);
   });
 
-  // 既存 open finding へのリダイレクト側も同様: 大小文字だけ違う title は
-  // 「完全一致」ではないため、manager の new 判断は覆されない。
-  it('Given an existing open finding whose title differs only by identifier case When a raw is decided "new" Then it is not auto-redirected', () => {
+  // claim identity は大小文字を保持する。識別子の case だけが異なる別問題を
+  // 既存 open finding へ機械的に誤統合しない。
+  it('Given an existing open finding whose title differs only by case When a raw is decided "new" Then it stays independent', () => {
     const ledger = makeLedger({
       findings: [makeFinding({ revision: 1,
         title: 'Wrong identifier PATH',
@@ -930,7 +951,11 @@ describe('assembleManagerOutput new-finding grouping', () => {
 
     expect(result.rejectedRawDecisions).toEqual([]);
     expect(result.output.matches).toEqual([]);
-    expect(result.output.newFindings).toHaveLength(1);
+    expect(result.output.newFindings).toEqual([{
+      rawFindingIds: ['raw-mixed'],
+      title: 'Wrong identifier Path',
+      severity: 'high',
+    }]);
   });
 
   // item 5: 同タイトル・同一ファイルでも、実際には failure mode が異なる別問題
@@ -1183,7 +1208,12 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
   // 組み立てだけを直しても台帳は凍ったままになる（takt-bench で実測）。
   it('Given the confirmation is consumed by mechanical classification When merged with the LLM matches Then the merged output is canonical and valid', () => {
     const ledger = makeLedger();
-    const stillPresent = makeRawFinding({ rawFindingId: 'raw-still-present', familyTag: 'bug', location: 'src/a.ts:22' });
+    const stillPresent = makeRawFinding({
+      rawFindingId: 'raw-still-present',
+      familyTag: 'bug',
+      location: 'src/a.ts:22',
+      title: 'Same defect remains at another line',
+    });
     const confirmation = makeRawFinding({
       rawFindingId: 'raw-confirmation',
       familyTag: 'bug',
@@ -1230,7 +1260,12 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
   // assembleManagerOutput に渡し、merge → canonicalize を内部で完結させる。
   it('Given mechanicalOutput is passed to assembleManagerOutput When the LLM decides "same" on the same finding Then merge and canonicalize happen internally and the ledger stays open with one conflict', () => {
     const ledger = makeLedger();
-    const stillPresent = makeRawFinding({ rawFindingId: 'raw-still-present', familyTag: 'bug', location: 'src/a.ts:22' });
+    const stillPresent = makeRawFinding({
+      rawFindingId: 'raw-still-present',
+      familyTag: 'bug',
+      location: 'src/a.ts:22',
+      title: 'Same defect remains at another line',
+    });
     const confirmation = makeRawFinding({
       rawFindingId: 'raw-confirmation',
       familyTag: 'bug',
@@ -1664,6 +1699,7 @@ describe('assembleManagerOutput carried conflicts', () => {
         outcome: 'stale' as const,
         reason: rejected.reason,
       })),
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       rawProvenanceByRawFindingId: new Map(rawFindings.map((rawFinding) => [
         rawFinding.rawFindingId,
         storedRawReconcileProvenance(
@@ -1675,12 +1711,10 @@ describe('assembleManagerOutput carried conflicts', () => {
             reviewerPersonaKey: rawFinding.reviewer,
           }),
           computeLineageKey({
-            ...(rawFinding.targetFindingId !== undefined
+            ...(rawFinding.targetFindingId !== null
               ? { targetFindingId: rawFinding.targetFindingId }
               : {}),
-            ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
-            title: rawFinding.title,
-            familyTag: rawFinding.familyTag,
+            claimIdentityHash: computeClaimIdentityHash(rawFinding),
           }),
         ),
       ])),

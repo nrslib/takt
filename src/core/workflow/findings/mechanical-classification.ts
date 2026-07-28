@@ -1,7 +1,7 @@
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
-import { normalizeFindingText, parseFindingLocation } from './location.js';
 import { createEmptyManagerOutput } from './manager-output.js';
 import type { FindingLedger, FindingManagerOutput, RawFinding } from './types.js';
+import { computeClaimIdentityHash } from './evidence-domain.js';
 
 /**
  * raw findings のうち、構造化フィールドの等価比較だけで分類が確定するものを
@@ -36,14 +36,11 @@ export function effectiveRawFindingRelation(raw: Pick<RawFinding, 'relation'>): 
   return raw.relation;
 }
 
-/** Exact-duplicate identity key for case 1: normalized (path, title, description, suggestion). Line number is deliberately excluded (evidence of current position, not identity). */
-function exactDuplicateKey(raw: Pick<RawFinding, 'title' | 'description' | 'suggestion' | 'location'>): string {
-  return JSON.stringify([
-    parseFindingLocation(raw.location)?.path ?? '',
-    normalizeFindingText(raw.title),
-    normalizeFindingText(raw.description),
-    raw.suggestion !== undefined ? normalizeFindingText(raw.suggestion) : '',
-  ]);
+/** Evidence location と suggestion を混ぜない claim identity が唯一の重複キー。 */
+function exactDuplicateKey(
+  raw: Pick<RawFinding, 'title' | 'description' | 'targetFindingId'>,
+): string {
+  return computeClaimIdentityHash(raw);
 }
 
 /** Indexes every raw finding attached to an open ledger finding by its exact-duplicate key, for case-1 matching. */
@@ -103,7 +100,7 @@ export function classifyRawFindingsMechanically(input: {
 
     // ケース3: resolution_confirmation は現行どおり。
     if (relation === 'resolution_confirmation') {
-      const target = raw.targetFindingId === undefined ? undefined : findingsById.get(raw.targetFindingId);
+      const target = raw.targetFindingId === null ? undefined : findingsById.get(raw.targetFindingId);
       if (target !== undefined && target.status === 'open') {
         const entry = resolvedByFindingId.get(target.id)
           ?? { findingId: target.id, rawFindingIds: [], evidence: raw.description };
@@ -119,7 +116,7 @@ export function classifyRawFindingsMechanically(input: {
 
     // ケース2: 明示参照。対象状態が relation と整合する場合だけ機械で確定する。
     if (relation === 'persists' || relation === 'reopened') {
-      const target = raw.targetFindingId === undefined ? undefined : findingsById.get(raw.targetFindingId);
+      const target = raw.targetFindingId === null ? undefined : findingsById.get(raw.targetFindingId);
       if (target !== undefined) {
         if (relation === 'persists' && target.status === 'open') {
           const entry = matchesByFindingId.get(target.id) ?? { findingId: target.id, rawFindingIds: [] };

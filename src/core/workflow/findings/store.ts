@@ -314,6 +314,7 @@ function createEmptyLedger(workflowName: string): FindingLedger {
     workflowName,
     nextId: 1,
     findings: [],
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
     interpretations: [],

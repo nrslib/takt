@@ -14,6 +14,10 @@ export function readAllFindingEntries(
       finding_id AS authorityId, record, digest
     FROM finding_entries WHERE run_id = ?
     UNION ALL
+    SELECT 'evidence', scope_id, revision, ordinal,
+      evidence_id, record, digest
+    FROM finding_evidence_records WHERE run_id = ?
+    UNION ALL
     SELECT 'raw', scope_id, revision, ordinal,
       raw_finding_id, record, digest
     FROM finding_raw_entries WHERE run_id = ?
@@ -30,7 +34,7 @@ export function readAllFindingEntries(
       anomaly_id, record, digest
     FROM finding_reviewer_anomaly_entries WHERE run_id = ?
     ORDER BY scopeId, revision, entryKind, ordinal
-  `, runId, runId, runId, runId, runId);
+  `, runId, runId, runId, runId, runId, runId);
   assertFindingEntryRows(rows);
   return rows;
 }

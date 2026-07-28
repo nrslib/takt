@@ -61,7 +61,7 @@ export async function runManagerDecisionStage(params: {
     reviewScopeSnapshotId,
   });
   try {
-    const invalidLocationCandidates = computeInvalidLocationCandidates(input.cwd, previousLedger.findings);
+    const invalidLocationCandidates = computeInvalidLocationCandidates(input.cwd, previousLedger);
     const invalidLocationCandidateFindingIds = new Set(invalidLocationCandidates.keys());
     const dismissCandidates = computeDismissCandidates(previousLedger);
     const dismissCandidateFindingIds = new Set(dismissCandidates.keys());

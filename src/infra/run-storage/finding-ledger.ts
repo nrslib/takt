@@ -42,6 +42,7 @@ interface JsonRecordRow {
 
 const ENTITY_TABLES = [
   ['finding_entries', 'finding_id', 'findings'],
+  ['finding_evidence_records', 'evidence_id', 'evidenceRecords'],
   ['finding_raw_entries', 'raw_finding_id', 'rawFindings'],
   ['finding_conflict_entries', 'conflict_id', 'conflicts'],
   ['finding_interpretation_entries', 'interpretation_key', 'interpretations'],
@@ -72,6 +73,7 @@ export function bootstrapFindingAuthority(
     nextId: 1,
     updatedAt: trustedIsoTime(input.createdAt),
     findings: [],
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
     interpretations: [],
@@ -133,9 +135,9 @@ function writeInitialFindingAuthority(
     INSERT INTO finding_ledger_revisions (
       run_id, scope_id, revision, workflow_name, next_id,
       finding_count, raw_finding_count, conflict_count,
-      interpretation_count, reviewer_anomaly_count, control_count,
+      evidence_record_count, interpretation_count, reviewer_anomaly_count, control_count,
       projection_digest, updated_at
-    ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   input.runId,
   input.scopeId,
@@ -144,6 +146,7 @@ function writeInitialFindingAuthority(
   input.ledger.findings.length,
   input.ledger.rawFindings.length,
   input.ledger.conflicts.length,
+  input.ledger.evidenceRecords.length,
   input.ledger.interpretations.length,
   input.ledger.reviewerAnomalies?.length ?? 0,
   [
@@ -167,6 +170,8 @@ function parseJsonRecord(row: JsonRecordRow, label: string): unknown {
 function entityId(entity: EntityTable, record: Record<string, unknown>): string {
   const key = entity[1] === 'finding_id'
     ? 'id'
+    : entity[1] === 'evidence_id'
+      ? 'evidenceId'
     : entity[1] === 'raw_finding_id'
       ? 'rawFindingId'
       : entity[1] === 'conflict_id'
@@ -292,6 +297,7 @@ interface FindingRevisionIntegrityRow {
   readonly workflowName: string;
   readonly workflowDefinitionName: string | null;
   readonly findingCount: number;
+  readonly evidenceRecordCount: number;
   readonly rawFindingCount: number;
   readonly conflictCount: number;
   readonly interpretationCount: number;
@@ -387,6 +393,7 @@ function validateFindingAuthorityHistory(
       revisions.workflow_name AS workflowName,
       definitions.name AS workflowDefinitionName,
       revisions.finding_count AS findingCount,
+      revisions.evidence_record_count AS evidenceRecordCount,
       revisions.raw_finding_count AS rawFindingCount,
       revisions.conflict_count AS conflictCount,
       revisions.interpretation_count AS interpretationCount,
@@ -443,10 +450,11 @@ function validateFindingAuthorityHistory(
     `, runId, revision.scopeId, revision.revision)?.count;
     if (
       actualCounts[0] !== revision.findingCount
-      || actualCounts[1] !== revision.rawFindingCount
-      || actualCounts[2] !== revision.conflictCount
-      || actualCounts[3] !== revision.interpretationCount
-      || actualCounts[4] !== revision.reviewerAnomalyCount
+      || actualCounts[1] !== revision.evidenceRecordCount
+      || actualCounts[2] !== revision.rawFindingCount
+      || actualCounts[3] !== revision.conflictCount
+      || actualCounts[4] !== revision.interpretationCount
+      || actualCounts[5] !== revision.reviewerAnomalyCount
       || controlCount !== revision.controlCount
     ) {
       throw new Error('Finding authority sealed revision count mismatch');
@@ -580,6 +588,7 @@ export class FindingLedgerRepository {
         workflow_name,
         next_id,
         finding_count,
+        evidence_record_count,
         raw_finding_count,
         conflict_count,
         interpretation_count,
@@ -587,7 +596,7 @@ export class FindingLedgerRepository {
         control_count,
         projection_digest,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     input.runId,
     input.scopeId,
@@ -595,6 +604,7 @@ export class FindingLedgerRepository {
     input.workflowName,
     ledger.nextId,
     ledger.findings.length,
+    ledger.evidenceRecords.length,
     ledger.rawFindings.length,
     ledger.conflicts.length,
     ledger.interpretations.length,

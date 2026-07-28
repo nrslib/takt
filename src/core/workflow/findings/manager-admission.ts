@@ -2,7 +2,9 @@ import type { RawNormalizationAuditRecord, RawAdmissionRejectionReport, Reviewer
 import type {
   CanonicalRawFinding,
   FindingLedger,
+  FindingEvidenceRecord,
   RawFinding,
+  RawFindingEvidence,
   ReviewerAnomalyKind,
 } from './types.js';
 import type { ProvisionalFindingSpec } from './reconciler.js';
@@ -11,11 +13,22 @@ import {
   type ReviewerAnomalyPromotionCandidate,
   type ReviewerAnomalySpec,
 } from './reviewer-anomalies.js';
-import { isLocationClaimAbsent, verifySourceQuoteEvidence } from './admission-validation.js';
 import {
   matchesProvisionalRecoveryOrigin,
   type ProvisionalRecoveryOrigin,
 } from './provisional-recovery-origin.js';
+import {
+  createEngineProofVerifierRegistry,
+  createLedgerEngineProofRegistry,
+} from './evidence-domain.js';
+import { formatFileQuoteLocation } from './evidence-location.js';
+import { verifyFindingEvidenceSet } from './evidence-verification.js';
+import { pathAbsentEngineProofVerifier } from './path-absent-engine-proof.js';
+import { provisionalSpecForRawKind } from './manager-provisional.js';
+
+const ENGINE_PROOF_VERIFIERS = createEngineProofVerifierRegistry([
+  pathAbsentEngineProofVerifier,
+]);
 
 interface CanonicalIntakeItemBase {
   canonical: CanonicalRawFinding;
@@ -137,12 +150,19 @@ export interface ReviewerIntakeResult {
   healthyReviewerStableKeys: Set<string>;
 }
 
+interface PendingRejectedObservation {
+  item: CanonicalIntakeItem;
+  targetFindingId: string;
+  reason: string;
+  failedEvidence?: RawFindingEvidence;
+}
+
 export interface RawAdmissionEvaluation {
   admissionRejections: RawAdmissionRejectionReport[];
   admissionAnomalySpecs: ReviewerAnomalySpec[];
+  admissionProvisionalSpecs: ProvisionalFindingSpec[];
   admissionRejectedItems: CanonicalIntakeItem[];
-  locationlessProvisionalItems: Array<{ item: CanonicalIntakeItem; reason: string }>;
-  pendingRejectedObservations: Array<{ item: CanonicalIntakeItem; targetFindingId: string; reason: string }>;
+  pendingRejectedObservations: PendingRejectedObservation[];
   cleanAdmitted: CanonicalIntakeItem[];
   tainted: CanonicalIntakeItem[];
   taintedAdmitted: CanonicalIntakeItem[];
@@ -150,107 +170,166 @@ export interface RawAdmissionEvaluation {
   verifiedEvidenceCandidates: ReviewerAnomalyPromotionCandidate[];
   provisionalOnlyLadderRawIds: Set<string>;
   cleanWire: RawFinding[];
+  verifiedEvidenceRecordsByRawFindingId: ReadonlyMap<string, readonly FindingEvidenceRecord[]>;
 }
 
 type AdmissionPool = 'clean' | 'tainted';
 
-type LocationEvidenceClassification =
-  | { admit: true }
-  | { admit: false; provisionalKind: 'unverified-locationless'; reason: string }
-  | { admit: false; anomalyKind: ReviewerAnomalyKind; reason: string };
+type EvidenceClassification =
+  | { admit: true; evidenceRecords: FindingEvidenceRecord[] }
+  | {
+      admit: false;
+      disposition: 'anomaly';
+      anomalyKind: ReviewerAnomalyKind;
+      reason: string;
+      failedEvidence?: RawFindingEvidence;
+    }
+  | {
+      admit: false;
+      disposition: 'provisional';
+      reason: string;
+      failedEvidence?: RawFindingEvidence;
+    };
 
 interface AdmissionItemEvaluation {
   pool: AdmissionPool;
   admitted?: CanonicalIntakeItem;
   rejection?: RawAdmissionRejectionReport;
   anomalySpec?: ReviewerAnomalySpec;
+  provisionalSpec?: ProvisionalFindingSpec;
   rejectedItem?: CanonicalIntakeItem;
-  locationlessProvisional?: { item: CanonicalIntakeItem; reason: string };
-  pendingRejectedObservation?: { item: CanonicalIntakeItem; targetFindingId: string; reason: string };
+  pendingRejectedObservation?: PendingRejectedObservation;
   verifiedEvidenceCandidate?: ReviewerAnomalyPromotionCandidate;
+  verifiedEvidenceRecords?: FindingEvidenceRecord[];
   provisionalOnlyLadderRawId?: string;
 }
 
-function classifyLocationEvidence(input: {
+function classifyEvidence(input: {
   cwd: string;
   reviewScopeSnapshotId: string;
+  runId: string;
+  scopeIdentity: string;
+  previousLedger: FindingLedger;
   item: CanonicalIntakeItem;
-  pool: AdmissionPool;
-}): LocationEvidenceClassification {
-  const { cwd, reviewScopeSnapshotId, item, pool } = input;
-  const evidence = item.canonical.evidence;
-  const relation = item.canonical.relation;
-
-  if (evidence?.kind === 'source_quote') {
-    const verification = verifySourceQuoteEvidence(cwd, evidence, reviewScopeSnapshotId);
-    if (verification.outcome === 'match') {
-      return { admit: true };
-    }
-    if (verification.outcome === 'unverifiable') {
-      if ('error' in verification) {
-        throw verification.error;
-      }
-      throw new Error(
-        `Source quote evidence for raw finding "${item.wire.rawFindingId}" could not be verified: ${verification.reason}`,
-      );
-    }
-    return { admit: false, anomalyKind: verification.outcome, reason: verification.reason };
-  }
-
-  if (relation === 'new') {
-    if (evidence?.kind === 'locationless') {
-      return {
-        admit: false,
-        provisionalKind: 'unverified-locationless',
-        reason: 'a new locationless claim has no mechanically verifiable source_quote evidence, so it is retained as a gate-blocking provisional observation rather than admitted as a confirmed product finding',
-      };
-    }
-    const reason = isLocationClaimAbsent(item.wire.location)
-      ? 'no verifiable evidence was supplied (an explicit locationless evidence declaration or a matching source_quote is required); a bare empty/N-A claim cannot become a product finding'
-      : `location "${item.wire.location ?? ''}" was cited but no verifiable source_quote evidence (verbatimExcerpt) was supplied`;
-    return { admit: false, anomalyKind: 'quote-mismatch', reason };
-  }
-
-  if (relation === 'persists' || relation === 'reopened') {
-    if (pool === 'tainted' && isLocationClaimAbsent(item.wire.location)) {
-      return { admit: true };
-    }
-    const detail = evidence?.kind === 'locationless'
-      ? 'locationless evidence is retained only as a provisional new observation and cannot mutate an existing finding'
-      : 'no verified source_quote evidence was supplied';
+}): EvidenceClassification {
+  const { cwd, reviewScopeSnapshotId, item } = input;
+  if (item.canonical.provenance.ambiguityCodes.includes('invalid-evidence-shape')) {
     return {
       admit: false,
-      anomalyKind: 'quote-mismatch',
-      reason: `a "${relation}" claim cannot mutate the referenced existing finding without a matching source_quote (verbatimExcerpt): ${detail}, so the claim is not applied to the finding's state`,
+      disposition: 'anomaly',
+      anomalyKind: 'protocol-anomaly',
+      reason: 'Reviewer evidence does not match the typed evidence protocol',
     };
   }
-
+  const evidence = item.canonical.evidence;
+  const verification = verifyFindingEvidenceSet({
+    cwd,
+    evidence,
+    expectedSnapshotId: reviewScopeSnapshotId,
+    claimIdentityHash: item.canonical.claimIdentityHash,
+    targetFindingId: item.wire.targetFindingId,
+    proofRegistry: createLedgerEngineProofRegistry(input.previousLedger),
+    proofVerifiers: ENGINE_PROOF_VERIFIERS,
+    proofContext: {
+      cwd,
+      workflowName: input.previousLedger.workflowName,
+      runId: input.runId,
+      scopeIdentity: input.scopeIdentity,
+    },
+  });
+  if (verification.outcome === 'match') {
+    return { admit: true, evidenceRecords: verification.records };
+  }
+  if (verification.outcome === 'unverifiable') {
+    if ('error' in verification) {
+      throw verification.error;
+    }
+    throw new Error(
+      `Evidence for raw finding "${item.wire.rawFindingId}" could not be verified: ${verification.reason}`,
+    );
+  }
+  const failedEvidence = verification.failureLevel === 'item'
+    ? verification.failedEvidence
+    : undefined;
+  if (verification.outcome === 'protocol-anomaly') {
+    return {
+      admit: false,
+      disposition: 'anomaly',
+      anomalyKind: 'protocol-anomaly',
+      reason: verification.reason,
+      failedEvidence,
+    };
+  }
+  if (
+    verification.outcome === 'quote-mismatch'
+    || verification.outcome === 'stale-snapshot'
+  ) {
+    return {
+      admit: false,
+      disposition: 'anomaly',
+      anomalyKind: verification.outcome,
+      reason: verification.reason,
+      failedEvidence,
+    };
+  }
   return {
     admit: false,
-    anomalyKind: 'quote-mismatch',
-    reason: 'a resolution confirmation cannot close a finding without a source_quote whose verbatimExcerpt mechanically matches the current file (locationless or unverified evidence cannot serve as resolution evidence)',
+    disposition: 'provisional',
+    reason: verification.reason,
+    failedEvidence,
   };
 }
 
 function evaluateRejectedItem(input: {
   item: CanonicalIntakeItem;
   pool: AdmissionPool;
-  classification: Extract<LocationEvidenceClassification, { admit: false; anomalyKind: ReviewerAnomalyKind }>;
+  classification: Extract<EvidenceClassification, { admit: false }>;
   previousFindingsById: ReadonlyMap<string, FindingLedger['findings'][number]>;
 }): AdmissionItemEvaluation {
   const { item, pool, classification, previousFindingsById } = input;
   const rejection = {
     rawFindingId: item.wire.rawFindingId,
-    location: item.wire.location ?? '',
+    location: classification.failedEvidence?.kind === 'file_quote'
+      ? formatFileQuoteLocation(classification.failedEvidence)
+      : '',
     reason: classification.reason,
   };
+  if (
+    classification.disposition === 'anomaly'
+    && classification.anomalyKind === 'protocol-anomaly'
+  ) {
+    return {
+      pool,
+      rejection,
+      ...(pool === 'clean' ? { rejectedItem: item } : {}),
+      anomalySpec: createReviewerAnomalySpec({
+        wire: item.wire,
+        canonical: item.canonical,
+        anomalyKind: classification.anomalyKind,
+        failedEvidence: classification.failedEvidence,
+        reason: `Evidence failed deterministic admission (${classification.reason}); the malformed protocol record is isolated as a reviewer anomaly`,
+      }),
+    };
+  }
+  if (classification.disposition === 'provisional') {
+    return {
+      pool,
+      rejection,
+      rejectedItem: item,
+      provisionalSpec: provisionalSpecForRawKind({
+        wire: item.wire,
+        canonical: item.canonical,
+        reason: `Engine proof failed deterministic admission (${classification.reason})`,
+      }, 'raw-adjudication-unresolved'),
+    };
+  }
   if (item.wire.relation === 'resolution_confirmation') {
     return { pool, rejection };
   }
 
   const targetFindingId = item.wire.targetFindingId;
-  const target = targetFindingId !== undefined ? previousFindingsById.get(targetFindingId) : undefined;
-  if (item.canonical.relation === 'persists' && targetFindingId !== undefined && target?.status === 'open') {
+  const target = targetFindingId !== null ? previousFindingsById.get(targetFindingId) : undefined;
+  if (item.canonical.relation === 'persists' && targetFindingId !== null && target?.status === 'open') {
     return {
       pool,
       rejection,
@@ -258,7 +337,8 @@ function evaluateRejectedItem(input: {
       pendingRejectedObservation: {
         item,
         targetFindingId,
-        reason: `Location evidence "${item.wire.location ?? ''}" failed deterministic admission (${classification.reason}); recorded as a rejected re-observation of the open target`,
+        reason: `Evidence failed deterministic admission (${classification.reason}); recorded as a rejected re-observation of the open target`,
+        failedEvidence: classification.failedEvidence,
       },
     };
   }
@@ -271,7 +351,8 @@ function evaluateRejectedItem(input: {
       wire: item.wire,
       canonical: item.canonical,
       anomalyKind: classification.anomalyKind,
-      reason: `Location evidence "${item.wire.location ?? ''}" failed deterministic admission (${classification.reason}); the observation is isolated as a reviewer anomaly because the evidence's failure does not prove the finding itself is false`,
+      failedEvidence: classification.failedEvidence,
+      reason: `Evidence failed deterministic admission (${classification.reason}); the observation is isolated as a reviewer anomaly because the evidence's failure does not prove the finding itself is false`,
     }),
   };
 }
@@ -279,20 +360,20 @@ function evaluateRejectedItem(input: {
 function evaluateAdmissionItem(input: {
   cwd: string;
   reviewScopeSnapshotId: string;
+  runId: string;
+  scopeIdentity: string;
+  previousLedger: FindingLedger;
   item: CanonicalIntakeItem;
   pool: AdmissionPool;
   previousFindingsById: ReadonlyMap<string, FindingLedger['findings'][number]>;
 }): AdmissionItemEvaluation {
-  const classification = classifyLocationEvidence(input);
+  const classification = classifyEvidence(input);
   const { item, pool } = input;
-  if (!classification.admit && 'provisionalKind' in classification) {
-    return { pool, locationlessProvisional: { item, reason: classification.reason } };
-  }
   if (!classification.admit) {
     return evaluateRejectedItem({ ...input, classification });
   }
 
-  const verifiedEvidenceCandidate = item.canonical.evidence?.kind === 'source_quote'
+  const verifiedEvidenceCandidate = classification.evidenceRecords.length > 0
     ? { lineageKey: item.canonical.lineageKey, rawFindingId: item.wire.rawFindingId }
     : undefined;
   const provisionalOnlyLadderRawId = pool === 'tainted'
@@ -300,7 +381,13 @@ function evaluateAdmissionItem(input: {
     && (item.canonical.relation === 'persists' || item.canonical.relation === 'reopened')
     ? item.canonical.rawFindingId
     : undefined;
-  return { pool, admitted: item, verifiedEvidenceCandidate, provisionalOnlyLadderRawId };
+  return {
+    pool,
+    admitted: item,
+    verifiedEvidenceCandidate,
+    provisionalOnlyLadderRawId,
+    verifiedEvidenceRecords: classification.evidenceRecords,
+  };
 }
 
 function definedValues<T>(items: readonly (T | undefined)[]): T[] {
@@ -310,6 +397,8 @@ function definedValues<T>(items: readonly (T | undefined)[]): T[] {
 export function evaluateRawAdmission(input: {
   cwd: string;
   reviewScopeSnapshotId: string;
+  runId: string;
+  scopeIdentity: string;
   previousLedger: FindingLedger;
   intake: ReviewerIntakeResult;
 }): RawAdmissionEvaluation {
@@ -326,6 +415,9 @@ export function evaluateRawAdmission(input: {
     ...clean.map((item) => evaluateAdmissionItem({
       cwd: input.cwd,
       reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+      runId: input.runId,
+      scopeIdentity: input.scopeIdentity,
+      previousLedger: input.previousLedger,
       item,
       pool: 'clean',
       previousFindingsById,
@@ -333,6 +425,9 @@ export function evaluateRawAdmission(input: {
     ...tainted.map((item) => evaluateAdmissionItem({
       cwd: input.cwd,
       reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+      runId: input.runId,
+      scopeIdentity: input.scopeIdentity,
+      previousLedger: input.previousLedger,
       item,
       pool: 'tainted',
       previousFindingsById,
@@ -345,12 +440,16 @@ export function evaluateRawAdmission(input: {
   return {
     admissionRejections: definedValues(evaluations.map((evaluation) => evaluation.rejection)),
     admissionAnomalySpecs: definedValues(
-      evaluations.map((evaluation) => evaluation.pool === 'clean' ? evaluation.anomalySpec : undefined),
+      evaluations.map((evaluation) => (
+        evaluation.pool === 'clean' || evaluation.anomalySpec?.kind === 'protocol-anomaly'
+          ? evaluation.anomalySpec
+          : undefined
+      )),
+    ),
+    admissionProvisionalSpecs: definedValues(
+      evaluations.map((evaluation) => evaluation.provisionalSpec),
     ),
     admissionRejectedItems: definedValues(evaluations.map((evaluation) => evaluation.rejectedItem)),
-    locationlessProvisionalItems: definedValues(
-      evaluations.map((evaluation) => evaluation.locationlessProvisional),
-    ),
     pendingRejectedObservations: definedValues(
       evaluations.map((evaluation) => evaluation.pendingRejectedObservation),
     ),
@@ -360,7 +459,11 @@ export function evaluateRawAdmission(input: {
       evaluations.map((evaluation) => evaluation.pool === 'tainted' ? evaluation.admitted : undefined),
     ),
     ladderAnomalySpecs: definedValues(
-      evaluations.map((evaluation) => evaluation.pool === 'tainted' ? evaluation.anomalySpec : undefined),
+      evaluations.map((evaluation) => (
+        evaluation.pool === 'tainted' && evaluation.anomalySpec?.kind !== 'protocol-anomaly'
+          ? evaluation.anomalySpec
+          : undefined
+      )),
     ),
     verifiedEvidenceCandidates: definedValues(
       evaluations.map((evaluation) => evaluation.verifiedEvidenceCandidate),
@@ -369,5 +472,15 @@ export function evaluateRawAdmission(input: {
       evaluations.map((evaluation) => evaluation.provisionalOnlyLadderRawId),
     )),
     cleanWire: cleanAdmitted.map((item) => item.wire),
+    verifiedEvidenceRecordsByRawFindingId: new Map(
+      evaluations.flatMap((evaluation) => (
+        evaluation.admitted === undefined || evaluation.verifiedEvidenceRecords === undefined
+          ? []
+          : [[
+              evaluation.admitted.wire.rawFindingId,
+              evaluation.verifiedEvidenceRecords,
+            ] as const]
+      )),
+    ),
   };
 }

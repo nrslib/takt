@@ -400,10 +400,10 @@ function importFindingRevision(
   database.prepare(`
     INSERT INTO finding_ledger_revisions (
       run_id, scope_id, revision, workflow_name, next_id,
-      finding_count, raw_finding_count, conflict_count,
+      finding_count, evidence_record_count, raw_finding_count, conflict_count,
       interpretation_count, reviewer_anomaly_count, control_count,
       projection_digest, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.childRunId,
     authority.scopeId,
@@ -411,6 +411,10 @@ function importFindingRevision(
     authority.workflowName,
     requiredPositiveInteger(sourceRevision.next_id, 'Finding next id'),
     requiredNonNegativeInteger(sourceRevision.finding_count, 'Finding count'),
+    requiredNonNegativeInteger(
+      sourceRevision.evidence_record_count,
+      'evidence record count',
+    ),
     requiredNonNegativeInteger(
       sourceRevision.raw_finding_count,
       'raw Finding count',
@@ -447,6 +451,9 @@ function insertFindingEntry(
   switch (kind) {
     case 'finding':
       insertFindingEntryRow(database, childRunId, identity, 'finding_entries', 'finding_id');
+      return;
+    case 'evidence':
+      insertFindingEntryRow(database, childRunId, identity, 'finding_evidence_records', 'evidence_id');
       return;
     case 'raw':
       insertFindingEntryRow(database, childRunId, identity, 'finding_raw_entries', 'raw_finding_id');

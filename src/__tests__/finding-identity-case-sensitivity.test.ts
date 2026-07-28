@@ -23,7 +23,7 @@ function finding(id: string, title: string, provisional = false): FindingLedgerE
     revision: 1,
     severity: 'high',
     title,
-    location: 'src/Path.ts:10',
+    evidenceIds: [],
     description: 'Case-sensitive description',
     reviewers: ['reviewer'],
     rawFindingIds: [],
@@ -52,6 +52,7 @@ function ledger(findings: FindingLedgerEntry[], rawFindings: RawFinding[] = []):
     nextId: findings.length + 1,
     updatedAt: observation.timestamp,
     findings,
+    evidenceRecords: [],
     rawFindings,
     conflicts: [],
     interpretations: [],
@@ -66,9 +67,11 @@ function raw(rawFindingId: string, title: string): RawFinding {
     familyTag: 'identity',
     severity: 'high',
     title,
-    location: 'src/Path.ts:10',
     description: 'Case-sensitive description',
+    suggestion: null,
     relation: 'new',
+    targetFindingId: null,
+    evidence: [],
   };
 }
 

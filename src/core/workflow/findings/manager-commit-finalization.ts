@@ -21,6 +21,7 @@ import type {
   FindingLedger,
   FindingManagerOutput,
   FindingObservation,
+  FindingEvidenceRecord,
   InterpretationApplicationResult,
   RawFindingDisposition,
   RawFinding,
@@ -68,6 +69,7 @@ function classifyRejectedObservations(
         wire: pending.item.wire,
         canonical: pending.item.canonical,
         anomalyKind: 'quote-mismatch',
+        failedEvidence: pending.failedEvidence,
         reason: `${pending.reason}; the target is no longer open after this round, so the observation is isolated as a reviewer anomaly instead`,
       })],
     };
@@ -95,6 +97,10 @@ export function reconcileCommitPlan(input: {
     evidence: string;
   }[];
   healthyReviewerStableKeys: ReadonlySet<string>;
+  verifiedEvidenceRecordsByRawFindingId: ReadonlyMap<
+    string,
+    readonly FindingEvidenceRecord[]
+  >;
 }): {
   ledger: FindingLedger;
   landedSpecs: ProvisionalFindingSpec[];
@@ -249,6 +255,7 @@ export function reconcileCommitPlan(input: {
     rawFindingDispositions: rawFindingDispositions.filter(
       (disposition) => reconcileRawFindingIds.has(disposition.rawFindingId),
     ),
+    verifiedEvidenceRecordsByRawFindingId: input.verifiedEvidenceRecordsByRawFindingId,
     context: {
       workflowName: input.runInput.workflowName,
       stepName: input.runInput.parentStep.name,

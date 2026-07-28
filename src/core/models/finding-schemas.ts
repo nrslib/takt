@@ -3,6 +3,12 @@ import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import { compareBinaryStrings } from '../../shared/utils/binary-string-comparator.js';
 import { normalizeRfc3339Timestamp } from './rfc3339.js';
 import { collectFindingLedgerProjectionInvariantViolations } from './finding-ledger-invariants.js';
+import { RAW_FINDING_FIELD_LIMITS } from './finding-contract-limits.js';
+import {
+  canonicalRawFindingEvidenceIdentity,
+  findingEvidenceRecordIdentityViolation,
+  SHA256_HEX_PATTERN,
+} from './finding-evidence-record.js';
 import type {
   FindingConflictAdjudicationOutput,
   FindingLedger,
@@ -28,12 +34,17 @@ import {
   FINDING_STATUSES,
   INTERPRETATION_APPLICATION_RESULTS,
   RAW_DECISION_KINDS,
-  RAW_FINDING_EVIDENCE_KINDS,
   RAW_FINDING_DISPOSITION_OUTCOMES,
   REVIEWER_ANOMALY_KINDS,
 } from './finding-types.js';
 
 const nonEmptyString = z.string().min(1);
+const Sha256Schema = z.string().regex(SHA256_HEX_PATTERN);
+const rawFindingIdString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxRawFindingIdChars);
+const familyTagString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxFamilyTagChars);
+const rawFindingTitleString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxTitleChars);
+const rawFindingDescriptionString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxDescriptionChars);
+const rawFindingSuggestionString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxSuggestionChars);
 const BinarySortedUniqueStringSetSchema = z.array(nonEmptyString).superRefine((values, ctx) => {
   const canonical = [...new Set(values)].sort(compareBinaryStrings);
   if (
@@ -42,7 +53,19 @@ const BinarySortedUniqueStringSetSchema = z.array(nonEmptyString).superRefine((v
   ) {
     ctx.addIssue({
       code: 'custom',
-      message: 'roundMarkers must be a binary-sorted unique set',
+      message: 'Expected a binary-sorted unique string set',
+    });
+  }
+});
+const BinarySortedUniqueSha256SetSchema = z.array(Sha256Schema).superRefine((values, ctx) => {
+  const canonical = [...new Set(values)].sort(compareBinaryStrings);
+  if (
+    canonical.length !== values.length
+    || canonical.some((value, index) => value !== values[index])
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Expected a binary-sorted unique SHA-256 set',
     });
   }
 });
@@ -107,25 +130,89 @@ export const FindingObservationSchema = z.object({
 // typed evidence protocol（review-integrity protocol: admission control 強化）
 // ---------------------------------------------------------------------------
 
-export const SourceQuoteEvidenceSchema = z.object({
-  kind: z.literal('source_quote'),
-  path: nonEmptyString,
+export const FileQuoteEvidenceSchema = z.object({
+  kind: z.literal('file_quote'),
+  path: nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxEvidencePathChars),
   startLine: z.number().int().positive(),
   endLine: z.number().int().positive(),
-  verbatimExcerpt: nonEmptyString,
-  snapshotId: nonEmptyString,
+  verbatimExcerpt: nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptChars),
+  snapshotId: Sha256Schema.max(RAW_FINDING_FIELD_LIMITS.maxSnapshotIdChars),
 }).strict();
 
-export const LocationlessEvidenceSchema = z.object({
-  kind: z.literal('locationless'),
-  explanation: nonEmptyString,
+export const EngineProofEvidenceSchema = z.object({
+  kind: z.literal('engine_proof'),
+  proofId: Sha256Schema.max(RAW_FINDING_FIELD_LIMITS.maxProofIdChars),
 }).strict();
 
-/** RawFinding.evidence の discriminated union。台帳保存形（組み立て済みネスト）を検証する — provider-facing の flat wire とは別（RawFindingsOutputJsonSchema 参照）。 */
+/** RawFinding.evidence の discriminated union。 */
 export const RawFindingEvidenceSchema = z.discriminatedUnion('kind', [
-  SourceQuoteEvidenceSchema,
-  LocationlessEvidenceSchema,
+  FileQuoteEvidenceSchema,
+  EngineProofEvidenceSchema,
 ]);
+
+const RawFindingEvidenceSetSchema = z.array(RawFindingEvidenceSchema).max(16)
+  .superRefine((evidence, ctx) => {
+    const identities = evidence.map(canonicalRawFindingEvidenceIdentity);
+    const canonical = [...new Set(identities)].sort(compareBinaryStrings);
+    if (
+      canonical.length !== identities.length
+      || canonical.some((identity, index) => identity !== identities[index])
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'evidence must be a binary-sorted set of exact evidence records',
+      });
+    }
+  });
+
+export const FindingEvidenceRecordSchema = z.discriminatedUnion('kind', [
+  FileQuoteEvidenceSchema.extend({
+    evidenceId: Sha256Schema,
+    claimIdentityHash: Sha256Schema,
+    fileHash: Sha256Schema,
+  }).strict(),
+  z.object({
+    evidenceId: Sha256Schema,
+    proofId: Sha256Schema,
+    kind: z.literal('engine_proof'),
+    verifierId: nonEmptyString,
+    verifierVersion: nonEmptyString,
+    workflowName: nonEmptyString,
+    runId: nonEmptyString,
+    scopeIdentity: nonEmptyString,
+    snapshotId: Sha256Schema,
+    claimIdentityHash: Sha256Schema,
+    targetFindingId: nonEmptyString.nullable(),
+    subject: z.discriminatedUnion('kind', [
+      z.object({
+        kind: z.literal('path_absent'),
+        path: nonEmptyString,
+      }).strict(),
+      z.object({
+        kind: z.literal('named_structural_check'),
+        checkId: nonEmptyString,
+        parameters: z.record(z.string(), z.string()),
+      }).strict(),
+      z.object({
+        kind: z.literal('execution_result'),
+        executionId: nonEmptyString,
+        expectedOutcome: z.enum(['passed', 'failed']),
+      }).strict(),
+    ]),
+    dependencyDigests: BinarySortedUniqueSha256SetSchema,
+    resultDigest: Sha256Schema,
+    issuedAt: Rfc3339TimestampSchema,
+  }).strict(),
+]).superRefine((record, ctx) => {
+  const violation = findingEvidenceRecordIdentityViolation(record);
+  if (violation !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['evidenceId'],
+      message: violation,
+    });
+  }
+});
 
 export const ReviewerAnomalyEntrySchema = z.object({
   id: nonEmptyString,
@@ -226,7 +313,7 @@ export const FindingLedgerEntrySchema = z.object({
   lifecycle: FindingLifecycleSchema,
   severity: FindingSeveritySchema,
   title: nonEmptyString,
-  location: nonEmptyString.optional(),
+  evidenceIds: BinarySortedUniqueStringSetSchema,
   description: nonEmptyString.optional(),
   suggestion: nonEmptyString.optional(),
   reviewers: z.array(nonEmptyString),
@@ -265,7 +352,7 @@ export const FindingLedgerEntrySchema = z.object({
 
 interface RawFindingRelationFields {
   relation: RawFindingRelation;
-  targetFindingId?: string;
+  targetFindingId?: string | null;
   targetPrecondition?: FindingMutationPrecondition;
 }
 
@@ -279,10 +366,10 @@ function validateRawFindingRelation<T extends RawFindingRelationFields>(
   requireEnginePrecondition: boolean,
 ): void {
   const relation = value.relation;
-  if (relation === 'new' && value.targetFindingId !== undefined) {
+  if (relation === 'new' && value.targetFindingId !== undefined && value.targetFindingId !== null) {
     ctx.addIssue({ code: 'custom', message: '"new" raw findings must not set targetFindingId', path: ['targetFindingId'] });
   }
-  if (relation !== 'new' && value.targetFindingId === undefined) {
+  if (relation !== 'new' && (value.targetFindingId === undefined || value.targetFindingId === null)) {
     ctx.addIssue({ code: 'custom', message: `"${relation}" raw findings require targetFindingId`, path: ['targetFindingId'] });
   }
   if (!requireEnginePrecondition) {
@@ -296,6 +383,7 @@ function validateRawFindingRelation<T extends RawFindingRelationFields>(
   }
   if (
     value.targetFindingId !== undefined
+    && value.targetFindingId !== null
     && value.targetPrecondition !== undefined
     && value.targetPrecondition.targetFindingId !== value.targetFindingId
   ) {
@@ -304,22 +392,20 @@ function validateRawFindingRelation<T extends RawFindingRelationFields>(
 }
 
 const RawFindingFieldsSchema = z.object({
+  // Persisted ids are engine-namespaced and may legitimately exceed the
+  // provider-facing local rawFindingId limit.
   rawFindingId: nonEmptyString,
   stepName: nonEmptyString,
   reviewer: nonEmptyString,
-  familyTag: nonEmptyString,
-  severity: FindingSeveritySchema,
-  title: nonEmptyString,
-  // 構造化出力の strict 様式では全プロパティが required になるため、
-  // 該当なしの欄は空文字で埋められる。空文字は未指定として扱う。
-  location: z.string().optional().transform((value) => (value ? value : undefined)),
-  description: nonEmptyString,
-  suggestion: z.string().optional().transform((value) => (value ? value : undefined)),
+  familyTag: familyTagString.nullable(),
+  severity: FindingSeveritySchema.nullable(),
+  title: rawFindingTitleString,
+  description: rawFindingDescriptionString,
+  suggestion: rawFindingSuggestionString.nullable(),
   relation: z.enum(RAW_FINDING_RELATIONS),
-  targetFindingId: nonEmptyString.optional(),
+  targetFindingId: nonEmptyString.nullable(),
   targetPrecondition: FindingMutationPreconditionSchema.optional(),
-  // typed evidence protocol（review-integrity protocol）。欠損は「evidence なし」として扱う。
-  evidence: RawFindingEvidenceSchema.optional(),
+  evidence: RawFindingEvidenceSetSchema,
 }).strict();
 
 export const RawFindingSchema = RawFindingFieldsSchema.superRefine((value, ctx) => {
@@ -327,20 +413,15 @@ export const RawFindingSchema = RawFindingFieldsSchema.superRefine((value, ctx) 
 });
 
 const ReviewerRawFindingFieldsSchema = z.object({
-  rawFindingId: nonEmptyString,
-  familyTag: nonEmptyString,
-  severity: FindingSeveritySchema,
-  title: nonEmptyString,
-  // 構造化出力の strict 様式では全プロパティが required になるため、
-  // 該当なしの欄は空文字で埋められる。空文字は未指定として扱う。
-  location: z.string().optional().transform((value) => (value ? value : undefined)),
-  description: nonEmptyString,
-  suggestion: z.string().optional().transform((value) => (value ? value : undefined)),
+  rawFindingId: rawFindingIdString,
+  familyTag: familyTagString.nullable(),
+  severity: FindingSeveritySchema.nullable(),
+  title: rawFindingTitleString,
+  description: rawFindingDescriptionString,
+  suggestion: rawFindingSuggestionString.nullable(),
   relation: z.enum(RAW_FINDING_RELATIONS),
-  // 構造化出力の strict 様式では全プロパティが required になるため、
-  // issue 行は空文字で埋める。空文字は未指定として扱う。
-  targetFindingId: z.string().optional().transform((value) => (value ? value : undefined)),
-  evidence: RawFindingEvidenceSchema.optional(),
+  targetFindingId: nonEmptyString.nullable(),
+  evidence: z.array(RawFindingEvidenceSchema).max(16),
 }).strict();
 
 export const ReviewerRawFindingSchema = ReviewerRawFindingFieldsSchema.superRefine((value, ctx) => {
@@ -550,8 +631,6 @@ const RawNormalizationAuditRecordSchema = z.object({
     'relation-normalized',
     'target-dropped-from-wire',
     'required-fields-missing',
-    'location-line-range-interpreted',
-    'location-not-applicable',
   ])),
 }).strict();
 
@@ -634,12 +713,11 @@ const FindingManagerValidationReportSchema = z.object({
   ).optional(),
 }).strict();
 
-const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
-
 const FindingManagerCommitProjectionSchema = z.object({
   nextId: z.number().int().positive(),
   updatedAt: Rfc3339TimestampSchema,
   findings: z.array(FindingLedgerEntrySchema),
+  evidenceRecords: z.array(FindingEvidenceRecordSchema),
   rawFindings: z.array(RawFindingSchema),
   conflicts: z.array(FindingLedgerConflictSchema),
   interpretations: z.array(FindingInterpretationRecordSchema),
@@ -670,6 +748,7 @@ export const FindingLedgerSchema = z.object({
   nextId: z.number().int().positive(),
   updatedAt: Rfc3339TimestampSchema,
   findings: z.array(FindingLedgerEntrySchema),
+  evidenceRecords: z.array(FindingEvidenceRecordSchema),
   rawFindings: z.array(RawFindingSchema),
   conflicts: z.array(FindingLedgerConflictSchema),
   interpretations: z.array(FindingInterpretationRecordSchema),
@@ -1049,7 +1128,11 @@ export const FindingManagerDecisionsJsonSchema = {
         additionalProperties: false,
         required: ['rawFindingId', 'decision', 'findingId', 'evidence'],
         properties: {
-          rawFindingId: { type: 'string', minLength: 1 },
+          rawFindingId: {
+            type: 'string',
+            minLength: 1,
+            description: 'Engine-namespaced raw finding id from the manager prompt.',
+          },
           decision: {
             enum: RAW_DECISION_KINDS,
             description: 'same = matches an existing open finding (familyTag and line-number differences alone are not disqualifying; judge by failure mode, trigger, impact, and required fix). new = no related finding exists yet. resolved = confirms an existing open finding is fixed. reopened = a previously resolved/waived/dismissed finding reappeared. conflict = contradicts an existing finding. unsupported = the raw finding explicitly referenced an existing finding (targetFindingId) as persists/reopened but the reference does not hold up; do not fall back to new.',
@@ -1192,18 +1275,7 @@ export function parseFindingConflictAdjudicationOutput(value: unknown): FindingC
   return FindingConflictAdjudicationOutputSchema.parse(value);
 }
 
-// NOTE (review-integrity requirement): native structured output は「全 properties が
-// required」の strict 様式を要求するため、evidenceKind:'locationless' の raw でも
-// location/verbatimExcerpt/snapshotId フィールド自体は存在させねばならず、この
-// schema はそれらに空文字を許す（type:'string' のまま minLength を課さない）。
-// つまり「空文字の source_quote」を schema だけでは弾けない。その意味的検証は
-// admission 層が担う: manager-runner.ts の classifyLocationEvidence が、evidence
-// として成立しない（空の verbatimExcerpt/snapshotId、空/N-A location の source_quote、
-// 検証済み証跡の無い resolution_confirmation）raw を admit せず reviewer anomaly へ
-// 隔離する（raw-canonicalization.ts の resolveRawFindingEvidence が空フィールドを
-// undefined に落とし、admission が未検証扱いにする）。schema の寛容さは admission で
-// backstop されている。
-export const RawFindingsOutputJsonSchema = {
+const RawFindingsOutputIntakeJsonSchema = {
   type: 'object',
   additionalProperties: false,
   required: ['rawFindings'],
@@ -1213,44 +1285,87 @@ export const RawFindingsOutputJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['rawFindingId', 'relation', 'targetFindingId', 'familyTag', 'severity', 'title', 'location', 'evidenceKind', 'verbatimExcerpt', 'snapshotId', 'description', 'suggestion'],
+        required: ['rawFindingId', 'relation', 'targetFindingId', 'familyTag', 'severity', 'title', 'description', 'suggestion', 'evidence'],
         properties: {
-          rawFindingId: { type: 'string', minLength: 1 },
-          relation: {
-            enum: RAW_FINDING_RELATIONS,
-            description: 'This finding\'s relationship to the ledger. new = a fresh observation with no target (targetFindingId must be empty). persists = you still observe an existing open finding (targetFindingId required). reopened = a previously resolved/waived/dismissed finding reappeared (targetFindingId required). resolution_confirmation = you verified an open finding is fixed (targetFindingId required) and MUST provide evidenceKind source_quote, one contiguous file:line or file:startLine-endLine location, an exact complete current verbatimExcerpt, and the current snapshotId.',
-          },
-          targetFindingId: {
-            type: 'string',
-            description: 'Ledger finding id this entry refers to. Required for persists/reopened/resolution_confirmation. Empty string for new.',
-          },
-          familyTag: {
+          rawFindingId: {
             type: 'string',
             minLength: 1,
+            maxLength: RAW_FINDING_FIELD_LIMITS.maxRawFindingIdChars,
+          },
+          relation: {
+            enum: RAW_FINDING_RELATIONS,
+            description: 'This finding\'s relationship to the ledger. new = a fresh observation with no target (targetFindingId must be null). persists = you still observe an existing open finding (targetFindingId required). reopened = a previously resolved/waived/dismissed finding reappeared (targetFindingId required). resolution_confirmation = you verified an open finding is fixed (targetFindingId required) and MUST provide mechanically verifiable evidence.',
+          },
+          targetFindingId: {
+            type: ['string', 'null'],
+            description: 'Ledger finding id this entry refers to. Required for persists/reopened/resolution_confirmation. Null for new.',
+          },
+          familyTag: {
+            type: ['string', 'null'],
+            maxLength: RAW_FINDING_FIELD_LIMITS.maxFamilyTagChars,
             description: 'Structured form of the Observed Findings family_tag value. A classification/search hint only — it is not used to determine whether two findings are the same issue.',
           },
-          severity: { enum: FINDING_SEVERITIES },
-          title: { type: 'string', minLength: 1 },
-          location: {
+          severity: { enum: [...FINDING_SEVERITIES, null] },
+          title: {
             type: 'string',
-            description: 'Exactly one contiguous file:line or file:startLine-endLine evidence range. Comma-separated or multiple ranges are invalid. Empty string only when evidenceKind is locationless (a claim that something is ABSENT, e.g. a missing file or missing wiring — there is no single site to cite). resolution_confirmation never permits an empty or locationless value.',
+            minLength: 1,
+            maxLength: RAW_FINDING_FIELD_LIMITS.maxTitleChars,
           },
-          evidenceKind: {
-            enum: RAW_FINDING_EVIDENCE_KINDS,
-            description: 'source_quote = you are citing code that exists at `location` and verbatimExcerpt must be the EXACT text of those lines, copied character-for-character from the file you read (not retyped from memory, not paraphrased). locationless = your claim is that something is ABSENT (a file that should exist but does not, a handler that was never wired up) — leave location, verbatimExcerpt, and snapshotId empty; you cannot quote something that is not there.',
-          },
-          verbatimExcerpt: {
+          description: {
             type: 'string',
-            description: 'Required (non-empty) when evidenceKind is source_quote: the EXACT complete current source text at location, copied verbatim from the file — the engine byte-compares it against the current file content and rejects any mismatch, so do not summarize, translate, omit lines, or reformat it. Empty string when evidenceKind is locationless.',
+            minLength: 1,
+            maxLength: RAW_FINDING_FIELD_LIMITS.maxDescriptionChars,
           },
-          snapshotId: {
-            type: 'string',
-            description: 'Required (non-empty) when evidenceKind is source_quote: copy the exact current "Current review snapshot" value given to you elsewhere in this prompt, unchanged. Empty string when evidenceKind is locationless. resolution_confirmation always requires the current non-empty snapshotId.',
-          },
-          description: { type: 'string', minLength: 1 },
           suggestion: {
-            type: 'string',
-            description: 'Fix direction. Empty string when not applicable (e.g. resolution confirmations).',
+            type: ['string', 'null'],
+            maxLength: RAW_FINDING_FIELD_LIMITS.maxSuggestionChars,
+            description: 'Fix direction. Null when not applicable.',
+          },
+          evidence: {
+            type: 'array',
+            maxItems: 16,
+            items: {
+              oneOf: [
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['kind', 'path', 'startLine', 'endLine', 'verbatimExcerpt', 'snapshotId'],
+                  properties: {
+                    kind: { const: 'file_quote' },
+                    path: {
+                      type: 'string',
+                      minLength: 1,
+                      maxLength: RAW_FINDING_FIELD_LIMITS.maxEvidencePathChars,
+                    },
+                    startLine: { type: 'integer', minimum: 1 },
+                    endLine: { type: 'integer', minimum: 1 },
+                    verbatimExcerpt: {
+                      type: 'string',
+                      minLength: 1,
+                      maxLength: RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptChars,
+                    },
+                    snapshotId: {
+                      type: 'string',
+                      pattern: '^[a-f0-9]{64}$',
+                      maxLength: RAW_FINDING_FIELD_LIMITS.maxSnapshotIdChars,
+                    },
+                  },
+                },
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['kind', 'proofId'],
+                  properties: {
+                    kind: { const: 'engine_proof' },
+                    proofId: {
+                      type: 'string',
+                      pattern: '^[a-f0-9]{64}$',
+                      maxLength: RAW_FINDING_FIELD_LIMITS.maxProofIdChars,
+                    },
+                  },
+                },
+              ],
+            },
           },
         },
       },
@@ -1258,36 +1373,104 @@ export const RawFindingsOutputJsonSchema = {
   },
 } as const;
 
+const NATIVE_STRUCTURED_OUTPUT_SCHEMA_KEYWORDS = new Set([
+  '$defs',
+  '$ref',
+  'type',
+  'description',
+  'properties',
+  'required',
+  'additionalProperties',
+  'enum',
+  'anyOf',
+  'items',
+  'minItems',
+  'maxItems',
+]);
+
+function projectNativeStructuredOutputSchema(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(projectNativeStructuredOutputSchema);
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+  const schema = value as Record<string, unknown>;
+  const projected: Record<string, unknown> = {};
+  for (const [keyword, keywordValue] of Object.entries(schema)) {
+    const projectedKeyword = keyword === 'oneOf'
+      ? 'anyOf'
+      : keyword === 'const'
+        ? 'enum'
+        : keyword;
+    if (!NATIVE_STRUCTURED_OUTPUT_SCHEMA_KEYWORDS.has(projectedKeyword)) {
+      continue;
+    }
+    if (projectedKeyword === 'properties' || projectedKeyword === '$defs') {
+      projected[projectedKeyword] = Object.fromEntries(
+        Object.entries(keywordValue as Record<string, unknown>).map(([name, propertySchema]) => [
+          name,
+          projectNativeStructuredOutputSchema(propertySchema),
+        ]),
+      );
+      continue;
+    }
+    projected[projectedKeyword] = keyword === 'const'
+      ? [keywordValue]
+      : projectNativeStructuredOutputSchema(keywordValue);
+  }
+  return projected;
+}
+
+export const RawFindingsOutputJsonSchema = projectNativeStructuredOutputSchema(
+  RawFindingsOutputIntakeJsonSchema,
+) as typeof RawFindingsOutputIntakeJsonSchema;
+
 /**
- * native structured output に渡す raw findings schema を、現在の review scope に
- * 束縛して生成する。locationless の空文字と source_quote の現在 snapshot だけを
- * 許可し、evidenceKind との意味的な対応は admission 層で引き続き検証する。
+ * native structured output に渡す raw findings schema を現在の review scope に束縛する。
  */
 export function createRawFindingsOutputJsonSchema(reviewScopeSnapshotId: string) {
   if (!reviewScopeSnapshotId) {
     throw new Error('reviewScopeSnapshotId is required to create the raw findings output schema');
   }
-  const rawFindings = RawFindingsOutputJsonSchema.properties.rawFindings;
+  const rawFindings = RawFindingsOutputIntakeJsonSchema.properties.rawFindings;
   const rawFindingItem = rawFindings.items;
-  return {
-    ...RawFindingsOutputJsonSchema,
+  const fileQuote = rawFindingItem.properties.evidence.items.oneOf[0];
+  const boundSchema = {
+    ...RawFindingsOutputIntakeJsonSchema,
     properties: {
-      ...RawFindingsOutputJsonSchema.properties,
+      ...RawFindingsOutputIntakeJsonSchema.properties,
       rawFindings: {
         ...rawFindings,
         items: {
           ...rawFindingItem,
           properties: {
             ...rawFindingItem.properties,
-            snapshotId: {
-              ...rawFindingItem.properties.snapshotId,
-              enum: ['', reviewScopeSnapshotId],
+            evidence: {
+              ...rawFindingItem.properties.evidence,
+              items: {
+                ...rawFindingItem.properties.evidence.items,
+                oneOf: [
+                  {
+                    ...fileQuote,
+                    properties: {
+                      ...fileQuote.properties,
+                      snapshotId: {
+                        ...fileQuote.properties.snapshotId,
+                        const: reviewScopeSnapshotId,
+                      },
+                    },
+                  },
+                  rawFindingItem.properties.evidence.items.oneOf[1],
+                ],
+              },
             },
           },
         },
       },
     },
   };
+  return projectNativeStructuredOutputSchema(boundSchema) as typeof RawFindingsOutputIntakeJsonSchema;
 }
 
 /**
@@ -1304,12 +1487,12 @@ export function createRawFindingsOutputJsonSchema(reviewScopeSnapshotId: string)
  *   安全な provisional 経路が機能しない。
  */
 export const RawFindingsOutputValidationJsonSchema = {
-  ...RawFindingsOutputJsonSchema,
+  ...RawFindingsOutputIntakeJsonSchema,
   properties: {
     rawFindings: {
-      ...RawFindingsOutputJsonSchema.properties.rawFindings,
+      ...RawFindingsOutputIntakeJsonSchema.properties.rawFindings,
       items: {
-        ...RawFindingsOutputJsonSchema.properties.rawFindings.items,
+        ...RawFindingsOutputIntakeJsonSchema.properties.rawFindings.items,
         required: [],
       },
     },

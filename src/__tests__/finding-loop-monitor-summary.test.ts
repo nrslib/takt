@@ -19,19 +19,20 @@ function provisionalEntry(
     lifecycle: 'new',
     severity: 'medium',
     title: '必須品質ゲートの実行証跡がない',
+    evidenceIds: [],
     reviewers: ['coding-review'],
     rawFindingIds: ['raw-1'],
     firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
     lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
     provisional: {
-      kind: 'unverified-locationless',
+      kind: 'raw-meaning-ambiguous',
       stableKey: 'stable-1',
       lineageKey: 'lineage-1',
       sourceRawFindingIds: ['raw-1'],
-      reason: 'locationless claim',
+      reason: 'claim has no mechanically verified evidence',
       firstObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
       lastObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
-      interpretationEpochs: 0,
+      interpretationEpochs: 2,
       gateEffect: 'block',
       firstObservedRound: 1,
     },
@@ -44,6 +45,7 @@ function makeLedger(findings: FindingLedgerEntry[], roundMarkers: string[] = [])
     workflowName: 'peer-review',
     nextId: findings.length + 1,
     updatedAt: '2026-07-01T00:00:00.000Z',
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
     interpretations: [],
@@ -109,8 +111,8 @@ describe('renderLoopMonitorFindingsSummary', () => {
       },
     });
     expect(data.openProvisional).toEqual([
-      // firstObservedRound=1、6ラウンド完了 → 6ラウンド滞留。locationless は裁定可能
-      expect.objectContaining({ id: 'F-0001', kind: 'unverified-locationless', stalledRounds: 6, dismissable: true }),
+      // firstObservedRound=1、6ラウンド完了 → 6ラウンド滞留。意味曖昧 raw は裁定可能
+      expect.objectContaining({ id: 'F-0001', kind: 'raw-meaning-ambiguous', stalledRounds: 6, dismissable: true }),
       // overflow 系は処理失敗の証跡なので裁定不可（clean 証拠のみが解消経路）
       expect.objectContaining({ id: 'F-0002', kind: 'reviewer-output-overflow', stalledRounds: 2, dismissable: false }),
     ]);
@@ -264,7 +266,7 @@ describe('provisional firstObservedRound persistence', () => {
   it('新規 provisional の作成時に現在ラウンド序数（記録済みラウンド + 1）を刻む', () => {
     const reviewerStableKey = computeReviewerStableKey({
       reviewer: 'coding-review',
-      title: 'locationless demand',
+      title: 'evidence-free demand',
       normalizedPathKey: '',
     });
     const lineageKey = computeLineageKey({ reviewer: 'coding-review', normalizedPathKey: '' });
@@ -274,29 +276,33 @@ describe('provisional firstObservedRound persistence', () => {
       reviewer: 'coding-review',
       familyTag: 'gate',
       severity: 'medium' as const,
-      title: 'locationless demand',
+      title: 'evidence-free demand',
       description: 'demand',
+      suggestion: null,
       relation: 'new' as const,
+      targetFindingId: null,
+      evidence: [],
     };
     const next = reconcileFindingLedger({
       previousLedger: makeLedger([], ['r1', 'r2', 'r3']),
       rawFindings: [rawFinding],
       managerOutput: createEmptyManagerOutput(),
       provisionalFindings: [{
-        kind: 'unverified-locationless',
+        kind: 'raw-meaning-ambiguous',
         stableKey: computeProvisionalStableKey({
           reviewerStableKey,
           lineageKey,
-          provisionalKind: 'unverified-locationless',
+          provisionalKind: 'raw-meaning-ambiguous',
         }),
         lineageKey,
         sourceRawFindingIds: ['raw-9'],
-        reason: 'locationless claim',
-        title: 'locationless demand',
+        reason: 'claim has no mechanically verified evidence',
+        title: 'evidence-free demand',
         severity: 'medium',
         reviewers: ['coding-review'],
       }],
       rawFindingDispositions: [],
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       rawProvenanceByRawFindingId: new Map([[
         'raw-9',
         storedRawReconcileProvenance(rawFinding, reviewerStableKey, lineageKey),

@@ -1,5 +1,9 @@
-import { validateLocationAdmission, type LocationAdmissionResult } from './admission-validation.js';
+import { validateLocationAdmission, validateLocationSetAdmission, type LocationAdmissionResult } from './admission-validation.js';
 import { parseFindingLocation, parseFindingLocationRange } from './location.js';
+import {
+  findingFileQuoteLocations,
+  formatFileQuoteLocation,
+} from './evidence-location.js';
 import type {
   FindingConflictAdjudicationOutcome,
   FindingConflictAdjudicationOutput,
@@ -237,7 +241,10 @@ export function applyFindingConflictAdjudication(
       // resolves fine (the claim is "the premise doesn't hold" in a way that
       // is not a location check — e.g. the assertion itself is false), fall
       // back to recording the adjudicator's structured evidence.
-      const locationResult = validateLocationAdmission(cwd, finding.location);
+      const locationResult = validateLocationSetAdmission(
+        cwd,
+        findingFileQuoteLocations(ledger, finding).map(formatFileQuoteLocation),
+      );
       if (!locationResult.ok && locationResult.outcome === 'unverifiable') {
         throw new Error(
           `Cannot invalidate finding "${finding.id}" because its location could not be verified: ${locationResult.reason}`,

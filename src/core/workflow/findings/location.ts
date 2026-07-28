@@ -1,12 +1,9 @@
 /**
- * Shared parsing for the "path:line" shape used by RawFinding.location and
- * FindingLedgerEntry.location (see finding_contract_instruction.md: "file:line
- * evidence"). The ledger keeps `location` as a single free-form string; this
- * module is the single place that decomposes it into path/line for callers that
- * need to reason about identity (decision-assembly.ts) or admission
- * (admission-validation.ts) without treating the line number as part of
- * identity. The Finding Contract treats familyTag and line number as hints
- * rather than identity fields.
+ * UI・監査・裁定の境界で使う "path:line" 表示を解析する。
+ * Raw finding は typed evidence を保持し、ledger finding は evidence record
+ * を id 参照するため、この表示文字列は finding の同一性を決めない。
+ * 同一性の根拠は claimIdentityHash、完全な位置集合の扱いは
+ * evidence-location.ts に集約する。
  */
 
 export interface ParsedFindingLocation {
@@ -18,7 +15,7 @@ export interface ParsedFindingLocation {
  * Parses a "path:line" location string. Locations without a trailing ":<digits>"
  * are treated as a bare path (line is undefined) rather than rejected, since some
  * findings only have file-level evidence. Returns undefined for empty/undefined
- * input (locationless findings, e.g. architectural observations with no single site).
+ * input.
  */
 export function parseFindingLocation(location: string | undefined): ParsedFindingLocation | undefined {
   if (location === undefined) {
@@ -46,9 +43,8 @@ export interface ParsedFindingLocationRange {
  * see admission-validation.ts). Returns undefined for any other shape,
  * including a bare "path:line" (single line — callers that accept both should
  * fall back to parseFindingLocation and treat startLine === endLine === line).
- * Shared by admission-validation.ts (lenient path-only check) and
- * raw-canonicalization.ts (typed evidence assembly, review-integrity protocol) so the two
- * callers can't drift on what counts as a range.
+ * 入力境界で表示用 citation を解釈する呼び出し元が、range の定義から
+ * ずれないように共有する。
  */
 export function parseFindingLocationRange(location: string | undefined): ParsedFindingLocationRange | undefined {
   if (location === undefined) {

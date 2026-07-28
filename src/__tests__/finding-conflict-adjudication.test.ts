@@ -20,13 +20,35 @@ import {
 import { computeConflictEvidenceHash as computeConflictEvidenceHashWithScope, isConflictUnadjudicated } from '../core/workflow/findings/adjudication-evidence.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithScope } from '../core/workflow/findings/context.js';
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
+import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
 import type {
   FindingConflictAdjudicationOutput,
   FindingLedger,
   FindingLedgerConflict,
   FindingLedgerEntry,
   RawFinding,
+  VerifiedFileQuoteEvidenceRecord,
 } from '../core/workflow/findings/types.js';
+
+function makeEvidenceRecord(
+  path = 'src/a.ts',
+  startLine = 10,
+): VerifiedFileQuoteEvidenceRecord {
+  const payload = {
+    kind: 'file_quote' as const,
+    path,
+    startLine,
+    endLine: startLine,
+    verbatimExcerpt: `// line ${startLine}`,
+    snapshotId: 'a'.repeat(64),
+    claimIdentityHash: 'b'.repeat(64),
+    fileHash: 'c'.repeat(64),
+  };
+  return {
+    evidenceId: computeFileQuoteEvidenceRecordId(payload),
+    ...payload,
+  };
+}
 
 function computeConflictEvidenceHash(
   conflict: FindingLedgerConflict,
@@ -42,13 +64,14 @@ function buildFindingsRuleContext(ledger: FindingLedger) {
 function makeFinding(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
 ): FindingLedgerEntry {
+  const evidenceRecord = makeEvidenceRecord();
   return {
     id: 'F-0001',
     status: 'open',
     lifecycle: 'new',
     severity: 'high',
     title: 'Disputed issue',
-    location: 'src/a.ts:10',
+    evidenceIds: [evidenceRecord.evidenceId],
     reviewers: ['coding-review'],
     rawFindingIds: ['raw-1'],
     firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
@@ -71,11 +94,13 @@ function makeConflict(overrides: Partial<FindingLedgerConflict> = {}): FindingLe
 }
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
+  const evidenceRecord = makeEvidenceRecord();
   return {
     workflowName: 'test-workflow',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
     findings: [makeFinding({ revision: 1 })],
+    evidenceRecords: [evidenceRecord],
     rawFindings: [{
       rawFindingId: 'raw-1',
       stepName: 'reviewers',
@@ -83,9 +108,18 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
       familyTag: 'bug',
       severity: 'high',
       title: 'Disputed issue',
-      location: 'src/a.ts:10',
       description: 'The bug is present.',
+      suggestion: null,
       relation: 'new',
+      targetFindingId: null,
+      evidence: [{
+        kind: 'file_quote',
+        path: 'src/a.ts',
+        startLine: 10,
+        endLine: 10,
+        verbatimExcerpt: '// line 10',
+        snapshotId: 'a'.repeat(64),
+      }],
     }],
     conflicts: [makeConflict()],
     interpretations: [],
@@ -112,9 +146,18 @@ describe('computeConflictEvidenceHash / isConflictUnadjudicated', () => {
     familyTag: 'bug',
     severity: 'high' as const,
     title: 'Disputed issue',
-    location: 'src/a.ts:10',
     description: 'The bug is present.',
+    suggestion: null,
     relation: 'new',
+    targetFindingId: null,
+    evidence: [{
+      kind: 'file_quote',
+      path: 'src/a.ts',
+      startLine: 10,
+      endLine: 10,
+      verbatimExcerpt: '// line 10',
+      snapshotId: 'a'.repeat(64),
+    }],
     ...overrides,
   });
 
@@ -405,7 +448,11 @@ describe('applyFindingConflictAdjudication', () => {
   });
 
   it('evidence_invalid -> invalidated: machine-verifies when the finding location does not exist', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, location: 'src/does-not-exist.ts:1' })] });
+    const evidenceRecord = makeEvidenceRecord('src/does-not-exist.ts', 1);
+    const ledger = makeLedger({
+      findings: [makeFinding({ revision: 1, evidenceIds: [evidenceRecord.evidenceId] })],
+      evidenceRecords: [evidenceRecord],
+    });
     const output = makeOutput({
       outcome: 'evidence_invalid',
       findingTransition: 'invalidated',
@@ -420,7 +467,11 @@ describe('applyFindingConflictAdjudication', () => {
   });
 
   it('evidence_invalid -> invalidated: falls back to adjudicator evidence when the location resolves fine', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, location: 'src/a.ts:5' })] });
+    const evidenceRecord = makeEvidenceRecord('src/a.ts', 5);
+    const ledger = makeLedger({
+      findings: [makeFinding({ revision: 1, evidenceIds: [evidenceRecord.evidenceId] })],
+      evidenceRecords: [evidenceRecord],
+    });
     const output = makeOutput({
       outcome: 'evidence_invalid',
       findingTransition: 'invalidated',

@@ -62,7 +62,7 @@ export async function runAmbiguousLadder(input: {
       baseInterpretationKey: target.baseInterpretationKey,
       reviewerStableKey: target.canonical.reviewerStableKey,
       lineageKey: target.canonical.lineageKey,
-      candidateEvidenceHash: target.canonical.evidenceHash,
+      candidateEvidenceHash: target.canonical.evidenceSetHash,
       canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(target.canonical),
       promptPreconditions,
     })),

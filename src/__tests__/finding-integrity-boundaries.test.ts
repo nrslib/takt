@@ -49,6 +49,7 @@ function openFinding(): FindingLedgerEntry {
     lifecycle: 'persists',
     severity: 'high',
     title: 'Existing finding',
+    evidenceIds: [],
     description: 'Existing description',
     rawFindingIds: [],
     reviewers: ['reviewer'],
@@ -65,6 +66,7 @@ function ledger(): FindingLedger {
     workflowName: 'peer-review',
     nextId: 2,
     findings: [openFinding()],
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
     interpretations: [],
@@ -84,13 +86,14 @@ function rawWithEvidence(
     severity: 'high',
     title: 'Same claim',
     description: 'Same claim description',
+    suggestion: null,
     relation: 'persists',
     targetFindingId: 'F-0001',
     targetPrecondition,
-    evidence: {
-      kind: 'locationless',
-      explanation,
-    },
+    evidence: [{
+      kind: 'engine_proof',
+      proofId: (explanation.endsWith('E1') ? '1' : '2').repeat(64),
+    }],
   };
 }
 
@@ -146,21 +149,22 @@ describe('finding integrity boundaries', () => {
       ),
       { ledger: baseLedger, preserveAmbiguityOrigin: true },
     ).canonical;
-    expect(canonicalE2.evidenceHash).toBe(canonicalE1.evidenceHash);
+    expect(canonicalE2.claimIdentityHash).toBe(canonicalE1.claimIdentityHash);
+    expect(canonicalE2.evidenceSetHash).not.toBe(canonicalE1.evidenceSetHash);
     expect(canonicalRawIntegrityDigestOf(canonicalE2))
       .not.toBe(canonicalRawIntegrityDigestOf(canonicalE1));
 
     const baseInterpretationKey = computeBaseInterpretationKey({
       reviewerStableKey: canonicalE1.reviewerStableKey,
       lineageKey: canonicalE1.lineageKey,
-      candidateEvidenceHash: canonicalE1.evidenceHash,
+      candidateEvidenceHash: canonicalE1.evidenceSetHash,
     });
     const memory = inMemoryStore(baseLedger);
     const first = await beginInterpretations(memory.store, [{
       baseInterpretationKey,
       reviewerStableKey: canonicalE1.reviewerStableKey,
       lineageKey: canonicalE1.lineageKey,
-      candidateEvidenceHash: canonicalE1.evidenceHash,
+      candidateEvidenceHash: canonicalE1.evidenceSetHash,
       canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonicalE1),
       promptPreconditions: [targetPrecondition],
     }], observation, 'round-integrity');
@@ -211,7 +215,7 @@ describe('finding integrity boundaries', () => {
       baseInterpretationKey,
       reviewerStableKey: canonicalE2.reviewerStableKey,
       lineageKey: canonicalE2.lineageKey,
-      candidateEvidenceHash: canonicalE2.evidenceHash,
+      candidateEvidenceHash: canonicalE2.evidenceSetHash,
       canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonicalE2),
       promptPreconditions: [targetPrecondition],
     }], observation, 'round-integrity');
@@ -345,14 +349,14 @@ describe('finding integrity boundaries', () => {
     const baseInterpretationKey = computeBaseInterpretationKey({
       reviewerStableKey: canonicalE1.reviewerStableKey,
       lineageKey: canonicalE1.lineageKey,
-      candidateEvidenceHash: canonicalE1.evidenceHash,
+      candidateEvidenceHash: canonicalE1.evidenceSetHash,
     });
     const memory = inMemoryStore(baseLedger);
     const begun = await beginInterpretations(memory.store, [{
       baseInterpretationKey,
       reviewerStableKey: canonicalE1.reviewerStableKey,
       lineageKey: canonicalE1.lineageKey,
-      candidateEvidenceHash: canonicalE1.evidenceHash,
+      candidateEvidenceHash: canonicalE1.evidenceSetHash,
       canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonicalE1),
       promptPreconditions: [targetPrecondition],
     }], observation, 'completion-cas-round');

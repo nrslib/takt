@@ -84,6 +84,7 @@ import { runManagerRoundExclusive } from '../core/workflow/findings/manager-roun
 import { runLedgerUpdateExclusive } from '../core/workflow/findings/ledger-identity-queue.js';
 import {
   finalizePendingManagerCommit,
+  rebindPendingManagerCommit,
   stagePendingManagerCommit,
 } from '../core/workflow/findings/manager-pending-commit.js';
 import { resumePendingManagerCommit } from '../core/workflow/findings/manager-commit.js';
@@ -113,6 +114,7 @@ function makeLedger(): FindingLedger {
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
     interpretations: [],
@@ -124,6 +126,7 @@ function makeLedger(): FindingLedger {
         revision: 1,
         severity: 'high',
         title: 'Open issue',
+        evidenceIds: [],
         reviewers: ['coding-reviewer'],
         rawFindingIds: ['raw-1'],
         firstSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
@@ -247,7 +250,7 @@ describe('FindingLedgerStore', () => {
 
     const store = createStore({ projectCwd, reportDir });
 
-    expect(() => store.loadLedger()).toThrow(/binary-sorted unique set/);
+    expect(() => store.loadLedger()).toThrow(/binary-sorted unique string set/i);
   });
 
   it('should persist the project ledger under projectCwd, not the run report directory', async () => {
@@ -594,7 +597,10 @@ describe('FindingLedgerStore', () => {
       severity: 'high' as const,
       title: 'Secret leak',
       description: 'The reviewer included a secret-shaped string in evidence.',
+      suggestion: null,
       relation: 'new' as const,
+      targetFindingId: null,
+      evidence: [],
     };
 
     await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
@@ -783,7 +789,10 @@ describe('FindingLedgerStore', () => {
       severity: 'high' as const,
       title: 'Open issue',
       description: 'The issue is still present.',
+      suggestion: null,
       relation: 'new' as const,
+      targetFindingId: null,
+      evidence: [],
     };
 
     const firstPath = join(
@@ -837,7 +846,10 @@ describe('FindingLedgerStore', () => {
         severity: 'high',
         title: 'Unsafe write',
         description: 'Raw findings must stay inside the projectCwd.',
+        suggestion: null,
         relation: 'new',
+        targetFindingId: null,
+        evidence: [],
       },
     ])).toThrow('Finding ledger path escapes base directory');
     expect(existsSync(join(outsideDir, `${store.runId}.reviewers.json`))).toBe(false);
@@ -1270,8 +1282,10 @@ describe('FindingLedgerStore', () => {
         severity: 'high',
         title: 'Pending raw',
         description: 'Pending raw description.',
+        suggestion: null,
         relation: 'new',
-        evidence: { kind: 'locationless', explanation: 'Pending evidence.' },
+        targetFindingId: null,
+        evidence: [],
       }],
       conflicts: [{
         id: formatConflictId(conflictWithoutId),
@@ -1376,11 +1390,60 @@ describe('FindingLedgerStore', () => {
     );
   });
 
+  it('should accept the canonical stage, destination-only rebind, and finalization sequence', () => {
+    const previousLedger = makeLedger();
+    const roundMarker = 'canonical-pending-transition-round';
+    const publication = makePendingPublication({
+      version: 1,
+      runId: 'run-pending',
+      stepName: 'reviewers',
+      retryCount: 0,
+      ledgerUpdated: true,
+      finalErrors: [],
+      attempts: [],
+    });
+    const completedLedger: FindingLedger = {
+      ...previousLedger,
+      updatedAt: '2026-06-14T00:00:00.000Z',
+      stopBudget: {
+        roundMarkers: [roundMarker],
+        firstRoundAt: previousLedger.updatedAt,
+        exhausted: false,
+      },
+    };
+
+    const staged = stagePendingManagerCommit({
+      previousLedger,
+      completedLedger,
+      roundMarker,
+      publication,
+    });
+    const reboundPublication = {
+      ...publication,
+      destinationRunId: 'resumed-run',
+    };
+    const rebound = rebindPendingManagerCommit(
+      staged,
+      publication.publicationId,
+      reboundPublication,
+    );
+    const finalized = finalizePendingManagerCommit(
+      rebound,
+      publication.publicationId,
+    );
+
+    expect(rebound.pendingManagerCommit?.publication).toEqual(reboundPublication);
+    expect(rebound.pendingManagerCommit?.completed).toEqual(
+      staged.pendingManagerCommit?.completed,
+    );
+    expect(finalized).toEqual(completedLedger);
+  });
+
   it.each([
     ['raw deletion', (_raw: RawFinding) => []],
     ['typed evidence replacement', (raw: RawFinding) => [{
       ...raw,
-      evidence: { kind: 'locationless' as const, explanation: 'evidence E2' },
+      evidence: [{ kind: 'engine_proof' as const, proofId: '2'.repeat(64) }],
     }]],
   ])('should reject pending %s at filesystem stage and dedicated finalization', async (
     _label,
@@ -1399,8 +1462,10 @@ describe('FindingLedgerStore', () => {
       severity: 'high',
       title: 'Pending integrity raw',
       description: 'Pending integrity description',
+      suggestion: null,
       relation: 'new',
-      evidence: { kind: 'locationless', explanation: 'evidence E1' },
+      targetFindingId: null,
+      evidence: [{ kind: 'engine_proof', proofId: '1'.repeat(64) }],
     };
     await store.updateLedger((current) => ({
       ledger: { ...current, rawFindings: [rawE1] },

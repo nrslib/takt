@@ -138,7 +138,7 @@ describe('buildRoutingWorkSnapshot', () => {
             lifecycle: 'provisional',
             title: 'Recovery boundary is incomplete',
             description: 'The recovery boundary has an unresolved observation.',
-            provisional: { kind: 'unverified-locationless' },
+            provisional: { kind: 'raw-meaning-ambiguous' },
           },
         ],
         conflicts: [],

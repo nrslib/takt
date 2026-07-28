@@ -10,7 +10,7 @@ vi.mock('../core/workflow/findings/admission-validation.js', async () => {
   );
   return {
     ...actual,
-    verifySourceQuoteEvidence: () => ({ outcome: 'unverifiable', reason: 'injected EIO' }),
+    verifyFileQuoteEvidence: () => ({ outcome: 'unverifiable', reason: 'injected EIO' }),
     validateLocationAdmission: () => ({ ok: false, outcome: 'unverifiable', reason: 'injected EIO' }),
   };
 });
@@ -37,12 +37,13 @@ function makeLedger(): FindingLedger {
       revision: 1,
       severity: 'high',
       title: 'Existing issue',
-      location: 'src/a.ts:1',
+      evidenceIds: [],
       reviewers: ['reviewer'],
       rawFindingIds: [],
       firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-17T00:00:00.000Z' },
       lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-17T00:00:00.000Z' },
     }],
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [{
       id: 'C-FA2947446963',
@@ -58,19 +59,25 @@ function makeLedger(): FindingLedger {
 }
 
 describe('unverifiable propagation', () => {
-  it('manager admission は source quote の検証不能を anomaly に変換せず停止する', () => {
+  it('manager admission は file quote の検証不能を anomaly に変換せず停止する', () => {
     const ledger = makeLedger();
     const [candidate] = createReviewerRawFindingCandidates([{
       rawFindingId: 'raw-1',
       relation: 'new',
       title: 'New issue',
       description: 'description',
+      suggestion: null,
       severity: 'high',
       familyTag: 'bug',
-      location: 'src/a.ts:1',
-      evidenceKind: 'source_quote',
-      verbatimExcerpt: 'const value = 1;',
-      snapshotId: 'snapshot',
+      targetFindingId: null,
+      evidence: [{
+        kind: 'file_quote',
+        path: 'src/a.ts',
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: 'const value = 1;',
+        snapshotId: '1'.repeat(64),
+      }],
     }], {
       callNamespace: '',
       parentStepName: 'reviewers',
@@ -101,32 +108,8 @@ describe('unverifiable propagation', () => {
   it('manager の invalidate 候補へ検証不能な open finding を入れない', () => {
     const ledger = makeLedger();
 
-    expect(computeInvalidLocationCandidates('/project', ledger.findings)).toEqual(new Map());
+    expect(computeInvalidLocationCandidates('/project', ledger)).toEqual(new Map());
     expect(ledger.findings[0]?.status).toBe('open');
-  });
-
-  it('adjudication は location 検証不能時に invalidated へ遷移しない', () => {
-    const ledger = makeLedger();
-    expect(() => applyFindingConflictAdjudication({
-      ledger,
-      output: {
-        conflictId: 'C-FA2947446963',
-        outcome: 'evidence_invalid',
-        findingTransition: 'invalidated',
-        evidence: ['invalid premise'],
-        actionableFix: '',
-      },
-      evidenceHash: 'hash',
-      cwd: '/project',
-      context: {
-        workflowName: 'peer-review',
-        stepName: 'finding-conflict-adjudication',
-        runId: 'run-1',
-        timestamp: '2026-07-17T00:00:00.000Z',
-      },
-    })).toThrow(/could not be verified: injected EIO/);
-    expect(ledger.findings[0]?.status).toBe('open');
-    expect(ledger.conflicts[0]?.status).toBe('active');
   });
 
   it('adjudication は resolved evidence の検証不能理由を保持して状態を変更しない', () => {

@@ -47,7 +47,7 @@ export function revalidateManagerPlan(input: {
     carriedFindingOnlyConflicts,
     priorStepResponseText: input.runInput.priorStepResponseText,
     invalidLocationCandidateFindingIds: new Set(
-      computeInvalidLocationCandidates(input.runInput.cwd, input.freshLedger.findings).keys(),
+      computeInvalidLocationCandidates(input.runInput.cwd, input.freshLedger).keys(),
     ),
     // fresh ledger に対して候補を再計算する: 初回判断と保存の間に clean 証拠で
     // settle された（open でなくなった）対象への dismiss は stale として不採用になる。
@@ -161,7 +161,7 @@ function collectRejectedRenotifications(input: {
       return [];
     }
     const raw = input.cleanWireById.get(rejected.rawFindingId);
-    if (raw?.relation !== 'persists' || raw.targetFindingId === undefined) {
+    if (raw?.relation !== 'persists' || raw.targetFindingId === null) {
       return [];
     }
     const captured = input.capturedPreconditions.get(raw.targetFindingId);
@@ -292,7 +292,6 @@ function applyPreconditionChecks(input: {
       parentStepName: input.parentStepName,
       targetFindingId: findingId,
       targetTitle: fresh?.title ?? findingId,
-      ...(fresh?.location !== undefined ? { targetLocation: fresh.location } : {}),
       sourceRawFindingIds,
       reason,
       ...(issuedActionRecovery !== undefined

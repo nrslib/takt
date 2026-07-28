@@ -1,5 +1,4 @@
 import { computeLineageKey, computeOverflowStableKey } from './raw-canonicalization.js';
-import { normalizeFindingText, parseFindingLocation } from './location.js';
 import {
   applyReplayOriginSettlement,
   type ProvisionalReplayOrigin,
@@ -11,6 +10,7 @@ import type {
   FindingObservation,
   RawFinding,
 } from './types.js';
+import { computeClaimIdentityHash } from './evidence-domain.js';
 
 export interface ProvisionalSettlement {
   output: FindingManagerOutput;
@@ -23,25 +23,24 @@ export interface ProvisionalSettlement {
 }
 
 /**
- * path と title だけでは別問題を誤確定できるため、description も同一性に含める。
+ * provisional settlement も claimIdentityHash を唯一の同一性正本にする。
  */
 export function fullIdentityKeyOf(
-  location: string | undefined,
   title: string | undefined,
   description: string | undefined,
 ): string {
-  return JSON.stringify([
-    parseFindingLocation(location)?.path ?? '',
-    title === undefined ? '' : normalizeFindingText(title),
-    description === undefined ? '' : normalizeFindingText(description),
-  ]);
+  return computeClaimIdentityHash({
+    targetFindingId: null,
+    title: title ?? '',
+    description: description ?? '',
+  });
 }
 
 /**
  * clean な後続 raw だけが provisional を確定・解消できる。
  *
  * 確定・解消の根拠は次のどちらかに限る:
- * (a) 完全 identity（正規化 path+title+description）の一致 — SameProof と同格
+ * (a) claimIdentityHash の一致 — SameProof と同格
  * (b) 保存済み lineageKey との一致（claim 形の再計算）
  * どちらも「対応が一意」の場合のみ採用する。複数候補・非一意は確定しない
  * （保守側 — provisional は開いたままで gate は閉じ続ける）。manager の意味判断
@@ -87,12 +86,12 @@ export function settleProvisionalsWithCleanEvidence(input: {
   // 一意な identity / lineage だけを索引に載せる（重複 identity は候補から除外）。
   let identityCounts = new Map<string, number>();
   for (const finding of openProvisionals) {
-    const key = fullIdentityKeyOf(finding.location, finding.title, finding.description);
+    const key = fullIdentityKeyOf(finding.title, finding.description);
     identityCounts = new Map([...identityCounts, [key, (identityCounts.get(key) ?? 0) + 1]]);
   }
   let byUniqueIdentity = new Map<string, FindingLedgerEntry>();
   for (const finding of openProvisionals) {
-    const key = fullIdentityKeyOf(finding.location, finding.title, finding.description);
+    const key = fullIdentityKeyOf(finding.title, finding.description);
     if (identityCounts.get(key) === 1) {
       byUniqueIdentity = new Map([...byUniqueIdentity, [key, finding]]);
     }
@@ -111,14 +110,13 @@ export function settleProvisionalsWithCleanEvidence(input: {
   }
 
   const findProvisionalForCleanRaw = (wire: RawFinding): FindingLedgerEntry | undefined => {
-    const byIdentity = byUniqueIdentity.get(fullIdentityKeyOf(wire.location, wire.title, wire.description));
+    const claimIdentityHash = fullIdentityKeyOf(wire.title, wire.description);
+    const byIdentity = byUniqueIdentity.get(claimIdentityHash);
     if (byIdentity !== undefined) {
       return byIdentity;
     }
     const claimLineage = computeLineageKey({
-      ...(wire.location !== undefined ? { location: wire.location } : {}),
-      title: wire.title,
-      familyTag: wire.familyTag,
+      claimIdentityHash,
     });
     return byUniqueLineage.get(claimLineage);
   };
@@ -129,12 +127,13 @@ export function settleProvisionalsWithCleanEvidence(input: {
     if (target === undefined) {
       return false;
     }
-    if (fullIdentityKeyOf(target.location, target.title, target.description) === identity) {
+    if (fullIdentityKeyOf(target.title, target.description) === identity) {
       return true;
     }
     return target.rawFindingIds.some((rawFindingId) => {
       const raw = freshRawsById.get(rawFindingId);
-      return raw !== undefined && fullIdentityKeyOf(raw.location, raw.title, raw.description) === identity;
+      return raw !== undefined
+        && fullIdentityKeyOf(raw.title, raw.description) === identity;
     });
   };
 
@@ -214,14 +213,17 @@ export function settleProvisionalsWithCleanEvidence(input: {
     if (provisional === undefined || promotedFindingIds.has(provisional.id)) {
       continue;
     }
-    const provisionalIdentity = fullIdentityKeyOf(provisional.location, provisional.title, provisional.description);
+    const provisionalIdentity = fullIdentityKeyOf(
+      provisional.title,
+      provisional.description,
+    );
     const hasExactCleanRaw = match.rawFindingIds.some((rawFindingId) => {
       if (!input.cleanRawIds.has(rawFindingId)) {
         return false;
       }
       const wire = input.wireById.get(rawFindingId);
       return wire !== undefined
-        && fullIdentityKeyOf(wire.location, wire.title, wire.description) === provisionalIdentity;
+        && fullIdentityKeyOf(wire.title, wire.description) === provisionalIdentity;
     });
     if (hasExactCleanRaw) {
       promotedFindingIds = new Set([...promotedFindingIds, provisional.id]);
@@ -241,7 +243,7 @@ export function settleProvisionalsWithCleanEvidence(input: {
       if (wire === undefined) {
         continue;
       }
-      const identity = fullIdentityKeyOf(wire.location, wire.title, wire.description);
+      const identity = fullIdentityKeyOf(wire.title, wire.description);
       const provisional = byUniqueIdentity.get(identity);
       if (provisional === undefined || provisional.id === match.findingId || promotedFindingIds.has(provisional.id)) {
         continue;

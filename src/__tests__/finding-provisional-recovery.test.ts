@@ -67,6 +67,12 @@ import {
   assertCanonicalIntakeRecoveryState,
   evaluateRawAdmission,
 } from '../core/workflow/findings/manager-admission.js';
+import {
+  computeClaimIdentityHash,
+  deduplicateRawEvidence,
+} from '../core/workflow/findings/evidence-domain.js';
+import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
+import { issuePathAbsentEngineProof } from '../core/workflow/findings/path-absent-engine-proof.js';
 
 const observation = {
   runId: 'run-1',
@@ -113,8 +119,10 @@ function raw(rawFindingId: string): RawFinding {
     severity: 'high',
     title: 'Incorrect state transition',
     description: 'The transition leaves the state inconsistent.',
+    suggestion: null,
     relation: 'new',
-    evidence: { kind: 'locationless', explanation: 'State transition is absent.' },
+    targetFindingId: null,
+    evidence: [],
   };
 }
 
@@ -128,6 +136,7 @@ function provisional(
     lifecycle: 'new',
     severity: 'high',
     title: 'Incorrect state transition',
+    evidenceIds: [],
     description: 'The transition leaves the state inconsistent.',
     reviewers: ['reviewer-a'],
     rawFindingIds: ['source-1'],
@@ -158,12 +167,10 @@ function alignRecoveryLineageWithStoredRaw(
     throw new Error('Test recovery finding must be provisional');
   }
   finding.provisional.lineageKey = computeLineageKey({
-    ...(source.targetFindingId !== undefined
+    claimIdentityHash: computeClaimIdentityHash(source),
+    ...(source.targetFindingId !== null
       ? { targetFindingId: source.targetFindingId }
       : {}),
-    ...(source.location !== undefined ? { location: source.location } : {}),
-    title: source.title,
-    familyTag: source.familyTag,
   });
 }
 
@@ -173,6 +180,7 @@ function ledger(findings: FindingLedgerEntry[], rawFindings: RawFinding[] = []):
     nextId: 20,
     updatedAt: observation.timestamp,
     findings,
+    evidenceRecords: [],
     rawFindings,
     conflicts: [],
     interpretations: [],
@@ -183,7 +191,7 @@ function stampTargetPrecondition(
   finding: RawFinding,
   snapshot: FindingLedger,
 ): RawFinding {
-  if (finding.targetFindingId === undefined) {
+  if (finding.targetFindingId === null) {
     throw new Error('Test target raw finding must set targetFindingId');
   }
   const targetPrecondition = captureFindingPreconditions(snapshot)
@@ -202,7 +210,7 @@ function emptyCommitPlanInput(
     input: {
       contract: {},
       cwd: process.cwd(),
-      ledgerStore: {},
+      ledgerStore: { runId: observation.runId, ledgerIdentity: 'test-ledger' },
       optionsBuilder: {},
       stepExecutor: {},
       parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
@@ -228,7 +236,6 @@ function emptyCommitPlanInput(
       admissionRejections: [],
       admissionAnomalySpecs: [],
       admissionRejectedItems: [],
-      locationlessProvisionalItems: [],
       pendingRejectedObservations: [],
       cleanAdmitted: [],
       tainted: [],
@@ -237,6 +244,7 @@ function emptyCommitPlanInput(
       verifiedEvidenceCandidates: [],
       provisionalOnlyLadderRawIds: new Set(),
       cleanWire: [],
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
     },
     managerDecision: {
       managerOutput: emptyOutput(),
@@ -601,7 +609,7 @@ describe('provisional recovery', () => {
   });
 
   it('increments revision for a rejected observation attachment and rejects a pre-attachment precondition', () => {
-    const process = provisional('F-0001', 'unverified-locationless');
+    const process = provisional('F-0001', 'raw-meaning-ambiguous');
     const current = ledger([process]);
     const captured = captureFindingPreconditions(current).get(process.id)!;
 
@@ -809,6 +817,12 @@ describe('provisional recovery', () => {
   });
 
   it('processes one stored raw payload once and carries every provisional recovery origin', () => {
+    const cwd = process.cwd();
+    const quote = verifiedSourceQuoteFields(
+      cwd,
+      'src/core/workflow/findings/interpretation-recovery.ts',
+      1,
+    );
     const first = provisional('F-0001', 'interpretation-interrupted');
     const second = provisional('F-0002', 'interpretation-interrupted');
     first.provisional = {
@@ -820,14 +834,37 @@ describe('provisional recovery', () => {
       interpretationEpochs: 1,
     };
 
-    const sharedSource = stampTargetPrecondition({
+    const sourceWithoutEvidence = stampTargetPrecondition({
       ...raw('source-1'),
       relation: 'persists' as const,
       targetFindingId: first.id,
     }, ledger([first, second]));
+    const proof = issuePathAbsentEngineProof({
+      subject: { kind: 'path_absent', path: 'generated/missing.ts' },
+      context: {
+        cwd,
+        workflowName: 'peer-review',
+        runId: observation.runId,
+        scopeIdentity: 'test-ledger',
+        snapshotId: quote.snapshotId,
+        claimIdentityHash: computeClaimIdentityHash(sourceWithoutEvidence),
+        targetFindingId: first.id,
+      },
+      issuedAt: observation.timestamp,
+    });
+    const sharedSource: RawFinding = {
+      ...sourceWithoutEvidence,
+      evidence: deduplicateRawEvidence([
+        quote,
+        { kind: 'engine_proof', proofId: proof.proofId },
+      ]),
+    };
     alignRecoveryLineageWithStoredRaw(first, sharedSource);
     alignRecoveryLineageWithStoredRaw(second, sharedSource);
-    const previousLedger = ledger([first, second], [sharedSource]);
+    const previousLedger = {
+      ...ledger([first, second], [sharedSource]),
+      evidenceRecords: [proof],
+    };
     const plan = collectInterpretationRecoveryPlan({
       ledger: previousLedger,
       currentItems: [],
@@ -883,9 +920,14 @@ describe('provisional recovery', () => {
         ...emptyCommitPlanInput().intake,
         items: plan.items,
       },
+      reviewScopeSnapshotId: quote.snapshotId,
     });
     const mutation = buildFindingManagerCommitMutation({
       ...baseCommitInput,
+      input: {
+        ...baseCommitInput.input,
+        cwd,
+      },
       managerDecision: {
         ...baseCommitInput.managerDecision,
         ladder: ladderAfterOneDecision,
@@ -910,6 +952,11 @@ describe('provisional recovery', () => {
         resolvedEvidence: 'Deterministically settled through F-0001',
       },
     ]);
+    const promoted = mutation.ledger.findings.find((finding) => finding.id === 'F-0001');
+    expect(promoted?.evidenceIds).toHaveLength(2);
+    expect(mutation.ledger.evidenceRecords.map((record) => record.evidenceId).sort())
+      .toEqual([...promoted!.evidenceIds].sort());
+    expect(promoted?.evidenceIds).toContain(proof.evidenceId);
   });
 
   it('adjudicates a shared raw once while settling a provenance failure and a valid origin independently', () => {
@@ -1272,6 +1319,7 @@ describe('provisional recovery', () => {
       },
       runInput: {
         cwd: process.cwd(),
+        ledgerStore: { runId: observation.runId, ledgerIdentity: 'test-ledger' },
         workflowName: current.workflowName,
         parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
         runId: observation.runId,
@@ -1334,6 +1382,7 @@ describe('provisional recovery', () => {
       },
       runInput: {
         cwd: process.cwd(),
+        ledgerStore: { runId: observation.runId, ledgerIdentity: 'test-ledger' },
         workflowName: current.workflowName,
         parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
         runId: observation.runId,
@@ -1412,6 +1461,7 @@ describe('provisional recovery', () => {
       },
       runInput: {
         cwd: process.cwd(),
+        ledgerStore: { runId: observation.runId, ledgerIdentity: 'test-ledger' },
         workflowName: current.workflowName,
         parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
         runId: observation.runId,
@@ -1706,7 +1756,7 @@ describe('provisional recovery', () => {
     const baseInterpretationKey = computeBaseInterpretationKey({
       reviewerStableKey: canonical.reviewerStableKey,
       lineageKey: canonical.lineageKey,
-      candidateEvidenceHash: canonical.evidenceHash,
+      candidateEvidenceHash: canonical.evidenceSetHash,
     });
     const interpretationKey = computeInterpretationAttemptKey(baseInterpretationKey, 1);
     current.interpretations = [{
@@ -1715,7 +1765,7 @@ describe('provisional recovery', () => {
       attemptOrdinal: 1,
       reviewerStableKey: canonical.reviewerStableKey,
       lineageKey: canonical.lineageKey,
-      candidateEvidenceHash: canonical.evidenceHash,
+      candidateEvidenceHash: canonical.evidenceSetHash,
       canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
       stage: 'interpretation_completed',
       startedAt: observation,
@@ -1773,7 +1823,7 @@ describe('provisional recovery', () => {
     const baseInterpretationKey = computeBaseInterpretationKey({
       reviewerStableKey: canonical.reviewerStableKey,
       lineageKey: canonical.lineageKey,
-      candidateEvidenceHash: canonical.evidenceHash,
+      candidateEvidenceHash: canonical.evidenceSetHash,
     });
     const priorInterpretationKey = computeInterpretationAttemptKey(baseInterpretationKey, 1);
     const interpretationKey = computeInterpretationAttemptKey(baseInterpretationKey, 2);
@@ -1795,7 +1845,7 @@ describe('provisional recovery', () => {
           attemptOrdinal: 1,
           reviewerStableKey: canonical.reviewerStableKey,
           lineageKey: canonical.lineageKey,
-          candidateEvidenceHash: canonical.evidenceHash,
+          candidateEvidenceHash: canonical.evidenceSetHash,
           canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
           stage: 'ledger_applied',
           startedAt: observation,
@@ -1810,7 +1860,7 @@ describe('provisional recovery', () => {
           attemptOrdinal: 2,
           reviewerStableKey: canonical.reviewerStableKey,
           lineageKey: canonical.lineageKey,
-          candidateEvidenceHash: canonical.evidenceHash,
+          candidateEvidenceHash: canonical.evidenceSetHash,
           canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
           stage: 'interpretation_completed',
           startedAt: observation,
@@ -1842,7 +1892,6 @@ describe('provisional recovery', () => {
       admissionRejections: [],
       admissionAnomalySpecs: [],
       admissionRejectedItems: [],
-      locationlessProvisionalItems: [],
       pendingRejectedObservations: [],
       cleanAdmitted: [],
       tainted: [],
@@ -1855,7 +1904,7 @@ describe('provisional recovery', () => {
     const input = {
       contract: {},
       cwd: process.cwd(),
-      ledgerStore: {},
+      ledgerStore: { runId: observation.runId, ledgerIdentity: 'test-ledger' },
       optionsBuilder: {},
       stepExecutor: {},
       parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
@@ -1943,15 +1992,7 @@ describe('provisional recovery', () => {
     );
     const cleanSource: RawFinding = {
       ...raw('current-clean'),
-      location: quote.location,
-      evidence: {
-        kind: 'source_quote',
-        path: 'src/core/workflow/findings/provisional-recovery-origin.ts',
-        startLine: 1,
-        endLine: 1,
-        verbatimExcerpt: quote.verbatimExcerpt,
-        snapshotId: quote.snapshotId,
-      },
+      evidence: [quote],
     };
     const processFinding = provisional('F-0001', 'manager-budget-exhausted');
     const previousLedger = ledger([processFinding], [raw('source-1')]);
@@ -1986,7 +2027,7 @@ describe('provisional recovery', () => {
     const input = {
       contract: {},
       cwd: process.cwd(),
-      ledgerStore: {},
+      ledgerStore: { runId: observation.runId, ledgerIdentity: 'test-ledger' },
       optionsBuilder: {},
       stepExecutor: {},
       parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
@@ -2007,7 +2048,6 @@ describe('provisional recovery', () => {
         admissionRejections: [],
         admissionAnomalySpecs: [],
         admissionRejectedItems: [],
-        locationlessProvisionalItems: [],
         pendingRejectedObservations: [],
         cleanAdmitted: [{
           canonical,
@@ -2021,6 +2061,7 @@ describe('provisional recovery', () => {
         verifiedEvidenceCandidates: [],
         provisionalOnlyLadderRawIds: new Set(),
         cleanWire: [wire],
+        verifiedEvidenceRecordsByRawFindingId: new Map(),
       },
       managerDecision: {
         managerOutput: {
@@ -2097,28 +2138,12 @@ describe('provisional recovery', () => {
     );
     const staleSource: RawFinding = {
       ...raw(`stale-${kind}`),
-      location: quote.location,
-      evidence: {
-        kind: 'source_quote',
-        path: 'src/core/workflow/findings/provisional-recovery-origin.ts',
-        startLine: 1,
-        endLine: 1,
-        verbatimExcerpt: quote.verbatimExcerpt,
-        snapshotId: quote.snapshotId,
-      },
+      evidence: [quote],
     };
     const freshSource: RawFinding = {
       ...raw(`fresh-${kind}`),
       title: `Fresh ${kind} claim`,
-      location: quote.location,
-      evidence: {
-        kind: 'source_quote',
-        path: 'src/core/workflow/findings/provisional-recovery-origin.ts',
-        startLine: 1,
-        endLine: 1,
-        verbatimExcerpt: quote.verbatimExcerpt,
-        snapshotId: quote.snapshotId,
-      },
+      evidence: [quote],
     };
     const processFinding = provisional('F-0001', 'manager-budget-exhausted');
     const previousLedger = ledger([processFinding], [raw('source-1')]);
@@ -2217,7 +2242,7 @@ describe('provisional recovery', () => {
     const baseInterpretationKey = computeBaseInterpretationKey({
       reviewerStableKey: canonical.reviewerStableKey,
       lineageKey: canonical.lineageKey,
-      candidateEvidenceHash: canonical.evidenceHash,
+      candidateEvidenceHash: canonical.evidenceSetHash,
     });
     const interpretationKey = computeInterpretationAttemptKey(baseInterpretationKey, 1);
     const freshLedger: FindingLedger = {
@@ -2231,7 +2256,7 @@ describe('provisional recovery', () => {
         attemptOrdinal: 1,
         reviewerStableKey: canonical.reviewerStableKey,
         lineageKey: canonical.lineageKey,
-        candidateEvidenceHash: canonical.evidenceHash,
+        candidateEvidenceHash: canonical.evidenceSetHash,
         canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
         stage: 'interpretation_completed',
         startedAt: observation,
@@ -2260,7 +2285,7 @@ describe('provisional recovery', () => {
     const input = {
       contract: {},
       cwd: process.cwd(),
-      ledgerStore: {},
+      ledgerStore: { runId: observation.runId, ledgerIdentity: 'test-ledger' },
       optionsBuilder: {},
       stepExecutor: {},
       parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
@@ -2294,7 +2319,6 @@ describe('provisional recovery', () => {
         admissionRejections: [],
         admissionAnomalySpecs: [],
         admissionRejectedItems: [],
-        locationlessProvisionalItems: [],
         pendingRejectedObservations: [],
         cleanAdmitted: [],
         tainted: [{
@@ -2394,7 +2418,7 @@ describe('provisional recovery', () => {
     const baseInterpretationKey = computeBaseInterpretationKey({
       reviewerStableKey: canonical.reviewerStableKey,
       lineageKey: canonical.lineageKey,
-      candidateEvidenceHash: canonical.evidenceHash,
+      candidateEvidenceHash: canonical.evidenceSetHash,
     });
     current.interpretations = [{
       interpretationKey: computeInterpretationAttemptKey(baseInterpretationKey, 1),
@@ -2402,7 +2426,7 @@ describe('provisional recovery', () => {
       attemptOrdinal: 1,
       reviewerStableKey: canonical.reviewerStableKey,
       lineageKey: canonical.lineageKey,
-      candidateEvidenceHash: canonical.evidenceHash,
+      candidateEvidenceHash: canonical.evidenceSetHash,
       canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
       stage: 'ledger_applied',
       startedAt: observation,
@@ -2775,12 +2799,30 @@ describe('provisional recovery', () => {
     { name: 'exact head', revision: 1, expectedStatus: 'invalidated' as const },
     { name: 'unrelated intermediate revision', revision: 2, expectedStatus: 'open' as const },
   ])('applies an engine-persisted action only against its $name', ({ revision, expectedStatus }) => {
+    const evidencePayload = {
+      kind: 'file_quote' as const,
+      path: '/outside-workflow.ts',
+      startLine: 1,
+      endLine: 1,
+      verbatimExcerpt: 'outside workflow',
+      snapshotId: 'snapshot',
+      claimIdentityHash: 'a'.repeat(64),
+      fileHash: 'b'.repeat(64),
+    };
+    const evidenceRecord = {
+      evidenceId: computeFileQuoteEvidenceRecordId(evidencePayload),
+      ...evidencePayload,
+    };
     const observedTarget: FindingLedgerEntry = {
       ...provisional('F-0001', 'raw-adjudication-unresolved'),
       provisional: undefined,
-      location: '/outside-workflow.ts',
+      evidenceIds: [evidenceRecord.evidenceId],
     };
-    const targetPrecondition = captureFindingPreconditions(ledger([observedTarget]))
+    const observedLedger = {
+      ...ledger([observedTarget]),
+      evidenceRecords: [evidenceRecord],
+    };
+    const targetPrecondition = captureFindingPreconditions(observedLedger)
       .get(observedTarget.id)!.precondition;
     const target = { ...observedTarget, revision };
     const processFinding = provisional('F-0002', 'stale-precondition');
@@ -2794,7 +2836,10 @@ describe('provisional recovery', () => {
         targetPreconditions: [targetPrecondition],
       },
     };
-    const current = ledger([target, processFinding]);
+    const current = {
+      ...ledger([target, processFinding]),
+      evidenceRecords: [evidenceRecord],
+    };
     const recovered = applyManagerActionRecovery({
       ledger: current,
       candidates: collectManagerActionRecoveryCandidates(current, 1),
@@ -2813,7 +2858,7 @@ describe('provisional recovery', () => {
   });
 
   it('allows verified reviewer evidence to reopen a human-auditable dismissal', () => {
-    const dismissed = provisional('F-0001', 'unverified-locationless');
+    const dismissed = provisional('F-0001', 'raw-meaning-ambiguous');
     dismissed.status = 'dismissed';
     dismissed.lifecycle = 'dismissed';
     dismissed.dismissal = {
@@ -2847,10 +2892,11 @@ describe('provisional recovery', () => {
       rawProvenanceByRawFindingId: new Map([[reopenedRaw.rawFindingId, {
         reviewerStableKey: canonical.reviewerStableKey,
         lineageKey: canonical.lineageKey,
-        claimIdentityHash: canonical.evidenceHash,
+        claimIdentityHash: canonical.claimIdentityHash,
         canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
         canonicalProvenance: canonical.provenance,
       }]]),
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       context: {
         workflowName: 'peer-review',
         stepName: observation.stepName,

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +21,8 @@ import {
 } from '../core/workflow/findings/raw-adjudication-reservation.js';
 import {
   estimateTokens,
+  findRawFieldLimitViolation,
+  RAW_FINDING_LIMITS,
   RAW_ADJUDICATION_RECOVERY_LIMITS,
 } from '../core/workflow/findings/raw-finding-limits.js';
 import { classifyProvisionalRecovery } from '../core/workflow/findings/provisional-recovery.js';
@@ -35,10 +37,11 @@ import {
 import { captureFindingPreconditions } from '../core/workflow/findings/finding-preconditions.js';
 import { snapshotProvisionalRecoveryOrigin } from '../core/workflow/findings/provisional-recovery-origin.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
+import { deduplicateRawEvidence } from '../core/workflow/findings/evidence-domain.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
 vi.mock('../core/workflow/findings/snapshot.js', () => ({
-  computeReviewScopeSnapshotId: () => 'bounded-snapshot',
+  computeReviewScopeSnapshotId: () => '1'.repeat(64),
 }));
 vi.mock('../core/workflow/findings/manager-output-validation.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../core/workflow/findings/manager-output-validation.js')>();
@@ -73,17 +76,59 @@ const observation = {
   timestamp: '2026-07-20T00:00:00.000Z',
 };
 const quote = {
-  location: 'package.json:1',
   verbatimExcerpt: '{',
-  snapshotId: 'bounded-snapshot',
+  snapshotId: '1'.repeat(64),
 };
 
 function findingId(index: number): string {
   return `F-${String(index).padStart(4, '0')}`;
 }
 
-function sourceRaw(index: number, descriptionChars = 0): RawFinding {
+function largeVerifiedEvidence(): RawFinding['evidence'] {
+  const lines = readFileSync(join(process.cwd(), 'package-lock.json'), 'utf8').split('\n');
+  if (lines.at(-1) === '') {
+    lines.pop();
+  }
+  let lineIndex = 0;
+  const evidence = Array.from({ length: 16 }, () => {
+    const startLine = lineIndex + 1;
+    const excerptLines: string[] = [];
+    while (lineIndex < lines.length && excerptLines.length < 200) {
+      const next = [...excerptLines, lines[lineIndex]!];
+      if (next.join('\n').length > RAW_FINDING_LIMITS.maxVerbatimExcerptChars) {
+        break;
+      }
+      excerptLines.push(lines[lineIndex]!);
+      lineIndex += 1;
+    }
+    return {
+      kind: 'file_quote' as const,
+      path: 'package-lock.json',
+      startLine,
+      endLine: lineIndex,
+      verbatimExcerpt: excerptLines.join('\n'),
+      snapshotId: quote.snapshotId,
+    };
+  });
+  return deduplicateRawEvidence(evidence);
+}
+
+function sourceRaw(
+  index: number,
+  descriptionChars = 0,
+  evidenceExcerptChars = 0,
+): RawFinding {
   const suffix = descriptionChars > 0 ? ` ${'x'.repeat(descriptionChars)}` : '';
+  const evidence = evidenceExcerptChars > 0
+    ? largeVerifiedEvidence()
+    : [{
+        kind: 'file_quote' as const,
+        path: 'package.json',
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: quote.verbatimExcerpt,
+        snapshotId: quote.snapshotId,
+      }];
   return {
     rawFindingId: `source-${index}`,
     stepName: 'reviewer-a',
@@ -91,18 +136,11 @@ function sourceRaw(index: number, descriptionChars = 0): RawFinding {
     familyTag: 'bug',
     severity: 'high',
     title: `Issue ${index}`,
-    location: quote.location,
     description: `Distinct issue ${index}.${suffix}`,
     suggestion: `Fix issue ${index}.`,
     relation: 'new',
-    evidence: {
-      kind: 'source_quote',
-      path: 'package.json',
-      startLine: 1,
-      endLine: 1,
-      verbatimExcerpt: quote.verbatimExcerpt,
-      snapshotId: quote.snapshotId,
-    },
+    targetFindingId: null,
+    evidence,
   };
 }
 
@@ -123,7 +161,7 @@ function provisionalFinding(input: {
     lifecycle: 'new',
     severity: 'high',
     title: input.source.title,
-    location: input.source.location,
+    evidenceIds: [],
     description: input.source.description,
     reviewers: ['reviewer-a'],
     rawFindingIds: [input.source.rawFindingId],
@@ -157,18 +195,24 @@ function provisionalFinding(input: {
 function makeBacklog(input: {
   count: number;
   descriptionChars?: number;
+  evidenceExcerptChars?: number;
   firstObservedRound: number;
   startIndex?: number;
 }): FindingLedger {
   const startIndex = input.startIndex ?? 1;
   const raws = Array.from(
     { length: input.count },
-    (_, offset) => sourceRaw(startIndex + offset, input.descriptionChars),
+    (_, offset) => sourceRaw(
+      startIndex + offset,
+      input.descriptionChars,
+      input.evidenceExcerptChars,
+    ),
   );
   return {
     workflowName: 'peer-review',
     nextId: startIndex + input.count + 1,
     updatedAt: observation.timestamp,
+    evidenceRecords: [],
     rawFindings: raws,
     conflicts: [],
     interpretations: [],
@@ -366,6 +410,43 @@ beforeEach(() => {
 });
 
 describe('bounded raw adjudication recovery', () => {
+  it('checks every nested evidence item instead of only the first quote', () => {
+    const violation = findRawFieldLimitViolation({
+      title: 'bounded claim',
+      evidence: [
+        {
+          kind: 'file_quote',
+          path: 'src/a.ts',
+          verbatimExcerpt: 'ok',
+          snapshotId: '1'.repeat(64),
+        },
+        {
+          kind: 'file_quote',
+          path: 'src/b.ts',
+          verbatimExcerpt: 'x'.repeat(RAW_FINDING_LIMITS.maxVerbatimExcerptChars + 1),
+          snapshotId: '1'.repeat(64),
+        },
+      ],
+    });
+
+    expect(violation).toContain('evidence[1].verbatimExcerpt');
+  });
+
+  it('bounds engine proof content addresses in nested evidence', () => {
+    expect(findRawFieldLimitViolation({
+      evidence: [{
+        kind: 'engine_proof',
+        proofId: 'a'.repeat(RAW_FINDING_LIMITS.maxProofIdChars + 1),
+      }],
+    })).toContain('evidence[0].proofId');
+    expect(findRawFieldLimitViolation({
+      evidence: [{
+        kind: 'engine_proof',
+        proofId: 'a'.repeat(RAW_FINDING_LIMITS.maxProofIdChars),
+      }],
+    })).toBeUndefined();
+  });
+
   it('uses a dedicated schema whose worst-case structured output stays within budget', () => {
     const properties = RawAdjudicationDecisionsJsonSchema.properties;
     const rawProperties = properties.rawDecisions.items.properties;
@@ -436,7 +517,11 @@ describe('bounded raw adjudication recovery', () => {
   });
 
   it('records an unsplittable single-item input overflow as a consumed failure', async () => {
-    const harness = makeHarness(makeBacklog({ count: 1, descriptionChars: 100_000, firstObservedRound: 1 }));
+    const harness = makeHarness(makeBacklog({
+      count: 1,
+      evidenceExcerptChars: RAW_FINDING_LIMITS.maxVerbatimExcerptChars,
+      firstObservedRound: 1,
+    }));
 
     const recovery = await harness.runRecovery();
     const committed = applyRecovery(harness, recovery);
@@ -463,7 +548,11 @@ describe('bounded raw adjudication recovery', () => {
   });
 
   it('rejects a replay failure when the expected attempt was already recorded', async () => {
-    const harness = makeHarness(makeBacklog({ count: 1, descriptionChars: 100_000, firstObservedRound: 1 }));
+    const harness = makeHarness(makeBacklog({
+      count: 1,
+      evidenceExcerptChars: RAW_FINDING_LIMITS.maxVerbatimExcerptChars,
+      firstObservedRound: 1,
+    }));
     const recovery = await harness.runRecovery();
     const firstCommit = applyRecovery(harness, recovery);
     await harness.replaceLedger(() => firstCommit);
@@ -842,7 +931,6 @@ describe('bounded raw adjudication recovery', () => {
     const secondDuplicateSource: RawFinding = {
       ...backlog.rawFindings[16]!,
       title: firstDuplicateSource.title,
-      location: firstDuplicateSource.location,
       description: firstDuplicateSource.description,
       suggestion: firstDuplicateSource.suggestion,
     };
@@ -1021,6 +1109,7 @@ describe('bounded raw adjudication recovery', () => {
       workflowName: 'peer-review',
       nextId: 9004,
       updatedAt: observation.timestamp,
+      evidenceRecords: [],
       rawFindings: targetSources,
       conflicts: [],
       interpretations: [],
@@ -1047,6 +1136,7 @@ describe('bounded raw adjudication recovery', () => {
       workflowName: 'peer-review',
       nextId: 9010,
       updatedAt: observation.timestamp,
+      evidenceRecords: [],
       rawFindings: [...targetSources, ...actionSources],
       conflicts: [],
       interpretations: [],

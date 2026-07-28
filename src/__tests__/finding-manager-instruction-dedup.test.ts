@@ -5,7 +5,10 @@ import {
 } from '../core/workflow/findings/manager-agent.js';
 import type { FindingLedger, FindingLedgerEntry } from '../core/workflow/findings/types.js';
 
+const locationsByFindingId = new Map<string, string>();
+
 function openFinding(id: string, title: string, location?: string): FindingLedgerEntry {
+  if (location !== undefined) locationsByFindingId.set(id, location);
   return {
     id,
     status: 'open',
@@ -13,7 +16,7 @@ function openFinding(id: string, title: string, location?: string): FindingLedge
     revision: 1,
     severity: 'medium',
     title,
-    ...(location !== undefined ? { location } : {}),
+    evidenceIds: location === undefined ? [] : [`evidence-${id}`],
     reviewers: ['coding-review'],
     rawFindingIds: [`raw-${id}`],
     firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
@@ -22,10 +25,27 @@ function openFinding(id: string, title: string, location?: string): FindingLedge
 }
 
 function ledgerWith(findings: FindingLedgerEntry[]): FindingLedger {
+  const evidenceRecords = findings.flatMap((finding) => {
+    const location = locationsByFindingId.get(finding.id);
+    const match = location === undefined ? null : /^(.*):(\d+)(?:-(\d+))?$/.exec(location);
+    if (match === null) return [];
+    return [{
+      evidenceId: `evidence-${finding.id}`,
+      kind: 'file_quote' as const,
+      path: match[1]!,
+      startLine: Number(match[2]),
+      endLine: Number(match[3] ?? match[2]),
+      verbatimExcerpt: 'fixture',
+      snapshotId: 'a'.repeat(64),
+      claimIdentityHash: 'b'.repeat(64),
+      fileHash: 'c'.repeat(64),
+    }];
+  });
   return {
     workflowName: 'peer-review',
     nextId: findings.length + 1,
     updatedAt: '2026-07-01T00:00:00.000Z',
+    evidenceRecords,
     rawFindings: [],
     conflicts: [],
     interpretations: [],
@@ -56,7 +76,7 @@ describe('collectDuplicateLocusGroups', () => {
     const provisional = {
       ...openFinding('F-0001', '暫定', 'src/a.ts:1'),
       provisional: {
-        kind: 'unverified-locationless' as const,
+        kind: 'raw-meaning-ambiguous' as const,
         stableKey: 's1',
         lineageKey: 'l1',
         sourceRawFindingIds: ['raw-F-0001'],

@@ -62,8 +62,10 @@ const CONFIRMATION_RAW: RawFinding = {
   severity: 'medium',
   title: '解消を確認',
   description: '修正を確認した。',
+  suggestion: null,
   relation: 'resolution_confirmation',
   targetFindingId: 'F-0001',
+  evidence: [],
 };
 
 const ISSUE_RAW: RawFinding = {
@@ -73,10 +75,11 @@ const ISSUE_RAW: RawFinding = {
   familyTag: 'bug',
   severity: 'medium',
   title: '新しい指摘',
-  location: 'src/b.ts:5',
   description: '別の問題。',
   suggestion: '直す。',
   relation: 'new',
+  targetFindingId: null,
+  evidence: [],
 };
 
 function makeAdmission(cleanWire: RawFinding[]): RawAdmissionEvaluation {
@@ -84,7 +87,6 @@ function makeAdmission(cleanWire: RawFinding[]): RawAdmissionEvaluation {
     admissionRejections: [],
     admissionAnomalySpecs: [],
     admissionRejectedItems: [],
-    locationlessProvisionalItems: [],
     pendingRejectedObservations: [],
     cleanAdmitted: cleanWire.map((wire) => ({
       wire,
@@ -99,6 +101,7 @@ function makeAdmission(cleanWire: RawFinding[]): RawAdmissionEvaluation {
     ladderAnomalySpecs: [],
     verifiedEvidenceCandidates: [],
     provisionalOnlyLadderRawIds: new Set(),
+    verifiedEvidenceRecordsByRawFindingId: new Map(),
     cleanWire,
   };
 }

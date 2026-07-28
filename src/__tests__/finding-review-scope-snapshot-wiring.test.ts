@@ -161,16 +161,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function getSnapshotIdEnum(context: FindingContractInstructionContext): unknown {
+function getFileQuoteSnapshotIdConst(context: FindingContractInstructionContext): unknown {
   const properties = context.rawFindingsStructuredOutput?.schema.properties;
   if (!isRecord(properties) || !isRecord(properties.rawFindings)) {
     return undefined;
   }
   const items = properties.rawFindings.items;
-  if (!isRecord(items) || !isRecord(items.properties) || !isRecord(items.properties.snapshotId)) {
+  if (!isRecord(items) || !isRecord(items.properties) || !isRecord(items.properties.evidence)) {
     return undefined;
   }
-  return items.properties.snapshotId.enum;
+  const evidenceItems = items.properties.evidence.items;
+  if (!isRecord(evidenceItems) || !Array.isArray(evidenceItems.anyOf)) {
+    return undefined;
+  }
+  const fileQuote = evidenceItems.anyOf.find((branch) => (
+    isRecord(branch)
+    && isRecord(branch.properties)
+    && isRecord(branch.properties.kind)
+    && Array.isArray(branch.properties.kind.enum)
+    && branch.properties.kind.enum.length === 1
+    && branch.properties.kind.enum[0] === 'file_quote'
+  ));
+  if (!isRecord(fileQuote) || !isRecord(fileQuote.properties) || !isRecord(fileQuote.properties.snapshotId)) {
+    return undefined;
+  }
+  const snapshotIdEnum = fileQuote.properties.snapshotId.enum;
+  return Array.isArray(snapshotIdEnum) && snapshotIdEnum.length === 1
+    ? snapshotIdEnum[0]
+    : undefined;
 }
 
 function makeRunner(options: {
@@ -195,6 +213,7 @@ function makeRunner(options: {
     nextId: 1,
     updatedAt: '2026-07-13T00:00:00.000Z',
     findings: [],
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
     interpretations: [],
@@ -303,7 +322,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       if (findingContractPolicy?.mode !== 'explicit') throw new Error('Expected explicit Finding Contract context');
       expect(findingContractPolicy.context).toBe(builtContext);
       expect(findingContractPolicy.context.reviewScopeSnapshotId).toBe('round-snapshot-abc123');
-      expect(getSnapshotIdEnum(findingContractPolicy.context)).toEqual(['', 'round-snapshot-abc123']);
+      expect(getFileQuoteSnapshotIdConst(findingContractPolicy.context)).toBe('round-snapshot-abc123');
     }
 
     const outputContract = builtContext?.rawFindingsStructuredOutput;
@@ -340,10 +359,10 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         severity: 'high',
         title: 'Confirmed fixed',
         description: 'The previously reported issue remains fixed.',
-        suggestion: '',
+        suggestion: null,
         relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
-        ...evidence,
+        evidence: [evidence],
       }];
       let ledger: FindingLedger = {
         workflowName: 'test-workflow',
@@ -356,7 +375,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
           revision: 1,
           severity: 'high',
           title: 'Fixed issue',
-          location: evidence.location,
+          evidenceIds: [],
           reviewers: ['ai-antipattern-review'],
           rawFindingIds: ['raw-existing'],
           firstSeen: { runId: 'old-run', stepName: 'reviewers', timestamp: '2026-07-12T00:00:00.000Z' },
@@ -369,10 +388,13 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
           familyTag: 'bug',
           severity: 'high',
           title: 'Fixed issue',
-          location: evidence.location,
           description: 'Previously reported issue.',
+          suggestion: null,
           relation: 'new',
+          targetFindingId: null,
+          evidence: [evidence],
         }],
+        evidenceRecords: [],
         conflicts: [],
         interpretations: [],
       };
@@ -438,7 +460,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     );
 
     expect(result.response.status).toBe('error');
-    expect(result.response.error).toMatch(/snapshotId enum.*exactly/);
+    expect(result.response.error).toMatch(/snapshotId const.*equal reviewScopeSnapshotId/);
     expect(executeAgent).not.toHaveBeenCalled();
   });
 

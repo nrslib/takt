@@ -32,6 +32,7 @@ const EMPTY_LEDGER: FindingLedger = {
   nextId: 1,
   updatedAt: OBSERVATION.timestamp,
   findings: [],
+  evidenceRecords: [],
   rawFindings: [],
   conflicts: [],
   interpretations: [],
@@ -93,12 +94,13 @@ function reconcileNewFindings(items: readonly unknown[]): Record<string, {
     managerOutput: assembly.output,
     provisionalFindings: [],
     rawFindingDispositions: [],
+    verifiedEvidenceRecordsByRawFindingId: new Map(),
     rawProvenanceByRawFindingId: new Map(canonicals.map((canonical) => [
       canonical.rawFindingId,
       {
         reviewerStableKey: canonical.reviewerStableKey,
         lineageKey: canonical.lineageKey,
-        claimIdentityHash: canonical.evidenceHash,
+        claimIdentityHash: canonical.claimIdentityHash,
         canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
         canonicalProvenance: canonical.provenance,
       },
@@ -123,9 +125,11 @@ function reviewerFinding(title: string, rawFindingId?: string): Record<string, u
     familyTag: 'correctness',
     severity: 'high',
     title,
-    location: `src/${title}.ts:1`,
     description: `Evidence for ${title}`,
+    suggestion: null,
     relation: 'new',
+    targetFindingId: null,
+    evidence: [],
   };
 }
 
@@ -138,7 +142,10 @@ function rawFinding(rawFindingId: string): RawFinding {
     severity: 'medium',
     title: rawFindingId,
     description: `Evidence for ${rawFindingId}`,
+    suggestion: null,
     relation: 'new',
+    targetFindingId: null,
+    evidence: [],
   };
 }
 
@@ -184,6 +191,7 @@ describe('Finding deterministic contract', () => {
         lifecycle: 'new',
         severity: 'high',
         title: 'Issue',
+        evidenceIds: [],
         reviewers: ['reviewer'],
         rawFindingIds: ids,
         firstSeen: OBSERVATION,

@@ -1,4 +1,8 @@
-import { validateLocationAdmission } from './admission-validation.js';
+import { validateLocationSetAdmission } from './admission-validation.js';
+import {
+  findingFileQuoteLocations,
+  formatFileQuoteLocation,
+} from './evidence-location.js';
 import { classifyProvisionalRecovery, isOpenProvisional } from './provisional-recovery.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import type { AssembleManagerOutputResult } from './decision-assembly.js';
@@ -13,7 +17,7 @@ import {
  * この open provisional が manager の dismiss 裁定対象か。
  * engine 主導の recovery（解釈の前進 / source raw の再裁定 / 機械 resolve）が
  * 残っている間は候補にしない — recovery を使い切った、または最初から機械処理の
- * 余地が無い locationless provisional だけが内容の管轄裁定へ回る。
+ * 余地が無い provisional だけが内容の管轄裁定へ回る。
  * 分類は provisional-recovery.ts が正本。
  */
 export function isDismissCandidate(finding: FindingLedgerEntry, roundsCompleted: number): boolean {
@@ -49,14 +53,16 @@ export function computeDismissCandidates(
 
 export function computeInvalidLocationCandidates(
   cwd: string,
-  findings: readonly FindingLedgerEntry[],
+  ledger: FindingLedger,
 ): Map<string, string> {
   const candidates = new Map<string, string>();
-  for (const finding of findings) {
-    if (finding.status !== 'open' || finding.location === undefined || finding.provisional !== undefined) {
+  for (const finding of ledger.findings) {
+    const locations = findingFileQuoteLocations(ledger, finding)
+      .map(formatFileQuoteLocation);
+    if (finding.status !== 'open' || locations.length === 0 || finding.provisional !== undefined) {
       continue;
     }
-    const result = validateLocationAdmission(cwd, finding.location);
+    const result = validateLocationSetAdmission(cwd, locations);
     if (!result.ok && result.outcome === 'invalid') {
       candidates.set(finding.id, result.reason);
     }

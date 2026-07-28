@@ -148,8 +148,8 @@ describe('buildFindingContractInstruction', () => {
 
   // codex 対策#4 の配線バグ回帰: rawFindingsStructuredOutput（reviewer step の目印）が
   // 立っているのに reviewScopeSnapshotId が欠落したまま `?? ''` でサイレントに
-  // 空文字へ落ちると、reviewer は空の snapshotId を source_quote evidence に
-  // echo し、manager 側の決定的検証（verifySourceQuoteEvidence）が必ず
+  // 空文字へ落ちると、reviewer は空の snapshotId を file_quote evidence に
+  // echo し、manager 側の決定的検証（verifyFileQuoteEvidence）が必ず
   // stale-snapshot で弾く。ParallelRunner が instruction context を inline で
   // 複製していたために実際に発生した配線バグであり、このガードはその再発を防ぐ。
   describe('reviewScopeSnapshotId wiring guard', () => {

@@ -180,16 +180,24 @@ describe('StepExecutor', () => {
     initializeGitFixture(cwd, ['src/fixed.ts']);
     const evidence = verifiedSourceQuoteFields(cwd, 'src/fixed.ts', 1);
     const structuredOutput = createRawFindingsStructuredOutput(evidence.snapshotId);
+    const fileQuoteEvidence = {
+      kind: 'file_quote' as const,
+      path: 'src/fixed.ts',
+      startLine: 1,
+      endLine: 1,
+      verbatimExcerpt: evidence.verbatimExcerpt,
+      snapshotId: evidence.snapshotId,
+    };
     const reviewerRawFindings = [{
       rawFindingId: 'confirmation-resolved',
       familyTag: 'bug',
       severity: 'high',
       title: 'Confirmed fixed',
       description: 'The previously reported issue remains fixed.',
-      suggestion: '',
+      suggestion: null,
       relation: 'resolution_confirmation',
       targetFindingId: 'F-0001',
-      ...evidence,
+      evidence: [fileQuoteEvidence],
     }];
     expect(structuredOutput.validationSchema).toBe(RawFindingsOutputValidationJsonSchema);
     const findingContractContext = {
@@ -253,12 +261,13 @@ describe('StepExecutor', () => {
         revision: 1,
         severity: 'high',
         title: 'Fixed issue',
-        location: 'src/fixed.ts:1',
+        evidenceIds: [],
         reviewers: ['reviewer'],
         rawFindingIds: ['raw-existing'],
         firstSeen: { runId: 'old-run', stepName: 'review', timestamp: '2026-07-21T00:00:00.000Z' },
         lastSeen: { runId: 'old-run', stepName: 'review', timestamp: '2026-07-21T00:00:00.000Z' },
       }],
+      evidenceRecords: [],
       rawFindings: [{
         rawFindingId: 'raw-existing',
         stepName: 'review',
@@ -266,9 +275,11 @@ describe('StepExecutor', () => {
         familyTag: 'bug',
         severity: 'high',
         title: 'Fixed issue',
-        location: 'src/fixed.ts:1',
         description: 'Previously reported issue.',
+        suggestion: 'Keep the issue fixed.',
         relation: 'new',
+        targetFindingId: null,
+        evidence: [],
       }],
       conflicts: [],
         interpretations: [],
@@ -339,7 +350,7 @@ describe('StepExecutor', () => {
       'review task',
       5,
       1,
-    )).toThrow(/snapshotId enum.*exactly/);
+    )).toThrow(/file_quote evidence snapshotId const.*reviewScopeSnapshotId/);
 
     await expect(executor.runNormalStep(
       step,
@@ -435,6 +446,11 @@ describe('StepExecutor', () => {
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
     const intake = vi.mocked(ingestFindingContractResults).mock.calls[0]![0];
     expect(intake.subResults[0]?.relationClarification).toBeUndefined();
+    expect(intake.subResults[0]?.reviewerRawResourceEnvelope).toMatchObject({
+      itemCount: 1,
+      itemSourceBytes: [expect.any(Number)],
+      jsonBytes: expect.any(Number),
+    });
     expect(intake.subResults[0]?.response.structuredOutput?.rawFindings).toEqual(reviewerRawFindings);
     const savedLedger = findingLedgerStore.loadLedger();
     expect(savedLedger.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('resolved');

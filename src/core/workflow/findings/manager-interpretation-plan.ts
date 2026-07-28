@@ -61,6 +61,10 @@ export function classifyInitialLadderTargets(input: {
   const issuedProofs = issueDeterministicSameProofs({
     ledger: input.previousLedger,
     ambiguousRawFindings: input.tainted.map((item) => item.canonical),
+    excludedTargetFindingIdsByRawFindingId: new Map(input.tainted.map((item) => [
+      item.canonical.rawFindingId,
+      new Set(item.recoveryOrigins?.map((origin) => origin.provisionalFindingId) ?? []),
+    ])),
   });
   const proofsByRawId = new Map(
     [...issuedProofs].filter(([rawFindingId]) => !input.provisionalOnlyRawFindingIds.has(rawFindingId)),
@@ -74,7 +78,7 @@ export function classifyInitialLadderTargets(input: {
           && finding.provisional?.sourceRawFindingIds.some((rawFindingId) => (
             input.previousLedger.rawFindings.some((raw) => (
               raw.rawFindingId === rawFindingId
-              && computeRawEvidenceHash(raw) === item.canonical.evidenceHash
+              && computeRawEvidenceHash(raw) === item.canonical.evidenceSetHash
             ))
           )) === true
         ))
@@ -83,7 +87,7 @@ export function classifyInitialLadderTargets(input: {
       ledger: input.previousLedger,
       reviewerStableKey: item.canonical.reviewerStableKey,
       lineageKey: item.canonical.lineageKey,
-      candidateEvidenceHash: item.canonical.evidenceHash,
+      candidateEvidenceHash: item.canonical.evidenceSetHash,
       canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(item.canonical),
     });
     const target: LadderTarget = item.interpretationRecoveryAttempt === true
@@ -273,7 +277,7 @@ export function applyInterpretationDecisions(input: {
       ? {
         decision: 'provisional',
         rawFindingId: rawDecision.rawFindingId,
-        reason: `Interpretation "${rawDecision.decision}" is not allowed for an unverified persists/reopened claim (no matching source_quote); restricted to a gate-blocking provisional so it cannot mutate an existing finding`,
+        reason: `Interpretation "${rawDecision.decision}" is not allowed for an unverified persists/reopened claim; restricted to a gate-blocking provisional so it cannot mutate an existing finding`,
       }
       : rawDecision;
     if (decision.decision === 'create_independent') {

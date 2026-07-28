@@ -74,13 +74,18 @@ import {
 import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
 import {
   RAW_FINDINGS_SCHEMA_REF,
-  projectReviewerRawStructuredOutput,
+  projectReviewerRawStructuredOutputWithEnvelope,
+  type ReviewerRawResourceEnvelope,
 } from '../findings/raw-canonicalization.js';
 import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
 import type { InstructionBuildTransaction } from './instruction-build-transaction.js';
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import type { PullRequestContext } from '../pr-context.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
+import {
+  correctStructuredOutputOnce,
+  type StructuredOutputNormalizationResult,
+} from './structured-output-correction.js';
 
 const log = createLogger('step-executor');
 
@@ -216,6 +221,7 @@ export class StepExecutor {
     stepIteration: number;
     iteration: number;
     response: AgentResponse;
+    reviewerRawResourceEnvelope?: ReviewerRawResourceEnvelope;
     priorStepResponseText: string | undefined;
     relationClarification?: ReviewerRelationClarification;
   }): Promise<FindingManagerRunResult> {
@@ -238,6 +244,9 @@ export class StepExecutor {
       subResults: [{
         subStep: input.step,
         response: input.response,
+        ...(input.reviewerRawResourceEnvelope !== undefined
+          ? { reviewerRawResourceEnvelope: input.reviewerRawResourceEnvelope }
+          : {}),
         ...(input.relationClarification !== undefined ? { relationClarification: input.relationClarification } : {}),
       }],
       // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
@@ -430,16 +439,7 @@ export class StepExecutor {
     step: WorkflowStep,
     response: AgentResponse,
     runtime?: RuntimeStepResolution,
-  ): {
-    response: AgentResponse;
-    invalidDetail?: string;
-    invalidKind?: 'model_output' | 'schema_config';
-    invalidIssues?: readonly {
-      readonly path: string;
-      readonly keyword: string;
-      readonly message: string;
-    }[];
-  } {
+  ): StructuredOutputNormalizationResult {
     if (!step.structuredOutput) {
       return { response };
     }
@@ -469,6 +469,7 @@ export class StepExecutor {
 
     try {
       let structuredOutput = response.structuredOutput;
+      let reviewerRawResourceEnvelope: ReviewerRawResourceEnvelope | undefined;
 
       if (structuredOutput === undefined) {
         if (supportsStructuredOutput !== false) {
@@ -483,7 +484,9 @@ export class StepExecutor {
       }
 
       if (step.structuredOutput.schemaRef === RAW_FINDINGS_SCHEMA_REF) {
-        structuredOutput = projectReviewerRawStructuredOutput(structuredOutput);
+        const projected = projectReviewerRawStructuredOutputWithEnvelope(structuredOutput);
+        structuredOutput = projected.structuredOutput;
+        reviewerRawResourceEnvelope = projected.resourceEnvelope;
       }
 
       // post-hoc 検証は寛容版（validationSchema）を優先する。provider へ渡る
@@ -498,7 +501,12 @@ export class StepExecutor {
         language: this.deps.getLanguage(),
       });
       if (structuredOutput === response.structuredOutput) {
-        return { response };
+        return {
+          response,
+          ...(reviewerRawResourceEnvelope !== undefined
+            ? { reviewerRawResourceEnvelope }
+            : {}),
+        };
       }
 
       return {
@@ -506,6 +514,9 @@ export class StepExecutor {
           ...response,
           structuredOutput,
         },
+        ...(reviewerRawResourceEnvelope !== undefined
+          ? { reviewerRawResourceEnvelope }
+          : {}),
       };
     } catch (error) {
       const detail = getErrorMessage(error);
@@ -860,7 +871,48 @@ export class StepExecutor {
       error: result.error,
       providerUsage: result.providerUsage,
     }));
-    response = this.normalizeStructuredOutput(executableStep, response, runtime);
+    let normalizedPhase1 = this.normalizeStructuredOutputWithDiagnostics(
+      executableStep,
+      response,
+      runtime,
+    );
+    if (findingContractIntakeStep !== undefined && normalizedPhase1.invalidKind === 'model_output') {
+      log.info('Structured output invalid for step, requesting one correction', {
+        step: step.name,
+        detail: normalizedPhase1.invalidDetail,
+      });
+    }
+    if (findingContractIntakeStep !== undefined) {
+      normalizedPhase1 = await correctStructuredOutputOnce({
+        stepName: executableStep.name,
+        initial: normalizedPhase1,
+        executeCorrection: (correctionInstruction, sessionId) => executeAgent(
+          executableStep.persona,
+          correctionInstruction,
+          {
+            ...agentOptions,
+            permissionMode: 'readonly',
+            allowedTools: [],
+            onPromptResolved: undefined,
+            onStream: undefined,
+            sessionId,
+          },
+        ),
+        normalize: (candidate) => this.normalizeStructuredOutputWithDiagnostics(
+          executableStep,
+          candidate,
+          runtime,
+        ),
+      });
+    }
+    if (normalizedPhase1.invalidDetail !== undefined) {
+      const provider = this.deps.optionsBuilder.resolveStepProviderModel(executableStep, runtime).provider;
+      throw new Error(
+        `Step "${executableStep.name}" requires structured_output for provider "${provider}": ${normalizedPhase1.invalidDetail}`,
+      );
+    }
+    response = normalizedPhase1.response;
+    let reviewerRawResourceEnvelope = normalizedPhase1.reviewerRawResourceEnvelope;
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
     }
@@ -909,8 +961,10 @@ export class StepExecutor {
         ledger: this.deps.findingLedgerStore.loadLedger(),
         agentOptions,
         normalize: (candidate: AgentResponse) => this.normalizeStructuredOutputWithDiagnostics(executableStep, candidate, runtime),
+        reviewerRawResourceEnvelope,
       });
       response = clarified.response;
+      reviewerRawResourceEnvelope = clarified.reviewerRawResourceEnvelope;
       relationClarification = clarified.clarification;
       if (response.sessionId !== undefined) {
         updatePersonaSession(sessionKey, response.sessionId);
@@ -928,6 +982,7 @@ export class StepExecutor {
         stepIteration,
         iteration: state.iteration,
         response,
+        reviewerRawResourceEnvelope,
         priorStepResponseText,
         relationClarification,
       });

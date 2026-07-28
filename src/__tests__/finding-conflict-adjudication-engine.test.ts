@@ -49,7 +49,10 @@ import { createFindingLedgerStore, resolveFindingLedgerRoot } from '../core/work
 import { createFindingConflictAdjudicationRunner } from '../core/workflow/findings/adjudication-runner.js';
 import { computeConflictEvidenceHash } from '../core/workflow/findings/adjudication-evidence.js';
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
-import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import {
+  verifiedFindingEvidenceFixture,
+  verifiedSourceQuoteFields,
+} from './helpers/finding-evidence.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 function createTestTmpDir(): string {
@@ -129,9 +132,17 @@ describe('finding-conflict-adjudication engine detour', () => {
     }
   });
 
-  const seedLedger = (findingLocation: string, workflowName = 'adjudication-engine-test'): void => {
+  const seedLedger = (workflowName = 'adjudication-engine-test'): void => {
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
     mkdirSync(dirname(ledgerPath), { recursive: true });
+    const evidence = verifiedFindingEvidenceFixture({
+      cwd,
+      path: 'src/a.ts',
+      startLine: 5,
+      title: 'Disputed issue',
+      description: 'Reviewers disagree about F-0001.',
+      targetFindingId: null,
+    });
     writeFileSync(ledgerPath, JSON.stringify({
       workflowName,
       nextId: 2,
@@ -143,12 +154,13 @@ describe('finding-conflict-adjudication engine detour', () => {
         revision: 1,
         severity: 'high',
         title: 'Disputed issue',
-        location: findingLocation,
+        evidenceIds: [evidence.record.evidenceId],
         reviewers: ['coding-review'],
         rawFindingIds: ['raw-1'],
         firstSeen: { runId: 'run-0', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
         lastSeen: { runId: 'run-0', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
       }],
+      evidenceRecords: [evidence.record],
       rawFindings: [],
       conflicts: [{
         id: 'C-FA2947446963',
@@ -171,7 +183,7 @@ describe('finding-conflict-adjudication engine detour', () => {
   ];
 
   it('finding_stale adjudication resolves the finding, resolves the conflict, and returns to reviewers which then completes', async () => {
-    seedLedger('src/a.ts:5');
+    seedLedger();
 
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
@@ -225,7 +237,7 @@ describe('finding-conflict-adjudication engine detour', () => {
     // must land on the ABORT side exactly like undetermined (codex design).
     ['finding_valid'],
   ] as const)('%s adjudication without an actionable fix keeps the conflict active and routes to ABORT', async (outcome) => {
-    seedLedger('src/a.ts:5');
+    seedLedger();
 
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
@@ -278,7 +290,7 @@ describe('finding-conflict-adjudication engine detour', () => {
   });
 
   it('runSingleIteration でも合成ステップが Unknown step にならず実行・遷移できる (codex B4)', async () => {
-    seedLedger('src/a.ts:5');
+    seedLedger();
 
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
@@ -333,7 +345,7 @@ describe('finding-conflict-adjudication engine detour', () => {
 
   it('workflow_call 継承: 裁定 runner の workflowName は store の正準名（親名）を使い、台帳の workflowName が親名のまま保存される', async () => {
     // 親の台帳（workflowName: parent-workflow）を継承する子エンジンを模す。
-    seedLedger('src/a.ts:5', 'parent-workflow');
+    seedLedger('parent-workflow');
     const parentLedgerStore = createFindingLedgerStore({
       projectCwd: cwd,
       runId: 'test-report-dir',
@@ -401,7 +413,7 @@ describe('finding-conflict-adjudication engine detour', () => {
   });
 
   it('resume 相互作用: 裁定途中で中断しても attempt が台帳に残り、再開後に同一 evidence で再裁定されない', async () => {
-    seedLedger('src/a.ts:5');
+    seedLedger();
 
     // 1走目: 裁定 LLM が中断相当の例外で死ぬ → run は runtime_error abort。
     // ただし attempt は LLM 呼び出しの前に台帳へ記録済み。
@@ -477,7 +489,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       revision: 1,
       severity: 'high',
       title: 'Disputed issue',
-      location: 'src/a.ts:5',
+      evidenceIds: [],
       reviewers: ['coding-review'],
       rawFindingIds: ['raw-1'],
       firstSeen: { runId: 'run-0', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
@@ -490,9 +502,11 @@ describe('finding-conflict-adjudication engine detour', () => {
       familyTag: 'bug',
       severity: 'high',
       title: 'Disputed issue',
-      location: 'src/a.ts:5',
       description: 'The bug is present.',
+      suggestion: null,
       relation: 'new',
+      targetFindingId: null,
+      evidence: [],
     };
     const conflictBase = {
       id: 'C-FA2947446963',
@@ -513,6 +527,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       nextId: 2,
       updatedAt: '2026-06-13T00:00:00.000Z',
       findings: [finding],
+      evidenceRecords: [],
       rawFindings: [rawFinding],
       conflicts: [{
         ...conflictBase,
@@ -614,7 +629,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       revision: 1,
       severity: 'high',
       title: 'Disputed issue',
-      location: 'src/a.ts:5',
+      evidenceIds: [],
       reviewers: ['coding-review'],
       rawFindingIds: ['raw-1'],
       firstSeen: { runId: 'run-0', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
@@ -627,9 +642,11 @@ describe('finding-conflict-adjudication engine detour', () => {
       familyTag: 'bug',
       severity: 'high',
       title: 'Disputed issue',
-      location: 'src/a.ts:5',
       description: 'The bug is present.',
+      suggestion: null,
       relation: 'new',
+      targetFindingId: null,
+      evidence: [],
     };
     const conflictBase = {
       id: 'C-FA2947446963',
@@ -650,6 +667,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       nextId: 2,
       updatedAt: '2026-06-13T00:00:00.000Z',
       findings: [finding],
+      evidenceRecords: [],
       rawFindings: [rawFinding],
       conflicts: [{
         ...conflictBase,
@@ -716,7 +734,7 @@ describe('finding-conflict-adjudication engine detour', () => {
   });
 
   it('R2(a): rate_limited → 同一 run の fallback 再実行が予約を引き継ぎ、代替 provider で裁定が完走する', async () => {
-    seedLedger('src/a.ts:5');
+    seedLedger();
 
     let adjudicationCallCount = 0;
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -782,7 +800,7 @@ describe('finding-conflict-adjudication engine detour', () => {
   });
 
   it('R2(a) 変形: structured output 非対応 provider（cursor）への fallback でフェンス方式の指示注入と正規化が代替 provider 基準で行われる', async () => {
-    seedLedger('src/a.ts:5');
+    seedLedger();
 
     let adjudicationCallCount = 0;
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -1097,7 +1115,7 @@ describe('finding-conflict-adjudication engine detour', () => {
   });
 
   it('finding_valid + actionableFix: conflict をレビュア側支持で解消し fix へ遷移、修正後の reviewers で COMPLETE まで到達する', async () => {
-    seedLedger('src/a.ts:5');
+    seedLedger();
 
     let reviewerCallCount = 0;
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -1166,7 +1184,7 @@ describe('finding-conflict-adjudication engine detour', () => {
               // typed evidence protocol（codex 対策#4）: admission を通すには
               // 機械照合済み verbatimExcerpt が要る。無いと A-1 の audit-only
               // 経路に落ち、F-0001 が解消されない。
-              ...verifiedSourceQuoteFields(cwd, 'src/a.ts', 5),
+              evidence: [verifiedSourceQuoteFields(cwd, 'src/a.ts', 5)],
             }],
           },
           timestamp: new Date('2026-06-13T03:00:01.000Z'),
@@ -1270,6 +1288,14 @@ describe('finding-conflict-adjudication engine detour', () => {
     // 再報告してくる（弱いモデルの典型挙動）ケース。
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
     mkdirSync(dirname(ledgerPath), { recursive: true });
+    const evidence = verifiedFindingEvidenceFixture({
+      cwd,
+      path: 'src/secret.ts',
+      startLine: 12,
+      title: 'Secret is logged',
+      description: 'The code logs a token.',
+      targetFindingId: null,
+    });
     writeFileSync(ledgerPath, JSON.stringify({
       workflowName: 'adjudication-engine-test',
       nextId: 2,
@@ -1281,13 +1307,14 @@ describe('finding-conflict-adjudication engine detour', () => {
         revision: 1,
         severity: 'high',
         title: 'Secret is logged',
-        location: 'src/secret.ts:12',
+        evidenceIds: [evidence.record.evidenceId],
         description: 'The code logs a token.',
         reviewers: ['review'],
         rawFindingIds: ['raw-existing'],
         firstSeen: { runId: 'run-0', stepName: 'review', timestamp: '2026-06-13T00:00:00.000Z' },
         lastSeen: { runId: 'run-0', stepName: 'review', timestamp: '2026-06-13T00:00:00.000Z' },
       }],
+      evidenceRecords: [evidence.record],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -1315,7 +1342,7 @@ describe('finding-conflict-adjudication engine detour', () => {
               // 通す必要がある（本テストの主眼は admission 後の taint 保持であって
               // admission 自体ではない）。評価対象は「証跡が成立しても taint は
               // 残る」ことなので、機械照合済み evidence を与える。
-              ...verifiedSourceQuoteFields(cwd, 'src/secret.ts', 40),
+              evidence: [verifiedSourceQuoteFields(cwd, 'src/secret.ts', 40)],
             }],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
@@ -1352,11 +1379,11 @@ describe('finding-conflict-adjudication engine detour', () => {
               familyTag: 'security',
               severity: 'high',
               title: 'Secret is logged',
-              location: 'src/secret.ts:40',
               description: 'Token logging is still present, observed at a new line.',
               suggestion: '',
               relation: 'new',
-              targetFindingId: '',
+              targetFindingId: 'F-0001',
+              evidence: [verifiedSourceQuoteFields(cwd, 'src/secret.ts', 40)],
             }],
           },
           timestamp: new Date('2026-06-13T00:00:01.000Z'),
@@ -1435,6 +1462,14 @@ describe('finding-conflict-adjudication engine detour', () => {
   it('レビュア突き返し: 突き返し後も relation=new のままなら確定 finding にせず gate-blocking provisional として台帳に残す', async () => {
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
     mkdirSync(dirname(ledgerPath), { recursive: true });
+    const evidence = verifiedFindingEvidenceFixture({
+      cwd,
+      path: 'src/secret.ts',
+      startLine: 12,
+      title: 'Secret is logged',
+      description: 'The code logs a token.',
+      targetFindingId: null,
+    });
     writeFileSync(ledgerPath, JSON.stringify({
       workflowName: 'adjudication-engine-test',
       nextId: 2,
@@ -1446,13 +1481,14 @@ describe('finding-conflict-adjudication engine detour', () => {
         revision: 1,
         severity: 'high',
         title: 'Secret is logged',
-        location: 'src/secret.ts:12',
+        evidenceIds: [evidence.record.evidenceId],
         description: 'The code logs a token.',
         reviewers: ['review'],
         rawFindingIds: ['raw-existing'],
         firstSeen: { runId: 'run-0', stepName: 'review', timestamp: '2026-06-13T00:00:00.000Z' },
         lastSeen: { runId: 'run-0', stepName: 'review', timestamp: '2026-06-13T00:00:00.000Z' },
       }],
+      evidenceRecords: [evidence.record],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -1467,12 +1503,12 @@ describe('finding-conflict-adjudication engine detour', () => {
         description: 'Token logging is still present, observed at a new line.',
         suggestion: '',
         relation: 'new',
-        targetFindingId: '',
+        targetFindingId: 'F-0001',
         // typed evidence protocol（codex 対策#4）: この試験の主眼は「訂正しても
         // relation が直らない raw が ladder で provisional に着地する」ことで
         // あって admission ではないため、機械照合済み evidence を与えて
         // admission を通す（無いと ladder に届く前に anomaly へ隔離される）。
-        ...verifiedSourceQuoteFields(cwd, 'src/secret.ts', 40),
+        evidence: [verifiedSourceQuoteFields(cwd, 'src/secret.ts', 40)],
       }],
     };
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {

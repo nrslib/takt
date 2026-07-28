@@ -226,6 +226,8 @@ export function applyRawAdjudicationRecovery(input: {
   const admission = evaluateRawAdmission({
     cwd: input.runInput.cwd,
     reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+    runId: input.runInput.ledgerStore.runId,
+    scopeIdentity: input.runInput.ledgerStore.ledgerIdentity,
     previousLedger: input.freshLedger,
     intake: eligibleIntake,
   });
@@ -303,7 +305,7 @@ export function applyRawAdjudicationRecovery(input: {
     {
       reviewerStableKey: item.canonical.reviewerStableKey,
       lineageKey: item.canonical.lineageKey,
-      claimIdentityHash: item.canonical.evidenceHash,
+      claimIdentityHash: item.canonical.claimIdentityHash,
       canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(item.canonical),
       canonicalProvenance: item.canonical.provenance,
     },
@@ -336,6 +338,7 @@ export function applyRawAdjudicationRecovery(input: {
     rawFindingDispositions: rawFindingDispositions.filter(
       (disposition) => replayRawFindingIds.has(disposition.rawFindingId),
     ),
+    verifiedEvidenceRecordsByRawFindingId: admission.verifiedEvidenceRecordsByRawFindingId,
     context: {
       workflowName: input.runInput.workflowName,
       stepName: input.runInput.parentStep.name,

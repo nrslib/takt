@@ -6,7 +6,7 @@ import {
   parseFindingManagerDecisions,
 } from './schemas.js';
 import { RAW_FINDINGS_SCHEMA_REF } from './raw-canonicalization.js';
-import { normalizeFindingText, parseFindingLocation, parseFindingLocationRange } from './location.js';
+import { normalizeFindingText } from './location.js';
 import type {
   FindingLedger,
   FindingManagerDecisions,
@@ -19,6 +19,11 @@ import {
   renderFencedTextBlock,
 } from '../instruction/fenced-block.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
+import {
+  findingFileQuoteLocations,
+  formatFileQuoteLocation,
+  rawFindingFileQuoteLocations,
+} from './evidence-location.js';
 
 export { RAW_FINDINGS_SCHEMA_REF };
 export { FINDING_MANAGER_SCHEMA_REF } from './manager-step.js';
@@ -55,7 +60,7 @@ export function buildManagerInputLedger(ledger: FindingLedger, fullDetailFinding
         lifecycle: finding.lifecycle,
         severity: finding.severity,
         title: finding.title,
-        location: finding.location,
+        locations: findingFileQuoteLocations(ledger, finding).map(formatFileQuoteLocation),
         description: finding.description,
         suggestion: finding.suggestion,
         reviewers: finding.reviewers,
@@ -77,7 +82,7 @@ export function buildManagerInputLedger(ledger: FindingLedger, fullDetailFinding
         lifecycle: finding.lifecycle,
         severity: finding.severity,
         title: finding.title,
-        location: finding.location,
+        locations: findingFileQuoteLocations(ledger, finding).map(formatFileQuoteLocation),
         lastSeen: finding.lastSeen,
       })),
     conflicts: ledger.conflicts.map((conflict) => ({
@@ -128,14 +133,12 @@ export function collectDuplicateLocusGroups(ledger: FindingLedger): Map<string, 
     if (finding.status !== 'open' || finding.provisional !== undefined) {
       continue;
     }
-    // 行範囲形式（path:10-20）は parseFindingLocation では path に範囲ごと
-    // 含まれてしまうため、先に範囲として解釈する（admission と同じ受理形式）。
-    const path = parseFindingLocationRange(finding.location)?.path
-      ?? parseFindingLocation(finding.location)?.path;
-    if (path === undefined) {
-      continue;
+    const paths = new Set(
+      findingFileQuoteLocations(ledger, finding).map(({ path }) => path),
+    );
+    for (const path of paths) {
+      byPath.set(path, [...(byPath.get(path) ?? []), finding]);
     }
-    byPath.set(path, [...(byPath.get(path) ?? []), finding]);
   }
   return new Map([...byPath.entries()].filter(([, findings]) => findings.length >= 2));
 }
@@ -152,15 +155,16 @@ function collectFullDetailFindingIds(ledger: FindingLedger, residualRawFindings:
   }
   const openFindings = ledger.findings.filter((finding) => finding.status === 'open');
   for (const raw of residualRawFindings) {
-    if (raw.targetFindingId !== undefined) {
+    if (raw.targetFindingId !== null) {
       ids.add(raw.targetFindingId);
     }
-    const rawPath = parseFindingLocation(raw.location)?.path;
+    const rawPaths = new Set(rawFindingFileQuoteLocations(raw).map(({ path }) => path));
     const rawTitle = normalizeFindingText(raw.title).toLowerCase();
     const rawSymbols = new Set([...extractSymbols(raw.title), ...extractSymbols(raw.description)]);
     for (const finding of openFindings) {
-      const findingPath = parseFindingLocation(finding.location)?.path;
-      if (rawPath !== undefined && findingPath !== undefined && rawPath === findingPath) {
+      const findingPaths = findingFileQuoteLocations(ledger, finding)
+        .map(({ path }) => path);
+      if (findingPaths.some((path) => rawPaths.has(path))) {
         ids.add(finding.id);
         continue;
       }

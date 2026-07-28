@@ -5,8 +5,8 @@
  *   であり、capability / taint / SameProof を LLM の出力フィールドから受け取る
  *   経路は存在しない。
  * - ambiguous 起源 raw に許される same は、エンジンが発行する決定的
- *   DeterministicSameProof（正規化 path/title/description/suggestion の完全一致 +
- *   target open + 発行時 revision 一致）だけ。path/title だけでは証明にしない。
+ *   DeterministicSameProof（claimIdentityHash 完全一致 +
+ *   target open + 発行時 revision 一致）だけ。location は証明に使わない。
  * - manager 提案の runtime 検証: 未知 raw・未知 proof・存在しない target・
  *   必須フィールド欠損の create_independent は全て不採用 → provisional へ着地
  *   （no-op / drop / unsupported で先へ進める経路は無い）。
@@ -24,7 +24,6 @@ import type {
 } from './types.js';
 import type { ParsedAmbiguousInterpretation } from './schemas.js';
 import { toAmbiguousInterpretation } from './schemas.js';
-import { normalizeFindingText, parseFindingLocation } from './location.js';
 import {
   assertCanonicalRawFinding,
   canonicalRawIntegrityDigestOf,
@@ -34,6 +33,7 @@ import {
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import type { ProvisionalFindingSpec } from './reconciler.js';
 import { computeCanonicalRawIntegrityDigest } from './finding-integrity.js';
+import { computeClaimIdentityHash } from './evidence-domain.js';
 
 // エンジン発行の証明だけを本物と認めるための runtime 登録簿。
 const SAME_PROOF_REGISTRY = new WeakSet<object>();
@@ -126,7 +126,7 @@ export function issueOpenConflictOutcomeAuthority(input: {
     interpretations.length !== 1
     || interpretation?.stage !== 'interpretation_completed'
     || interpretation.canonicalIntegrityDigest !== canonicalIntegrityDigest
-    || interpretation.candidateEvidenceHash !== input.canonical.evidenceHash
+    || interpretation.candidateEvidenceHash !== input.canonical.evidenceSetHash
     || interpretation.reviewerStableKey !== input.canonical.reviewerStableKey
     || interpretation.lineageKey !== input.canonical.lineageKey
     || canonicalJson(interpretation.validatedDecision) !== canonicalJson(validatedDecision)
@@ -135,15 +135,12 @@ export function issueOpenConflictOutcomeAuthority(input: {
   }
   const issuanceIntegrityDigest = openConflictIssuanceIntegrityDigest({
     canonicalWire,
-    typedEvidence: input.canonical.evidence === undefined
-      ? null
-      : input.canonical.evidence,
     provenance: input.canonical.provenance,
     stableIdentity: {
       rawFindingId: input.canonical.rawFindingId,
       reviewerStableKey: input.canonical.reviewerStableKey,
       lineageKey: input.canonical.lineageKey,
-      claimIdentityHash: input.canonical.evidenceHash,
+      claimIdentityHash: input.canonical.claimIdentityHash,
       canonicalIntegrityDigest,
     },
     validatedDecision,
@@ -162,7 +159,7 @@ export function issueOpenConflictOutcomeAuthority(input: {
     interpretationKey: input.interpretationKey,
     provisionalStableKey,
     canonicalWire: canonicalJson(canonicalWire),
-    evidenceHash: input.canonical.evidenceHash,
+    evidenceHash: input.canonical.evidenceSetHash,
     canonicalIntegrityDigest,
     provenance: canonicalJson(input.canonical.provenance),
     outcomeProvenance: canonicalJson({
@@ -252,9 +249,6 @@ export function verifyOpenConflictOutcomeAuthority(input: {
   }
   const issuanceIntegrityDigest = openConflictIssuanceIntegrityDigest({
     canonicalWire: input.rawFinding,
-    typedEvidence: input.rawFinding.evidence === undefined
-      ? null
-      : input.rawFinding.evidence,
     provenance: input.provenance.canonicalProvenance,
     stableIdentity: {
       rawFindingId: input.rawFinding.rawFindingId,
@@ -275,7 +269,6 @@ export function verifyOpenConflictOutcomeAuthority(input: {
 
 function openConflictIssuanceIntegrityDigest(input: {
   canonicalWire: RawFinding;
-  typedEvidence: RawFinding['evidence'] | null;
   provenance: CanonicalRawFinding['provenance'];
   stableIdentity: {
     rawFindingId: string;
@@ -291,9 +284,6 @@ function openConflictIssuanceIntegrityDigest(input: {
   return createHash('sha256').update(canonicalJson({
     version: 1,
     canonicalWire: input.canonicalWire,
-    typedEvidence: input.typedEvidence === null
-      ? null
-      : { ...input.typedEvidence },
     provenance: input.provenance,
     stableIdentity: input.stableIdentity,
     validatedDecision: input.validatedDecision,
@@ -321,17 +311,14 @@ function issueProof(value: UnbrandedSameProof): DeterministicSameProof {
  * 正規化 — 大小文字は保存する。contract invariant: 大小文字を潰すと別問題を誤統合）。
  */
 function sameProofIdentityKey(fields: {
-  location?: string;
   title?: string;
   description?: string;
-  suggestion?: string;
 }): string {
-  return JSON.stringify([
-    parseFindingLocation(fields.location)?.path ?? '',
-    fields.title === undefined ? '' : normalizeFindingText(fields.title),
-    fields.description === undefined ? '' : normalizeFindingText(fields.description),
-    fields.suggestion === undefined ? '' : normalizeFindingText(fields.suggestion),
-  ]);
+  return computeClaimIdentityHash({
+    targetFindingId: null,
+    title: fields.title ?? '',
+    description: fields.description ?? '',
+  });
 }
 
 function findingRevisionOf(entry: FindingLedgerEntry): number {
@@ -341,32 +328,35 @@ function findingRevisionOf(entry: FindingLedgerEntry): number {
 /**
  * ambiguous canonical raw に対して成立する決定的 SameProof をエンジンが発行する。
  * 証明条件は、open finding に紐づく raw（または finding 自身の
- * フィールド）との正規化 path/title/description/suggestion 完全一致。
+ * フィールド）との claimIdentityHash 完全一致。
  * 返り値は rawFindingId → proof。証明が成立しない raw は含まれない。
  */
 export function issueDeterministicSameProofs(input: {
   ledger: FindingLedger;
   ambiguousRawFindings: readonly CanonicalRawFinding[];
+  excludedTargetFindingIdsByRawFindingId: ReadonlyMap<string, ReadonlySet<string>>;
 }): Map<string, DeterministicSameProof> {
   const rawById = new Map(input.ledger.rawFindings.map((raw) => [raw.rawFindingId, raw]));
-  const identityToOpenFinding = new Map<string, FindingLedgerEntry>();
+  const identityToOpenFindings = new Map<string, FindingLedgerEntry[]>();
+  const indexFinding = (identity: string, finding: FindingLedgerEntry): void => {
+    const indexed = identityToOpenFindings.get(identity) ?? [];
+    if (!indexed.some((candidate) => candidate.id === finding.id)) {
+      identityToOpenFindings.set(identity, [...indexed, finding]);
+    }
+  };
   for (const finding of input.ledger.findings) {
     if (finding.status !== 'open') {
       continue;
     }
     const ownKey = sameProofIdentityKey(finding);
-    if (!identityToOpenFinding.has(ownKey)) {
-      identityToOpenFinding.set(ownKey, finding);
-    }
+    indexFinding(ownKey, finding);
     for (const rawFindingId of finding.rawFindingIds) {
       const raw = rawById.get(rawFindingId);
       if (raw === undefined) {
         continue;
       }
       const key = sameProofIdentityKey(raw);
-      if (!identityToOpenFinding.has(key)) {
-        identityToOpenFinding.set(key, finding);
-      }
+      indexFinding(key, finding);
     }
   }
 
@@ -380,7 +370,10 @@ export function issueDeterministicSameProofs(input: {
       continue;
     }
     const identityHash = createHash('sha256').update(sameProofIdentityKey(raw)).digest('hex');
-    const target = identityToOpenFinding.get(sameProofIdentityKey(raw));
+    const excludedTargetFindingIds = input.excludedTargetFindingIdsByRawFindingId
+      .get(raw.rawFindingId);
+    const target = identityToOpenFindings.get(sameProofIdentityKey(raw))
+      ?.find((candidate) => excludedTargetFindingIds?.has(candidate.id) !== true);
     if (target === undefined) {
       continue;
     }

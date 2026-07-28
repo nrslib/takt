@@ -24,6 +24,9 @@ import {
 } from '../core/models/finding-schemas.js';
 import { compareRfc3339Timestamps } from '../core/models/rfc3339.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
+import { RAW_FINDING_FIELD_LIMITS } from '../core/models/finding-contract-limits.js';
+import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
+import { deduplicateRawEvidence } from '../core/workflow/findings/evidence-domain.js';
 
 const TEST_INTEGRITY_DIGEST = 'a'.repeat(64);
 import { FINDING_CONFLICT_ADJUDICATION_SCHEMA_REF } from '../core/workflow/findings/adjudication-step.js';
@@ -47,6 +50,7 @@ function pendingLedgerWithCompleted(
     nextId: 1,
     updatedAt: '2026-07-24T00:00:00.000Z',
     findings: [],
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
     interpretations: [],
@@ -73,6 +77,7 @@ function pendingLedgerWithCompleted(
         nextId: completed.nextId,
         updatedAt: '2026-07-24T00:01:00.000Z',
         findings: completed.findings,
+        evidenceRecords: [],
         rawFindings: [],
         conflicts: completed.conflicts ?? [],
         interpretations: [],
@@ -96,6 +101,7 @@ function pendingFinding(id: string) {
     title: 'Pending finding',
     reviewers: ['reviewer'],
     rawFindingIds: ['raw-1'],
+    evidenceIds: [],
     firstSeen: {
       runId: 'run-source',
       stepName: 'reviewers',
@@ -132,12 +138,78 @@ describe('finding schemas', () => {
       nextId: 1,
       updatedAt: '2026-07-24T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
     };
 
     expect(parseFindingLedger(ledger)).toEqual(ledger);
+  });
+
+  it('requires superseded evidence to be projected onto the canonical finding', () => {
+    const evidencePayload = {
+      kind: 'file_quote' as const,
+      path: 'src/duplicate.ts',
+      startLine: 1,
+      endLine: 1,
+      verbatimExcerpt: 'duplicate evidence',
+      snapshotId: '1'.repeat(64),
+      claimIdentityHash: '2'.repeat(64),
+      fileHash: '3'.repeat(64),
+    };
+    const evidenceRecord = {
+      evidenceId: computeFileQuoteEvidenceRecordId(evidencePayload),
+      ...evidencePayload,
+    };
+    const observedAt = {
+      runId: 'run-1',
+      stepName: 'reviewers',
+      timestamp: '2026-07-24T00:00:00.000Z',
+    };
+    const canonical = {
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'new',
+      severity: 'high',
+      title: 'Canonical',
+      reviewers: ['reviewer-a'],
+      rawFindingIds: [],
+      evidenceIds: [],
+      firstSeen: observedAt,
+      lastSeen: observedAt,
+      revision: 1,
+    };
+    const duplicate = {
+      ...canonical,
+      id: 'F-0002',
+      status: 'superseded',
+      lifecycle: 'superseded',
+      title: 'Duplicate',
+      evidenceIds: [evidenceRecord.evidenceId],
+      supersededByFindingId: 'F-0001',
+    };
+    const ledger = {
+      workflowName: 'peer-review',
+      nextId: 3,
+      updatedAt: observedAt.timestamp,
+      findings: [canonical, duplicate],
+      evidenceRecords: [evidenceRecord],
+      rawFindings: [],
+      conflicts: [],
+      interpretations: [],
+    };
+
+    expect(() => parseFindingLedger(ledger)).toThrow(
+      /must also be referenced by canonical finding/u,
+    );
+    expect(parseFindingLedger({
+      ...ledger,
+      findings: [
+        { ...canonical, evidenceIds: [evidenceRecord.evidenceId] },
+        duplicate,
+      ],
+    }).findings).toHaveLength(2);
   });
 
   it.each([
@@ -151,6 +223,7 @@ describe('finding schemas', () => {
       nextId: 1,
       updatedAt: '2026-07-24T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -159,7 +232,7 @@ describe('finding schemas', () => {
         firstRoundAt: '2026-07-24T00:00:00.000Z',
         exhausted: false,
       },
-    })).toThrow(/binary-sorted unique set/);
+    })).toThrow(/binary-sorted unique string set/i);
   });
 
   it('accepts canonical binary-sorted unique roundMarkers for both budgets', () => {
@@ -173,6 +246,7 @@ describe('finding schemas', () => {
       nextId: 1,
       updatedAt: '2026-07-24T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -189,6 +263,7 @@ describe('finding schemas', () => {
       nextId: 1,
       updatedAt: '2026-07-24T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -261,6 +336,7 @@ describe('finding schemas', () => {
       nextId: 1,
       updatedAt: '2026-07-24T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [record],
@@ -308,6 +384,7 @@ describe('finding schemas', () => {
       nextId: 1,
       updatedAt: '2026-07-24T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [record],
@@ -394,11 +471,13 @@ describe('finding schemas', () => {
         title: 'Pending finding',
         reviewers: ['reviewer-a'],
         rawFindingIds: ['raw-1'],
+        evidenceIds: [],
         firstSeen: provisional.firstObservedAt,
         lastSeen: provisional.lastObservedAt,
         revision: 1,
         provisional,
       }],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -429,6 +508,7 @@ describe('finding schemas', () => {
           timestamp: '2026-07-24T00:00:00.000Z',
         },
       }],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
       interpretations: [],
@@ -447,6 +527,7 @@ describe('finding schemas', () => {
       nextId: 1,
       updatedAt: '2026-07-24T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [{
         id: 'C-NONCANONICAL',
@@ -607,28 +688,224 @@ describe('finding schemas', () => {
     );
   });
 
-  it('creates a provider-facing snapshotId enum for each review round without changing the static lenient validation schema', () => {
-    const firstRound = createRawFindingsOutputJsonSchema('review-snapshot-first');
-    const secondRound = createRawFindingsOutputJsonSchema('review-snapshot-second');
-    const getSnapshotIdSchema = (schema: typeof firstRound) =>
-      schema.properties.rawFindings.items.properties.snapshotId;
+  it('binds only file_quote evidence to the current review snapshot in the provider schema', () => {
+    const firstSnapshotId = '1'.repeat(64);
+    const secondSnapshotId = '2'.repeat(64);
+    const firstRound = createRawFindingsOutputJsonSchema(firstSnapshotId);
+    const secondRound = createRawFindingsOutputJsonSchema(secondSnapshotId);
+    type ProviderEvidenceBranch = {
+      properties: {
+        kind: { enum: string[] };
+        snapshotId?: { enum: string[] };
+      };
+    };
+    const branchesOf = (schema: unknown) =>
+      (schema as {
+        properties: {
+          rawFindings: {
+            items: {
+              properties: {
+                evidence: { items: { anyOf: ProviderEvidenceBranch[] } };
+              };
+            };
+          };
+        };
+      }).properties.rawFindings.items.properties.evidence.items.anyOf;
+    const fileQuoteOf = (schema: unknown) => branchesOf(schema).find(
+      (branch) => branch.properties.kind.enum.includes('file_quote'),
+    );
+    const engineProofOf = (schema: unknown) => branchesOf(schema).find(
+      (branch) => branch.properties.kind.enum.includes('engine_proof'),
+    );
 
-    expect(getSnapshotIdSchema(firstRound).enum).toEqual(['', 'review-snapshot-first']);
-    expect(getSnapshotIdSchema(secondRound).enum).toEqual(['', 'review-snapshot-second']);
-    expect(getSnapshotIdSchema(firstRound).enum).not.toContain('review-snapshot-second');
-    expect(RawFindingsOutputValidationJsonSchema.properties.rawFindings.items.properties.snapshotId)
-      .toEqual(RawFindingsOutputJsonSchema.properties.rawFindings.items.properties.snapshotId);
+    expect(fileQuoteOf(firstRound)).toMatchObject({
+      properties: { snapshotId: { enum: [firstSnapshotId] } },
+    });
+    expect(fileQuoteOf(secondRound)).toMatchObject({
+      properties: { snapshotId: { enum: [secondSnapshotId] } },
+    });
+    expect(fileQuoteOf(firstRound)).not.toMatchObject({
+      properties: { snapshotId: { enum: [secondSnapshotId] } },
+    });
+    expect(engineProofOf(firstRound)).toEqual(engineProofOf(secondRound));
+
+    const staticFileQuote = RawFindingsOutputValidationJsonSchema
+      .properties.rawFindings.items.properties.evidence.items.oneOf.find(
+        (branch) => branch.properties.kind.const === 'file_quote',
+      );
+    expect(staticFileQuote).toMatchObject({
+      properties: { snapshotId: { pattern: '^[a-f0-9]{64}$' } },
+    });
+    expect(staticFileQuote).not.toMatchObject({
+      properties: { snapshotId: { const: expect.anything() } },
+    });
   });
 
   it('describes the complete resolution confirmation evidence contract in the provider schema', () => {
     const properties = RawFindingsOutputJsonSchema.properties.rawFindings.items.properties;
+    const providerEvidence = properties.evidence.items as unknown as {
+      anyOf: Array<{
+        required: string[];
+        properties: Record<string, { enum?: string[] }>;
+      }>;
+    };
+    const fileQuote = providerEvidence.anyOf.find(
+      (branch) => branch.properties.kind?.enum?.includes('file_quote') === true,
+    );
 
-    expect(properties.relation.description).toContain('one contiguous');
-    expect(properties.location.description).toContain('Exactly one contiguous');
-    expect(properties.verbatimExcerpt.description).toContain('complete');
-    expect(properties.verbatimExcerpt.description).toContain('current');
-    expect(properties.snapshotId.description).toContain('current');
-    expect(properties.snapshotId.description).toContain('resolution_confirmation');
+    expect(properties.relation.description).toContain('resolution_confirmation');
+    expect(properties.relation.description).toContain('mechanically verifiable evidence');
+    expect(properties.evidence.maxItems).toBe(16);
+    expect(fileQuote?.required).toEqual([
+      'kind',
+      'path',
+      'startLine',
+      'endLine',
+      'verbatimExcerpt',
+      'snapshotId',
+    ]);
+    expect(fileQuote).toMatchObject({
+      properties: {
+        kind: { enum: ['file_quote'] },
+      },
+    });
+    const engineProof = providerEvidence.anyOf.find(
+      (branch) => branch.properties.kind?.enum?.includes('engine_proof') === true,
+    );
+    expect(engineProof).toMatchObject({
+      properties: {
+        kind: { enum: ['engine_proof'] },
+      },
+    });
+  });
+
+  it('uses only the native structured output keyword subset recursively', () => {
+    const allowedKeywords = new Set([
+      '$defs',
+      '$ref',
+      'type',
+      'description',
+      'properties',
+      'required',
+      'additionalProperties',
+      'enum',
+      'anyOf',
+      'items',
+      'minItems',
+      'maxItems',
+    ]);
+    const visit = (value: unknown, insideProperties = false): void => {
+      if (Array.isArray(value)) {
+        for (const item of value) visit(item);
+        return;
+      }
+      if (typeof value !== 'object' || value === null) return;
+      for (const [key, nested] of Object.entries(value)) {
+        if (!insideProperties) expect(allowedKeywords.has(key)).toBe(true);
+        visit(nested, key === 'properties' || key === '$defs');
+      }
+    };
+
+    visit(createRawFindingsOutputJsonSchema('a'.repeat(64)));
+  });
+
+  it('uses the same SHA-256 length contract in runtime and provider schemas', () => {
+    const base = {
+      rawFindingId: 'raw-1',
+      relation: 'new' as const,
+      targetFindingId: null,
+      familyTag: 'bug',
+      severity: 'low' as const,
+      title: 'title',
+      description: 'description',
+      suggestion: null,
+    };
+    expect(() => ReviewerRawFindingSchema.parse({
+      ...base,
+      evidence: [{ kind: 'engine_proof', proofId: 'a'.repeat(65) }],
+    })).toThrow();
+    expect(() => ReviewerRawFindingSchema.parse({
+      ...base,
+      evidence: [{
+        kind: 'file_quote',
+        path: 'src/a.ts',
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: 'evidence',
+        snapshotId: 'a'.repeat(65),
+      }],
+    })).toThrow();
+    expect(RAW_FINDING_FIELD_LIMITS.maxSnapshotIdChars).toBe(64);
+    expect(RAW_FINDING_FIELD_LIMITS.maxProofIdChars).toBe(64);
+  });
+
+  it('keeps the provider raw id limit separate from valid engine-namespaced ids', () => {
+    const evidence = [{
+      kind: 'engine_proof' as const,
+      proofId: 'a'.repeat(64),
+    }];
+    const fields = {
+      relation: 'new' as const,
+      targetFindingId: null,
+      familyTag: 'bug',
+      severity: 'low' as const,
+      title: 'Namespaced id',
+      description: 'Engine namespaces may exceed the provider local id limit.',
+      suggestion: null,
+      evidence,
+    };
+    const namespacedId = 'namespace:'.repeat(20);
+
+    expect(() => ReviewerRawFindingSchema.parse({
+      ...fields,
+      rawFindingId: namespacedId,
+    })).toThrow();
+    expect(RawFindingSchema.parse({
+      ...fields,
+      rawFindingId: namespacedId,
+      stepName: 'reviewers',
+      reviewer: 'reviewer-a',
+    }).rawFindingId).toBe(namespacedId);
+  });
+
+  it('accepts multi-evidence normalized by the canonical evidence ordering helper', () => {
+    const snapshotId = 'a'.repeat(64);
+    const byEarlierCanonicalField = {
+      kind: 'file_quote' as const,
+      path: 'src/z.ts',
+      startLine: 1,
+      endLine: 1,
+      verbatimExcerpt: 'z',
+      snapshotId,
+    };
+    const byLaterCanonicalField = {
+      kind: 'file_quote' as const,
+      path: 'src/a.ts',
+      startLine: 2,
+      endLine: 2,
+      verbatimExcerpt: 'a',
+      snapshotId,
+    };
+    const evidence = deduplicateRawEvidence([
+      byLaterCanonicalField,
+      byEarlierCanonicalField,
+    ]);
+
+    expect(evidence).toEqual([
+      byEarlierCanonicalField,
+      byLaterCanonicalField,
+    ]);
+    expect(ReviewerRawFindingSchema.parse({
+      rawFindingId: 'raw-multi-evidence',
+      relation: 'new',
+      targetFindingId: null,
+      familyTag: 'bug',
+      severity: 'low',
+      title: 'Multi evidence ordering',
+      description: 'Canonical JSON ordering differs from insertion-order JSON.',
+      suggestion: null,
+      evidence,
+    }).evidence).toEqual(evidence);
   });
 
   it('uses finding type constants for schema enum values', () => {
@@ -636,7 +913,8 @@ describe('finding schemas', () => {
     expect(FindingStatusSchema.options).toEqual(FINDING_STATUSES);
     expect(FindingLifecycleSchema.options).toEqual(FINDING_LIFECYCLES);
     expect(FindingManagerOutputJsonSchema.properties.newFindings.items.properties.severity.enum).toBe(FINDING_SEVERITIES);
-    expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.properties.severity.enum).toBe(FINDING_SEVERITIES);
+    expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.properties.severity.enum)
+      .toEqual([...FINDING_SEVERITIES, null]);
 
     const conflictStatus = {
       id: 'C-0001',
@@ -651,15 +929,24 @@ describe('finding schemas', () => {
   });
 
   it('requires structured fields in reviewer raw findings output', () => {
+    const evidence = [{
+      kind: 'file_quote',
+      path: 'src/core/workflow/findings/manager-runner.ts',
+      startLine: 72,
+      endLine: 72,
+      verbatimExcerpt: 'const finding = true;',
+      snapshotId: 'a'.repeat(64),
+    }] as const;
     const reviewerRawFinding = {
       rawFindingId: 'raw-1',
       familyTag: 'missing-edge-case',
       severity: 'high',
       title: 'Structured output omits the family tag',
-      location: 'src/core/workflow/findings/manager-runner.ts:72',
       description: 'The findings manager cannot reconcile findings without familyTag.',
       suggestion: 'Keep reviewer raw finding fields complete for reconciliation.',
       relation: 'new',
+      targetFindingId: null,
+      evidence,
     };
     const persistedRawFinding = {
       ...reviewerRawFinding,
@@ -673,16 +960,17 @@ describe('finding schemas', () => {
       rawFindingId: 'raw-1',
       severity: 'high',
       title: 'Structured output omits the family tag',
-      location: 'src/core/workflow/findings/manager-runner.ts:72',
       description: 'The findings manager cannot reconcile findings without familyTag.',
       suggestion: 'Keep reviewer raw finding fields complete for reconciliation.',
+      relation: 'new',
+      targetFindingId: null,
+      evidence,
     })).toThrow();
     expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.required).toContain('familyTag');
-    expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.required).toContain('location');
+    expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.required).toContain('evidence');
     expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.required).toContain('suggestion');
     expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.properties.familyTag).toEqual({
-      type: 'string',
-      minLength: 1,
+      type: ['string', 'null'],
       description: 'Structured form of the Observed Findings family_tag value. A classification/search hint only — it is not used to determine whether two findings are the same issue.',
     });
   });
@@ -693,11 +981,18 @@ describe('finding schemas', () => {
       familyTag: 'state',
       severity: 'high',
       title: 'State remains invalid',
-      location: 'src/state.ts:1',
       description: 'The invalid state remains.',
       suggestion: 'Repair the transition.',
       relation: 'persists',
       targetFindingId: 'F-0001',
+      evidence: [{
+        kind: 'file_quote',
+        path: 'src/state.ts',
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: 'const state = invalid;',
+        snapshotId: 'b'.repeat(64),
+      }],
     };
     const targetPrecondition = {
       targetFindingId: 'F-0001',

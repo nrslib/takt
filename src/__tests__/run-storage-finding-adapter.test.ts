@@ -391,7 +391,7 @@ describe('Finding manager SQLite adapter', () => {
     ['raw deletion', (_raw: RawFinding) => []],
     ['typed evidence replacement', (raw: RawFinding) => [{
       ...raw,
-      evidence: { kind: 'locationless' as const, explanation: 'evidence E2' },
+      evidence: [{ kind: 'engine_proof' as const, proofId: '2'.repeat(64) }],
     }]],
   ])('rejects pending %s at SQLite stage and dedicated finalization', async (
     _label,
@@ -423,8 +423,10 @@ describe('Finding manager SQLite adapter', () => {
       severity: 'high',
       title: 'Pending integrity raw',
       description: 'Pending integrity description',
+      suggestion: null,
       relation: 'new',
-      evidence: { kind: 'locationless', explanation: 'evidence E1' },
+      targetFindingId: null,
+      evidence: [{ kind: 'engine_proof', proofId: '1'.repeat(64) }],
     };
     await store.updateLedger((current) => ({
       ledger: { ...current, rawFindings: [rawE1] },

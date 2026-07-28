@@ -23,6 +23,7 @@ function emptyLedger(): FindingLedger {
     nextId: 1,
     updatedAt: '1970-01-01T00:00:01.000Z',
     findings: [],
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
     interpretations: [],
@@ -58,7 +59,10 @@ describe('run storage authority redesign', () => {
           severity: 'high',
           title: 'Cross-scope authority',
           description: 'A cross-scope mutation was attempted.',
+          suggestion: null,
           relation: 'new',
+          targetFindingId: null,
+          evidence: [],
         }],
       },
       result: undefined,
@@ -115,7 +119,7 @@ describe('run storage authority redesign', () => {
         },
       },
       result: undefined,
-    })))).rejects.toThrow(/binary-sorted unique set/);
+    })))).rejects.toThrow(/binary-sorted unique string set/);
   });
 
   it('isolates direct callback mutation from the SQLite comparison baseline', async () => {
