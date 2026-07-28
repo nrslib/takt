@@ -28,7 +28,10 @@ function createRunWithOrder(cwd: string, slug: string, taskContent: string, orde
     startTime: '2026-02-01T00:00:00.000Z',
     logsDirectory: `.takt/runs/${slug}/logs`,
     reportDirectory: `.takt/runs/${slug}/reports`,
+    contextDirectory: `.takt/runs/${slug}/context`,
+    runRoot: `.takt/runs/${slug}`,
     runSlug: slug,
+    storageBackend: 'file',
   };
   writeFileSync(join(runDir, 'meta.json'), JSON.stringify(meta), 'utf-8');
   writeFileSync(join(runDir, 'context', 'task', 'order.md'), orderContent, 'utf-8');
@@ -45,7 +48,10 @@ function createRunWithoutOrder(cwd: string, slug: string, taskContent: string): 
     startTime: '2026-02-01T00:00:00.000Z',
     logsDirectory: `.takt/runs/${slug}/logs`,
     reportDirectory: `.takt/runs/${slug}/reports`,
+    contextDirectory: `.takt/runs/${slug}/context`,
+    runRoot: `.takt/runs/${slug}`,
     runSlug: slug,
+    storageBackend: 'file',
   };
   writeFileSync(join(runDir, 'meta.json'), JSON.stringify(meta), 'utf-8');
 }

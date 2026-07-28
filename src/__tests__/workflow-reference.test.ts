@@ -51,6 +51,7 @@ describe('workflow-reference', () => {
           workflow_ref: 'project:sha256:child-b',
           step: 'review',
           kind: 'agent' as const,
+          occurrence: 1,
         },
       ],
       iteration: 7,
@@ -98,8 +99,8 @@ describe('workflow-reference', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call'),
-        buildWorkflowResumePointEntry(childWorkflow, 'review', 'agent'),
+        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', 1),
+        buildWorkflowResumePointEntry(childWorkflow, 'review', 'agent', 1),
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -108,7 +109,7 @@ describe('workflow-reference', () => {
     expect(trimResumePointStackForWorkflow({
       workflow: childWorkflow,
       resumePoint,
-      resumeStackPrefix: [buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call')],
+      resumeStackPrefix: [buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', 1)],
       resolveWorkflowCall: () => null,
     })).toEqual(resumePoint);
   });
@@ -146,8 +147,8 @@ describe('workflow-reference', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call'),
-        buildWorkflowResumePointEntry(childWorkflow, 'review', 'agent'),
+        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', 1),
+        buildWorkflowResumePointEntry(childWorkflow, 'review', 'agent', 1),
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -156,8 +157,66 @@ describe('workflow-reference', () => {
     expect(trimResumePointStackForWorkflow({
       workflow: childWorkflow,
       resumePoint,
-      resumeStackPrefix: [buildWorkflowResumePointEntry(otherParentWorkflow, 'delegate', 'workflow_call')],
+      resumeStackPrefix: [buildWorkflowResumePointEntry(otherParentWorkflow, 'delegate', 'workflow_call', 1)],
       resolveWorkflowCall: () => null,
+    })).toBeUndefined();
+  });
+
+  it('同じ workflow_ref の parallel 親が通常 agent に変わった場合は深い suffix も親 frame も受理しない', () => {
+    const workflowRef = 'project:sha256:stable-path-ref';
+    const sourceWorkflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
+      name: 'default',
+      initial_step: 'reviewers',
+      max_steps: 3,
+      steps: [{
+        name: 'reviewers',
+        instruction: 'Run delegated reviews',
+        parallel: [{
+          name: 'delegate',
+          call: 'child',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        }],
+        rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }],
+      }],
+    }, '/tmp/project'), workflowRef);
+    const currentWorkflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
+      name: 'default',
+      initial_step: 'reviewers',
+      max_steps: 3,
+      steps: [{
+        name: 'reviewers',
+        persona: 'reviewer',
+        instruction: 'Run a normal review',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    }, '/tmp/project'), workflowRef);
+    const childWorkflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
+      name: 'child',
+      subworkflow: { callable: true },
+      initial_step: 'review',
+      max_steps: 3,
+      steps: [{
+        name: 'review',
+        persona: 'reviewer',
+        instruction: 'Review',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    }, '/tmp/project'), 'project:sha256:child');
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        buildWorkflowResumePointEntry(sourceWorkflow, 'reviewers', 'parallel', 4),
+        buildWorkflowResumePointEntry(sourceWorkflow, 'delegate', 'workflow_call', 2),
+        buildWorkflowResumePointEntry(childWorkflow, 'review', 'agent', 1),
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+    };
+
+    expect(trimResumePointStackForWorkflow({
+      workflow: currentWorkflow,
+      resumePoint,
+      resolveWorkflowCall: () => childWorkflow,
     })).toBeUndefined();
   });
 
@@ -178,7 +237,7 @@ steps:
 `, 'utf-8');
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
-    const entry = buildWorkflowResumePointEntry(workflow, 'review', 'agent');
+    const entry = buildWorkflowResumePointEntry(workflow, 'review', 'agent', 1);
     const workflowRef = getWorkflowReference(workflow);
 
     expect((workflow as Record<string, unknown>).workflowRef).toBeUndefined();

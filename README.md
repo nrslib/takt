@@ -281,7 +281,13 @@ Minimal `~/.takt/config.yaml`:
 provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, or mock
 model: sonnet       # passed directly to provider
 language: en        # en or ja
+run_storage:
+  backend: file     # file (default) or sqlite
 ```
+
+With `run_storage.backend: sqlite`, `.takt/runs/<run>/run.sqlite` is the sole
+Finding Contract authority for the run. Resume requires the source run to use
+the same backend.
 
 To let TAKT choose provider/model per workflow step, keep a concrete top-level provider and define `auto_routing` candidates. The presence of effective `auto_routing` enables automatic routing:
 

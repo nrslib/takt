@@ -29,12 +29,17 @@ import {
   type WorkflowTraceDiscovery,
 } from '../../../core/workflow/observability/traceDiscovery.js';
 import { getGlobalConfigDir } from '../../../infra/config/paths.js';
-import { createSessionLog, generateSessionId, initNdjsonLog, type SessionLog } from '../../../infra/fs/index.js';
+import { createSessionLog, initNdjsonLog, type SessionLog } from '../../../infra/fs/index.js';
 import { isQuietMode } from '../../../shared/context.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
-import { createLogger, generateReportDir, getDebugPromptsLogFile, isValidReportDirName, preventSleep } from '../../../shared/utils/index.js';
+import {
+  createLogger,
+  getDebugPromptsLogFile,
+  isValidReportDirName,
+  preventSleep,
+} from '../../../shared/utils/index.js';
 import { createProviderEventLogger, isProviderEventsEnabled } from '../../../core/logging/providerEventLogger.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { createUsageEventLogger, isUsageEventsEnabled } from '../../../core/logging/usageEventLogger.js';
@@ -48,12 +53,13 @@ import { ensureWorktreeTaktRuntimeProtection } from '../../../infra/task/project
 import { createOperationJournalStore } from '../../../infra/workflow/operation-journal-store.js';
 import { AnalyticsEmitter } from './analyticsEmitter.js';
 import { createOutputFns, createPrefixedStreamHandler } from './outputFns.js';
-import { RunMetaManager } from './runMeta.js';
+import type { RunMetaManager } from './runMeta.js';
 import { SessionLogger } from './sessionLogger.js';
-import { createTraceReportWriter } from './traceReportWriter.js';
+import type { TraceReportMode } from './traceReport.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import type { WorkflowExecutionOptions } from './types.js';
 import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.js';
+import type { WorkflowRunBootstrap } from './workflowRunStorage.js';
 
 const log = createLogger('workflow');
 
@@ -96,7 +102,8 @@ export interface WorkflowExecutionBootstrap {
   structuredCaller: CapabilityAwareStructuredCaller;
   savedSessions: Record<string, string>;
   sessionUpdateHandler: (persona: string, sessionId: string | undefined) => void;
-  writeTraceReportOnce: ReturnType<typeof createTraceReportWriter>;
+  traceReportMode: TraceReportMode;
+  promptLogPath?: string;
   operationJournal: WorkflowOperationJournalContext;
 }
 
@@ -117,6 +124,7 @@ export async function createWorkflowExecutionBootstrap(
   task: string,
   cwd: string,
   options: WorkflowExecutionOptions,
+  runStorageBootstrap: WorkflowRunBootstrap,
 ): Promise<WorkflowExecutionBootstrap> {
   const { headerPrefix = 'Running Workflow:', interactiveUserInput = false, outputMode = 'terminal' } = options;
   const projectCwd = options.projectCwd;
@@ -154,15 +162,11 @@ export async function createWorkflowExecutionBootstrap(
   const isWorktree = cwd !== projectCwd;
   log.debug('Session mode', { isRetry, isWorktree });
 
-  const runSlug = options.reportDirName ?? generateReportDir(task);
-  if (!isValidReportDirName(runSlug)) {
-    throw new Error(`Invalid reportDirName: ${runSlug}`);
-  }
+  const { runSlug, runPaths } = runStorageBootstrap;
   if (isWorktree) {
     ensureWorktreeTaktRuntimeProtection(cwd);
   }
 
-  const runPaths = buildRunPaths(cwd, runSlug);
   // resume（requeue / retry / instruct、attachment 有無を問わず）が新しい run
   // slug を作る場合、旧 run の reports/ を継承しないと {report:X} 参照が
   // 壊れる（v3-r4 の resume 境界バグ）。同一秒の auto requeue などで slug
@@ -238,7 +242,12 @@ export async function createWorkflowExecutionBootstrap(
       files: resumeArtifactsManifest.files.length,
     });
   }
-  const sessionLog = createSessionLog(task, projectCwd, workflowConfig.name);
+  const sessionLog = createSessionLog(
+    task,
+    projectCwd,
+    workflowConfig.name,
+    { startTime: runStorageBootstrap.startedAt },
+  );
   const globalConfig = resolveWorkflowConfigValues(projectCwd, [
     'notificationSound',
     'notificationSoundEvents',
@@ -265,12 +274,14 @@ export async function createWorkflowExecutionBootstrap(
         sanitizeText: sanitizeObservabilityText,
       })
     : undefined;
-  const runMetaManager = new RunMetaManager(
+  const runMetaManager = runStorageBootstrap.publishRunMeta({
     runPaths,
     task,
-    workflowConfig.name,
-    options.resumeSource,
-    {
+    workflowName: workflowConfig.name,
+    ...(options.resumeSource === undefined
+      ? {}
+      : { resumeSource: options.resumeSource }),
+    options: {
       ...(traceDiscovery ? { traceDiscovery } : {}),
       // manifest（ファイル一覧と hash の SSOT）への参照のみを meta.json に残す。
       // manifest は reports スナップショットの内側の予約名（公開を単一 rename に
@@ -282,13 +293,16 @@ export async function createWorkflowExecutionBootstrap(
       operationClaimToken,
       ...(options.prContext ? { prContext: options.prContext } : {}),
     },
-  );
-  const workflowSessionId = generateSessionId();
+  });
+  const workflowSessionId = runStorageBootstrap.sessionId;
   const ndjsonLogPath = initNdjsonLog(
     workflowSessionId,
-    sanitizeTextForStorage(task, allowSensitiveData),
+    task,
     workflowConfig.name,
-    { logsDir: runPaths.logsAbs },
+    {
+      logsDir: runPaths.logsAbs,
+      startTime: runStorageBootstrap.startedAt,
+    },
   );
   const sessionLogger = new SessionLogger(ndjsonLogPath, allowSensitiveData);
   if (options.interactiveMetadata) {
@@ -368,9 +382,6 @@ export async function createWorkflowExecutionBootstrap(
 
   const analyticsEmitter = new AnalyticsEmitter(
     runSlug,
-    currentProvider,
-    configuredModel ?? '(default)',
-    workflowConfig.name,
     interactiveUserInput,
     workflowSessionId,
   );
@@ -385,17 +396,7 @@ export async function createWorkflowExecutionBootstrap(
         updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider)
     : (persona: string, personaSessionId: string | undefined) =>
         updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
-  const writeTraceReportOnce = createTraceReportWriter({
-    sessionLogger,
-    ndjsonLogPath,
-    tracePath: join(runPaths.runRootAbs, 'trace.md'),
-    workflowName: workflowConfig.name,
-    task,
-    runSlug,
-    promptLogPath: getDebugPromptsLogFile() ?? undefined,
-    mode: traceReportMode,
-    logger: log,
-  });
+  const promptLogPath = getDebugPromptsLogFile() ?? undefined;
   const observabilityOptions = globalConfig.observability.enabled
     && (
       globalConfig.observability.sessionLogExporter
@@ -469,7 +470,8 @@ export async function createWorkflowExecutionBootstrap(
     structuredCaller,
     savedSessions,
     sessionUpdateHandler,
-    writeTraceReportOnce,
+    traceReportMode,
+    ...(promptLogPath === undefined ? {} : { promptLogPath }),
     operationJournal,
   };
 }

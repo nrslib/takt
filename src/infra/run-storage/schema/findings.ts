@@ -7,6 +7,27 @@ const JSON_RECORD_TABLES = [
 ] as const;
 
 export const FINDINGS_DDL = [
+  `CREATE TABLE finding_resume_authorities (
+    run_id TEXT NOT NULL,
+    scope_id TEXT NOT NULL,
+    source_run_id TEXT NOT NULL,
+    source_scope_id TEXT NOT NULL,
+    source_revision INTEGER NOT NULL CHECK (source_revision > 0),
+    imported_revision INTEGER NOT NULL CHECK (imported_revision > 0),
+    projection_digest TEXT NOT NULL CHECK (
+      length(projection_digest) = 64
+      AND projection_digest NOT GLOB '*[^0-9a-f]*'
+    ),
+    PRIMARY KEY (run_id, scope_id),
+    FOREIGN KEY (run_id, scope_id)
+      REFERENCES scopes(run_id, scope_id) ON DELETE CASCADE,
+    FOREIGN KEY (run_id, source_run_id)
+      REFERENCES run_ancestry(run_id, ancestor_run_id),
+    FOREIGN KEY (run_id, scope_id, imported_revision, projection_digest)
+      REFERENCES finding_ledger_revisions(
+        run_id, scope_id, revision, projection_digest
+      ) DEFERRABLE INITIALLY DEFERRED
+  ) STRICT`,
   `CREATE TABLE finding_revision_publications (
     run_id TEXT NOT NULL,
     scope_id TEXT NOT NULL,
@@ -40,6 +61,7 @@ export const FINDINGS_DDL = [
     ),
     updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
     PRIMARY KEY (run_id, scope_id, revision),
+    UNIQUE (run_id, scope_id, revision, projection_digest),
     FOREIGN KEY (run_id, scope_id)
       REFERENCES scope_runtime(run_id, scope_id) ON DELETE CASCADE,
     FOREIGN KEY (run_id, scope_id, revision, projection_digest)
@@ -266,6 +288,7 @@ FINDINGS_DDL.push(
 );
 
 export const FINDING_AUTHORITY_TABLES = Object.freeze([
+  'finding_resume_authorities',
   'finding_revision_publications',
   'finding_ledger_revisions',
   'finding_ledger_heads',
@@ -283,10 +306,26 @@ for (const table of FINDING_AUTHORITY_TABLES) {
     BEFORE INSERT ON ${table}
     WHEN NOT EXISTS (
       SELECT 1
-      FROM runs
-      WHERE run_id = NEW.run_id AND finding_contract_enabled = 1
+      FROM scopes
+      WHERE
+        run_id = NEW.run_id
+        AND scope_id = NEW.scope_id
+        AND finding_contract_enabled = 1
     )
     BEGIN
       SELECT RAISE(ABORT, 'Finding Contract is disabled');
     END`);
 }
+
+FINDINGS_DDL.push(
+  `CREATE TRIGGER finding_resume_authorities_update_guard
+    BEFORE UPDATE ON finding_resume_authorities
+    BEGIN
+      SELECT RAISE(ABORT, 'finding resume authority is immutable');
+    END`,
+  `CREATE TRIGGER finding_resume_authorities_delete_guard
+    BEFORE DELETE ON finding_resume_authorities
+    BEGIN
+      SELECT RAISE(ABORT, 'finding resume authority cannot be deleted');
+    END`,
+);

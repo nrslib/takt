@@ -38,9 +38,15 @@ export function readCompleteResumeSnapshot(
   const operations = readOperations(context, run.runId);
   const sessions = readSessions(context, run.runId);
   const reports = readReports(context, run.runId);
-  const finding = run.findingContractEnabled === 1
+  const rootFindingEnabled = scopeRows.find(
+    (scope) => scope.scopeId === 'root',
+  )?.findingContractEnabled === 1;
+  const finding = rootFindingEnabled
     ? readFindingProjection(context, run.runId)
     : null;
+  if (run.findingContractEnabled === 1 && !rootFindingEnabled) {
+    validateFindingAuthority(context, run.runId);
+  }
   return {
     run,
     workflowDefinitions,
@@ -131,7 +137,6 @@ function readRun(
   const run = context.get<CompleteResumeSnapshot['run']>(`
     SELECT
       run_id AS runId,
-      slug,
       engine_build_id AS engineBuildId,
       workflow_definition_id AS workflowDefinitionId,
       finding_contract_enabled AS findingContractEnabled,
@@ -156,6 +161,7 @@ function readScopeRows(
       parent_scope_id AS parentScopeId,
       kind,
       workflow_definition_id AS workflowDefinitionId,
+      finding_contract_enabled AS findingContractEnabled,
       created_at AS createdAt,
       terminal_at AS terminalAt
     FROM scopes

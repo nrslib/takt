@@ -171,6 +171,7 @@ describe('reconciled conflict history reservation', () => {
   it('should use the newest pending origin across equivalent RFC 3339 offset representations', async () => {
     const store = createFindingLedgerStore({
       projectCwd: cwd,
+      runId: 'run-2',
       reportDir: join(cwd, '.takt', 'runs', 'run-2', 'reports'),
       workflowName: WORKFLOW_NAME,
       ledgerPath: LEDGER_PATH,
@@ -215,6 +216,7 @@ describe('reconciled conflict history reservation', () => {
   it('should preserve the reconciled reservation origin when rejecting submillisecond history timestamps', async () => {
     const store = createFindingLedgerStore({
       projectCwd: cwd,
+      runId: 'run-2',
       reportDir: join(cwd, '.takt', 'runs', 'run-2', 'reports'),
       workflowName: WORKFLOW_NAME,
       ledgerPath: LEDGER_PATH,

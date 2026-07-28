@@ -269,6 +269,7 @@ export function createRunFindingManagerStore(
   };
 
   return {
+    runId: options.runId,
     ledgerIdentity,
     workflowName: options.workflowName,
     loadLedger,
@@ -414,7 +415,9 @@ export function createRunFindingManagerStore(
     },
     saveRawFindings: (runId, stepName, rawFindings) => {
       if (runId !== options.runId) {
-        throw new Error(`Raw Finding run "${runId}" does not match "${options.runId}"`);
+        throw new Error(
+          `Raw Finding run "${runId}" does not match "${options.runId}"`,
+        );
       }
       const parsed = parseRawFindings(rawFindings);
       appendReport(

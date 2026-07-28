@@ -35,6 +35,7 @@ import type { RunResumeSource } from './run/run-meta.js';
 import type { FindingLedgerStore } from './findings/store.js';
 import type { OperationJournalStore } from './operations/operation-journal-types.js';
 import type { PullRequestContext } from './pr-context.js';
+import type { RunPaths } from './run/run-paths.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 
@@ -224,6 +225,28 @@ export interface WorkflowCallResolutionRequest {
 
 export type WorkflowCallResolver = (request: WorkflowCallResolutionRequest) => WorkflowConfig | null;
 
+export interface FindingAuthorityResolver {
+  resolve(input: {
+    readonly workflowConfig: WorkflowConfig;
+    readonly runPaths: RunPaths;
+    readonly runPathNamespace: readonly string[];
+    readonly workflowCallSiteIdentity?: string;
+  }): FindingLedgerStore;
+}
+
+export interface WorkflowStepExecutionEventContext {
+  readonly iteration: number;
+  readonly workflowName: string;
+  readonly resumeStepName: string;
+  readonly stepIteration: number;
+  readonly providerInfo: StepProviderInfo;
+  readonly provider: ProviderType;
+  readonly model: string;
+  readonly workflowStack: WorkflowResumePointEntry[];
+  readonly findingScopeIdentity: string | undefined;
+  readonly findingIds: readonly string[] | undefined;
+}
+
 /** Events emitted by workflow engine */
 export interface WorkflowEvents {
   'step:start': (
@@ -234,8 +257,17 @@ export interface WorkflowEvents {
     workflowName: string,
     resumeStepName: string,
     stepIteration: number,
+    workflowStack: WorkflowResumePointEntry[],
+    findingScopeIdentity: string | undefined,
+    findingIds: readonly string[] | undefined,
   ) => void;
-  'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string, resumeStepName: string) => void;
+  'step:complete': (
+    step: WorkflowStep,
+    response: AgentResponse,
+    instruction: string,
+    resumeStepName: string,
+    workflowStack: WorkflowResumePointEntry[],
+  ) => void;
   'routing:decision': (
     step: WorkflowStep,
     response: AgentResponse,
@@ -246,8 +278,20 @@ export interface WorkflowEvents {
     iteration: number,
     workflowName: string,
   ) => void;
-  'step:report': (step: WorkflowStep, filePath: string, fileName: string) => void;
-  'findings:ledger': (ledger: FindingLedger) => void;
+  'step:report': (
+    step: WorkflowStep,
+    filePath: string,
+    fileName: string,
+    context: WorkflowStepExecutionEventContext,
+  ) => void;
+  'findings:ledger': (
+    ledger: FindingLedger,
+    context: {
+      readonly iteration: number;
+      readonly workflowName: string;
+      readonly scopeIdentity: string;
+    },
+  ) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
   'step:rate_limited': (step: WorkflowStep, response: AgentResponse, rateLimitInfo: AgentResponse['rateLimitInfo']) => void;
   'step:user_input': (step: WorkflowStep, userInput: string) => void;
@@ -257,8 +301,9 @@ export interface WorkflowEvents {
     phaseName: PhaseName,
     instruction: string,
     promptParts: PhasePromptParts,
-    phaseExecutionId?: string,
-    iteration?: number,
+    phaseExecutionId: string | undefined,
+    iteration: number | undefined,
+    workflowStack: WorkflowResumePointEntry[],
   ) => void;
   'phase:complete': (
     step: WorkflowStep,
@@ -266,17 +311,19 @@ export interface WorkflowEvents {
     phaseName: PhaseName,
     content: string,
     status: string,
-    error?: string,
-    phaseExecutionId?: string,
-    iteration?: number,
+    error: string | undefined,
+    phaseExecutionId: string | undefined,
+    iteration: number | undefined,
+    workflowStack: WorkflowResumePointEntry[],
   ) => void;
   'phase:judge_stage': (
     step: WorkflowStep,
     phase: 3,
     phaseName: 'judge',
     entry: JudgeStageEntry,
-    phaseExecutionId?: string,
-    iteration?: number,
+    phaseExecutionId: string | undefined,
+    iteration: number | undefined,
+    workflowStack: WorkflowResumePointEntry[],
   ) => void;
   'workflow:complete': (state: WorkflowState) => void;
   'workflow:abort': (state: WorkflowState, reason: string, kind: WorkflowAbortKind) => void;
@@ -431,6 +478,12 @@ export interface WorkflowEngineOptions {
   resumeStackPrefix?: WorkflowResumePointEntry[];
   workflowCallResolver?: WorkflowCallResolver;
   /**
+   * Run-bound Finding authority selected by the application composition root.
+   * Local contracts resolve through it; inherited contracts keep the exact
+   * parent store instance.
+   */
+  findingAuthorityResolver?: FindingAuthorityResolver;
+  /**
    * workflow_call の親から継承する Finding Contract。
    * 継承しないと子の parallel レビューが出す raw findings が親の台帳に届かず、
    * fix ステップへ渡らないまま reviewers ↔ fix が回り続ける（実測: 56周・9時間）。
@@ -451,6 +504,8 @@ export interface WorkflowEngineOptions {
    * undefined のままにし、既存の raw finding id の形を変えない。
    */
   findingCallNamespace?: string;
+  /** Full resume-stack-derived identity for the workflow_call that owns this engine. */
+  workflowCallSiteIdentity?: string;
 }
 
 export interface WorkflowTraceTaskMetadata {

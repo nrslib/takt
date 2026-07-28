@@ -9,7 +9,7 @@ export const CORE_DDL = [
       AND substr(database_instance_id, 24, 1) = '-'
       AND replace(database_instance_id, '-', '') NOT GLOB '*[^0-9a-f]*'
     ),
-    schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    schema_version INTEGER NOT NULL CHECK (schema_version = 2),
     application_id INTEGER NOT NULL CHECK (application_id = 1413565268),
     schema_hash TEXT NOT NULL CHECK (
       length(schema_hash) = 64 AND schema_hash NOT GLOB '*[^0-9a-f]*'
@@ -41,13 +41,20 @@ export const CORE_DDL = [
   ) STRICT`,
   `CREATE TABLE runs (
     singleton_id INTEGER PRIMARY KEY DEFAULT 1 CHECK (singleton_id = 1),
-    run_id TEXT NOT NULL UNIQUE,
-    slug TEXT NOT NULL UNIQUE CHECK (
-      length(slug) > 0 AND slug NOT LIKE '%/%' AND slug NOT LIKE '%\\%'
+    run_id TEXT NOT NULL UNIQUE CHECK (
+      length(run_id) > 0
+      AND run_id NOT LIKE '%/%'
+      AND run_id NOT LIKE '%\\%'
     ),
     engine_build_id TEXT NOT NULL REFERENCES engine_builds(build_id),
     workflow_definition_id TEXT NOT NULL REFERENCES workflow_definitions(definition_id),
     finding_contract_enabled INTEGER NOT NULL CHECK (finding_contract_enabled IN (0, 1)),
+    bootstrap_seed_codec_name TEXT NOT NULL REFERENCES storage_codecs(codec_name),
+    bootstrap_seed TEXT NOT NULL,
+    bootstrap_seed_sha256 TEXT NOT NULL CHECK (
+      length(bootstrap_seed_sha256) = 64
+      AND bootstrap_seed_sha256 NOT GLOB '*[^0-9a-f]*'
+    ),
     status TEXT NOT NULL CHECK (
       status IN ('running', 'completed', 'failed', 'cancelled')
     ),
@@ -56,6 +63,53 @@ export const CORE_DDL = [
     CHECK (
       (status = 'running' AND terminal_at IS NULL)
       OR (status <> 'running' AND terminal_at IS NOT NULL)
+    )
+  ) STRICT`,
+  `CREATE TABLE terminal_publications (
+    run_id TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE,
+    event_id TEXT NOT NULL UNIQUE CHECK (
+      length(event_id) = 64 AND event_id NOT GLOB '*[^0-9a-f]*'
+    ),
+    status TEXT NOT NULL CHECK (status IN ('completed', 'aborted', 'failed')),
+    iteration INTEGER NOT NULL CHECK (iteration >= 0),
+    reason TEXT,
+    terminal_at INTEGER NOT NULL CHECK (terminal_at >= 0),
+    payload_codec_name TEXT NOT NULL REFERENCES storage_codecs(codec_name),
+    payload TEXT NOT NULL,
+    payload_digest TEXT NOT NULL CHECK (
+      length(payload_digest) = 64 AND payload_digest NOT GLOB '*[^0-9a-f]*'
+    ),
+    published_at INTEGER,
+    CHECK (
+      (status = 'completed' AND reason IS NULL)
+      OR (status IN ('aborted', 'failed') AND length(reason) > 0)
+    ),
+    CHECK (published_at IS NULL OR published_at >= terminal_at)
+  ) STRICT`,
+  `CREATE TABLE terminal_publication_stages (
+    run_id TEXT NOT NULL REFERENCES terminal_publications(run_id) ON DELETE CASCADE,
+    stage TEXT NOT NULL CHECK (
+      stage IN ('meta', 'session', 'trace')
+    ),
+    stage_id TEXT NOT NULL UNIQUE CHECK (
+      length(stage_id) = 64 AND stage_id NOT GLOB '*[^0-9a-f]*'
+    ),
+    claim_generation INTEGER NOT NULL DEFAULT 0 CHECK (claim_generation >= 0),
+    claim_token TEXT,
+    claim_expires_at INTEGER CHECK (claim_expires_at >= 0),
+    acknowledged_at INTEGER CHECK (acknowledged_at >= 0),
+    PRIMARY KEY (run_id, stage),
+    CHECK (
+      (
+        claim_generation = 0
+        AND claim_token IS NULL
+        AND claim_expires_at IS NULL
+      )
+      OR (
+        claim_generation > 0
+        AND length(claim_token) > 0
+        AND claim_expires_at IS NOT NULL
+      )
     )
   ) STRICT`,
   `CREATE TABLE run_ancestry (
@@ -74,30 +128,6 @@ export const CORE_DDL = [
     source_snapshot_digest TEXT NOT NULL CHECK (
       length(source_snapshot_digest) = 64
       AND source_snapshot_digest NOT GLOB '*[^0-9a-f]*'
-    ),
-    source_finding_scope_id TEXT,
-    source_finding_revision INTEGER CHECK (source_finding_revision > 0),
-    imported_finding_revision INTEGER CHECK (imported_finding_revision > 0),
-    source_finding_projection_digest TEXT CHECK (
-      source_finding_projection_digest IS NULL
-      OR (
-        length(source_finding_projection_digest) = 64
-        AND source_finding_projection_digest NOT GLOB '*[^0-9a-f]*'
-      )
-    ),
-    CHECK (
-      (
-        source_finding_scope_id IS NULL
-        AND source_finding_revision IS NULL
-        AND imported_finding_revision IS NULL
-        AND source_finding_projection_digest IS NULL
-      )
-      OR (
-        source_finding_scope_id IS NOT NULL
-        AND source_finding_revision IS NOT NULL
-        AND imported_finding_revision IS NOT NULL
-        AND source_finding_projection_digest IS NOT NULL
-      )
     ),
     FOREIGN KEY (run_id, source_run_id)
       REFERENCES run_ancestry(run_id, ancestor_run_id)
@@ -164,6 +194,9 @@ export const CORE_DDL = [
     parent_scope_id TEXT,
     kind TEXT NOT NULL CHECK (kind IN ('root', 'workflow_call', 'parallel')),
     workflow_definition_id TEXT NOT NULL REFERENCES workflow_definitions(definition_id),
+    finding_contract_enabled INTEGER NOT NULL CHECK (
+      finding_contract_enabled IN (0, 1)
+    ),
     created_at INTEGER NOT NULL CHECK (created_at >= 0),
     terminal_at INTEGER,
     PRIMARY KEY (run_id, scope_id),
@@ -230,10 +263,8 @@ export const CORE_DDL = [
     WHEN
       NEW.singleton_id <> OLD.singleton_id
       OR NEW.run_id <> OLD.run_id
-      OR NEW.slug <> OLD.slug
       OR NEW.engine_build_id <> OLD.engine_build_id
       OR NEW.workflow_definition_id <> OLD.workflow_definition_id
-      OR NEW.finding_contract_enabled <> OLD.finding_contract_enabled
       OR NEW.created_at <> OLD.created_at
     BEGIN
       SELECT RAISE(ABORT, 'run authority identity is immutable');
@@ -241,21 +272,116 @@ export const CORE_DDL = [
   `CREATE TRIGGER runs_state_transition_guard
     BEFORE UPDATE ON runs
     WHEN NOT (
-      OLD.status = 'running'
-      AND OLD.terminal_at IS NULL
-      AND NEW.status IN ('completed', 'failed', 'cancelled')
-      AND NEW.terminal_at IS NOT NULL
-      AND EXISTS (
-        SELECT 1
-        FROM run_leases
-        WHERE
-          run_leases.run_id = NEW.run_id
-          AND run_leases.terminalized_at = NEW.terminal_at
-          AND run_leases.terminal_status = NEW.status
+      (
+        OLD.status = 'running'
+        AND OLD.terminal_at IS NULL
+        AND NEW.status = OLD.status
+        AND NEW.terminal_at IS OLD.terminal_at
+        AND OLD.finding_contract_enabled = 0
+        AND NEW.finding_contract_enabled = 1
+      )
+      OR (
+        OLD.status = 'running'
+        AND OLD.terminal_at IS NULL
+        AND NEW.finding_contract_enabled = OLD.finding_contract_enabled
+        AND NEW.status IN ('completed', 'failed', 'cancelled')
+        AND NEW.terminal_at IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM run_leases
+          WHERE
+            run_leases.run_id = NEW.run_id
+            AND run_leases.terminalized_at = NEW.terminal_at
+            AND run_leases.terminal_status = NEW.status
+        )
       )
     )
     BEGIN
       SELECT RAISE(ABORT, 'run state transition is terminal and one-way');
+    END`,
+  `CREATE TRIGGER terminal_publications_update_guard
+    BEFORE UPDATE ON terminal_publications
+    WHEN NOT (
+      NEW.run_id IS OLD.run_id
+      AND NEW.event_id IS OLD.event_id
+      AND NEW.status IS OLD.status
+      AND NEW.iteration IS OLD.iteration
+      AND NEW.reason IS OLD.reason
+      AND NEW.terminal_at IS OLD.terminal_at
+      AND NEW.payload_codec_name IS OLD.payload_codec_name
+      AND NEW.payload IS OLD.payload
+      AND NEW.payload_digest IS OLD.payload_digest
+      AND OLD.published_at IS NULL
+      AND NEW.published_at >= NEW.terminal_at
+      AND NOT EXISTS (
+        SELECT 1
+        FROM terminal_publication_stages
+        WHERE
+          terminal_publication_stages.run_id = NEW.run_id
+          AND terminal_publication_stages.acknowledged_at IS NULL
+      )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'terminal publication requires every stage acknowledgement');
+    END`,
+  `CREATE TRIGGER terminal_publications_delete_guard
+    BEFORE DELETE ON terminal_publications
+    BEGIN
+      SELECT RAISE(ABORT, 'terminal publication cannot be deleted');
+    END`,
+  `CREATE TRIGGER terminal_publication_stages_update_guard
+    BEFORE UPDATE ON terminal_publication_stages
+    WHEN NOT (
+      (
+        NEW.run_id IS OLD.run_id
+        AND NEW.stage IS OLD.stage
+        AND NEW.stage_id IS OLD.stage_id
+        AND NEW.claim_generation = OLD.claim_generation + 1
+        AND length(NEW.claim_token) > 0
+        AND NEW.claim_expires_at >= (
+          SELECT terminal_at
+          FROM terminal_publications
+          WHERE terminal_publications.run_id = NEW.run_id
+        )
+        AND NEW.acknowledged_at IS OLD.acknowledged_at
+      )
+      OR (
+        NEW.run_id IS OLD.run_id
+        AND NEW.stage IS OLD.stage
+        AND NEW.stage_id IS OLD.stage_id
+        AND NEW.claim_generation IS OLD.claim_generation
+        AND NEW.claim_token IS OLD.claim_token
+        AND NEW.claim_expires_at <= OLD.claim_expires_at
+        AND NEW.claim_expires_at >= (
+          SELECT terminal_at
+          FROM terminal_publications
+          WHERE terminal_publications.run_id = NEW.run_id
+        )
+        AND NEW.acknowledged_at IS OLD.acknowledged_at
+      )
+      OR (
+        NEW.run_id IS OLD.run_id
+        AND NEW.stage IS OLD.stage
+        AND NEW.stage_id IS OLD.stage_id
+        AND NEW.claim_generation IS OLD.claim_generation
+        AND NEW.claim_token IS OLD.claim_token
+        AND NEW.claim_expires_at IS OLD.claim_expires_at
+        AND OLD.acknowledged_at IS NULL
+        AND NEW.acknowledged_at >= (
+          SELECT terminal_at
+          FROM terminal_publications
+          WHERE terminal_publications.run_id = NEW.run_id
+        )
+        AND NEW.acknowledged_at < NEW.claim_expires_at
+      )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'terminal publication stage claim or acknowledgement is invalid');
+    END`,
+  `CREATE TRIGGER terminal_publication_stages_delete_guard
+    BEFORE DELETE ON terminal_publication_stages
+    BEGIN
+      SELECT RAISE(ABORT, 'terminal publication stage cannot be deleted');
     END`,
   `CREATE TRIGGER run_ancestry_update_guard
     BEFORE UPDATE ON run_ancestry

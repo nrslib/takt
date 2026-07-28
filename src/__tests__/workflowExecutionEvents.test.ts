@@ -8,8 +8,10 @@ import { initAnalyticsWriter } from '../features/analytics/index.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
 import { bindWorkflowExecutionEvents } from '../features/tasks/execute/workflowExecutionEvents.js';
+import { createWorkflowTerminalPayloadFactory } from '../features/tasks/execute/workflowTerminalPayload.js';
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/debug.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import type { ProviderType } from '../shared/types/provider.js';
 
 class TestEngine extends EventEmitter {
   public abort = vi.fn();
@@ -37,17 +39,24 @@ class TestEngine extends EventEmitter {
 }
 
 function createBridgeHarness(options?: {
-  currentProvider?: string;
+  currentProvider?: ProviderType;
   configuredModel?: string;
   resumePoint?: WorkflowResumePoint;
   findingIds?: string[];
   traceDiscovery?: { queries: string[] };
   eventSink?: ReturnType<typeof vi.fn>;
   shouldNotifyRateLimit?: boolean;
+  display?: { flush: ReturnType<typeof vi.fn> };
 }) {
   const resumePoint = options?.resumePoint ?? {
     version: 1,
-    stack: [{ workflow: 'parent', step: 'review', kind: 'agent' }],
+    stack: [{
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'review',
+      kind: 'agent',
+      occurrence: 1,
+    }],
     iteration: 2,
     elapsed_ms: 100,
   } satisfies WorkflowResumePoint;
@@ -65,6 +74,9 @@ function createBridgeHarness(options?: {
     setStepContext: vi.fn(),
     flush: vi.fn(),
   };
+  const displayRef = {
+    current: options?.display ?? null,
+  };
   const runMetaManager = {
     updateStep: vi.fn(),
     updatePhase: vi.fn(),
@@ -72,16 +84,58 @@ function createBridgeHarness(options?: {
     finalize: vi.fn(),
   };
   const analyticsEmitter = {
-    updateProviderInfo: vi.fn(),
     onStepComplete: vi.fn(),
     onStepReport: vi.fn(),
     onFindingLedgerUpdated: vi.fn(),
-    seedFindingContractFindingIds: vi.fn(),
+    setFindingContractFindingIds: vi.fn(),
     onRoutingDecision: vi.fn(),
   };
   const usageEventLogger = {
     logUsageFor: vi.fn(),
   };
+  const sessionLogger = {
+    onPhaseStart: vi.fn(),
+    onPhaseComplete: vi.fn(),
+    onJudgeStage: vi.fn(),
+    onStepStart: vi.fn(),
+    onStepComplete: vi.fn(),
+    onWorkflowComplete: vi.fn(),
+    onWorkflowAbort: vi.fn(),
+  };
+  const sessionLog = {
+    task: 'task',
+    projectDir: '/tmp/project',
+    workflowName: 'parent',
+    iterations: 0,
+    startTime: new Date().toISOString(),
+    status: 'running' as const,
+    history: [],
+  };
+  const terminalPayloads = createWorkflowTerminalPayloadFactory({
+    runSlug: 'run-1',
+    projectCwd: '/tmp/project',
+    task: 'task',
+    workflowName: 'parent',
+    sessionLog,
+    sessionId: 'session',
+    ndjsonLogPath: '/tmp/project/run/logs/session.jsonl',
+    traceReportMode: 'redacted',
+    metaSeed: {
+      backend: 'file',
+      startedAt: sessionLog.startTime,
+      resumeSource: null,
+    },
+    ...(options?.traceDiscovery === undefined
+      ? {}
+      : {
+          traceDiscovery: {
+            serviceName: 'takt',
+            runId: 'run-1',
+            workflowName: 'parent',
+            queries: options.traceDiscovery.queries,
+          },
+        }),
+  });
   const bridge = bindWorkflowExecutionEvents({
     engine: engine as never,
     workflowConfig: {
@@ -89,46 +143,21 @@ function createBridgeHarness(options?: {
       maxSteps: 5,
       steps: [{ name: 'review' }],
     },
-    task: 'task',
-    projectCwd: '/tmp/project',
     currentProvider: options?.currentProvider ?? 'mock',
     configuredModel: options?.configuredModel ?? 'gpt-test',
     out: out as never,
     prefixWriter: prefixWriter as never,
-    displayRef: { current: null },
+    displayRef: displayRef as never,
     handlerRef: { current: null },
     usageEventLogger: usageEventLogger as never,
     analyticsEmitter: analyticsEmitter as never,
-    sessionLogger: {
-      onPhaseStart: vi.fn(),
-      setIteration: vi.fn(),
-      onPhaseComplete: vi.fn(),
-      onJudgeStage: vi.fn(),
-      onStepStart: vi.fn(),
-      onStepComplete: vi.fn(),
-      onWorkflowComplete: vi.fn(),
-      onWorkflowAbort: vi.fn(),
-    } as never,
+    sessionLogger: sessionLogger as never,
     runMetaManager: runMetaManager as never,
-    ndjsonLogPath: '/tmp/project/run/logs/session.jsonl',
     shouldNotifyRateLimit: options?.shouldNotifyRateLimit ?? false,
-    shouldNotifyWorkflowComplete: false,
-    shouldNotifyWorkflowAbort: false,
-    writeTraceReportOnce: vi.fn(),
-    traceDiscovery: options?.traceDiscovery,
-    getCurrentWorkflowStack: () => resumePoint.stack,
     initialResumePoint: resumePoint,
-    sessionLog: {
-      task: 'task',
-      projectDir: '/tmp/project',
-      workflowName: 'parent',
-      iterations: 0,
-      startTime: new Date().toISOString(),
-      status: 'running',
-      history: [],
-    },
+    sessionLog,
     eventSink: options?.eventSink,
-    reportDirectory: '/tmp/project/run/reports',
+    terminalPayloads,
   });
 
   return {
@@ -137,9 +166,12 @@ function createBridgeHarness(options?: {
     out,
     runMetaManager,
     prefixWriter,
+    displayRef,
     resumePoint,
     analyticsEmitter,
     usageEventLogger,
+    sessionLogger,
+    terminalPayloads,
   };
 }
 
@@ -176,6 +208,9 @@ describe('bindWorkflowExecutionEvents', () => {
     engine.emit('step:complete', step, response, 'instruction', step.name);
     engine.emit('workflow:complete', { iteration: 2 });
 
+    expect(runMetaManager.finalize).not.toHaveBeenCalled();
+    const payload = bridge.prepareTerminalPublicationPayload();
+
     expect(runMetaManager.updateStep).toHaveBeenCalledWith('review', 2, resumePoint);
     expect(prefixWriter.setStepContext).toHaveBeenCalledWith({
       stepName: 'review',
@@ -187,7 +222,11 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(runMetaManager.updatePhase.mock.calls[0]?.slice(0, 3)).toEqual(['review', 2, 1]);
     expect(runMetaManager.updatePhase.mock.calls[1]?.slice(0, 3)).toEqual(['review', 2, 1]);
     expect(runMetaManager.updateResumePoint).toHaveBeenCalledWith(resumePoint);
-    expect(runMetaManager.finalize).toHaveBeenCalledWith('completed', 2);
+    expect(runMetaManager.finalize).not.toHaveBeenCalled();
+    expect(payload).toMatchObject({
+      status: 'completed',
+      iterations: 2,
+    });
     expect(bridge.state.lastStepName).toBe('review');
     expect(bridge.state.lastStepContent).toBe('approved');
     expect(bridge.state.sessionLog.iterations).toBe(1);
@@ -239,6 +278,72 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(bridge.state.lastStepName).toBe('review');
   });
 
+  it('step の開始・完了を event payload の発生元 stack で相関する', () => {
+    const { engine, sessionLogger } = createBridgeHarness();
+    const step = {
+      name: 'child-review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+      rules: [],
+    } as WorkflowStep;
+    const workflowStack = [
+      {
+        workflow: 'parent',
+        workflow_ref: 'project:sha256:parent',
+        step: 'delegate',
+        kind: 'workflow_call' as const,
+        occurrence: 1,
+      },
+      {
+        workflow: 'child',
+        workflow_ref: 'project:sha256:child',
+        step: step.name,
+        kind: 'agent' as const,
+        occurrence: 1,
+      },
+    ];
+
+    engine.emit(
+      'step:start',
+      step,
+      2,
+      'instruction',
+      { provider: 'mock', model: 'gpt-test' },
+      'child',
+      'delegate',
+      1,
+      workflowStack,
+    );
+    const response = {
+      persona: 'reviewer',
+      status: 'done',
+      content: 'approved',
+      timestamp: new Date(),
+    };
+    engine.emit(
+      'step:complete',
+      step,
+      response,
+      'instruction',
+      'delegate',
+      workflowStack,
+    );
+
+    expect(sessionLogger.onStepStart).toHaveBeenCalledWith(
+      step,
+      2,
+      'instruction',
+      workflowStack,
+      { provider: 'mock', model: 'gpt-test' },
+    );
+    expect(sessionLogger.onStepComplete).toHaveBeenCalledWith(
+      step,
+      response,
+      'instruction',
+      workflowStack,
+    );
+  });
+
   it('workflow abort kind を実行状態に保持する', () => {
     const { bridge, engine } = createBridgeHarness();
 
@@ -250,6 +355,86 @@ describe('bindWorkflowExecutionEvents', () => {
     );
 
     expect(bridge.state.abortKind).toBe('step_transition');
+  });
+
+  it('terminal投影失敗をadditionalに保持しcleanupを完了して最初のabort intentを維持する', () => {
+    const projectionFailure = new Error('resume-point projection failed');
+    const display = { flush: vi.fn() };
+    const {
+      bridge,
+      engine,
+      runMetaManager,
+      prefixWriter,
+      displayRef,
+    } = createBridgeHarness({ display });
+    runMetaManager.updateResumePoint.mockImplementation(() => {
+      throw projectionFailure;
+    });
+
+    expect(() => {
+      engine.emit(
+        'workflow:abort',
+        { iteration: 3 },
+        'first abort',
+        'step_error',
+      );
+    }).not.toThrow();
+    expect(() => {
+      engine.emit(
+        'workflow:abort',
+        { iteration: 4 },
+        'second abort',
+        'runtime_error',
+      );
+    }).not.toThrow();
+
+    expect(bridge.getStagedAbort()).toEqual({
+      iteration: 3,
+      reason: 'first abort',
+      kind: 'step_error',
+      status: 'failed',
+    });
+    expect(bridge.getFinalizationIssues()).toEqual([
+      expect.objectContaining({
+        name: 'RunProjectionError',
+        stage: 'meta',
+        cause: projectionFailure,
+      }),
+      expect.objectContaining({
+        name: 'RunProjectionError',
+        stage: 'meta',
+        cause: projectionFailure,
+      }),
+    ]);
+    expect(display.flush).toHaveBeenCalledOnce();
+    expect(displayRef.current).toBeNull();
+    expect(prefixWriter.flush).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      kind: 'interrupt',
+      expectedStatus: 'aborted',
+    },
+    {
+      kind: 'step_error',
+      expectedStatus: 'failed',
+    },
+  ] as const)('publishes $kind as $expectedStatus', ({
+    kind,
+    expectedStatus,
+  }) => {
+    const { bridge, engine, runMetaManager } = createBridgeHarness();
+
+    engine.emit('workflow:abort', { iteration: 3 }, 'terminal reason', kind);
+    const payload = bridge.prepareTerminalPublicationPayload();
+
+    expect(runMetaManager.finalize).not.toHaveBeenCalled();
+    expect(payload).toMatchObject({
+      status: expectedStatus,
+      iterations: 3,
+      reason: 'terminal reason',
+    });
   });
 
   it('findings ledger event を analytics emitter に渡す', () => {
@@ -264,39 +449,52 @@ describe('bindWorkflowExecutionEvents', () => {
       interpretations: [],
     };
 
-    engine.emit('findings:ledger', ledger);
+    const context = {
+      iteration: 4,
+      workflowName: 'peer-review',
+      scopeIdentity: 'peer-review-scope',
+    };
+    engine.emit('findings:ledger', ledger, context);
 
-    expect(analyticsEmitter.onFindingLedgerUpdated).toHaveBeenCalledWith(ledger);
+    expect(analyticsEmitter.onFindingLedgerUpdated).toHaveBeenCalledWith(
+      ledger,
+      context,
+    );
   });
 
   it('workflow complete event が TraceQL discovery を完了出力へ渡す', () => {
-    const { engine, out } = createBridgeHarness({
+    const { bridge, engine } = createBridgeHarness({
       traceDiscovery: {
         queries: ['{ resource.service.name = "takt" && span."takt.run.id" = "run-843" }'],
       },
     });
 
     engine.emit('workflow:complete', { iteration: 2 });
+    const payload = bridge.prepareTerminalPublicationPayload();
 
-    expect(out.info).toHaveBeenCalledWith('TraceQL discovery:');
-    expect(out.info).toHaveBeenCalledWith(
-      '  { resource.service.name = "takt" && span."takt.run.id" = "run-843" }',
-    );
+    expect(payload.traceDiscovery?.queries).toEqual([
+      '{ resource.service.name = "takt" && span."takt.run.id" = "run-843" }',
+    ]);
   });
 
   it('workflow abort event が TraceQL discovery を abort 出力へ渡す', () => {
-    const { engine, out } = createBridgeHarness({
+    const { bridge, engine } = createBridgeHarness({
       traceDiscovery: {
         queries: ['{ resource.service.name = "takt" && span."takt.task.issue_number" = 792 }'],
       },
     });
 
-    engine.emit('workflow:abort', { iteration: 2 }, 'Step "write_tests" failed');
-
-    expect(out.info).toHaveBeenCalledWith('TraceQL discovery:');
-    expect(out.info).toHaveBeenCalledWith(
-      '  { resource.service.name = "takt" && span."takt.task.issue_number" = 792 }',
+    engine.emit(
+      'workflow:abort',
+      { iteration: 2 },
+      'Step "write_tests" failed',
+      'step_error',
     );
+    const payload = bridge.prepareTerminalPublicationPayload();
+
+    expect(payload.traceDiscovery?.queries).toEqual([
+      '{ resource.service.name = "takt" && span."takt.task.issue_number" = 792 }',
+    ]);
   });
 
   it('finding ledger analytics の書き込み失敗後も workflow complete を処理する', () => {
@@ -305,10 +503,22 @@ describe('bindWorkflowExecutionEvents', () => {
     writeFileSync(analyticsPath, 'not a directory', 'utf-8');
     initAnalyticsWriter(true, analyticsPath);
     try {
-      const actualAnalyticsEmitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'parent', false);
-      const { engine, runMetaManager, analyticsEmitter } = createBridgeHarness();
-      analyticsEmitter.onFindingLedgerUpdated.mockImplementation((ledger: FindingLedger) => {
-        actualAnalyticsEmitter.onFindingLedgerUpdated(ledger);
+      const actualAnalyticsEmitter = new AnalyticsEmitter('run-ledger', false);
+      const {
+        bridge,
+        engine,
+        runMetaManager,
+        analyticsEmitter,
+      } = createBridgeHarness();
+      analyticsEmitter.onFindingLedgerUpdated.mockImplementation((
+        ledger: FindingLedger,
+        context: {
+          readonly iteration: number;
+          readonly workflowName: string;
+          readonly scopeIdentity: string;
+        },
+      ) => {
+        actualAnalyticsEmitter.onFindingLedgerUpdated(ledger, context);
       });
       const ledger: FindingLedger = {
         workflowName: 'peer-review',
@@ -333,20 +543,50 @@ describe('bindWorkflowExecutionEvents', () => {
         interpretations: [],
       };
 
-      expect(() => engine.emit('findings:ledger', ledger)).not.toThrow();
+      expect(() => engine.emit('findings:ledger', ledger, {
+        iteration: 2,
+        workflowName: 'peer-review',
+        scopeIdentity: 'peer-review-scope',
+      })).not.toThrow();
       expect(() => engine.emit('workflow:complete', { iteration: 3 })).not.toThrow();
+      const payload = bridge.prepareTerminalPublicationPayload();
 
-      expect(runMetaManager.finalize).toHaveBeenCalledWith('completed', 3);
+      expect(runMetaManager.finalize).not.toHaveBeenCalled();
+      expect(payload).toMatchObject({
+        status: 'completed',
+        iterations: 3,
+      });
     } finally {
       resetAnalyticsWriter();
       rmSync(analyticsRoot, { recursive: true, force: true });
     }
   });
 
-  it('event bridge 初期化時に既存 open finding id を analytics emitter に渡す', () => {
-    const { analyticsEmitter } = createBridgeHarness({ findingIds: ['F-0001', 'F-0002'] });
+  it('direct child resumeの初回stepでchild ledgerの現行Finding IDsを渡す', () => {
+    const { analyticsEmitter, engine } = createBridgeHarness();
+    const step = {
+      name: 'fix',
+      personaDisplayName: 'Coder',
+      instruction: '',
+    } as WorkflowStep;
+    engine.emit(
+      'step:start',
+      step,
+      1,
+      'fix',
+      { provider: 'mock', model: 'test' },
+      'peer-review',
+      step.name,
+      1,
+      [],
+      'peer-review-scope',
+      ['F-1001', 'F-1002'],
+    );
 
-    expect(analyticsEmitter.seedFindingContractFindingIds).toHaveBeenCalledWith(['F-0001', 'F-0002']);
+    expect(analyticsEmitter.setFindingContractFindingIds).toHaveBeenCalledWith(
+      'peer-review-scope',
+      ['F-1001', 'F-1002'],
+    );
   });
 
   it('routing decision event を analytics emitter に渡す', () => {
@@ -389,7 +629,7 @@ describe('bindWorkflowExecutionEvents', () => {
   });
 
   it('step model が明示省略された場合は configured model へ戻さず default として記録する', () => {
-    const { engine, out, usageEventLogger, analyticsEmitter } = createBridgeHarness({
+    const { engine, out } = createBridgeHarness({
       currentProvider: 'cursor',
       configuredModel: 'global-model',
     });
@@ -406,11 +646,10 @@ describe('bindWorkflowExecutionEvents', () => {
     }, 'parent', step.name);
 
     expect(out.info).toHaveBeenCalledWith('Model: (default)');
-    expect(analyticsEmitter.updateProviderInfo).toHaveBeenCalledWith(1, 'cursor', '(default)', 'parent');
   });
 
   it('workflow_call 親子の完了順が入れ子でも開始時の usage context を保持する', () => {
-    const { engine, usageEventLogger } = createBridgeHarness();
+    const { engine, usageEventLogger, analyticsEmitter } = createBridgeHarness();
     const parentStep = {
       name: 'call-child',
       kind: 'workflow_call',
@@ -470,6 +709,206 @@ describe('bindWorkflowExecutionEvents', () => {
         expect.objectContaining({ success: true, usage }),
       ],
     ]);
+    expect(analyticsEmitter.onStepComplete.mock.calls).toEqual([
+      [
+        childStep,
+        expect.objectContaining({ content: 'child done' }),
+        {
+          iteration: 1,
+          workflowName: 'parent',
+          scopeIdentity: '{"workflow":"parent","stack":[]}',
+          provider: 'claude',
+          model: 'child-model',
+        },
+      ],
+      [
+        parentStep,
+        expect.objectContaining({ content: 'parent done' }),
+        {
+          iteration: 1,
+          workflowName: 'parent',
+          scopeIdentity: '{"workflow":"parent","stack":[]}',
+          provider: 'codex',
+          model: 'parent-model',
+        },
+      ],
+    ]);
+  });
+
+  it('parallel substep reportは対応するstep:startなしで実行境界のcontextを使う', () => {
+    const { engine, analyticsEmitter } = createBridgeHarness();
+    const reportRoot = mkdtempSync(join(tmpdir(), 'takt-parallel-report-context-'));
+    const reportPath = join(reportRoot, 'architecture-review.md');
+    writeFileSync(reportPath, '# Architecture review\n');
+    const subStep = {
+      name: 'architecture-review',
+      personaDisplayName: 'Architecture Reviewer',
+      instruction: '',
+      rules: [],
+    } as WorkflowStep;
+    const workflowStack = [{
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'reviewers',
+      kind: 'parallel' as const,
+      occurrence: 2,
+    }];
+    const reportContext = {
+      iteration: 7,
+      workflowName: 'parent',
+      resumeStepName: 'reviewers',
+      stepIteration: 3,
+      providerInfo: {
+        provider: 'codex' as const,
+        model: 'gpt-5',
+      },
+      provider: 'codex' as const,
+      model: 'gpt-5',
+      workflowStack,
+      findingScopeIdentity: 'review-scope',
+      findingIds: ['F-0007'],
+    };
+
+    try {
+      expect(() => {
+        engine.emit(
+          'step:report',
+          subStep,
+          reportPath,
+          'architecture-review.md',
+          reportContext,
+        );
+      }).not.toThrow();
+      expect(analyticsEmitter.onStepReport).toHaveBeenCalledWith(
+        subStep,
+        reportPath,
+        {
+          iteration: 7,
+          workflowName: 'parent',
+          scopeIdentity: 'review-scope',
+          provider: 'codex',
+          model: 'gpt-5',
+        },
+      );
+    } finally {
+      rmSync(reportRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('同名 parallel child の逆順完了でも開始 scope ごとの analytics context を保持する', () => {
+    const { engine, analyticsEmitter } = createBridgeHarness();
+    const slowStep = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+      rules: [],
+    } as WorkflowStep;
+    const fastStep = {
+      ...slowStep,
+    };
+    const slowStack = [
+      {
+        workflow: 'parent',
+        workflow_ref: 'project:sha256:parent',
+        step: 'slow-delegate',
+        kind: 'workflow_call',
+        occurrence: 1,
+      },
+      {
+        workflow: 'shared-child',
+        workflow_ref: 'project:sha256:shared-child',
+        step: 'review',
+        kind: 'agent',
+        occurrence: 1,
+      },
+    ];
+    const fastStack = [
+      {
+        workflow: 'parent',
+        workflow_ref: 'project:sha256:parent',
+        step: 'fast-delegate',
+        kind: 'workflow_call',
+        occurrence: 1,
+      },
+      {
+        workflow: 'shared-child',
+        workflow_ref: 'project:sha256:shared-child',
+        step: 'review',
+        kind: 'agent',
+        occurrence: 1,
+      },
+    ];
+
+    engine.emit(
+      'step:start',
+      slowStep,
+      3,
+      'slow',
+      { provider: 'codex', model: 'slow-model' },
+      'shared-child',
+      slowStep.name,
+      1,
+      slowStack,
+      'slow-finding-scope',
+      ['F-0001'],
+    );
+    engine.emit(
+      'step:start',
+      fastStep,
+      4,
+      'fast',
+      { provider: 'claude', model: 'fast-model' },
+      'shared-child',
+      fastStep.name,
+      1,
+      fastStack,
+      'fast-finding-scope',
+      ['F-0002'],
+    );
+    engine.emit('step:complete', fastStep, {
+      persona: 'reviewer',
+      status: 'done',
+      content: 'fast done',
+      timestamp: new Date(),
+    }, 'fast', fastStep.name, fastStack);
+    engine.emit('step:complete', slowStep, {
+      persona: 'reviewer',
+      status: 'done',
+      content: 'slow done',
+      timestamp: new Date(),
+    }, 'slow', slowStep.name, slowStack);
+
+    expect(analyticsEmitter.onStepComplete.mock.calls.map(
+      ([, response, context]) => ({
+        content: response.content,
+        context,
+      }),
+    )).toEqual([
+      {
+        content: 'fast done',
+        context: {
+          iteration: 4,
+          workflowName: 'shared-child',
+          scopeIdentity: 'fast-finding-scope',
+          provider: 'claude',
+          model: 'fast-model',
+        },
+      },
+      {
+        content: 'slow done',
+        context: {
+          iteration: 3,
+          workflowName: 'shared-child',
+          scopeIdentity: 'slow-finding-scope',
+          provider: 'codex',
+          model: 'slow-model',
+        },
+      },
+    ]);
+    expect(analyticsEmitter.setFindingContractFindingIds.mock.calls).toEqual([
+      ['slow-finding-scope', ['F-0001']],
+      ['fast-finding-scope', ['F-0002']],
+    ]);
   });
 
   it.each([
@@ -490,13 +929,22 @@ describe('bindWorkflowExecutionEvents', () => {
       timestamp: new Date(),
     } as const;
 
+    engine.emit(
+      'step:start',
+      step,
+      1,
+      'instruction',
+      { provider: 'mock', model: 'test-model' },
+      'parent',
+      step.name,
+    );
     engine.emit('step:complete', step, response, 'instruction', step.name);
 
     expect(usageEventLogger.logUsageFor).not.toHaveBeenCalled();
   });
 
   it('loop monitor judge model が明示省略された場合は usage に default として記録する', () => {
-    const { engine, out, usageEventLogger, analyticsEmitter } = createBridgeHarness({
+    const { engine, out } = createBridgeHarness({
       currentProvider: 'codex',
       configuredModel: 'configured-model',
     });
@@ -513,7 +961,6 @@ describe('bindWorkflowExecutionEvents', () => {
     }, 'parent', step.name);
 
     expect(out.info).toHaveBeenCalledWith('Model: (default)');
-    expect(analyticsEmitter.updateProviderInfo).toHaveBeenCalledWith(1, 'codex', '(default)', 'parent');
   });
 
   it('OpenCode variant を step start の provider option 表示に含める', () => {
@@ -1168,34 +1615,51 @@ describe('bindWorkflowExecutionEvents', () => {
     });
   });
 
-  it('event sink へ workflow completed 成功/失敗を渡す', async () => {
+  it('workflow completed 成功/失敗をbackend-neutral payloadへstageする', () => {
     const eventSink = vi.fn().mockResolvedValue(undefined);
     const successHarness = createBridgeHarness({ eventSink });
 
     successHarness.engine.emit('workflow:complete', { iteration: 2 });
-    await successHarness.bridge.flushEventSink();
+    const successPayload =
+      successHarness.bridge.prepareTerminalPublicationPayload();
 
-    expect(eventSink).toHaveBeenCalledWith({
-      type: 'completed',
-      success: true,
-      reportDirectory: '/tmp/project/run/reports',
+    expect(successPayload).toMatchObject({
+      status: 'completed',
+      iterations: 2,
     });
+    expect(eventSink).not.toHaveBeenCalled();
 
     eventSink.mockClear();
     const failureHarness = createBridgeHarness({ eventSink });
-    failureHarness.engine.emit('workflow:abort', { iteration: 3 }, 'Step "review" failed');
-    await failureHarness.bridge.flushEventSink();
+    failureHarness.engine.emit(
+      'workflow:abort',
+      { iteration: 3 },
+      'Step "review" failed',
+      'step_error',
+    );
+    const failurePayload =
+      failureHarness.bridge.prepareTerminalPublicationPayload();
 
-    expect(eventSink).toHaveBeenCalledWith({
-      type: 'completed',
-      success: false,
-      reportDirectory: '/tmp/project/run/reports',
+    expect(failurePayload).toMatchObject({
+      status: 'failed',
+      iterations: 3,
       reason: 'Step "review" failed',
     });
-
+    expect(eventSink).not.toHaveBeenCalled();
   });
 
-  it('event sink 失敗時は workflow を abort し、flush で伝播する', async () => {
+  it('terminal payloadをimmutableな同一instanceとして一度だけ確定する', () => {
+    const { bridge, engine } = createBridgeHarness();
+    engine.emit('workflow:complete', { iteration: 2 });
+
+    const first = bridge.prepareTerminalPublicationPayload();
+    const second = bridge.prepareTerminalPublicationPayload();
+
+    expect(first).toBe(second);
+    expect(Object.isFrozen(first)).toBe(true);
+  });
+
+  it('event sink 失敗はworkflowをabortせずlive delivery issueにする', async () => {
     const eventSinkError = new Error('session/update failed');
     const { bridge, engine } = createBridgeHarness({
       eventSink: vi.fn().mockRejectedValue(eventSinkError),
@@ -1207,12 +1671,21 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', 'review');
 
-    await expect(bridge.flushEventSink()).rejects.toThrow('session/update failed');
-    expect(engine.abort).toHaveBeenCalled();
-    expect(bridge.state.abortReason).toBe('Workflow event sink failed: session/update failed');
+    await expect(bridge.flushEventSink()).resolves.toBeUndefined();
+    expect(engine.abort).not.toHaveBeenCalled();
+    expect(bridge.state.abortReason).toBeUndefined();
+    expect(bridge.getFinalizationIssues()).toHaveLength(2);
+    expect(bridge.getFinalizationIssues()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'RunLiveDeliveryError',
+          cause: eventSinkError,
+        }),
+      ]),
+    );
   });
 
-  it('event sink の同期 throw も workflow を abort し、flush で伝播する', async () => {
+  it('event sink の同期throwもworkflow outcomeを変更しない', async () => {
     const eventSinkError = new Error('session/update threw');
     const { bridge, engine } = createBridgeHarness({
       eventSink: vi.fn(() => {
@@ -1227,8 +1700,14 @@ describe('bindWorkflowExecutionEvents', () => {
       ndjsonLogPath: '/tmp/project/run/logs/session.jsonl',
     });
 
-    await expect(bridge.flushEventSink()).rejects.toThrow('session/update threw');
-    expect(engine.abort).toHaveBeenCalled();
-    expect(bridge.state.abortReason).toBe('Workflow event sink failed: session/update threw');
+    await expect(bridge.flushEventSink()).resolves.toBeUndefined();
+    expect(engine.abort).not.toHaveBeenCalled();
+    expect(bridge.state.abortReason).toBeUndefined();
+    expect(bridge.getFinalizationIssues()).toEqual([
+      expect.objectContaining({
+        name: 'RunLiveDeliveryError',
+        cause: eventSinkError,
+      }),
+    ]);
   });
 });

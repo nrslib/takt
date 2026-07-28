@@ -72,7 +72,7 @@ describe('Finding manager SQLite adapter', () => {
     reopen(updated.databasePath, updated.root);
 
     const pending = createFindingStore();
-    const pendingRunId = pending.root.readResumeSnapshot().run.runId;
+    const pendingRunId = pending.store.runId;
     await pending.store.commitManagerLedger((current) => ({
       ledger: {
         ...current,
@@ -100,7 +100,7 @@ describe('Finding manager SQLite adapter', () => {
     reopen(pending.databasePath, pending.root);
 
     const finalized = createFindingStore();
-    const finalizedRunId = finalized.root.readResumeSnapshot().run.runId;
+    const finalizedRunId = finalized.store.runId;
     const staged = await finalized.store.commitManagerLedger((current) => ({
       ledger: {
         ...current,
@@ -177,7 +177,7 @@ describe('Finding manager SQLite adapter', () => {
     });
     const report = {
       version: 1 as const,
-      runId: root.readResumeSnapshot().run.runId,
+      runId: store.runId,
       stepName: 'reviewers',
       retryCount: 2,
       ledgerUpdated: false,
@@ -232,6 +232,7 @@ describe('Finding manager SQLite adapter', () => {
       mkdirSync(reportDir, { recursive: true });
       const filesystemStore = createFindingLedgerStore({
         projectCwd,
+        runId: report.runId,
         reportDir,
         workflowName: 'default',
         ledgerPath: '.takt/findings/ledger.json',
@@ -336,7 +337,7 @@ describe('Finding manager SQLite adapter', () => {
       workflowName: 'default',
       producer: execution.handle,
     });
-    const runId = root.readResumeSnapshot().run.runId;
+    const runId = store.runId;
     const roundMarker = 'round-1';
     const previousLedger = store.loadLedger();
     const publication = store.planManagerValidationPublication(roundMarker, {
@@ -412,7 +413,8 @@ describe('Finding manager SQLite adapter', () => {
       workflowName: 'default',
       producer: execution.handle,
     });
-    const runId = root.readResumeSnapshot().run.runId;
+    const runId = store.runId;
+    const internalRunId = root.readResumeSnapshot().run.runId;
     const rawE1: RawFinding = {
       rawFindingId: 'raw-pending-integrity',
       stepName: 'reviewers',
@@ -494,7 +496,7 @@ describe('Finding manager SQLite adapter', () => {
       SELECT scope_id AS scopeId, current_revision AS revision
       FROM finding_ledger_heads
       WHERE run_id = ?
-    `).get(runId) as { scopeId: string; revision: number };
+    `).get(internalRunId) as { scopeId: string; revision: number };
     database.exec(`
       DROP TRIGGER finding_ledger_controls_update_guard;
       DROP TRIGGER finding_ledger_revisions_update_guard;
@@ -506,17 +508,23 @@ describe('Finding manager SQLite adapter', () => {
       SET record = ?, digest = ?
       WHERE run_id = ? AND scope_id = ? AND revision = ?
         AND control_kind = 'pending_manager_commit'
-    `).run(pendingRecord, pendingDigest, runId, head.scopeId, head.revision);
+    `).run(
+      pendingRecord,
+      pendingDigest,
+      internalRunId,
+      head.scopeId,
+      head.revision,
+    );
     database.prepare(`
       UPDATE finding_ledger_revisions
       SET projection_digest = ?
       WHERE run_id = ? AND scope_id = ? AND revision = ?
-    `).run(projectionDigest, runId, head.scopeId, head.revision);
+    `).run(projectionDigest, internalRunId, head.scopeId, head.revision);
     database.prepare(`
       UPDATE finding_revision_publications
       SET projection_digest = ?
       WHERE run_id = ? AND scope_id = ? AND revision = ?
-    `).run(projectionDigest, runId, head.scopeId, head.revision);
+    `).run(projectionDigest, internalRunId, head.scopeId, head.revision);
     database.exec('COMMIT');
     database.close();
 
@@ -542,7 +550,7 @@ describe('Finding manager SQLite adapter', () => {
       workflowName: 'default',
       producer: execution.handle,
     });
-    const runId = root.readResumeSnapshot().run.runId;
+    const runId = store.runId;
     const roundMarker = 'round-general-finalization';
     const publication = store.planManagerValidationPublication(roundMarker, {
       version: 1,
@@ -598,7 +606,7 @@ describe('Finding manager SQLite adapter', () => {
       workflowName: 'default',
       producer: execution.handle,
     });
-    const parentRunId = parentRoot.readResumeSnapshot().run.runId;
+    const parentRunId = store.runId;
     const roundMarker = 'round-cross-run-resume';
     const publication = store.planManagerValidationPublication(roundMarker, {
       version: 1,
@@ -720,7 +728,7 @@ describe('Finding manager SQLite adapter', () => {
       workflowName: 'default',
       producer: execution.handle,
     });
-    const runId = root.readResumeSnapshot().run.runId;
+    const runId = store.runId;
     const roundMarker = 'round-stale';
     const previousLedger = store.loadLedger();
     const publication = store.planManagerValidationPublication(roundMarker, {
@@ -810,7 +818,7 @@ describe('Finding manager SQLite adapter', () => {
       workflowName: 'default',
       producer: execution.handle,
     });
-    const runId = root.readResumeSnapshot().run.runId;
+    const runId = store.runId;
     const roundMarker = 'round-conflict';
     const publication = store.planManagerValidationPublication(roundMarker, {
       version: 1,
@@ -870,7 +878,7 @@ describe('Finding manager SQLite adapter', () => {
       workflowName: 'default',
       producer: execution.handle,
     });
-    const runId = root.readResumeSnapshot().run.runId;
+    const runId = store.runId;
     const roundMarker = 'round-rollback';
     const publication = store.planManagerValidationPublication(roundMarker, {
       version: 1,
@@ -941,7 +949,7 @@ describe('Finding manager SQLite adapter', () => {
       workflowName: 'default',
       producer: execution.handle,
     });
-    const runId = root.readResumeSnapshot().run.runId;
+    const runId = store.runId;
     const first = store.bindManagerValidationPublication(
       'round-1',
       store.planManagerValidationPublication('round-1', {
@@ -1010,7 +1018,7 @@ describe('Finding manager SQLite adapter', () => {
       workflowName: 'default',
       producer: execution.handle,
     });
-    const runId = root.readResumeSnapshot().run.runId;
+    const runId = store.runId;
     const publication = store.bindManagerValidationPublication(
       'round-1',
       store.planManagerValidationPublication('round-1', {
@@ -1138,7 +1146,7 @@ describe('Finding manager SQLite adapter', () => {
     });
 
     expect(store.saveLedgerSnapshot()).toBeUndefined();
-    const runId = root.readResumeSnapshot().run.runId;
+    const runId = store.runId;
     expect(store.saveRawFindings(
       runId,
       'reviewers',

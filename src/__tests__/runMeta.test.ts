@@ -34,6 +34,8 @@ function createRunPaths(): RunPaths {
     operationsRel: '.takt/runs/20260409-force-fail-test/operations',
     operationJournalAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/operations/journal.json',
     operationJournalRel: '.takt/runs/20260409-force-fail-test/operations/journal.json',
+    databaseAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/run.sqlite',
+    databaseRel: '.takt/runs/20260409-force-fail-test/run.sqlite',
     metaAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/meta.json',
     metaRel: '.takt/runs/20260409-force-fail-test/meta.json',
   };
@@ -45,7 +47,7 @@ describe('RunMetaManager', () => {
   });
 
   it('should persist currentStep and currentIteration on updateStep', () => {
-    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
+    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default', 'file');
 
     manager.updateStep('implement', 2);
 
@@ -66,6 +68,7 @@ describe('RunMetaManager', () => {
     };
 
     expect(initialMeta.status).toBe('running');
+    expect(initialMeta).toMatchObject({ storageBackend: 'file' });
     expect(initialMeta.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(initialMeta.currentStep).toBeUndefined();
     expect(initialMeta.currentIteration).toBeUndefined();
@@ -76,7 +79,7 @@ describe('RunMetaManager', () => {
   });
 
   it('should persist the latest phase alongside step progress', () => {
-    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
+    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default', 'file');
     manager.updateStep('review', 3);
 
     (
@@ -100,38 +103,13 @@ describe('RunMetaManager', () => {
     expect(phasedMeta.phase).toBe(2);
   });
 
-  it('should keep currentStep and currentIteration when finalize is called', () => {
-    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
-    manager.updateStep('review', 3);
-
-    manager.finalize('completed', 3);
-
-    expect(vi.mocked(writeFileAtomic)).toHaveBeenCalledTimes(3);
-
-    const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
-      status: string;
-      updatedAt?: string;
-      currentStep?: string;
-      currentIteration?: number;
-      iterations?: number;
-      endTime?: string;
-    };
-
-    expect(finalizedMeta.status).toBe('completed');
-    expect(finalizedMeta.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    expect(finalizedMeta.currentStep).toBe('review');
-    expect(finalizedMeta.currentIteration).toBe(3);
-    expect(finalizedMeta.iterations).toBe(3);
-    expect(finalizedMeta.endTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-  });
-
   it('should persist and retain resume point metadata for workflow_call retries', () => {
-    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
+    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default', 'file');
     const resumePoint = {
       version: 1,
       stack: [
-        { workflow: 'default', step: 'dev', kind: 'workflow_call' },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'dev', kind: 'workflow_call', occurrence: 1 },
+        { workflow: 'takt/coding', workflow_ref: 'project:sha256:coding', step: 'review', kind: 'agent', occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -143,28 +121,21 @@ describe('RunMetaManager', () => {
       }
     ).updateStep('review', 7, resumePoint);
 
-    manager.finalize('aborted', 7);
-
     const updatedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[1]![1])) as {
-      resume_point?: typeof resumePoint;
-    };
-    const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
       resume_point?: typeof resumePoint;
     };
 
     expect(updatedMeta).not.toHaveProperty('resumePoint');
-    expect(finalizedMeta).not.toHaveProperty('resumePoint');
     expect(updatedMeta.resume_point).toEqual(resumePoint);
-    expect(finalizedMeta.resume_point).toEqual(resumePoint);
   });
 
   it('should refresh resume point without rolling back current step metadata', () => {
-    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
+    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default', 'file');
     const staleResumePoint = {
       version: 1,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
+        { workflow: 'takt/coding', workflow_ref: 'project:sha256:coding', step: 'review', kind: 'agent', occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -172,7 +143,7 @@ describe('RunMetaManager', () => {
     const refreshedResumePoint = {
       version: 1,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183900,
@@ -180,14 +151,7 @@ describe('RunMetaManager', () => {
 
     manager.updateStep('delegate', 7, staleResumePoint);
     manager.updateResumePoint(refreshedResumePoint);
-    manager.finalize('aborted', 7);
-
     const refreshedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
-      currentStep?: string;
-      currentIteration?: number;
-      resume_point?: typeof refreshedResumePoint;
-    };
-    const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[3]![1])) as {
       currentStep?: string;
       currentIteration?: number;
       resume_point?: typeof refreshedResumePoint;
@@ -196,12 +160,9 @@ describe('RunMetaManager', () => {
     expect(refreshedMeta.currentStep).toBe('delegate');
     expect(refreshedMeta.currentIteration).toBe(7);
     expect(refreshedMeta.resume_point).toEqual(refreshedResumePoint);
-    expect(finalizedMeta.currentStep).toBe('delegate');
-    expect(finalizedMeta.currentIteration).toBe(7);
-    expect(finalizedMeta.resume_point).toEqual(refreshedResumePoint);
   });
 
-  it('should persist trace discovery metadata from initial write through finalize', () => {
+  it('should persist trace discovery metadata through progress updates', () => {
     const traceDiscovery = {
       serviceName: 'takt',
       runId: '20260409-force-fail-test',
@@ -225,12 +186,12 @@ describe('RunMetaManager', () => {
       createRunPaths(),
       'Force fail task',
       'default',
+      'sqlite',
       undefined,
       { traceDiscovery },
     );
 
     manager.updateStep('review', 3);
-    manager.finalize('completed', 3);
 
     const initialMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[0]![1])) as {
       observability?: { traceDiscovery?: typeof traceDiscovery };
@@ -238,13 +199,10 @@ describe('RunMetaManager', () => {
     const updatedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[1]![1])) as {
       observability?: { traceDiscovery?: typeof traceDiscovery };
     };
-    const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
-      observability?: { traceDiscovery?: typeof traceDiscovery };
-    };
 
     expect(initialMeta.observability?.traceDiscovery).toEqual(traceDiscovery);
+    expect(initialMeta).toMatchObject({ storageBackend: 'sqlite' });
     expect(updatedMeta.observability?.traceDiscovery).toEqual(traceDiscovery);
-    expect(finalizedMeta.observability?.traceDiscovery).toEqual(traceDiscovery);
   });
 
   it('should persist direct resume source metadata for resumed runs', () => {
@@ -252,6 +210,7 @@ describe('RunMetaManager', () => {
       createRunPaths(),
       'Force fail task',
       'default',
+      'sqlite',
       {
         sourceRunSlug: '20260409-source-run',
         resumeMode: 'retry',
@@ -259,17 +218,12 @@ describe('RunMetaManager', () => {
     );
 
     manager.updateStep('review', 3);
-    manager.finalize('completed', 3);
 
     const initialMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[0]![1])) as {
       source_run_slug?: string;
       resume_mode?: string;
     } & Record<string, unknown>;
     const updatedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[1]![1])) as {
-      source_run_slug?: string;
-      resume_mode?: string;
-    } & Record<string, unknown>;
-    const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
       source_run_slug?: string;
       resume_mode?: string;
     } & Record<string, unknown>;
@@ -282,17 +236,14 @@ describe('RunMetaManager', () => {
     expect(updatedMeta.resume_mode).toBe('retry');
     expect(updatedMeta).not.toHaveProperty('sourceRunSlug');
     expect(updatedMeta).not.toHaveProperty('resumeMode');
-    expect(finalizedMeta.source_run_slug).toBe('20260409-source-run');
-    expect(finalizedMeta.resume_mode).toBe('retry');
-    expect(finalizedMeta).not.toHaveProperty('sourceRunSlug');
-    expect(finalizedMeta).not.toHaveProperty('resumeMode');
   });
 
-  it('should persist operation journal ownership metadata through finalize', () => {
+  it('should persist operation journal ownership metadata through progress updates', () => {
     const manager = new RunMetaManager(
       createRunPaths(),
       'Force fail task',
       'default',
+      'file',
       undefined,
       {
         operationJournalRunSlug: '20260409-original-run',
@@ -301,7 +252,6 @@ describe('RunMetaManager', () => {
     );
 
     manager.updateStep('fix', 4);
-    manager.finalize('completed', 4);
 
     for (const call of vi.mocked(writeFileAtomic).mock.calls) {
       const meta = JSON.parse(String(call[1])) as Record<string, unknown>;
@@ -312,7 +262,7 @@ describe('RunMetaManager', () => {
     }
   });
 
-  it('should persist a validated PR context through finalize', () => {
+  it('should persist a validated PR context through progress updates', () => {
     const prContext = {
       source: 'pr_review' as const,
       prNumber: 861,
@@ -324,12 +274,12 @@ describe('RunMetaManager', () => {
       createRunPaths(),
       'Review PR changes',
       'default',
+      'file',
       undefined,
       { prContext },
     );
 
     manager.updateStep('review', 2);
-    manager.finalize('completed', 2);
 
     for (const call of vi.mocked(writeFileAtomic).mock.calls) {
       const meta = JSON.parse(String(call[1])) as Record<string, unknown>;

@@ -14,7 +14,10 @@ import {
   TaskExecutionConfigSchema,
 } from '../../../infra/task/index.js';
 import type { WorkflowResumePoint } from '../../../core/models/index.js';
-import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
+import {
+  parseWorkflowResumePoint,
+  type RunResumeSource,
+} from '../../../core/workflow/run/run-meta.js';
 import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resume-point.js';
 import { getGitProvider, type GitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
@@ -22,7 +25,10 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { generateReportDir } from '../../../shared/utils/reportDir.js';
 import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
-import { stageTaskSpecForExecution } from './taskSpecContext.js';
+import {
+  resolveTaskSpecForExecution,
+  type ResolvedTaskSpec,
+} from './taskSpecContext.js';
 import { resolveReusedWorktreeExecution } from './reusedWorktree.js';
 import type { ExecuteTaskOptions, TaskExecutionContextOverride } from './types.js';
 import { createPullRequestContext, type PullRequestContext } from '../../../core/workflow/pr-context.js';
@@ -140,8 +146,7 @@ export interface ResolvedTaskExecution {
   workflowIdentifier: string;
   isWorktree: boolean;
   reportDirName: string;
-  taskPrompt?: string;
-  orderContent?: string;
+  taskSpec?: ResolvedTaskSpec;
   branch?: string;
   worktreePath?: string;
   baseBranch?: string;
@@ -274,7 +279,9 @@ export async function resolveTaskExecution(
     throw new Error(`Task "${task.name}" is missing required workflow.`);
   }
   const configuredStartStep = resolveTaskStartStepValue(normalizedData);
-  const resumePoint = normalizedData.resume_point as WorkflowResumePoint | undefined;
+  const resumePoint = normalizedData.resume_point === undefined
+    ? undefined
+    : parseWorkflowResumePoint(normalizedData.resume_point);
   const retryNote = normalizedData.retry_note;
   const contextOverride = options?.taskContext;
   let prContext = resolvePrReviewContext(task.name, normalizedData, defaultCwd, contextOverride);
@@ -282,8 +289,7 @@ export async function resolveTaskExecution(
   let execCwd = defaultCwd;
   let isWorktree = false;
   let reportDirName: string | undefined;
-  let taskPrompt: string | undefined;
-  let orderContent: string | undefined;
+  let taskSpec: ResolvedTaskSpec | undefined;
   let branch: string | undefined;
   let worktreePath: string | undefined;
   let baseBranch: string | undefined = prContext?.baseBranch ?? contextOverride?.baseBranch;
@@ -375,9 +381,12 @@ export async function resolveTaskExecution(
 
   if (task.taskDir) {
     reportDirName = generateExecutionReportDir(execCwd, task.content);
-    const stagedTaskSpec = stageTaskSpecForExecution(defaultCwd, execCwd, task.taskDir, reportDirName);
-    taskPrompt = stagedTaskSpec.taskPrompt;
-    orderContent = stagedTaskSpec.orderContent;
+    taskSpec = resolveTaskSpecForExecution(
+      defaultCwd,
+      execCwd,
+      task.taskDir,
+      reportDirName,
+    );
   }
 
   const resolvedReportDirName = reportDirName ?? generateReportDir(task.content);
@@ -410,8 +419,7 @@ export async function resolveTaskExecution(
     draftPr,
     managedPr,
     shouldPublishBranchToOrigin,
-    ...(taskPrompt ? { taskPrompt } : {}),
-    ...(orderContent !== undefined ? { orderContent } : {}),
+    ...(taskSpec === undefined ? {} : { taskSpec }),
     ...(branch ? { branch } : {}),
     ...(worktreePath ? { worktreePath } : {}),
     ...(baseBranch ? { baseBranch } : {}),

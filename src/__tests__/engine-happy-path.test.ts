@@ -48,6 +48,7 @@ import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import { runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import { StructuredOutputSchemaError } from '../core/workflow/engine/structured-output-schema-validator.js';
+import { buildScopedStepIterationIdentity } from '../core/workflow/step-iteration-identity.js';
 import {
   makeResponse,
   makeStep,
@@ -84,6 +85,48 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   // 1. Happy Path
   // =====================================================
   describe('Happy path', () => {
+    it('keeps top-level and parallel descendant occurrences independent when their names match', async () => {
+      const config = buildDefaultWorkflowConfig({
+        maxSteps: 2,
+        initialStep: 'delegate',
+        steps: [
+          makeStep('delegate', {
+            rules: [makeRule('done', 'reviewers')],
+          }),
+          makeStep('reviewers', {
+            parallel: [
+              makeStep('delegate', {
+                rules: [makeRule('approved', 'COMPLETE')],
+              }),
+            ],
+            rules: [makeRule('all("approved")', 'COMPLETE')],
+          }),
+        ],
+      });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+      });
+      mockRunAgentSequence([
+        makeResponse({ persona: 'delegate', content: 'delegated' }),
+        makeResponse({ persona: 'delegate', content: 'approved' }),
+      ]);
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'aggregate' },
+      ]);
+
+      const state = await engine.run();
+      const descendantIdentity = buildScopedStepIterationIdentity(
+        'delegate',
+        ['reviewers'],
+      );
+
+      expect(state.status).toBe('completed');
+      expect(state.stepIterations.get('delegate')).toBe(1);
+      expect(state.stepIterations.get(descendantIdentity)).toBe(1);
+    });
+
     it('should keep an existing normal step session when the response omits sessionId', async () => {
       const config = buildDefaultWorkflowConfig({
         maxSteps: 1,
@@ -676,6 +719,14 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
       await engine.run();
 
+      const expectedWorkflowStack = [
+        expect.objectContaining({
+          workflow: 'test',
+          step: 'plan',
+          kind: 'agent',
+          occurrence: 1,
+        }),
+      ];
       expect(phaseStartFn).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'plan' }),
         1, 'execute', expect.any(String), expect.objectContaining({
@@ -684,10 +735,12 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         }),
         'plan:1:1:1',
         1,
+        expectedWorkflowStack,
       );
       expect(phaseCompleteFn).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'plan' }),
         1, 'execute', expect.any(String), 'done', undefined, 'plan:1:1:1', 1,
+        expectedWorkflowStack,
       );
     });
 
@@ -798,8 +851,10 @@ describe('WorkflowEngine Integration: Happy Path', () => {
           version: 1,
           stack: [{
             workflow: 'resume-workflow',
+            workflow_ref: 'resume-workflow',
             step: 'implement',
             kind: 'agent',
+            occurrence: 5,
             step_iterations: { implement: 4, reviewers: 2 },
           }],
           iteration: 10,

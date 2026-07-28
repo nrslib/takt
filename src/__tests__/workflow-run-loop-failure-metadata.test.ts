@@ -3,6 +3,7 @@ import type { AgentResponse, WorkflowConfig, WorkflowState, WorkflowStep } from 
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { runSingleWorkflowIteration, runWorkflowToCompletion } from '../core/workflow/engine/WorkflowRunLoop.js';
 import { makeResponse, makeRule, makeStep } from './engine-test-helpers.js';
+import { createWorkflowRunLoopTestContract } from './test-helpers.js';
 
 function makeConfig(step: WorkflowStep): WorkflowConfig {
   return {
@@ -28,11 +29,11 @@ function makeDeps(
   step: WorkflowStep,
   response: AgentResponse,
 ) {
+  const config = makeConfig(step);
   return {
     state,
     options: {},
     getWorkflowName: () => 'failure-metadata-workflow',
-    getCurrentWorkflowStack: () => undefined,
     getCwd: () => '/worktree',
     getMaxSteps: () => 5,
     getReportDir: () => '/worktree/.takt/runs/test/reports',
@@ -53,13 +54,13 @@ function makeDeps(
       model: undefined,
     })),
     resolveRuntimeForStep: vi.fn(),
-    setActiveStep: vi.fn(),
     addUserInput: vi.fn(),
     emit: vi.fn(),
     updateMaxSteps: vi.fn(),
     persistPreviousResponseSnapshot: vi.fn(),
     checkCompletionGate: vi.fn(() => ({ ok: true as const })),
     checkReturnValueGate: vi.fn(() => ({ ok: true as const })),
+    ...createWorkflowRunLoopTestContract(config, state, 'test task'),
   };
 }
 

@@ -50,8 +50,17 @@ interface WorkflowCallRunnerDeps {
   getOptions: () => WorkflowEngineOptions;
   sharedRuntime: WorkflowSharedRuntimeState;
   resumeStackPrefix: WorkflowResumePointEntry[];
+  consumeWorkflowCallContinuation: (
+    step: WorkflowCallStep,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ) => WorkflowResumePointEntry | undefined;
   runPaths: RunPaths;
-  setActiveResumePoint: (step: WorkflowCallStep, iteration: number) => void;
+  setActiveResumePoint: (
+    step: WorkflowCallStep,
+    iteration: number,
+    occurrence: number,
+  ) => void;
   emit: (event: string, ...args: unknown[]) => void;
   resolveWorkflowCall: WorkflowCallResolver;
   createEngine: (
@@ -233,6 +242,7 @@ export class WorkflowCallRunner {
     step: WorkflowCallStep,
     runtime: RuntimeStepResolution,
     syncParentState: boolean,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ): Promise<{
     childResult: WorkflowCallExecutionResult;
     providerInfo: NonNullable<StepRunResult['providerInfo']>;
@@ -252,7 +262,9 @@ export class WorkflowCallRunner {
     }
 
     const workflowChain = [
-      ...this.deps.resumeStackPrefix.map((entry) => getResumePointWorkflowReference(entry)),
+      ...resumeStackPrefix
+        .filter((entry) => entry.kind === 'workflow_call')
+        .map((entry) => getResumePointWorkflowReference(entry)),
       getWorkflowReference(parentConfig),
     ];
     const childWorkflowRef = getWorkflowReference(childWorkflow);
@@ -260,7 +272,9 @@ export class WorkflowCallRunner {
       throw new Error(`Detected workflow_call cycle: ${[...workflowChain, childWorkflow.name].join(' -> ')}`);
     }
 
-    const currentDepth = this.deps.resumeStackPrefix.length + 1;
+    const currentDepth = resumeStackPrefix.filter(
+      (entry) => entry.kind === 'workflow_call',
+    ).length + 1;
     const nextDepth = currentDepth + 1;
     if (nextDepth > MAX_WORKFLOW_CALL_DEPTH) {
       throw new Error(`workflow_call depth exceeds limit (${MAX_WORKFLOW_CALL_DEPTH}): ${childWorkflow.name}`);
@@ -281,7 +295,10 @@ export class WorkflowCallRunner {
       parentProviderOptions: parentProviderContext.providerOptions,
       personaProviders: this.buildChildPersonaProviders(step),
       providerRouting: this.buildChildProviderRouting(step),
-    }, { syncParentState });
+    }, {
+      syncParentState,
+      resumeStackPrefix,
+    });
 
     return {
       childResult,
@@ -293,7 +310,12 @@ export class WorkflowCallRunner {
     step: WorkflowCallStep,
     runtime: RuntimeStepResolution = this.resolveRuntime(step),
   ): Promise<StepRunResult> {
-    const { childResult, providerInfo } = await this.executeChildWorkflow(step, runtime, true);
+    const { childResult, providerInfo } = await this.executeChildWorkflow(
+      step,
+      runtime,
+      true,
+      this.deps.resumeStackPrefix,
+    );
 
     const response = this.buildWorkflowCallResponse(
       step,
@@ -314,13 +336,19 @@ export class WorkflowCallRunner {
 
   async runIsolated(
     step: WorkflowCallStep,
-    runtime: RuntimeStepResolution = this.resolveRuntime(step),
+    runtime: RuntimeStepResolution,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ): Promise<{
     result: StepRunResult;
     sessionUpdates: WorkflowCallSessionUpdates;
     stateSync: WorkflowCallIsolatedStateSync;
   }> {
-    const { childResult, providerInfo } = await this.executeChildWorkflow(step, runtime, false);
+    const { childResult, providerInfo } = await this.executeChildWorkflow(
+      step,
+      runtime,
+      false,
+      resumeStackPrefix,
+    );
     const response = this.buildWorkflowCallResponse(
       step,
       childResult,

@@ -8,12 +8,27 @@ import {
 import {
   cleanupRealRunStorages,
   createRealRunStorage,
+  createTestBootstrapSeed,
 } from './helpers/run-storage.js';
 
 afterEach(cleanupRealRunStorages);
 
 function lease(root: ReturnType<typeof createRealRunStorage>['root']) {
   return root.claimLease({ ownerKey: 'worker', leaseDurationMs: 9_000 });
+}
+
+function forceFail(
+  root: ReturnType<typeof createRealRunStorage>['root'],
+  reason: string,
+): void {
+  root.forceFailRun({
+    expectedRunId: 'run-1',
+    ownerKey: 'force-fail-worker',
+    leaseDurationMs: 9_000,
+    reason,
+    iteration: 2,
+    publicationPayload: '{}',
+  });
 }
 
 describe('run storage adversarial SOL contracts', () => {
@@ -48,10 +63,11 @@ describe('run storage adversarial SOL contracts', () => {
   it('generates authority IDs and rejects unknown raw authority inputs and forged handles', () => {
     expect(() => createRunStorage({
       databasePath: '/tmp/never-created.sqlite',
+      bootstrapSeed: createTestBootstrapSeed(),
       run: {
-        slug: 'forged',
-        findingContractEnabled: false,
         runId: 'forged',
+        findingContractEnabled: false,
+        slug: 'forged',
       },
       workflowDefinition: {
         name: 'default',
@@ -77,7 +93,7 @@ describe('run storage adversarial SOL contracts', () => {
     } as never)).toThrow(/unknown/i);
   });
 
-  it('seals terminal scopes and rejects active descendants and duplicate running steps', () => {
+  it('atomically terminalizes active descendants and seals their authorities', () => {
     const { root } = createRealRunStorage();
     const owner = lease(root);
     const parent = root.runtime({ lease: owner });
@@ -97,10 +113,6 @@ describe('run storage adversarial SOL contracts', () => {
       expectedStatus: 'running',
       status: 'completed',
     })).toThrow(/active authority/i);
-    expect(() => root.terminalizeRun(owner, 'completed'))
-      .toThrow(/active authority/i);
-
-    child.execution.finishStep({ execution: running.handle, status: 'completed' });
     child.reports.publish({
       publicationKey: 'child-terminal-report',
       streamName: 'child.json',
@@ -109,15 +121,18 @@ describe('run storage adversarial SOL contracts', () => {
       content: '{}',
       producer: running.handle,
     });
-    child.scopes.terminalize({
-      expectedRevision: 1,
-      expectedStatus: 'running',
+    root.finishRun(owner, {
       status: 'completed',
+      publication: {
+        status: 'completed',
+        iteration: 1,
+        payload: '{}',
+      },
     });
     expect(() => child.sequences.appendEvent({
       expectedSequence: 0,
       eventType: 'after-terminal',
-    })).toThrow(/terminal|sealed/i);
+    })).toThrow(/stale|terminal|sealed/i);
     expect(() => child.reports.publish({
       publicationKey: 'child-terminal-report',
       streamName: 'child.json',
@@ -125,7 +140,35 @@ describe('run storage adversarial SOL contracts', () => {
       codecName: 'json-v1',
       content: '{}',
       producer: running.handle,
-    })).toThrow(/terminal|sealed/i);
+    })).toThrow(/stale|terminal|sealed/i);
+  });
+
+  it('force-failをterminal再読込・lease claim・終端化の単一CAS操作にする', () => {
+    const { databasePath, root: first } = createRealRunStorage();
+    const second = openRunStorage({ databasePath });
+    expect(first.readResumeSnapshot().run.status).toBe('running');
+    expect(second.readResumeSnapshot().run.status).toBe('running');
+
+    forceFail(first, 'same force-fail reason');
+    expect(() => forceFail(second, 'same force-fail reason')).not.toThrow();
+    expect(second.readResumeSnapshot().run.status).toBe('failed');
+    expect(second.readTerminalPublication()).toMatchObject({
+      status: 'failed',
+      reason: 'same force-fail reason',
+    });
+    expect(() => forceFail(second, 'different force-fail reason'))
+      .toThrow(/conflict/i);
+    second.close();
+    first.close();
+
+    const owned = createRealRunStorage();
+    const competing = openRunStorage({ databasePath: owned.databasePath });
+    lease(owned.root);
+    expect(() => forceFail(competing, 'lease conflict'))
+      .toThrow(/active lease/i);
+    expect(competing.readResumeSnapshot().run.status).toBe('running');
+    competing.close();
+    owned.root.close();
   });
 
   it('rejects every authority command after terminalization at both API and DDL boundaries', () => {
@@ -179,7 +222,14 @@ describe('run storage adversarial SOL contracts', () => {
       execution: execution.handle,
       status: 'completed',
     });
-    root.terminalizeRun(owner, 'completed');
+    root.finishRun(owner, {
+      status: 'completed',
+      publication: {
+        status: 'completed',
+        iteration: 1,
+        payload: '{}',
+      },
+    });
 
     const rejectedCommands = [
       () => runtime.sequences.appendEvent({

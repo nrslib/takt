@@ -45,12 +45,16 @@ function pragmaText(database: DatabaseSync, name: string): string {
 export function configureConnectionSafety(database: DatabaseSync): void {
   database.exec('PRAGMA foreign_keys = ON');
   database.exec('PRAGMA trusted_schema = OFF');
+  database.exec('PRAGMA synchronous = FULL');
   database.enableDefensive(true);
   if (pragmaNumber(database, 'foreign_keys') !== 1) {
     throw new Error('Run storage requires PRAGMA foreign_keys = ON');
   }
   if (pragmaNumber(database, 'trusted_schema') !== 0) {
     throw new Error('Run storage requires PRAGMA trusted_schema = OFF');
+  }
+  if (pragmaNumber(database, 'synchronous') !== 2) {
+    throw new Error('Run storage requires PRAGMA synchronous = FULL');
   }
 }
 
@@ -195,7 +199,69 @@ export function validateAuthoritySeed(database: DatabaseSync): void {
               OR run_leases.terminal_status <> runs.status
             )
           )
-      ) AS terminalPairViolationCount
+      ) AS terminalPairViolationCount,
+      (
+        SELECT count(*)
+        FROM runs
+        LEFT JOIN terminal_publications USING (run_id)
+        WHERE
+          (runs.status = 'running' AND terminal_publications.run_id IS NOT NULL)
+          OR (
+            runs.status <> 'running'
+            AND (
+              terminal_publications.run_id IS NULL
+              OR terminal_publications.terminal_at <> runs.terminal_at
+              OR terminal_publications.status <> CASE runs.status
+                WHEN 'cancelled' THEN 'aborted'
+                ELSE runs.status
+              END
+            )
+          )
+      ) AS terminalPublicationViolationCount,
+      (
+        SELECT count(*)
+        FROM runs
+        LEFT JOIN terminal_publications USING (run_id)
+        WHERE
+          (
+            runs.status = 'running'
+            AND EXISTS (
+              SELECT 1
+              FROM terminal_publication_stages
+              WHERE terminal_publication_stages.run_id = runs.run_id
+            )
+          )
+          OR (
+            runs.status <> 'running'
+            AND (
+              (
+                SELECT count(*)
+                FROM terminal_publication_stages
+                WHERE terminal_publication_stages.run_id = runs.run_id
+              ) <> 3
+              OR (
+                terminal_publications.published_at IS NOT NULL
+                AND EXISTS (
+                  SELECT 1
+                  FROM terminal_publication_stages
+                  WHERE
+                    terminal_publication_stages.run_id = runs.run_id
+                    AND acknowledged_at IS NULL
+                )
+              )
+              OR (
+                terminal_publications.published_at IS NULL
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM terminal_publication_stages
+                  WHERE
+                    terminal_publication_stages.run_id = runs.run_id
+                    AND acknowledged_at IS NULL
+                )
+              )
+            )
+          )
+      ) AS terminalPublicationStageViolationCount
   `).get() as {
     readonly runCount: number;
     readonly rootScopeCount: number;
@@ -204,6 +270,8 @@ export function validateAuthoritySeed(database: DatabaseSync): void {
     readonly runtimeWithoutScopeCount: number;
     readonly scopeTerminalPairViolationCount: number;
     readonly terminalPairViolationCount: number;
+    readonly terminalPublicationViolationCount: number;
+    readonly terminalPublicationStageViolationCount: number;
   };
   if (
     authority.runCount !== 1
@@ -213,6 +281,8 @@ export function validateAuthoritySeed(database: DatabaseSync): void {
     || authority.runtimeWithoutScopeCount !== 0
     || authority.scopeTerminalPairViolationCount !== 0
     || authority.terminalPairViolationCount !== 0
+    || authority.terminalPublicationViolationCount !== 0
+    || authority.terminalPublicationStageViolationCount !== 0
   ) {
     throw new Error('Run storage authority seed invariant mismatch');
   }
@@ -239,13 +309,13 @@ export function validateAuthoritySeed(database: DatabaseSync): void {
     }
   } else {
     const findingSeed = database.prepare(`
-      SELECT count(*) AS rootRevisionOneCount
+      SELECT count(*) AS authorityCount
       FROM finding_ledger_revisions
-      WHERE run_id = ? AND scope_id = 'root' AND revision = 1
+      WHERE run_id = ? AND revision = 1
     `).get(run.runId) as {
-      readonly rootRevisionOneCount: number;
+      readonly authorityCount: number;
     };
-    if (findingSeed.rootRevisionOneCount !== 1) {
+    if (findingSeed.authorityCount === 0) {
       throw new Error('Finding Contract authority bootstrap invariant mismatch');
     }
     const findingContext = {
@@ -283,20 +353,12 @@ function validateResumeProvenance(
   const source = database.prepare(`
     SELECT
       source_run_id AS sourceRunId,
-      source_snapshot_digest AS sourceSnapshotDigest,
-      source_finding_scope_id AS sourceFindingScopeId,
-      source_finding_revision AS sourceFindingRevision,
-      imported_finding_revision AS importedFindingRevision,
-      source_finding_projection_digest AS sourceFindingProjectionDigest
+      source_snapshot_digest AS sourceSnapshotDigest
     FROM run_resume_sources
     WHERE run_id = ?
   `).get(run.runId) as {
     readonly sourceRunId: string;
     readonly sourceSnapshotDigest: string;
-    readonly sourceFindingScopeId: string | null;
-    readonly sourceFindingRevision: number | null;
-    readonly importedFindingRevision: number | null;
-    readonly sourceFindingProjectionDigest: string | null;
   } | undefined;
   if (source === undefined) {
     if (ancestry.length !== 0) {
@@ -313,31 +375,44 @@ function validateResumeProvenance(
     throw new Error('Run resume direct source provenance mismatch');
   }
   if (run.findingContractEnabled === 0) {
-    if (
-      source.sourceFindingScopeId !== null
-      || source.sourceFindingRevision !== null
-      || source.importedFindingRevision !== null
-      || source.sourceFindingProjectionDigest !== null
-    ) {
+    const authority = database.prepare(`
+      SELECT 1 AS found
+      FROM finding_resume_authorities
+      WHERE run_id = ?
+      LIMIT 1
+    `).get(run.runId);
+    if (authority !== undefined) {
       throw new Error('Run resume imported Finding authority while disabled');
     }
     return;
   }
-  const imported = database.prepare(`
-    SELECT projection_digest AS projectionDigest
-    FROM finding_ledger_revisions
-    WHERE run_id = ? AND scope_id = ? AND revision = ?
+  const authorityProvenance = database.prepare(`
+    SELECT
+      (SELECT count(*) FROM finding_resume_authorities
+       WHERE run_id = ?) AS provenanceCount,
+      (SELECT count(*)
+       FROM finding_resume_authorities AS provenance
+       JOIN finding_ledger_revisions AS revisions
+         ON revisions.run_id = provenance.run_id
+         AND revisions.scope_id = provenance.scope_id
+         AND revisions.revision = provenance.imported_revision
+         AND revisions.projection_digest = provenance.projection_digest
+       WHERE provenance.run_id = ?
+         AND provenance.source_run_id = ?
+         AND provenance.source_scope_id = provenance.scope_id
+         AND provenance.source_revision = provenance.imported_revision
+       ) AS validCount
   `).get(
     run.runId,
-    source.sourceFindingScopeId,
-    source.importedFindingRevision,
-  ) as { readonly projectionDigest: string } | undefined;
+    run.runId,
+    source.sourceRunId,
+  ) as {
+    readonly provenanceCount: number;
+    readonly validCount: number;
+  };
   if (
-    source.sourceFindingScopeId !== 'root'
-    || source.sourceFindingRevision === null
-    || source.importedFindingRevision !== 1
-    || source.sourceFindingProjectionDigest === null
-    || imported?.projectionDigest !== source.sourceFindingProjectionDigest
+    authorityProvenance.provenanceCount === 0
+    || authorityProvenance.validCount !== authorityProvenance.provenanceCount
   ) {
     throw new Error('Run resume imported Finding authority provenance mismatch');
   }

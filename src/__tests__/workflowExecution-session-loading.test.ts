@@ -111,6 +111,7 @@ const {
           'workflow:abort',
           { status: 'aborted', iteration: 1 },
           MockWorkflowEngine.runOutcome.reason,
+          'step_error',
         );
         return { status: 'aborted', iteration: 1 };
       }
@@ -142,6 +143,30 @@ vi.mock('../core/workflow/index.js', async () => {
   };
 });
 
+vi.mock('../features/tasks/execute/workflowRunStorage.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../features/tasks/execute/workflowRunStorage.js')
+  >();
+  const { createWorkflowRunStorageCompositionTestDouble } = await import(
+    './helpers/run-storage.js'
+  );
+  return {
+    ...actual,
+    createWorkflowRunComposition: (
+      ...args: Parameters<typeof actual.createWorkflowRunComposition>
+    ) => createWorkflowRunStorageCompositionTestDouble(
+      actual.createWorkflowRunComposition,
+      args[0],
+      args[1],
+      {
+        sessionId: 'test-session-id',
+        startedAt: '2026-03-04T00:00:00.000Z',
+        projectTerminalArtifacts: true,
+      },
+    ),
+  };
+});
+
 vi.mock('../infra/claude/query-manager.js', () => ({
   interruptAllQueries: vi.fn(),
 }));
@@ -151,6 +176,7 @@ vi.mock('../infra/config/index.js', () => ({
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: mockLoadWorktreeSessions,
   updateWorktreeSession: vi.fn(),
+  resolveWorkflowConfigValue: vi.fn(() => ({ backend: 'file' })),
   resolveWorkflowConfigValues: vi.fn().mockReturnValue({
     notificationSound: true,
     notificationSoundEvents: {},
@@ -195,18 +221,36 @@ vi.mock('../shared/ui/index.js', () => ({
   })),
 }));
 
-vi.mock('../infra/fs/index.js', () => ({
+vi.mock('../infra/fs/index.js', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../infra/fs/index.js')
+  >()),
   generateSessionId: vi.fn().mockReturnValue('test-session-id'),
-  createSessionLog: vi.fn().mockReturnValue({
-    startTime: new Date().toISOString(),
+  createSessionLog: vi.fn().mockImplementation((
+    task,
+    projectDir,
+    workflowName,
+    options,
+  ) => ({
+    task,
+    projectDir,
+    workflowName,
+    startTime: options.startTime,
     iterations: 0,
-  }),
+    status: 'running',
+    history: [],
+  })),
   finalizeSessionLog: vi.fn().mockImplementation((log, status) => ({
     ...log,
     status,
     endTime: new Date().toISOString(),
   })),
-  initNdjsonLog: vi.fn().mockReturnValue('/tmp/test-log.jsonl'),
+  initNdjsonLog: vi.fn((
+    sessionId: string,
+    _task: string,
+    _workflowName: string,
+    options: { logsDir: string },
+  ) => join(options.logsDir, `${sessionId}.jsonl`)),
   appendNdjsonLine: vi.fn(),
 }));
 
@@ -248,6 +292,20 @@ vi.mock('../shared/i18n/index.js', () => ({
 
 vi.mock('../shared/exitCodes.js', () => ({
   EXIT_SIGINT: 130,
+}));
+
+vi.mock('../features/tasks/execute/sessionLogger.js', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../features/tasks/execute/sessionLogger.js')
+  >()),
+  projectTerminalSessionRecord: vi.fn(),
+}));
+
+vi.mock('../features/tasks/execute/traceReportWriter.js', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../features/tasks/execute/traceReportWriter.js')
+  >()),
+  writeTerminalTraceReport: vi.fn(),
 }));
 
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
@@ -687,7 +745,7 @@ describe('executeWorkflow session loading', () => {
       };
     };
     const metaQueries = finalMeta.observability?.traceDiscovery?.queries;
-    expect(finalMeta.status).toBe('aborted');
+    expect(finalMeta.status).toBe('failed');
     expect(metaQueries).toEqual([
       '{ resource.service.name = "takt" && span."takt.run.id" = "trace-discovery-abort-run" }',
       '{ resource.service.name = "takt" && span."takt.task.pr_number" = 826 }',
@@ -746,7 +804,7 @@ describe('executeWorkflow session loading', () => {
       };
     };
     const metaQueries = finalMeta.observability?.traceDiscovery?.queries;
-    expect(finalMeta.status).toBe('aborted');
+    expect(finalMeta.status).toBe('failed');
     expect(metaQueries).toEqual([
       '{ resource.service.name = "takt" && span."takt.run.id" = "trace-discovery-error-run" }',
       '{ resource.service.name = "takt" && span."takt.task.pr_number" = 826 }',

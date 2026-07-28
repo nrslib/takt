@@ -13,6 +13,10 @@ export {
   type OpenRunStorageOptions,
   type ResumeRunStorageOptions,
   type RunStorageRoot,
+  type TerminalPublication,
+  type TerminalPublicationStageClaim,
+  type TerminalPublicationStage,
+  type TerminalPublicationCommitReceipt,
 } from './root.js';
 export {
   StaleLeaseOwnerError,
@@ -29,6 +33,7 @@ export type {
   ScopeHandle,
   StartedExecution,
 } from './runtime-handles.js';
+export type { RunStorageRuntime } from './runtime-composition.js';
 export {
   type OperationRecord,
   type OperationState,

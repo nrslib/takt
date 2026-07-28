@@ -38,6 +38,17 @@ function stepKey(step: string, iteration: number, stack: NdjsonWorkflowStackEntr
   return `${stepScopeKey(step, stack)}:${iteration}`;
 }
 
+function phaseExecutionKey(
+  phaseExecutionId: string,
+  step: string,
+  stack: NdjsonWorkflowStackEntry[] | undefined,
+): string {
+  return JSON.stringify([
+    stepScopeKey(step, stack),
+    phaseExecutionId,
+  ]);
+}
+
 function createPhaseExecutionId(
   step: string,
   iteration: number,
@@ -100,13 +111,17 @@ export function buildTraceFromRecords(
 ): BuildTraceResult {
   const promptByExecutionId = new Map<string, PromptRecord>();
   for (const prompt of promptRecords) {
-    if (prompt.phaseExecutionId) {
-      promptByExecutionId.set(prompt.phaseExecutionId, prompt);
+    const key = JSON.stringify([prompt.scope, prompt.phaseExecutionId]);
+    if (promptByExecutionId.has(key)) {
+      throw new Error(
+        `Duplicate prompt execution: ${prompt.scope}:${prompt.phaseExecutionId}`,
+      );
     }
+    promptByExecutionId.set(key, prompt);
   }
 
   const stepsByKey = new Map<string, TraceStep>();
-  const phasesByExecutionId = new Map<string, { step: TraceStep; index: number }>();
+  const phasesByExecutionKey = new Map<string, { step: TraceStep; index: number }>();
   const phaseExecutionCounters = new Map<string, number>();
   const latestIterationByStepScope = new Map<string, number>();
 
@@ -181,7 +196,10 @@ export function buildTraceFromRecords(
       const resolvedExecutionId =
         record.phaseExecutionId
         ?? createPhaseExecutionId(record.step, iteration, record.phase, phaseExecutionCounters);
-      const prompt = promptByExecutionId.get(resolvedExecutionId);
+      const prompt = promptByExecutionId.get(JSON.stringify([
+        stepScopeKey(record.step, record.stack),
+        resolvedExecutionId,
+      ]));
       const phase: TracePhase = {
         phaseExecutionId: resolvedExecutionId,
         phase: record.phase,
@@ -192,10 +210,13 @@ export function buildTraceFromRecords(
         startedAt: record.timestamp,
       };
       traceStep.phases.push(phase);
-      phasesByExecutionId.set(resolvedExecutionId, {
-        step: traceStep,
-        index: traceStep.phases.length - 1,
-      });
+      phasesByExecutionKey.set(
+        phaseExecutionKey(resolvedExecutionId, record.step, record.stack),
+        {
+          step: traceStep,
+          index: traceStep.phases.length - 1,
+        },
+      );
       continue;
     }
 
@@ -213,7 +234,9 @@ export function buildTraceFromRecords(
       const resolvedExecutionId =
         record.phaseExecutionId
         ?? createPhaseExecutionId(record.step, iteration, record.phase, phaseExecutionCounters);
-      const phaseRef = phasesByExecutionId.get(resolvedExecutionId);
+      const phaseRef = phasesByExecutionKey.get(
+        phaseExecutionKey(resolvedExecutionId, record.step, record.stack),
+      );
       if (!phaseRef) {
         throw new Error(`Missing phase_start before phase_complete: ${resolvedExecutionId}`);
       }
@@ -221,7 +244,10 @@ export function buildTraceFromRecords(
       if (!existing) {
         throw new Error(`Missing phase state for completion: ${resolvedExecutionId}`);
       }
-      const prompt = promptByExecutionId.get(resolvedExecutionId);
+      const prompt = promptByExecutionId.get(JSON.stringify([
+        stepScopeKey(record.step, record.stack),
+        resolvedExecutionId,
+      ]));
       phaseRef.step.phases[phaseRef.index] = {
         ...existing,
         instruction: existing.instruction || prompt?.userInstruction || '',
@@ -237,7 +263,13 @@ export function buildTraceFromRecords(
 
     if (record.type === 'phase_judge_stage') {
       const phaseRef = record.phaseExecutionId
-        ? phasesByExecutionId.get(record.phaseExecutionId)
+        ? phasesByExecutionKey.get(
+            phaseExecutionKey(
+              record.phaseExecutionId,
+              record.step,
+              record.stack,
+            ),
+          )
         : undefined;
       if (!phaseRef) {
         continue;

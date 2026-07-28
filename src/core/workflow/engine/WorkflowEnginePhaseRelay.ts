@@ -1,5 +1,9 @@
-import type { WorkflowStep } from '../../models/types.js';
+import type {
+  WorkflowResumePointEntry,
+  WorkflowStep,
+} from '../../models/types.js';
 import type { JudgeStageEntry, PhaseName, PhasePromptParts } from '../types.js';
+import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 
 export interface WorkflowPhaseRelay {
   onPhaseStart: (
@@ -33,28 +37,78 @@ export interface WorkflowPhaseRelay {
 
 export function createWorkflowPhaseRelay(
   emit: (event: string, ...args: unknown[]) => void,
+  getCurrentWorkflowStack: () => readonly WorkflowResumePointEntry[] | undefined,
 ): WorkflowPhaseRelay {
+  const workflowStackByPhase = new Map<string, WorkflowResumePointEntry[]>();
+  const phaseKey = (
+    step: WorkflowStep,
+    phase: 1 | 2 | 3,
+    phaseExecutionId: string | undefined,
+    iteration: number | undefined,
+  ): string => JSON.stringify([
+    step.name,
+    phase,
+    phaseExecutionId,
+    iteration,
+  ]);
   return {
     onPhaseStart: (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
-      if (phaseExecutionId == null && iteration == null) {
-        emit('phase:start', step, phase, phaseName, instruction, promptParts);
-        return;
-      }
-      emit('phase:start', step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration);
+      const workflowStack = requireWorkflowResumeStackSnapshot(
+        getCurrentWorkflowStack(),
+      );
+      workflowStackByPhase.set(
+        phaseKey(step, phase, phaseExecutionId, iteration),
+        workflowStack,
+      );
+      emit(
+        'phase:start',
+        step,
+        phase,
+        phaseName,
+        instruction,
+        promptParts,
+        phaseExecutionId,
+        iteration,
+        workflowStack,
+      );
     },
     onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration) => {
-      if (phaseExecutionId == null && iteration == null) {
-        emit('phase:complete', step, phase, phaseName, content, phaseStatus, error);
-        return;
+      const key = phaseKey(step, phase, phaseExecutionId, iteration);
+      const workflowStack = workflowStackByPhase.get(key);
+      if (workflowStack === undefined) {
+        throw new Error(`Phase completion has no originating workflow stack: ${step.name}:${phase}`);
       }
-      emit('phase:complete', step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration);
+      workflowStackByPhase.delete(key);
+      emit(
+        'phase:complete',
+        step,
+        phase,
+        phaseName,
+        content,
+        phaseStatus,
+        error,
+        phaseExecutionId,
+        iteration,
+        workflowStack,
+      );
     },
     onJudgeStage: (step, phase, phaseName, entry, phaseExecutionId, iteration) => {
-      if (phaseExecutionId == null && iteration == null) {
-        emit('phase:judge_stage', step, phase, phaseName, entry);
-        return;
+      const workflowStack = workflowStackByPhase.get(
+        phaseKey(step, phase, phaseExecutionId, iteration),
+      );
+      if (workflowStack === undefined) {
+        throw new Error(`Judge stage has no originating workflow stack: ${step.name}:${phase}`);
       }
-      emit('phase:judge_stage', step, phase, phaseName, entry, phaseExecutionId, iteration);
+      emit(
+        'phase:judge_stage',
+        step,
+        phase,
+        phaseName,
+        entry,
+        phaseExecutionId,
+        iteration,
+        workflowStack,
+      );
     },
   };
 }

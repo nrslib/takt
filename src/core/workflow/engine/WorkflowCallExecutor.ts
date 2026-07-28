@@ -20,7 +20,8 @@ import { resolveEffectiveAutoRouting } from '../auto-routing/effective-auto-rout
 import type { WorkRequirementEstimator } from '../auto-routing/contracts.js';
 import { RoutingRuntime } from '../auto-routing/runtime.js';
 import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
-import { buildWorkflowCallNamespaceSegment } from '../workflow-call-namespace.js';
+import { buildWorkflowCallSiteIdentity } from '../workflow-call-site-identity.js';
+import { buildWorkflowStackStepIterationIdentity } from '../step-iteration-identity.js';
 import type {
   StepProviderInfo,
   AutoRoutingEstimatorSource,
@@ -28,6 +29,7 @@ import type {
   WorkflowCallChildEngine,
   WorkflowCallResolver,
   WorkflowEngineOptions,
+  WorkflowEvents,
   WorkflowSharedRuntimeState,
 } from '../types.js';
 import { validateFindingContractManagerProviderModel } from './WorkflowValidator.js';
@@ -120,6 +122,11 @@ interface WorkflowCallExecutorDeps {
   task: string;
   sharedRuntime: WorkflowSharedRuntimeState;
   resumeStackPrefix: WorkflowResumePointEntry[];
+  consumeWorkflowCallContinuation: (
+    step: WorkflowCallStep,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ) => WorkflowResumePointEntry | undefined;
   runPaths: RunPaths;
   resolveWorkflowCall: WorkflowCallResolver;
   createEngine: (
@@ -135,7 +142,11 @@ interface WorkflowCallExecutorDeps {
     stepIterations: Map<string, number>;
     userInputs: string[];
   };
-  setActiveResumePoint: (step: WorkflowCallStep, iteration: number) => void;
+  setActiveResumePoint: (
+    step: WorkflowCallStep,
+    iteration: number,
+    occurrence: number,
+  ) => void;
   /** 自前 or 継承済みの、この engine で有効な Finding Contract。子へ引き継ぐ。 */
   findingContract?: FindingContractConfig;
   findingLedgerStore?: FindingLedgerStore;
@@ -154,6 +165,7 @@ interface ExecuteWorkflowCallRequest {
 
 interface ExecuteWorkflowCallOptions {
   syncParentState: boolean;
+  resumeStackPrefix: readonly WorkflowResumePointEntry[];
 }
 
 export type WorkflowCallExecutionResult = WorkflowState & {
@@ -232,39 +244,43 @@ export class WorkflowCallExecutor {
    * レビューは stepIteration=1 になる。ステップ名・parentStepName・stepIteration・
    * subStepName が全て一致すれば、ローカルの raw finding id が同じ場合に
    * 正規化後の id も完全に一致し、後勝ちで前回の raw finding が台帳から
-   * 消える。buildWorkflowCallNamespace() と同じ「親のこの呼び出し時点の
-   * イテレーション」（this.deps.state.iteration）をステップ名に組み合わせ、
-   * ループの各回を区別する。
+   * 消える。buildWorkflowCallNamespace() と同じ workflow_call step の
+   * occurrence をステップ名に組み合わせ、ループの各回を区別する。resume
+   * continuation では source frame の occurrence を再利用する。
    */
-  private buildFindingCallNamespace(step: WorkflowCallStep): string {
-    const parentNamespace = this.deps.getOptions().findingCallNamespace;
-    const segment = `${step.name}#${this.deps.state.iteration}`;
-    return parentNamespace ? `${parentNamespace}/${segment}` : segment;
-  }
-
-  private buildWorkflowCallNamespace(step: WorkflowCallStep, childWorkflow: WorkflowConfig): string[] {
+  private buildWorkflowCallNamespace(runPathSegment: string): string[] {
     const baseNamespace = this.deps.getOptions().runPathNamespace ?? [];
-    const callIteration = this.deps.state.iteration;
-    if (!Number.isInteger(callIteration) || callIteration <= 0) {
-      throw new Error(`workflow_call step "${step.name}" requires a positive parent iteration before creating child report namespace`);
-    }
 
     return [
       ...baseNamespace,
       'subworkflows',
-      buildWorkflowCallNamespaceSegment(step.name, childWorkflow.name, callIteration),
+      runPathSegment,
     ];
+  }
+
+  private buildCurrentWorkflowCallFrame(
+    step: WorkflowCallStep,
+    occurrence: number,
+  ): WorkflowResumePointEntry {
+    return buildWorkflowResumePointEntry(
+      this.deps.getConfig(),
+      step.name,
+      'workflow_call',
+      occurrence,
+      this.deps.state.stepIterations,
+    );
   }
 
   private resolveChildResumeStartStep(
     childWorkflow: WorkflowConfig,
     resumePoint: WorkflowEngineOptions['resumePoint'],
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ): string | undefined {
     if (!resumePoint) {
       return undefined;
     }
 
-    const nextEntry = resumePoint.stack[this.deps.resumeStackPrefix.length + 1];
+    const nextEntry = resumePoint.stack[resumeStackPrefix.length + 1];
     if (!nextEntry || !workflowEntryMatchesWorkflow(nextEntry, childWorkflow)) {
       return undefined;
     }
@@ -273,23 +289,30 @@ export class WorkflowCallExecutor {
     return targetStep?.name;
   }
 
-  private resolveChildResumePoint(
+  private resolveChildContinuation(
     step: WorkflowCallStep,
     childWorkflow: WorkflowConfig,
-  ): WorkflowEngineOptions['resumePoint'] {
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ): {
+    readonly resumePoint?: NonNullable<WorkflowEngineOptions['resumePoint']>;
+    readonly frame: WorkflowResumePointEntry;
+  } | undefined {
     const options = this.deps.getOptions();
-    const parentConfig = this.deps.getConfig();
-    return trimResumePointStackForWorkflow({
+    const frame = this.deps.consumeWorkflowCallContinuation(
+      step,
+      occurrence,
+      resumeStackPrefix,
+    );
+    if (frame === undefined) {
+      return undefined;
+    }
+    const resumePoint = trimResumePointStackForWorkflow({
       workflow: childWorkflow,
       resumePoint: options.resumePoint,
       resumeStackPrefix: [
-        ...this.deps.resumeStackPrefix,
-        buildWorkflowResumePointEntry(
-          parentConfig,
-          step.name,
-          'workflow_call',
-          this.deps.state.stepIterations,
-        ),
+        ...resumeStackPrefix,
+        frame,
       ],
       resolveWorkflowCall: (parentWorkflow, nestedStep) => this.deps.resolveWorkflowCall({
         parentWorkflow,
@@ -298,11 +321,26 @@ export class WorkflowCallExecutor {
         lookupCwd: this.deps.getCwd(),
       }),
     });
+    return {
+      frame,
+      ...(resumePoint !== undefined ? { resumePoint } : {}),
+    };
   }
 
   private relayChildEvents(childEngine: WorkflowCallChildEngine, resumeStepName: string): void {
     childEngine.on('step:start', (...args) => {
-      const [step, iteration, instruction, providerInfo, workflowName, , stepIteration] = args;
+      const [
+        step,
+        iteration,
+        instruction,
+        providerInfo,
+        workflowName,
+        ,
+        stepIteration,
+        workflowStack,
+        findingScopeIdentity,
+        findingIds,
+      ] = args as Parameters<WorkflowEvents['step:start']>;
       this.deps.emit(
         'step:start',
         step,
@@ -312,11 +350,27 @@ export class WorkflowCallExecutor {
         workflowName,
         resumeStepName,
         stepIteration,
+        workflowStack,
+        findingScopeIdentity,
+        findingIds,
       );
     });
     childEngine.on('step:complete', (...args) => {
-      const [step, response, instruction] = args;
-      this.deps.emit('step:complete', step, response, instruction, resumeStepName);
+      const [
+        step,
+        response,
+        instruction,
+        ,
+        workflowStack,
+      ] = args as Parameters<WorkflowEvents['step:complete']>;
+      this.deps.emit(
+        'step:complete',
+        step,
+        response,
+        instruction,
+        resumeStepName,
+        workflowStack,
+      );
     });
     for (const eventName of [
       'routing:decision',
@@ -336,7 +390,11 @@ export class WorkflowCallExecutor {
     }
   }
 
-  private syncStateFromChild(step: WorkflowCallStep, childState: WorkflowState): void {
+  private syncStateFromChild(
+    step: WorkflowCallStep,
+    childState: WorkflowState,
+    occurrence: number,
+  ): void {
     if (this.deps.sharedRuntime.maxSteps !== undefined) {
       this.deps.updateMaxSteps(this.deps.sharedRuntime.maxSteps);
     }
@@ -349,7 +407,7 @@ export class WorkflowCallExecutor {
     for (const [sessionKey, sessionId] of childState.personaSessions) {
       this.deps.state.personaSessions.set(sessionKey, sessionId);
     }
-    this.deps.setActiveResumePoint(step, this.deps.state.iteration);
+    this.deps.setActiveResumePoint(step, this.deps.state.iteration, occurrence);
     // 子が Finding Contract の台帳（親と共有）へ書き込んでいても、iteration /
     // session の同期だけでは親の state.findings は古いまま。親の
     // when(findings.*) ルールが子の取り込み結果を見られるよう、ここで
@@ -364,8 +422,36 @@ export class WorkflowCallExecutor {
     executeOptions: ExecuteWorkflowCallOptions,
   ): Promise<WorkflowCallExecutionResult> {
     const options = this.deps.getOptions();
-    const parentConfig = this.deps.getConfig();
-    const childResumePoint = this.resolveChildResumePoint(request.step, request.childWorkflow);
+    const stepIterationIdentity = buildWorkflowStackStepIterationIdentity(
+      this.deps.getConfig(),
+      request.step.name,
+      executeOptions.resumeStackPrefix,
+    );
+    const occurrence = this.deps.state.stepIterations.get(stepIterationIdentity);
+    if (occurrence === undefined) {
+      throw new Error(`workflow_call step "${request.step.name}" has no occurrence`);
+    }
+    const continuation = this.resolveChildContinuation(
+      request.step,
+      request.childWorkflow,
+      occurrence,
+      executeOptions.resumeStackPrefix,
+    );
+    const childResumePoint = continuation?.resumePoint;
+    const workflowCallFrame = continuation?.frame
+      ?? this.buildCurrentWorkflowCallFrame(request.step, occurrence);
+    if (workflowCallFrame.occurrence !== occurrence) {
+      throw new Error(
+        `workflow_call step "${request.step.name}" continuation occurrence does not match active occurrence`,
+      );
+    }
+    const workflowCallSite = buildWorkflowCallSiteIdentity({
+      stack: [
+        ...executeOptions.resumeStackPrefix,
+        workflowCallFrame,
+      ],
+      childWorkflow: request.childWorkflow,
+    });
     const inheritedSessions = new Map(this.deps.state.personaSessions);
     const sessionUpdates = new Map<string, WorkflowCallSessionUpdate>();
     const childAutoRouting = resolveEffectiveAutoRouting(request.childWorkflow, options.autoRouting);
@@ -404,21 +490,23 @@ export class WorkflowCallExecutor {
           },
       personaProviders: request.personaProviders,
       providerRouting: request.providerRouting,
-      startStep: this.resolveChildResumeStartStep(request.childWorkflow, childResumePoint),
+      startStep: this.resolveChildResumeStartStep(
+        request.childWorkflow,
+        childResumePoint,
+        executeOptions.resumeStackPrefix,
+      ),
       resumePoint: childResumePoint,
       initialIteration: this.deps.state.iteration,
       reportDirName: this.deps.runPaths.slug,
-      runPathNamespace: this.buildWorkflowCallNamespace(request.step, request.childWorkflow),
-      findingCallNamespace: this.buildFindingCallNamespace(request.step),
+      runPathNamespace: this.buildWorkflowCallNamespace(
+        workflowCallSite.runPathSegment,
+      ),
+      findingCallNamespace: workflowCallSite.key,
+      workflowCallSiteIdentity: workflowCallSite.key,
       sharedRuntime: this.deps.sharedRuntime,
       resumeStackPrefix: [
-        ...this.deps.resumeStackPrefix,
-        buildWorkflowResumePointEntry(
-          parentConfig,
-          request.step.name,
-          'workflow_call',
-          this.deps.state.stepIterations,
-        ),
+        ...executeOptions.resumeStackPrefix,
+        workflowCallFrame,
       ],
       // 親の Finding Contract を子エンジンへ継承する。継承しないと子の
       // parallel レビューが出す raw findings が台帳に入らず、fix に届かないまま
@@ -448,7 +536,7 @@ export class WorkflowCallExecutor {
     const childResult = await childEngine.runWithResult();
     const childState = childResult.state;
     if (executeOptions.syncParentState) {
-      this.syncStateFromChild(request.step, childState);
+      this.syncStateFromChild(request.step, childState, occurrence);
     }
     return {
       ...childState,

@@ -10,13 +10,38 @@ const {
   disabledObservability,
   mockIsDebugEnabled,
   mockWritePromptLog,
+  mockInitNdjsonLog,
+  mockAppendNdjsonLine,
   MockWorkflowEngine,
 } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require('node:fs') as typeof import('node:fs');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const path = require('node:path') as typeof import('node:path');
 
   const mockIsDebugEnabled = vi.fn().mockReturnValue(true);
   const mockWritePromptLog = vi.fn();
+  const mockInitNdjsonLog = vi.fn((
+    sessionId: string,
+    task: string,
+    workflowName: string,
+    options: { logsDir: string; startTime: string },
+  ) => {
+    fs.mkdirSync(options.logsDir, { recursive: true });
+    const filePath = path.join(options.logsDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(filePath, `${JSON.stringify({
+      type: 'workflow_start',
+      task,
+      workflowName,
+      startTime: options.startTime,
+    })}\n`);
+    return filePath;
+  });
+  const mockAppendNdjsonLine = vi.fn((filePath: string, record: unknown) => {
+    fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`);
+  });
 
   class MockWorkflowEngine extends EE {
     private config: WorkflowConfig;
@@ -170,6 +195,8 @@ const {
     },
     mockIsDebugEnabled,
     mockWritePromptLog,
+    mockInitNdjsonLog,
+    mockAppendNdjsonLine,
     MockWorkflowEngine,
   };
 });
@@ -182,6 +209,30 @@ vi.mock('../core/workflow/index.js', async () => {
   };
 });
 
+vi.mock('../features/tasks/execute/workflowRunStorage.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../features/tasks/execute/workflowRunStorage.js')
+  >();
+  const { createWorkflowRunStorageCompositionTestDouble } = await import(
+    './helpers/run-storage.js'
+  );
+  return {
+    ...actual,
+    createWorkflowRunComposition: (
+      ...args: Parameters<typeof actual.createWorkflowRunComposition>
+    ) => createWorkflowRunStorageCompositionTestDouble(
+      actual.createWorkflowRunComposition,
+      args[0],
+      args[1],
+      {
+        sessionId: 'test-session-id',
+        startedAt: '2026-02-07T00:00:00.000Z',
+        projectTerminalArtifacts: true,
+      },
+    ),
+  };
+});
+
 vi.mock('../infra/claude/query-manager.js', () => ({
   interruptAllQueries: vi.fn(),
 }));
@@ -191,6 +242,7 @@ vi.mock('../infra/config/index.js', () => ({
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: vi.fn().mockReturnValue({}),
   updateWorktreeSession: vi.fn(),
+  resolveWorkflowConfigValue: vi.fn(() => ({ backend: 'file' })),
   resolveWorkflowConfigValues: vi.fn().mockReturnValue({
     notificationSound: true,
     notificationSoundEvents: {},
@@ -213,6 +265,46 @@ vi.mock('../infra/config/resolveConfigValue.js', async (importOriginal) => ({
     : { value: undefined, source: 'default' }),
 }));
 
+vi.mock('../features/tasks/execute/traceReportWriter.js', async () => {
+  const { renderTraceReportFromLogs } = await import(
+    '../features/tasks/execute/traceReport.js'
+  );
+  const { writeFileAtomic } = await import('../infra/config/index.js');
+  return {
+    writeTerminalTraceReport: (input: {
+      tracePath: string;
+      workflowName: string;
+      task: string;
+      runSlug: string;
+      ndjsonLogPath: string;
+      promptLogPath?: string;
+      mode: 'off' | 'redacted' | 'full';
+      terminal: {
+        status: 'completed' | 'aborted' | 'failed';
+        iterations: number;
+        endTime: string;
+        reason?: string;
+      };
+    }) => {
+      const markdown = renderTraceReportFromLogs(
+        {
+          tracePath: input.tracePath,
+          workflowName: input.workflowName,
+          task: input.task,
+          runSlug: input.runSlug,
+          ...input.terminal,
+        },
+        input.ndjsonLogPath,
+        input.promptLogPath,
+        input.mode,
+      );
+      if (markdown !== undefined) {
+        writeFileAtomic(input.tracePath, markdown);
+      }
+    },
+  };
+});
+
 vi.mock('../shared/context.js', () => ({
   isQuietMode: vi.fn().mockReturnValue(true),
 }));
@@ -231,19 +323,32 @@ vi.mock('../shared/ui/index.js', () => ({
   })),
 }));
 
-vi.mock('../infra/fs/index.js', () => ({
+vi.mock('../infra/fs/index.js', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../infra/fs/index.js')
+  >()),
   generateSessionId: vi.fn().mockReturnValue('test-session-id'),
-  createSessionLog: vi.fn().mockReturnValue({
-    startTime: new Date().toISOString(),
+  createSessionLog: vi.fn().mockImplementation((
+    task,
+    projectDir,
+    workflowName,
+    options,
+  ) => ({
+    task,
+    projectDir,
+    workflowName,
+    startTime: options.startTime,
     iterations: 0,
-  }),
+    status: 'running',
+    history: [],
+  })),
   finalizeSessionLog: vi.fn().mockImplementation((log, status) => ({
     ...log,
     status,
     endTime: new Date().toISOString(),
   })),
-  initNdjsonLog: vi.fn().mockReturnValue('/tmp/test-log.jsonl'),
-  appendNdjsonLine: vi.fn(),
+  initNdjsonLog: mockInitNdjsonLog,
+  appendNdjsonLine: mockAppendNdjsonLine,
 }));
 
 vi.mock('../shared/utils/index.js', () => ({
@@ -544,7 +649,7 @@ describe('executeWorkflow debug prompts logging', () => {
     const secondMeta = JSON.parse(String(metaCalls[1]![1])) as { status: string; endTime?: string };
     expect(firstMeta.status).toBe('running');
     expect(firstMeta.endTime).toBeUndefined();
-    expect(secondMeta.status).toBe('aborted');
+    expect(secondMeta.status).toBe('failed');
     expect(secondMeta.endTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 

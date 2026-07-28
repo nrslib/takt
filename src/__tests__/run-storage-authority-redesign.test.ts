@@ -134,7 +134,7 @@ describe('run storage authority redesign', () => {
     const roundMarker = 'sqlite-callback-isolation-round';
     const publication = store.planManagerValidationPublication(roundMarker, {
       version: 1,
-      runId: root.readResumeSnapshot().run.runId,
+      runId: store.runId,
       stepName: 'reviewers',
       retryCount: 0,
       ledgerUpdated: true,
@@ -224,11 +224,11 @@ describe('run storage authority redesign', () => {
     database.prepare(`
       INSERT INTO scopes (
         run_id, scope_id, parent_scope_id, kind,
-        workflow_definition_id, created_at
+        workflow_definition_id, finding_contract_enabled, created_at
       )
       SELECT
         run_id, 'ghost', 'root', 'parallel',
-        workflow_definition_id, created_at
+        workflow_definition_id, finding_contract_enabled, created_at
       FROM runs
     `).run();
     expect(() => database.exec('COMMIT')).toThrow(/foreign key/i);

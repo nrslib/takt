@@ -87,6 +87,11 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
     expect(state.status).toBe('aborted');
     expect(blockedFn).toHaveBeenCalledOnce();
     expect(abortFn).toHaveBeenCalledOnce();
+    expect(abortFn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      'blocked',
+    );
   });
 
   it('should abort when blocked and onUserInput returns null', async () => {
@@ -102,10 +107,17 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
       { index: 0, method: 'phase3_tag' },
     ]);
 
+    const abortFn = vi.fn();
+    engine.on('workflow:abort', abortFn);
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
     expect(onUserInput).toHaveBeenCalledOnce();
+    expect(abortFn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      'user_input_cancelled',
+    );
   });
 
   it('should continue when blocked and onUserInput provides input', async () => {

@@ -59,7 +59,12 @@ export function createFindingManagerResumeBinding(
         `Finding manager publication "${pending.publication.publicationId}" has no trusted direct resume source`,
       );
     }
-    const imported = readImportedFindingLedger(context, options.runId, trusted);
+    const imported = readImportedFindingLedger(
+      context,
+      options.runId,
+      options.scopeId,
+      trusted,
+    );
     const importedPending = imported.pendingManagerCommit;
     const ancestry = context.all<{ readonly ancestorRunId: string }>(`
       SELECT ancestor_run_id AS ancestorRunId
@@ -71,7 +76,9 @@ export function createFindingManagerResumeBinding(
       pending.roundMarker,
       {
         directSourceRunId: trusted.sourceRunId,
-        originRunIds: new Set(ancestry.map(({ ancestorRunId }) => ancestorRunId)),
+        originRunIds: new Set(
+          ancestry.map(({ ancestorRunId }) => ancestorRunId),
+        ),
         originScopeId: trusted.sourceScopeId,
         workflowName: options.workflowName,
       },

@@ -7,6 +7,7 @@ import { resumeRunStorage } from '../infra/run-storage/root.js';
 import {
   cleanupRealRunStorages,
   createRealRunStorage,
+  createTestBootstrapSeed,
   resumeRealRunStorage,
 } from './helpers/run-storage.js';
 
@@ -35,10 +36,9 @@ function stagePendingPublication(
     producer: execution.handle,
   });
   const roundMarker = 'round-resume-chain';
-  const runId = root.readResumeSnapshot().run.runId;
   const publication = store.planManagerValidationPublication(roundMarker, {
     version: 1,
-    runId,
+    runId: store.runId,
     stepName: 'reviewers',
     retryCount: 0,
     ledgerUpdated: true,
@@ -82,6 +82,55 @@ function findingStore(
 }
 
 describe('SQLite Finding resume authority', () => {
+  it('import済みparallel scopeをidentity検証付きで再利用する', () => {
+    const source = createRealRunStorage({ findingContractEnabled: true });
+    const sourceLease = source.root.claimLease({
+      ownerKey: 'parallel-source',
+      leaseDurationMs: 10_000,
+    });
+    source.root.runtime({ lease: sourceLease }).scopes.createParallelChild({
+      scopeKey: 'reviewers',
+    });
+    source.root.finishRun(sourceLease, {
+      status: 'failed',
+      failureReason: 'resume source failed',
+      publication: {
+        status: 'failed',
+        iteration: 1,
+        reason: 'resume source failed',
+        payload: '{}',
+      },
+    });
+
+    const target = resumeRealRunStorage(source.root, {
+      slug: 'parallel-target',
+      findingContractEnabled: true,
+    });
+    const targetLease = target.root.claimLease({
+      ownerKey: 'parallel-target',
+      leaseDurationMs: 10_000,
+    });
+    const runtime = target.root.runtime({ lease: targetLease });
+    const scopeCount = runtime.scopes.list().length;
+
+    runtime.scopes.resolveParallelChild({ scopeKey: 'reviewers' });
+
+    expect(runtime.scopes.list()).toHaveLength(scopeCount);
+    target.root.finishRun(targetLease, {
+      status: 'completed',
+      publication: {
+        status: 'completed',
+        iteration: 1,
+        payload: '{}',
+      },
+    });
+    expect(target.root.readResumeSnapshot().scopes.every(
+      (scope) => scope.runtime.status === 'completed',
+    )).toBe(true);
+    target.root.close();
+    source.root.close();
+  });
+
   it('uses each multi-hop direct parent and preserves publication intent through finalization', async () => {
     const parent = createRealRunStorage({ findingContractEnabled: true });
     const pending = await stagePendingPublication(parent.root);
@@ -90,7 +139,8 @@ describe('SQLite Finding resume authority', () => {
       findingContractEnabled: true,
     });
     const childStore = findingStore(child.root, 'child-owner');
-    const childRunId = child.root.readResumeSnapshot().run.runId;
+    const childRun = child.root.readResumeSnapshot().run;
+    const childRunId = childRun.runId;
     const childPublication = childStore.bindManagerValidationPublication(
       pending.roundMarker,
       pending.publication,
@@ -102,7 +152,7 @@ describe('SQLite Finding resume authority', () => {
       findingContractEnabled: true,
     });
     const grandchildStore = findingStore(grandchild.root, 'grandchild-owner');
-    const grandchildRunId = grandchild.root.readResumeSnapshot().run.runId;
+    const grandchildRunSlug = grandchild.root.readResumeSnapshot().run.runId;
     const importedPublication = grandchildStore.loadLedger()
       .pendingManagerCommit!.publication;
     expect(importedPublication.destinationRunId).toBe(childRunId);
@@ -119,7 +169,7 @@ describe('SQLite Finding resume authority', () => {
       publicationId: pending.publication.publicationId,
       domainId: pending.publication.domainId,
       originRunId: pending.publication.originRunId,
-      destinationRunId: grandchildRunId,
+      destinationRunId: grandchildRunSlug,
       contentSha256: pending.publication.contentSha256,
       report: pending.publication.report,
     });
@@ -239,8 +289,11 @@ describe('SQLite Finding resume authority', () => {
     expect(() => resumeRunStorage({
       databasePath: failedDatabasePath,
       source: parent.root,
+      bootstrapSeed: createTestBootstrapSeed({
+        sessionId: 'invalid-child-session',
+      }),
       run: {
-        slug: 'run-invalid-child',
+        runId: 'run-invalid-child',
         findingContractEnabled: false,
       },
       workflowDefinition: {
@@ -249,7 +302,7 @@ describe('SQLite Finding resume authority', () => {
         definition: '{"name":"default"}',
       },
     })).toThrow(/Finding Contract does not match/i);
-    expect(existsSync(failedDatabasePath)).toBe(true);
+    expect(existsSync(failedDatabasePath)).toBe(false);
     expect(parent.root.readResumeSnapshot()).toEqual(parentState);
     expect(readFileSync(parent.databasePath)).toEqual(parentBytes);
   });
@@ -267,8 +320,11 @@ describe('SQLite Finding resume authority', () => {
     expect(() => resumeRunStorage({
       databasePath: skippedDatabasePath,
       source: child.root,
+      bootstrapSeed: createTestBootstrapSeed({
+        sessionId: 'skipped-grandchild-session',
+      }),
       run: {
-        slug: 'run-skipped-grandchild',
+        runId: 'run-skipped-grandchild',
         findingContractEnabled: true,
       },
       workflowDefinition: {
@@ -276,8 +332,8 @@ describe('SQLite Finding resume authority', () => {
         codecName: 'json-v1',
         definition: '{"name":"default"}',
       },
-    })).toThrow(/pending Finding publication is not bound/i);
-    expect(existsSync(skippedDatabasePath)).toBe(true);
+    })).toThrow(/failed resume provenance validation/i);
+    expect(existsSync(skippedDatabasePath)).toBe(false);
     expect(child.root.readResumeSnapshot()).toEqual(childState);
   });
 
@@ -288,8 +344,11 @@ describe('SQLite Finding resume authority', () => {
     expect(() => resumeRunStorage({
       databasePath: `${target.databasePath}.forged`,
       source: Object.freeze({}) as never,
+      bootstrapSeed: createTestBootstrapSeed({
+        sessionId: 'forged-child-session',
+      }),
       run: {
-        slug: 'forged-child',
+        runId: 'forged-child',
         findingContractEnabled: false,
       },
       workflowDefinition: {
@@ -311,8 +370,11 @@ describe('SQLite Finding resume authority', () => {
     const child = resumeRunStorage({
       databasePath: childDatabasePath,
       source: source.root,
+      bootstrapSeed: createTestBootstrapSeed({
+        sessionId: 'trusted-child-session',
+      }),
       run: {
-        slug: 'trusted-child',
+        runId: 'trusted-child',
         findingContractEnabled: false,
       },
       workflowDefinition: {

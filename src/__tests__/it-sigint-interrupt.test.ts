@@ -45,7 +45,7 @@ const { disabledObservability, mockInterruptAllQueries, MockWorkflowEngine } = v
       this.abortRequested = true;
       // When abort is called, emit workflow:abort and resolve run()
       const state = { status: 'aborted', iteration: 1 };
-      this.emit('workflow:abort', state, 'user_interrupted');
+      this.emit('workflow:abort', state, 'user_interrupted', 'interrupt');
       if (this.runResolve) {
         this.runResolve(state);
         this.runResolve = null;
@@ -87,6 +87,30 @@ vi.mock('../core/workflow/index.js', async () => {
   };
 });
 
+vi.mock('../features/tasks/execute/workflowRunStorage.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../features/tasks/execute/workflowRunStorage.js')
+  >();
+  const { createWorkflowRunStorageCompositionTestDouble } = await import(
+    './helpers/run-storage.js'
+  );
+  return {
+    ...actual,
+    createWorkflowRunComposition: (
+      ...args: Parameters<typeof actual.createWorkflowRunComposition>
+    ) => createWorkflowRunStorageCompositionTestDouble(
+      actual.createWorkflowRunComposition,
+      args[0],
+      args[1],
+      {
+        sessionId: 'test-session-id',
+        startedAt: '2026-02-07T00:00:00.000Z',
+        projectTerminalArtifacts: false,
+      },
+    ),
+  };
+});
+
 vi.mock('../infra/claude/query-manager.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   interruptAllQueries: mockInterruptAllQueries,
@@ -115,6 +139,9 @@ vi.mock('../infra/config/index.js', () => ({
     }
     return result;
   },
+  resolveWorkflowConfigValue: vi.fn().mockReturnValue({
+    backend: 'file',
+  }),
   saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
@@ -140,16 +167,31 @@ vi.mock('../shared/ui/index.js', () => ({
 
 vi.mock('../infra/fs/index.js', () => ({
   generateSessionId: vi.fn().mockReturnValue('test-session-id'),
-  createSessionLog: vi.fn().mockReturnValue({
-    startTime: new Date().toISOString(),
+  createSessionLog: vi.fn().mockImplementation((
+    task,
+    projectDir,
+    workflowName,
+    options,
+  ) => ({
+    task,
+    projectDir,
+    workflowName,
+    startTime: options.startTime,
     iterations: 0,
-  }),
+    status: 'running',
+    history: [],
+  })),
   finalizeSessionLog: vi.fn().mockImplementation((log, _status) => ({
     ...log,
     status: _status,
     endTime: new Date().toISOString(),
   })),
-  initNdjsonLog: vi.fn().mockReturnValue('/tmp/test-log.jsonl'),
+  initNdjsonLog: vi.fn((
+    sessionId: string,
+    _task: string,
+    _workflowName: string,
+    options: { logsDir: string },
+  ) => join(options.logsDir, `${sessionId}.jsonl`)),
   appendNdjsonLine: vi.fn(),
 }));
 
@@ -192,6 +234,22 @@ vi.mock('../shared/exitCodes.js', () => ({
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+
+async function waitForSigintListener(
+  savedListeners: readonly ((...args: unknown[]) => void)[],
+): Promise<(...args: unknown[]) => void> {
+  let listener: ((...args: unknown[]) => void) | undefined;
+  await vi.waitFor(() => {
+    listener = (
+      process.rawListeners('SIGINT') as ((...args: unknown[]) => void)[]
+    ).find((candidate) => !savedListeners.includes(candidate));
+    expect(listener).toBeDefined();
+  });
+  if (!listener) {
+    throw new Error('Workflow SIGINT listener was not registered');
+  }
+  return listener;
+}
 
 // --- Tests ---
 
@@ -254,16 +312,10 @@ describe('executeWorkflow: SIGINT handler integration', () => {
       projectCwd: tmpDir,
     });
 
-    // Wait for SIGINT handler to be registered
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    // Find the SIGINT handler added by executeWorkflow
-    const allListeners = process.rawListeners('SIGINT') as ((...args: unknown[]) => void)[];
-    const newListener = allListeners.find((l) => !savedSigintListeners.includes(l));
-    expect(newListener).toBeDefined();
+    const newListener = await waitForSigintListener(savedSigintListeners);
 
     // Simulate SIGINT
-    newListener!();
+    newListener();
 
     // Wait for workflow to complete
     const result = await resultPromise;
@@ -282,16 +334,13 @@ describe('executeWorkflow: SIGINT handler integration', () => {
       projectCwd: tmpDir,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    const newListener = await waitForSigintListener(savedSigintListeners);
 
     const signal = MockWorkflowEngine.lastOptions?.abortSignal;
     expect(signal).toBeDefined();
     expect(signal!.aborted).toBe(false);
 
-    const allListeners = process.rawListeners('SIGINT') as ((...args: unknown[]) => void)[];
-    const newListener = allListeners.find((l) => !savedSigintListeners.includes(l));
-    expect(newListener).toBeDefined();
-    newListener!();
+    newListener();
 
     expect(signal!.aborted).toBe(true);
 
@@ -317,11 +366,8 @@ describe('executeWorkflow: SIGINT handler integration', () => {
       projectCwd: tmpDir,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    const allListeners = process.rawListeners('SIGINT') as ((...args: unknown[]) => void)[];
-    const newListener = allListeners.find((l) => !savedSigintListeners.includes(l));
-    newListener!();
+    const newListener = await waitForSigintListener(savedSigintListeners);
+    newListener();
 
     await resultPromise;
 
@@ -336,11 +382,8 @@ describe('executeWorkflow: SIGINT handler integration', () => {
       projectCwd: tmpDir,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    const allListeners = process.rawListeners('SIGINT') as ((...args: unknown[]) => void)[];
-    const newListener = allListeners.find((l) => !savedSigintListeners.includes(l));
-    newListener!();
+    const newListener = await waitForSigintListener(savedSigintListeners);
+    newListener();
 
     await resultPromise;
 
@@ -359,13 +402,10 @@ describe('executeWorkflow: SIGINT handler integration', () => {
       projectCwd: tmpDir,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    const allListeners = process.rawListeners('SIGINT') as ((...args: unknown[]) => void)[];
-    const newListener = allListeners.find((l) => !savedSigintListeners.includes(l));
+    const newListener = await waitForSigintListener(savedSigintListeners);
 
     // Simulate SIGINT
-    newListener!();
+    newListener();
 
     // After SIGINT, EPIPE handler should be active
     const uncaughtListeners = process.rawListeners('uncaughtException') as ((err: Error) => void)[];

@@ -1,4 +1,4 @@
-import type { AnalyticsConfig, WorkflowArpeggioConfig, WorkflowCommandGatesConfig, WorkflowMcpServersConfig, WorkflowRuntimePrepareConfig, SubmoduleSelection, SyncConflictResolverConfig } from '../../../core/models/config-types.js';
+import type { AnalyticsConfig, RunStorageConfig, WorkflowArpeggioConfig, WorkflowCommandGatesConfig, WorkflowMcpServersConfig, WorkflowRuntimePrepareConfig, SubmoduleSelection, SyncConflictResolverConfig } from '../../../core/models/config-types.js';
 
 const SUBMODULES_ALL = 'all';
 
@@ -140,4 +140,16 @@ export function denormalizeWorkflowMcpServers(
 ): Record<string, unknown> | undefined {
   if (!config) return undefined;
   return { stdio: config.stdio, sse: config.sse, http: config.http };
+}
+
+export function normalizeRunStorage(
+  raw: { backend: RunStorageConfig['backend'] } | undefined,
+): RunStorageConfig | undefined {
+  return raw === undefined ? undefined : { backend: raw.backend };
+}
+
+export function denormalizeRunStorage(
+  config: RunStorageConfig | undefined,
+): { backend: RunStorageConfig['backend'] } | undefined {
+  return config === undefined ? undefined : { backend: config.backend };
 }

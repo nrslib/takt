@@ -412,6 +412,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
         initialStep: 'plan',
         steps: [
           makeStep('plan', {
+            provider: 'claude',
             outputContracts: [{ name: '01-plan.md', format: '# Plan' }],
             rules: [makeRule('continue', 'COMPLETE')],
           }),

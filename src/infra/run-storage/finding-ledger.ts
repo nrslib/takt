@@ -332,14 +332,14 @@ function validateFindingAuthorityScopes(
             definitions.definition_id IS NULL
             OR (
               (
-                scopes.kind IN ('root', 'parallel')
+                scopes.finding_contract_enabled = 1
                 AND (
                   heads.scope_id IS NULL
                   OR heads.workflow_name <> definitions.name
                 )
               )
               OR (
-                scopes.kind = 'workflow_call'
+                scopes.finding_contract_enabled = 0
                 AND heads.scope_id IS NOT NULL
               )
             )

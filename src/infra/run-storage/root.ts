@@ -13,6 +13,11 @@ import {
 } from './run-storage-root-core.js';
 import type { BusyRetryPolicy } from './unit-of-work.js';
 import { captureTrustedRunStorageResumeSnapshot } from './resume-import.js';
+import type {
+  BootstrapRecoverySeed,
+} from '../../core/workflow/run/bootstrap-recovery-seed.js';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 const DEFAULT_BUSY_RETRY: BusyRetryPolicy = Object.freeze({
   delaysMs: Object.freeze([2, 4, 8]),
@@ -29,7 +34,7 @@ interface WorkflowDefinitionInput {
 }
 
 interface RunInput {
-  readonly slug: string;
+  readonly runId: string;
   readonly findingContractEnabled: boolean;
 }
 
@@ -37,6 +42,7 @@ export interface CreateRunStorageOptions {
   readonly databasePath: string;
   readonly run: RunInput;
   readonly workflowDefinition: WorkflowDefinitionInput;
+  readonly bootstrapSeed: BootstrapRecoverySeed;
   readonly busyRetry?: BusyRetryPolicy;
 }
 
@@ -49,19 +55,31 @@ export interface ResumeRunStorageOptions extends CreateRunStorageOptions {
   readonly source: RunStorageRoot;
 }
 
-export type { RunStorageRoot } from './run-storage-root-core.js';
+export type {
+  RunStorageRoot,
+  TerminalPublication,
+  TerminalPublicationStageClaim,
+  TerminalPublicationStage,
+  TerminalPublicationCommitReceipt,
+} from './run-storage-root-core.js';
 
 export function createRunStorage(
   options: CreateRunStorageOptions,
 ): RunStorageRoot {
   assertExactPublicInput(
     options,
-    ['databasePath', 'run', 'workflowDefinition', 'busyRetry'],
+    [
+      'databasePath',
+      'run',
+      'workflowDefinition',
+      'bootstrapSeed',
+      'busyRetry',
+    ],
     'createRunStorage',
   );
   assertExactPublicInput(
     options.run,
-    ['slug', 'findingContractEnabled'],
+    ['runId', 'findingContractEnabled'],
     'run',
   );
   assertExactPublicInput(
@@ -70,6 +88,7 @@ export function createRunStorage(
     'workflowDefinition',
   );
   rejectPublicEngineIdentityInput(options);
+  assertNoFileAuthority(options.databasePath);
   return createRunStorageRoot(
     createPublishedRunDatabase(options),
     options.busyRetry ?? DEFAULT_BUSY_RETRY,
@@ -86,6 +105,7 @@ export function openRunStorage(
     'openRunStorage',
   );
   rejectPublicEngineIdentityInput(options);
+  assertNoFileAuthority(options.databasePath);
   return createRunStorageRoot(
     openPublishedRunDatabase(options.databasePath),
     options.busyRetry ?? DEFAULT_BUSY_RETRY,
@@ -98,12 +118,19 @@ export function resumeRunStorage(
 ): RunStorageRoot {
   assertExactPublicInput(
     options,
-    ['databasePath', 'run', 'workflowDefinition', 'busyRetry', 'source'],
+    [
+      'databasePath',
+      'run',
+      'workflowDefinition',
+      'bootstrapSeed',
+      'busyRetry',
+      'source',
+    ],
     'resumeRunStorage',
   );
   assertExactPublicInput(
     options.run,
-    ['slug', 'findingContractEnabled'],
+    ['runId', 'findingContractEnabled'],
     'run',
   );
   assertExactPublicInput(
@@ -112,6 +139,7 @@ export function resumeRunStorage(
     'workflowDefinition',
   );
   rejectPublicEngineIdentityInput(options);
+  assertNoFileAuthority(options.databasePath);
   const source = captureTrustedRunStorageResumeSnapshot(
     readTrustedRunStorageResumeSnapshot(options.source),
   );
@@ -120,6 +148,15 @@ export function resumeRunStorage(
     options.busyRetry ?? DEFAULT_BUSY_RETRY,
     SYSTEM_RUN_STORAGE_CLOCK,
   );
+}
+
+function assertNoFileAuthority(databasePath: string): void {
+  if (existsSync(join(dirname(databasePath), 'run-authority.json'))) {
+    throw new Error(
+      `Run directory corruption: SQLite and file authorities coexist at `
+      + `"${dirname(databasePath)}"`,
+    );
+  }
 }
 
 function rejectPublicEngineIdentityInput(options: object): void {

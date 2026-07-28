@@ -15,7 +15,7 @@ import type {
   WorkflowResumePointEntry,
 } from '../../models/types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
-import { isWorkflowCallStep } from '../step-kind.js';
+import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../step-kind.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { runReportPhase, ReportPhaseGenerationError } from '../phase-runner.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
@@ -49,6 +49,7 @@ import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } 
 import { recordAgentUsageEvent } from './agent-usage-event.js';
 import { formatWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
+import { buildScopedStepIterationIdentity } from '../step-iteration-identity.js';
 
 const log = createLogger('parallel-runner');
 
@@ -143,8 +144,16 @@ export interface ParallelRunnerDeps {
   readonly workflowModel?: WorkflowConfig['model'];
   readonly findingLedgerStore?: FindingLedgerStore;
   readonly getWorkflowCallRunner?: () => WorkflowCallRunner;
+  readonly claimStepOccurrence: (
+    step: WorkflowStep,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ) => number;
   readonly updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
-  readonly setActiveResumePoint: (step: WorkflowStep, iteration: number) => void;
+  readonly setActiveResumePoint: (
+    step: WorkflowStep,
+    iteration: number,
+    occurrence: number,
+  ) => void;
   readonly getRunId: () => string;
   /** raw finding id 衝突対策の呼び出し名前空間。トップレベルでは空文字列。 */
   readonly getFindingCallNamespace: () => string;
@@ -294,6 +303,9 @@ export class ParallelRunner {
           abortSignal: this.deps.engineOptions.abortSignal,
         })
       : new Map();
+    const workflowCallResumeStack = subSteps.some(isWorkflowCallStep)
+      ? this.requireWorkflowCallResumeStack(step, stepIteration)
+      : undefined;
 
     // Run all sub-steps concurrently (failures are captured, not thrown)
     // When semaphore is set, at most `concurrency` sub-steps execute simultaneously.
@@ -308,8 +320,19 @@ export class ParallelRunner {
         subStepStartedAtByName.set(subStep.name, startedAt);
         try {
           if (isWorkflowCallStep(subStep)) {
+            if (workflowCallResumeStack === undefined) {
+              throw new Error(
+                `Parallel workflow_call sub-step "${subStep.name}" has no parent resume stack`,
+              );
+            }
             subStepInstructionByName.set(subStep.name, '');
-            return await this.runWorkflowCallSubStep(subStep, state, runtime, startedAt);
+            return await this.runWorkflowCallSubStep(
+              subStep,
+              state,
+              runtime,
+              startedAt,
+              workflowCallResumeStack,
+            );
           }
           if (!isAgentParallelSubStep(subStep)) {
             throw new Error(`Unsupported parallel sub-step kind for "${subStep.name}"`);
@@ -324,7 +347,10 @@ export class ParallelRunner {
                 providerInfo: routedProviderInfoByStep.get(subStep.name)!,
               }
             : runtime;
-          const subIteration = incrementStepIteration(state, subStep.name);
+          const subIteration = incrementStepIteration(
+            state,
+            buildScopedStepIterationIdentity(subStep.name, [step.name]),
+          );
           const subInstruction = this.deps.stepExecutor.buildInstruction(
             executableSubStep,
             subIteration,
@@ -696,7 +722,15 @@ export class ParallelRunner {
         }
 
         state.stepOutputs.set(subStep.name, finalResponse);
-        this.deps.stepExecutor.emitStepReports(subStep);
+        this.deps.stepExecutor.emitStepReports(
+          subStep,
+          {
+            iteration: parentIteration,
+            resumeStepName: step.name,
+            stepIteration: subIteration,
+            providerInfo: subPm,
+          },
+        );
 
         return {
           subStep,
@@ -822,7 +856,13 @@ export class ParallelRunner {
 
     // v2 梯子設計: 取り込みは常に 'updated' で完了する（manager の壊れた応答・
     // 予算超過は provisional として台帳へ着地し、run-level の失敗経路は無い）。
-    await this.runFindingContractManager(step, stepIteration, subResults, priorStepResponseText);
+    await this.runFindingContractManager(
+      step,
+      stepIteration,
+      state.iteration,
+      subResults,
+      priorStepResponseText,
+    );
 
     // Print completion summary
     if (parallelLogger) {
@@ -880,7 +920,15 @@ export class ParallelRunner {
       stepIteration,
       aggregatedResponse.content,
     );
-    this.deps.stepExecutor.emitStepReports(step);
+    this.deps.stepExecutor.emitStepReports(
+      step,
+      {
+        iteration: state.iteration,
+        resumeStepName: step.name,
+        stepIteration,
+        providerInfo: parentPm,
+      },
+    );
     return { response: aggregatedResponse, instruction: aggregatedInstruction, providerInfo: parentPm };
   }
 
@@ -889,12 +937,13 @@ export class ParallelRunner {
     state: WorkflowState,
     runtime: RuntimeStepResolution | undefined,
     startedAt: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ): Promise<ParallelSubStepResult> {
     if (!isWorkflowCallStep(subStep)) {
       throw new Error(`Parallel sub-step "${subStep.name}" is not a workflow_call`);
     }
 
-    incrementStepIteration(state, subStep.name);
+    this.deps.claimStepOccurrence(subStep, resumeStackPrefix);
     const workflowCallRunner = this.deps.getWorkflowCallRunner?.();
     if (!workflowCallRunner) {
       throw new Error(`Parallel workflow_call sub-step "${subStep.name}" requires workflowCallRunner`);
@@ -902,7 +951,11 @@ export class ParallelRunner {
     const subRuntime = runtime?.fallback
       ? runtime
       : workflowCallRunner.resolveRuntime(subStep);
-    const result = await workflowCallRunner.runIsolated(subStep, subRuntime);
+    const result = await workflowCallRunner.runIsolated(
+      subStep,
+      subRuntime,
+      resumeStackPrefix,
+    );
     return {
       subStep,
       response: result.result.response,
@@ -912,6 +965,26 @@ export class ParallelRunner {
       workflowCallSessionUpdates: result.sessionUpdates,
       workflowCallStateSync: result.stateSync,
     };
+  }
+
+  private requireWorkflowCallResumeStack(
+    step: WorkflowStep,
+    occurrence: number,
+  ): WorkflowResumePointEntry[] {
+    const stack = this.deps.getCurrentWorkflowStack?.();
+    const parentFrame = stack?.at(-1);
+    if (
+      stack === undefined
+      || parentFrame === undefined
+      || parentFrame.step !== step.name
+      || parentFrame.kind !== getWorkflowResumeFrameKind(step)
+      || parentFrame.occurrence !== occurrence
+    ) {
+      throw new Error(
+        `Parallel workflow_call parent "${this.deps.getWorkflowName()}/${step.name}" has no active resume frame`,
+      );
+    }
+    return [...stack];
   }
 
   private mergeWorkflowCallSubStepEffects(
@@ -943,7 +1016,11 @@ export class ParallelRunner {
     }
     this.mergeWorkflowCallSessionUpdates(subResults, state, updatePersonaSession);
     if (didSyncWorkflowCallState) {
-      this.deps.setActiveResumePoint(step, state.iteration);
+      const occurrence = state.stepIterations.get(step.name);
+      if (occurrence === undefined) {
+        throw new Error(`Parallel step "${step.name}" has no occurrence after child execution`);
+      }
+      this.deps.setActiveResumePoint(step, state.iteration, occurrence);
     }
   }
 
@@ -977,6 +1054,7 @@ export class ParallelRunner {
   private async runFindingContractManager(
     step: WorkflowStep,
     stepIteration: number,
+    iteration: number,
     subResults: ParallelSubStepResult[],
     priorStepResponseText: string | undefined,
   ): Promise<FindingManagerRunResult | undefined> {
@@ -997,6 +1075,7 @@ export class ParallelRunner {
       stepExecutor: this.deps.stepExecutor,
       parentStep: step,
       stepIteration,
+      iteration,
       subResults,
       // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
       // workflow_call の子が親の台帳を継承した場合、この engine 自身の
@@ -1004,7 +1083,7 @@ export class ParallelRunner {
       // ledger.workflowName が親の台帳と食い違い、次回 load/save で
       // assertLedgerWorkflowName が例外を投げる。
       workflowName: ledgerStore.workflowName,
-      runId: this.deps.getRunId(),
+      analyticsWorkflowName: this.deps.getWorkflowName(),
       callNamespace: this.deps.getFindingCallNamespace(),
       timestamp: new Date().toISOString(),
       priorStepResponseText,
@@ -1159,7 +1238,12 @@ export class ParallelRunner {
       providerInfo: options.providerInfo,
       consumedStepIterations: [
         options.step.name,
-        ...options.subResults.map((result) => result.subStep.name),
+        ...options.subResults.map((result) => (
+          buildScopedStepIterationIdentity(
+            result.subStep.name,
+            [options.step.name],
+          )
+        )),
       ],
     };
   }

@@ -25,28 +25,33 @@ interface ResumeSourceRow {
 export function readTrustedFindingResumeSource(
   context: RunReadContext,
   runId: string,
+  scopeId: string,
 ): TrustedFindingResumeSource | undefined {
   const row = context.get<ResumeSourceRow>(`
     SELECT
       sources.source_run_id AS sourceRunId,
       sources.source_snapshot_digest AS sourceSnapshotDigest,
-      sources.source_finding_scope_id AS sourceFindingScopeId,
-      sources.source_finding_revision AS sourceFindingRevision,
-      sources.imported_finding_revision AS importedFindingRevision,
-      sources.source_finding_projection_digest AS sourceFindingProjectionDigest,
+      authority.source_scope_id AS sourceFindingScopeId,
+      authority.source_revision AS sourceFindingRevision,
+      authority.imported_revision AS importedFindingRevision,
+      authority.projection_digest AS sourceFindingProjectionDigest,
       ancestry.depth
     FROM run_resume_sources AS sources
+    JOIN finding_resume_authorities AS authority
+      ON authority.run_id = sources.run_id
+      AND authority.source_run_id = sources.source_run_id
     JOIN run_ancestry AS ancestry
       ON ancestry.run_id = sources.run_id
       AND ancestry.ancestor_run_id = sources.source_run_id
       AND ancestry.snapshot_digest = sources.source_snapshot_digest
-    WHERE sources.run_id = ?
-  `, runId);
-  if (row === undefined || row.sourceFindingScopeId === null) {
+    WHERE sources.run_id = ? AND authority.scope_id = ?
+  `, runId, scopeId);
+  if (row === undefined) {
     return undefined;
   }
   if (
     row.depth !== 1
+    || row.sourceFindingScopeId === null
     || row.sourceFindingRevision === null
     || row.importedFindingRevision === null
     || row.sourceFindingProjectionDigest === null
@@ -55,7 +60,7 @@ export function readTrustedFindingResumeSource(
   }
   const imported = readFindingLedgerProjection(context, {
     runId,
-    scopeId: 'root',
+    scopeId,
     revision: row.importedFindingRevision,
   });
   if (
@@ -77,15 +82,16 @@ export function readTrustedFindingResumeSource(
 export function readImportedFindingLedger(
   context: RunReadContext,
   runId: string,
+  scopeId: string,
   source: TrustedFindingResumeSource,
 ): FindingLedger {
-  const stored = readTrustedFindingResumeSource(context, runId);
+  const stored = readTrustedFindingResumeSource(context, runId, scopeId);
   if (!sameTrustedFindingResumeSource(stored, source)) {
     throw new Error(`Run "${runId}" Finding resume source is forged or stale`);
   }
   return readFindingLedgerProjection(context, {
     runId,
-    scopeId: 'root',
+    scopeId,
     revision: source.importedRevision,
   }).ledger;
 }

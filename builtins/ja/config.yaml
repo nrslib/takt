@@ -20,6 +20,8 @@ language: ja         # 表示言語: ja | en
 # auto_requeue_max_attempts: 0     # takt run 中の失敗 workflow task 自動 requeue 上限（非負整数、0で無効）
 # ignore_exceed: false             # takt run / takt watch で --ignore-exceed 相当を適用
 # sync_project_local_takt_on_retry: true # Retry / re-execution 前に root の project-local .takt を同期。保持したい場合は false
+# run_storage:
+#   backend: file                  # Finding Contractのauthority: file | sqlite
 
 # PR / ブランチ
 # auto_pr: false                   # worktree実行後にPR自動作成

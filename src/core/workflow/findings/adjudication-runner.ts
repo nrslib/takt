@@ -35,6 +35,8 @@ export interface FindingConflictAdjudicationRunnerDeps {
   /** cwd the reviewed code lives in (see admission-validation.ts). */
   getCwd: () => string;
   workflowName: string;
+  analyticsWorkflowName: string;
+  findingScopeIdentity: string;
   runId: string;
   refreshFindingsState: () => void;
   emitEvent: (event: string, ...args: unknown[]) => void;
@@ -175,7 +177,11 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
       return noTargetResult(ledgerAtAttempt, `conflict "${targetConflict.id}" is already being adjudicated`);
     }
     try {
-      deps.emitEvent('findings:ledger', structuredClone(ledgerAtAttempt));
+      deps.emitEvent('findings:ledger', structuredClone(ledgerAtAttempt), {
+        iteration: state.iteration,
+        workflowName: deps.analyticsWorkflowName,
+        scopeIdentity: deps.findingScopeIdentity,
+      });
       deps.refreshFindingsState();
       const evidenceSnapshot = attemptMutation.result.evidenceSnapshot;
       const promptConflict = evidenceSnapshot.conflict;
@@ -213,7 +219,11 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
       });
       const nextLedger = applyMutation.ledger;
 
-      deps.emitEvent('findings:ledger', structuredClone(nextLedger));
+      deps.emitEvent('findings:ledger', structuredClone(nextLedger), {
+        iteration: state.iteration,
+        workflowName: deps.analyticsWorkflowName,
+        scopeIdentity: deps.findingScopeIdentity,
+      });
       deps.refreshFindingsState();
 
       if (!applyMutation.result.applied) {

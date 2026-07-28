@@ -18,6 +18,7 @@ function writeRunMeta(slug: string, meta: Record<string, unknown>): void {
     reportDirectory: `.takt/runs/${slug}/reports`,
     contextDirectory: `.takt/runs/${slug}/context`,
     logsDirectory: `.takt/runs/${slug}/logs`,
+    storageBackend: 'file',
     startTime: '2026-05-24T00:00:00.000Z',
     ...meta,
   }), 'utf-8');

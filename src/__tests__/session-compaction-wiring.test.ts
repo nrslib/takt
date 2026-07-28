@@ -10,7 +10,11 @@ import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engin
 import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
 import { parseFindingLedger } from '../core/workflow/findings/schemas.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
-import { makeRule, makeStep } from './test-helpers.js';
+import {
+  makeRule,
+  makeStep,
+  makeWorkflowResumePointEntry,
+} from './test-helpers.js';
 
 const { compactSessionBeforePhase1Mock, ingestFindingContractResultsMock } = vi.hoisted(() => ({
   compactSessionBeforePhase1Mock: vi.fn().mockResolvedValue('reused'),
@@ -320,6 +324,9 @@ describe('session compaction Phase 1 wiring', () => {
       getInteractive: () => false,
       getWorkflowSteps: () => [{ name: 'review' }],
       getWorkflowName: () => 'test-workflow',
+      getCurrentWorkflowStack: () => [
+        makeWorkflowResumePointEntry({ step: 'review' }),
+      ],
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
       structuredCaller: {
@@ -432,6 +439,9 @@ describe('session compaction Phase 1 wiring', () => {
       getInteractive: () => false,
       getWorkflowSteps: () => [{ name: 'review' }],
       getWorkflowName: () => 'test-workflow',
+      getCurrentWorkflowStack: () => [
+        makeWorkflowResumePointEntry({ step: 'review' }),
+      ],
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
       structuredCaller: {

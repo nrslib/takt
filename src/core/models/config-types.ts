@@ -157,6 +157,13 @@ export type SubmoduleSelection = 'all' | string[];
 /** Language setting for takt */
 export type Language = 'en' | 'ja';
 
+export const RUN_STORAGE_BACKENDS = ['file', 'sqlite'] as const;
+export type RunStorageBackend = (typeof RUN_STORAGE_BACKENDS)[number];
+
+export interface RunStorageConfig {
+  backend: RunStorageBackend;
+}
+
 /** Pipeline execution configuration */
 export interface PipelineConfig {
   /** Branch name prefix for pipeline-created branches (default: "takt/") */
@@ -300,6 +307,8 @@ export interface ProjectConfig {
   syncConflictResolver?: SyncConflictResolverConfig;
   /** Workflow-level MCP transport policy */
   workflowMcpServers?: WorkflowMcpServersConfig;
+  /** Run-scoped persistence backend */
+  runStorage?: RunStorageConfig;
 }
 
 /**

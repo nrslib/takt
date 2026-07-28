@@ -58,6 +58,34 @@ describe('traceReport', () => {
     expect(markdown).toContain('<details><summary>Stage Response</summary>');
   });
 
+  it('renders failed runs and their terminal step as failed', () => {
+    const markdown = renderTraceReportMarkdown(
+      {
+        tracePath: '/tmp/trace.md',
+        workflowName: 'failed-workflow',
+        task: 'test task',
+        runSlug: 'run-failed',
+        status: 'failed',
+        iterations: 1,
+        endTime: '2026-03-04T12:00:00.000Z',
+        reason: 'storage failed',
+      },
+      '2026-03-04T11:59:00.000Z',
+      [{
+        step: 'review',
+        persona: 'reviewer',
+        iteration: 1,
+        startedAt: '2026-03-04T11:59:01.000Z',
+        completedAt: '2026-03-04T11:59:02.000Z',
+        phases: [],
+      }],
+    );
+
+    expect(markdown).toContain('- Status: ❌ failed');
+    expect(markdown).toContain('- Step Status: failed');
+    expect(markdown).not.toContain('❌ aborted');
+  });
+
   it('should render steps in timestamp order from NDJSON logs', () => {
     const dir = mkdtempSync(join(tmpdir(), 'trace-report-'));
     const sessionPath = join(dir, 'session.jsonl');
@@ -76,8 +104,8 @@ describe('traceReport', () => {
       '',
     ].join('\n'));
     writeFileSync(promptPath, [
-      JSON.stringify({ step: 'plan', phase: 1, iteration: 1, phaseExecutionId: 'plan:1:1:1', prompt: 'p', systemPrompt: 'ps', userInstruction: 'pu', response: 'p-ok', timestamp: '2026-03-04T11:59:03.000Z' }),
-      JSON.stringify({ step: 'reviewers', phase: 1, iteration: 2, phaseExecutionId: 'reviewers:2:1:1', prompt: 'r', systemPrompt: 'rs', userInstruction: 'ru', response: 'r-ok', timestamp: '2026-03-04T11:59:07.000Z' }),
+      JSON.stringify({ step: 'plan', phase: 1, iteration: 1, scope: '{"step":"plan","stack":[]}', phaseExecutionId: 'plan:1:1:1', prompt: 'p', systemPrompt: 'ps', userInstruction: 'pu', response: 'p-ok', timestamp: '2026-03-04T11:59:03.000Z' }),
+      JSON.stringify({ step: 'reviewers', phase: 1, iteration: 2, scope: '{"step":"reviewers","stack":[]}', phaseExecutionId: 'reviewers:2:1:1', prompt: 'r', systemPrompt: 'rs', userInstruction: 'ru', response: 'r-ok', timestamp: '2026-03-04T11:59:07.000Z' }),
       '',
     ].join('\n'));
 
@@ -152,7 +180,13 @@ describe('traceReport', () => {
         type: 'step_start',
         step: 'review',
         workflow: 'parent',
-        stack: [{ workflow: 'parent', step: 'review', kind: 'workflow_call' }],
+        stack: [{
+          workflow: 'parent',
+          workflow_ref: 'project:sha256:parent',
+          step: 'review',
+          kind: 'workflow_call',
+          occurrence: 1,
+        }],
         persona: 'planner',
         iteration: 3,
         timestamp: '2026-03-04T11:59:01.000Z',
@@ -162,8 +196,20 @@ describe('traceReport', () => {
         step: 'review',
         workflow: 'child',
         stack: [
-          { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'child', step: 'review', kind: 'agent' },
+          {
+            workflow: 'parent',
+            workflow_ref: 'project:sha256:parent',
+            step: 'delegate',
+            kind: 'workflow_call',
+            occurrence: 1,
+          },
+          {
+            workflow: 'child',
+            workflow_ref: 'project:sha256:child',
+            step: 'review',
+            kind: 'agent',
+            occurrence: 1,
+          },
         ],
         persona: 'reviewer',
         iteration: 4,
@@ -174,8 +220,20 @@ describe('traceReport', () => {
         step: 'review',
         workflow: 'child',
         stack: [
-          { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'child', step: 'review', kind: 'agent' },
+          {
+            workflow: 'parent',
+            workflow_ref: 'project:sha256:parent',
+            step: 'delegate',
+            kind: 'workflow_call',
+            occurrence: 1,
+          },
+          {
+            workflow: 'child',
+            workflow_ref: 'project:sha256:child',
+            step: 'review',
+            kind: 'agent',
+            occurrence: 1,
+          },
         ],
         persona: 'reviewer',
         iteration: 4,
@@ -188,7 +246,13 @@ describe('traceReport', () => {
         type: 'step_complete',
         step: 'review',
         workflow: 'parent',
-        stack: [{ workflow: 'parent', step: 'review', kind: 'workflow_call' }],
+        stack: [{
+          workflow: 'parent',
+          workflow_ref: 'project:sha256:parent',
+          step: 'review',
+          kind: 'workflow_call',
+          occurrence: 1,
+        }],
         persona: 'planner',
         iteration: 3,
         status: 'done',

@@ -1902,6 +1902,7 @@ describe('解釈梯子の追加必須テスト', () => {
 
       const realStore = createFindingLedgerStore({
         projectCwd,
+        runId: 'crash-run',
         reportDir,
         workflowName: 'peer-review',
         ledgerPath: '.takt/findings/peer-review.json',
@@ -2272,6 +2273,7 @@ describe('解釈梯子の追加必須テスト', () => {
 
       const store = createFindingLedgerStore({
         projectCwd,
+        runId: 'shared-run',
         reportDir,
         workflowName: 'peer-review',
         ledgerPath: '.takt/findings/peer-review.json',

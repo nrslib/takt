@@ -30,6 +30,8 @@ export interface ReviewFindingEvent {
   file: string;
   line: number;
   iteration: number;
+  workflowName: string;
+  scopeIdentity: string;
   runId: string;
   timestamp: string;
 }
@@ -43,6 +45,8 @@ export interface FixActionEvent {
   testCommand?: string;
   testResult?: string;
   iteration: number;
+  workflowName: string;
+  scopeIdentity: string;
   runId: string;
   timestamp: string;
 }
@@ -55,6 +59,8 @@ export interface StepResultEvent {
   model: string;
   decisionTag: string;
   iteration: number;
+  workflowName: string;
+  scopeIdentity: string;
   runId: string;
   timestamp: string;
 }

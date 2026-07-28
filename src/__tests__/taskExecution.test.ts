@@ -1440,15 +1440,20 @@ describe('executeAndCompleteTask', () => {
       draftPr: false,
       managedPr: false,
       shouldPublishBranchToOrigin: true,
-      taskPrompt: undefined,
       reportDirName: '20260216-task-order-content',
+      taskSpec: {
+        runSlug: '20260216-task-order-content',
+        sourceTaskDir: '/project/.takt/tasks/task-order-content',
+        taskPrompt: 'Use the task spec.',
+        orderContent: '## Task\n\nUse the full order.md content.',
+        stagedOrderContent: '## Task\n\nUse the full order.md content.',
+      },
       branch: 'takt/task-order-content',
       worktreePath: '/worktree/clone',
       baseBranch: 'main',
       startStep: undefined,
       retryNote: undefined,
       issueNumber: undefined,
-      orderContent: '## Task\n\nUse the full order.md content.',
     });
     mockExecuteWorkflow.mockResolvedValue({ success: true });
     mockPostExecutionFlow.mockResolvedValue({});

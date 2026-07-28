@@ -10,7 +10,7 @@ export interface TraceReportParams {
   workflowName: string;
   task: string;
   runSlug: string;
-  status: 'completed' | 'aborted';
+  status: 'completed' | 'aborted' | 'failed';
   iterations: number;
   endTime: string;
   reason?: string;

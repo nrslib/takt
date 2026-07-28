@@ -12,7 +12,8 @@ import {
   resolveStepProviderModel,
 } from '../provider-resolution.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
-import { getWorkflowStepKind, isDelegatedWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
+import { getWorkflowStepKind, isDelegatedWorkflowStep } from '../step-kind.js';
+import { collectWorkflowCallSteps } from '../workflow-step-traversal.js';
 import {
   findSemanticAppendixConflicts,
   hasAggregateCondition,
@@ -428,22 +429,19 @@ function validatePromotionProviderModels(
 }
 
 function validateParallelSubStepNamesUnique(config: WorkflowConfig): void {
-  for (const step of config.steps) {
-    const names = new Set<string>();
-    for (const subStep of step.parallel ?? []) {
-      if (names.has(subStep.name)) {
-        throw new Error(`Configuration error: parallel step "${step.name}" contains duplicate sub-step name "${subStep.name}"`);
+  const validateSiblingNames = (steps: readonly WorkflowStep[]): void => {
+    for (const step of steps) {
+      const names = new Set<string>();
+      for (const subStep of step.parallel ?? []) {
+        if (names.has(subStep.name)) {
+          throw new Error(`Configuration error: parallel step "${step.name}" contains duplicate sub-step name "${subStep.name}"`);
+        }
+        names.add(subStep.name);
       }
-      names.add(subStep.name);
+      validateSiblingNames(step.parallel ?? []);
     }
-  }
-}
-
-function workflowContainsWorkflowCall(config: WorkflowConfig): boolean {
-  const stepContainsWorkflowCall = (step: WorkflowConfig['steps'][number]): boolean =>
-    isWorkflowCallStep(step) || (step.parallel ?? []).some(stepContainsWorkflowCall);
-
-  return config.steps.some(stepContainsWorkflowCall);
+  };
+  validateSiblingNames(config.steps);
 }
 
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
@@ -475,7 +473,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
     }
   }
 
-  if (workflowContainsWorkflowCall(config) && !options.workflowCallResolver) {
+  if (collectWorkflowCallSteps(config.steps).length > 0 && !options.workflowCallResolver) {
     throw new Error('Configuration error: workflowCallResolver is required when workflow contains workflow_call steps');
   }
 

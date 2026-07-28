@@ -26,7 +26,7 @@ import { createInitialState, addUserInput as addUserInputToState } from './state
 import { CycleDetector } from './cycle-detector.js';
 import { runSingleWorkflowIteration, runWorkflowToCompletion } from './WorkflowRunLoop.js';
 import { validateWorkflowConfig } from './WorkflowValidator.js';
-import { getWorkflowStepKind } from '../step-kind.js';
+import { getWorkflowResumeFrameKind } from '../step-kind.js';
 import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
 import { RoutingRuntime } from '../auto-routing/runtime.js';
 import { buildRoutingFindings } from '../auto-routing/snapshot.js';
@@ -48,7 +48,7 @@ import {
 } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import { buildFindingsRuleContext } from '../findings/context.js';
-import { createFindingLedgerStore, type FindingLedgerStore } from '../findings/store.js';
+import type { FindingLedgerStore } from '../findings/store.js';
 import type { FindingLedger, FindingLedgerEntry, ReviewerAnomalyEntry } from '../findings/types.js';
 import { injectFindingConflictAdjudicationStep } from '../findings/adjudication-step.js';
 import { createFindingConflictAdjudicationRunner } from '../findings/adjudication-runner.js';
@@ -59,6 +59,7 @@ import {
   resolveInheritedReviewReportNamesWithDiagnostics,
 } from '../review-report-discovery.js';
 import { getRemoteRepositoryIdentifiers } from '../../../infra/git/detect.js';
+import { WorkflowResumeContinuation } from './workflow-resume-continuation.js';
 const log = createLogger('workflow-engine');
 
 type WorkflowEngineRuntimeOptions = WorkflowEngineOptions & {
@@ -102,6 +103,8 @@ export class WorkflowEngine extends EventEmitter {
   private abortRequested = false;
   private readonly sharedRuntime: WorkflowSharedRuntimeState;
   private readonly resumeStackPrefix: WorkflowResumePointEntry[];
+  private activeResumePoint: WorkflowResumePoint | undefined;
+  private readonly resumeContinuation: WorkflowResumeContinuation;
   private readonly findingLedgerStore?: FindingLedgerStore;
   private readonly findingContract?: FindingContractConfig;
   private findingContractBootstrap?: Promise<void>;
@@ -204,6 +207,10 @@ export class WorkflowEngine extends EventEmitter {
     validateWorkflowConfig(this.config, this.options);
 
     this.state = createInitialState(this.config, this.options);
+    this.resumeContinuation = new WorkflowResumeContinuation(
+      this.config,
+      this.options.resumePoint,
+    );
     this.inheritPreviousReviewReports();
     // workflow_call の親から継承した Finding Contract があればそれを優先する。
     // 継承しないと子の parallel レビューが出す raw findings が親の台帳に届かず、
@@ -211,20 +218,30 @@ export class WorkflowEngine extends EventEmitter {
     // 自前 finding_contract と継承の同時指定は WorkflowValidator で設定エラーに
     // しているため、ここでは「継承 or 自前」のどちらか一方だけが来る前提で良い。
     this.findingContract = this.options.inheritedFindingContract?.contract ?? this.config.findingContract;
-    if (this.findingContract) {
+    if (this.options.inheritedFindingContract !== undefined) {
       // 継承時は親と同一の FindingLedgerStore インスタンスをそのまま使う。
       // ledger_path / raw_findings_path はワークフロー名に紐づくため、子が
       // 自前で store を作り直すと親の when(findings.*) と別の台帳を見てしまう。
-      this.findingLedgerStore = this.options.inheritedFindingContract?.ledgerStore ?? createFindingLedgerStore({
-        projectCwd: this.projectCwd,
-        reportDir: this.runPaths.reportsAbs,
-        workflowName: this.config.name,
-        ledgerPath: this.findingContract.ledgerPath,
-        rawFindingsPath: this.findingContract.rawFindingsPath,
-        ...(this.options.resumeSource?.sourceRunSlug === undefined
+      this.findingLedgerStore = this.options.inheritedFindingContract.ledgerStore;
+    } else if (this.findingContract !== undefined) {
+      if (this.options.findingAuthorityResolver === undefined) {
+        throw new Error(
+          'Finding Contract requires an injected Finding authority resolver',
+        );
+      }
+      this.findingLedgerStore = this.options.findingAuthorityResolver.resolve({
+        workflowConfig: this.config,
+        runPaths: this.runPaths,
+        runPathNamespace: this.options.runPathNamespace ?? [],
+        ...(this.options.workflowCallSiteIdentity === undefined
           ? {}
-          : { trustedResumeSourceRunId: this.options.resumeSource.sourceRunSlug }),
+          : {
+              workflowCallSiteIdentity:
+                this.options.workflowCallSiteIdentity,
+            }),
       });
+    }
+    if (this.findingLedgerStore !== undefined) {
       this.refreshFindingsState();
       this.findingLedgerStore.saveLedgerSnapshot();
     }
@@ -241,11 +258,26 @@ export class WorkflowEngine extends EventEmitter {
       structuredCaller: this.structuredCaller,
       sharedRuntime: this.sharedRuntime,
       resumeStackPrefix: this.resumeStackPrefix,
+      getCurrentWorkflowStack: () => this.activeResumePoint?.stack,
       runPaths: this.runPaths,
       updateMaxSteps: (maxSteps) => {
         this.maxSteps = maxSteps;
         this.sharedRuntime.maxSteps = maxSteps;
       },
+      claimStepOccurrence: (step, resumeStackPrefix) => (
+        this.resumeContinuation.claimStepOccurrence({
+          step,
+          resumeStackPrefix,
+          state: this.state,
+        })
+      ),
+      consumeWorkflowCallContinuation: (step, occurrence, resumeStackPrefix) => (
+        this.resumeContinuation.consumeWorkflowCallFrame({
+          step,
+          occurrence,
+          resumeStackPrefix,
+        })
+      ),
       setActiveResumePoint: this.setActiveResumePoint.bind(this),
       refreshFindingsState: this.refreshFindingsState.bind(this),
       findingContract: this.findingContract,
@@ -284,7 +316,13 @@ export class WorkflowEngine extends EventEmitter {
       loopMonitorJudgeRunner: this.loopMonitorJudgeRunner,
       workflowCallRunner: this.workflowCallRunner,
       updatePersonaSession: this.updatePersonaSession.bind(this),
-      emitReport: (step, filePath, fileName) => this.emit('step:report', step, filePath, fileName),
+      emitReport: (step, filePath, fileName, context) => this.emit(
+        'step:report',
+        step,
+        filePath,
+        fileName,
+        context,
+      ),
       findingConflictAdjudicationRunner: this.findingContract && this.findingLedgerStore
         ? createFindingConflictAdjudicationRunner({
           ledgerStore: this.findingLedgerStore,
@@ -296,6 +334,8 @@ export class WorkflowEngine extends EventEmitter {
           // （子の名前）を使うと reconcile 文脈が親の台帳の workflowName と
           // 食い違う（StepExecutor / ParallelRunner の manager 経路と同じ理由）。
           workflowName: this.findingLedgerStore.workflowName,
+          analyticsWorkflowName: this.config.name,
+          findingScopeIdentity: this.findingLedgerStore.ledgerIdentity,
           runId: this.runPaths.slug,
           refreshFindingsState: this.refreshFindingsState.bind(this),
           emitEvent: (event, ...args) => this.emit(event as never, ...args as []),
@@ -311,9 +351,14 @@ export class WorkflowEngine extends EventEmitter {
           state: this.state,
           options: this.options,
           getWorkflowName: () => this.config.name,
+          getFindingScopeIdentity: () => this.findingLedgerStore?.ledgerIdentity,
+          getFindingIds: () => this.findingLedgerStore
+            ?.loadLedger()
+            .findings
+            .map((finding) => finding.id),
           getTask: () => this.task,
           getRoutingFindings: () => buildRoutingFindings(this.findingLedgerStore?.loadLedger()),
-          getCurrentWorkflowStack: () => this.sharedRuntime.activeResumePoint?.stack,
+          getCurrentWorkflowStack: () => this.activeResumePoint?.stack,
           getCwd: () => this.cwd,
           getMaxSteps: () => this.maxSteps,
           getReportDir: () => this.runPaths.reportsAbs,
@@ -341,6 +386,13 @@ export class WorkflowEngine extends EventEmitter {
           resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
           resolveStepProviderModelBeforeAutoRouting: (step, runtime) => this.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
+          claimStepOccurrence: (step) => (
+            this.resumeContinuation.claimStepOccurrence({
+              step,
+              resumeStackPrefix: this.resumeStackPrefix,
+              state: this.state,
+            })
+          ),
           setActiveStep: this.setActiveResumePoint.bind(this),
           addUserInput: this.addUserInput.bind(this),
           emit: (event, ...args) => this.emit(event as never, ...args as []),
@@ -573,7 +625,11 @@ export class WorkflowEngine extends EventEmitter {
       && workflowEntryMatchesWorkflow(entry, this.config);
   }
 
-  private buildResumePoint(step: WorkflowStep, iteration: number): WorkflowResumePoint {
+  private buildResumePoint(
+    step: WorkflowStep,
+    iteration: number,
+    occurrence: number,
+  ): WorkflowResumePoint {
     return {
       version: 1,
       stack: [
@@ -581,7 +637,8 @@ export class WorkflowEngine extends EventEmitter {
         buildWorkflowResumePointEntry(
           this.config,
           step.name,
-          getWorkflowStepKind(step),
+          getWorkflowResumeFrameKind(step),
+          occurrence,
           this.state.stepIterations,
         ),
       ],
@@ -590,8 +647,18 @@ export class WorkflowEngine extends EventEmitter {
     };
   }
 
-  private setActiveResumePoint(step: WorkflowStep, iteration: number): void {
-    this.sharedRuntime.activeResumePoint = this.buildResumePoint(step, iteration);
+  private setActiveResumePoint(
+    step: WorkflowStep,
+    iteration: number,
+    occurrence: number,
+  ): void {
+    const activeResumePoint = this.buildResumePoint(
+      step,
+      iteration,
+      occurrence,
+    );
+    this.activeResumePoint = activeResumePoint;
+    this.sharedRuntime.activeResumePoint = activeResumePoint;
   }
 
   getResumePoint(): WorkflowResumePoint | undefined {
@@ -600,12 +667,15 @@ export class WorkflowEngine extends EventEmitter {
     if (activeResumePoint === undefined || activeEntry === undefined) {
       return activeResumePoint;
     }
-
+    if (activeResumePoint.stack.length > this.resumeStackPrefix.length + 1) {
+      return activeResumePoint;
+    }
     const stack = [...activeResumePoint.stack];
     stack[this.resumeStackPrefix.length] = buildWorkflowResumePointEntry(
       this.config,
       activeEntry.step,
       activeEntry.kind,
+      activeEntry.occurrence,
       this.state.stepIterations,
     );
     const refreshedResumePoint = { ...activeResumePoint, stack };
@@ -615,7 +685,15 @@ export class WorkflowEngine extends EventEmitter {
 
   buildResumePointForStepName(stepName: string): WorkflowResumePoint | undefined {
     const step = this.config.steps.find((candidate) => candidate.name === stepName);
-    return step ? this.buildResumePoint(step, this.state.iteration) : undefined;
+    if (step === undefined) {
+      return undefined;
+    }
+    const nextOccurrence = (this.state.stepIterations.get(stepName) ?? 0) + 1;
+    return this.buildResumePoint(
+      step,
+      this.state.iteration,
+      nextOccurrence,
+    );
   }
 
   addUserInput(input: string): void {
@@ -736,9 +814,14 @@ export class WorkflowEngine extends EventEmitter {
           state: this.state,
           options: this.options,
           getWorkflowName: () => this.config.name,
+          getFindingScopeIdentity: () => this.findingLedgerStore?.ledgerIdentity,
+          getFindingIds: () => this.findingLedgerStore
+            ?.loadLedger()
+            .findings
+            .map((finding) => finding.id),
           getTask: () => this.task,
           getRoutingFindings: () => buildRoutingFindings(this.findingLedgerStore?.loadLedger()),
-          getCurrentWorkflowStack: () => this.sharedRuntime.activeResumePoint?.stack,
+          getCurrentWorkflowStack: () => this.activeResumePoint?.stack,
           getCwd: () => this.cwd,
           getMaxSteps: () => this.maxSteps,
           getReportDir: () => this.runPaths.reportsAbs,
@@ -766,6 +849,13 @@ export class WorkflowEngine extends EventEmitter {
           resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
           resolveStepProviderModelBeforeAutoRouting: (step, runtime) => this.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
+          claimStepOccurrence: (step) => (
+            this.resumeContinuation.claimStepOccurrence({
+              step,
+              resumeStackPrefix: this.resumeStackPrefix,
+              state: this.state,
+            })
+          ),
           setActiveStep: this.setActiveResumePoint.bind(this),
           addUserInput: this.addUserInput.bind(this),
           emit: (event, ...args) => this.emit(event as never, ...args as []),

@@ -4,7 +4,7 @@ import { OPERATION_TRANSITION_CONTRACT } from './operation-state-contract.js';
 import { CODEC_CONTRACT } from './codec-contract.js';
 
 export const APPLICATION_ID = 0x54414b54;
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const EXPECTED_SCHEMA_HASH = expectedSchemaHashFromDdl();
 

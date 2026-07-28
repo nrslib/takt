@@ -7,6 +7,7 @@ import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { runSingleWorkflowIteration, runWorkflowToCompletion } from '../core/workflow/engine/WorkflowRunLoop.js';
 import { runQualityGates as runActualQualityGates } from '../core/workflow/quality-gates/qualityGateRunner.js';
 import { makeResponse, makeRule, makeStep } from './engine-test-helpers.js';
+import { createWorkflowRunLoopTestContract } from './test-helpers.js';
 
 type CommandGateRunResult = {
   ok: true;
@@ -40,11 +41,11 @@ function makeDeps(
   runQualityGates: ReturnType<typeof vi.fn<() => Promise<CommandGateRunResult>>>,
   cwd: string,
 ) {
+  const config = makeConfig(step);
   return {
     state,
     options: {},
     getWorkflowName: () => 'command-gate-workflow',
-    getCurrentWorkflowStack: () => undefined,
     getCwd: () => cwd,
     getMaxSteps: () => 5,
     getReportDir: () => '/worktree/.takt/runs/test/reports',
@@ -68,7 +69,6 @@ function makeDeps(
       model: undefined,
     })),
     resolveRuntimeForStep: vi.fn(),
-    setActiveStep: vi.fn(),
     addUserInput: vi.fn(),
     emit: vi.fn(),
     updateMaxSteps: vi.fn(),
@@ -83,6 +83,7 @@ function makeDeps(
         timestamp: new Date(),
       };
     }),
+    ...createWorkflowRunLoopTestContract(config, state, 'test task'),
   };
 }
 

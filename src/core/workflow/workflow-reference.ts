@@ -1,4 +1,8 @@
-import type { WorkflowConfig, WorkflowResumePointEntry, WorkflowStepKind } from '../models/types.js';
+import type {
+  WorkflowConfig,
+  WorkflowResumeFrameKind,
+  WorkflowResumePointEntry,
+} from '../models/types.js';
 
 const WORKFLOW_OPAQUE_REF = Symbol.for('takt.workflowOpaqueRef');
 
@@ -13,15 +17,20 @@ export function getWorkflowReference(workflow: WorkflowConfig): string {
 export function buildWorkflowResumePointEntry(
   workflow: WorkflowConfig,
   step: string,
-  kind: WorkflowStepKind,
+  kind: WorkflowResumeFrameKind,
+  occurrence: number,
   stepIterations?: ReadonlyMap<string, number>,
 ): WorkflowResumePointEntry {
+  if (!Number.isSafeInteger(occurrence) || occurrence <= 0) {
+    throw new Error(`Workflow resume frame "${workflow.name}/${step}" occurrence is invalid`);
+  }
   const workflowRef = getWorkflowReference(workflow);
   return {
     workflow: workflow.name,
-    ...(workflowRef !== workflow.name ? { workflow_ref: workflowRef } : {}),
+    workflow_ref: workflowRef,
     step,
     kind,
+    occurrence,
     ...(stepIterations !== undefined
       ? { step_iterations: Object.fromEntries(stepIterations) }
       : {}),
@@ -29,25 +38,19 @@ export function buildWorkflowResumePointEntry(
 }
 
 export function getResumePointWorkflowReference(entry: WorkflowResumePointEntry): string {
-  return entry.workflow_ref ?? entry.workflow;
+  return entry.workflow_ref;
 }
 
 export function workflowEntryMatchesWorkflow(
   entry: WorkflowResumePointEntry,
   workflow: WorkflowConfig,
 ): boolean {
-  if (entry.workflow_ref !== undefined) {
-    return entry.workflow_ref === getWorkflowReference(workflow);
-  }
-  return entry.workflow === workflow.name;
+  return entry.workflow_ref === getWorkflowReference(workflow);
 }
 
 export function workflowEntriesMatch(
   left: WorkflowResumePointEntry,
   right: WorkflowResumePointEntry,
 ): boolean {
-  if (left.workflow_ref !== undefined && right.workflow_ref !== undefined) {
-    return left.workflow_ref === right.workflow_ref;
-  }
-  return left.workflow === right.workflow;
+  return left.workflow_ref === right.workflow_ref;
 }

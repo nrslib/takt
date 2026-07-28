@@ -208,7 +208,7 @@ describe('routing event contract', () => {
         persona: 'leader.api_key=leader-persona-credential',
       },
     ];
-    const emitter = new AnalyticsEmitter('routing-contract', 'mock', 'model', 'workflow', false);
+    const emitter = new AnalyticsEmitter('routing-contract', false);
 
     for (const metadata of metadataByStepType) {
       emitter.onRoutingDecision(
@@ -263,7 +263,7 @@ describe('routing event contract', () => {
       candidateName: 'candidate.secret=candidate-credential',
     };
     const longMetadata = 'overlong routing metadata '.repeat(100);
-    const emitter = new AnalyticsEmitter('routing-contract', 'mock', 'model', 'workflow', false);
+    const emitter = new AnalyticsEmitter('routing-contract', false);
 
     emitter.onRoutingDecision(
       { name: 'implement', tags: ['implementation'], persona: 'coder' } as WorkflowStep,
@@ -339,7 +339,7 @@ describe('routing event contract', () => {
   });
 
   function emitRoutingDecision(providerInfo: StepProviderInfo): void {
-    const emitter = new AnalyticsEmitter('routing-contract', 'mock', 'model', 'workflow', false);
+    const emitter = new AnalyticsEmitter('routing-contract', false);
     emitter.onRoutingDecision(
       { name: 'implement', tags: ['implementation'], persona: 'coder' } as WorkflowStep,
       { persona: 'coder', status: 'done', content: 'done', timestamp: new Date('2026-07-26T00:00:00.000Z') },

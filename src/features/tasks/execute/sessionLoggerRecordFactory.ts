@@ -19,6 +19,9 @@ import type {
 import type { JudgeStageEntry, PhasePromptParts, StepProviderInfo } from '../../../core/workflow/types.js';
 import { redactProviderOptionsForLogging } from '../../../core/workflow/providerOptionsRedaction.js';
 import { toJudgmentMatchMethod } from '../../../core/logging/contracts.js';
+import {
+  parseCanonicalWorkflowResumeFrame,
+} from '../../../shared/types/workflow-resume.js';
 import type { InteractiveMetadata } from './types.js';
 
 type SanitizeText = (text: string) => string;
@@ -27,9 +30,10 @@ function serializeWorkflowStack(stack: WorkflowResumePointEntry[] | undefined): 
   workflow?: string;
   stack?: Array<{
     workflow: string;
-    workflow_ref?: string;
+    workflow_ref: string;
     step: string;
-    kind: 'agent' | 'system' | 'workflow_call';
+    kind: WorkflowResumePointEntry['kind'];
+    occurrence: number;
   }>;
 } {
   if (!stack || stack.length === 0) {
@@ -38,12 +42,12 @@ function serializeWorkflowStack(stack: WorkflowResumePointEntry[] | undefined): 
 
   return {
     workflow: stack[stack.length - 1]?.workflow,
-    stack: stack.map((entry) => ({
-      workflow: entry.workflow,
-      ...(entry.workflow_ref ? { workflow_ref: entry.workflow_ref } : {}),
-      step: entry.step,
-      kind: entry.kind,
-    })),
+    stack: stack.map((entry, index) => (
+      parseCanonicalWorkflowResumeFrame(
+        entry,
+        `NDJSON workflow stack[${index}]`,
+      )
+    )),
   };
 }
 
@@ -120,6 +124,7 @@ export function buildPromptLogRecord(
   step: WorkflowStep,
   phase: 1 | 2 | 3,
   iteration: number,
+  scope: string,
   phaseExecutionId: string,
   promptParts: PhasePromptParts,
   content: string,
@@ -130,6 +135,7 @@ export function buildPromptLogRecord(
     step: step.name,
     phase,
     iteration,
+    scope,
     phaseExecutionId,
     prompt: sanitizeText(promptParts.userInstruction),
     systemPrompt: sanitizeText(promptParts.systemPrompt),

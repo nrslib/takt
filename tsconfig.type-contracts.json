@@ -4,7 +4,8 @@
     "noEmit": true
   },
   "include": [
-    "src/__tests__/type-contracts/**/*.ts"
+    "src/__tests__/type-contracts/**/*.ts",
+    "src/types/**/*.d.ts"
   ],
   "exclude": []
 }

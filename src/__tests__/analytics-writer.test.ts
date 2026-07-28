@@ -55,6 +55,8 @@ describe('AnalyticsWriter', () => {
         model: 'sonnet',
         decisionTag: 'done',
         iteration: 1,
+        workflowName: 'workflow',
+        scopeIdentity: 'scope',
         runId: 'run-1',
         timestamp: '2026-02-18T10:00:00.000Z',
       };
@@ -77,6 +79,8 @@ describe('AnalyticsWriter', () => {
         model: 'sonnet',
         decisionTag: 'approved',
         iteration: 2,
+        workflowName: 'workflow',
+        scopeIdentity: 'scope',
         runId: 'run-abc',
         timestamp: '2026-02-18T14:30:00.000Z',
       };
@@ -104,6 +108,8 @@ describe('AnalyticsWriter', () => {
         model: 'sonnet',
         decisionTag: 'done',
         iteration: 1,
+        workflowName: 'workflow',
+        scopeIdentity: 'scope',
         runId: 'run-1',
         timestamp: '2026-02-18T10:00:00.000Z',
       };
@@ -115,6 +121,8 @@ describe('AnalyticsWriter', () => {
         model: 'o3',
         decisionTag: 'needs_fix',
         iteration: 2,
+        workflowName: 'workflow',
+        scopeIdentity: 'scope',
         runId: 'run-1',
         timestamp: '2026-02-18T11:00:00.000Z',
       };
@@ -142,6 +150,8 @@ describe('AnalyticsWriter', () => {
         model: 'sonnet',
         decisionTag: 'done',
         iteration: 1,
+        workflowName: 'workflow',
+        scopeIdentity: 'scope',
         runId: 'run-1',
         timestamp: '2026-02-17T23:59:00.000Z',
       };
@@ -153,6 +163,8 @@ describe('AnalyticsWriter', () => {
         model: 'sonnet',
         decisionTag: 'done',
         iteration: 2,
+        workflowName: 'workflow',
+        scopeIdentity: 'scope',
         runId: 'run-1',
         timestamp: '2026-02-18T00:01:00.000Z',
       };
@@ -177,6 +189,8 @@ describe('AnalyticsWriter', () => {
         file: 'src/index.ts',
         line: 10,
         iteration: 1,
+        workflowName: 'workflow',
+        scopeIdentity: 'scope',
         runId: 'run-1',
         timestamp: '2026-03-01T08:00:00.000Z',
       };
@@ -309,6 +323,7 @@ function createRoutingDecisionEvent(): RoutingDecisionEvent {
     model: 'gpt-5',
     selectedCategory: 'coding',
     selectedRoutingTier: 'medium',
+    requiredRoutingTier: 'medium',
     candidateCount: 3,
     strategy: 'balanced',
     resolutionSource: 'auto.rules',

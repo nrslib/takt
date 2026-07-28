@@ -293,7 +293,7 @@ async function runReservedRawAdjudicationRecovery(input: {
   ]);
   if (mechanical.residualRawFindings.length > 0) {
     input.runInput.ledgerStore.saveRawFindings(
-      input.runInput.runId,
+      input.runInput.ledgerStore.runId,
       `${input.runInput.parentStep.name}-replay`,
       prepared.intake.items.map((item) => item.wire),
     );

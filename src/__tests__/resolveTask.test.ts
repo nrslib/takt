@@ -8,6 +8,7 @@ import * as runOrderContent from '../core/workflow/run/order-content.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
+import { buildOpaqueWorkflowRef } from '../infra/config/loaders/workflowSourceMetadata.js';
 
 const mockGetGitProvider = vi.hoisted(() => vi.fn());
 let originalTaktConfigDir: string | undefined;
@@ -89,6 +90,26 @@ function writeTaktFile(baseDir: string, relativePath: string, content: string): 
 
 function readTaktFile(baseDir: string, relativePath: string): string {
   return fs.readFileSync(path.join(baseDir, '.takt', relativePath), 'utf-8');
+}
+
+function projectWorkflowRef(
+  root: string,
+  relativePath: string,
+): string {
+  return buildOpaqueWorkflowRef(
+    path.join(root, '.takt', 'workflows', relativePath),
+    { source: 'project' },
+  );
+}
+
+function worktreeWorkflowRef(
+  root: string,
+  relativePath: string,
+): string {
+  return buildOpaqueWorkflowRef(
+    path.join(root, '.takt', 'workflows', relativePath),
+    { source: 'worktree' },
+  );
 }
 
 const resolveTaskExecutionStrict = resolveTaskExecution as (task: TaskInfo, projectCwd: string) => ReturnType<typeof resolveTaskExecution>;
@@ -181,8 +202,14 @@ describe('resolveTaskExecution', () => {
         resume_point: {
           version: 1,
           stack: [
-            { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-            { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+            {
+              workflow: 'default',
+              workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+              step: 'delegate',
+              kind: 'workflow_call',
+              occurrence: 1,
+            },
+            { workflow: 'takt/coding', workflow_ref: 'takt/coding', step: 'review', kind: 'agent', occurrence: 1 },
           ],
           iteration: 7,
           elapsed_ms: 183245,
@@ -234,8 +261,20 @@ describe('resolveTaskExecution', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: projectWorkflowRef(root, 'takt/coding.yaml'),
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -277,8 +316,14 @@ describe('resolveTaskExecution', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
+        { workflow: 'takt/coding', workflow_ref: 'takt/coding', step: 'review', kind: 'agent' as const, occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -338,8 +383,20 @@ describe('resolveTaskExecution', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: worktreeWorkflowRef(worktreePath, 'default.yaml'),
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: worktreeWorkflowRef(worktreePath, 'takt/coding.yaml'),
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -410,9 +467,27 @@ describe('resolveTaskExecution', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'delegate_review', kind: 'workflow_call' as const },
-        { workflow: 'takt/review-loop', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: projectWorkflowRef(root, 'takt/coding.yaml'),
+          step: 'delegate_review',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/review-loop',
+          workflow_ref: projectWorkflowRef(root, 'takt/review-loop.yaml'),
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -458,8 +533,8 @@ describe('resolveTaskExecution', () => {
         resume_point: {
           version: 1,
           stack: [
-            { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-            { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+            { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
+            { workflow: 'takt/coding', workflow_ref: 'takt/coding', step: 'review', kind: 'agent', occurrence: 1 },
           ],
           iteration: 7,
           elapsed_ms: 183245,
@@ -475,7 +550,7 @@ describe('resolveTaskExecution', () => {
   });
 
 
-  it('should generate report context and copy issue-bearing task spec', async () => {
+  it('should resolve issue-bearing task spec without creating the run context', async () => {
     const root = createTempProjectDir();
     const taskDir = '.takt/tasks/issue-task-123';
     const sourceTaskDir = path.join(root, taskDir);
@@ -501,17 +576,20 @@ describe('resolveTaskExecution', () => {
       isWorktree: false,
       autoPr: true,
       draftPr: false,
-      orderContent: '# task instruction',
       shouldPublishBranchToOrigin: true,
       issueNumber: 12345,
-      taskPrompt: expect.stringContaining(`Primary spec: \`.takt/runs/${result.reportDirName}/context/task/order.md\``),
+      taskSpec: {
+        orderContent: '# task instruction',
+        taskPrompt: expect.stringContaining(
+          `Primary spec: \`.takt/runs/${result.reportDirName}/context/task/order.md\``,
+        ),
+      },
     });
     expect(result.reportDirName).not.toBe('issue-task-123');
-    expect(fs.existsSync(expectedReportOrderPath)).toBe(true);
-    expect(fs.readFileSync(expectedReportOrderPath, 'utf-8')).toBe('# task instruction');
+    expect(fs.existsSync(expectedReportOrderPath)).toBe(false);
   });
 
-  it('should create separate run contexts when executing the same task_dir repeatedly', async () => {
+  it('should resolve separate run identities for repeated task_dir execution without staging', async () => {
     const root = createTempProjectDir();
     const taskDir = '.takt/tasks/reused-task-123';
     const sourceTaskDir = path.join(root, taskDir);
@@ -536,15 +614,17 @@ describe('resolveTaskExecution', () => {
     expect(first.reportDirName).not.toBe('reused-task-123');
     expect(second.reportDirName).not.toBe('reused-task-123');
     expect(second.reportDirName).not.toBe(first.reportDirName);
-    expect(fs.readFileSync(path.join(root, '.takt', 'runs', first.reportDirName, 'context', 'task', 'order.md'), 'utf-8')).toBe(
-      '# reused task instruction',
-    );
-    expect(fs.readFileSync(path.join(root, '.takt', 'runs', second.reportDirName, 'context', 'task', 'order.md'), 'utf-8')).toBe(
-      '# reused task instruction',
-    );
+    expect(first.taskSpec?.orderContent).toBe('# reused task instruction');
+    expect(second.taskSpec?.orderContent).toBe('# reused task instruction');
+    expect(fs.existsSync(
+      path.join(root, '.takt', 'runs', first.reportDirName),
+    )).toBe(false);
+    expect(fs.existsSync(
+      path.join(root, '.takt', 'runs', second.reportDirName),
+    )).toBe(false);
   });
 
-  it('should stage order.md into the worktree run context and return order content', async () => {
+  it('should resolve worktree task spec without staging before run reservation', async () => {
     const root = createTempProjectDir();
     const worktreePath = createTempProjectDir();
     const taskDir = '.takt/tasks/worktree-task-123';
@@ -588,11 +668,15 @@ describe('resolveTaskExecution', () => {
       shouldPublishBranchToOrigin: true,
       branch: 'feature/worktree-task-123',
       worktreePath,
-      orderContent,
-      taskPrompt: expect.stringContaining(`Primary spec: \`.takt/runs/${result.reportDirName}/context/task/order.md\``),
+      taskSpec: {
+        orderContent,
+        taskPrompt: expect.stringContaining(
+          `Primary spec: \`.takt/runs/${result.reportDirName}/context/task/order.md\``,
+        ),
+      },
     });
     expect(result.reportDirName).not.toBe('worktree-task-123');
-    expect(fs.readFileSync(stagedOrderPath, 'utf-8')).toBe(orderContent);
+    expect(fs.existsSync(stagedOrderPath)).toBe(false);
 
     mockCreateSharedClone.mockRestore();
     mockResolveBaseBranch.mockRestore();
@@ -640,9 +724,10 @@ describe('resolveTaskExecution', () => {
 
     expect(result.reportDirName).toBe(`${existingReportDirName}-2`);
     expect(fs.existsSync(path.join(worktreePath, '.takt', 'runs', existingReportDirName, 'context', 'task', 'order.md'))).toBe(false);
-    expect(fs.readFileSync(path.join(worktreePath, '.takt', 'runs', result.reportDirName, 'context', 'task', 'order.md'), 'utf-8')).toBe(
-      orderContent,
-    );
+    expect(result.taskSpec?.orderContent).toBe(orderContent);
+    expect(fs.existsSync(
+      path.join(worktreePath, '.takt', 'runs', result.reportDirName),
+    )).toBe(false);
 
     mockCreateSharedClone.mockRestore();
     mockResolveBaseBranch.mockRestore();
@@ -685,7 +770,7 @@ describe('resolveTaskExecution', () => {
 
     const result = await resolveTaskExecutionStrict(task, root);
 
-    expect(result.orderContent).toBeUndefined();
+    expect(result.taskSpec).toBeUndefined();
     expect(readRunContextOrderContentSpy).not.toHaveBeenCalled();
     readRunContextOrderContentSpy.mockRestore();
   });
@@ -1703,7 +1788,7 @@ describe('resolveTaskExecution', () => {
         resume_point: {
           version: 1,
           stack: [
-            { workflow: 'default', step: 'fix', kind: 'agent' },
+            { workflow: 'default', workflow_ref: 'default', step: 'fix', kind: 'agent', occurrence: 1 },
           ],
           iteration: 3,
           elapsed_ms: 1200,

@@ -14,7 +14,10 @@ import type { TaskExecutionOptions, WorktreeConfirmationResult, SelectAndExecute
 import { selectWorkflow } from '../../workflowSelection/index.js';
 import { buildBooleanTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
 import { prepareTaskSpecDirectory, cleanupPreparedTaskSpec } from '../attachments.js';
-import { cleanupStagedTaskSpec, stageTaskSpecForExecution, type StagedTaskSpec } from './taskSpecContext.js';
+import {
+  resolveTaskSpecForExecution,
+  type ResolvedTaskSpec,
+} from './taskSpecContext.js';
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
 
 export type { WorktreeConfirmationResult, SelectAndExecuteOptions };
@@ -23,16 +26,9 @@ const log = createLogger('selectAndExecute');
 
 function cleanupTransientTaskSpecs(
   preparedSpecTaskDir: string | undefined,
-  stagedSpec: StagedTaskSpec | undefined,
 ): void {
-  try {
-    if (stagedSpec) {
-      cleanupStagedTaskSpec(stagedSpec);
-    }
-  } finally {
-    if (preparedSpecTaskDir) {
-      cleanupPreparedTaskSpec(preparedSpecTaskDir);
-    }
+  if (preparedSpecTaskDir) {
+    cleanupPreparedTaskSpec(preparedSpecTaskDir);
   }
 }
 
@@ -123,7 +119,7 @@ export async function selectAndExecuteTask(
   const taskRunner = new TaskRunner(cwd, { onWarning: warn });
   let taskRecord: Awaited<ReturnType<TaskRunner['addTask']>> | null = null;
   let preparedSpec: ReturnType<typeof prepareTaskSpecDirectory> | undefined;
-  let stagedSpec: StagedTaskSpec | undefined;
+  let taskSpec: ResolvedTaskSpec | undefined;
   let reportDirName = options?.reportDirName;
   try {
     preparedSpec = options?.attachments && options.attachments.length > 0
@@ -131,7 +127,12 @@ export async function selectAndExecuteTask(
       : undefined;
     if (preparedSpec) {
       reportDirName = reportDirName ?? generateExecutionReportDir(execCwd, task);
-      stagedSpec = stageTaskSpecForExecution(cwd, execCwd, preparedSpec.taskDirRelative, reportDirName);
+      taskSpec = resolveTaskSpecForExecution(
+        cwd,
+        execCwd,
+        preparedSpec.taskDirRelative,
+        reportDirName,
+      );
     }
   } catch (error) {
     if (preparedSpec) {
@@ -146,7 +147,7 @@ export async function selectAndExecuteTask(
         ...(preparedSpec ? { task_dir: preparedSpec.taskDirRelative } : {}),
       });
     } catch (error) {
-      cleanupTransientTaskSpecs(preparedSpec?.taskDir, stagedSpec);
+      cleanupTransientTaskSpecs(preparedSpec?.taskDir);
       throw error;
     }
   }
@@ -157,7 +158,8 @@ export async function selectAndExecuteTask(
   let taskSuccess: boolean;
   try {
     taskSuccess = await executeTask({
-      task: stagedSpec?.taskPrompt ?? task,
+      task: taskSpec?.taskPrompt ?? task,
+      ...(taskSpec === undefined ? {} : { taskSpec }),
       cwd: execCwd,
       workflowIdentifier,
       projectCwd: cwd,
@@ -168,7 +170,7 @@ export async function selectAndExecuteTask(
       ...(options?.providerProfileOverrides ? { providerProfileOverrides: options.providerProfileOverrides } : {}),
       traceTaskMetadata: buildTraceTaskMetadata({
         task: taskRecord ?? undefined,
-        taskContent: stagedSpec?.taskPrompt ?? task,
+        taskContent: taskSpec?.taskPrompt ?? task,
         source: options?.traceTaskContext?.source,
         issueNumber: options?.traceTaskContext?.issueNumber,
         prNumber: options?.traceTaskContext?.prNumber,
@@ -189,7 +191,7 @@ export async function selectAndExecuteTask(
     throw err;
   } finally {
     statusLine.stop();
-    cleanupTransientTaskSpecs(preparedSpecTaskDirToCleanup, undefined);
+    cleanupTransientTaskSpecs(preparedSpecTaskDirToCleanup);
   }
 
   const completedAt = new Date().toISOString();

@@ -146,7 +146,7 @@ describe('TaskExecutionConfigSchema', () => {
     expect(config.start_step).toBe('plan');
   });
 
-  it('should accept resume point entries with omitted or positive integer step iterations', () => {
+  it('should require occurrence and accept omitted or positive integer step iterations', () => {
     const baseResumePoint = {
       version: 1,
       iteration: 3,
@@ -156,7 +156,24 @@ describe('TaskExecutionConfigSchema', () => {
     expect(() => TaskExecutionConfigSchema.parse({
       resume_point: {
         ...baseResumePoint,
-        stack: [{ workflow: 'default', step: 'implement', kind: 'agent' }],
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'implement',
+          kind: 'agent',
+        }],
+      },
+    })).toThrow();
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        ...baseResumePoint,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'implement',
+          kind: 'agent',
+          occurrence: 1,
+        }],
       },
     })).not.toThrow();
     expect(() => TaskExecutionConfigSchema.parse({
@@ -164,10 +181,46 @@ describe('TaskExecutionConfigSchema', () => {
         ...baseResumePoint,
         stack: [{
           workflow: 'default',
+          workflow_ref: 'project:sha256:default',
           step: 'implement',
           kind: 'agent',
+          occurrence: 2,
           step_iterations: { implement: 1, review: 4 },
         }],
+      },
+    })).not.toThrow();
+  });
+
+  it.each([0, -1, 1.5])('should reject invalid occurrence %s', (occurrence) => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 1,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'implement',
+          kind: 'agent',
+          occurrence,
+        }],
+        iteration: 3,
+        elapsed_ms: 100,
+      },
+    })).toThrow();
+  });
+
+  it('should accept parallel resume frame kind', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 1,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'reviewers',
+          kind: 'parallel',
+          occurrence: 1,
+        }],
+        iteration: 3,
+        elapsed_ms: 100,
       },
     })).not.toThrow();
   });
@@ -183,8 +236,10 @@ describe('TaskExecutionConfigSchema', () => {
         version: 1,
         stack: [{
           workflow: 'default',
+          workflow_ref: 'project:sha256:default',
           step: 'implement',
           kind: 'agent',
+          occurrence: 1,
           step_iterations: stepIterations,
         }],
         iteration: 3,

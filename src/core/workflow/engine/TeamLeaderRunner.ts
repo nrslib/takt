@@ -840,7 +840,15 @@ export class TeamLeaderRunner {
       stepIteration,
       aggregatedResponse.content,
     );
-    this.deps.stepExecutor.emitStepReports(step);
+    this.deps.stepExecutor.emitStepReports(
+      step,
+      {
+        iteration: parentIteration,
+        resumeStepName: step.name,
+        stepIteration,
+        providerInfo: leaderProviderInfo,
+      },
+    );
 
     const result = { response: aggregatedResponse, instruction, providerInfo: leaderProviderInfo };
     return findingContractCoordinator?.prepareStepResult(result) ?? result;

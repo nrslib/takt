@@ -97,6 +97,7 @@ describe('finding manager filesystem error propagation', () => {
   it.each(['EIO', 'EACCES', 'EPERM'])('source quote の %s を実 runner/store 境界で握りつぶさず、台帳を更新しない', async (code) => {
     const ledgerStore = createFindingLedgerStore({
       projectCwd: cwd,
+      runId: 'run-1',
       reportDir,
       workflowName: 'peer-review',
       ledgerPath: FINDING_CONTRACT.ledgerPath,
@@ -169,6 +170,7 @@ describe('finding manager filesystem error propagation', () => {
   it('manager 応答待ち中に source quote が古くなった場合は finding を作成しない', async () => {
     const ledgerStore = createFindingLedgerStore({
       projectCwd: cwd,
+      runId: 'run-1',
       reportDir,
       workflowName: 'peer-review',
       ledgerPath: FINDING_CONTRACT.ledgerPath,
@@ -295,6 +297,7 @@ describe('finding manager filesystem error propagation', () => {
     };
     const storeOptions = {
       projectCwd: cwd,
+      runId: 'run-1',
       reportDir,
       workflowName: 'peer-review',
       ledgerPath: FINDING_CONTRACT.ledgerPath,

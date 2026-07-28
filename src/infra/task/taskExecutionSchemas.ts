@@ -1,15 +1,22 @@
 import { z } from 'zod/v4';
 import { buildTaskSchema } from './taskConfigSerialization.js';
 import { getLocalBranchNameError } from '../../shared/utils/gitBranchValidation.js';
+import { WORKFLOW_RESUME_FRAME_KINDS } from '../../shared/types/workflow-resume.js';
+
+const positiveSafeIntegerSchema = z.number().refine(
+  (value) => Number.isSafeInteger(value) && value > 0,
+  { message: 'Expected a positive safe integer' },
+);
 
 const ResumePointEntrySchema = z.object({
   workflow: z.string().min(1),
-  workflow_ref: z.string().min(1).optional(),
+  workflow_ref: z.string().min(1),
   step: z.string().min(1),
-  kind: z.enum(['agent', 'system', 'workflow_call']),
+  kind: z.enum(WORKFLOW_RESUME_FRAME_KINDS),
+  occurrence: positiveSafeIntegerSchema,
   step_iterations: z.record(
     z.string().min(1),
-    z.number().int().positive(),
+    positiveSafeIntegerSchema,
   ).optional(),
 }).strict();
 
@@ -19,11 +26,6 @@ const ResumePointSchema = z.object({
   iteration: z.number().int().min(0),
   elapsed_ms: z.number().int().min(0),
 }).strict();
-
-const positiveSafeIntegerSchema = z.number().refine(
-  (value) => Number.isSafeInteger(value) && value > 0,
-  { message: 'Expected a positive safe integer' },
-);
 
 export const TaskExecutionConfigObjectSchema = z.object({
   worktree: z.union([z.boolean(), z.string()]).optional(),

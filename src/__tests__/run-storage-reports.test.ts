@@ -15,6 +15,7 @@ import {
 import {
   cleanupRealRunStorages,
   createRealRunStorage,
+  createTestBootstrapSeed,
 } from './helpers/run-storage.js';
 
 afterEach(cleanupRealRunStorages);
@@ -433,8 +434,11 @@ describe('run report authority', () => {
     expect(() => resumeRunStorage({
       databasePath: `${databasePath}.corrupt-resume-${label.replaceAll(' ', '-')}`,
       source: root,
+      bootstrapSeed: createTestBootstrapSeed({
+        sessionId: 'corrupt-report-resume-session',
+      }),
       run: {
-        slug: 'corrupt-report-resume',
+        runId: 'corrupt-report-resume',
         findingContractEnabled: false,
       },
       workflowDefinition: {
@@ -728,7 +732,6 @@ describe('run report authority', () => {
     const { databasePath, root } = createRealRunStorage({
       findingContractEnabled: true,
     });
-    const runId = root.readResumeSnapshot().run.runId;
     const owner = root.claimLease({
       ownerKey: 'owner-1',
       leaseDurationMs: 9_000,
@@ -744,7 +747,7 @@ describe('run report authority', () => {
     });
     const report = {
       version: 1 as const,
-      runId,
+      runId: store.runId,
       stepName: 'reviewers',
       retryCount: 0,
       ledgerUpdated: false,

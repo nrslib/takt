@@ -16,6 +16,8 @@ logging:
   level: info                 # Log level: debug, info, warn, error
 provider: claude              # Default provider: claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, or mock
 model: sonnet                 # Default model (optional, passed to provider as-is)
+run_storage:
+  backend: file               # Run storage authority: file (default) or sqlite
 branch_name_strategy: romaji  # Branch name generation: 'romaji' (fast) or 'ai' (slow)
 prevent_sleep: false          # Prevent macOS idle sleep during execution (caffeinate)
 notification_sound: true      # Enable/disable notification sounds
@@ -166,6 +168,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 | `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | Default concrete AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode, `claude-terminal` = experimental interactive terminal mode) |
 | `logging.trace` | boolean | `false` | Enable trace-level logging (suppresses high-frequency debug noise) |
 | `model` | string | - | Default model name (passed to provider as-is) |
+| `run_storage.backend` | `"file"` \| `"sqlite"` | `"file"` | Run storage authority. SQLite stores each run in `.takt/runs/<run>/run.sqlite` |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
 | `notification_sound` | boolean | `true` | Enable notification sounds |
@@ -220,6 +223,8 @@ Configure project-specific settings in `.takt/config.yaml`. This file is created
 # .takt/config.yaml
 provider: claude              # Override provider for this project
 model: sonnet                 # Override model for this project
+run_storage:
+  backend: sqlite             # Override run storage authority for this project
 auto_pr: true                 # Auto-create PR after worktree execution
 logging:
   level: info                 # Console log level: debug | info | warn | error
@@ -263,6 +268,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 |-------|------|---------|-------------|
 | `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | Override concrete provider |
 | `model` | string | - | Override model name (passed to provider as-is) |
+| `run_storage.backend` | `"file"` \| `"sqlite"` | global setting, then `"file"` | Project run storage authority override |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
@@ -283,6 +289,11 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 | `observability` | object | - | Project-level OpenTelemetry opt-in override. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` writes phase-level usage events to `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl`. With `enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT also sends spans and metrics through OTLP using standard `OTEL_EXPORTER_OTLP_*` environment variables; TAKT does not add an OTLP config key. |
 
 Project config values override global config when both are set.
+
+With `backend: sqlite`, TAKT uses only `.takt/runs/<run>/run.sqlite` as the
+Finding Contract authority; it does not dual-write or fall back to the file
+ledger. Resume fails if the source database is missing or its recorded backend
+does not match the currently resolved backend.
 
 ### Task Execution Config Environment Overrides
 

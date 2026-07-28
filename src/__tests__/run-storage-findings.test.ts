@@ -135,7 +135,7 @@ describe('Finding authority boundary', () => {
       slug: 'revision-history-resume',
       findingContractEnabled: true,
     });
-    expect(resumed.root.readResumeSnapshot().findingLedger?.revision).toBe(1);
+    expect(resumed.root.readResumeSnapshot().findingLedger?.revision).toBe(2);
   });
 
   it('rejects root, parallel, and workflow_call sibling producer handles', () => {

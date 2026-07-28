@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import type { WorkRequirementEstimator } from '../core/workflow/auto-routing/contracts.js';
 import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
+import { createInitialState } from '../core/workflow/engine/state-manager.js';
+import { createWorkflowOccurrenceTestHarness } from './test-helpers.js';
 
 const { createWorkRequirementEstimatorMock } = vi.hoisted(() => ({
   createWorkRequirementEstimatorMock: vi.fn(),
@@ -38,12 +40,16 @@ describe('WorkflowCallExecutor routing runtime', () => {
     } as never;
     const parentAutoRouting = createAutoRoutingConfig();
     const parentEstimator: WorkRequirementEstimator = { estimate: vi.fn() };
-    const state = {
-      iteration: 1,
-      personaSessions: new Map(),
-      stepIterations: new Map(),
-      userInputs: ['Retry the remaining task work'],
-    };
+    const state = createInitialState(parentWorkflow, {
+      projectCwd: '/project',
+      initialUserInputs: ['Retry the remaining task work'],
+    });
+    state.iteration = 1;
+    const occurrenceHarness = createWorkflowOccurrenceTestHarness(
+      parentWorkflow,
+      state,
+      [],
+    );
     const createdOptions: Array<Record<string, unknown>> = [];
     const executor = new WorkflowCallExecutor({
       getConfig: () => parentWorkflow,
@@ -61,6 +67,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
       task: 'Complete the task',
       sharedRuntime: { startedAtMs: 0 },
       resumeStackPrefix: [],
+      consumeWorkflowCallContinuation: vi.fn(),
       runPaths: { slug: 'run' },
       resolveWorkflowCall: vi.fn(),
       createEngine: vi.fn((_config, _cwd, _task, options) => {
@@ -90,8 +97,17 @@ describe('WorkflowCallExecutor routing runtime', () => {
       providerRouting: undefined,
     } as never;
 
-    await executor.execute(request, { syncParentState: true });
-    await executor.execute({ ...request, step: { ...request.step, name: 'delegate-other' } }, { syncParentState: true });
+    occurrenceHarness.claimStepOccurrence(request.step);
+    await executor.execute(request, { syncParentState: true, resumeStackPrefix: [] });
+    const otherRequest = {
+      ...request,
+      step: { ...request.step, name: 'delegate-other' },
+    };
+    occurrenceHarness.claimStepOccurrence(otherRequest.step);
+    await executor.execute(
+      otherRequest,
+      { syncParentState: true, resumeStackPrefix: [] },
+    );
 
     expect(createdOptions[0]?.autoRoutingEstimator).toBe(parentEstimator);
     expect(createdOptions[1]?.autoRoutingEstimator).toBe(parentEstimator);
@@ -110,6 +126,13 @@ describe('WorkflowCallExecutor routing runtime', () => {
     } as never;
     const parentEstimator: WorkRequirementEstimator = { estimate: vi.fn() };
     const createdOptions: Array<Record<string, unknown>> = [];
+    const state = createInitialState(parentWorkflow, { projectCwd: '/project' });
+    state.iteration = 1;
+    const occurrenceHarness = createWorkflowOccurrenceTestHarness(
+      parentWorkflow,
+      state,
+      [],
+    );
     const executor = new WorkflowCallExecutor({
       getConfig: () => parentWorkflow,
       getOptions: () => ({
@@ -126,6 +149,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
       task: 'Complete the task',
       sharedRuntime: { startedAtMs: 0 },
       resumeStackPrefix: [],
+      consumeWorkflowCallContinuation: vi.fn(),
       runPaths: { slug: 'run' },
       resolveWorkflowCall: vi.fn(),
       createEngine: vi.fn((_config, _cwd, _task, options) => {
@@ -142,24 +166,21 @@ describe('WorkflowCallExecutor routing runtime', () => {
         };
       }),
       emit: vi.fn(),
-      state: {
-        iteration: 1,
-        personaSessions: new Map(),
-        stepIterations: new Map(),
-        userInputs: [],
-      },
+      state,
       setActiveResumePoint: vi.fn(),
       refreshFindingsState: vi.fn(),
     } as never);
 
-    await executor.execute({
+    const request = {
       step: { name: 'delegate', kind: 'workflow_call', call: 'child' },
       childWorkflow,
       childProviderInfo: { provider: 'mock', model: 'child-model', providerSource: 'workflow_call', modelSource: 'workflow_call' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
       providerRouting: undefined,
-    } as never, { syncParentState: true });
+    } as never;
+    occurrenceHarness.claimStepOccurrence(request.step);
+    await executor.execute(request, { syncParentState: true, resumeStackPrefix: [] });
 
     expect(createdOptions[0]?.autoRouting).toBe(childAutoRouting);
     expect(createdOptions[0]?.autoRoutingEstimator).toBe(parentEstimator);
@@ -171,6 +192,13 @@ describe('WorkflowCallExecutor routing runtime', () => {
     const childAutoRouting = createAutoRoutingConfig('child-router-model');
     const parentEstimator: WorkRequirementEstimator = { estimate: vi.fn() };
     const createdOptions: Array<Record<string, unknown>> = [];
+    const state = createInitialState(parentWorkflow, { projectCwd: '/project' });
+    state.iteration = 1;
+    const occurrenceHarness = createWorkflowOccurrenceTestHarness(
+      parentWorkflow,
+      state,
+      [],
+    );
     const executor = new WorkflowCallExecutor({
       getConfig: () => parentWorkflow,
       getOptions: () => ({
@@ -187,6 +215,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
       task: 'Complete the task',
       sharedRuntime: { startedAtMs: 0 },
       resumeStackPrefix: [],
+      consumeWorkflowCallContinuation: vi.fn(),
       runPaths: { slug: 'run' },
       resolveWorkflowCall: vi.fn(),
       createEngine: vi.fn((_config, _cwd, _task, options) => {
@@ -199,19 +228,21 @@ describe('WorkflowCallExecutor routing runtime', () => {
         };
       }),
       emit: vi.fn(),
-      state: { iteration: 1, personaSessions: new Map(), stepIterations: new Map(), userInputs: [] },
+      state,
       setActiveResumePoint: vi.fn(),
       refreshFindingsState: vi.fn(),
     } as never);
 
-    await executor.execute({
+    const request = {
       step: { name: 'delegate', kind: 'workflow_call', call: 'child' },
       childWorkflow: { name: 'child', autoRouting: childAutoRouting, steps: [] },
       childProviderInfo: { provider: 'mock', model: 'child-model', providerSource: 'workflow_call', modelSource: 'workflow_call' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
       providerRouting: undefined,
-    } as never, { syncParentState: true });
+    } as never;
+    occurrenceHarness.claimStepOccurrence(request.step);
+    await executor.execute(request, { syncParentState: true, resumeStackPrefix: [] });
 
     expect(createdOptions[0]?.autoRoutingEstimator).not.toBe(parentEstimator);
     expect(createWorkRequirementEstimatorMock).toHaveBeenCalledWith(expect.objectContaining({

@@ -173,8 +173,20 @@ describe('TaskRunner - exceedTask', () => {
     const resumePoint = {
       version: 1,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'review',
+          kind: 'agent',
+          occurrence: 1,
+        },
       ],
       iteration: 30,
       elapsed_ms: 183245,
@@ -375,8 +387,20 @@ describe('TaskRunner - requeueExceededTask', () => {
     const resumePoint = {
       version: 1,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'review',
+          kind: 'agent',
+          occurrence: 1,
+        },
       ],
       iteration: 30,
       elapsed_ms: 183245,

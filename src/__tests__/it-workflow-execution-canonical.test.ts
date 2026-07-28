@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 import type { WorkflowConfig } from '../core/models/index.js';
 
 const workflowEngineError = new Error('workflow-engine-constructor-called');
@@ -15,6 +16,30 @@ vi.mock('../core/workflow/index.js', () => ({
   createDenyAskUserQuestionHandler: vi.fn(() => 'deny-handler'),
 }));
 
+vi.mock('../features/tasks/execute/workflowRunStorage.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../features/tasks/execute/workflowRunStorage.js')
+  >();
+  const { createWorkflowRunStorageCompositionTestDouble } = await import(
+    './helpers/run-storage.js'
+  );
+  return {
+    ...actual,
+    createWorkflowRunComposition: (
+      ...args: Parameters<typeof actual.createWorkflowRunComposition>
+    ) => createWorkflowRunStorageCompositionTestDouble(
+      actual.createWorkflowRunComposition,
+      args[0],
+      args[1],
+      {
+        sessionId: 'session-id',
+        startedAt: '2026-02-07T00:00:00.000Z',
+        projectTerminalArtifacts: false,
+      },
+    ),
+  };
+});
+
 vi.mock('../agents/structured-caller.js', () => ({
   CapabilityAwareStructuredCaller: class {},
   DefaultStructuredCaller: class {},
@@ -26,6 +51,7 @@ vi.mock('../infra/config/index.js', () => ({
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: vi.fn(() => ({})),
   updateWorktreeSession: vi.fn(),
+  resolveWorkflowConfigValue: vi.fn(() => ({ backend: 'file' })),
   resolveWorkflowConfigValues: vi.fn(() => ({
     provider: 'mock',
     logging: {},
@@ -77,9 +103,31 @@ vi.mock('../core/logging/usageEventLogger.js', () => ({
 
 vi.mock('../infra/fs/index.js', () => ({
   generateSessionId: vi.fn(() => 'session-id'),
-  createSessionLog: vi.fn(() => ({ history: [] })),
-  finalizeSessionLog: vi.fn(),
-  initNdjsonLog: vi.fn(() => '/tmp/session.jsonl'),
+  createSessionLog: vi.fn((
+    task,
+    projectDir,
+    workflowName,
+    options,
+  ) => ({
+    task,
+    projectDir,
+    workflowName,
+    startTime: options.startTime,
+    iterations: 0,
+    status: 'running',
+    history: [],
+  })),
+  finalizeSessionLog: vi.fn((log, status) => ({
+    ...log,
+    status,
+    endTime: new Date().toISOString(),
+  })),
+  initNdjsonLog: vi.fn((
+    sessionId: string,
+    _task: string,
+    _workflowName: string,
+    options: { logsDir: string },
+  ) => join(options.logsDir, `${sessionId}.jsonl`)),
 }));
 
 vi.mock('../shared/context.js', () => ({
@@ -145,7 +193,6 @@ vi.mock('../features/tasks/execute/sessionLogger.js', () => ({
   SessionLogger: class {
     writeInteractiveMetadata() {}
     onPhaseStart() {}
-    setIteration() {}
     onPhaseComplete() {}
     onJudgeStage() {}
     onStepStart() {}
@@ -163,9 +210,7 @@ vi.mock('../features/tasks/execute/abortHandler.js', () => ({
 }));
 
 vi.mock('../features/tasks/execute/analyticsEmitter.js', () => ({
-  AnalyticsEmitter: class {
-    updateProviderInfo() {}
-  },
+  AnalyticsEmitter: class {},
 }));
 
 vi.mock('../features/tasks/execute/outputFns.js', () => ({
@@ -182,6 +227,7 @@ vi.mock('../features/tasks/execute/runMeta.js', () => ({
   RunMetaManager: class {
     updateStep() {}
     finalize() {}
+    projectTerminal() {}
   },
 }));
 
@@ -195,10 +241,6 @@ vi.mock('../features/tasks/execute/workflowExecutionUtils.js', () => ({
   truncate: vi.fn((value: string) => value),
   formatElapsedTime: vi.fn(() => '0.0s'),
   detectStepType: vi.fn(() => 'normal'),
-}));
-
-vi.mock('../features/tasks/execute/traceReportWriter.js', () => ({
-  createTraceReportWriter: vi.fn(() => vi.fn()),
 }));
 
 vi.mock('../features/tasks/execute/traceReportRedaction.js', () => ({
@@ -240,6 +282,7 @@ describe('workflow execution canonical entrypoints', () => {
 
   it('should construct WorkflowEngine through executeWorkflow', async () => {
     const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+    const { resolveWorkflowConfigValue } = await import('../infra/config/index.js');
     const config: WorkflowConfig = {
       name: 'default',
       description: '',
@@ -273,6 +316,11 @@ describe('workflow execution canonical entrypoints', () => {
           runSlug: 'test-report-dir',
         },
       }),
+    );
+    expect(resolveWorkflowConfigValue).toHaveBeenCalledTimes(1);
+    expect(resolveWorkflowConfigValue).toHaveBeenCalledWith(
+      '/tmp/project',
+      'runStorage',
     );
   });
 });

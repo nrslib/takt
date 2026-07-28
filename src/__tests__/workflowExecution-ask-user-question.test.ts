@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { join } from 'node:path';
 import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/index.js';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
 
@@ -63,7 +64,7 @@ const { disabledObservability, MockWorkflowEngine } = vi.hoisted(() => {
         this.emit('workflow:abort', {
           status: 'aborted',
           iteration: MockWorkflowEngine.iterationLimitCurrentIteration,
-        }, 'Reached max steps');
+        }, 'Reached max steps', 'iteration_limit');
         return {
           status: 'aborted',
           iteration: MockWorkflowEngine.iterationLimitCurrentIteration,
@@ -96,6 +97,30 @@ vi.mock('../core/workflow/index.js', async () => {
   };
 });
 
+vi.mock('../features/tasks/execute/workflowRunStorage.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../features/tasks/execute/workflowRunStorage.js')
+  >();
+  const { createWorkflowRunStorageCompositionTestDouble } = await import(
+    './helpers/run-storage.js'
+  );
+  return {
+    ...actual,
+    createWorkflowRunComposition: (
+      ...args: Parameters<typeof actual.createWorkflowRunComposition>
+    ) => createWorkflowRunStorageCompositionTestDouble(
+      actual.createWorkflowRunComposition,
+      args[0],
+      args[1],
+      {
+        sessionId: 'test-session-id',
+        startedAt: '2026-02-07T00:00:00.000Z',
+        projectTerminalArtifacts: false,
+      },
+    ),
+  };
+});
+
 vi.mock('../infra/claude/query-manager.js', () => ({
   interruptAllQueries: vi.fn(),
 }));
@@ -105,6 +130,7 @@ vi.mock('../infra/config/index.js', () => ({
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: vi.fn().mockReturnValue({}),
   updateWorktreeSession: vi.fn(),
+  resolveWorkflowConfigValue: vi.fn(() => ({ backend: 'file' })),
   resolveWorkflowConfigValues: vi.fn().mockReturnValue({
     notificationSound: true,
     notificationSoundEvents: {},
@@ -147,16 +173,31 @@ vi.mock('../shared/ui/index.js', () => ({
 
 vi.mock('../infra/fs/index.js', () => ({
   generateSessionId: vi.fn().mockReturnValue('test-session-id'),
-  createSessionLog: vi.fn().mockReturnValue({
-    startTime: new Date().toISOString(),
+  createSessionLog: vi.fn().mockImplementation((
+    task,
+    projectDir,
+    workflowName,
+    options,
+  ) => ({
+    task,
+    projectDir,
+    workflowName,
+    startTime: options.startTime,
     iterations: 0,
-  }),
+    status: 'running',
+    history: [],
+  })),
   finalizeSessionLog: vi.fn().mockImplementation((log, status) => ({
     ...log,
     status,
     endTime: new Date().toISOString(),
   })),
-  initNdjsonLog: vi.fn().mockReturnValue('/tmp/test-log.jsonl'),
+  initNdjsonLog: vi.fn((
+    sessionId: string,
+    _task: string,
+    _workflowName: string,
+    options: { logsDir: string },
+  ) => join(options.logsDir, `${sessionId}.jsonl`)),
   appendNdjsonLine: vi.fn(),
 }));
 
@@ -317,8 +358,20 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     MockWorkflowEngine.activeResumePoint = {
       version: 1,
       stack: [
-        { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
-        { workflow: 'takt/coding', step: 'fix', kind: 'agent' },
+        {
+          workflow: 'parent',
+          workflow_ref: 'parent',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'fix',
+          kind: 'agent',
+          occurrence: 1,
+        },
       ],
       iteration: 2,
       elapsed_ms: 183245,
@@ -346,8 +399,20 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     MockWorkflowEngine.activeResumePoint = {
       version: 1,
       stack: [
-        { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
-        { workflow: 'takt/coding', step: 'implement', kind: 'agent' },
+        {
+          workflow: 'parent',
+          workflow_ref: 'parent',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'implement',
+          kind: 'agent',
+          occurrence: 1,
+        },
       ],
       iteration: 3,
       elapsed_ms: 183246,
@@ -355,7 +420,13 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     MockWorkflowEngine.buildResumePointForCurrentStep = {
       version: 1,
       stack: [
-        { workflow: 'parent', step: 'implement', kind: 'agent' },
+        {
+          workflow: 'parent',
+          workflow_ref: 'parent',
+          step: 'implement',
+          kind: 'agent',
+          occurrence: 1,
+        },
       ],
       iteration: 3,
       elapsed_ms: 183247,
@@ -375,7 +446,7 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     });
   });
 
-  it('should report workflow abort message and session log path when aborted', async () => {
+  it('should report workflow failure feedback and session log path when aborted', async () => {
     MockWorkflowEngine.triggerIterationLimit = true;
 
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
@@ -383,8 +454,10 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     });
 
     expect(vi.mocked(error)).toHaveBeenCalledWith(
-      expect.stringContaining('Workflow aborted after 1 iterations'),
+      expect.stringContaining('Workflow failed after 1 iterations'),
     );
-    expect(vi.mocked(info)).toHaveBeenCalledWith('Session log: /tmp/test-log.jsonl');
+    expect(vi.mocked(info)).toHaveBeenCalledWith(
+      'Session log: /tmp/project/.takt/runs/test-report-dir/logs/test-session-id.jsonl',
+    );
   });
 });

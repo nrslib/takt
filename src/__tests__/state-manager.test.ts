@@ -100,14 +100,18 @@ describe('StateManager', () => {
             stack: [
               {
                 workflow: 'parent',
+                workflow_ref: 'parent',
                 step: 'delegate',
                 kind: 'workflow_call',
+                occurrence: 1,
                 step_iterations: { delegate: 3 },
               },
               {
                 workflow: 'test-workflow',
+                workflow_ref: 'test-workflow',
                 step: 'review',
                 kind: 'agent',
+                occurrence: 1,
                 step_iterations: { review: 6, fix: 2 },
               },
             ],
@@ -115,7 +119,13 @@ describe('StateManager', () => {
             elapsed_ms: 100,
           },
           resumeStackPrefix: [
-            { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
+            {
+              workflow: 'parent',
+              workflow_ref: 'parent',
+              step: 'delegate',
+              kind: 'workflow_call',
+              occurrence: 1,
+            },
           ],
         }),
       );
@@ -133,8 +143,10 @@ describe('StateManager', () => {
             version: 1,
             stack: [{
               workflow: 'test-workflow',
+              workflow_ref: 'test-workflow',
               step: 'review',
               kind: 'agent',
+              occurrence: 1,
               step_iterations: { review: 6 },
             }],
             iteration: 12,

@@ -385,6 +385,7 @@ describe('runFindingManagerForStep mechanical path', () => {
 
     const createStore = (reportDir: string) => createFindingLedgerStore({
       projectCwd,
+      runId: 'shared-run',
       reportDir,
       workflowName: 'peer-review',
       ledgerPath: '.takt/findings/peer-review.json',
@@ -465,15 +466,20 @@ describe('runFindingManagerForStep mechanical path', () => {
     writeFileSync(join(projectCwd, 'src/b.ts'), '// line 1\n// line 2\n// line 3\n// line 4\n// line 5\n');
     writeFileSync(join(projectCwd, 'src/c.ts'), '// line 1\n');
     initializeGitFixture(projectCwd, ['src/b.ts', 'src/c.ts']);
-    const createStore = (reportDir: string, trustedResumeSourceRunId?: string) => createFindingLedgerStore({
+    const createStore = (
+      runId: string,
+      reportDir: string,
+      trustedResumeSourceRunId?: string,
+    ) => createFindingLedgerStore({
       projectCwd,
+      runId,
       reportDir,
       workflowName: 'peer-review',
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
       ...(trustedResumeSourceRunId === undefined ? {} : { trustedResumeSourceRunId }),
     });
-    const storeA = createStore(reportDirA);
+    const storeA = createStore('pending-run', reportDirA);
     await storeA.updateLedger(() => ({
       ledger: {
         workflowName: 'peer-review',
@@ -533,7 +539,11 @@ describe('runFindingManagerForStep mechanical path', () => {
         targetRunSlug: 'different-run',
       });
       const reportDirB = join(projectCwd, '.takt', 'runs', 'different-run', 'reports');
-      const storeB = createStore(reportDirB, 'pending-run');
+      const storeB = createStore(
+        'different-run',
+        reportDirB,
+        'pending-run',
+      );
       const copySpyB = vi.spyOn(storeB, 'saveLedgerSnapshot');
       const rawSpyB = vi.spyOn(storeB, 'saveRawFindings');
       const reportSpyB = vi.spyOn(storeB, 'publishManagerValidationPublication');
@@ -1074,6 +1084,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     // 参照）。ここでも1つの store インスタンスを両呼び出しで共有する。
     const store = createFindingLedgerStore({
       projectCwd,
+      runId: 'shared-run',
       reportDir,
       workflowName: 'peer-review',
       ledgerPath: '.takt/findings/peer-review.json',
@@ -1220,6 +1231,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
 
     const store = createFindingLedgerStore({
       projectCwd,
+      runId: 'shared-run',
       reportDir,
       workflowName: 'peer-review',
       ledgerPath: '.takt/findings/peer-review.json',

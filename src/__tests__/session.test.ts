@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, readFileSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -163,6 +163,33 @@ describe('NDJSON log', () => {
   });
 
   describe('loadNdjsonLog', () => {
+    it('occurrenceが欠けたNDJSON workflow stackをfail-fastで拒否する', () => {
+      const filepath = initTestNdjsonLog(
+        'sess-invalid-stack',
+        'invalid stack',
+        'default',
+        projectDir,
+      );
+      appendFileSync(filepath, `${JSON.stringify({
+        type: 'step_complete',
+        step: 'review',
+        persona: 'reviewer',
+        iteration: 1,
+        status: 'done',
+        content: 'done',
+        instruction: 'review',
+        timestamp: '2026-07-28T00:00:00.000Z',
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'review',
+          kind: 'agent',
+        }],
+      })}\n`);
+
+      expect(() => loadNdjsonLog(filepath)).toThrow(/occurrence/i);
+    });
+
     it('should reconstruct SessionLog from NDJSON file', () => {
       const filepath = initTestNdjsonLog('sess-003', 'build app', 'default', projectDir);
 
@@ -260,8 +287,8 @@ describe('NDJSON log', () => {
         instruction: 'Review child workflow',
         workflow: 'takt/coding',
         stack: [
-          { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          { workflow: 'parent', workflow_ref: 'project:sha256:parent', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
+          { workflow: 'takt/coding', workflow_ref: 'project:sha256:coding', step: 'review', kind: 'agent', occurrence: 1 },
         ],
         timestamp: '2025-01-01T00:00:04.000Z',
       } satisfies NdjsonStepComplete);
@@ -272,8 +299,8 @@ describe('NDJSON log', () => {
       expect(log!.history[0]).toMatchObject({
         workflow: 'takt/coding',
         stack: [
-          { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          { workflow: 'parent', workflow_ref: 'project:sha256:parent', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
+          { workflow: 'takt/coding', workflow_ref: 'project:sha256:coding', step: 'review', kind: 'agent', occurrence: 1 },
         ],
       });
     });

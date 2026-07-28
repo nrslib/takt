@@ -7,6 +7,7 @@ import type {
   WorkflowConfig,
   WorkflowMaxSteps,
   WorkflowResumePoint,
+  WorkflowResumePointEntry,
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
@@ -38,6 +39,7 @@ import {
 import { renderLoopMonitorFindingsSummary } from '../findings/loop-monitor-summary.js';
 import { computeReviewScopeSnapshotId } from '../findings/snapshot.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
+import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 
 const log = createLogger('workflow-engine');
 
@@ -54,9 +56,23 @@ interface WorkflowEngineSetupParams {
   structuredCaller: StructuredCaller;
   sharedRuntime: WorkflowSharedRuntimeState;
   resumeStackPrefix: WorkflowEngineOptions['resumeStackPrefix'];
+  getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined;
   runPaths: RunPaths;
   updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
-  setActiveResumePoint: (step: WorkflowStep, iteration: number) => void;
+  claimStepOccurrence: (
+    step: WorkflowStep,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ) => number;
+  consumeWorkflowCallContinuation: (
+    step: WorkflowStep,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ) => WorkflowResumePointEntry | undefined;
+  setActiveResumePoint: (
+    step: WorkflowStep,
+    iteration: number,
+    occurrence: number,
+  ) => void;
   refreshFindingsState: () => void;
   /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
   findingContract?: FindingContractConfig;
@@ -141,8 +157,10 @@ export function applyRuntimeEnvironment(
 }
 
 export function createWorkflowEngineServices(params: WorkflowEngineSetupParams): WorkflowEngineServices {
-  const phaseRelay = createWorkflowPhaseRelay((event, ...args) => params.emitEvent(event, ...args));
-  const getCurrentWorkflowStack = () => params.sharedRuntime.activeResumePoint?.stack;
+  const phaseRelay = createWorkflowPhaseRelay(
+    (event, ...args) => params.emitEvent(event, ...args),
+    params.getCurrentWorkflowStack,
+  );
   const buildFindingContractInstructionContext = (
     _step: WorkflowStep,
     includeRawFindingsSchema: boolean,
@@ -186,7 +204,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     () => params.config.steps.map((step) => ({ name: step.name, description: step.description })),
     () => params.config.name,
     () => params.config.description,
-    getCurrentWorkflowStack,
+    params.getCurrentWorkflowStack,
     buildFindingContractInstructionContext,
   );
 
@@ -206,12 +224,14 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getObservabilityRunId: () => params.options.observabilityRunId,
     observabilityEnabled: () => params.options.observability?.enabled === true,
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,
-    getCurrentWorkflowStack,
+    getCurrentWorkflowStack: params.getCurrentWorkflowStack,
     structuredCaller: params.structuredCaller,
     structuredOutputNormalizers: params.options.structuredOutputNormalizers,
     findingContract: params.findingContract,
     workflowProvider: params.config.provider,
     workflowModel: params.config.model,
+    executionProvider: params.options.provider,
+    executionModel: params.options.model,
     findingLedgerStore: params.findingLedgerStore,
     refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
@@ -233,6 +253,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getOptions: () => params.options,
     sharedRuntime: params.sharedRuntime,
     resumeStackPrefix: params.resumeStackPrefix ?? [],
+    consumeWorkflowCallContinuation: params.consumeWorkflowCallContinuation,
     runPaths: params.runPaths,
     setActiveResumePoint: params.setActiveResumePoint as never,
     emit: params.emitEvent,
@@ -254,7 +275,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     observabilityEnabled: params.options.observability?.enabled === true,
     observabilityRunId: params.options.observabilityRunId,
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,
-    getCurrentWorkflowStack,
+    getCurrentWorkflowStack: params.getCurrentWorkflowStack,
     refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
     findingContract: params.findingContract,
@@ -262,6 +283,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     workflowModel: params.config.model,
     findingLedgerStore: params.findingLedgerStore,
     getWorkflowCallRunner: () => workflowCallRunner,
+    claimStepOccurrence: params.claimStepOccurrence,
     updateMaxSteps: params.updateMaxSteps,
     setActiveResumePoint: params.setActiveResumePoint,
     getRunId: () => params.runPaths.slug,
@@ -280,7 +302,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     observabilityEnabled: params.options.observability?.enabled === true,
     observabilityRunId: params.options.observabilityRunId,
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,
-    getCurrentWorkflowStack,
+    getCurrentWorkflowStack: params.getCurrentWorkflowStack,
     onPhaseStart: phaseRelay.onPhaseStart,
     onPhaseComplete: phaseRelay.onPhaseComplete,
   });
@@ -301,7 +323,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     observabilityEnabled: params.options.observability?.enabled === true,
     observabilityRunId: params.options.observabilityRunId,
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,
-    getCurrentWorkflowStack,
+    getCurrentWorkflowStack: params.getCurrentWorkflowStack,
     onPhaseStart: phaseRelay.onPhaseStart,
     onPhaseComplete: phaseRelay.onPhaseComplete,
     emitEvent: params.emitEvent,
@@ -341,6 +363,9 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     updatePersonaSession: params.updatePersonaSession,
     resolveNextStepFromDone: params.resolveNextStepFromDone as never,
     onStepStart: (step, iteration, instruction, providerInfo, resumeStepName, stepIteration) => {
+      const workflowStack = requireWorkflowResumeStackSnapshot(
+        params.getCurrentWorkflowStack(),
+      );
       params.emitEvent(
         'step:start',
         step,
@@ -350,14 +375,39 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
         params.config.name,
         resumeStepName,
         stepIteration,
+        workflowStack,
+        params.findingLedgerStore?.ledgerIdentity,
+        params.findingLedgerStore
+          ?.loadLedger()
+          .findings
+          .map((finding) => finding.id),
+      );
+      return workflowStack;
+    },
+    onStepComplete: (step, response, instruction, resumeStepName, workflowStack) => {
+      params.emitEvent(
+        'step:complete',
+        step,
+        response,
+        instruction,
+        resumeStepName,
+        workflowStack,
       );
     },
-    onStepComplete: (step, response, instruction, resumeStepName) => {
-      params.emitEvent('step:complete', step, response, instruction, resumeStepName);
-    },
     emitCollectedReports: () => {
-      for (const { step, filePath, fileName } of stepExecutor.drainReportFiles()) {
-        params.emitEvent('step:report', step, filePath, fileName);
+      for (const {
+        step,
+        filePath,
+        fileName,
+        context,
+      } of stepExecutor.drainReportFiles()) {
+        params.emitEvent(
+          'step:report',
+          step,
+          filePath,
+          fileName,
+          context,
+        );
       }
     },
     resetCycleDetector: params.resetCycleDetector,

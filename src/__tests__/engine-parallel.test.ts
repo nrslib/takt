@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // --- Mock setup (must be before imports that use these modules) ---
@@ -42,6 +42,7 @@ import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { runReportPhase } from '../core/workflow/phase-runner.js';
 import {
   makeResponse,
   makeStep,
@@ -76,6 +77,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     applyDefaultMocks();
+    vi.mocked(runReportPhase).mockResolvedValue(undefined);
     tmpDir = createTestTmpDir();
   });
 
@@ -120,6 +122,94 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(reviewersOutput!.content).toContain('## security-review');
     expect(reviewersOutput!.content).toContain('Security review content');
     expect(reviewersOutput!.matchedRuleMethod).toBe('aggregate');
+  });
+
+  it('parallel substep reportへsubstep自身のproviderとcanonical execution contextを載せる', async () => {
+    const reportName = 'architecture-review.md';
+    const reportPath = join(
+      tmpDir,
+      '.takt',
+      'runs',
+      'test-report-dir',
+      'reports',
+      reportName,
+    );
+    vi.mocked(runReportPhase).mockImplementation(async () => {
+      mkdirSync(join(reportPath, '..'), { recursive: true });
+      writeFileSync(reportPath, '# Architecture review\n');
+      return undefined;
+    });
+    const config = buildDefaultWorkflowConfig({
+      maxSteps: 1,
+      initialStep: 'reviewers',
+      steps: [
+        makeStep('reviewers', {
+          parallel: [
+            makeStep('architecture-review', {
+              persona: 'architecture-reviewer',
+              personaDisplayName: 'Architecture Reviewer',
+              provider: 'codex',
+              model: 'gpt-5',
+              outputContracts: [{ name: reportName }],
+              rules: [makeRule('approved', 'COMPLETE')],
+            }),
+          ],
+          rules: [makeRule('all("approved")', 'COMPLETE')],
+        }),
+      ],
+    });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+    });
+    const startedSteps: string[] = [];
+    const reportEvents: unknown[][] = [];
+    engine.on('step:start', (step) => {
+      startedSteps.push(step.name);
+    });
+    engine.on('step:report', (...args) => {
+      reportEvents.push(args);
+    });
+    mockRunAgentSequence([
+      makeResponse({
+        persona: 'architecture-reviewer',
+        content: 'approved',
+      }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'aggregate' },
+    ]);
+
+    await engine.run();
+
+    expect(startedSteps).toEqual(['reviewers']);
+    expect(reportEvents).toEqual([[
+      expect.objectContaining({ name: 'architecture-review' }),
+      reportPath,
+      reportName,
+      expect.objectContaining({
+        iteration: 1,
+        workflowName: config.name,
+        resumeStepName: 'reviewers',
+        stepIteration: 1,
+        providerInfo: expect.objectContaining({
+          provider: 'codex',
+          model: 'gpt-5',
+        }),
+        provider: 'codex',
+        model: 'gpt-5',
+        workflowStack: [
+          expect.objectContaining({
+            workflow: config.name,
+            workflow_ref: expect.any(String),
+            step: 'reviewers',
+            kind: 'parallel',
+            occurrence: 1,
+          }),
+        ],
+      }),
+    ]]);
   });
 
   it('should store individual sub-step outputs in stepOutputs', async () => {

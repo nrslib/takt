@@ -72,6 +72,7 @@ function buildConfigWithReport(): WorkflowConfig {
         ],
       }),
       makeStep('implement', {
+        provider: 'claude',
         outputContracts: [reportContract],
         rules: [
           makeRule('Implementation complete', 'supervise'),

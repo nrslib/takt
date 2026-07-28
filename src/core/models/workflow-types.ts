@@ -1,4 +1,7 @@
 import type { ProviderType } from '../../shared/types/provider.js';
+import type {
+  CanonicalWorkflowResumeFrame,
+} from '../../shared/types/workflow-resume.js';
 import type { AutoRoutingConfig } from './config-types.js';
 import type { PermissionMode } from './status.js';
 import type { AgentResponse } from './response.js';
@@ -9,7 +12,6 @@ import type {
   StepProviderOptions,
   WorkflowCallOverrides,
   WorkflowRuntimeConfig,
-  WorkflowStepKind,
 } from './workflow-provider-options.js';
 import type {
   WorkflowEffect,
@@ -31,6 +33,7 @@ export type {
   WorkflowTemplateReference,
   WorkflowEffectScalarReference,
 } from './workflow-system-input-types.js';
+export type { WorkflowResumeFrameKind } from '../../shared/types/workflow-resume.js';
 export type { FindingContractConfig, FindingLedger, FindingsRuleContext } from './finding-types.js';
 export {
   normalizeWorkflowPrListWhere,
@@ -136,11 +139,7 @@ export interface WorkflowSubworkflowConfig {
   params?: Record<string, WorkflowSubworkflowParamConfig>;
 }
 
-export interface WorkflowResumePointEntry {
-  workflow: string;
-  workflow_ref?: string;
-  step: string;
-  kind: WorkflowStepKind;
+export interface WorkflowResumePointEntry extends CanonicalWorkflowResumeFrame {
   step_iterations?: Record<string, number>;
 }
 

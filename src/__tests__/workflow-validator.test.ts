@@ -968,6 +968,31 @@ describe('validateWorkflowConfig', () => {
     );
   });
 
+  it('accepts a parallel sub-step name that is also used at top level', () => {
+    const workflow = createWorkflow({
+      initialStep: 'delegate',
+      steps: [
+        createPlanAgent({ name: 'delegate' }),
+        {
+          name: 'reviewers',
+          personaDisplayName: 'reviewers',
+          instruction: 'review',
+          parallel: [{
+            name: 'delegate',
+            persona: 'reviewer',
+            personaDisplayName: 'reviewer',
+            instruction: 'review delegated work',
+            rules: [normalizeRule({ condition: 'approved', next: 'COMPLETE' })],
+          }],
+          rules: [normalizeRule({ condition: 'all("approved")', next: 'COMPLETE' })],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() }))
+      .not.toThrow();
+  });
+
   it('rejects conflicting appendices in normalized normal-step rules', () => {
     const workflow = createWorkflow({
       steps: [createPlanAgent({

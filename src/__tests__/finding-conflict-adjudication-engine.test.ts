@@ -41,7 +41,7 @@ vi.mock('../core/workflow/findings/adjudication-runner.js', async (importOrigina
   };
 });
 
-import { WorkflowEngine } from '../core/workflow/index.js';
+import { WorkflowEngine } from './helpers/workflow-engine.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
@@ -336,6 +336,7 @@ describe('finding-conflict-adjudication engine detour', () => {
     seedLedger('src/a.ts:5', 'parent-workflow');
     const parentLedgerStore = createFindingLedgerStore({
       projectCwd: cwd,
+      runId: 'test-report-dir',
       reportDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'reports'),
       workflowName: 'parent-workflow',
       ledgerPath: '.takt/findings/peer-review.json',

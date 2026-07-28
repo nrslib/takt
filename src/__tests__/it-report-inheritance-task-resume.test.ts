@@ -10,9 +10,15 @@ vi.mock('../agents/runner.js', () => ({
 
 import { runAgent } from '../agents/runner.js';
 import { executeAndCompleteTask } from '../features/tasks/execute/taskExecution.js';
-import { invalidateGlobalConfigCache } from '../infra/config/index.js';
+import {
+  invalidateGlobalConfigCache,
+  loadWorkflowByIdentifier,
+  resolveWorkflowCallTarget,
+} from '../infra/config/index.js';
 import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
 import { parseFindingLedger } from '../core/models/finding-schemas.js';
+import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
 
 const sourceRunSlug = '20260717-source-run';
 const resumeModes = ['requeue', 'retry', 'instruct'] as const;
@@ -89,12 +95,60 @@ function createEnvironment(withFindingContract: boolean): TestEnvironment {
   return { root, projectDir, globalDir };
 }
 
-function buildResumePoint() {
+function loadResumeWorkflows(projectDir: string) {
+  const parent = loadWorkflowByIdentifier('parent-fix', projectDir);
+  if (!parent) {
+    throw new Error('Resume workflow fixtures could not be loaded');
+  }
+  const parentStep = parent.steps.find((step) => step.name === 'delegate');
+  if (!parentStep || parentStep.kind !== 'workflow_call') {
+    throw new Error('Resume parent workflow_call fixture could not be loaded');
+  }
+  const child = resolveWorkflowCallTarget(
+    parent,
+    parentStep,
+    projectDir,
+    projectDir,
+  );
+  if (!child) {
+    throw new Error('Resume child workflow fixture could not be loaded');
+  }
+  return { parent, child };
+}
+
+function buildWorkflowCallNamespace(projectDir: string, occurrence: number): string {
+  const { parent, child } = loadResumeWorkflows(projectDir);
+  return buildWorkflowCallSiteIdentity({
+    stack: [{
+      workflow: parent.name,
+      workflow_ref: parent.name,
+      step: 'delegate',
+      kind: 'workflow_call',
+      occurrence,
+    }],
+    childWorkflow: child,
+  }).runPathSegment;
+}
+
+function buildResumePoint(projectDir: string) {
+  const { parent, child } = loadResumeWorkflows(projectDir);
   return {
     version: 1 as const,
     stack: [
-      { workflow: 'parent-fix', step: 'delegate', kind: 'workflow_call' as const },
-      { workflow: 'child-fix', step: 'fix', kind: 'agent' as const },
+      {
+        workflow: parent.name,
+        workflow_ref: parent.name,
+        step: 'delegate',
+        kind: 'workflow_call' as const,
+        occurrence: 1,
+      },
+      {
+        workflow: child.name,
+        workflow_ref: getWorkflowReference(child),
+        step: 'fix',
+        kind: 'agent' as const,
+        occurrence: 1,
+      },
     ],
     iteration: 1,
     elapsed_ms: 0,
@@ -112,7 +166,11 @@ function completeSourceTask(runner: TaskRunner, task: TaskInfo): void {
   });
 }
 
-function prepareResumedTask(runner: TaskRunner, mode: ResumeMode): TaskInfo {
+function prepareResumedTask(
+  runner: TaskRunner,
+  mode: ResumeMode,
+  projectDir: string,
+): TaskInfo {
   runner.addTask('resume inherited review reports', { workflow: 'parent-fix' });
   const sourceTask = runner.claimNextTasks(1)[0];
   if (!sourceTask) {
@@ -121,7 +179,7 @@ function prepareResumedTask(runner: TaskRunner, mode: ResumeMode): TaskInfo {
   const taskWithSourceRun = runner.updateRunningTaskExecution(sourceTask.name, {
     runSlug: sourceRunSlug,
   });
-  const resumePoint = buildResumePoint();
+  const resumePoint = buildResumePoint(projectDir);
 
   if (mode === 'requeue') {
     runner.exceedTask(taskWithSourceRun.name, {
@@ -149,10 +207,29 @@ function prepareResumedTask(runner: TaskRunner, mode: ResumeMode): TaskInfo {
   );
 }
 
+function writeSourceRunMeta(projectDir: string): void {
+  const runRoot = `.takt/runs/${sourceRunSlug}`;
+  const runDir = join(projectDir, runRoot);
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'meta.json'), JSON.stringify({
+    task: 'resume inherited review reports',
+    workflow: 'parent-fix',
+    runSlug: sourceRunSlug,
+    runRoot,
+    reportDirectory: `${runRoot}/reports`,
+    contextDirectory: `${runRoot}/context`,
+    logsDirectory: `${runRoot}/logs`,
+    storageBackend: 'file',
+    status: 'completed',
+    startTime: '2026-07-17T00:00:00.000Z',
+  }), 'utf-8');
+}
+
 function writeSourceReports(projectDir: string, withFindingContract: boolean): {
   sourceReportDir: string;
   sourceLedger?: string;
 } {
+  writeSourceRunMeta(projectDir);
   const sourceReportDir = join(
     projectDir,
     '.takt',
@@ -160,7 +237,7 @@ function writeSourceReports(projectDir: string, withFindingContract: boolean): {
     sourceRunSlug,
     'reports',
     'subworkflows',
-    'iteration-1--step-delegate--workflow-child-fix',
+    buildWorkflowCallNamespace(projectDir, 1),
   );
   mkdirSync(sourceReportDir, { recursive: true });
   writeFileSync(join(sourceReportDir, '05-arch-review.md'), 'previous architecture review', 'utf-8');
@@ -191,6 +268,22 @@ function findResumedRunSlug(projectDir: string): string {
     throw new Error('Resumed run directory was not created');
   }
   return resumedRunSlug;
+}
+
+function readResumeArtifacts(projectDir: string, runSlug: string) {
+  return JSON.parse(readFileSync(join(
+    projectDir,
+    '.takt',
+    'runs',
+    runSlug,
+    'reports',
+    'resume-artifacts.json',
+  ), 'utf-8')) as {
+    version: number;
+    sourceRunSlug: string;
+    targetRunSlug: string;
+    files: Array<{ path: string; size: number; sha256: string }>;
+  };
 }
 
 describe.each(resumeModes)('IT: report inheritance through %s task resume', (mode) => {
@@ -237,7 +330,11 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
 
     const source = writeSourceReports(environment.projectDir, withFindingContract);
     const runner = new TaskRunner(environment.projectDir);
-    const resumedTask = prepareResumedTask(runner, mode);
+    const resumedTask = prepareResumedTask(
+      runner,
+      mode,
+      environment.projectDir,
+    );
 
     const success = await executeAndCompleteTask(resumedTask, runner, environment.projectDir);
 
@@ -249,19 +346,14 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       resumedRunSlug,
       'reports',
       'subworkflows',
-      'iteration-2--step-delegate--workflow-child-fix',
+      buildWorkflowCallNamespace(environment.projectDir, 1),
       '05-arch-review.md',
     );
-    const diagnosticPath = join(
-      environment.projectDir,
-      '.takt',
-      'runs',
-      resumedRunSlug,
-      'reports',
+    const inheritedReportRelativePath = [
       'subworkflows',
-      'iteration-2--step-delegate--workflow-child-fix',
-      'review-report-inheritance.json',
-    );
+      buildWorkflowCallNamespace(environment.projectDir, 1),
+      '05-arch-review.md',
+    ].join('/');
 
     expect(success).toBe(true);
     expect(instructions).toHaveLength(1);
@@ -271,11 +363,17 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
     expect(instructions[0]).not.toContain(source.sourceReportDir);
     expect(readFileSync(inheritedReportPath, 'utf-8')).toBe('previous architecture review');
     expect(readFileSync(join(source.sourceReportDir, '05-arch-review.md'), 'utf-8')).toBe('previous architecture review');
-    expect(JSON.parse(readFileSync(diagnosticPath, 'utf-8'))).toEqual(expect.objectContaining({
+    expect(readResumeArtifacts(environment.projectDir, resumedRunSlug)).toEqual(expect.objectContaining({
+      version: 1,
       sourceRunSlug,
-      sourceReportDirectory: join(environment.projectDir, '.takt', 'runs', sourceRunSlug, 'reports'),
-      status: 'copied',
-      fallbackUsed: false,
+      targetRunSlug: resumedRunSlug,
+      files: [
+        expect.objectContaining({
+          path: inheritedReportRelativePath,
+          size: Buffer.byteLength('previous architecture review'),
+          sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+      ],
     }));
     if (source.sourceLedger !== undefined) {
       expect(readFileSync(join(environment.projectDir, '.takt', 'findings', 'review-ledger.json'), 'utf-8'))
@@ -284,7 +382,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
   });
 });
 
-describe('IT: missing report source fallback through task resume', () => {
+describe('IT: missing report source through task resume', () => {
   let environment: TestEnvironment;
   let originalConfigDir: string | undefined;
 
@@ -305,7 +403,7 @@ describe('IT: missing report source fallback through task resume', () => {
     }
   });
 
-  it('should fail before the resumed fix agent runs and record unavailable diagnostics when the source run was deleted', async () => {
+  it('should fail before the resumed fix agent runs and publish an empty source snapshot when source reports are missing', async () => {
     environment = createEnvironment(false);
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
@@ -326,38 +424,33 @@ describe('IT: missing report source fallback through task resume', () => {
       };
     });
 
+    writeSourceRunMeta(environment.projectDir);
     const runner = new TaskRunner(environment.projectDir);
-    const resumedTask = prepareResumedTask(runner, 'requeue');
+    const resumedTask = prepareResumedTask(
+      runner,
+      'requeue',
+      environment.projectDir,
+    );
 
     const success = await executeAndCompleteTask(resumedTask, runner, environment.projectDir);
 
     const resumedRunSlug = findResumedRunSlug(environment.projectDir);
-    const diagnosticPath = join(
+    const resumedMeta = JSON.parse(readFileSync(join(
       environment.projectDir,
       '.takt',
       'runs',
       resumedRunSlug,
-      'reports',
-      'subworkflows',
-      'iteration-2--step-delegate--workflow-child-fix',
-      'review-report-inheritance.json',
-    );
-    const diagnostic = JSON.parse(readFileSync(diagnosticPath, 'utf-8')) as {
-      sourceRunSlug?: string;
-      status?: string;
-      fallbackUsed?: boolean;
-      skipped?: Array<{ reason?: string }>;
-    };
+      'meta.json',
+    ), 'utf-8')) as { reason?: string };
 
     expect(success).toBe(false);
     expect(instructions).toHaveLength(0);
-    expect(diagnostic).toEqual(expect.objectContaining({
+    expect(readResumeArtifacts(environment.projectDir, resumedRunSlug)).toEqual(expect.objectContaining({
+      version: 1,
       sourceRunSlug,
-      status: 'unavailable',
-      fallbackUsed: true,
+      targetRunSlug: resumedRunSlug,
+      files: [],
     }));
-    expect(diagnostic.skipped).toEqual(expect.arrayContaining([
-      expect.objectContaining({ reason: expect.stringContaining('source_resolution_failed') }),
-    ]));
+    expect(resumedMeta.reason).toContain('source report snapshot does not contain it');
   });
 });

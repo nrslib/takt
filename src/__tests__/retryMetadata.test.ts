@@ -10,7 +10,13 @@ describe('resolveRetryMetadataFromRunMeta', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -23,6 +29,7 @@ describe('resolveRetryMetadataFromRunMeta', () => {
       reportDirectory: '.takt/runs/run-1/reports',
       contextDirectory: '.takt/runs/run-1/context',
       logsDirectory: '.takt/runs/run-1/logs',
+      storageBackend: 'file',
       status: 'aborted',
       startTime: '2026-04-13T00:00:00.000Z',
       currentStep: 'final-review',
@@ -41,8 +48,20 @@ describe('resolveRetryMetadataFromRunMeta', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'fix', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'fix',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 11,
       elapsed_ms: 183245,
@@ -55,6 +74,7 @@ describe('resolveRetryMetadataFromRunMeta', () => {
       reportDirectory: '.takt/runs/run-1b/reports',
       contextDirectory: '.takt/runs/run-1b/context',
       logsDirectory: '.takt/runs/run-1b/logs',
+      storageBackend: 'file',
       status: 'aborted',
       startTime: '2026-04-13T00:00:00.000Z',
       currentStep: 'final-review',
@@ -78,6 +98,7 @@ describe('resolveRetryMetadataFromRunMeta', () => {
       reportDirectory: '.takt/runs/run-2/reports',
       contextDirectory: '.takt/runs/run-2/context',
       logsDirectory: '.takt/runs/run-2/logs',
+      storageBackend: 'file',
       status: 'aborted',
       startTime: '2026-04-13T00:00:00.000Z',
       currentStep: 'final-review',

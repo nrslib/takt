@@ -23,7 +23,10 @@ function writeTasksFile(testDir: string, tasks: Array<Record<string, unknown>>):
 function writeRunMeta(testDir: string, slug: string, meta: Record<string, unknown>): void {
   const metaPath = join(testDir, '.takt', 'runs', slug, 'meta.json');
   mkdirSync(join(testDir, '.takt', 'runs', slug), { recursive: true });
-  writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+  writeFileSync(metaPath, JSON.stringify({
+    storageBackend: 'file',
+    ...meta,
+  }, null, 2), 'utf-8');
 }
 
 function writeBrokenRunMeta(testDir: string, slug: string): string {
@@ -176,7 +179,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'review', kind: 'agent' as const },
+        { workflow: 'default', workflow_ref: 'default', step: 'review', kind: 'agent' as const, occurrence: 1 },
       ],
       iteration: 3,
       elapsed_ms: 1000,
@@ -294,7 +297,7 @@ describe('TaskRunner (tasks.yaml)', () => {
       resume_point: {
         version: 1,
         stack: [
-          { workflow: 'default', step: 'draft', kind: 'workflow_call' },
+          { workflow: 'default', workflow_ref: 'default', step: 'draft', kind: 'workflow_call', occurrence: 1 },
         ],
         iteration: 4,
         elapsed_ms: 120000,
@@ -319,8 +322,8 @@ describe('TaskRunner (tasks.yaml)', () => {
       resume_point: {
         version: 1,
         stack: [
-          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
+          { workflow: 'takt/coding', workflow_ref: 'takt/coding', step: 'review', kind: 'agent', occurrence: 1 },
         ],
         iteration: 7,
         elapsed_ms: 183245,
@@ -352,7 +355,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const staleResumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call' as const, occurrence: 1 },
       ],
       iteration: 4,
       elapsed_ms: 120000,
@@ -390,7 +393,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const staleResumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call' as const, occurrence: 1 },
       ],
       iteration: 4,
       elapsed_ms: 120000,
@@ -1249,14 +1252,18 @@ describe('TaskRunner (tasks.yaml)', () => {
       stack: [
         {
           workflow: 'default',
+          workflow_ref: 'default',
           step: 'implement',
           kind: 'workflow_call' as const,
+          occurrence: 3,
           step_iterations: { implement: 3 },
         },
         {
           workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
           step: 'review',
           kind: 'agent' as const,
+          occurrence: 6,
           step_iterations: { review: 6, fix: 2 },
         },
       ],
@@ -1290,7 +1297,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const latestResumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'final-review', kind: 'agent' as const },
+        { workflow: 'default', workflow_ref: 'default', step: 'final-review', kind: 'agent' as const, occurrence: 1 },
       ],
       iteration: 9,
       elapsed_ms: 200000,
@@ -1304,7 +1311,7 @@ describe('TaskRunner (tasks.yaml)', () => {
       resume_point: {
         version: 1,
         stack: [
-          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
         ],
         iteration: 7,
         elapsed_ms: 183245,
@@ -1351,7 +1358,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const workflowCallResumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call' as const, occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183900,
@@ -1363,8 +1370,8 @@ describe('TaskRunner (tasks.yaml)', () => {
       resume_point: {
         version: 1,
         stack: [
-          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
+          { workflow: 'takt/coding', workflow_ref: 'takt/coding', step: 'review', kind: 'agent', occurrence: 1 },
         ],
         iteration: 6,
         elapsed_ms: 180000,
@@ -1410,7 +1417,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const staleResumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call' as const, occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -1455,7 +1462,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const staleResumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call' as const, occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -1507,7 +1514,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const staleResumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call' as const, occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -1554,7 +1561,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const staleResumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call' as const, occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -1599,7 +1606,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const staleResumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call' as const, occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -1631,7 +1638,7 @@ describe('TaskRunner (tasks.yaml)', () => {
       resume_point: {
         version: 1,
         stack: [
-          { workflow: 'default', step: 'final-review', kind: 'agent' },
+          { workflow: 'default', workflow_ref: 'default', step: 'final-review', kind: 'agent', occurrence: 1 },
         ],
         iteration: 9,
         elapsed_ms: 200000,

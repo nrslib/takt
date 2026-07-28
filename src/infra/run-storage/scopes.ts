@@ -17,6 +17,7 @@ export interface ScopeRecord {
   readonly parentScopeId: string | null;
   readonly kind: ScopeKind;
   readonly workflowDefinitionId: string;
+  readonly findingContractEnabled: boolean;
   readonly createdAt: number;
   readonly terminalAt: number | null;
   readonly currentStepId: string | null;
@@ -27,6 +28,25 @@ export interface ScopeRecord {
   readonly updatedAt: number;
 }
 
+type ScopeRow = Omit<ScopeRecord, 'findingContractEnabled'> & {
+  readonly findingContractEnabled: number;
+};
+
+function scopeRecordFromRow(row: ScopeRow): ScopeRecord {
+  if (
+    row.findingContractEnabled !== 0
+    && row.findingContractEnabled !== 1
+  ) {
+    throw new Error(
+      `Scope "${row.runId}/${row.scopeId}" has invalid Finding Contract state`,
+    );
+  }
+  return {
+    ...row,
+    findingContractEnabled: row.findingContractEnabled === 1,
+  };
+}
+
 function scopeSelect(): string {
   return `
     SELECT
@@ -35,6 +55,7 @@ function scopeSelect(): string {
       scopes.parent_scope_id AS parentScopeId,
       scopes.kind,
       scopes.workflow_definition_id AS workflowDefinitionId,
+      scopes.finding_contract_enabled AS findingContractEnabled,
       scopes.created_at AS createdAt,
       scopes.terminal_at AS terminalAt,
       runtime.current_step_id AS currentStepId,
@@ -101,22 +122,79 @@ export class ScopeRepository {
   }
 
   get(context: RunReadContext, runId: string, scopeId: string): ScopeRecord {
-    const scope = context.get<ScopeRecord>(`
-      ${scopeSelect()}
-      WHERE scopes.run_id = ? AND scopes.scope_id = ?
-    `, runId, scopeId);
+    const scope = this.find(context, runId, scopeId);
     if (scope === undefined) {
       throw new Error(`Scope "${runId}/${scopeId}" does not exist`);
     }
     return scope;
   }
 
+  find(
+    context: RunReadContext,
+    runId: string,
+    scopeId: string,
+  ): ScopeRecord | undefined {
+    const row = context.get<ScopeRow>(`
+      ${scopeSelect()}
+      WHERE scopes.run_id = ? AND scopes.scope_id = ?
+    `, runId, scopeId);
+    return row === undefined ? undefined : scopeRecordFromRow(row);
+  }
+
   list(context: RunReadContext, runId: string): ScopeRecord[] {
-    return context.all<ScopeRecord>(`
+    return context.all<ScopeRow>(`
       ${scopeSelect()}
       WHERE scopes.run_id = ?
       ORDER BY scopes.created_at, scopes.scope_id
-    `, runId);
+    `, runId).map(scopeRecordFromRow);
+  }
+
+  terminalizeActiveDescendants(
+    context: RunWriteContext,
+    input: {
+      readonly runId: string;
+      readonly status: Extract<
+        ScopeRuntimeStatus,
+        'completed' | 'failed' | 'cancelled'
+      >;
+      readonly terminalAt: number;
+    },
+  ): void {
+    const descendants = context.all<ScopeRecord & { readonly depth: number }>(`
+      WITH RECURSIVE scope_tree(scope_id, depth) AS (
+        SELECT scope_id, 0
+        FROM scopes
+        WHERE run_id = ? AND kind = 'root'
+        UNION ALL
+        SELECT child.scope_id, parent.depth + 1
+        FROM scopes AS child
+        JOIN scope_tree AS parent
+          ON child.parent_scope_id = parent.scope_id
+        WHERE child.run_id = ?
+      )
+      SELECT scope_records.*, scope_tree.depth
+      FROM scope_tree
+      JOIN (${scopeSelect()}) AS scope_records
+        ON scope_records.scopeId = scope_tree.scope_id
+      WHERE
+        scope_records.runId = ?
+        AND scope_tree.depth > 0
+        AND scope_records.status IN ('ready', 'running')
+      ORDER BY scope_tree.depth DESC, scope_records.scopeId
+    `, input.runId, input.runId, input.runId);
+    for (const descendant of descendants) {
+      this.terminalize(context, {
+        runId: input.runId,
+        scopeId: descendant.scopeId,
+        expectedRevision: descendant.revision,
+        expectedStatus: descendant.status as Extract<
+          ScopeRuntimeStatus,
+          'ready' | 'running'
+        >,
+        status: input.status,
+        terminalAt: input.terminalAt,
+      });
+    }
   }
 
   createChild(context: RunWriteContext, input: {
@@ -125,6 +203,7 @@ export class ScopeRepository {
     readonly parentScopeId: string;
     readonly kind: Exclude<ScopeKind, 'root'>;
     readonly workflowDefinitionId: string;
+    readonly findingContractEnabled?: boolean;
     readonly createdAt: number;
   }): void {
     const parent = this.get(context, input.runId, input.parentScopeId);
@@ -137,6 +216,16 @@ export class ScopeRepository {
     ) {
       throw new Error(`Parallel scope "${input.scopeId}" must use parent workflow definition`);
     }
+    const ownsFindingAuthority = input.kind === 'parallel'
+      ? parent.findingContractEnabled
+      : input.findingContractEnabled === true;
+    if (ownsFindingAuthority) {
+      context.run(`
+        UPDATE runs
+        SET finding_contract_enabled = 1
+        WHERE run_id = ? AND finding_contract_enabled = 0
+      `, input.runId);
+    }
     context.run(`
       INSERT INTO scopes (
         run_id,
@@ -144,14 +233,16 @@ export class ScopeRepository {
         parent_scope_id,
         kind,
         workflow_definition_id,
+        finding_contract_enabled,
         created_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `,
     input.runId,
     input.scopeId,
     input.parentScopeId,
     input.kind,
     input.workflowDefinitionId,
+    ownsFindingAuthority ? 1 : 0,
     input.createdAt);
     context.run(`
       INSERT INTO scope_runtime (
@@ -159,18 +250,14 @@ export class ScopeRepository {
       ) VALUES (?, ?, 'ready', ?)
     `, input.runId, input.scopeId, input.createdAt);
     const finding = context.get<{
-      readonly enabled: number;
       readonly workflowName: string;
     }>(`
       SELECT
-        runs.finding_contract_enabled AS enabled,
         definitions.name AS workflowName
-      FROM runs
-      JOIN workflow_definitions AS definitions
-        ON definitions.definition_id = ?
-      WHERE runs.run_id = ?
-    `, input.workflowDefinitionId, input.runId);
-    if (finding?.enabled === 1 && input.kind === 'parallel') {
+      FROM workflow_definitions AS definitions
+      WHERE definitions.definition_id = ?
+    `, input.workflowDefinitionId);
+    if (finding !== undefined && ownsFindingAuthority) {
       bootstrapFindingAuthority(context, {
         runId: input.runId,
         scopeId: input.scopeId,

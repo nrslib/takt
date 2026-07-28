@@ -1,6 +1,7 @@
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   rmSync,
   statSync,
 } from 'node:fs';
@@ -12,6 +13,7 @@ import {
   openRunStorage,
   resumeRunStorage,
 } from '../infra/run-storage/root.js';
+import { createTestBootstrapSeed } from './helpers/run-storage.js';
 
 let directory: string | undefined;
 
@@ -40,8 +42,12 @@ function workflowDefinition() {
 function createAt(path: string) {
   return createRunStorage({
     databasePath: path,
+    bootstrapSeed: createTestBootstrapSeed({
+      workflowName: 'publication',
+      sessionId: 'publication-session',
+    }),
     run: {
-      slug: 'publication-run',
+      runId: 'publication-run',
       findingContractEnabled: false,
     },
     workflowDefinition: workflowDefinition(),
@@ -49,11 +55,18 @@ function createAt(path: string) {
 }
 
 describe('run storage publication', () => {
-  it('creates a private database directly at the final path and rejects retry', () => {
+  it('atomically publishes a private database at the final path and rejects retry', () => {
     const path = databasePath();
     const root = createAt(path);
 
     expect(existsSync(path)).toBe(true);
+    expect(root.readResumeSnapshot().run.runId).toBe('publication-run');
+    expect(root.readBootstrapSeed()).toMatchObject({
+      version: 1,
+      workflowName: 'publication',
+      backend: 'sqlite',
+      sessionId: 'publication-session',
+    });
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(() => createAt(path)).toThrow(/already exists/i);
     root.close();
@@ -65,8 +78,12 @@ describe('run storage publication', () => {
     const resumed = resumeRunStorage({
       databasePath: path,
       source,
+      bootstrapSeed: createTestBootstrapSeed({
+        workflowName: 'publication',
+        sessionId: 'resumed-session',
+      }),
       run: {
-        slug: 'resumed-run',
+        runId: 'resumed-run',
         findingContractEnabled: false,
       },
       workflowDefinition: workflowDefinition(),
@@ -113,13 +130,17 @@ describe('run storage publication', () => {
     expect(existsSync(path)).toBe(false);
   });
 
-  it('closes a failed publication and leaves its destination as an orphan', () => {
+  it('removes the private temporary database when initialization fails', () => {
     const path = databasePath();
 
     expect(() => createRunStorage({
       databasePath: path,
+      bootstrapSeed: createTestBootstrapSeed({
+        workflowName: 'invalid-publication',
+        sessionId: 'invalid-publication-session',
+      }),
       run: {
-        slug: 'invalid-publication',
+        runId: 'invalid-publication',
         findingContractEnabled: false,
       },
       workflowDefinition: {
@@ -127,10 +148,12 @@ describe('run storage publication', () => {
         codecName: 'json-v1',
         definition: 'not-json',
       },
-    })).toThrow(/left untouched as an orphan/i);
+    })).toThrow(/publication failed/i);
 
-    expect(existsSync(path)).toBe(true);
-    expect(() => createAt(path)).toThrow(/already exists/i);
-    expect(() => openRunStorage({ databasePath: path })).toThrow();
+    expect(existsSync(path)).toBe(false);
+    expect(readdirSync(directory!)).toEqual([]);
+    const root = createAt(path);
+    expect(root.readResumeSnapshot().run.runId).toBe('publication-run');
+    root.close();
   });
 });

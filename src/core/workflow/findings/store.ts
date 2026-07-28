@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 import { lstatSync, readlinkSync, realpathSync, type Stats } from 'node:fs';
-import { dirname, relative, resolve, sep } from 'node:path';
+import {
+  dirname,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import {
   readRegularFileNoFollow,
   readPrivateFileState,
@@ -45,6 +50,7 @@ import { runPrivateFileExclusive } from '../../../shared/utils/private-file-lock
 
 interface FindingLedgerStoreOptions {
   projectCwd: string;
+  runId: string;
   reportDir: string;
   workflowName: string;
   ledgerPath: string;
@@ -56,6 +62,8 @@ const PRIVATE_FILE_MODE = 0o600;
 const READ_ONLY_PRIVATE_FILE_MODE = 0o400;
 
 export interface LedgerRepository {
+  /** この store が束縛する、外部公開用の論理 run identity。 */
+  readonly runId: string;
   /** 同じ永続台帳を指す store 間で共有する、永続化方式に依存しない識別子。 */
   readonly ledgerIdentity: string;
   /**
@@ -422,20 +430,6 @@ function managerReportContent(report: FindingManagerValidationReport): string {
   return serializeFindingManagerValidationReport(report);
 }
 
-function reportRunId(projectCwd: string, reportDir: string): string {
-  const runsRoot = canonicalPathIdentity(resolve(projectCwd, '.takt', 'runs'));
-  const reportIdentity = canonicalPathIdentity(reportDir);
-  const segments = relative(runsRoot, reportIdentity).split(sep);
-  if (segments.length !== 2
-    || segments[1] !== 'reports'
-    || !isValidReportDirName(segments[0]!)) {
-    throw new Error(
-      `Finding manager report directory is outside the canonical run publication domain: ${reportDir}`,
-    );
-  }
-  return segments[0]!;
-}
-
 function sameManagerPublication(
   left: FindingManagerReportPublication,
   right: FindingManagerReportPublication,
@@ -460,6 +454,10 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
   ].join('\0'));
   const copyPath = resolveInside(options.reportDir, 'findings-ledger.json');
   const rawFindingsDir = resolveInside(ledgerRoot, options.rawFindingsPath);
+  if (!isValidReportDirName(options.runId)) {
+    throw new Error(`Invalid finding store run id: ${options.runId}`);
+  }
+  const boundRunId = options.runId;
   if (options.trustedResumeSourceRunId !== undefined
     && !isValidReportDirName(options.trustedResumeSourceRunId)) {
     throw new Error(`Invalid trusted resume source run id: ${options.trustedResumeSourceRunId}`);
@@ -544,7 +542,7 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
       || publication.publicationId !== expectedPublicationId) {
       throw new Error(`Finding manager publication "${publication.publicationId}" failed integrity validation`);
     }
-    const currentRunId = reportRunId(options.projectCwd, options.reportDir);
+    const currentRunId = boundRunId;
     if (currentRunId === publication.destinationRunId) {
       return publication;
     }
@@ -563,7 +561,7 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
     roundMarker: string,
     report: FindingManagerValidationReport,
   ): FindingManagerReportPublication => {
-    const originRunId = reportRunId(options.projectCwd, options.reportDir);
+    const originRunId = boundRunId;
     if (report.runId !== originRunId) {
       throw new Error(
         `Finding manager report run id "${report.runId}" does not match publication destination "${originRunId}"`,
@@ -645,6 +643,7 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
   };
 
   return {
+    runId: boundRunId,
     ledgerIdentity,
     workflowName: options.workflowName,
     loadLedger: loadLedgerImpl,
@@ -744,6 +743,11 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
       }
     },
     saveRawFindings: (runId, stepName, rawFindings) => {
+      if (runId !== boundRunId) {
+        throw new Error(
+          `Raw Finding run "${runId}" does not match the store-bound run identity`,
+        );
+      }
       const parsedRawFindings = parseRawFindings(rawFindings);
       prepareWritableDirectory(ledgerRoot, rawFindingsDir);
       const baseName = `${sanitizeFileSegment(runId)}.${sanitizeFileSegment(stepName)}`;
@@ -806,7 +810,7 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
       });
     },
     publishManagerValidationPublication: (publication) => {
-      const currentRunId = reportRunId(options.projectCwd, options.reportDir);
+      const currentRunId = boundRunId;
       if (publication.domainId !== publicationDomainId
         || publication.destinationRunId !== currentRunId) {
         throw new Error(
@@ -822,7 +826,7 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
       });
     },
     finalizeManagerValidationPublication: (publication, receipt) => {
-      const currentRunId = reportRunId(options.projectCwd, options.reportDir);
+      const currentRunId = boundRunId;
       if (publication.domainId !== publicationDomainId
         || publication.destinationRunId !== currentRunId) {
         throw new Error(

@@ -53,7 +53,7 @@ vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) =
   };
 });
 
-import { WorkflowEngine } from '../core/workflow/index.js';
+import { WorkflowEngine } from './helpers/workflow-engine.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';

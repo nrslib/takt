@@ -347,8 +347,10 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
       getRunPaths: () => runPaths,
       getCurrentWorkflowStack: () => [{
         workflow: 'workflow',
+        workflow_ref: 'project:sha256:workflow',
         step: 'fix',
         kind: 'agent',
+        occurrence: 1,
         step_iterations: workflowStepIterations,
       }],
       findingContract,
@@ -377,6 +379,28 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     };
     const state = makeState();
     state.stepIterations.set('fix', 1);
+    const invalidStackRunner = new TeamLeaderRunner({
+      ...runnerDeps,
+      getCurrentWorkflowStack: () => [{
+        workflow: 'workflow',
+        workflow_ref: 'project:sha256:workflow',
+        step: 'fix',
+        kind: 'agent',
+      } as never],
+    });
+    const invalidStackState = makeState();
+    invalidStackState.stepIterations.set('fix', 1);
+    await expect(
+      invalidStackRunner.runTeamLeaderStep(
+        step,
+        invalidStackState,
+        'task',
+        20,
+        vi.fn(),
+        undefined,
+        1,
+      ),
+    ).rejects.toThrow(/occurrence.*positive safe integer/i);
 
     const firstRunner = new TeamLeaderRunner(runnerDeps);
     await expect(
@@ -560,6 +584,17 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     if (operation === undefined) throw new Error('Missing Team Leader operation');
     expect(operation.stage).toBe('completed');
     expect(operation.owner).toEqual({ generation: 1, claimToken: 'claim-b' });
+    expect(operation.payload).toMatchObject({
+      executionScope: {
+        workflowStack: [{
+          workflow: 'workflow',
+          workflow_ref: 'project:sha256:workflow',
+          step: 'fix',
+          kind: 'agent',
+          occurrence: 1,
+        }],
+      },
+    });
     expect(new Set(operation.children.map((child) => child.id))).toEqual(new Set([
       'decomposition',
       'part:repair-first:completion',
@@ -715,7 +750,13 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => runPaths,
-      getCurrentWorkflowStack: () => [],
+      getCurrentWorkflowStack: () => [{
+        workflow: 'workflow',
+        workflow_ref: 'project:sha256:workflow',
+        step: 'fix',
+        kind: 'agent',
+        occurrence: 1,
+      }],
       findingContract,
       findingLedgerStore: ledgerStore,
       operationJournal: {

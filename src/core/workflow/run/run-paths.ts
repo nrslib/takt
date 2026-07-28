@@ -15,6 +15,7 @@ export interface RunPaths {
   readonly logsRel: string;
   readonly operationsRel: string;
   readonly operationJournalRel: string;
+  readonly databaseRel: string;
   readonly metaRel: string;
   readonly runRootAbs: string;
   readonly reportsAbs: string;
@@ -28,6 +29,7 @@ export interface RunPaths {
   readonly logsAbs: string;
   readonly operationsAbs: string;
   readonly operationJournalAbs: string;
+  readonly databaseAbs: string;
   readonly metaAbs: string;
 }
 
@@ -50,6 +52,7 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
   const logsRel = `${runRootRel}/logs`;
   const operationsRel = `${runRootRel}/operations`;
   const operationJournalRel = `${operationsRel}/journal.json`;
+  const databaseRel = `${runRootRel}/run.sqlite`;
   const metaRel = `${runRootRel}/meta.json`;
 
   return {
@@ -66,6 +69,7 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     logsRel,
     operationsRel,
     operationJournalRel,
+    databaseRel,
     metaRel,
     runRootAbs: join(cwd, runRootRel),
     reportsAbs: join(cwd, reportsRel),
@@ -79,6 +83,7 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     logsAbs: join(cwd, logsRel),
     operationsAbs: join(cwd, operationsRel),
     operationJournalAbs: join(cwd, operationJournalRel),
+    databaseAbs: join(cwd, databaseRel),
     metaAbs: join(cwd, metaRel),
   };
 }

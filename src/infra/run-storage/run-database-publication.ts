@@ -4,9 +4,12 @@ import {
   constants,
   existsSync,
   fsyncSync,
+  linkSync,
+  mkdirSync,
   openSync,
+  unlinkSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { sha256 } from './canonical-json.js';
 import { readClock, SYSTEM_RUN_STORAGE_CLOCK } from './clock.js';
@@ -32,13 +35,18 @@ import {
   validateRunDatabase,
 } from './schema-contract.js';
 import { throwAfterCleanup } from './cleanup-error.js';
+import {
+  bootstrapRecoverySeedSha256,
+  serializeBootstrapRecoverySeed,
+  type BootstrapRecoverySeed,
+} from '../../core/workflow/run/bootstrap-recovery-seed.js';
 
 const CONNECTION_TIMEOUT_MS = 5;
 
 interface RunDatabaseCreationInput {
   readonly databasePath: string;
   readonly run: {
-    readonly slug: string;
+    readonly runId: string;
     readonly findingContractEnabled: boolean;
   };
   readonly workflowDefinition: {
@@ -46,6 +54,7 @@ interface RunDatabaseCreationInput {
     readonly codecName: string;
     readonly definition: string;
   };
+  readonly bootstrapSeed: BootstrapRecoverySeed;
 }
 
 export interface PublishedRunDatabase {
@@ -80,9 +89,15 @@ function publishRunDatabase(
     throw new Error(`Run database already exists: ${input.databasePath}`);
   }
   const directory = dirname(input.databasePath);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
   const engineArtifact = currentEngineArtifactIdentity();
-  const runId = randomUUID();
+  const runId = input.run.runId;
   const databaseInstanceId = randomUUID();
+  const temporaryPath = join(
+    directory,
+    `.${basename(input.databasePath)}.${randomUUID()}.tmp`,
+  );
+  let temporaryExists = false;
   let destinationCreated = false;
   let opened: {
     readonly database: DatabaseSync;
@@ -90,16 +105,16 @@ function publishRunDatabase(
   } | undefined;
   try {
     const descriptor = openSync(
-      input.databasePath,
+      temporaryPath,
       constants.O_CREAT
         | constants.O_EXCL
         | constants.O_RDWR
         | constants.O_NOFOLLOW,
       0o600,
     );
-    destinationCreated = true;
+    temporaryExists = true;
     opened = openDatabaseFileFromDescriptor(
-      input.databasePath,
+      temporaryPath,
       descriptor,
       CONNECTION_TIMEOUT_MS,
     );
@@ -119,7 +134,19 @@ function publishRunDatabase(
       runId,
     );
     opened.file.sync();
+    opened.file.close(opened.database);
+    opened = undefined;
+
+    linkSync(temporaryPath, input.databasePath);
+    destinationCreated = true;
+    unlinkSync(temporaryPath);
+    temporaryExists = false;
     fsyncPath(directory);
+
+    opened = openValidatedWritable(
+      input.databasePath,
+      engineArtifact,
+    );
     assertPublicationIdentity(
       opened.database,
       engineArtifact,
@@ -128,12 +155,29 @@ function publishRunDatabase(
     );
     return { ...opened, runId };
   } catch (error) {
-    const cleanupError = disposeOpenedDatabase(opened);
+    const cleanupErrors: unknown[] = [];
+    const closeError = disposeOpenedDatabase(opened);
+    if (closeError !== undefined) {
+      cleanupErrors.push(closeError);
+    }
+    if (temporaryExists) {
+      try {
+        unlinkSync(temporaryPath);
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (destinationCreated) {
+      try {
+        unlinkSync(input.databasePath);
+        fsyncPath(directory);
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
     throw publicationFailure(
       error,
-      input.databasePath,
-      destinationCreated,
-      cleanupError,
+      cleanupErrors,
     );
   }
 }
@@ -276,6 +320,13 @@ function seedRun(
     workflow.codecName,
     definitionDigest,
   ].join('\0'));
+  const rootFindingContractEnabled = seed.kind === 'new'
+    ? input.run.findingContractEnabled
+    : readRootFindingContractEnabled(seed.source);
+  const bootstrapSeed = serializeBootstrapRecoverySeed(input.bootstrapSeed);
+  const bootstrapSeedSha256 = bootstrapRecoverySeedSha256(
+    input.bootstrapSeed,
+  );
   database.exec('BEGIN IMMEDIATE');
   try {
     database.prepare(`
@@ -299,22 +350,31 @@ function seedRun(
     );
     database.prepare(`
       INSERT INTO runs (
-        singleton_id, run_id, slug, engine_build_id,
-        workflow_definition_id, finding_contract_enabled, status, created_at
-      ) VALUES (1, ?, ?, ?, ?, ?, 'running', ?)
+        singleton_id, run_id, engine_build_id,
+        workflow_definition_id, finding_contract_enabled,
+        bootstrap_seed_codec_name, bootstrap_seed, bootstrap_seed_sha256,
+        status, created_at
+      ) VALUES (1, ?, ?, ?, ?, 'json-v1', ?, ?, 'running', ?)
     `).run(
       runId,
-      input.run.slug,
       engineArtifact.buildId,
       definitionId,
       input.run.findingContractEnabled ? 1 : 0,
+      bootstrapSeed,
+      bootstrapSeedSha256,
       createdAt,
     );
     database.prepare(`
       INSERT INTO scopes (
-        run_id, scope_id, kind, workflow_definition_id, created_at
-      ) VALUES (?, 'root', 'root', ?, ?)
-    `).run(runId, definitionId, createdAt);
+        run_id, scope_id, kind, workflow_definition_id,
+        finding_contract_enabled, created_at
+      ) VALUES (?, 'root', 'root', ?, ?, ?)
+    `).run(
+      runId,
+      definitionId,
+      rootFindingContractEnabled ? 1 : 0,
+      createdAt,
+    );
     database.prepare(`
       INSERT INTO scope_runtime (run_id, scope_id, status, updated_at)
       VALUES (?, 'root', 'ready', ?)
@@ -346,6 +406,19 @@ function seedRun(
       },
     ]);
   }
+}
+
+function readRootFindingContractEnabled(
+  source: TrustedRunStorageResumeSnapshot,
+): boolean {
+  const root = source.snapshot.scopes.find((scope) => scope.scopeId === 'root');
+  if (
+    root?.findingContractEnabled !== 0
+    && root?.findingContractEnabled !== 1
+  ) {
+    throw new Error('Run resume source root Finding Contract state is invalid');
+  }
+  return root.findingContractEnabled === 1;
 }
 
 function checkpointWal(database: DatabaseSync): void {
@@ -416,28 +489,18 @@ function fsyncPath(path: string): void {
 
 function publicationFailure(
   error: unknown,
-  databasePath: string,
-  destinationCreated: boolean,
-  cleanupError: unknown,
+  cleanupErrors: readonly unknown[],
 ): Error {
   const detail = error instanceof Error ? error.message : String(error);
-  const cause = cleanupError === undefined
+  const cause = cleanupErrors.length === 0
     ? error
     : new AggregateError(
-        [error, cleanupError],
+        [error, ...cleanupErrors],
         detail,
         { cause: error },
       );
-  if (destinationCreated) {
-    return new Error(
-      `Run database publication failed after destination creation; `
-      + `the destination was left untouched as an orphan and retrying the same path will fail: `
-      + `${databasePath}; ${detail}`,
-      { cause },
-    );
-  }
   return new Error(
-    `Run database publication failed before destination creation: ${detail}`,
+    `Run database publication failed: ${detail}`,
     { cause },
   );
 }

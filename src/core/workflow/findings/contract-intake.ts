@@ -74,9 +74,10 @@ export interface FindingContractIntakeInput {
   cwd: string;
   parentStep: WorkflowStep;
   stepIteration: number;
+  iteration: number;
   subResults: FindingManagerSubStepResult[];
   workflowName: string;
-  runId: string;
+  analyticsWorkflowName: string;
   /** raw finding id 衝突対策の呼び出し名前空間。トップレベルでは空文字列。 */
   callNamespace: string;
   timestamp: string;
@@ -106,14 +107,18 @@ export async function ingestFindingContractResults(
     stepIteration: input.stepIteration,
     subResults: input.subResults,
     workflowName: input.workflowName,
-    runId: input.runId,
+    runId: input.ledgerStore.runId,
     callNamespace: input.callNamespace,
     timestamp: input.timestamp,
     priorStepResponseText: input.priorStepResponseText,
   });
   if (result.status === 'updated') {
     input.refreshFindingsState();
-    input.emitEvent('findings:ledger', result.ledger);
+    input.emitEvent('findings:ledger', result.ledger, {
+      iteration: input.iteration,
+      workflowName: input.analyticsWorkflowName,
+      scopeIdentity: input.ledgerStore.ledgerIdentity,
+    });
   }
   return result;
 }

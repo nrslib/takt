@@ -16,6 +16,8 @@ logging:
   level: info                 # ログレベル: debug, info, warn, error
 provider: claude              # デフォルト provider: claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, または mock
 model: sonnet                 # デフォルトモデル（省略可、provider にそのまま渡される）
+run_storage:
+  backend: file               # run storage authority: file（デフォルト）または sqlite
 branch_name_strategy: romaji  # ブランチ名生成方式: 'romaji'（高速）または 'ai'（低速）
 prevent_sleep: false          # 実行中に macOS のアイドルスリープを防止（caffeinate）
 notification_sound: true      # 通知音の有効/無効
@@ -166,6 +168,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 | `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | デフォルトの具体 AI provider（`claude` = ヘッドレス CLI モード、`claude-sdk` = SDK/API モード、`claude-terminal` = experimental interactive terminal モード） |
 | `logging.trace` | boolean | `false` | trace レベルのログを有効化（高頻度のデバッグノイズを抑制） |
 | `model` | string | - | デフォルトモデル名（provider にそのまま渡される） |
+| `run_storage.backend` | `"file"` \| `"sqlite"` | `"file"` | run storage authority。SQLiteは各runを `.takt/runs/<run>/run.sqlite` に保存 |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | ブランチ名生成方式 |
 | `prevent_sleep` | boolean | `false` | macOS アイドルスリープ防止（caffeinate） |
 | `notification_sound` | boolean | `true` | 通知音の有効化 |
@@ -220,6 +223,8 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 # .takt/config.yaml
 provider: claude              # このプロジェクトの provider 上書き
 model: sonnet                 # このプロジェクトのモデル上書き
+run_storage:
+  backend: sqlite             # このプロジェクトのrun storage authority上書き
 auto_pr: true                 # worktree 実行後に PR を自動作成
 logging:
   level: info                 # コンソールログレベル: debug | info | warn | error
@@ -263,6 +268,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 |-----------|------|---------|------|
 | `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | 具体 provider の上書き |
 | `model` | string | - | モデル名の上書き（provider にそのまま渡される） |
+| `run_storage.backend` | `"file"` \| `"sqlite"` | グローバル設定、未設定時は `"file"` | プロジェクトのrun storage authority上書き |
 | `allow_git_hooks` | boolean | `false` | TAKT 管理の auto-commit 時に git hooks を許可 |
 | `allow_git_filters` | boolean | `false` | TAKT 管理の auto-commit 時に git filter を許可 |
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
@@ -283,6 +289,10 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 | `observability` | object | - | プロジェクトレベルの OpenTelemetry opt-in 上書き。`enabled` で SDK を初期化し、`monitor` は workflow metric を `.takt/runs/<run>/monitor.json` に出力し、`session_log_exporter` は span 由来の shadow session log を出力します。`usage_events_phase` は phase 粒度の usage events を `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力します。`enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃うと、TAKT は標準の `OTEL_EXPORTER_OTLP_*` 環境変数で span と metric も OTLP 送信します。TAKT 独自の OTLP config キーはありません。 |
 
 プロジェクト設定の値は、両方が設定されている場合にグローバル設定を上書きします。
+
+`backend: sqlite` の場合、Finding Contractのauthorityは
+`.takt/runs/<run>/run.sqlite` のみです。file ledgerとのdual-writeやfileへのfallbackは行いません。
+resume元DBが存在しない場合、またはrun metaに記録されたbackendが現在の解決値と一致しない場合は失敗します。
 
 ### task 実行設定の環境変数上書き
 

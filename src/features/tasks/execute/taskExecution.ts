@@ -129,7 +129,7 @@ export async function executeTaskAndCompleteWithDetails(
       execCwd,
       workflowIdentifier,
       isWorktree,
-      taskPrompt,
+      taskSpec,
       reportDirName,
       branch,
       worktreePath,
@@ -143,7 +143,6 @@ export async function executeTaskAndCompleteWithDetails(
       managedPr,
       shouldPublishBranchToOrigin,
       issueNumber,
-      orderContent,
       maxStepsOverride,
       initialIterationOverride,
       prNumber,
@@ -161,7 +160,8 @@ export async function executeTaskAndCompleteWithDetails(
 
     const projectRootCwd = cwd;
     const taskRunResult = await taskExecutor({
-      task: taskPrompt ?? task.content,
+      task: taskSpec?.taskPrompt ?? task.content,
+      ...(taskSpec === undefined ? {} : { taskSpec }),
       cwd: execCwd,
       workflowIdentifier,
       projectCwd: projectRootCwd,
@@ -181,7 +181,7 @@ export async function executeTaskAndCompleteWithDetails(
       currentTaskIssueNumber: issueNumber,
       traceTaskMetadata: buildTraceTaskMetadata({
         task,
-        taskContent: taskPrompt ?? task.content,
+        taskContent: taskSpec?.taskPrompt ?? task.content,
         branch,
         baseBranch,
         worktreePath,
@@ -226,7 +226,7 @@ export async function executeTaskAndCompleteWithDetails(
         draftPr,
         workflowIdentifier,
         issues,
-        orderContent,
+        orderContent: taskSpec?.orderContent,
         outputMode: parallelOptions?.outputMode,
         ...(gitProvider === undefined ? {} : { gitProvider }),
       });

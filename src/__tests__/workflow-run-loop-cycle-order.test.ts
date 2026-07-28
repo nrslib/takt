@@ -3,6 +3,7 @@ import type { AgentResponse, LoopMonitorConfig, WorkflowConfig, WorkflowState, W
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { runWorkflowToCompletion } from '../core/workflow/engine/WorkflowRunLoop.js';
 import { makeResponse, makeRule, makeStep } from './engine-test-helpers.js';
+import { createWorkflowRunLoopTestContract } from './test-helpers.js';
 
 const monitor: LoopMonitorConfig = {
   cycle: ['fix', 'reviewers'],
@@ -25,7 +26,6 @@ function makeDeps(nextStep: string) {
     state,
     options: {},
     getWorkflowName: () => config.name,
-    getCurrentWorkflowStack: () => undefined,
     getCwd: () => '/worktree',
     getMaxSteps: () => config.maxSteps,
     getReportDir: () => '/worktree/.takt/runs/test/reports',
@@ -49,13 +49,13 @@ function makeDeps(nextStep: string) {
     resolveStepProviderModel: vi.fn(() => ({ provider: undefined, model: undefined })),
     resolveStepProviderModelBeforeAutoRouting: vi.fn(() => ({ provider: undefined, model: undefined })),
     resolveRuntimeForStep: vi.fn(),
-    setActiveStep: vi.fn(),
     addUserInput: vi.fn(),
     emit: vi.fn(),
     updateMaxSteps: vi.fn(),
     checkCompletionGate: vi.fn(() => ({ ok: true as const })),
     checkReturnValueGate: vi.fn(() => ({ ok: true as const })),
     commitTransition,
+    ...createWorkflowRunLoopTestContract(config, state, 'test task'),
   };
 }
 

@@ -11,7 +11,7 @@ import type {
   WorkflowRunResult,
 } from '../types.js';
 import type { WorkflowRuleTransition } from './transitions.js';
-import { decrementStepIteration, incrementStepIteration } from './state-manager.js';
+import { decrementStepIteration } from './state-manager.js';
 import { handleBlocked } from './blocked-handler.js';
 import { getWorkflowStepKind, isDelegatedWorkflowStep } from '../step-kind.js';
 import { resolvePromotionRuntime } from '../promotion/promotion-runtime.js';
@@ -21,6 +21,7 @@ import { runWithStepSpan, type StepSpanParams } from '../observability/workflowS
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
+import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 
 const log = createLogger('workflow-run-loop');
 
@@ -37,6 +38,8 @@ interface WorkflowRunLoopDeps {
   state: WorkflowState;
   options: WorkflowEngineOptions;
   getWorkflowName: () => string;
+  getFindingScopeIdentity: () => string | undefined;
+  getFindingIds: () => readonly string[] | undefined;
   getTask: () => string;
   getRoutingFindings: () => RoutingFindings;
   getCurrentWorkflowStack: () => StepSpanParams['workflowStack'];
@@ -87,7 +90,12 @@ interface WorkflowRunLoopDeps {
   /** auto-routing ルーター・promotion 評価への入力専用（補完前の解決）。 */
   resolveStepProviderModelBeforeAutoRouting: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
   resolveRuntimeForStep: (step: WorkflowStep) => RuntimeStepResolution | undefined;
-  setActiveStep: (step: WorkflowStep, iteration: number) => void;
+  claimStepOccurrence: (step: WorkflowStep) => number;
+  setActiveStep: (
+    step: WorkflowStep,
+    iteration: number,
+    occurrence: number,
+  ) => void;
   addUserInput: (input: string) => void;
   emit: (event: string, ...args: unknown[]) => void;
   updateMaxSteps: (maxSteps: number) => void;
@@ -332,7 +340,8 @@ function advanceActiveStep(deps: WorkflowRunLoopDeps, nextStep: string, iteratio
   // WorkflowEngineStepCoordinator.resolveTransitionFromDone).
   deps.state.previousStep = deps.state.currentStep;
   deps.state.currentStep = nextStep;
-  deps.setActiveStep(resolvedStep, iteration);
+  const nextOccurrence = (deps.state.stepIterations.get(nextStep) ?? 0) + 1;
+  deps.setActiveStep(resolvedStep, iteration, nextOccurrence);
 }
 
 function buildWorkflowAbortResult(kind: WorkflowAbortKind, stepName: string, reason: string): WorkflowAbortResult {
@@ -620,7 +629,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     const isDelegated = isDelegatedWorkflowStep(step);
     const activeIteration = deps.state.iteration;
     const baseStepRuntime = deps.resolveRuntimeForStep(step);
-    const stepIteration = incrementStepIteration(deps.state, step.name);
+    const stepIteration = deps.claimStepOccurrence(step);
     const promotedRuntime = await resolveStepPromotionRuntime(
       deps,
       step,
@@ -651,7 +660,10 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       ?? (prebuiltInstruction
       ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
       : '');
-    deps.setActiveStep(step, activeIteration);
+    deps.setActiveStep(step, activeIteration, stepIteration);
+    const stepEventWorkflowStack = requireWorkflowResumeStackSnapshot(
+      deps.getCurrentWorkflowStack(),
+    );
     const providerInfo = deps.resolveStepProviderModel(executionStep, stepRuntime);
     deps.emit(
       'step:start',
@@ -662,6 +674,9 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       deps.getWorkflowName(),
       step.name,
       stepIteration,
+      stepEventWorkflowStack,
+      deps.getFindingScopeIdentity(),
+      deps.getFindingIds(),
     );
 
     try {
@@ -674,7 +689,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         iteration: activeIteration,
         stepIteration,
         instruction: stepInstruction,
-        workflowStack: deps.getCurrentWorkflowStack(),
+        workflowStack: stepEventWorkflowStack,
         sanitizeText: deps.options.sanitizeObservabilityText,
         providerInfo,
         getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
@@ -699,7 +714,14 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       if (stepRuntime?.fallback) {
         deps.state.pendingFallback = undefined;
       }
-      deps.emit('step:complete', executionStep, response, instruction, step.name);
+      deps.emit(
+        'step:complete',
+        executionStep,
+        response,
+        instruction,
+        step.name,
+        stepEventWorkflowStack,
+      );
 
       if (response.status === 'rate_limited') {
         const currentProvider = completedProviderInfo;
@@ -736,12 +758,18 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       if (response.status === 'blocked') {
         deps.emit('step:blocked', step, response);
         const result = await handleBlocked(step, response, deps.options);
-        if (result.shouldContinue && result.userInput) {
+        if (result.kind === 'continued') {
           deps.addUserInput(result.userInput);
           deps.emit('step:user_input', step, result.userInput);
           continue;
         }
-        abort = abortWorkflow(deps, 'blocked', 'Workflow blocked and no user input provided');
+        abort = result.kind === 'cancelled'
+          ? abortWorkflow(deps, 'user_input_cancelled', 'User input cancelled')
+          : abortWorkflow(
+              deps,
+              'blocked',
+              'Workflow blocked and no user input provided',
+            );
         break;
       }
 
@@ -916,8 +944,8 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   const activeIteration = deps.state.iteration;
   const isDelegated = isDelegatedWorkflowStep(step);
   const baseStepRuntime = deps.resolveRuntimeForStep(step);
-  const stepIteration = incrementStepIteration(deps.state, step.name);
-  deps.setActiveStep(step, activeIteration);
+  const stepIteration = deps.claimStepOccurrence(step);
+  deps.setActiveStep(step, activeIteration, stepIteration);
   const promotedRuntime = await resolveStepPromotionRuntime(
     deps,
     step,

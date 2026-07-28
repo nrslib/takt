@@ -3,6 +3,10 @@ import { resolve } from 'node:path';
 import { isPathInside, isValidReportDirName } from '../../../shared/utils/index.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import type { WorkflowResumePoint } from '../../models/types.js';
+import {
+  parseCanonicalWorkflowResumeFrame,
+} from '../../../shared/types/workflow-resume.js';
+import type { RunStorageBackend } from '../../models/config-types.js';
 import type { WorkflowTraceDiscovery } from '../observability/traceDiscovery.js';
 import { buildRunPaths } from './run-paths.js';
 import {
@@ -30,7 +34,9 @@ export interface RunMeta {
   reportDirectory: string;
   contextDirectory: string;
   logsDirectory: string;
+  storageBackend: RunStorageBackend;
   status: 'running' | 'completed' | 'aborted' | 'failed';
+  reason?: string;
   startTime: string;
   endTime?: string;
   iterations?: number;
@@ -47,9 +53,20 @@ export interface RunMeta {
   operationJournalRunSlug?: string;
   operationClaimToken?: string;
   prContext?: PullRequestContext;
+  terminalPublicationId?: string;
 }
 
-interface RawRunMeta extends Omit<RunMeta, 'prContext'> {
+interface RawRunMeta extends Omit<
+  RunMeta,
+  | 'resumePoint'
+  | 'sourceRunSlug'
+  | 'resumeMode'
+  | 'resumeArtifacts'
+  | 'operationJournalRunSlug'
+  | 'operationClaimToken'
+  | 'prContext'
+  | 'terminalPublicationId'
+> {
   resume_point?: WorkflowResumePoint;
   source_run_slug?: string;
   resume_mode?: RunResumeMode;
@@ -57,24 +74,56 @@ interface RawRunMeta extends Omit<RunMeta, 'prContext'> {
   operation_journal_run_slug?: string;
   operation_claim_token?: string;
   pr_context?: unknown;
+  terminal_publication_id?: string;
 }
 
 export type RunMetaWarningHandler = (warning: string) => void;
 
-function normalizeRunMeta(raw: RawRunMeta): RunMeta {
-  const { pr_context: persistedPrContext, ...baseMeta } = raw;
+function normalizeRunMeta(value: unknown): RunMeta {
+  const raw = parseRawRunMeta(value);
+  if (raw.storageBackend !== 'file' && raw.storageBackend !== 'sqlite') {
+    throw new Error('Run metadata storageBackend must be "file" or "sqlite"');
+  }
+  const {
+    resume_point: persistedResumePoint,
+    source_run_slug: persistedSourceRunSlug,
+    resume_mode: persistedResumeMode,
+    resume_artifacts: persistedResumeArtifacts,
+    operation_journal_run_slug: persistedOperationJournalRunSlug,
+    operation_claim_token: persistedOperationClaimToken,
+    pr_context: persistedPrContext,
+    terminal_publication_id: persistedTerminalPublicationId,
+    ...baseMeta
+  } = raw;
   return {
     ...baseMeta,
-    resumePoint: raw.resumePoint ?? raw.resume_point,
-    sourceRunSlug: raw.sourceRunSlug ?? raw.source_run_slug,
-    resumeMode: raw.resumeMode ?? raw.resume_mode,
-    resumeArtifacts: raw.resumeArtifacts ?? raw.resume_artifacts,
-    operationJournalRunSlug: raw.operationJournalRunSlug ?? raw.operation_journal_run_slug,
-    operationClaimToken: raw.operationClaimToken ?? raw.operation_claim_token,
+    ...(persistedResumePoint === undefined
+      ? {}
+      : { resumePoint: persistedResumePoint }),
+    ...(persistedSourceRunSlug === undefined
+      ? {}
+      : { sourceRunSlug: persistedSourceRunSlug }),
+    ...(persistedResumeMode === undefined ? {} : { resumeMode: persistedResumeMode }),
+    ...(persistedResumeArtifacts === undefined
+      ? {}
+      : { resumeArtifacts: persistedResumeArtifacts }),
+    ...(persistedOperationJournalRunSlug === undefined
+      ? {}
+      : { operationJournalRunSlug: persistedOperationJournalRunSlug }),
+    ...(persistedOperationClaimToken === undefined
+      ? {}
+      : { operationClaimToken: persistedOperationClaimToken }),
     ...(persistedPrContext === undefined
       ? {}
       : { prContext: decodePullRequestContext(persistedPrContext) }),
+    ...(persistedTerminalPublicationId === undefined
+      ? {}
+      : { terminalPublicationId: persistedTerminalPublicationId }),
   };
+}
+
+export function parseRunMeta(value: unknown): RunMeta {
+  return normalizeRunMeta(value);
 }
 
 function emitRunMetaWarning(
@@ -97,10 +146,273 @@ export function readRunMeta(metaPath: string, onWarning?: RunMetaWarningHandler)
   }
 
   try {
-    return normalizeRunMeta(JSON.parse(raw) as RawRunMeta);
+    return normalizeRunMeta(JSON.parse(raw) as unknown);
   } catch (error) {
     return emitRunMetaWarning(metaPath, error, onWarning);
   }
+}
+
+function parseRawRunMeta(value: unknown): RawRunMeta {
+  const raw = requireRecord(value, 'Run metadata');
+  const storageBackend = raw.storageBackend;
+  if (storageBackend !== 'file' && storageBackend !== 'sqlite') {
+    throw new Error('Run metadata storageBackend must be "file" or "sqlite"');
+  }
+  const status = raw.status;
+  if (
+    status !== 'running'
+    && status !== 'completed'
+    && status !== 'aborted'
+    && status !== 'failed'
+  ) {
+    throw new Error('Run metadata status is invalid');
+  }
+  const result: RawRunMeta = {
+    task: requiredString(raw.task, 'task'),
+    workflow: requiredString(raw.workflow, 'workflow'),
+    runSlug: requiredString(raw.runSlug, 'runSlug'),
+    runRoot: requiredString(raw.runRoot, 'runRoot'),
+    reportDirectory: requiredString(raw.reportDirectory, 'reportDirectory'),
+    contextDirectory: requiredString(raw.contextDirectory, 'contextDirectory'),
+    logsDirectory: requiredString(raw.logsDirectory, 'logsDirectory'),
+    storageBackend,
+    status,
+    startTime: requiredString(raw.startTime, 'startTime'),
+    ...(optionalString(raw.reason, 'reason')),
+    ...(optionalString(raw.endTime, 'endTime')),
+    ...(optionalInteger(raw.iterations, 'iterations')),
+    ...(optionalString(raw.currentStep, 'currentStep')),
+    ...(optionalInteger(raw.currentIteration, 'currentIteration')),
+    ...(raw.phase === undefined ? {} : { phase: requiredPhase(raw.phase) }),
+    ...(optionalString(raw.updatedAt, 'updatedAt')),
+    ...(raw.observability === undefined
+      ? {}
+      : { observability: parseRunMetaObservability(raw.observability) }),
+    ...(raw.resume_point === undefined
+      ? {}
+      : { resume_point: parseWorkflowResumePoint(raw.resume_point) }),
+    ...(optionalString(raw.source_run_slug, 'source_run_slug')),
+    ...(raw.resume_mode === undefined
+      ? {}
+      : { resume_mode: requiredResumeMode(raw.resume_mode) }),
+    ...(optionalString(raw.resume_artifacts, 'resume_artifacts')),
+    ...(optionalString(
+      raw.operation_journal_run_slug,
+      'operation_journal_run_slug',
+    )),
+    ...(optionalString(raw.operation_claim_token, 'operation_claim_token')),
+    ...(raw.pr_context === undefined ? {} : { pr_context: raw.pr_context }),
+    ...(optionalString(
+      raw.terminal_publication_id,
+      'terminal_publication_id',
+    )),
+  };
+  return result;
+}
+
+export function parseWorkflowResumePoint(value: unknown): WorkflowResumePoint {
+  const point = requireRecord(value, 'resume_point');
+  if (point.version !== 1) {
+    throw new Error('resume_point.version must be 1');
+  }
+  if (!Array.isArray(point.stack) || point.stack.length === 0) {
+    throw new Error('resume_point.stack must be a non-empty array');
+  }
+  const stack = point.stack.map((entry, index) => {
+    const frame = parseCanonicalWorkflowResumeFrame(
+      entry,
+      `resume_point.stack[${index}]`,
+    );
+    const record = requireRecord(entry, `resume_point.stack[${index}]`);
+    if (record.step_iterations === undefined) {
+      return frame;
+    }
+    const iterations = requireRecord(
+      record.step_iterations,
+      `resume_point.stack[${index}].step_iterations`,
+    );
+    const stepIterations: Record<string, number> = {};
+    for (const [step, occurrence] of Object.entries(iterations)) {
+      if (
+        step.length === 0
+        || !Number.isSafeInteger(occurrence)
+        || (occurrence as number) <= 0
+      ) {
+        throw new Error(
+          `resume_point.stack[${index}].step_iterations is invalid`,
+        );
+      }
+      stepIterations[step] = occurrence as number;
+    }
+    return { ...frame, step_iterations: stepIterations };
+  });
+  return {
+    version: 1,
+    stack,
+    iteration: requiredNonNegativeInteger(point.iteration, 'resume_point.iteration'),
+    elapsed_ms: requiredNonNegativeInteger(point.elapsed_ms, 'resume_point.elapsed_ms'),
+  };
+}
+
+function requireRecord(
+  value: unknown,
+  label: string,
+): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Run metadata ${label} must be a non-empty string`);
+  }
+  return value;
+}
+
+function optionalString(
+  value: unknown,
+  label: string,
+): Record<string, string> {
+  if (value === undefined) {
+    return {};
+  }
+  return { [label]: requiredString(value, label) };
+}
+
+function optionalInteger(
+  value: unknown,
+  label: string,
+): Record<string, number> {
+  if (value === undefined) {
+    return {};
+  }
+  return { [label]: requiredNonNegativeInteger(value, label) };
+}
+
+function requiredNonNegativeInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error(`Run metadata ${label} must be a non-negative safe integer`);
+  }
+  return value as number;
+}
+
+function requiredPhase(value: unknown): 1 | 2 | 3 {
+  if (value !== 1 && value !== 2 && value !== 3) {
+    throw new Error('Run metadata phase is invalid');
+  }
+  return value;
+}
+
+function requiredResumeMode(value: unknown): RunResumeMode {
+  if (
+    value !== 'requeue'
+    && value !== 'retry'
+    && value !== 'instruct'
+  ) {
+    throw new Error('Run metadata resume_mode is invalid');
+  }
+  return value;
+}
+
+function parseRunMetaObservability(value: unknown): RunMetaObservability {
+  const observability = requireRecord(value, 'observability');
+  const discovery = requireRecord(
+    observability.traceDiscovery,
+    'observability.traceDiscovery',
+  );
+  if (discovery.serviceName !== 'takt') {
+    throw new Error('Run metadata trace discovery serviceName is invalid');
+  }
+  const queries = discovery.queries;
+  if (
+    !Array.isArray(queries)
+    || queries.some((query) => typeof query !== 'string')
+  ) {
+    throw new Error('Run metadata trace discovery queries are invalid');
+  }
+  return {
+    traceDiscovery: {
+      serviceName: 'takt',
+      runId: requiredString(discovery.runId, 'traceDiscovery.runId'),
+      workflowName: requiredString(
+        discovery.workflowName,
+        'traceDiscovery.workflowName',
+      ),
+      queries: [...queries],
+      ...(discovery.task === undefined
+        ? {}
+        : { task: parseTraceDiscoveryTask(discovery.task) }),
+      ...(discovery.git === undefined
+        ? {}
+        : { git: parseTraceDiscoveryGit(discovery.git) }),
+    },
+  };
+}
+
+function parseTraceDiscoveryTask(
+  value: unknown,
+): NonNullable<WorkflowTraceDiscovery['task']> {
+  const task = requireRecord(value, 'traceDiscovery.task');
+  const source = task.source;
+  if (
+    source !== undefined
+    && source !== 'issue'
+    && source !== 'pr_review'
+    && source !== 'manual'
+  ) {
+    throw new Error('Run metadata trace discovery task source is invalid');
+  }
+  return {
+    ...(optionalStringValue(task.name, 'traceDiscovery.task.name')),
+    ...(optionalStringValue(task.slug, 'traceDiscovery.task.slug')),
+    ...(source === undefined ? {} : { source }),
+    ...(optionalPositiveInteger(
+      task.issueNumber,
+      'traceDiscovery.task.issueNumber',
+    )),
+    ...(optionalPositiveInteger(
+      task.prNumber,
+      'traceDiscovery.task.prNumber',
+    )),
+    ...(optionalStringValue(task.summary, 'traceDiscovery.task.summary')),
+  };
+}
+
+function parseTraceDiscoveryGit(
+  value: unknown,
+): NonNullable<WorkflowTraceDiscovery['git']> {
+  const git = requireRecord(value, 'traceDiscovery.git');
+  return {
+    ...(optionalStringValue(git.branch, 'traceDiscovery.git.branch')),
+    ...(optionalStringValue(git.baseBranch, 'traceDiscovery.git.baseBranch')),
+  };
+}
+
+function optionalStringValue(
+  value: unknown,
+  field: string,
+): Record<string, string> {
+  if (value === undefined) {
+    return {};
+  }
+  const key = field.slice(field.lastIndexOf('.') + 1);
+  return { [key]: requiredString(value, field) };
+}
+
+function optionalPositiveInteger(
+  value: unknown,
+  field: string,
+): Record<string, number> {
+  if (value === undefined) {
+    return {};
+  }
+  if (!Number.isSafeInteger(value) || (value as number) <= 0) {
+    throw new Error(`Run metadata ${field} must be a positive safe integer`);
+  }
+  const key = field.slice(field.lastIndexOf('.') + 1);
+  return { [key]: value as number };
 }
 
 export function readRunMetaBySlug(cwd: string, slug: string, onWarning?: RunMetaWarningHandler): RunMeta | null {
@@ -117,6 +429,11 @@ export function readRunMetaBySlug(cwd: string, slug: string, onWarning?: RunMeta
   const meta = readRunMeta(metaPath, onWarning);
   if (!meta) {
     return null;
+  }
+  if (meta.runSlug !== slug) {
+    throw new Error(
+      `Run metadata slug "${meta.runSlug}" does not match directory slug "${slug}"`,
+    );
   }
 
   const runPaths = buildRunPaths(cwd, slug);

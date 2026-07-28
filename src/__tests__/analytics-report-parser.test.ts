@@ -19,6 +19,9 @@ import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import type { FixActionEvent } from '../features/analytics/events.js';
 import type { FindingLedger } from '../core/models/types.js';
 
+const ANALYTICS_WORKFLOW_NAME = 'peer-review';
+const ANALYTICS_SCOPE_IDENTITY = '{"workflow":"peer-review","stack":[]}';
+
 describe('parseFindingsFromReport', () => {
   it('should extract new findings from a review report', () => {
     const report = [
@@ -261,6 +264,8 @@ describe('buildReviewFindingEventsFromLedger', () => {
     const events = buildReviewFindingEventsFromLedger(
       ledger,
       3,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
       'run-1',
       new Date('2026-06-13T01:00:00.000Z'),
     );
@@ -276,6 +281,8 @@ describe('buildReviewFindingEventsFromLedger', () => {
         file: 'src/security.ts',
         line: 12,
         iteration: 3,
+        workflowName: ANALYTICS_WORKFLOW_NAME,
+        scopeIdentity: ANALYTICS_SCOPE_IDENTITY,
         runId: 'run-1',
         timestamp: '2026-06-13T01:00:00.000Z',
       },
@@ -309,6 +316,8 @@ describe('buildReviewFindingEventsFromLedger', () => {
     const events = buildReviewFindingEventsFromLedger(
       ledger,
       3,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
       'run-1',
       new Date('2026-06-13T01:00:00.000Z'),
     );
@@ -357,7 +366,14 @@ describe('emitFixActionEvents', () => {
   it('should emit fix_action events for each finding ID in response', () => {
     const timestamp = new Date('2026-02-18T12:00:00.000Z');
 
-    emitFixActionEvents('Fixed AA-001 and ARCH-002-barrel', 3, 'run-xyz', timestamp);
+    emitFixActionEvents(
+      'Fixed AA-001 and ARCH-002-barrel',
+      3,
+      'run-xyz',
+      timestamp,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
+    );
 
     const filePath = join(testDir, '2026-02-18.jsonl');
     const lines = readFileSync(filePath, 'utf-8').trim().split('\n');
@@ -368,6 +384,8 @@ describe('emitFixActionEvents', () => {
     expect(event1.findingId).toBe('AA-001');
     expect(event1.action).toBe('fixed');
     expect(event1.iteration).toBe(3);
+    expect(event1.workflowName).toBe(ANALYTICS_WORKFLOW_NAME);
+    expect(event1.scopeIdentity).toBe(ANALYTICS_SCOPE_IDENTITY);
     expect(event1.runId).toBe('run-xyz');
     expect(event1.timestamp).toBe('2026-02-18T12:00:00.000Z');
 
@@ -380,7 +398,14 @@ describe('emitFixActionEvents', () => {
   it('should not emit events when response contains no finding IDs', () => {
     const timestamp = new Date('2026-02-18T12:00:00.000Z');
 
-    emitFixActionEvents('No issues found, all good.', 1, 'run-abc', timestamp);
+    emitFixActionEvents(
+      'No issues found, all good.',
+      1,
+      'run-abc',
+      timestamp,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
+    );
 
     const filePath = join(testDir, '2026-02-18.jsonl');
     expect(() => readFileSync(filePath, 'utf-8')).toThrow();
@@ -394,6 +419,8 @@ describe('emitFixActionEvents', () => {
       2,
       'run-dedup',
       timestamp,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
     );
 
     const filePath = join(testDir, '2026-02-18.jsonl');
@@ -413,7 +440,14 @@ describe('emitFixActionEvents', () => {
       'Addressed SEC-002-xss with suffix',
     ].join('\n');
 
-    emitFixActionEvents(response, 1, 'run-formats', timestamp);
+    emitFixActionEvents(
+      response,
+      1,
+      'run-formats',
+      timestamp,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
+    );
 
     const filePath = join(testDir, '2026-02-18.jsonl');
     const lines = readFileSync(filePath, 'utf-8').trim().split('\n');
@@ -429,7 +463,15 @@ describe('emitFixActionEvents', () => {
   it('should emit engine-owned finding IDs when they are confirmed by the finding ledger', () => {
     const timestamp = new Date('2026-02-18T12:00:00.000Z');
 
-    emitFixActionEvents('Fixed F-0001 and F-9999', 1, 'run-ledger', timestamp, new Set(['F-0001']));
+    emitFixActionEvents(
+      'Fixed F-0001 and F-9999',
+      1,
+      'run-ledger',
+      timestamp,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
+      new Set(['F-0001']),
+    );
 
     const filePath = join(testDir, '2026-02-18.jsonl');
     const lines = readFileSync(filePath, 'utf-8').trim().split('\n');
@@ -463,6 +505,8 @@ describe('emitRebuttalEvents', () => {
       3,
       'run-xyz',
       timestamp,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
       new Set(['F-0001']),
     );
 
@@ -475,6 +519,8 @@ describe('emitRebuttalEvents', () => {
     expect(event1.findingId).toBe('AA-001');
     expect(event1.action).toBe('rebutted');
     expect(event1.iteration).toBe(3);
+    expect(event1.workflowName).toBe(ANALYTICS_WORKFLOW_NAME);
+    expect(event1.scopeIdentity).toBe(ANALYTICS_SCOPE_IDENTITY);
     expect(event1.runId).toBe('run-xyz');
 
     const event2 = JSON.parse(lines[1]) as FixActionEvent;
@@ -491,7 +537,14 @@ describe('emitRebuttalEvents', () => {
   it('should not emit events when response contains no finding IDs', () => {
     const timestamp = new Date('2026-02-18T12:00:00.000Z');
 
-    emitRebuttalEvents('No findings mentioned here.', 1, 'run-abc', timestamp);
+    emitRebuttalEvents(
+      'No findings mentioned here.',
+      1,
+      'run-abc',
+      timestamp,
+      ANALYTICS_WORKFLOW_NAME,
+      ANALYTICS_SCOPE_IDENTITY,
+    );
 
     const filePath = join(testDir, '2026-02-18.jsonl');
     expect(() => readFileSync(filePath, 'utf-8')).toThrow();

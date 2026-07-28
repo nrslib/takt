@@ -201,6 +201,8 @@ function makeRunner(options: {
   });
   let findingLedgerStore: NonNullable<ParallelRunnerDeps['findingLedgerStore']>;
   findingLedgerStore = {
+    runId: 'test-run',
+    ledgerIdentity: '/test/finding-review-scope-snapshot-wiring/ledger.json',
     workflowName: 'test-workflow',
     loadLedger: vi.fn(() => ledgerRepository.loadLedger()),
     updateLedger: vi.fn((mutator) => ledgerRepository.updateLedger(mutator)),

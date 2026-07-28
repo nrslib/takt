@@ -1,6 +1,7 @@
 import type {
   SystemWorkflowStep,
   WorkflowCallStep,
+  WorkflowResumeFrameKind,
   WorkflowStep,
 } from '../models/types.js';
 import {
@@ -10,6 +11,18 @@ import {
 
 export function getWorkflowStepKind(step: WorkflowStepKindLike) {
   return getRawWorkflowStepKind(step);
+}
+
+export function getWorkflowResumeFrameKind(
+  step: WorkflowStep,
+): WorkflowResumeFrameKind {
+  const kind = getWorkflowStepKind(step);
+  if (kind !== 'agent') {
+    return kind;
+  }
+  return step.parallel !== undefined && step.parallel.length > 0
+    ? 'parallel'
+    : 'agent';
 }
 
 export function isDelegatedWorkflowStep(step: WorkflowStepKindLike & Pick<WorkflowStep, 'parallel' | 'arpeggio' | 'teamLeader'>): boolean {

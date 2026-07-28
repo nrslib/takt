@@ -56,6 +56,7 @@ import {
   requestValidFindingContractControlOutput,
   type FindingContractRecoveryRequest,
 } from './team-leader-finding-contract-recovery.js';
+import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 
 export interface FindingContractTeamLeaderExecutionContext {
   readonly targetFindingIds: string[];
@@ -100,11 +101,14 @@ export class FindingContractTeamLeaderCoordinator {
       stepIteration,
       executionScope: {
         runPathNamespace: deps.engineOptions.runPathNamespace ?? [],
-        workflowStack: (deps.getCurrentWorkflowStack?.() ?? []).map((entry) => ({
+        workflowStack: requireWorkflowResumeStackSnapshot(
+          deps.getCurrentWorkflowStack?.(),
+        ).map((entry) => ({
           workflow: entry.workflow,
-          ...(entry.workflow_ref === undefined ? {} : { workflow_ref: entry.workflow_ref }),
+          workflow_ref: entry.workflow_ref,
           step: entry.step,
           kind: entry.kind,
+          occurrence: entry.occurrence,
         })),
       },
     });

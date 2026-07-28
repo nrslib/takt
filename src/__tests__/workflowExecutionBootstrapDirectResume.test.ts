@@ -124,10 +124,6 @@ vi.mock('../features/tasks/execute/outputFns.js', () => ({
   createPrefixedStreamHandler: vi.fn(() => vi.fn()),
 }));
 
-vi.mock('../features/tasks/execute/traceReportWriter.js', () => ({
-  createTraceReportWriter: vi.fn(() => vi.fn()),
-}));
-
 vi.mock('../features/tasks/execute/sessionLogger.js', () => ({
   SessionLogger: vi.fn().mockImplementation(() => ({
     writeInteractiveMetadata: vi.fn(),
@@ -138,7 +134,74 @@ vi.mock('../core/runtime/runtime-environment.js', () => ({
   resolveRuntimeConfig: vi.fn(() => undefined),
 }));
 
-import { createWorkflowExecutionBootstrap } from '../features/tasks/execute/workflowExecutionBootstrap.js';
+import {
+  createWorkflowExecutionBootstrap as createWorkflowExecutionBootstrapImpl,
+} from '../features/tasks/execute/workflowExecutionBootstrap.js';
+import type {
+  WorkflowRunBootstrap,
+} from '../features/tasks/execute/workflowRunStorage.js';
+import { RunMetaManager } from '../features/tasks/execute/runMeta.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import {
+  generateReportDir,
+  isValidReportDirName,
+} from '../shared/utils/index.js';
+
+async function createWorkflowExecutionBootstrap(
+  ...args: [
+    Parameters<typeof createWorkflowExecutionBootstrapImpl>[0],
+    Parameters<typeof createWorkflowExecutionBootstrapImpl>[1],
+    Parameters<typeof createWorkflowExecutionBootstrapImpl>[2],
+    Parameters<typeof createWorkflowExecutionBootstrapImpl>[3],
+  ]
+) {
+  return await createWorkflowExecutionBootstrapImpl(
+    ...args,
+    createRunBootstrap({
+      backend: 'file',
+      cwd: args[2],
+      task: args[1],
+      requestedRunSlug: args[3].reportDirName,
+      resumeSource: args[3].resumeSource,
+    }),
+  );
+}
+
+function createRunBootstrap(setup: {
+  readonly backend: 'file' | 'sqlite';
+  readonly cwd: string;
+  readonly task: string;
+  readonly requestedRunSlug?: string;
+  readonly resumeSource?: Parameters<typeof createWorkflowExecutionBootstrapImpl>[3]['resumeSource'];
+}): WorkflowRunBootstrap {
+  const runSlug = setup.requestedRunSlug ?? generateReportDir(setup.task);
+  if (!isValidReportDirName(runSlug)) {
+    throw new Error(`Invalid reportDirName: ${runSlug}`);
+  }
+  if (
+    setup.backend === 'sqlite'
+    && setup.resumeSource?.sourceRunSlug === runSlug
+  ) {
+    throw new Error(
+      `SQLite resume requires distinct source and target run slugs: `
+      + `"${runSlug}"`,
+    );
+  }
+  return {
+    runSlug,
+    runPaths: buildRunPaths(setup.cwd, runSlug),
+    publishRunMeta(input): RunMetaManager {
+      return new RunMetaManager(
+        input.runPaths,
+        input.task,
+        input.workflowName,
+        setup.backend,
+        input.resumeSource,
+        input.options,
+      );
+    },
+  };
+}
 import { initAnalyticsWriter } from '../features/analytics/index.js';
 
 const workflowConfig: WorkflowConfig = {
@@ -855,6 +918,16 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     writeFileSync(
       join(projectDir, '.takt', 'runs', '20260524-source-run', 'meta.json'),
       JSON.stringify({
+        task: 'Resume tampered operation journal',
+        workflow: 'default',
+        runSlug: '20260524-source-run',
+        runRoot: '.takt/runs/20260524-source-run',
+        reportDirectory: '.takt/runs/20260524-source-run/reports',
+        contextDirectory: '.takt/runs/20260524-source-run/context',
+        logsDirectory: '.takt/runs/20260524-source-run/logs',
+        storageBackend: 'file',
+        status: 'failed',
+        startTime: '2026-05-24T00:00:00.000Z',
         operation_journal_run_slug: '../outside',
         operation_claim_token: 'claim-a',
       }),
@@ -909,6 +982,40 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     };
     expect(meta.source_run_slug).toBe(sharedRunSlug);
     expect(meta).not.toHaveProperty('resume_artifacts');
+  });
+
+  it('rejects a SQLite resume whose explicit target slug equals the source slug', async () => {
+    const projectDir = createTempProject();
+    const sharedRunSlug = '20260524-shared-sqlite-run';
+
+    await expect(async () => {
+      await createWorkflowExecutionBootstrapImpl(
+        workflowConfig,
+        'Resume same SQLite run',
+        projectDir,
+        {
+          projectCwd: projectDir,
+          provider: 'mock',
+          reportDirName: sharedRunSlug,
+          resumeSource: {
+            sourceRunSlug: sharedRunSlug,
+            resumeMode: 'retry',
+          },
+        },
+        createRunBootstrap({
+          backend: 'sqlite',
+          cwd: projectDir,
+          task: 'Resume same SQLite run',
+          requestedRunSlug: sharedRunSlug,
+          resumeSource: {
+            sourceRunSlug: sharedRunSlug,
+            resumeMode: 'retry',
+          },
+        }),
+      );
+    }).rejects.toThrow(
+      `SQLite resume requires distinct source and target run slugs: "${sharedRunSlug}"`,
+    );
   });
 
   it('Given the source run is unavailable, When bootstrap resumes, Then it records fallback and continues', async () => {

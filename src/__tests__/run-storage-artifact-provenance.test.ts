@@ -31,6 +31,7 @@ vi.mock('../infra/run-storage/engine-artifact.js', async (importOriginal) => {
 
 import { deriveEngineArtifactIdentity } from '../infra/run-storage/engine-artifact.js';
 import { createRunStorage, openRunStorage } from '../infra/run-storage/root.js';
+import { createTestBootstrapSeed } from './helpers/run-storage.js';
 
 let directory: string | undefined;
 
@@ -64,8 +65,12 @@ describe('run storage artifact provenance', () => {
     const definition = '{"name":"artifact-provenance"}';
     createRunStorage({
       databasePath,
+      bootstrapSeed: createTestBootstrapSeed({
+        workflowName: 'artifact-provenance',
+        sessionId: 'artifact-provenance-session',
+      }),
       run: {
-        slug: 'run-artifact-provenance',
+        runId: 'run-artifact-provenance',
         findingContractEnabled: false,
       },
       workflowDefinition: {

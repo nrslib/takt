@@ -9,7 +9,6 @@ import type {
   RunSessionHandle,
   ScopeHandle,
 } from './runtime-handles.js';
-import type { TrustedFindingResumeSource } from './finding-resume-source.js';
 
 export interface RunStorageExecutor {
   read<Result>(command: (context: RunReadContext) => Result): Result;
@@ -66,7 +65,6 @@ export interface RuntimeBinding {
   readonly owner: LeaseOwner;
   readonly runId: string;
   readonly scopeId: string;
-  readonly trustedFindingResumeSource?: TrustedFindingResumeSource;
 }
 
 export function assertExactInput(

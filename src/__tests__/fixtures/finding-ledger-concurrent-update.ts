@@ -14,6 +14,7 @@ const reportDir = join(projectCwd, '.takt', 'runs', `worker-${workerId}`, 'repor
 mkdirSync(reportDir, { recursive: true });
 const store = createFindingLedgerStore({
   projectCwd,
+  runId: `worker-${workerId}`,
   reportDir,
   workflowName: 'peer-review',
   ledgerPath: '.takt/findings/peer-review.json',

@@ -1,5 +1,12 @@
 import { createLogger } from '../../../shared/utils/index.js';
-import type { AgentResponse, LoopMonitorConfig, WorkflowMaxSteps, WorkflowState, WorkflowStep } from '../../models/types.js';
+import type {
+  AgentResponse,
+  LoopMonitorConfig,
+  WorkflowMaxSteps,
+  WorkflowResumePointEntry,
+  WorkflowState,
+  WorkflowStep,
+} from '../../models/types.js';
 import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
 import { providerSupportsClaudeAllowedTools } from '../../../infra/providers/provider-capabilities.js';
 import { resolveLoopMonitorJudgeProviderModel } from '../provider-resolution.js';
@@ -27,8 +34,14 @@ interface LoopMonitorJudgeRunnerDeps {
     providerInfo: StepProviderInfo | undefined,
     resumeStepName: string,
     stepIteration: number,
+  ) => WorkflowResumePointEntry[];
+  onStepComplete: (
+    step: WorkflowStep,
+    response: AgentResponse,
+    instruction: string,
+    resumeStepName: string,
+    workflowStack: WorkflowResumePointEntry[],
   ) => void;
-  onStepComplete: (step: WorkflowStep, response: AgentResponse, instruction: string, resumeStepName: string) => void;
   emitCollectedReports: () => void;
   resetCycleDetector: () => void;
   /**
@@ -74,7 +87,7 @@ export class LoopMonitorJudgeRunner {
       : baseInstruction;
 
     const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(judgeStep, resolvedRuntime);
-    this.deps.onStepStart(
+    const stepEventWorkflowStack = this.deps.onStepStart(
       judgeStep,
       this.deps.state.iteration,
       prebuiltInstruction,
@@ -94,7 +107,13 @@ export class LoopMonitorJudgeRunner {
     );
 
     this.deps.emitCollectedReports();
-    this.deps.onStepComplete(judgeStep, response, instruction, triggeringStep.name);
+    this.deps.onStepComplete(
+      judgeStep,
+      response,
+      instruction,
+      triggeringStep.name,
+      stepEventWorkflowStack,
+    );
 
     if (response.status !== 'done') {
       // 監視は衛生装置であり、判定役自身の障害（プロバイダエラー等）で

@@ -6,6 +6,7 @@ import { z } from 'zod/v4';
 import { DEFAULT_LANGUAGE } from '../../shared/constants.js';
 import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
+import { RUN_STORAGE_BACKENDS } from './config-types.js';
 import {
   AnalyticsConfigSchema,
   AutoRoutingSchema,
@@ -55,6 +56,10 @@ export const WorkflowMcpServersConfigSchema = z.object({
   stdio: z.boolean().optional(),
   sse: z.boolean().optional(),
   http: z.boolean().optional(),
+}).strict();
+
+export const RunStorageConfigSchema = z.object({
+  backend: z.enum(RUN_STORAGE_BACKENDS),
 }).strict();
 
 export const AssistantConfigSchema = z.object({
@@ -116,6 +121,7 @@ const ProjectConfigObjectBaseSchema = z.object({
   workflow_arpeggio: WorkflowArpeggioConfigSchema.optional(),
   sync_conflict_resolver: SyncConflictResolverConfigSchema.optional(),
   workflow_mcp_servers: WorkflowMcpServersConfigSchema.optional(),
+  run_storage: RunStorageConfigSchema.optional(),
   concurrency: z.number().int().min(1).max(10).optional(),
   task_poll_interval_ms: z.number().int().min(100).max(5000).optional(),
   interactive_preview_steps: z.number().int().min(0).max(10).optional(),

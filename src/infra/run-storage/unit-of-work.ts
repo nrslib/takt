@@ -104,6 +104,30 @@ export class RunUnitOfWork {
     );
   }
 
+  terminalize<Result>(
+    owner: LeaseOwner,
+    callback: (context: RunWriteContext, now: number) => Result,
+  ): Result {
+    return this.runOwnedWrite(
+      'run-terminalization',
+      owner,
+      false,
+      callback,
+    );
+  }
+
+  terminalPublication<Result>(
+    callback: (context: RunWriteContext, now: number) => Result,
+  ): Result {
+    return this.runUnownedWrite('terminal-publication', callback);
+  }
+
+  forceFail<Result>(
+    callback: (context: RunWriteContext, now: number) => Result,
+  ): Result {
+    return this.runUnownedWrite('forced-run-terminalization', callback);
+  }
+
   claim<Result>(
     callback: (context: RunWriteContext, now: number) => Result,
   ): Result {
@@ -143,7 +167,13 @@ export class RunUnitOfWork {
   }
 
   private runOwnedWrite<Result>(
-    callbackMode: Extract<AuthorityMode, 'normal-write' | 'lease-maintenance' | 'operation'>,
+    callbackMode: Extract<
+      AuthorityMode,
+      | 'normal-write'
+      | 'lease-maintenance'
+      | 'run-terminalization'
+      | 'operation'
+    >,
     owner: LeaseOwner,
     revalidateBeforeCommit: boolean,
     callback: (context: RunWriteContext, now: number) => Result,
@@ -170,6 +200,42 @@ export class RunUnitOfWork {
         const commitNow = readClock(this.#clock);
         this.#authority.switchTo('lease-check');
         this.#leases.assertForWrite(context, owner, commitNow);
+      }
+      capability.assertActive();
+      capability.invalidate();
+      this.#authority.clear();
+      this.commit();
+      return result;
+    } catch (error) {
+      capability.invalidate();
+      this.rollbackAfter(error);
+    } finally {
+      this.#writing = false;
+    }
+  }
+
+  private runUnownedWrite<Result>(
+    callbackMode: Extract<
+      AuthorityMode,
+      'terminal-publication' | 'forced-run-terminalization'
+    >,
+    callback: (context: RunWriteContext, now: number) => Result,
+  ): Result {
+    this.assertIdle();
+    if (isNativeAsyncFunction(callback)) {
+      throw new Error('RunUnitOfWork rejects native async callbacks');
+    }
+    this.acquireWriteTransaction();
+    this.#writing = true;
+    const capability = new ContextCapability();
+    try {
+      this.#authority.activate(callbackMode);
+      const result = callback(
+        this.createWriteContext(capability),
+        readClock(this.#clock),
+      );
+      if (isThenable(result)) {
+        throw new Error('RunUnitOfWork rejects thenable callback results');
       }
       capability.assertActive();
       capability.invalidate();

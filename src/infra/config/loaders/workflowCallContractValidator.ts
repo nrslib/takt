@@ -1,6 +1,6 @@
 import { dirname } from 'node:path';
-import type { WorkflowCallStep, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
-import { isWorkflowCallStep } from '../../../core/workflow/step-kind.js';
+import type { WorkflowConfig } from '../../../core/models/index.js';
+import { collectWorkflowCallSteps } from '../../../core/workflow/workflow-step-traversal.js';
 import { validateWorkflowCallRulesAgainstChildReturns } from './workflowCallContracts.js';
 import { getWorkflowSourcePath } from './workflowSourceMetadata.js';
 import { getWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
@@ -33,19 +33,6 @@ function getWorkflowCallValidationKey(workflow: WorkflowConfig, lookupCwd: strin
     return sourcePath;
   }
   return `${lookupCwd}:${workflow.name}`;
-}
-
-function collectWorkflowCallSteps(
-  steps: readonly WorkflowStep[],
-  matches: WorkflowCallStep[] = [],
-): WorkflowCallStep[] {
-  for (const step of steps) {
-    if (isWorkflowCallStep(step)) {
-      matches.push(step);
-    }
-    collectWorkflowCallSteps(step.parallel ?? [], matches);
-  }
-  return matches;
 }
 
 function validateWorkflowCallContractsRecursive(

@@ -206,6 +206,7 @@ describe('finding-conflict-adjudication runner', () => {
     const contract = makeContract(cwd);
     const ledgerStore = createFindingLedgerStore({
       projectCwd: cwd,
+      runId: 'run-1',
       reportDir,
       workflowName: 'runner-test',
       ledgerPath: contract.ledgerPath,

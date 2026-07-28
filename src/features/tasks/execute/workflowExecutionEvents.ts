@@ -1,8 +1,7 @@
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
-import type { WorkflowResumePointEntry } from '../../../core/models/index.js';
+import type { WorkflowState } from '../../../core/models/index.js';
 import { formatWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
 import type { WorkflowEngine } from '../../../core/workflow/index.js';
-import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
 import type { StepProviderInfo, WorkflowAbortKind } from '../../../core/workflow/types.js';
 import { extractBlockedPrompt } from '../../../core/workflow/engine/transitions.js';
@@ -17,15 +16,29 @@ import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { isDebugEnabled, isVerboseConsole } from '../../../shared/utils/debug.js';
 import { notifyWarning, playWarningSound } from '../../../shared/utils/index.js';
 import type { ExceededInfo, WorkflowExecutionEvent, WorkflowExecutionOptions } from './types.js';
+import type { AnalyticsStepContext } from './analyticsEmitter.js';
 import { detectStepType, isQuietMode } from './workflowExecutionBootstrap.js';
 import {
-  finalizeWorkflowAbort,
-  finalizeWorkflowSuccess,
+  buildWorkflowScopeIdentity,
+  buildWorkflowStepScopeKey,
+} from './workflowStepScope.js';
+import {
   reportStepFile,
-  reportWorkflowAbort,
-  reportWorkflowCompletion,
   updateUsageForStepCompletion,
 } from './workflowExecutionReporting.js';
+import {
+  type WorkflowTerminalPayloadFactory,
+  type WorkflowTerminalPublicationPayload,
+} from './workflowTerminalPayload.js';
+import {
+  resolveWorkflowAbortPublicationStatus,
+} from './workflowTerminalStatus.js';
+import {
+  RunCleanupError,
+  RunLiveDeliveryError,
+  RunProjectionError,
+  type RunFinalizationIssue,
+} from './workflowRunExecution.js';
 
 export interface WorkflowExecutionEventState {
   abortReason?: string;
@@ -46,8 +59,6 @@ interface WorkflowExecutionEventBridgeDeps {
     steps: Array<{ name: string }>;
     maxSteps: number | 'infinite';
   };
-  task: string;
-  projectCwd: string;
   currentProvider: ProviderType;
   configuredModel: string | undefined;
   out: ReturnType<typeof import('./outputFns.js').createOutputFns>;
@@ -58,37 +69,89 @@ interface WorkflowExecutionEventBridgeDeps {
   analyticsEmitter: import('./analyticsEmitter.js').AnalyticsEmitter;
   sessionLogger: import('./sessionLogger.js').SessionLogger;
   runMetaManager: import('./runMeta.js').RunMetaManager;
-  ndjsonLogPath: string;
   shouldNotifyRateLimit: boolean;
-  shouldNotifyWorkflowComplete: boolean;
-  shouldNotifyWorkflowAbort: boolean;
-  traceDiscovery?: WorkflowTraceDiscovery;
-  writeTraceReportOnce: ReturnType<typeof import('./traceReportWriter.js').createTraceReportWriter>;
-  getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined;
   initialResumePoint: WorkflowExecutionOptions['resumePoint'];
   sessionLog: SessionLog;
   eventSink: WorkflowExecutionOptions['eventSink'];
-  reportDirectory: string;
+  terminalPayloads: WorkflowTerminalPayloadFactory;
 }
 
 export interface WorkflowExecutionEventBridge {
   state: WorkflowExecutionEventState;
   syncLatestResumePoint: () => void;
+  getFinalizationIssues: () => readonly RunFinalizationIssue[];
+  getStagedAbort: () => {
+    readonly iteration: number;
+    readonly reason: string;
+    readonly kind: WorkflowAbortKind;
+    readonly status: 'aborted' | 'failed';
+  } | undefined;
   emitRunStarted: (event: Extract<WorkflowExecutionEvent, { type: 'run_started' }>) => void;
-  emitWorkflowFailed: (event: Extract<WorkflowExecutionEvent, { type: 'completed' }>) => void;
+  stageWorkflowFailure: (
+    iteration: number,
+    reason: string,
+    status: 'aborted' | 'failed',
+  ) => void;
+  stageHeartbeatFailure: (
+    iteration: number,
+    reason: string,
+    status: 'aborted' | 'failed',
+  ) => void;
+  prepareTerminalPublicationPayload: () => WorkflowTerminalPublicationPayload;
   emitProviderOutput: (event: StreamEvent) => void;
+  emitTerminalFeedback: (
+    event: Extract<WorkflowExecutionEvent, { type: 'completed' }>,
+  ) => void;
   flushEventSink: () => Promise<void>;
 }
 
+type WorkflowTerminalIntent =
+  | {
+      readonly kind: 'completed';
+      readonly workflowState: WorkflowState;
+      readonly endTime: string;
+    }
+  | {
+      readonly kind: 'aborted';
+      readonly workflowState: WorkflowState;
+      readonly reason: string;
+      readonly abortKind: WorkflowAbortKind;
+      readonly status: 'aborted' | 'failed';
+      readonly endTime: string;
+    }
+  | {
+      readonly kind: 'failure';
+      readonly iteration: number;
+      readonly reason: string;
+      readonly status: 'aborted' | 'failed';
+      readonly endTime: string;
+    };
+
 type OutInfo = { info: (line: string) => void };
+
+function resolveStepProviderContext(
+  providerInfo: StepProviderInfo,
+  currentProvider: ProviderType,
+  configuredModel: string | undefined,
+): {
+  readonly provider: ProviderType;
+  readonly model: string;
+} {
+  const provider = providerInfo.provider ?? currentProvider;
+  const model = providerInfo.modelSource !== undefined
+    ? providerInfo.model ?? '(default)'
+    : providerInfo.model
+      ?? (provider === currentProvider ? configuredModel : undefined)
+      ?? '(default)';
+  return { provider, model };
+}
+
 function emitWorkflowExecutionEvent(
   sink: WorkflowExecutionOptions['eventSink'],
   event: WorkflowExecutionEvent,
   onFailure: (error: unknown) => void,
   dispatchState: {
     current: Promise<void>;
-    hasError: boolean;
-    firstError: unknown;
   },
 ): void {
   if (!sink) {
@@ -97,18 +160,10 @@ function emitWorkflowExecutionEvent(
   const dispatch = dispatchState.current.then(() => sink(event)).then(
     () => undefined,
     (error) => {
-      if (!dispatchState.hasError) {
-        dispatchState.hasError = true;
-        dispatchState.firstError = error;
-      }
       onFailure(error);
     },
   );
   dispatchState.current = dispatch;
-}
-
-function getEventSinkErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function createOutputEvents(
@@ -296,9 +351,11 @@ function emitProviderOptionLines(
 export function bindWorkflowExecutionEvents(
   deps: WorkflowExecutionEventBridgeDeps,
 ): WorkflowExecutionEventBridge {
-  const usageContextByStep = new WeakMap<object, UsageEventLogContext>();
+  const stepContextsByScope = new Map<string, {
+    readonly usage: UsageEventLogContext;
+    readonly analytics: AnalyticsStepContext;
+  }>();
   const canReadResumePoint = (): boolean => typeof deps.engine.getResumePoint === 'function';
-  const canReadEngineState = (): boolean => typeof deps.engine.getState === 'function';
   const getResumePoint = (): WorkflowExecutionOptions['resumePoint'] => {
     if (!canReadResumePoint()) {
       return undefined;
@@ -312,21 +369,20 @@ export function bindWorkflowExecutionEvents(
   };
   const eventSinkDispatchState = {
     current: Promise.resolve(),
-    hasError: false,
-    firstError: undefined as unknown,
   };
   const pendingToolCallIds: string[] = [];
   const pendingPermissionRequestIds: string[] = [];
+  let terminalIntent: WorkflowTerminalIntent | undefined;
+  const finalizationIssues: RunFinalizationIssue[] = [];
+  let preparedTerminalPublication:
+    WorkflowTerminalPublicationPayload | undefined;
   let confirmationSequence = 0;
   const nextConfirmationId = (): string => {
     confirmationSequence += 1;
     return `confirmation-${confirmationSequence}`;
   };
   const onEventSinkFailure = (error: unknown): void => {
-    if (!state.abortReason) {
-      state.abortReason = `Workflow event sink failed: ${getEventSinkErrorMessage(error)}`;
-    }
-    deps.engine.abort();
+    finalizationIssues.push(new RunLiveDeliveryError(error));
   };
   const syncLatestResumePoint = (): void => {
     if (!canReadResumePoint()) {
@@ -335,14 +391,30 @@ export function bindWorkflowExecutionEvents(
     state.lastResumePoint = getResumePoint();
     deps.runMetaManager.updateResumePoint(state.lastResumePoint);
   };
-  const initialFindingsState = canReadEngineState() ? deps.engine.getState().findings : undefined;
-  deps.analyticsEmitter.seedFindingContractFindingIds(
-    initialFindingsState !== undefined
-      ? initialFindingsState.open.items.map((finding) => finding.id)
-      : [],
-  );
-
-  deps.engine.on('phase:start', (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
+  const captureTerminalProjection = (action: () => void): void => {
+    try {
+      action();
+    } catch (error) {
+      finalizationIssues.push(new RunProjectionError('meta', error));
+    }
+  };
+  const captureTerminalCleanup = (action: () => void): void => {
+    try {
+      action();
+    } catch (error) {
+      finalizationIssues.push(new RunCleanupError(error));
+    }
+  };
+  deps.engine.on('phase:start', (
+    step,
+    phase,
+    phaseName,
+    instruction,
+    promptParts,
+    phaseExecutionId,
+    iteration,
+    workflowStack,
+  ) => {
     if (state.currentStepName === undefined) {
       throw new Error(`Phase ${phase} started before a resumable step was recorded`);
     }
@@ -353,18 +425,27 @@ export function bindWorkflowExecutionEvents(
       phaseName,
       instruction,
       promptParts,
-      deps.getCurrentWorkflowStack(),
+      workflowStack,
       phaseExecutionId,
       iteration,
     );
   });
 
-  deps.engine.on('phase:complete', (step, phase, phaseName, content, phaseStatus, phaseError, phaseExecutionId, iteration) => {
+  deps.engine.on('phase:complete', (
+    step,
+    phase,
+    phaseName,
+    content,
+    phaseStatus,
+    phaseError,
+    phaseExecutionId,
+    iteration,
+    workflowStack,
+  ) => {
     if (state.currentStepName === undefined) {
       throw new Error(`Phase ${phase} completed before a resumable step was recorded`);
     }
     deps.runMetaManager.updatePhase(state.currentStepName, iteration, phase);
-    deps.sessionLogger.setIteration(state.currentIteration);
     deps.sessionLogger.onPhaseComplete(
       step,
       phase,
@@ -372,19 +453,27 @@ export function bindWorkflowExecutionEvents(
       content,
       phaseStatus,
       phaseError,
-      deps.getCurrentWorkflowStack(),
+      workflowStack,
       phaseExecutionId,
       iteration,
     );
   });
 
-  deps.engine.on('phase:judge_stage', (step, phase, phaseName, entry, phaseExecutionId, iteration) => {
+  deps.engine.on('phase:judge_stage', (
+    step,
+    phase,
+    phaseName,
+    entry,
+    phaseExecutionId,
+    iteration,
+    workflowStack,
+  ) => {
     deps.sessionLogger.onJudgeStage(
       step,
       phase,
       phaseName,
       entry,
-      deps.getCurrentWorkflowStack(),
+      workflowStack,
       phaseExecutionId,
       iteration,
     );
@@ -398,6 +487,9 @@ export function bindWorkflowExecutionEvents(
     workflowName,
     resumeStepName,
     stepIteration,
+    workflowStack,
+    findingScopeIdentity,
+    findingIds,
   ) => {
     state.currentIteration = iteration;
     state.currentStepName = resumeStepName;
@@ -435,15 +527,42 @@ export function bindWorkflowExecutionEvents(
     });
     deps.out.info(`[${iteration}/${deps.workflowConfig.maxSteps}] ${safeStepName} (${safePersonaDisplayName})`);
 
-    const stepProvider = providerInfo.provider ?? deps.currentProvider;
-    const stepModel = providerInfo.modelSource !== undefined
-      ? providerInfo.model ?? '(default)'
-      : providerInfo.model ?? (stepProvider === deps.currentProvider ? deps.configuredModel : undefined) ?? '(default)';
-    usageContextByStep.set(step, {
+    const {
       provider: stepProvider,
-      providerModel: stepModel,
-      step: step.name,
-      stepType: detectStepType(step),
+      model: stepModel,
+    } = resolveStepProviderContext(
+      providerInfo,
+      deps.currentProvider,
+      deps.configuredModel,
+    );
+    const stepScopeKey = buildWorkflowStepScopeKey(step.name, workflowStack);
+    const analyticsScopeIdentity = findingScopeIdentity
+      ?? buildWorkflowScopeIdentity(workflowName, workflowStack);
+    if (findingScopeIdentity !== undefined) {
+      if (findingIds === undefined) {
+        throw new Error(
+          `Finding IDs are missing for scope "${findingScopeIdentity}"`,
+        );
+      }
+      deps.analyticsEmitter.setFindingContractFindingIds(
+        findingScopeIdentity,
+        findingIds,
+      );
+    }
+    stepContextsByScope.set(stepScopeKey, {
+      usage: {
+        provider: stepProvider,
+        providerModel: stepModel,
+        step: step.name,
+        stepType: detectStepType(step),
+      },
+      analytics: {
+        iteration,
+        workflowName,
+        scopeIdentity: analyticsScopeIdentity,
+        provider: stepProvider,
+        model: stepModel,
+      },
     });
     const showSource = isDebugEnabled() || isVerboseConsole();
     const providerSourceSuffix = showSource && providerInfo.providerSource
@@ -455,8 +574,6 @@ export function bindWorkflowExecutionEvents(
     deps.out.info(`Provider: ${stepProvider}${providerSourceSuffix}`);
     deps.out.info(`Model: ${stepModel}${modelSourceSuffix}`);
     emitProviderOptionLines(deps.out, stepProvider, providerInfo, showSource);
-    deps.analyticsEmitter.updateProviderInfo(iteration, stepProvider, stepModel, workflowName ?? deps.workflowConfig.name);
-
     if (!deps.prefixWriter) {
       const stepIndex = deps.workflowConfig.steps.findIndex((workflowStep) => workflowStep.name === step.name);
       deps.displayRef.current = new StreamDisplay(safePersonaDisplayName, isQuietMode(), {
@@ -468,10 +585,16 @@ export function bindWorkflowExecutionEvents(
       deps.handlerRef.current = null;
     }
 
-    deps.sessionLogger.onStepStart(step, iteration, instruction, state.lastResumePoint?.stack, providerInfo);
+    deps.sessionLogger.onStepStart(step, iteration, instruction, workflowStack, providerInfo);
   });
 
-  deps.engine.on('step:complete', (step, response, instruction, resumeStepName) => {
+  deps.engine.on('step:complete', (
+    step,
+    response,
+    instruction,
+    resumeStepName,
+    workflowStack,
+  ) => {
     syncLatestResumePoint();
     state.lastStepContent = response.content;
     state.lastStepName = resumeStepName;
@@ -529,17 +652,22 @@ export function bindWorkflowExecutionEvents(
       eventSinkDispatchState,
     );
 
+    const stepScopeKey = buildWorkflowStepScopeKey(step.name, workflowStack);
+    const stepContext = stepContextsByScope.get(stepScopeKey);
+    if (stepContext === undefined) {
+      throw new Error(`Execution context is missing for completed step "${step.name}"`);
+    }
     const stepType = detectStepType(step);
     if (stepType !== 'parallel' && stepType !== 'team_leader') {
-      const usageContext = usageContextByStep.get(step);
-      if (!usageContext) {
-        throw new Error(`Usage context is missing for completed step "${step.name}"`);
-      }
-      updateUsageForStepCompletion(deps.usageEventLogger, usageContext, response);
+      updateUsageForStepCompletion(
+        deps.usageEventLogger,
+        stepContext.usage,
+        response,
+      );
     }
-    usageContextByStep.delete(step);
-    deps.sessionLogger.onStepComplete(step, response, instruction, deps.getCurrentWorkflowStack());
-    deps.analyticsEmitter.onStepComplete(step, response);
+    stepContextsByScope.delete(stepScopeKey);
+    deps.sessionLogger.onStepComplete(step, response, instruction, workflowStack);
+    deps.analyticsEmitter.onStepComplete(step, response, stepContext.analytics);
     state.sessionLog = { ...state.sessionLog, iterations: state.sessionLog.iterations + 1 };
   });
 
@@ -615,105 +743,165 @@ export function bindWorkflowExecutionEvents(
     );
   });
 
-  deps.engine.on('step:report', (_step, filePath, fileName) => {
+  deps.engine.on('step:report', (step, filePath, fileName, context) => {
     reportStepFile(filePath, fileName, deps.out);
-    deps.analyticsEmitter.onStepReport(_step, filePath);
+    if (
+      context.findingScopeIdentity !== undefined
+      && context.findingIds === undefined
+    ) {
+      throw new Error(
+        `Finding IDs are missing for scope "${context.findingScopeIdentity}"`,
+      );
+    }
+    const scopeIdentity = context.findingScopeIdentity
+      ?? buildWorkflowScopeIdentity(
+        context.workflowName,
+        context.workflowStack,
+      );
+    deps.analyticsEmitter.onStepReport(
+      step,
+      filePath,
+      {
+        iteration: context.iteration,
+        workflowName: context.workflowName,
+        scopeIdentity,
+        provider: context.provider,
+        model: context.model,
+      },
+    );
   });
 
-  deps.engine.on('findings:ledger', (ledger) => {
-    deps.analyticsEmitter.onFindingLedgerUpdated(ledger);
+  deps.engine.on('findings:ledger', (ledger, context) => {
+    deps.analyticsEmitter.onFindingLedgerUpdated(ledger, context);
   });
 
   deps.engine.on('workflow:complete', (workflowState) => {
-    syncLatestResumePoint();
-    state.sessionLog = finalizeWorkflowSuccess(
-      state.sessionLog,
-      deps.task,
-      deps.workflowConfig.name,
-      state.lastStepContent,
-      state.lastStepName,
-      deps.projectCwd,
-      deps.out.warn,
-    );
-    deps.sessionLogger.onWorkflowComplete(workflowState);
-    deps.runMetaManager.finalize('completed', workflowState.iteration);
-    deps.writeTraceReportOnce({
-      status: 'completed',
-      iterations: workflowState.iteration,
-      endTime: new Date().toISOString(),
-    });
-    reportWorkflowCompletion(
-      deps.out,
-      state.sessionLog,
-      workflowState.iteration,
-      deps.ndjsonLogPath,
-      deps.shouldNotifyWorkflowComplete,
-      deps.traceDiscovery,
-    );
-    emitWorkflowExecutionEvent(
-      deps.eventSink,
-      {
-        type: 'completed',
-        success: true,
-        reportDirectory: deps.reportDirectory,
-      },
-      onEventSinkFailure,
-      eventSinkDispatchState,
-    );
+    if (terminalIntent === undefined) {
+      terminalIntent = {
+        kind: 'completed',
+        workflowState,
+        endTime: new Date().toISOString(),
+      };
+    }
+    captureTerminalProjection(syncLatestResumePoint);
   });
 
   deps.engine.on('workflow:abort', (workflowState, reason, kind) => {
-    interruptAllQueries();
-    syncLatestResumePoint();
-    if (deps.displayRef.current) {
-      deps.displayRef.current.flush();
-      deps.displayRef.current = null;
-    }
-    deps.prefixWriter?.flush();
-    state.abortReason = reason;
-    state.abortKind = kind;
-    state.sessionLog = finalizeWorkflowAbort(
-      state.sessionLog,
-      reason,
-      deps.task,
-      deps.workflowConfig.name,
-      state.lastStepName,
-      deps.projectCwd,
-      deps.out.warn,
-    );
-    deps.sessionLogger.onWorkflowAbort(workflowState, reason);
-    deps.runMetaManager.finalize('aborted', workflowState.iteration);
-    deps.writeTraceReportOnce({
-      status: 'aborted',
-      iterations: workflowState.iteration,
-      reason,
-      endTime: new Date().toISOString(),
-    });
-    reportWorkflowAbort(
-      deps.out,
-      state.sessionLog,
-      workflowState.iteration,
-      reason,
-      deps.ndjsonLogPath,
-      deps.shouldNotifyWorkflowAbort,
-      deps.traceDiscovery,
-    );
-    emitWorkflowExecutionEvent(
-      deps.eventSink,
-      {
-        type: 'completed',
-        success: false,
-        reportDirectory: deps.reportDirectory,
+    if (terminalIntent === undefined) {
+      state.abortReason = reason;
+      state.abortKind = kind;
+      terminalIntent = {
+        kind: 'aborted',
+        workflowState,
         reason,
-      },
-      onEventSinkFailure,
-      eventSinkDispatchState,
-    );
+        abortKind: kind,
+        status: resolveWorkflowAbortPublicationStatus(kind),
+        endTime: new Date().toISOString(),
+      };
+    }
+    captureTerminalCleanup(interruptAllQueries);
+    captureTerminalProjection(syncLatestResumePoint);
+    const display = deps.displayRef.current;
+    if (display !== null) {
+      deps.displayRef.current = null;
+      captureTerminalCleanup(() => display.flush());
+    }
+    captureTerminalCleanup(() => deps.prefixWriter?.flush());
   });
+
+  const createWorkflowFailureIntent = (
+    iteration: number,
+    reason: string,
+    status: 'aborted' | 'failed',
+  ): WorkflowTerminalIntent => ({
+    kind: 'failure',
+    iteration,
+    reason,
+    status,
+    endTime: new Date().toISOString(),
+  });
+
+  const applyWorkflowFailureIntent = (
+    intent: WorkflowTerminalIntent,
+    reason: string,
+  ): void => {
+    state.abortReason = reason;
+    state.abortKind = 'runtime_error';
+    terminalIntent = intent;
+    captureTerminalProjection(syncLatestResumePoint);
+  };
+
+  const stageWorkflowFailure = (
+    iteration: number,
+    reason: string,
+    status: 'aborted' | 'failed',
+  ): void => {
+    if (
+      terminalIntent?.kind === 'aborted'
+      || terminalIntent?.kind === 'failure'
+    ) {
+      return;
+    }
+    applyWorkflowFailureIntent(
+      createWorkflowFailureIntent(iteration, reason, status),
+      reason,
+    );
+  };
+
+  const stageHeartbeatFailure = (
+    iteration: number,
+    reason: string,
+    status: 'aborted' | 'failed',
+  ): void => {
+    applyWorkflowFailureIntent(
+      createWorkflowFailureIntent(iteration, reason, status),
+      reason,
+    );
+  };
+
+  const prepareTerminalPublicationPayload =
+    (): WorkflowTerminalPublicationPayload => {
+      if (preparedTerminalPublication !== undefined) {
+        return preparedTerminalPublication;
+      }
+      if (terminalIntent === undefined) {
+        throw new Error('Workflow terminal result was not staged');
+      }
+      const status = terminalIntent.kind === 'completed'
+        ? 'completed'
+        : terminalIntent.status;
+      const iterations = terminalIntent.kind === 'failure'
+        ? terminalIntent.iteration
+        : terminalIntent.workflowState.iteration;
+      const reason = terminalIntent.kind === 'completed'
+        ? undefined
+        : terminalIntent.reason;
+      preparedTerminalPublication = deps.terminalPayloads.create({
+        status,
+        iterations,
+        ...(reason === undefined ? {} : { reason }),
+        lastStepContent: state.lastStepContent,
+        lastStepName: state.lastStepName,
+        sessionLog: state.sessionLog,
+        endTime: terminalIntent.endTime,
+      });
+      return preparedTerminalPublication;
+    };
 
   return {
     state,
     syncLatestResumePoint,
+    getFinalizationIssues: () => [...finalizationIssues],
+    getStagedAbort: () => (
+      terminalIntent?.kind === 'aborted'
+        ? {
+            iteration: terminalIntent.workflowState.iteration,
+            reason: terminalIntent.reason,
+            kind: terminalIntent.abortKind,
+            status: terminalIntent.status,
+          }
+        : undefined
+    ),
     emitRunStarted(event): void {
       emitWorkflowExecutionEvent(
         deps.eventSink,
@@ -722,14 +910,9 @@ export function bindWorkflowExecutionEvents(
         eventSinkDispatchState,
       );
     },
-    emitWorkflowFailed(event): void {
-      emitWorkflowExecutionEvent(
-        deps.eventSink,
-        event,
-        onEventSinkFailure,
-        eventSinkDispatchState,
-      );
-    },
+    stageWorkflowFailure,
+    stageHeartbeatFailure,
+    prepareTerminalPublicationPayload,
     emitProviderOutput(event: StreamEvent): void {
       const outputEvents = createOutputEvents(
         event,
@@ -746,11 +929,16 @@ export function bindWorkflowExecutionEvents(
         );
       }
     },
+    emitTerminalFeedback(event): void {
+      emitWorkflowExecutionEvent(
+        deps.eventSink,
+        event,
+        onEventSinkFailure,
+        eventSinkDispatchState,
+      );
+    },
     async flushEventSink(): Promise<void> {
       await eventSinkDispatchState.current;
-      if (eventSinkDispatchState.hasError) {
-        throw eventSinkDispatchState.firstError;
-      }
     },
   };
 }

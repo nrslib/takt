@@ -7,6 +7,9 @@ export type AuthorityMode =
   | 'lease-check'
   | 'lease-claim'
   | 'lease-maintenance'
+  | 'run-terminalization'
+  | 'forced-run-terminalization'
+  | 'terminal-publication'
   | 'operation';
 
 const READ_ACTIONS = new Set([
@@ -28,8 +31,11 @@ const BOOTSTRAP_AUTHORITY_TABLES = new Set([
   'engine_builds',
   'workflow_definitions',
   'runs',
+  'terminal_publications',
+  'terminal_publication_stages',
   'run_ancestry',
   'run_resume_sources',
+  'finding_resume_authorities',
   'run_leases',
 ]);
 
@@ -55,6 +61,9 @@ function permitsDml(
       if (tableName === 'workflow_definitions') {
         return actionCode === constants.SQLITE_INSERT;
       }
+      if (tableName === 'runs') {
+        return actionCode === constants.SQLITE_UPDATE;
+      }
       return !BOOTSTRAP_AUTHORITY_TABLES.has(tableName)
         && !OPERATION_AUTHORITY_TABLES.has(tableName);
     case 'lease-check':
@@ -72,6 +81,51 @@ function permitsDml(
             tableName === 'runs'
             && triggerName === 'run_leases_apply_terminal_state'
           )
+        );
+    case 'run-terminalization':
+      return (
+        actionCode === constants.SQLITE_UPDATE
+        && (
+          tableName === 'run_leases'
+          || tableName === 'runs'
+          || tableName === 'scopes'
+          || tableName === 'scope_runtime'
+          || tableName === 'step_executions'
+          || tableName === 'phase_executions'
+        )
+      ) || (
+        actionCode === constants.SQLITE_INSERT
+        && (
+          tableName === 'run_events'
+          || tableName === 'terminal_publications'
+          || tableName === 'terminal_publication_stages'
+        )
+      );
+    case 'forced-run-terminalization':
+      return (
+        actionCode === constants.SQLITE_UPDATE
+        && (
+          tableName === 'run_leases'
+          || tableName === 'runs'
+          || tableName === 'scopes'
+          || tableName === 'scope_runtime'
+          || tableName === 'step_executions'
+          || tableName === 'phase_executions'
+        )
+      ) || (
+        actionCode === constants.SQLITE_INSERT
+        && (
+          tableName === 'run_leases'
+          || tableName === 'run_events'
+          || tableName === 'terminal_publications'
+          || tableName === 'terminal_publication_stages'
+        )
+      );
+    case 'terminal-publication':
+      return actionCode === constants.SQLITE_UPDATE
+        && (
+          tableName === 'terminal_publications'
+          || tableName === 'terminal_publication_stages'
         );
     case 'operation':
       return OPERATION_AUTHORITY_TABLES.has(tableName);

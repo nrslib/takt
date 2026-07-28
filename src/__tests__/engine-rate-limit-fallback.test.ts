@@ -30,6 +30,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { InstructionBuildTransaction } from '../core/workflow/engine/instruction-build-transaction.js';
+import { buildScopedStepIterationIdentity } from '../core/workflow/step-iteration-identity.js';
 import { runAgent } from '../agents/runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
@@ -662,8 +663,14 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(state.status).toBe('completed');
     expect(state.iteration).toBe(1);
     expect(state.stepIterations.get('reviewers')).toBe(1);
-    expect(state.stepIterations.get('arch-review')).toBe(1);
-    expect(state.stepIterations.get('security-review')).toBe(1);
+    expect(state.stepIterations.get(
+      buildScopedStepIterationIdentity('arch-review', ['reviewers']),
+    )).toBe(1);
+    expect(state.stepIterations.get(
+      buildScopedStepIterationIdentity('security-review', ['reviewers']),
+    )).toBe(1);
+    expect(state.stepIterations.has('arch-review')).toBe(false);
+    expect(state.stepIterations.has('security-review')).toBe(false);
     expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'claude', 'codex', 'codex']);
     const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
     expect(prompts[0]).not.toContain('Fallback Execution');
@@ -803,8 +810,14 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(state.status).toBe('completed');
     expect(state.iteration).toBe(1);
     expect(state.stepIterations.get('reviewers')).toBe(1);
-    expect(state.stepIterations.get('arch-review')).toBe(1);
-    expect(state.stepIterations.get('security-review')).toBe(1);
+    expect(state.stepIterations.get(
+      buildScopedStepIterationIdentity('arch-review', ['reviewers']),
+    )).toBe(1);
+    expect(state.stepIterations.get(
+      buildScopedStepIterationIdentity('security-review', ['reviewers']),
+    )).toBe(1);
+    expect(state.stepIterations.has('arch-review')).toBe(false);
+    expect(state.stepIterations.has('security-review')).toBe(false);
     expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'claude', 'codex', 'codex']);
     expect(runReportPhase).toHaveBeenCalledTimes(4);
     expect(mockRuleEvaluation).toHaveBeenCalledTimes(4);

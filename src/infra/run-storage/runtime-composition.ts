@@ -36,7 +36,6 @@ import {
 import type { LeaseOwner } from './lease.js';
 import type { ExecutionHandle } from './runtime-handles.js';
 import { ScopeRepository } from './scopes.js';
-import type { TrustedFindingResumeSource } from './finding-resume-source.js';
 
 export type {
   RunStorageExecutor,
@@ -63,7 +62,6 @@ export function createBoundRunStorageRuntime(input: {
   readonly owner: LeaseOwner;
   readonly runId: string;
   readonly scopeId: string;
-  readonly trustedFindingResumeSource?: TrustedFindingResumeSource;
 }): RunStorageRuntime {
   const binding: RuntimeBinding = {
     executor: input.executor,
@@ -71,9 +69,6 @@ export function createBoundRunStorageRuntime(input: {
     owner: input.owner,
     runId: input.runId,
     scopeId: input.scopeId,
-    ...(input.trustedFindingResumeSource === undefined
-      ? {}
-      : { trustedFindingResumeSource: input.trustedFindingResumeSource }),
   };
   assertScopeExists(binding);
   const finding = createRuntimeFindingCommands(binding);

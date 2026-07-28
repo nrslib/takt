@@ -2,9 +2,10 @@ import type { GlobalConfig, ResolvedObservabilityConfig } from '../../core/model
 import type { ProjectConfig } from './types.js';
 
 export interface LoadedConfig
-  extends Omit<GlobalConfig, 'language'>,
+  extends Omit<GlobalConfig, 'language' | 'runStorage'>,
     ProjectConfig {
   language: GlobalConfig['language'];
+  runStorage: NonNullable<ProjectConfig['runStorage']>;
   observability: ResolvedObservabilityConfig;
   minimalOutput: NonNullable<ProjectConfig['minimalOutput']>;
   concurrency: NonNullable<ProjectConfig['concurrency']>;

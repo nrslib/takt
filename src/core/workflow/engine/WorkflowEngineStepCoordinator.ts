@@ -2,7 +2,12 @@ import type { AgentResponse, LoopMonitorConfig, WorkflowMaxSteps, WorkflowState,
 import { ABORT_STEP, FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
 import { FINDING_CONFLICT_ADJUDICATION_RULE_INDEX } from '../findings/adjudication-step.js';
 import { isDelegatedWorkflowStep, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
-import type { RuntimeStepResolution, StepRunResult, WorkflowEngineOptions } from '../types.js';
+import type {
+  RuntimeStepResolution,
+  StepRunResult,
+  WorkflowEngineOptions,
+  WorkflowStepExecutionEventContext,
+} from '../types.js';
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
 import { determineRuleTransition, type WorkflowRuleTransition } from './transitions.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
@@ -42,7 +47,12 @@ interface WorkflowEngineStepCoordinatorDeps {
       maxSteps: WorkflowMaxSteps,
     ) => string;
     buildPhase1Instruction: (instruction: string, step: WorkflowStep, runtime?: RuntimeStepResolution) => string;
-    drainReportFiles: () => Array<{ step: WorkflowStep; filePath: string; fileName: string }>;
+    drainReportFiles: () => Array<{
+      step: WorkflowStep;
+      filePath: string;
+      fileName: string;
+      context: WorkflowStepExecutionEventContext;
+    }>;
   };
   parallelRunner: {
     runParallelStep: (
@@ -98,7 +108,12 @@ interface WorkflowEngineStepCoordinatorDeps {
     resolveRuntime: (step: WorkflowStep & { call: string }) => RuntimeStepResolution;
   };
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
-  emitReport: (step: WorkflowStep, filePath: string, fileName: string) => void;
+  emitReport: (
+    step: WorkflowStep,
+    filePath: string,
+    fileName: string,
+    context: WorkflowStepExecutionEventContext,
+  ) => void;
   /** Present only when the workflow has an effective finding_contract and the finding-conflict-adjudication step was injected (see WorkflowEngine). */
   findingConflictAdjudicationRunner?: {
     run: (step: WorkflowStep, state: WorkflowState, runtime?: RuntimeStepResolution) => Promise<StepRunResult>;
@@ -190,8 +205,13 @@ export class WorkflowEngineStepCoordinator {
       );
     }
 
-    for (const { step: reportedStep, filePath, fileName } of this.deps.stepExecutor.drainReportFiles()) {
-      this.deps.emitReport(reportedStep, filePath, fileName);
+    for (const {
+      step: reportedStep,
+      filePath,
+      fileName,
+      context,
+    } of this.deps.stepExecutor.drainReportFiles()) {
+      this.deps.emitReport(reportedStep, filePath, fileName, context);
     }
     return result;
   }

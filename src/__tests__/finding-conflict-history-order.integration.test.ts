@@ -169,6 +169,7 @@ describe('reconciled conflict history order', () => {
     });
     const store = createFindingLedgerStore({
       projectCwd: cwd,
+      runId: 'run-2',
       reportDir: join(cwd, '.takt', 'runs', 'run-2', 'reports'),
       workflowName: WORKFLOW_NAME,
       ledgerPath: LEDGER_PATH,

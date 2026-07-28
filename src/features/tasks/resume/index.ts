@@ -32,7 +32,10 @@ import {
 } from '../../../infra/task/index.js';
 import { toLocalBranchRef } from '../../../shared/utils/gitBranchValidation.js';
 import { executeTaskWithResult } from '../execute/taskExecution.js';
-import { stageTaskSpecForExecution } from '../execute/taskSpecContext.js';
+import {
+  resolveTaskSpecForExecution,
+  type ResolvedTaskSpec,
+} from '../execute/taskSpecContext.js';
 import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { buildTraceTaskMetadata } from '../execute/traceTaskMetadata.js';
@@ -107,6 +110,7 @@ interface ResolvedTaskContent {
 interface PreparedDirectResumeExecution {
   readonly task: string;
   readonly reportDirName: string;
+  readonly taskSpec: ResolvedTaskSpec;
   readonly retryNote: string;
   readonly preparedSpec: PreparedRetryTaskSpec;
 }
@@ -251,10 +255,16 @@ function prepareDirectResumeExecutionWithAttachments(
 
   try {
     const reportDirName = generateExecutionReportDir(projectDir, context.taskContent);
-    const stagedSpec = stageTaskSpecForExecution(projectDir, projectDir, preparedSpec.taskDirRelative, reportDirName);
-    return {
-      task: stagedSpec.taskPrompt,
+    const taskSpec = resolveTaskSpecForExecution(
+      projectDir,
+      projectDir,
+      preparedSpec.taskDirRelative,
       reportDirName,
+    );
+    return {
+      task: taskSpec.taskPrompt,
+      reportDirName,
+      taskSpec,
       retryNote: preparedSpec.retryNote,
       preparedSpec,
     };
@@ -294,6 +304,7 @@ async function executeDirectResume(
       resumePoint: context.resumePoint,
       resumeSource: buildResumeSource(context.run, resumeMode),
       ...(preparedExecution ? { reportDirName: preparedExecution.reportDirName } : {}),
+      ...(preparedExecution ? { taskSpec: preparedExecution.taskSpec } : {}),
       ...(context.run.meta.prContext ? { prContext: context.run.meta.prContext } : {}),
       traceTaskMetadata: buildTraceTaskMetadata({
         taskContent: executionTask,

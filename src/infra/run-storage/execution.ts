@@ -44,6 +44,26 @@ function assertBoundExecution(
 }
 
 export class ExecutionRepository {
+  terminalizeActive(
+    context: RunWriteContext,
+    input: {
+      readonly runId: string;
+      readonly status: TerminalStatus;
+      readonly terminalAt: number;
+    },
+  ): void {
+    context.run(`
+      UPDATE phase_executions
+      SET status = ?, terminal_at = ?
+      WHERE run_id = ? AND status = 'running' AND terminal_at IS NULL
+    `, input.status, input.terminalAt, input.runId);
+    context.run(`
+      UPDATE step_executions
+      SET status = ?, terminal_at = ?
+      WHERE run_id = ? AND status = 'running' AND terminal_at IS NULL
+    `, input.status, input.terminalAt, input.runId);
+  }
+
   startStep(context: RunWriteContext, input: {
     readonly runId: string;
     readonly scopeId: string;

@@ -19,7 +19,15 @@ import type {
   WorkflowConfig,
   WorkflowResumePointEntry,
 } from '../../models/types.js';
-import type { PhaseName, PhasePromptParts, JudgeStageEntry, RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
+import type {
+  PhaseName,
+  PhasePromptParts,
+  JudgeStageEntry,
+  RuntimeStepResolution,
+  StepProviderInfo,
+  StepRunResult,
+  WorkflowStepExecutionEventContext,
+} from '../types.js';
 import type { ProviderUsageSnapshot } from '../../models/response.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
@@ -72,6 +80,7 @@ import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } 
 import type { InstructionBuildTransaction } from './instruction-build-transaction.js';
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import type { PullRequestContext } from '../pr-context.js';
+import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 
 const log = createLogger('step-executor');
 
@@ -99,6 +108,8 @@ export interface StepExecutorDeps {
   /** findings-manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
   readonly workflowProvider?: WorkflowConfig['provider'];
   readonly workflowModel?: WorkflowConfig['model'];
+  readonly executionProvider: WorkflowConfig['provider'];
+  readonly executionModel: WorkflowConfig['model'];
   readonly findingLedgerStore?: FindingLedgerStore;
   readonly refreshFindingsState: () => void;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
@@ -203,6 +214,7 @@ export class StepExecutor {
   private async ingestFindingContractForNormalStep(input: {
     step: AgentWorkflowStep;
     stepIteration: number;
+    iteration: number;
     response: AgentResponse;
     priorStepResponseText: string | undefined;
     relationClarification?: ReviewerRelationClarification;
@@ -220,6 +232,7 @@ export class StepExecutor {
       cwd: this.deps.getCwd(),
       parentStep: input.step,
       stepIteration: input.stepIteration,
+      iteration: input.iteration,
       // 単独ステップでは「レビュアー1件」を自分自身として渡す
       // （manager-runner.ts の subResults は並列・単独どちらも同じ形で扱う）。
       subResults: [{
@@ -232,7 +245,7 @@ export class StepExecutor {
       // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の
       // ledger.workflowName が親の台帳と食い違う（ParallelRunner と同じ理由）。
       workflowName: this.deps.findingLedgerStore.workflowName,
-      runId: this.deps.getRunId(),
+      analyticsWorkflowName: this.deps.getWorkflowName(),
       callNamespace: this.deps.getFindingCallNamespace(),
       timestamp: new Date().toISOString(),
       priorStepResponseText: input.priorStepResponseText,
@@ -660,6 +673,15 @@ export class StepExecutor {
       return nextResponse;
     }
 
+    const recordPhaseProviderAttempt = onProviderAttempt
+      ?? ((providerInfo, success, usage) => {
+        this.deps.recordSynthesizedAgentUsage(
+          step.name,
+          providerInfo,
+          success,
+          usage,
+        );
+      });
     const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(
       step,
       state,
@@ -670,7 +692,7 @@ export class StepExecutor {
       this.deps.onJudgeStage,
       state.iteration,
       runtime,
-      onProviderAttempt,
+      recordPhaseProviderAttempt,
     );
 
     // Phase 2: report output (resume same session, Write only)
@@ -904,6 +926,7 @@ export class StepExecutor {
       await this.ingestFindingContractForNormalStep({
         step: findingContractIntakeStep,
         stepIteration,
+        iteration: state.iteration,
         response,
         priorStepResponseText,
         relationClarification,
@@ -938,34 +961,119 @@ export class StepExecutor {
       return { response, instruction: phase1Instruction, providerInfo };
     }
     this.persistPreviousResponseSnapshot(state, step.name, stepIteration, response.content);
-    this.emitStepReports(step);
+    this.emitStepReports(
+      step,
+      {
+        iteration: state.iteration,
+        resumeStepName: step.name,
+        stepIteration,
+        providerInfo,
+      },
+    );
     return { response, instruction: phase1Instruction, providerInfo };
   }
 
+  private createReportExecutionContext(input: {
+    readonly iteration: number;
+    readonly resumeStepName: string;
+    readonly stepIteration: number;
+    readonly providerInfo: StepProviderInfo;
+  }): WorkflowStepExecutionEventContext {
+    const workflowStack = requireWorkflowResumeStackSnapshot(
+      this.deps.getCurrentWorkflowStack?.(),
+    );
+    const findingScopeIdentity = this.deps.findingLedgerStore?.ledgerIdentity;
+    const findingIds = findingScopeIdentity === undefined
+      ? undefined
+      : this.deps.findingLedgerStore
+        ?.loadLedger()
+        .findings
+        .map((finding) => finding.id);
+    if (findingScopeIdentity !== undefined && findingIds === undefined) {
+      throw new Error(
+        `Finding IDs are missing for scope "${findingScopeIdentity}"`,
+      );
+    }
+    const provider = input.providerInfo.provider
+      ?? this.deps.executionProvider;
+    if (provider === undefined) {
+      throw new Error(
+        `Step report "${input.resumeStepName}" has no resolved provider`,
+      );
+    }
+    const model = input.providerInfo.modelSource !== undefined
+      ? input.providerInfo.model ?? '(default)'
+      : input.providerInfo.model
+        ?? (
+          provider === this.deps.executionProvider
+            ? this.deps.executionModel
+            : undefined
+        )
+        ?? '(default)';
+    return Object.freeze({
+      iteration: input.iteration,
+      workflowName: this.deps.getWorkflowName(),
+      resumeStepName: input.resumeStepName,
+      stepIteration: input.stepIteration,
+      providerInfo: Object.freeze({ ...input.providerInfo }),
+      provider,
+      model,
+      workflowStack,
+      findingScopeIdentity,
+      findingIds: findingIds === undefined
+        ? undefined
+        : Object.freeze([...findingIds]),
+    });
+  }
+
   /** Collect step:report events for each report file that exists */
-  emitStepReports(step: WorkflowStep): void {
+  emitStepReports(
+    step: WorkflowStep,
+    execution: {
+      readonly iteration: number;
+      readonly resumeStepName: string;
+      readonly stepIteration: number;
+      readonly providerInfo: StepProviderInfo;
+    },
+  ): void {
     if (!step.outputContracts || step.outputContracts.length === 0) return;
+    const context = this.createReportExecutionContext(execution);
     const baseDir = join(this.deps.getCwd(), this.deps.getReportDir());
 
     for (const entry of step.outputContracts) {
       const fileName = entry.name;
-      this.checkReportFile(step, baseDir, fileName);
+      this.checkReportFile(step, baseDir, fileName, context);
     }
   }
 
   // Collects report file paths that exist (used by WorkflowEngine to emit events)
-  private reportFiles: Array<{ step: WorkflowStep; filePath: string; fileName: string }> = [];
+  private reportFiles: Array<{
+    step: WorkflowStep;
+    filePath: string;
+    fileName: string;
+    context: WorkflowStepExecutionEventContext;
+  }> = [];
 
   /** Check if report file exists and collect for emission */
-  private checkReportFile(step: WorkflowStep, baseDir: string, fileName: string): void {
+  private checkReportFile(
+    step: WorkflowStep,
+    baseDir: string,
+    fileName: string,
+    context: WorkflowStepExecutionEventContext,
+  ): void {
     const filePath = join(baseDir, fileName);
     if (existsSync(filePath)) {
-      this.reportFiles.push({ step, filePath, fileName });
+      this.reportFiles.push({ step, filePath, fileName, context });
     }
   }
 
   /** Drain collected report files (called by engine after step execution) */
-  drainReportFiles(): Array<{ step: WorkflowStep; filePath: string; fileName: string }> {
+  drainReportFiles(): Array<{
+    step: WorkflowStep;
+    filePath: string;
+    fileName: string;
+    context: WorkflowStepExecutionEventContext;
+  }> {
     const files = this.reportFiles;
     this.reportFiles = [];
     return files;

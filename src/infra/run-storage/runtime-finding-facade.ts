@@ -1,6 +1,7 @@
 import type { FindingLedgerStore } from '../../core/workflow/findings/store.js';
 import type { RunReadContext } from './context.js';
 import { createRunFindingManagerStore } from './finding-manager-adapter.js';
+import { readTrustedFindingResumeSource } from './finding-resume-source.js';
 import {
   assertExactInput,
   type RuntimeBinding,
@@ -28,9 +29,17 @@ export function createRuntimeFindingCommands(
         );
       }
       assertProducerExecution(binding, producer);
-      const ledger = binding.executor.read((context) => (
-        readFindingAuthority(context, binding)
-      ));
+      const { ledger, trustedResumeSource } = binding.executor.read((context) => {
+        const resolvedLedger = readFindingAuthority(context, binding);
+        return {
+          ledger: resolvedLedger,
+          trustedResumeSource: readTrustedFindingResumeSource(
+            context,
+            binding.runId,
+            resolvedLedger.scopeId,
+          ),
+        };
+      });
       if (ledger.workflowName !== input.workflowName) {
         throw new Error(
           `Finding authority workflow mismatch: expected "${input.workflowName}", got "${ledger.workflowName}"`,
@@ -44,9 +53,8 @@ export function createRuntimeFindingCommands(
         workflowName: input.workflowName,
         producerScopeId: producer.scopeId,
         producerExecutionId: producer.executionId,
-        ...(ledger.scopeId === 'root'
-          && binding.trustedFindingResumeSource !== undefined
-          ? { trustedResumeSource: binding.trustedFindingResumeSource }
+        ...(trustedResumeSource !== undefined
+          ? { trustedResumeSource }
           : {}),
       });
     },
@@ -129,13 +137,10 @@ function readFindingAuthority(
       ON heads.run_id = ?
       AND heads.scope_id = authority_scope.scope_id
     WHERE
-      (
+      authority_scope.distance = 0
+      OR (
         authority_scope.authority_kind = 'workflow_call'
         AND authority_scope.distance > 0
-      )
-      OR (
-        authority_scope.authority_kind IN ('root', 'parallel')
-        AND authority_scope.distance = 0
       )
     ORDER BY authority_scope.distance
     LIMIT 1

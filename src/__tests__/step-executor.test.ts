@@ -6,7 +6,10 @@ import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/Ste
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import type { WorkflowState } from '../core/models/types.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
-import { makeStep } from './test-helpers.js';
+import {
+  makeStep,
+  makeWorkflowResumePointEntry,
+} from './test-helpers.js';
 import { createTeamLeaderPlanningStep } from '../core/workflow/engine/team-leader-common.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -232,6 +235,7 @@ describe('StepExecutor', () => {
     mkdirSync(join(cwd, reportDir), { recursive: true });
     const findingLedgerStore = createFindingLedgerStore({
       projectCwd: cwd,
+      runId: 'test-run',
       reportDir: join(cwd, reportDir),
       workflowName: 'test-workflow',
       ledgerPath: '.takt/findings/ledger.json',
@@ -299,6 +303,9 @@ describe('StepExecutor', () => {
       getInteractive: () => false,
       getWorkflowSteps: () => [{ name: 'review' }],
       getWorkflowName: () => 'test-workflow',
+      getCurrentWorkflowStack: () => [
+        makeWorkflowResumePointEntry({ step: 'review' }),
+      ],
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
       structuredCaller: {

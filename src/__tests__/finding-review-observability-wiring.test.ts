@@ -11,6 +11,8 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig, WorkflowStep } from '../core/models/types.js';
+import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
@@ -170,6 +172,24 @@ function makeParallelReviewerConfig(): WorkflowConfig {
   };
 }
 
+function createTestFindingAuthorityResolver(config: WorkflowConfig, cwd: string) {
+  const contract = config.findingContract;
+  if (contract === undefined) {
+    throw new Error('Expected Finding Contract');
+  }
+  const store = createFindingLedgerStore({
+    projectCwd: cwd,
+    runId: 'test-report-dir',
+    reportDir: buildRunPaths(cwd, 'test-report-dir').reportsAbs,
+    workflowName: config.name,
+    ledgerPath: contract.ledgerPath,
+    rawFindingsPath: contract.rawFindingsPath,
+  });
+  return {
+    resolve: () => store,
+  };
+}
+
 describe('finding reviewer observability wiring', () => {
   const exporter = new CapturingSpanExporter();
   let sdk: NodeSDK;
@@ -270,10 +290,12 @@ describe('finding reviewer observability wiring', () => {
     { mode: 'full' as const },
     { mode: 'single' as const },
   ])('single reviewer shares prompt snapshot, schema enum, provider outputSchema, and real phase span in $mode mode', async ({ mode }) => {
-    const engine = new WorkflowEngine(makeSingleReviewerConfig(), cwd, 'task', {
+    const config = makeSingleReviewerConfig();
+    const engine = new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
+      findingAuthorityResolver: createTestFindingAuthorityResolver(config, cwd),
       observability: { enabled: true },
       sanitizeObservabilityText: (text) => text,
     });
@@ -323,10 +345,12 @@ describe('finding reviewer observability wiring', () => {
   });
 
   it('parallel reviewers expose real phase spans whose instructions match the shared provider schema snapshot', async () => {
-    await new WorkflowEngine(makeParallelReviewerConfig(), cwd, 'task', {
+    const config = makeParallelReviewerConfig();
+    await new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
+      findingAuthorityResolver: createTestFindingAuthorityResolver(config, cwd),
       observability: { enabled: true },
       sanitizeObservabilityText: (text) => text,
     }).run();
@@ -381,10 +405,12 @@ describe('finding reviewer observability wiring', () => {
       };
     });
 
-    await new WorkflowEngine(makeSingleReviewerConfig(), cwd, 'task', {
+    const config = makeSingleReviewerConfig();
+    await new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
+      findingAuthorityResolver: createTestFindingAuthorityResolver(config, cwd),
     }).runSingleIteration();
 
     const ledger = readFindingLedger(cwd);

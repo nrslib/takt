@@ -61,6 +61,7 @@ export type {
   RuntimePrepareEntry,
   WorkflowRuntimeConfig,
   WorkflowStepKind,
+  WorkflowResumeFrameKind,
   WorkflowCallOverrides,
   WorkflowSessionMode,
   WorkflowPromotionEntry,

@@ -81,6 +81,7 @@ const PROJECT_LOCAL_DEFAULTS: Partial<Record<ConfigParameterKey, unknown>> = {
   syncProjectLocalTaktOnRetry: true,
   autoRequeueMaxAttempts: 0,
   ignoreExceed: false,
+  runStorage: Object.freeze({ backend: 'file' }),
 };
 
 function loadProjectConfigCached(projectDir: string) {

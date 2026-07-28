@@ -94,10 +94,6 @@ vi.mock('../features/tasks/execute/outputFns.js', () => ({
   createPrefixedStreamHandler: vi.fn(() => vi.fn()),
 }));
 
-vi.mock('../features/tasks/execute/traceReportWriter.js', () => ({
-  createTraceReportWriter: vi.fn(() => vi.fn()),
-}));
-
 vi.mock('../features/tasks/execute/sessionLogger.js', () => ({
   SessionLogger: vi.fn().mockImplementation(() => ({
     writeInteractiveMetadata: vi.fn(),
@@ -108,7 +104,61 @@ vi.mock('../core/runtime/runtime-environment.js', () => ({
   resolveRuntimeConfig: vi.fn(() => undefined),
 }));
 
-import { createWorkflowExecutionBootstrap } from '../features/tasks/execute/workflowExecutionBootstrap.js';
+import {
+  createWorkflowExecutionBootstrap as createWorkflowExecutionBootstrapImpl,
+} from '../features/tasks/execute/workflowExecutionBootstrap.js';
+import type {
+  WorkflowRunBootstrap,
+} from '../features/tasks/execute/workflowRunStorage.js';
+import { RunMetaManager } from '../features/tasks/execute/runMeta.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import {
+  generateReportDir,
+  isValidReportDirName,
+} from '../shared/utils/index.js';
+
+async function createWorkflowExecutionBootstrap(
+  ...args: [
+    Parameters<typeof createWorkflowExecutionBootstrapImpl>[0],
+    Parameters<typeof createWorkflowExecutionBootstrapImpl>[1],
+    Parameters<typeof createWorkflowExecutionBootstrapImpl>[2],
+    Parameters<typeof createWorkflowExecutionBootstrapImpl>[3],
+  ]
+) {
+  return await createWorkflowExecutionBootstrapImpl(
+    ...args,
+    createRunBootstrap(
+      args[2],
+      args[1],
+      args[3].reportDirName,
+    ),
+  );
+}
+
+function createRunBootstrap(
+  cwd: string,
+  task: string,
+  requestedRunSlug?: string,
+): WorkflowRunBootstrap {
+  const runSlug = requestedRunSlug ?? generateReportDir(task);
+  if (!isValidReportDirName(runSlug)) {
+    throw new Error(`Invalid reportDirName: ${runSlug}`);
+  }
+  return {
+    runSlug,
+    runPaths: buildRunPaths(cwd, runSlug),
+    publishRunMeta(input): RunMetaManager {
+      return new RunMetaManager(
+        input.runPaths,
+        input.task,
+        input.workflowName,
+        'file',
+        input.resumeSource,
+        input.options,
+      );
+    },
+  };
+}
 
 const workflowConfig: WorkflowConfig = {
   name: 'default',

@@ -89,6 +89,30 @@ vi.mock('../core/workflow/index.js', async () => {
   };
 });
 
+vi.mock('../features/tasks/execute/workflowRunStorage.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../features/tasks/execute/workflowRunStorage.js')
+  >();
+  const { createWorkflowRunStorageCompositionTestDouble } = await import(
+    './helpers/run-storage.js'
+  );
+  return {
+    ...actual,
+    createWorkflowRunComposition: (
+      ...args: Parameters<typeof actual.createWorkflowRunComposition>
+    ) => createWorkflowRunStorageCompositionTestDouble(
+      actual.createWorkflowRunComposition,
+      args[0],
+      args[1],
+      {
+        sessionId: 'test-session-id',
+        startedAt: '2026-04-01T00:00:00.000Z',
+        projectTerminalArtifacts: false,
+      },
+    ),
+  };
+});
+
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: mockGetProvider,
 }));
@@ -107,6 +131,7 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: vi.fn().mockReturnValue({}),
   updateWorktreeSession: vi.fn(),
+  resolveWorkflowConfigValue: vi.fn(() => ({ backend: 'file' })),
   resolveWorkflowConfigValues: vi.fn().mockReturnValue({
     notificationSound: true,
     notificationSoundEvents: {},
@@ -148,16 +173,31 @@ vi.mock('../shared/ui/index.js', () => ({
 
 vi.mock('../infra/fs/index.js', () => ({
   generateSessionId: vi.fn().mockReturnValue('test-session-id'),
-  createSessionLog: vi.fn().mockReturnValue({
-    startTime: new Date().toISOString(),
+  createSessionLog: vi.fn().mockImplementation((
+    task,
+    projectDir,
+    workflowName,
+    options,
+  ) => ({
+    task,
+    projectDir,
+    workflowName,
+    startTime: options.startTime,
     iterations: 0,
-  }),
+    status: 'running',
+    history: [],
+  })),
   finalizeSessionLog: vi.fn().mockImplementation((log, status) => ({
     ...log,
     status,
     endTime: new Date().toISOString(),
   })),
-  initNdjsonLog: vi.fn().mockReturnValue('/tmp/test-log.jsonl'),
+  initNdjsonLog: vi.fn((
+    sessionId: string,
+    _task: string,
+    _workflowName: string,
+    options: { logsDir: string },
+  ) => join(options.logsDir, `${sessionId}.jsonl`)),
   appendNdjsonLine: vi.fn(),
 }));
 
@@ -755,8 +795,20 @@ steps:
     const childResumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -764,7 +816,13 @@ steps:
     const parentResumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183900,
@@ -780,7 +838,12 @@ steps:
         timestamp: new Date('2026-04-01T00:00:00.000Z'),
       }, workflowCallStep.instruction);
       instance.currentResumePoint = parentResumePoint;
-      instance.emit('workflow:abort', { status: 'aborted', iteration: 7 }, 'post child failure');
+      instance.emit(
+        'workflow:abort',
+        { status: 'aborted', iteration: 7 },
+        'post child failure',
+        'runtime_error',
+      );
       return { status: 'aborted', iteration: 7 };
     };
 
@@ -799,7 +862,7 @@ steps:
     const lastWrite = metaWrites.at(-1);
     expect(lastWrite).toBeDefined();
     const serialized = JSON.parse(String(lastWrite?.[1]));
-    expect(serialized.status).toBe('aborted');
+    expect(serialized.status).toBe('failed');
     expect(serialized.resume_point).toEqual(parentResumePoint);
   });
 
@@ -817,8 +880,20 @@ steps:
     const childResumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -826,7 +901,13 @@ steps:
     const parentResumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183900,
@@ -858,7 +939,7 @@ steps:
     const lastWrite = metaWrites.at(-1);
     expect(lastWrite).toBeDefined();
     const serialized = JSON.parse(String(lastWrite?.[1]));
-    expect(serialized.status).toBe('aborted');
+    expect(serialized.status).toBe('failed');
     expect(serialized.resume_point).toEqual(parentResumePoint);
   });
 

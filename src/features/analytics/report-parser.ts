@@ -160,6 +160,8 @@ const FINDING_CONTRACT_RULE_ID = 'finding-contract';
 export function buildReviewFindingEventsFromLedger(
   ledger: FindingLedger,
   iteration: number,
+  workflowName: string,
+  scopeIdentity: string,
   runId: string,
   timestamp: Date,
 ): ReviewFindingEvent[] {
@@ -180,6 +182,8 @@ export function buildReviewFindingEventsFromLedger(
       file,
       line,
       iteration,
+      workflowName,
+      scopeIdentity,
       runId,
       timestamp: timestamp.toISOString(),
     };
@@ -194,9 +198,20 @@ export function emitFixActionEvents(
   iteration: number,
   runId: string,
   timestamp: Date,
+  workflowName: string,
+  scopeIdentity: string,
   findingContractFindingIds?: ReadonlySet<string>,
 ): void {
-  emitActionEvents(responseContent, 'fixed', iteration, runId, timestamp, findingContractFindingIds);
+  emitActionEvents(
+    responseContent,
+    'fixed',
+    iteration,
+    runId,
+    timestamp,
+    workflowName,
+    scopeIdentity,
+    findingContractFindingIds,
+  );
 }
 
 export function emitRebuttalEvents(
@@ -204,9 +219,20 @@ export function emitRebuttalEvents(
   iteration: number,
   runId: string,
   timestamp: Date,
+  workflowName: string,
+  scopeIdentity: string,
   findingContractFindingIds?: ReadonlySet<string>,
 ): void {
-  emitActionEvents(responseContent, 'rebutted', iteration, runId, timestamp, findingContractFindingIds);
+  emitActionEvents(
+    responseContent,
+    'rebutted',
+    iteration,
+    runId,
+    timestamp,
+    workflowName,
+    scopeIdentity,
+    findingContractFindingIds,
+  );
 }
 
 function emitActionEvents(
@@ -215,6 +241,8 @@ function emitActionEvents(
   iteration: number,
   runId: string,
   timestamp: Date,
+  workflowName: string,
+  scopeIdentity: string,
   findingContractFindingIds?: ReadonlySet<string>,
 ): void {
   const matches = responseContent.match(FINDING_ID_PATTERN);
@@ -232,6 +260,8 @@ function emitActionEvents(
       findingId,
       action,
       iteration,
+      workflowName,
+      scopeIdentity,
       runId,
       timestamp: timestamp.toISOString(),
     };

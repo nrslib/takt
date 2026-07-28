@@ -412,7 +412,13 @@ describe('requeueFailedTask', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'implement', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'implement',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 3,
       elapsed_ms: 1000,
@@ -521,8 +527,20 @@ describe('requeueFailedTask', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -944,8 +962,20 @@ describe('retryFailedTask', () => {
       resumePoint: {
         version: 1,
         stack: [
-          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          {
+            workflow: 'default',
+            workflow_ref: 'default',
+            step: 'delegate',
+            kind: 'workflow_call',
+            occurrence: 1,
+          },
+          {
+            workflow: 'takt/coding',
+            workflow_ref: 'takt/coding',
+            step: 'review',
+            kind: 'agent',
+            occurrence: 1,
+          },
         ],
         iteration: 7,
         elapsed_ms: 183245,
@@ -1038,8 +1068,20 @@ describe('retryFailedTask', () => {
       resumePoint: {
         version: 1,
         stack: [
-          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          {
+            workflow: 'default',
+            workflow_ref: 'default',
+            step: 'delegate',
+            kind: 'workflow_call',
+            occurrence: 1,
+          },
+          {
+            workflow: 'takt/coding',
+            workflow_ref: 'takt/coding',
+            step: 'review',
+            kind: 'agent',
+            occurrence: 1,
+          },
         ],
         iteration: 7,
         elapsed_ms: 183245,
@@ -1078,8 +1120,20 @@ describe('retryFailedTask', () => {
       resumePoint: {
         version: 1,
         stack: [
-          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          {
+            workflow: 'default',
+            workflow_ref: 'default',
+            step: 'delegate',
+            kind: 'workflow_call',
+            occurrence: 1,
+          },
+          {
+            workflow: 'takt/coding',
+            workflow_ref: 'takt/coding',
+            step: 'review',
+            kind: 'agent',
+            occurrence: 1,
+          },
         ],
         iteration: 7,
         elapsed_ms: 183245,
@@ -1119,8 +1173,20 @@ describe('retryFailedTask', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'implement', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'implement',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -1160,8 +1226,20 @@ describe('retryFailedTask', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'implement', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'implement',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -1516,8 +1594,20 @@ describe('retryFailedTask', () => {
     const resumePoint = {
       version: 1 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,

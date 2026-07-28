@@ -15,6 +15,7 @@ import {
 import {
   cleanupRealRunStorages,
   createRealRunStorage,
+  createTestBootstrapSeed,
 } from './helpers/run-storage.js';
 
 afterEach(cleanupRealRunStorages);
@@ -88,6 +89,11 @@ describe('run storage schema contract', () => {
     expect(enabledDb.prepare(`
       SELECT count(*) AS count FROM finding_ledger_heads
     `).get()).toEqual({ count: 1 });
+    const runColumns = disabledDb.prepare('PRAGMA table_info(runs)')
+      .all()
+      .map((column) => column.name);
+    expect(runColumns).toContain('run_id');
+    expect(runColumns).not.toContain('slug');
     disabledDb.close();
     enabledDb.close();
   });
@@ -229,7 +235,7 @@ describe('run storage schema contract', () => {
       .toThrow(/Finding Contract scope authority invariant/i);
   });
 
-  it('fails fast when a workflow_call owns a Finding authority head', () => {
+  it('accepts a workflow_call Finding authority matching its definition', () => {
     const { databasePath, root } = createRealRunStorage({
       findingContractEnabled: true,
     });
@@ -237,25 +243,24 @@ describe('run storage schema contract', () => {
       ownerKey: 'workflow-head-owner',
       leaseDurationMs: 9_000,
     });
-    root.runtime({ lease: owner }).scopes.createParallelChild({
-      scopeKey: 'scope-kind-forgery',
-    });
-    const parallelScopeId = root.readResumeSnapshot().scopes.find(
-      (scope) => scope.kind === 'parallel',
-    )!.scopeId;
-    root.close();
-    mutateWithTriggerDisabled(
-      databasePath,
-      'child_scope_identity_guard',
-      (database) => {
-        database.prepare(`
-          UPDATE scopes SET kind = 'workflow_call' WHERE scope_id = ?
-        `).run(parallelScopeId);
+    root.runtime({ lease: owner }).scopes.createWorkflowCallChild({
+      scopeKey: 'owned-finding-authority',
+      findingContractEnabled: true,
+      workflowDefinition: {
+        name: 'child',
+        codecName: 'json-v1',
+        definition: '{"name":"child"}',
       },
-    );
+    });
+    root.close();
 
-    expect(() => openRunStorage({ databasePath }))
-      .toThrow(/Finding Contract scope authority invariant/i);
+    const reopened = openRunStorage({ databasePath });
+    expect(reopened.readResumeSnapshot().findingHeads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ workflow_name: 'child' }),
+      ]),
+    );
+    reopened.close();
   });
 
   it('fails fast when a Finding head workflow differs from its scope definition', () => {
@@ -282,7 +287,7 @@ describe('run storage schema contract', () => {
     'missing parallel scope',
     'missing parallel head',
     'missing current revision',
-    'workflow_call head',
+    'workflow_call head mismatch',
     'workflow name mismatch',
   ])('fails fast for live Finding authority corruption: %s', (corruption) => {
     const { databasePath, root } = createRealRunStorage({
@@ -337,13 +342,24 @@ describe('run storage schema contract', () => {
           `).run(parallelScopeId);
         },
       );
-    } else if (corruption === 'workflow_call head') {
+    } else if (corruption === 'workflow_call head mismatch') {
       mutateWithTriggerDisabled(
         databasePath,
         'child_scope_identity_guard',
         (database) => {
           database.prepare(`
             UPDATE scopes SET kind = 'workflow_call' WHERE scope_id = ?
+          `).run(parallelScopeId);
+        },
+      );
+      mutateWithTriggerDisabled(
+        databasePath,
+        'finding_ledger_head_transition_guard',
+        (database) => {
+          database.prepare(`
+            UPDATE finding_ledger_heads
+            SET workflow_name = 'forged-workflow'
+            WHERE scope_id = ?
           `).run(parallelScopeId);
         },
       );
@@ -367,8 +383,11 @@ describe('run storage schema contract', () => {
     expect(() => resumeRunStorage({
       databasePath: `${databasePath}.corrupt-resume-${corruption.replaceAll(' ', '-')}`,
       source: root,
+      bootstrapSeed: createTestBootstrapSeed({
+        sessionId: 'corrupt-finding-resume-session',
+      }),
       run: {
-        slug: 'corrupt-finding-resume',
+        runId: 'corrupt-finding-resume',
         findingContractEnabled: true,
       },
       workflowDefinition: {
@@ -440,8 +459,11 @@ describe('run storage schema contract', () => {
     expect(() => resumeRunStorage({
       databasePath: `${databasePath}.corrupt-resume`,
       source: root,
+      bootstrapSeed: createTestBootstrapSeed({
+        sessionId: 'corrupt-finding-history-resume-session',
+      }),
       run: {
-        slug: 'corrupt-finding-history-resume',
+        runId: 'corrupt-finding-history-resume',
         findingContractEnabled: true,
       },
       workflowDefinition: {
@@ -517,7 +539,16 @@ describe('run storage schema contract', () => {
       leaseDurationMs: 9_000,
     });
     clock.set(2_000);
-    root.terminalizeRun(owner, 'failed');
+    root.finishRun(owner, {
+      status: 'failed',
+      failureReason: 'test failure',
+      publication: {
+        status: 'failed',
+        iteration: 1,
+        reason: 'test failure',
+        payload: '{}',
+      },
+    });
     const snapshot = root.readResumeSnapshot();
 
     expect(snapshot.run).toMatchObject({ status: 'failed', terminalAt: 2_000 });
@@ -529,7 +560,15 @@ describe('run storage schema contract', () => {
       terminal_status: 'failed',
       terminalized_at: 2_000,
     });
-    expect(() => root.terminalizeRun(owner, 'completed')).toThrow(/stale|terminal/i);
+    expect(() => root.finishRun(owner, {
+      status: 'completed',
+      publication: {
+        status: 'completed',
+        iteration: 1,
+        payload: '{}',
+      },
+    }))
+      .toThrow(/stale|terminal/i);
   });
 
   it('takes bootstrap timestamps from the trusted clock', () => {

@@ -10,6 +10,9 @@ import type {
   NdjsonWorkflowStackEntry,
 } from '../../shared/utils/index.js';
 import { AGENT_FAILURE_CATEGORIES, type AgentFailureCategory } from '../../shared/types/agent-failure.js';
+import {
+  parseCanonicalWorkflowResumeFrame,
+} from '../../shared/types/workflow-resume.js';
 
 export interface SpanSnapshot {
   name: string;
@@ -257,22 +260,16 @@ function parseWorkflowStack(value: string | undefined): NdjsonWorkflowStackEntry
   if (!value) {
     return undefined;
   }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!Array.isArray(parsed)) {
-      return undefined;
-    }
-    const stack: NdjsonWorkflowStackEntry[] = [];
-    for (const entry of parsed) {
-      if (!isWorkflowStackEntry(entry)) {
-        return undefined;
-      }
-      stack.push(entry);
-    }
-    return stack;
-  } catch {
-    return undefined;
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new Error('Workflow stack must be an array');
   }
+  return parsed.map((entry, index) => (
+    parseCanonicalWorkflowResumeFrame(
+      entry,
+      `workflow stack[${index}]`,
+    )
+  ));
 }
 
 function parseJsonValue(value: string | undefined): unknown {
@@ -298,17 +295,6 @@ function parseJsonRecord(value: string | undefined): Record<string, string> | un
     }
   }
   return result;
-}
-
-function isWorkflowStackEntry(value: unknown): value is NdjsonWorkflowStackEntry {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-  const entry = value as Record<string, unknown>;
-  return typeof entry.workflow === 'string'
-    && (entry.workflow_ref === undefined || typeof entry.workflow_ref === 'string')
-    && typeof entry.step === 'string'
-    && (entry.kind === 'agent' || entry.kind === 'system' || entry.kind === 'workflow_call');
 }
 
 function isAgentFailureCategory(value: string | undefined): value is AgentFailureCategory {

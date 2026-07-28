@@ -14,6 +14,7 @@ import {
   cleanupRealRunStorages,
   createRealRunStorage,
 } from './helpers/run-storage.js';
+import { openRunStorage } from '../infra/run-storage/index.js';
 
 afterEach(cleanupRealRunStorages);
 
@@ -363,19 +364,19 @@ describe('RunUnitOfWork and lease fencing', () => {
       lease: Object.freeze({}) as never,
     })).toThrow(/Lease handle is forged/i);
 
-    const independent = createIndependentUnitOfWork();
     for (const sql of [
       'BEGIN',
       'CREATE TABLE bypass (value TEXT)',
       "UPDATE runs SET status = 'forged'",
       "INSERT INTO operations (operation_id) VALUES ('forged')",
     ]) {
+      const independent = createIndependentUnitOfWork();
       expect(() => independent.uow.write(
         independent.owner,
         (context) => context.run(sql),
-      )).toThrow(/authorized|not authorized|transaction/i);
+      )).toThrow(/authorized|not authorized|transaction|stale/i);
+      independent.close();
     }
-    independent.close();
   });
 
   it('rejects caller-controlled authority timestamps and generated IDs', () => {
@@ -400,12 +401,148 @@ describe('RunUnitOfWork and lease fencing', () => {
     clock.set(2_000);
     root.heartbeatLease(owner, 9_000);
     clock.set(3_000);
-    root.terminalizeRun(owner, 'completed');
+    const receipt = root.finishRun(owner, {
+      status: 'completed',
+      publication: {
+        status: 'completed',
+        iteration: 1,
+        payload: '{}',
+      },
+    });
+    expect(receipt).toMatchObject({
+      runId: 'run-1',
+      eventId: expect.stringMatching(/^[a-f0-9]{64}$/),
+      runStatus: 'completed',
+      iteration: 1,
+      payloadDigest:
+        '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a',
+      terminalAt: 3_000,
+    });
 
     expect(root.readResumeSnapshot().run).toMatchObject({
       status: 'completed',
       terminalAt: 3_000,
     });
+    expect(root.readTerminalPublication()).toMatchObject({
+      status: 'completed',
+      iteration: 1,
+      terminalAt: 3_000,
+      payload: '{}',
+      stages: ['meta', 'session', 'trace'],
+    });
+    clock.set(4_000);
+    for (const stage of ['meta', 'session', 'trace'] as const) {
+      const claim = root.claimTerminalPublicationStage({
+        claimDurationMs: 9_000,
+      });
+      expect(claim).toMatchObject({ stage });
+      root.acknowledgeTerminalPublicationStage(claim!);
+    }
+    expect(root.readTerminalPublication()).toMatchObject({
+      status: 'completed',
+      iteration: 1,
+      terminalAt: 3_000,
+      payload: '{}',
+      stages: [],
+      publishedAt: 4_000,
+    });
     expect(() => root.heartbeatLease(owner, 9_000)).toThrow(/stale|terminal/i);
+  });
+
+  it('terminal stageをtransactional claimし、同時ownerを排除して期限後に回収する', () => {
+    const { databasePath, root, clock } = createRealRunStorage();
+    const owner = claim(root);
+    clock.set(2_000);
+    root.finishRun(owner, {
+      status: 'completed',
+      publication: {
+        status: 'completed',
+        iteration: 1,
+        payload: '{}',
+      },
+    });
+
+    clock.set(3_000);
+    const first = root.claimTerminalPublicationStage({
+      claimDurationMs: 1_000,
+    });
+    expect(first).toMatchObject({ stage: 'meta', generation: 1 });
+    const competingRecovery = openRunStorage({ databasePath });
+    try {
+      expect(competingRecovery.claimTerminalPublicationStage({
+        claimDurationMs: 1_000,
+      })).toBeUndefined();
+    } finally {
+      competingRecovery.close();
+    }
+
+    clock.set(4_001);
+    const recovered = root.claimTerminalPublicationStage({
+      claimDurationMs: 1_000,
+    });
+    expect(recovered).toMatchObject({ stage: 'meta', generation: 2 });
+    expect(() => root.acknowledgeTerminalPublicationStage(first!))
+      .toThrow(/stale/i);
+    root.acknowledgeTerminalPublicationStage(recovered!);
+    expect(root.readTerminalPublication()).toMatchObject({
+      stages: ['session', 'trace'],
+    });
+  });
+
+  it('rolls back every execution, scope, run, lease, and publication on terminal failure', () => {
+    const { databasePath, root } = createRealRunStorage();
+    const owner = claim(root);
+    const rootRuntime = root.runtime({ lease: owner });
+    rootRuntime.execution.startStep({
+      stepKey: 'root-step',
+      expectedScopeRevision: 0,
+    });
+    const childScope = rootRuntime.scopes.createParallelChild({
+      scopeKey: 'parallel-child',
+    });
+    root.runtime({ lease: owner, scope: childScope }).execution.startStep({
+      stepKey: 'child-step',
+      expectedScopeRevision: 0,
+    });
+
+    const injector = new DatabaseSync(databasePath);
+    injector.exec(`
+      CREATE TRIGGER injected_root_terminal_failure
+      BEFORE UPDATE OF status ON scope_runtime
+      WHEN OLD.scope_id = 'root' AND NEW.status = 'failed'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected root terminal failure');
+      END
+    `);
+    injector.close();
+
+    expect(() => root.finishRun(owner, {
+      status: 'failed',
+      failureReason: 'workflow failed',
+      publication: {
+        status: 'failed',
+        iteration: 2,
+        reason: 'workflow failed',
+        payload: '{}',
+      },
+    })).toThrow(/injected root terminal failure/i);
+
+    const snapshot = root.readResumeSnapshot();
+    expect(snapshot.run).toMatchObject({
+      status: 'running',
+      terminalAt: null,
+    });
+    expect(snapshot.leases[0]).toMatchObject({
+      terminalized_at: null,
+      terminal_status: null,
+    });
+    expect(snapshot.scopes).toHaveLength(2);
+    expect(snapshot.scopes.every(
+      (scope) => scope.runtime.status === 'running',
+    )).toBe(true);
+    expect(snapshot.scopes.flatMap(
+      (scope) => scope.stepExecutions,
+    ).every((execution) => execution.status === 'running')).toBe(true);
+    expect(root.readTerminalPublication()).toBeUndefined();
   });
 });
