@@ -1,0 +1,52 @@
+{
+  "reports": {
+    "1": {
+      "reviewScopeSnapshotId": "snapshot-json-assembly-1",
+      "output": {
+        "rawFindings": [
+          {
+            "rawFindingId": "raw-review-1",
+            "relation": "new",
+            "targetFindingId": "",
+            "familyTag": "resource-lifecycle",
+            "severity": "high",
+            "title": "Attachment cleanup is not guaranteed",
+            "location": "src/services/task-cleanup.ts:42-43",
+            "evidenceKind": "source_quote",
+            "verbatimExcerpt": "await cleanupAttachments();\nreturn task;",
+            "snapshotId": "snapshot-json-assembly-1",
+            "description": "`cleanupAttachments` must be awaited before returning the task.",
+            "suggestion": "Await `cleanupAttachments()` before returning."
+          }
+        ]
+      }
+    },
+    "2": {
+      "reviewScopeSnapshotId": "snapshot-json-assembly-2",
+      "output": {
+        "rawFindings": [
+          {
+            "rawFindingId": "raw-review-2",
+            "relation": "persists",
+            "targetFindingId": "F-0042",
+            "familyTag": "state-consistency",
+            "severity": "medium",
+            "title": "Session cache invalidation still runs too early",
+            "location": "src/cache/session-cache.ts:80",
+            "evidenceKind": "source_quote",
+            "verbatimExcerpt": "sessionCache.delete(sessionId);",
+            "snapshotId": "snapshot-json-assembly-2",
+            "description": "Cache invalidation still occurs before the durable session write.",
+            "suggestion": "Move cache invalidation after the durable write succeeds."
+          }
+        ]
+      }
+    },
+    "3": {
+      "reviewScopeSnapshotId": "snapshot-json-assembly-empty",
+      "output": {
+        "rawFindings": []
+      }
+    }
+  }
+}

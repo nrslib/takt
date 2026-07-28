@@ -24,6 +24,7 @@
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
     "eval:prompts": "npm run eval:prompts:prepare && node eval/scripts/run-evals.mjs",
+    "eval:finding-normalizer": "node eval/scripts/run-finding-normalizer-eval.mjs",
     "test": "npm run test:type-contracts && node scripts/run-npm-test.mjs",
     "test:type-contracts": "tsc --noEmit -p tsconfig.type-contracts.json",
     "test:unit": "vitest run --config vitest.config.unit.parallel.ts",
