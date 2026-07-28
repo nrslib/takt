@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FindingLedger, FindingLedgerEntry, FindingManagerOutput, RawFinding } from '../core/workflow/findings/types.js';
+import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 import {
   applyRejectedObservationAttachments,
   applyProvisionalSettlement,
@@ -20,15 +21,19 @@ import {
   completeInterpretations,
   countInterpretationEpochs,
   markInterpretationsApplied,
-  normalizeProvisionalInterpretationEpochs,
   releaseInterpretationReservations,
   resolveInterpretationAttempt,
+  syncProvisionalInterpretationEpochs,
 } from '../core/workflow/findings/interpretation-wal.js';
 import type { FindingManagerStore } from '../core/workflow/findings/store.js';
+import type { InterpretationLiveClaimRegistry } from '../core/workflow/findings/interpretation-live-claims.js';
 import {
+  applyManagerActionRecoveryLifecycleCommands,
   applyManagerActionRecovery,
   collectManagerActionRecoveryCandidates,
+  planManagerActionRecovery,
 } from '../core/workflow/findings/manager-action-recovery.js';
+import { issueManagerLifecycleAuthority } from '../core/workflow/findings/manager-lifecycle-authority.js';
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import { applyRawAdjudicationRecovery } from '../core/workflow/findings/raw-adjudication-commit.js';
 import {
@@ -62,6 +67,8 @@ import {
 import { resolveReviewIntegrityLimits } from '../core/workflow/findings/review-integrity.js';
 import { resolveStopBudgetLimits } from '../core/workflow/findings/stop-budget.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import { createRawRecoveryAttempt } from '../core/models/finding-raw-recovery.js';
+import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
 import { buildManagerCommitReport } from '../core/workflow/findings/manager-report.js';
 import {
   assertCanonicalIntakeRecoveryState,
@@ -175,7 +182,7 @@ function alignRecoveryLineageWithStoredRaw(
 }
 
 function ledger(findings: FindingLedgerEntry[], rawFindings: RawFinding[] = []): FindingLedger {
-  return {
+  const authorized = authorizeFindingLedgerFixture({
     workflowName: 'peer-review',
     nextId: 20,
     updatedAt: observation.timestamp,
@@ -184,6 +191,62 @@ function ledger(findings: FindingLedgerEntry[], rawFindings: RawFinding[] = []):
     rawFindings,
     conflicts: [],
     interpretations: [],
+  });
+  findings.forEach((finding, index) => {
+    Object.assign(finding, authorized.findings[index]);
+  });
+  return authorized;
+}
+
+function testInterpretationLiveClaims(
+  initiallyClaimed: readonly string[] = [],
+): InterpretationLiveClaimRegistry {
+  const claimed = new Set(initiallyClaimed);
+  return {
+    isClaimed: (_ledgerIdentity, reservationToken) => claimed.has(reservationToken),
+    acquire: (_ledgerIdentity, reservationToken) => {
+      if (claimed.has(reservationToken)) {
+        throw new Error(`Interpretation reservation "${reservationToken}" is already live`);
+      }
+      claimed.add(reservationToken);
+    },
+    release: (_ledgerIdentity, reservationToken) => {
+      claimed.delete(reservationToken);
+    },
+  };
+}
+
+function rawRecoveryOrigin(
+  current: FindingLedger,
+  finding: FindingLedgerEntry,
+  sourceRawFindingId: string,
+  attempt = 1,
+) {
+  const expectedHead = captureFindingLifecycleHead(
+    current,
+    'finding',
+    finding.id,
+  );
+  if (expectedHead === undefined) {
+    throw new Error(`Missing lifecycle head for ${finding.id}`);
+  }
+  const durableAttempt = createRawRecoveryAttempt({
+    provisionalFindingId: finding.id,
+    expectedHead,
+    sourceRawFindingId,
+    sourceRawIntegrityDigest: null,
+    promptSnapshotDigest: '1'.repeat(64),
+    attempt,
+    startedAt: observation,
+  });
+  return {
+    attemptId: durableAttempt.attemptId,
+    provisionalFindingId: finding.id,
+    sourceRawFindingId,
+    expectedHead,
+    expectedProvisionalRevision: expectedHead.revision,
+    attempt,
+    recoveryOrigin: snapshotProvisionalRecoveryOrigin(finding),
   };
 }
 
@@ -501,8 +564,8 @@ describe('provisional recovery', () => {
       }],
     };
 
-    const normalized = normalizeProvisionalInterpretationEpochs(current);
-    const unchanged = normalizeProvisionalInterpretationEpochs(normalized);
+    const normalized = syncProvisionalInterpretationEpochs(current, observation);
+    const unchanged = syncProvisionalInterpretationEpochs(normalized, observation);
 
     expect(normalized.findings[0]?.provisional?.interpretationEpochs).toBe(1);
     expect(normalized.findings[0]?.revision).toBe(2);
@@ -532,10 +595,10 @@ describe('provisional recovery', () => {
       }],
     };
 
-    const normalized = normalizeProvisionalInterpretationEpochs(current);
+    const normalized = syncProvisionalInterpretationEpochs(current, observation);
 
     expect(normalized).toBe(current);
-    expect(normalized.findings[0]).toBe(process);
+    expect(normalized.findings[0]).toBe(current.findings[0]);
     expect(normalized.findings[0]?.provisional?.interpretationEpochs).toBe(0);
     expect(normalized.findings[0]?.revision).toBe(1);
   });
@@ -610,7 +673,7 @@ describe('provisional recovery', () => {
 
   it('increments revision for a rejected observation attachment and rejects a pre-attachment precondition', () => {
     const process = provisional('F-0001', 'raw-meaning-ambiguous');
-    const current = ledger([process]);
+    const current = ledger([process], [raw('rejected-raw-1')]);
     const captured = captureFindingPreconditions(current).get(process.id)!;
 
     const attached = applyRejectedObservationAttachments(
@@ -619,6 +682,7 @@ describe('provisional recovery', () => {
         targetFindingId: process.id,
         rawFindingId: 'rejected-raw-1',
         reason: 'source quote did not match',
+        rejectionCode: 'evidence_admission_failed',
       }],
       observation,
     );
@@ -771,26 +835,32 @@ describe('provisional recovery', () => {
       interpretationRecoveryFailures: plan.failures,
     }), previousLedger);
 
-    expect(mutation.ledger.findings.map((finding) => ({
-      id: finding.id,
-      attempts: finding.provisional?.adjudicationAttempts?.map((attempt) => ({
-        replayRawFindingId: attempt.replayRawFindingId,
-        reason: attempt.reason,
-      })),
+    expect(mutation.ledger.interpretations.filter((record) => (
+      record.stage === 'interpretation_retryable_failure'
+      || record.stage === 'interpretation_terminal_failure'
+    )).map((record) => ({
+      id: record.stage === 'interpretation_retryable_failure'
+        || record.stage === 'interpretation_terminal_failure'
+        ? record.provisionalFindingId
+        : '',
+      sourceRawFindingId: record.stage === 'interpretation_retryable_failure'
+        || record.stage === 'interpretation_terminal_failure'
+        ? record.sourceRawFindingId
+        : '',
+      reason: record.stage === 'interpretation_retryable_failure'
+        || record.stage === 'interpretation_terminal_failure'
+        ? record.failureReason
+        : '',
     }))).toEqual([
       {
         id: 'F-0001',
-        attempts: [{
-          replayRawFindingId: 'shared-missing-source',
-          reason: expect.stringContaining('missing raw finding'),
-        }],
+        sourceRawFindingId: 'shared-missing-source',
+        reason: expect.stringContaining('missing raw finding'),
       },
       {
         id: 'F-0002',
-        attempts: [{
-          replayRawFindingId: 'shared-missing-source',
-          reason: expect.stringContaining('missing raw finding'),
-        }],
+        sourceRawFindingId: 'shared-missing-source',
+        reason: expect.stringContaining('missing raw finding'),
       },
     ]);
     expect(mutation.result.rawFindingDispositions).toEqual([{
@@ -861,9 +931,10 @@ describe('provisional recovery', () => {
     };
     alignRecoveryLineageWithStoredRaw(first, sharedSource);
     alignRecoveryLineageWithStoredRaw(second, sharedSource);
+    const authorizedPreviousLedger = ledger([first, second], [sharedSource]);
     const previousLedger = {
-      ...ledger([first, second], [sharedSource]),
-      evidenceRecords: [proof],
+      ...authorizedPreviousLedger,
+      evidenceRecords: [...authorizedPreviousLedger.evidenceRecords, proof],
     };
     const plan = collectInterpretationRecoveryPlan({
       ledger: previousLedger,
@@ -953,9 +1024,11 @@ describe('provisional recovery', () => {
       },
     ]);
     const promoted = mutation.ledger.findings.find((finding) => finding.id === 'F-0001');
-    expect(promoted?.evidenceIds).toHaveLength(2);
+    expect(promoted?.evidenceIds).toHaveLength(3);
     expect(mutation.ledger.evidenceRecords.map((record) => record.evidenceId).sort())
-      .toEqual([...promoted!.evidenceIds].sort());
+      .toEqual([...new Set(
+        mutation.ledger.findings.flatMap((finding) => finding.evidenceIds),
+      )].sort());
     expect(promoted?.evidenceIds).toContain(proof.evidenceId);
   });
 
@@ -1008,14 +1081,11 @@ describe('provisional recovery', () => {
     const mutation = buildFindingManagerCommitMutation(params, previousLedger);
 
     expect(mutation.result.applied).toBe(true);
-    expect(mutation.ledger.findings.find((finding) => finding.id === missingProvenance.id))
-      .toEqual(expect.objectContaining({
-        provisional: expect.objectContaining({
-          adjudicationAttempts: [expect.objectContaining({
-            replayRawFindingId: sharedSource.rawFindingId,
-          })],
-        }),
-      }));
+    expect(mutation.ledger.interpretations).toContainEqual(expect.objectContaining({
+      provisionalFindingId: missingProvenance.id,
+      sourceRawFindingId: sharedSource.rawFindingId,
+      stage: expect.stringMatching(/^interpretation_(?:retryable|terminal)_failure$/u),
+    }));
     expect(mutation.ledger.rawFindings.filter(
       (rawFinding) => rawFinding.rawFindingId === sharedSource.rawFindingId,
     )).toHaveLength(1);
@@ -1170,7 +1240,7 @@ describe('provisional recovery', () => {
       interpretationRecoveryFailures: plan.failures,
     }), freshLedger);
 
-    expect(mutation.ledger.findings[0]?.provisional?.adjudicationAttempts).toBeUndefined();
+    expect(mutation.ledger.rawRecoveryAttempts).toEqual(freshLedger.rawRecoveryAttempts);
     expect(mutation.result.rawFindingDispositions).toEqual([{
       rawFindingId: 'missing-source',
       outcome: 'stale',
@@ -1214,7 +1284,15 @@ describe('provisional recovery', () => {
       observation,
     });
 
-    expect(applied).toEqual(fresh);
+    expect(applied.findings).toEqual(fresh.findings);
+    expect(applied.interpretations).toEqual([
+      ...fresh.interpretations,
+      expect.objectContaining({
+        provisionalFindingId: process.id,
+        sourceRawFindingId: 'missing-source',
+        stage: 'interpretation_retryable_failure',
+      }),
+    ]);
   });
 
   it('promotes the replay origin instead of creating a second finding', () => {
@@ -1251,28 +1329,14 @@ describe('provisional recovery', () => {
 
   it('makes failed replay recovery terminal after the bounded attempts are exhausted', () => {
     const process = provisional('F-0001', 'raw-adjudication-unresolved');
-    process.provisional!.adjudicationAttempts = [1, 2].map((attempt) => ({
-      attempt,
-      replayRawFindingId: `replay-${attempt}`,
-      reason: 'manager returned no substantive outcome',
-      at: observation,
-    }));
-
-    expect(classifyProvisionalRecovery(process.provisional!, 2)).toBe('terminal-adjudication');
+    expect(classifyProvisionalRecovery(process.provisional!, 2, 2)).toBe('terminal-adjudication');
   });
 
   it('applies the replay attempt limit to raw ambiguity recovery with and without a WAL epoch', () => {
     for (const interpretationEpochs of [0, 1]) {
       const process = provisional(`F-000${interpretationEpochs + 1}`, 'raw-meaning-ambiguous');
       process.provisional!.interpretationEpochs = interpretationEpochs;
-      process.provisional!.adjudicationAttempts = [1, 2].map((attempt) => ({
-        attempt,
-        replayRawFindingId: `replay-${interpretationEpochs}-${attempt}`,
-        reason: 'manager returned no substantive outcome',
-        at: observation,
-      }));
-
-      expect(classifyProvisionalRecovery(process.provisional!, 2)).toBe('terminal-adjudication');
+      expect(classifyProvisionalRecovery(process.provisional!, 2, 2)).toBe('terminal-adjudication');
     }
   });
 
@@ -1299,16 +1363,11 @@ describe('provisional recovery', () => {
           healthyReviewerStableKeys: new Set(),
         },
         output: emptyOutput(),
-        origins: new Map([[wire.rawFindingId, {
-          provisionalFindingId: processFinding.id,
-          sourceRawFindingId: source.rawFindingId,
-          expectedProvisionalRevision: 1,
-          attempt: 1,
-          recoveryOrigin: snapshotProvisionalRecoveryOrigin({
-            ...processFinding,
-            provisional: processFinding.provisional!,
-          }),
-        }]]),
+        origins: new Map([[wire.rawFindingId, rawRecoveryOrigin(
+          current,
+          processFinding,
+          source.rawFindingId,
+        )]]),
         failures: new Map(),
         capturedPreconditions: captureFindingPreconditions(current),
         invalidAttempts: [],
@@ -1334,9 +1393,9 @@ describe('provisional recovery', () => {
       outcome: 'audit_only',
       reason: 'replay source evidence did not pass admission at commit time',
     }]);
-    expect(recovered.ledger.findings[0]?.provisional?.adjudicationAttempts).toEqual([
-      expect.objectContaining({ attempt: 1, replayRawFindingId: wire.rawFindingId }),
-    ]);
+    expect(recovered.ledger.rawRecoveryAttempts).toEqual(current.rawRecoveryAttempts);
+    expect(captureFindingLifecycleHead(recovered.ledger, 'finding', processFinding.id))
+      .toEqual(captureFindingLifecycleHead(current, 'finding', processFinding.id));
   });
 
   it('does not attach a replay from a different reviewer provenance to the reserved provisional', () => {
@@ -1362,16 +1421,11 @@ describe('provisional recovery', () => {
           healthyReviewerStableKeys: new Set(),
         },
         output: emptyOutput(),
-        origins: new Map([[wire.rawFindingId, {
-          provisionalFindingId: processFinding.id,
-          sourceRawFindingId: source.rawFindingId,
-          expectedProvisionalRevision: 1,
-          attempt: 1,
-          recoveryOrigin: snapshotProvisionalRecoveryOrigin({
-            ...processFinding,
-            provisional: processFinding.provisional!,
-          }),
-        }]]),
+        origins: new Map([[wire.rawFindingId, rawRecoveryOrigin(
+          current,
+          processFinding,
+          source.rawFindingId,
+        )]]),
         failures: new Map(),
         capturedPreconditions: captureFindingPreconditions(current),
         invalidAttempts: [],
@@ -1433,16 +1487,11 @@ describe('provisional recovery', () => {
           healthyReviewerStableKeys: new Set(),
         },
         output: emptyOutput(),
-        origins: new Map([[wire.rawFindingId, {
-          provisionalFindingId: processFinding.id,
-          sourceRawFindingId: source.rawFindingId,
-          expectedProvisionalRevision: 1,
-          attempt: 1,
-          recoveryOrigin: snapshotProvisionalRecoveryOrigin({
-            ...processFinding,
-            provisional: processFinding.provisional!,
-          }),
-        }]]),
+        origins: new Map([[wire.rawFindingId, rawRecoveryOrigin(
+          current,
+          processFinding,
+          source.rawFindingId,
+        )]]),
         failures: new Map([[wire.rawFindingId, {
           kind: 'manager_unsupported',
           outcome: 'unsupported',
@@ -1478,7 +1527,7 @@ describe('provisional recovery', () => {
     }]);
   });
 
-  it('advances a started WAL record to a distinct attempt key and terminates the old attempt', async () => {
+  it('defers a durable started WAL record owned by the same run', async () => {
     const baseInterpretationKey = computeBaseInterpretationKey({
       reviewerStableKey: 'reviewer-stable-a',
       lineageKey: 'lineage-a',
@@ -1511,6 +1560,7 @@ describe('provisional recovery', () => {
     const claimed = new Set<string>();
     const store: FindingManagerStore = {
       ledgerIdentity: '/test/finding-provisional-recovery/reservation-ledger.json',
+      interpretationLiveClaims: testInterpretationLiveClaims(['interrupted-owner']),
       workflowName: current.workflowName,
       loadLedger: () => current,
       updateLedger: async (mutator) => {
@@ -1542,13 +1592,102 @@ describe('provisional recovery', () => {
       promptPreconditions: [],
     }], observation, stopBudgetRoundMarker);
 
-    expect(begun.interruptedPriorKeys).toEqual(new Set([
+    expect(begun.interruptedPriorKeys).toEqual(new Set());
+    expect(begun.deferredKeys).toEqual(new Set([
       computeInterpretationAttemptKey(baseInterpretationKey, 1),
     ]));
+    expect(begun.ownedByKey).toEqual(new Map());
+    expect(begun.attemptByBaseKey.get(baseInterpretationKey)).toEqual({
+      interpretationKey: computeInterpretationAttemptKey(baseInterpretationKey, 1),
+      attemptOrdinal: 1,
+    });
     expect(current.interpretations?.map((record) => record.stage)).toEqual([
+      'interpretation_started',
+    ]);
+  });
+
+  it('atomically interrupts a started attempt owned by another run and starts a new attempt', async () => {
+    const baseInterpretationKey = computeBaseInterpretationKey({
+      reviewerStableKey: 'reviewer-stable-a',
+      lineageKey: 'lineage-a',
+      candidateEvidenceHash: 'evidence-a',
+      canonicalIntegrityDigest: TEST_INTEGRITY_DIGEST,
+    });
+    const priorKey = computeInterpretationAttemptKey(baseInterpretationKey, 1);
+    let current: FindingLedger = {
+      ...ledger([]),
+      interpretations: [{
+        interpretationKey: priorKey,
+        baseInterpretationKey,
+        attemptOrdinal: 1,
+        reviewerStableKey: 'reviewer-stable-a',
+        lineageKey: 'lineage-a',
+        candidateEvidenceHash: 'evidence-a',
+        canonicalIntegrityDigest: TEST_INTEGRITY_DIGEST,
+        stage: 'interpretation_started',
+        startedAt: {
+          ...observation,
+          runId: 'crashed-run',
+        },
+        reservationToken: 'crashed-owner',
+        promptPreconditions: [],
+      }],
+    };
+    const claimed = new Set(['crashed-owner']);
+    const store: FindingManagerStore = {
+      ledgerIdentity: '/test/finding-provisional-recovery/cross-run-resume.json',
+      interpretationLiveClaims: testInterpretationLiveClaims(),
+      workflowName: current.workflowName,
+      loadLedger: () => current,
+      updateLedger: async (mutator) => {
+        const mutation = mutator(current);
+        current = mutation.ledger;
+        return mutation;
+      },
+      claimAdjudicationReservation: (token) => {
+        if (claimed.has(token)) {
+          return false;
+        }
+        claimed.add(token);
+        return true;
+      },
+      releaseAdjudicationReservation: (token) => { claimed.delete(token); },
+      saveLedgerSnapshot: () => {},
+      saveRawFindings: () => {},
+      saveManagerValidationReport: () => {},
+    };
+
+    const begun = await beginInterpretations(store, [{
+      baseInterpretationKey,
+      reviewerStableKey: 'reviewer-stable-a',
+      lineageKey: 'lineage-a',
+      candidateEvidenceHash: 'evidence-a',
+      canonicalIntegrityDigest: TEST_INTEGRITY_DIGEST,
+      promptPreconditions: [],
+    }], observation, stopBudgetRoundMarker);
+    const nextKey = computeInterpretationAttemptKey(baseInterpretationKey, 2);
+
+    expect(begun.interruptedPriorKeys).toEqual(new Set([priorKey]));
+    expect(begun.deferredKeys).toEqual(new Set());
+    expect(begun.ownedByKey).toEqual(new Map([[nextKey, nextKey]]));
+    expect(current.interpretations.map((record) => record.stage)).toEqual([
       'interpretation_interrupted',
       'interpretation_started',
     ]);
+    expect(current.interpretations[1]?.startedAt.runId).toBe(observation.runId);
+
+    await releaseInterpretationReservations(store, begun.ownedByKey, observation);
+    expect(current.interpretations[1]?.stage).toBe('interpretation_interrupted');
+    const retried = await beginInterpretations(store, [{
+      baseInterpretationKey,
+      reviewerStableKey: 'reviewer-stable-a',
+      lineageKey: 'lineage-a',
+      candidateEvidenceHash: 'evidence-a',
+      canonicalIntegrityDigest: TEST_INTEGRITY_DIGEST,
+      promptPreconditions: [],
+    }], observation, stopBudgetRoundMarker);
+    const retryKey = computeInterpretationAttemptKey(baseInterpretationKey, 3);
+    expect(retried.ownedByKey).toEqual(new Map([[retryKey, retryKey]]));
   });
 
   it('defers a concurrent interpretation while a live owner holds the attempt', async () => {
@@ -1556,6 +1695,7 @@ describe('provisional recovery', () => {
     const claimed = new Set<string>();
     const store: FindingManagerStore = {
       ledgerIdentity: '/test/finding-provisional-recovery/concurrent-ledger.json',
+      interpretationLiveClaims: testInterpretationLiveClaims(),
       workflowName: current.workflowName,
       loadLedger: () => current,
       updateLedger: async (mutator) => {
@@ -1638,7 +1778,7 @@ describe('provisional recovery', () => {
     expect(liveContender.completedByKey).toEqual(new Map());
 
     const reservationToken = owner.ownedByKey.get(interpretationKey)!;
-    store.releaseAdjudicationReservation(reservationToken);
+    store.interpretationLiveClaims.release(store.ledgerIdentity, reservationToken);
     const recovered = await beginInterpretations(
       store,
       [input],
@@ -1647,7 +1787,7 @@ describe('provisional recovery', () => {
     );
     expect(recovered.completedByKey).toEqual(new Map([[interpretationKey, decision]]));
     expect(recovered.ownedByKey).toEqual(new Map([[interpretationKey, reservationToken]]));
-    releaseInterpretationReservations(store, recovered.ownedByKey);
+    await releaseInterpretationReservations(store, recovered.ownedByKey, observation);
   });
 
   it('does not persist begin or complete WAL mutations after the round marker is applied', async () => {
@@ -1662,6 +1802,7 @@ describe('provisional recovery', () => {
     let updateCalls = 0;
     const store: FindingManagerStore = {
       ledgerIdentity: '/test/finding-provisional-recovery/marker-ledger.json',
+      interpretationLiveClaims: testInterpretationLiveClaims(),
       workflowName: current.workflowName,
       loadLedger: () => current,
       updateLedger: async () => {
@@ -1837,7 +1978,10 @@ describe('provisional recovery', () => {
       },
     };
     const freshLedger: FindingLedger = {
-      ...ledger([replacement], [source]),
+      ...authorizeFindingLedgerFixture({
+        ...previousLedger,
+        findings: [replacement],
+      }),
       interpretations: [
         {
           interpretationKey: priorInterpretationKey,
@@ -2567,7 +2711,7 @@ describe('provisional recovery', () => {
   });
 
   it('rejects a fresh attached origin whose lineage or reviewer does not match the item', () => {
-    const process = provisional('F-attached', 'manager-budget-exhausted');
+    const process = provisional('F-0003', 'manager-budget-exhausted');
     const previousLedger = ledger([process], [raw('source-1')]);
     const canonical = canonicalizeReviewerRawFinding(
       candidateFromStoredRawFinding(raw('current-attached'), 'reviewer-stable-a'),
@@ -2596,12 +2740,13 @@ describe('provisional recovery', () => {
     }
   });
 
-  it('reserves a raw replay once per provisional revision and attempt', async () => {
+  it('persists one raw replay attempt and returns the same durable reservation to concurrent readers', async () => {
     let current = ledger([provisional('F-0001', 'raw-adjudication-unresolved')], [raw('source-1')]);
     const processFinding = current.findings[0]!;
     const claimed = new Set<string>();
     const store: FindingManagerStore = {
       ledgerIdentity: '/test/finding-provisional-recovery/action-ledger.json',
+      interpretationLiveClaims: testInterpretationLiveClaims(),
       workflowName: current.workflowName,
       loadLedger: () => current,
       updateLedger: async (mutator) => {
@@ -2623,11 +2768,11 @@ describe('provisional recovery', () => {
     };
 
     const [first, second] = await Promise.all([
-      reserveRawAdjudicationRecovery(store),
-      reserveRawAdjudicationRecovery(store),
+      reserveRawAdjudicationRecovery(store, observation, '1'.repeat(64)),
+      reserveRawAdjudicationRecovery(store, observation, '1'.repeat(64)),
     ]);
-    const owner = first.result.length === 1 ? first : second;
-    const deferred = first.result.length === 0 ? first : second;
+    const owner = first;
+    const concurrent = second;
 
     expect(owner.result).toEqual([
       expect.objectContaining({
@@ -2643,14 +2788,24 @@ describe('provisional recovery', () => {
         },
       }),
     ]);
-    expect(deferred.result).toEqual([]);
-    expect(current.findings[0]?.provisional?.adjudicationAttempts).toBeUndefined();
+    expect(concurrent.result).toEqual(owner.result);
+    expect(current.rawRecoveryAttempts).toEqual([
+      expect.objectContaining({
+        attemptId: owner.result[0]?.attemptId,
+        provisionalFindingId: processFinding.id,
+        attempt: 1,
+      }),
+    ]);
 
     releaseRawAdjudicationReservations(
       store,
       new Set(owner.result.map((reservation) => reservation.reservationToken)),
     );
-    const retried = await reserveRawAdjudicationRecovery(store);
+    const retried = await reserveRawAdjudicationRecovery(
+      store,
+      observation,
+      '1'.repeat(64),
+    );
     expect(retried.result[0]).toMatchObject({ expectedRevision: 1, attempt: 1 });
     releaseRawAdjudicationReservations(
       store,
@@ -2818,9 +2973,10 @@ describe('provisional recovery', () => {
       provisional: undefined,
       evidenceIds: [evidenceRecord.evidenceId],
     };
+    const authorizedObservedLedger = ledger([observedTarget]);
     const observedLedger = {
-      ...ledger([observedTarget]),
-      evidenceRecords: [evidenceRecord],
+      ...authorizedObservedLedger,
+      evidenceRecords: [...authorizedObservedLedger.evidenceRecords, evidenceRecord],
     };
     const targetPrecondition = captureFindingPreconditions(observedLedger)
       .get(observedTarget.id)!.precondition;
@@ -2836,9 +2992,10 @@ describe('provisional recovery', () => {
         targetPreconditions: [targetPrecondition],
       },
     };
+    const authorizedCurrent = ledger([target, processFinding]);
     const current = {
-      ...ledger([target, processFinding]),
-      evidenceRecords: [evidenceRecord],
+      ...authorizedCurrent,
+      evidenceRecords: [...authorizedCurrent.evidenceRecords, evidenceRecord],
     };
     const recovered = applyManagerActionRecovery({
       ledger: current,
@@ -2855,6 +3012,155 @@ describe('provisional recovery', () => {
 
     expect(recovered.findings.find((finding) => finding.id === target.id)?.status)
       .toBe(expectedStatus);
+  });
+
+  it('applies action recovery invalidation and settlement through lifecycle commands', () => {
+    const evidencePayload = {
+      kind: 'file_quote' as const,
+      path: '/outside-workflow.ts',
+      startLine: 1,
+      endLine: 1,
+      verbatimExcerpt: 'outside workflow',
+      snapshotId: 'snapshot',
+      claimIdentityHash: 'a'.repeat(64),
+      fileHash: 'b'.repeat(64),
+    };
+    const evidenceRecord = {
+      evidenceId: computeFileQuoteEvidenceRecordId(evidencePayload),
+      ...evidencePayload,
+    };
+    const target: FindingLedgerEntry = {
+      ...provisional('F-0001', 'raw-adjudication-unresolved'),
+      provisional: undefined,
+      evidenceIds: [evidenceRecord.evidenceId],
+    };
+    const withEvidence = {
+      ...ledger([target]),
+      evidenceRecords: [evidenceRecord],
+    };
+    const targetPrecondition = captureFindingPreconditions(withEvidence)
+      .get(target.id)!.precondition;
+    const processFinding = provisional('F-0002', 'stale-precondition');
+    processFinding.provisional = {
+      ...processFinding.provisional!,
+      sourceRawFindingIds: [],
+      actionRecovery: {
+        action: 'invalidate',
+        findingId: target.id,
+        evidence: 'The location is outside the workflow root.',
+        targetPreconditions: [targetPrecondition],
+      },
+    };
+    const authorized = ledger([target, processFinding]);
+    const current = {
+      ...authorized,
+      evidenceRecords: [...authorized.evidenceRecords, evidenceRecord],
+    };
+    const context = {
+      workflowName: current.workflowName,
+      stepName: observation.stepName,
+      runId: observation.runId,
+      timestamp: observation.timestamp,
+    };
+    const plan = planManagerActionRecovery({
+      ledger: current,
+      candidates: collectManagerActionRecoveryCandidates(current, 1),
+      cwd: process.cwd(),
+      context,
+      observation,
+    });
+    const proofed = issueManagerLifecycleAuthority({
+      current,
+      proposed: plan.ledger,
+      managerDecisionCommands: [],
+      managerOutput: plan.output,
+      cwd: process.cwd(),
+      workflowName: current.workflowName,
+      runId: observation.runId,
+      scopeIdentity: 'action-recovery-command-test',
+      reviewScopeSnapshotId: 'c'.repeat(64),
+      observation,
+    }).ledger;
+
+    const applied = applyManagerActionRecoveryLifecycleCommands({
+      ledger: {
+        ...current,
+        evidenceRecords: proofed.evidenceRecords,
+      },
+      plan,
+      proofedLedger: proofed,
+      observation,
+    });
+
+    expect(applied.findings.find((finding) => finding.id === target.id)?.status)
+      .toBe('invalidated');
+    expect(applied.findings.find((finding) => finding.id === processFinding.id)?.status)
+      .toBe('resolved');
+    expect(applied.lifecycleEvents
+      .slice(current.lifecycleEvents.length)
+      .map((event) => event.operation)).toEqual([
+      'invalidate_finding',
+      'resolve_finding',
+    ]);
+    expect(applied.lifecycleReservations
+      .slice(current.lifecycleReservations.length)
+      .map((reservation) => reservation.authority))
+      .toEqual([
+        { kind: 'verified_evidence' },
+        { kind: 'system', action: 'settle_action_recovery' },
+      ]);
+  });
+
+  it('records a failed action recovery attempt through a lifecycle command', () => {
+    const target: FindingLedgerEntry = {
+      ...provisional('F-0001', 'raw-adjudication-unresolved'),
+      provisional: undefined,
+      severity: 'medium',
+    };
+    const processFinding = provisional('F-0002', 'stale-precondition');
+    const targetPrecondition = captureFindingPreconditions(ledger([target]))
+      .get(target.id)!.precondition;
+    processFinding.provisional = {
+      ...processFinding.provisional!,
+      sourceRawFindingIds: [],
+      actionRecovery: {
+        action: 'waive',
+        findingId: target.id,
+        reason: 'The supported runtime cannot change.',
+        evidence: 'Runtime support policy is fixed.',
+        targetPreconditions: [targetPrecondition],
+      },
+    };
+    const current = ledger([target, processFinding]);
+    const plan = planManagerActionRecovery({
+      ledger: current,
+      candidates: collectManagerActionRecoveryCandidates(current, 1),
+      cwd: process.cwd(),
+      context: {
+        workflowName: current.workflowName,
+        stepName: observation.stepName,
+        runId: observation.runId,
+        timestamp: observation.timestamp,
+      },
+      observation,
+    });
+
+    const applied = applyManagerActionRecoveryLifecycleCommands({
+      ledger: current,
+      plan,
+      proofedLedger: current,
+      observation,
+    });
+
+    expect(applied.findings.find((finding) => finding.id === processFinding.id)
+      ?.provisional?.actionRecoveryAttempts).toHaveLength(1);
+    expect(applied.lifecycleEvents.slice(current.lifecycleEvents.length)).toEqual([
+      expect.objectContaining({ operation: 'record_recovery_attempt' }),
+    ]);
+    expect(applied.lifecycleReservations.at(-1)?.authority).toEqual({
+      kind: 'system',
+      action: 'record_recovery_attempt',
+    });
   });
 
   it('allows verified reviewer evidence to reopen a human-auditable dismissal', () => {

@@ -23,11 +23,6 @@ export function compareRawAdjudicationCandidates(
   if (roundComparison !== 0) {
     return roundComparison;
   }
-  const attemptComparison = (left.provisional.adjudicationAttempts ?? []).length
-    - (right.provisional.adjudicationAttempts ?? []).length;
-  if (attemptComparison !== 0) {
-    return attemptComparison;
-  }
   const observedAtComparison = compareStrings(
     left.provisional.firstObservedAt.timestamp,
     right.provisional.firstObservedAt.timestamp,

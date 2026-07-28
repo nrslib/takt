@@ -29,10 +29,14 @@ import {
   FINDING_CONFLICT_STATUSES,
   FINDING_DISMISSAL_BASES,
   FINDING_LIFECYCLES,
+  FINDING_LIFECYCLE_ENTITY_KINDS,
+  FINDING_LIFECYCLE_OPERATIONS,
+  FINDING_REJECTED_OBSERVATION_CODES,
   FINDING_PROVISIONAL_KINDS,
   FINDING_SEVERITIES,
   FINDING_STATUSES,
   INTERPRETATION_APPLICATION_RESULTS,
+  INTERPRETATION_RECOVERY_FAILURE_CODES,
   RAW_DECISION_KINDS,
   RAW_FINDING_DISPOSITION_OUTCOMES,
   REVIEWER_ANOMALY_KINDS,
@@ -66,6 +70,14 @@ const BinarySortedUniqueSha256SetSchema = z.array(Sha256Schema).superRefine((val
     ctx.addIssue({
       code: 'custom',
       message: 'Expected a binary-sorted unique SHA-256 set',
+    });
+  }
+});
+const UniqueSha256ListSchema = z.array(Sha256Schema).superRefine((values, ctx) => {
+  if (new Set(values).size !== values.length) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Expected unique SHA-256 values',
     });
   }
 });
@@ -124,6 +136,139 @@ export const FindingObservationSchema = z.object({
   runId: nonEmptyString,
   stepName: nonEmptyString,
   timestamp: Rfc3339TimestampSchema,
+}).strict();
+
+export const FindingLifecycleEntityHeadSchema = z.object({
+  entityKind: z.enum(FINDING_LIFECYCLE_ENTITY_KINDS),
+  entityId: nonEmptyString,
+  revision: z.number().int().positive(),
+  eventId: Sha256Schema,
+  projectionDigest: Sha256Schema,
+}).strict();
+
+export const FindingLifecycleMutationTargetSchema = z.object({
+  entityKind: z.enum(FINDING_LIFECYCLE_ENTITY_KINDS),
+  entityId: nonEmptyString,
+  expectedHead: FindingLifecycleEntityHeadSchema.nullable(),
+}).strict();
+
+export const FindingEvidenceBindingSchema = z.object({
+  bindingId: Sha256Schema,
+  evidenceId: Sha256Schema,
+  claimIdentityHash: Sha256Schema,
+  sourceRawFindingId: nonEmptyString.nullable(),
+  sourceRawIntegrityDigest: Sha256Schema.nullable(),
+  operation: z.enum(FINDING_LIFECYCLE_OPERATIONS),
+  target: FindingLifecycleMutationTargetSchema,
+}).strict();
+
+export const FindingLifecycleReservationContextSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('transaction') }).strict(),
+  z.object({
+    kind: z.literal('conflict_adjudication'),
+    conflictId: nonEmptyString,
+    evidenceHash: Sha256Schema,
+    originStep: nonEmptyString.nullable(),
+  }).strict(),
+]);
+
+export const FindingLifecycleAuthoritySchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('verified_evidence'),
+  }).strict(),
+  z.object({
+    kind: z.literal('engine_policy'),
+    decisionKind: z.enum([
+      'waive',
+      'dispute',
+      'dismiss',
+      'resolve_conflict',
+      'semantic_duplicate',
+    ]),
+    decisionDigest: Sha256Schema,
+  }).strict(),
+  z.object({
+    kind: z.literal('conflict_adjudication'),
+    conflictId: nonEmptyString,
+    findingIds: BinarySortedUniqueStringSetSchema,
+    evidenceHash: Sha256Schema,
+    inputBindingIds: BinarySortedUniqueSha256SetSchema,
+    originStep: nonEmptyString.nullable(),
+  }).strict(),
+  z.object({
+    kind: z.literal('system'),
+    action: z.enum([
+      'record_recovery_attempt',
+      'settle_action_recovery',
+      'sync_interpretation_epoch',
+    ]),
+  }).strict(),
+  z.object({
+    kind: z.literal('rejected_observation'),
+    rawFindingId: nonEmptyString,
+    rawIntegrityDigest: Sha256Schema,
+    rejectionCode: z.enum(FINDING_REJECTED_OBSERVATION_CODES),
+  }).strict(),
+]);
+
+export const FindingLifecycleReservationSchema = z.object({
+  reservationId: Sha256Schema,
+  mutationId: Sha256Schema,
+  operation: z.enum(FINDING_LIFECYCLE_OPERATIONS),
+  targets: z.array(FindingLifecycleMutationTargetSchema).min(1),
+  evidenceBindingIds: BinarySortedUniqueSha256SetSchema,
+  authority: FindingLifecycleAuthoritySchema,
+  context: FindingLifecycleReservationContextSchema,
+  reservedAt: FindingObservationSchema,
+}).strict();
+
+export const FindingLifecycleTransitionSchema = z.object({
+  before: FindingLifecycleEntityHeadSchema.nullable(),
+  after: FindingLifecycleEntityHeadSchema,
+}).strict();
+
+export const FindingLifecycleOutcomeSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('projection_applied'),
+  }).strict(),
+  z.object({
+    kind: z.literal('conflict_adjudication'),
+    conflictId: nonEmptyString,
+    evidenceHash: Sha256Schema,
+    outcome: z.enum(FINDING_CONFLICT_ADJUDICATION_OUTCOMES),
+  }).strict(),
+]);
+
+export const FindingLifecycleEventSchema = z.object({
+  eventId: Sha256Schema,
+  mutationId: Sha256Schema,
+  reservationId: Sha256Schema,
+  operation: z.enum(FINDING_LIFECYCLE_OPERATIONS),
+  transitions: z.array(FindingLifecycleTransitionSchema).min(1),
+  evidenceBindingIds: BinarySortedUniqueSha256SetSchema,
+  outcome: FindingLifecycleOutcomeSchema,
+  resultDigest: Sha256Schema,
+  occurredAt: FindingObservationSchema,
+}).strict();
+
+export const RawRecoveryAttemptSchema = z.object({
+  attemptId: Sha256Schema,
+  provisionalFindingId: nonEmptyString,
+  expectedHead: FindingLifecycleEntityHeadSchema,
+  sourceRawFindingId: nonEmptyString,
+  sourceRawIntegrityDigest: Sha256Schema.nullable(),
+  promptSnapshotDigest: Sha256Schema,
+  attempt: z.number().int().positive(),
+  startedAt: FindingObservationSchema,
+}).strict();
+
+export const RawRecoveryResultSchema = z.object({
+  resultId: Sha256Schema,
+  attemptId: Sha256Schema,
+  replayRawFindingId: nonEmptyString.nullable(),
+  mutationIds: UniqueSha256ListSchema,
+  outcome: z.enum(['applied', 'stale', 'failed']),
+  completedAt: FindingObservationSchema,
 }).strict();
 
 // ---------------------------------------------------------------------------
@@ -197,6 +342,16 @@ export const FindingEvidenceRecordSchema = z.discriminatedUnion('kind', [
         kind: z.literal('execution_result'),
         executionId: nonEmptyString,
         expectedOutcome: z.enum(['passed', 'failed']),
+      }).strict(),
+      z.object({
+        kind: z.literal('finding_location_set_invalid'),
+        findingId: nonEmptyString,
+        reason: nonEmptyString,
+      }).strict(),
+      z.object({
+        kind: z.literal('finding_claim_sets_equal'),
+        findingIds: BinarySortedUniqueStringSetSchema,
+        claimIdentityHashes: BinarySortedUniqueSha256SetSchema,
       }).strict(),
     ]),
     dependencyDigests: BinarySortedUniqueSha256SetSchema,
@@ -292,12 +447,6 @@ export const FindingProvisionalMetadataSchema = z.object({
   interpretationEpochs: z.number().int().min(0),
   gateEffect: z.literal('block'),
   firstObservedRound: z.number().int().positive(),
-  adjudicationAttempts: z.array(z.object({
-    attempt: z.number().int().positive(),
-    replayRawFindingId: nonEmptyString,
-    reason: nonEmptyString,
-    at: FindingObservationSchema,
-  }).strict()).optional(),
   actionRecovery: FindingActionRecoverySchema.optional(),
   actionRecoveryAttempts: z.array(z.object({
     attempt: z.number().int().positive(),
@@ -434,17 +583,9 @@ export const FindingConflictAdjudicationTransitionSchema = z.enum(FINDING_CONFLI
 export const FindingConflictAdjudicationRecordSchema = z.object({
   evidenceHash: nonEmptyString,
   outcome: FindingConflictAdjudicationOutcomeSchema,
-  findingTransition: FindingConflictAdjudicationTransitionSchema,
-  evidence: z.array(nonEmptyString),
-  actionableFix: z.string(),
+  actionableFix: nonEmptyString.optional(),
+  rationale: nonEmptyString.optional(),
   decidedAt: FindingObservationSchema,
-}).strict();
-
-export const FindingConflictAdjudicationAttemptSchema = z.object({
-  evidenceHash: nonEmptyString,
-  reservationToken: nonEmptyString,
-  startedAt: FindingObservationSchema,
-  originStep: nonEmptyString.optional(),
 }).strict();
 
 export const FindingLedgerConflictSchema = z.object({
@@ -458,7 +599,7 @@ export const FindingLedgerConflictSchema = z.object({
   resolvedAt: Rfc3339TimestampSchema.optional(),
   resolvedEvidence: nonEmptyString.optional(),
   adjudications: z.array(FindingConflictAdjudicationRecordSchema).optional(),
-  adjudicationAttempts: z.array(FindingConflictAdjudicationAttemptSchema).optional(),
+  revision: z.number().int().positive(),
 }).strict();
 
 /** 楽観的前提条件（CAS）。 */
@@ -553,6 +694,14 @@ export const FindingInterpretationRecordSchema = z.discriminatedUnion('stage', [
     stage: z.literal('interpretation_interrupted'),
     reservationToken: nonEmptyString,
     interruptedAt: FindingObservationSchema,
+  }).strict(),
+  FindingInterpretationRecordBaseSchema.extend({
+    stage: z.enum(['interpretation_retryable_failure', 'interpretation_terminal_failure']),
+    failedAt: FindingObservationSchema,
+    failureCode: z.enum(INTERPRETATION_RECOVERY_FAILURE_CODES),
+    failureReason: nonEmptyString,
+    sourceRawFindingId: nonEmptyString,
+    provisionalFindingId: nonEmptyString,
   }).strict(),
   FindingInterpretationRecordBaseSchema.extend({
     stage: z.literal('interpretation_completed'),
@@ -718,6 +867,11 @@ const FindingManagerCommitProjectionSchema = z.object({
   updatedAt: Rfc3339TimestampSchema,
   findings: z.array(FindingLedgerEntrySchema),
   evidenceRecords: z.array(FindingEvidenceRecordSchema),
+  evidenceBindings: z.array(FindingEvidenceBindingSchema),
+  lifecycleReservations: z.array(FindingLifecycleReservationSchema),
+  lifecycleEvents: z.array(FindingLifecycleEventSchema),
+  rawRecoveryAttempts: z.array(RawRecoveryAttemptSchema),
+  rawRecoveryResults: z.array(RawRecoveryResultSchema),
   rawFindings: z.array(RawFindingSchema),
   conflicts: z.array(FindingLedgerConflictSchema),
   interpretations: z.array(FindingInterpretationRecordSchema),
@@ -749,6 +903,11 @@ export const FindingLedgerSchema = z.object({
   updatedAt: Rfc3339TimestampSchema,
   findings: z.array(FindingLedgerEntrySchema),
   evidenceRecords: z.array(FindingEvidenceRecordSchema),
+  evidenceBindings: z.array(FindingEvidenceBindingSchema),
+  lifecycleReservations: z.array(FindingLifecycleReservationSchema),
+  lifecycleEvents: z.array(FindingLifecycleEventSchema),
+  rawRecoveryAttempts: z.array(RawRecoveryAttemptSchema),
+  rawRecoveryResults: z.array(RawRecoveryResultSchema),
   rawFindings: z.array(RawFindingSchema),
   conflicts: z.array(FindingLedgerConflictSchema),
   interpretations: z.array(FindingInterpretationRecordSchema),
@@ -1227,23 +1386,17 @@ export const FindingManagerDecisionsJsonSchema = {
   },
 } as const;
 
-// LLM が返す一次出力。outcome と findingTransition の整合はスキーマでは強制しない
-// （enum ペアの相互制約は JSON Schema / zod の素朴な組み合わせでは表現できない）。
-// 整合の検証（不一致は reject して例外）と、outcome + actionableFix からの
-// disposition 導出は adjudication-apply.ts の責務（"決定可能なものはコードで
-// 処理し LLM には判断だけ残す" という Finding Contract 全体の設計方針に合わせる）。
 export const FindingConflictAdjudicationOutputSchema = z.object({
   conflictId: nonEmptyString,
   outcome: FindingConflictAdjudicationOutcomeSchema,
-  findingTransition: FindingConflictAdjudicationTransitionSchema,
-  evidence: z.array(nonEmptyString).min(1),
-  actionableFix: z.string(),
+  actionableFix: nonEmptyString.optional(),
+  rationale: nonEmptyString.optional(),
 }).strict();
 
 export const FindingConflictAdjudicationOutputJsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['conflictId', 'outcome', 'findingTransition', 'evidence', 'actionableFix'],
+  required: ['conflictId', 'outcome'],
   properties: {
     conflictId: {
       type: 'string',
@@ -1254,19 +1407,15 @@ export const FindingConflictAdjudicationOutputJsonSchema = {
       enum: FINDING_CONFLICT_ADJUDICATION_OUTCOMES,
       description: 'finding_valid = the reviewer finding is legitimate and still stands; state the concrete coder fix in actionableFix so the workflow can route to the fix step (a finding_valid with an empty actionableFix is treated as undetermined). finding_stale = the finding no longer applies (already fixed, or the code it describes no longer exists). evidence_invalid = the finding\'s own premise does not hold (it was never a real problem). undetermined = you could not reach a conclusion from the evidence available.',
     },
-    findingTransition: {
-      enum: FINDING_CONFLICT_ADJUDICATION_TRANSITIONS,
-      description: 'The finding-side effect that matches your outcome: finding_valid -> keep_open (the finding stays open for the coder to fix), finding_stale -> resolved, evidence_invalid -> invalidated, undetermined -> keep_open. The engine rejects output where this does not match outcome.',
-    },
-    evidence: {
-      type: 'array',
-      items: { type: 'string', minLength: 1 },
-      minItems: 1,
-      description: 'Concrete evidence for your outcome. For findingTransition "resolved", include at least one clearly delimited file:line or file:start-end citation token (for example, src/a.ts:5 or src/a.ts:5-9). It may be part of an explanatory sentence; the engine extracts and verifies it against the current code.',
-    },
     actionableFix: {
       type: 'string',
-      description: 'For finding_valid: the concrete code change the coder must make (REQUIRED, non-empty — leaving it empty downgrades your verdict to undetermined and blocks the run). Empty string for every other outcome.',
+      minLength: 1,
+      description: 'For finding_valid: the concrete code change the coder must make. Omit for every other outcome. A finding_valid without this field is treated as undetermined and blocks the run.',
+    },
+    rationale: {
+      type: 'string',
+      minLength: 1,
+      description: 'Optional concise explanation of the judgment. This is an annotation only; it is never treated as lifecycle evidence.',
     },
   },
 } as const;

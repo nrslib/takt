@@ -29,6 +29,7 @@ import type {
 } from '../core/workflow/findings/types.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.js';
 
 function makeFinding(
@@ -53,7 +54,7 @@ function makeFinding(
 }
 
 function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLedger> = {}): FindingLedger {
-  return {
+  return authorizeFindingLedgerFixture({
     workflowName: 'peer-review',
     nextId: 100,
     updatedAt: '2026-07-01T00:00:00.000Z',
@@ -63,13 +64,14 @@ function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLe
     interpretations: [],
     findings,
     ...overrides,
-  };
+  });
 }
 
 function makeConflict(overrides: Partial<FindingLedgerConflict> = {}): FindingLedgerConflict {
   return {
     id: 'C-FA2947446963',
     status: 'active',
+    revision: 1,
     findingIds: ['F-0001'],
     rawFindingIds: [],
     description: 'Reviewers disagree.',

@@ -6,6 +6,11 @@ import {
 import type { FindingConflictAdjudicationOutput } from './types.js';
 import type { FindingAdjudicationStore, FindingLedgerMutation } from './store.js';
 import { captureReviewScopeSnapshot } from './snapshot.js';
+import { applyFindingLifecycleCommands } from './lifecycle-transaction.js';
+import {
+  FindingLedgerConflictSchema,
+  FindingLedgerEntrySchema,
+} from '../../models/finding-schemas.js';
 
 export type AdjudicationApplyOutcome =
   | {
@@ -22,12 +27,14 @@ export async function commitFindingConflictAdjudication(input: {
   ledgerStore: FindingAdjudicationStore;
   conflictId: string;
   promptedEvidenceHash: string;
+  reservationMutationId: string;
   output: FindingConflictAdjudicationOutput;
   cwd: string;
   workflowName: string;
   stepName: string;
   runId: string;
   timestamp: string;
+  originStep?: string;
 }): Promise<FindingLedgerMutation<AdjudicationApplyOutcome>> {
   return input.ledgerStore.updateLedger<AdjudicationApplyOutcome>((fresh) => {
     const freshReviewScopeSnapshot = captureReviewScopeSnapshot(input.cwd);
@@ -79,7 +86,56 @@ export async function commitFindingConflictAdjudication(input: {
       },
     });
     return {
-      ledger: applied.ledger,
+      ledger: applyFindingLifecycleCommands({
+        ledger: fresh,
+        commands: [{
+          operation: 'apply_conflict_adjudication',
+          changes: {
+            findings: freshConflict.findingIds.flatMap((findingId) => {
+              const before = fresh.findings.find((candidate) => candidate.id === findingId);
+              const finding = FindingLedgerEntrySchema.parse(
+                applied.ledger.findings.find((candidate) => candidate.id === findingId),
+              );
+              if (before !== undefined && finding.revision === before.revision) {
+                return [];
+              }
+              const change: Partial<typeof finding> = { ...finding };
+              delete change.revision;
+              return [change as Omit<typeof finding, 'revision'>];
+            }),
+            conflicts: [(() => {
+              const conflict = FindingLedgerConflictSchema.parse(
+                applied.ledger.conflicts.find(
+                  (candidate) => candidate.id === freshConflict.id,
+                ),
+              );
+              const change: Partial<typeof conflict> = { ...conflict };
+              delete change.revision;
+              return change as Omit<typeof conflict, 'revision'>;
+            })()],
+          },
+          authority: {
+            kind: 'conflict_adjudication',
+            conflictId: freshConflict.id,
+            findingIds: [...freshConflict.findingIds],
+            evidenceHash: freshEvidenceHash,
+            originStep: input.originStep ?? null,
+          },
+          evidenceSourcesByTarget: new Map([[
+            `conflict\0${freshConflict.id}`,
+            {
+              sourceRawFindingIds: freshConflict.rawFindingIds,
+              authorityEvidenceIds: [],
+            },
+          ]]),
+          reservedMutationId: input.reservationMutationId,
+        }],
+        occurredAt: {
+          runId: input.runId,
+          stepName: input.stepName,
+          timestamp: input.timestamp,
+        },
+      }),
       result: { applied: true as const, disposition: applied.disposition },
     };
   }, (fresh, prepared) => {

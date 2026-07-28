@@ -5,7 +5,11 @@ import {
 } from './evidence-location.js';
 import { createEmptyManagerOutput } from './manager-output.js';
 import { applyProvisionalSettlement } from './manager-provisional-settlement.js';
-import { classifyProvisionalRecovery, isOpenProvisional } from './provisional-recovery.js';
+import {
+  classifyProvisionalRecovery,
+  isOpenProvisional,
+  provisionalRecoveryAttemptCount,
+} from './provisional-recovery.js';
 import { reconcileManagerActionRecovery } from './reconciler.js';
 import type {
   FindingActionRecovery,
@@ -15,16 +19,27 @@ import type {
   FindingReconcileContext,
 } from './types.js';
 import { findingMatchesMutationPrecondition } from './finding-preconditions.js';
+import { FindingLedgerEntrySchema } from '../../models/finding-schemas.js';
+import { applyFindingLifecycleCommands } from './lifecycle-transaction.js';
 
 export interface ManagerActionRecoveryCandidate {
   provisionalFindingId: string;
   expectedRevision: number;
 }
 
-interface ActionRecoveryPlan {
+export interface ActionRecoveryPlan {
   output: FindingManagerOutput;
   settlements: Map<string, string>;
   failures: Map<string, string>;
+}
+
+export interface ManagerActionRecoveryLifecyclePlan {
+  ledger: FindingLedger;
+  output: FindingManagerOutput;
+  appliedLedger: FindingLedger;
+  settledLedger: FindingLedger;
+  settlements: ReadonlyMap<string, string>;
+  failures: ReadonlyMap<string, string>;
 }
 
 function recoveryTargetsMatch(
@@ -50,7 +65,11 @@ export function collectManagerActionRecoveryCandidates(
 ): ManagerActionRecoveryCandidate[] {
   return ledger.findings.flatMap((finding) => (
     isOpenProvisional(finding)
-      && classifyProvisionalRecovery(finding.provisional, roundsCompleted) === 'action'
+      && classifyProvisionalRecovery(
+        finding.provisional,
+        roundsCompleted,
+        provisionalRecoveryAttemptCount(ledger, finding.id),
+      ) === 'action'
       ? [{ provisionalFindingId: finding.id, expectedRevision: finding.revision }]
       : []
   ));
@@ -242,6 +261,16 @@ export function applyManagerActionRecovery(input: {
   context: FindingReconcileContext;
   observation: FindingObservation;
 }): FindingLedger {
+  return planManagerActionRecovery(input).ledger;
+}
+
+export function planManagerActionRecovery(input: {
+  ledger: FindingLedger;
+  candidates: readonly ManagerActionRecoveryCandidate[];
+  cwd: string;
+  context: FindingReconcileContext;
+  observation: FindingObservation;
+}): ManagerActionRecoveryLifecyclePlan {
   const plan = buildActionRecoveryPlan(input);
   const applied = reconcileManagerActionRecovery({
     previousLedger: input.ledger,
@@ -255,5 +284,126 @@ export function applyManagerActionRecovery(input: {
     resolvedByEvidence: new Map(),
     settledReplayRawIds: new Set(),
   }, input.context.timestamp);
-  return recordActionRecoveryFailures(settled, plan.failures, input.candidates, input.observation);
+  return {
+    ledger: recordActionRecoveryFailures(
+      settled,
+      plan.failures,
+      input.candidates,
+      input.observation,
+    ),
+    output: plan.output,
+    appliedLedger: applied,
+    settledLedger: settled,
+    settlements: plan.settlements,
+    failures: plan.failures,
+  };
+}
+
+function withoutRevision(
+  finding: FindingLedger['findings'][number],
+): Omit<FindingLedger['findings'][number], 'revision'> {
+  const parsed = FindingLedgerEntrySchema.parse(JSON.parse(JSON.stringify(finding)));
+  const change: Partial<FindingLedger['findings'][number]> = { ...parsed };
+  delete change.revision;
+  return change as Omit<FindingLedger['findings'][number], 'revision'>;
+}
+
+export function applyManagerActionRecoveryLifecycleCommands(input: {
+  ledger: FindingLedger;
+  plan: ManagerActionRecoveryLifecyclePlan | null;
+  proofedLedger: FindingLedger;
+  observation: FindingObservation;
+}): FindingLedger {
+  if (input.plan === null) {
+    return input.ledger;
+  }
+  let ledger = input.ledger;
+  for (const invalidated of input.plan.output.invalidatedFindings) {
+    const projected = input.plan.appliedLedger.findings.find(
+      (finding) => finding.id === invalidated.findingId,
+    );
+    if (projected === undefined) {
+      throw new Error(
+        `Action recovery invalidation references unknown finding "${invalidated.findingId}"`,
+      );
+    }
+    const proofedFinding = input.proofedLedger.findings.find(
+      (finding) => finding.id === invalidated.findingId,
+    );
+    if (proofedFinding?.invalidatedEvidence === undefined) {
+      throw new Error(
+        `Action recovery invalidation for "${invalidated.findingId}" has no verified reason`,
+      );
+    }
+    const proofIds = input.proofedLedger.evidenceRecords.flatMap((record) => (
+      record.kind === 'engine_proof'
+      && record.subject.kind === 'finding_location_set_invalid'
+      && record.subject.findingId === invalidated.findingId
+        ? [record.evidenceId]
+        : []
+    ));
+    if (proofIds.length === 0) {
+      throw new Error(
+        `Action recovery invalidation for "${invalidated.findingId}" has no engine proof`,
+      );
+    }
+    ledger = applyFindingLifecycleCommands({
+      ledger,
+      commands: [{
+        operation: 'invalidate_finding',
+        changes: {
+          findings: [withoutRevision({
+            ...projected,
+            evidenceIds: [...new Set([...projected.evidenceIds, ...proofIds])].sort(),
+            invalidatedEvidence: proofedFinding.invalidatedEvidence,
+          })],
+          conflicts: [],
+        },
+        authority: { kind: 'verified_evidence' },
+        evidenceSourcesByTarget: new Map([[
+          `finding\0${projected.id}`,
+          { sourceRawFindingIds: [], authorityEvidenceIds: proofIds },
+        ]]),
+      }],
+      occurredAt: input.observation,
+    });
+  }
+  for (const findingId of input.plan.settlements.keys()) {
+    const projected = input.plan.settledLedger.findings.find(
+      (finding) => finding.id === findingId,
+    );
+    const current = ledger.findings.find((finding) => finding.id === findingId);
+    if (projected === undefined || current === undefined || projected.status === current.status) {
+      continue;
+    }
+    ledger = applyFindingLifecycleCommands({
+      ledger,
+      commands: [{
+        operation: 'resolve_finding',
+        changes: { findings: [withoutRevision(projected)], conflicts: [] },
+        authority: { kind: 'system', action: 'settle_action_recovery' },
+        evidenceSourcesByTarget: new Map(),
+      }],
+      occurredAt: input.observation,
+    });
+  }
+  for (const findingId of input.plan.failures.keys()) {
+    const projected = input.plan.ledger.findings.find(
+      (finding) => finding.id === findingId,
+    );
+    if (projected === undefined) {
+      throw new Error(`Action recovery failure references unknown finding "${findingId}"`);
+    }
+    ledger = applyFindingLifecycleCommands({
+      ledger,
+      commands: [{
+        operation: 'record_recovery_attempt',
+        changes: { findings: [withoutRevision(projected)], conflicts: [] },
+        authority: { kind: 'system', action: 'record_recovery_attempt' },
+        evidenceSourcesByTarget: new Map(),
+      }],
+      occurredAt: input.observation,
+    });
+  }
+  return ledger;
 }

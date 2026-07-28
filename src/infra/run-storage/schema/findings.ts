@@ -1,6 +1,11 @@
 const JSON_RECORD_TABLES = [
   ['finding_entries', 'finding_id', '$.id'],
   ['finding_evidence_records', 'evidence_id', '$.evidenceId'],
+  ['finding_evidence_bindings', 'binding_id', '$.bindingId'],
+  ['finding_lifecycle_reservations', 'reservation_id', '$.reservationId'],
+  ['finding_lifecycle_events', 'event_id', '$.eventId'],
+  ['finding_raw_recovery_attempts', 'attempt_id', '$.attemptId'],
+  ['finding_raw_recovery_results', 'result_id', '$.resultId'],
   ['finding_raw_entries', 'raw_finding_id', '$.rawFindingId'],
   ['finding_conflict_entries', 'conflict_id', '$.id'],
   ['finding_interpretation_entries', 'interpretation_key', '$.interpretationKey'],
@@ -52,6 +57,11 @@ export const FINDINGS_DDL = [
     next_id INTEGER NOT NULL CHECK (next_id > 0),
     finding_count INTEGER NOT NULL CHECK (finding_count >= 0),
     evidence_record_count INTEGER NOT NULL CHECK (evidence_record_count >= 0),
+    evidence_binding_count INTEGER NOT NULL CHECK (evidence_binding_count >= 0),
+    lifecycle_reservation_count INTEGER NOT NULL CHECK (lifecycle_reservation_count >= 0),
+    lifecycle_event_count INTEGER NOT NULL CHECK (lifecycle_event_count >= 0),
+    raw_recovery_attempt_count INTEGER NOT NULL CHECK (raw_recovery_attempt_count >= 0),
+    raw_recovery_result_count INTEGER NOT NULL CHECK (raw_recovery_result_count >= 0),
     raw_finding_count INTEGER NOT NULL CHECK (raw_finding_count >= 0),
     conflict_count INTEGER NOT NULL CHECK (conflict_count >= 0),
     interpretation_count INTEGER NOT NULL CHECK (interpretation_count >= 0),
@@ -102,15 +112,6 @@ export const FINDINGS_DDL = [
     FOREIGN KEY (run_id, scope_id, revision)
       REFERENCES finding_ledger_revisions(run_id, scope_id, revision)
       ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
-  ) STRICT`,
-  `CREATE TABLE finding_adjudication_reservations (
-    run_id TEXT NOT NULL,
-    scope_id TEXT NOT NULL,
-    reservation_token TEXT NOT NULL CHECK (length(reservation_token) > 0),
-    claimed_at INTEGER NOT NULL CHECK (claimed_at >= 0),
-    PRIMARY KEY (run_id, scope_id, reservation_token),
-    FOREIGN KEY (run_id, scope_id)
-      REFERENCES finding_ledger_heads(run_id, scope_id) ON DELETE CASCADE
   ) STRICT`,
 ];
 
@@ -164,6 +165,31 @@ FINDINGS_DDL.push(
       )
       AND NEW.evidence_record_count = (
         SELECT count(*) FROM finding_evidence_records
+        WHERE run_id = NEW.run_id AND scope_id = NEW.scope_id
+          AND revision = NEW.revision
+      )
+      AND NEW.evidence_binding_count = (
+        SELECT count(*) FROM finding_evidence_bindings
+        WHERE run_id = NEW.run_id AND scope_id = NEW.scope_id
+          AND revision = NEW.revision
+      )
+      AND NEW.lifecycle_reservation_count = (
+        SELECT count(*) FROM finding_lifecycle_reservations
+        WHERE run_id = NEW.run_id AND scope_id = NEW.scope_id
+          AND revision = NEW.revision
+      )
+      AND NEW.lifecycle_event_count = (
+        SELECT count(*) FROM finding_lifecycle_events
+        WHERE run_id = NEW.run_id AND scope_id = NEW.scope_id
+          AND revision = NEW.revision
+      )
+      AND NEW.raw_recovery_attempt_count = (
+        SELECT count(*) FROM finding_raw_recovery_attempts
+        WHERE run_id = NEW.run_id AND scope_id = NEW.scope_id
+          AND revision = NEW.revision
+      )
+      AND NEW.raw_recovery_result_count = (
+        SELECT count(*) FROM finding_raw_recovery_results
         WHERE run_id = NEW.run_id AND scope_id = NEW.scope_id
           AND revision = NEW.revision
       )
@@ -301,12 +327,16 @@ export const FINDING_AUTHORITY_TABLES = Object.freeze([
   'finding_ledger_heads',
   'finding_entries',
   'finding_evidence_records',
+  'finding_evidence_bindings',
+  'finding_lifecycle_reservations',
+  'finding_lifecycle_events',
+  'finding_raw_recovery_attempts',
+  'finding_raw_recovery_results',
   'finding_raw_entries',
   'finding_conflict_entries',
   'finding_interpretation_entries',
   'finding_reviewer_anomaly_entries',
   'finding_ledger_controls',
-  'finding_adjudication_reservations',
 ]);
 
 for (const table of FINDING_AUTHORITY_TABLES) {

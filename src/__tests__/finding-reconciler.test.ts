@@ -44,6 +44,11 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     nextId: 1,
     findings,
     evidenceRecords,
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawRecoveryAttempts: [],
+    rawRecoveryResults: [],
     rawFindings: [],
     conflicts: [],
     interpretations: [],
@@ -1229,6 +1234,7 @@ describe('reconcileFindingLedger', () => {
       {
         id: 'C-FA2947446963',
         status: 'active',
+        revision: 1,
         findingIds: ['F-0001'],
         rawFindingIds: ['raw-conflict'],
         description: 'Reviewers disagree whether this is fixed.',
@@ -1287,6 +1293,7 @@ describe('reconcileFindingLedger', () => {
       {
         id: 'C-548C1D35CEAA',
         status: 'active',
+        revision: 1,
         findingIds: [],
         rawFindingIds: ['raw-architecture', 'raw-security'],
         description: 'Reviewers disagree about whether the cache should remain.',
@@ -1301,6 +1308,7 @@ describe('reconcileFindingLedger', () => {
     const previousConflict = {
       id: formatConflictId({ findingIds: ['F-0001'], rawFindingIds: ['raw-conflict'] }),
       status: 'active' as const,
+      revision: 1,
       findingIds: ['F-0001'],
       rawFindingIds: ['raw-conflict'],
       description: 'Reviewers disagree whether this is fixed.',
@@ -1352,6 +1360,7 @@ describe('reconcileFindingLedger', () => {
           {
             id: conflictId,
             status: 'active',
+            revision: 1,
             findingIds: ['F-0001'],
             rawFindingIds: ['raw-conflict'],
             description: 'Reviewers disagree whether this is fixed.',
@@ -2159,6 +2168,7 @@ describe('reconcileFindingLedger', () => {
       conflicts: [{
         id: conflictId,
         status: 'active',
+        revision: 1,
         findingIds: ['F-0001'],
         rawFindingIds: [previousRawFinding.rawFindingId],
         description: 'Previous conflict.',
@@ -2188,7 +2198,7 @@ describe('reconcileFindingLedger', () => {
     });
   });
 
-  it('should preserve a canonical active conflict with time-ordered adjudication histories', () => {
+  it('should preserve a canonical active conflict with time-ordered closed adjudication histories', () => {
     const rawFinding = makeRawFinding({ rawFindingId: 'raw-current-conflict' });
     const ledgerWithOpenFinding = makeLedgerWithOpenFinding();
     const firstObservation = { runId: 'run-0', stepName: 'reviewers', timestamp: '2016-12-31T23:59:60.500Z' };
@@ -2205,35 +2215,23 @@ describe('reconcileFindingLedger', () => {
       conflicts: [{
         id: conflictId,
         status: 'active',
+        revision: 1,
         findingIds: ['F-0001'],
         rawFindingIds: ['raw-previous-conflict', 'raw-generated-conflict'],
         description: 'Existing conflict.',
         firstSeen: firstObservation,
         lastSeen: secondObservation,
-        adjudicationAttempts: [{
-          evidenceHash: 'first-attempt',
-          reservationToken: 'first-reservation',
-          startedAt: firstObservation,
-          originStep: 'reviewers',
-        }, {
-          evidenceHash: 'second-attempt',
-          reservationToken: 'second-reservation',
-          startedAt: secondObservation,
-          originStep: 'final-gate',
-        }],
         adjudications: [{
           evidenceHash: 'first-adjudication',
           outcome: 'undetermined',
-          findingTransition: 'keep_open',
-          evidence: ['Previous conflicting evidence.'],
           actionableFix: '',
+          rationale: 'Previous conflicting evidence.',
           decidedAt: firstObservation,
         }, {
           evidenceHash: 'second-adjudication',
           outcome: 'undetermined',
-          findingTransition: 'keep_open',
-          evidence: ['Current conflicting evidence.'],
           actionableFix: '',
+          rationale: 'Current conflicting evidence.',
           decidedAt: secondObservation,
         }],
       }],
@@ -2262,10 +2260,6 @@ describe('reconcileFindingLedger', () => {
       'first-adjudication',
       'second-adjudication',
     ]);
-    expect(ledger.conflicts[0]!.adjudicationAttempts).toEqual([
-      expect.objectContaining({ evidenceHash: 'first-attempt', originStep: 'reviewers' }),
-      expect.objectContaining({ evidenceHash: 'second-attempt', originStep: 'final-gate' }),
-    ]);
   });
 
   it('should reuse a canonical active raw-only conflict with the same signature', () => {
@@ -2277,6 +2271,7 @@ describe('reconcileFindingLedger', () => {
       conflicts: [{
         id: generatedConflictId,
         status: 'active',
+        revision: 1,
         findingIds: [],
         rawFindingIds: ['raw-only-conflict'],
         description: 'Existing raw-only conflict.',

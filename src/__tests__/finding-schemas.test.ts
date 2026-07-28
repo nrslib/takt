@@ -7,7 +7,7 @@ import {
 } from '../core/models/finding-types.js';
 import {
   FindingLifecycleSchema,
-  FindingConflictAdjudicationAttemptSchema,
+  FindingLifecycleReservationSchema,
   FindingObservationSchema,
   FindingManagerDecisionsJsonSchema,
   FindingManagerOutputJsonSchema,
@@ -27,6 +27,8 @@ import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import { RAW_FINDING_FIELD_LIMITS } from '../core/models/finding-contract-limits.js';
 import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
 import { deduplicateRawEvidence } from '../core/workflow/findings/evidence-domain.js';
+import { createFindingLifecycleReservation } from '../core/models/finding-lifecycle-identity.js';
+import { emptyFindingAuthorityProjection } from './helpers/finding-lifecycle-fixture.js';
 
 const TEST_INTEGRITY_DIGEST = 'a'.repeat(64);
 import { FINDING_CONFLICT_ADJUDICATION_SCHEMA_REF } from '../core/workflow/findings/adjudication-step.js';
@@ -54,6 +56,7 @@ function pendingLedgerWithCompleted(
     rawFindings: [],
     conflicts: [],
     interpretations: [],
+    ...emptyFindingAuthorityProjection(),
     pendingManagerCommit: {
       roundMarker,
       publication: {
@@ -81,6 +84,7 @@ function pendingLedgerWithCompleted(
         rawFindings: [],
         conflicts: completed.conflicts ?? [],
         interpretations: [],
+        ...emptyFindingAuthorityProjection(),
         stopBudget: {
           roundMarkers: [roundMarker],
           firstRoundAt: '2026-07-24T00:01:00.000Z',
@@ -142,6 +146,7 @@ describe('finding schemas', () => {
       rawFindings: [],
       conflicts: [],
       interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     };
 
     expect(parseFindingLedger(ledger)).toEqual(ledger);
@@ -198,6 +203,7 @@ describe('finding schemas', () => {
       rawFindings: [],
       conflicts: [],
       interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     };
 
     expect(() => parseFindingLedger(ledger)).toThrow(
@@ -227,6 +233,7 @@ describe('finding schemas', () => {
       rawFindings: [],
       conflicts: [],
       interpretations: [],
+      ...emptyFindingAuthorityProjection(),
       [field]: {
         roundMarkers,
         firstRoundAt: '2026-07-24T00:00:00.000Z',
@@ -250,6 +257,7 @@ describe('finding schemas', () => {
       rawFindings: [],
       conflicts: [],
       interpretations: [],
+      ...emptyFindingAuthorityProjection(),
       stopBudget: state,
       reviewIntegrity: state,
     };
@@ -297,6 +305,7 @@ describe('finding schemas', () => {
       conflicts: [{
         id: 'C-NONCANONICAL',
         status: 'active',
+        revision: 1,
         ...identity,
         description: 'Pending conflict',
         firstSeen: {
@@ -340,6 +349,7 @@ describe('finding schemas', () => {
       rawFindings: [],
       conflicts: [],
       interpretations: [record],
+      ...emptyFindingAuthorityProjection(),
     };
 
     expect(parseFindingLedger(ledger).interpretations).toEqual([record]);
@@ -388,6 +398,7 @@ describe('finding schemas', () => {
       rawFindings: [],
       conflicts: [],
       interpretations: [record],
+      ...emptyFindingAuthorityProjection(),
     });
     const started = {
       ...base,
@@ -481,6 +492,7 @@ describe('finding schemas', () => {
       rawFindings: [],
       conflicts: [],
       interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     })).toThrow();
   });
 
@@ -512,6 +524,7 @@ describe('finding schemas', () => {
       rawFindings: [],
       conflicts: [],
       interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     };
 
     expect(() => parseFindingLedger(ledger)).toThrow();
@@ -532,6 +545,7 @@ describe('finding schemas', () => {
       conflicts: [{
         id: 'C-NONCANONICAL',
         status: 'active',
+        revision: 1,
         ...identity,
         description: 'The evidence conflicts.',
         firstSeen: {
@@ -546,6 +560,7 @@ describe('finding schemas', () => {
         },
       }],
       interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     };
 
     expect(formatConflictId(identity)).not.toBe(ledger.conflicts[0]?.id);
@@ -618,20 +633,33 @@ describe('finding schemas', () => {
     }
   });
 
-  it('requires an adjudication reservation token', () => {
-    const attempt = {
-      evidenceHash: 'evidence-hash',
-      reservationToken: 'reservation-token',
-      startedAt: {
+  it('requires the lifecycle reservation identity that authorizes a recovery mutation', () => {
+    const reservation = createFindingLifecycleReservation({
+      operation: 'record_recovery_attempt',
+      targets: [{
+        entityKind: 'finding',
+        entityId: 'F-0001',
+        expectedHead: {
+          entityKind: 'finding',
+          entityId: 'F-0001',
+          revision: 1,
+          projectionDigest: '1'.repeat(64),
+          eventId: '2'.repeat(64),
+        },
+      }],
+      evidenceBindingIds: [],
+      authority: { kind: 'system', action: 'record_recovery_attempt' },
+      context: { kind: 'transaction' },
+      reservedAt: {
         runId: 'run-1',
-        stepName: 'finding-conflict-adjudication',
+        stepName: 'raw-recovery',
         timestamp: '2026-07-17T00:00:00.000Z',
       },
-    };
+    });
 
-    expect(FindingConflictAdjudicationAttemptSchema.parse(attempt)).toEqual(attempt);
-    const { reservationToken: _reservationToken, ...withoutToken } = attempt;
-    expect(() => FindingConflictAdjudicationAttemptSchema.parse(withoutToken)).toThrow();
+    expect(FindingLifecycleReservationSchema.parse(reservation)).toEqual(reservation);
+    const { reservationId: _reservationId, ...withoutIdentity } = reservation;
+    expect(() => FindingLifecycleReservationSchema.parse(withoutIdentity)).toThrow();
   });
 
   it('keeps strict JSON Schema object properties listed in required', () => {

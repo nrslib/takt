@@ -1,6 +1,5 @@
 /** attempt 固有キーにより、中断済み呼び出しの再利用を防ぎつつ completed decision の同一 attempt 内再利用を保つ。 */
 
-import { randomUUID } from 'node:crypto';
 import type {
   AmbiguousInterpretation,
   FindingInterpretationRecord,
@@ -11,6 +10,7 @@ import type {
 } from './types.js';
 import type { FindingManagerStore } from './store.js';
 import { computeBaseInterpretationKey, computeInterpretationAttemptKey } from './raw-canonicalization.js';
+import { applyFindingLifecycleCommands } from './lifecycle-transaction.js';
 
 export function findInterpretationRecord(
   ledger: FindingLedger,
@@ -51,7 +51,14 @@ export async function beginInterpretations(
   if (hasAppliedRoundMarker(store.loadLedger(), stopBudgetRoundMarker)) {
     return emptyBeginInterpretationsResult(true);
   }
-  const claimedTokens = new Set<string>();
+  const acquiredReservationTokens = new Set<string>();
+  const acquire = (reservationToken: string): void => {
+    store.interpretationLiveClaims.acquire(
+      store.ledgerIdentity,
+      reservationToken,
+    );
+    acquiredReservationTokens.add(reservationToken);
+  };
   try {
     const mutation = await store.updateLedger((ledger) => {
       const result = emptyBeginInterpretationsResult(
@@ -67,15 +74,18 @@ export async function beginInterpretations(
         }
         const records = recordsForBaseKey(interpretations, input.baseInterpretationKey);
         const latest = records.at(-1);
-        if (latest?.stage === 'interpretation_started'
+        if (
+          latest?.stage === 'interpretation_started'
           && latest.reservationToken !== undefined
-          && !store.claimAdjudicationReservation(latest.reservationToken)) {
-          result.attemptByBaseKey.set(input.baseInterpretationKey, attemptIdentity(latest));
-          result.deferredKeys.add(latest.interpretationKey);
-          continue;
-        }
-        if (latest?.stage === 'interpretation_started' && latest.reservationToken !== undefined) {
-          store.releaseAdjudicationReservation(latest.reservationToken);
+        ) {
+          if (store.interpretationLiveClaims.isClaimed(
+            store.ledgerIdentity,
+            latest.reservationToken,
+          )) {
+            result.attemptByBaseKey.set(input.baseInterpretationKey, attemptIdentity(latest));
+            result.deferredKeys.add(latest.interpretationKey);
+            continue;
+          }
         }
         if (
           latest?.stage === 'interpretation_completed'
@@ -84,12 +94,16 @@ export async function beginInterpretations(
           if (latest.reservationToken === undefined || latest.validatedDecision === undefined) {
             throw new Error(`Completed interpretation attempt "${latest.interpretationKey}" is missing its reservation or decision`);
           }
-          result.attemptByBaseKey.set(input.baseInterpretationKey, attemptIdentity(latest));
-          if (!store.claimAdjudicationReservation(latest.reservationToken)) {
+          if (store.interpretationLiveClaims.isClaimed(
+            store.ledgerIdentity,
+            latest.reservationToken,
+          )) {
+            result.attemptByBaseKey.set(input.baseInterpretationKey, attemptIdentity(latest));
             result.deferredKeys.add(latest.interpretationKey);
             continue;
           }
-          claimedTokens.add(latest.reservationToken);
+          acquire(latest.reservationToken);
+          result.attemptByBaseKey.set(input.baseInterpretationKey, attemptIdentity(latest));
           result.ownedByKey.set(latest.interpretationKey, latest.reservationToken);
           result.completedByKey.set(latest.interpretationKey, latest.validatedDecision);
           continue;
@@ -118,7 +132,10 @@ export async function beginInterpretations(
         }
         for (let index = 0; index < interpretations.length; index += 1) {
           const record = interpretations[index]!;
-          if (interruptedPriorKeys.has(record.interpretationKey)) {
+          if (
+            record.stage === 'interpretation_started'
+            && interruptedPriorKeys.has(record.interpretationKey)
+          ) {
             interpretations[index] = {
               ...record,
               stage: 'interpretation_interrupted',
@@ -126,11 +143,8 @@ export async function beginInterpretations(
             };
           }
         }
-        const reservationToken = randomUUID();
-        if (!store.claimAdjudicationReservation(reservationToken)) {
-          throw new Error(`New interpretation reservation token collision: "${reservationToken}"`);
-        }
-        claimedTokens.add(reservationToken);
+        const reservationToken = attempt.interpretationKey;
+        acquire(reservationToken);
         result.ownedByKey.set(attempt.interpretationKey, reservationToken);
         if (
           latest !== undefined
@@ -158,8 +172,11 @@ export async function beginInterpretations(
     });
     return mutation.result;
   } catch (error) {
-    for (const token of claimedTokens) {
-      store.releaseAdjudicationReservation(token);
+    for (const reservationToken of acquiredReservationTokens) {
+      store.interpretationLiveClaims.release(
+        store.ledgerIdentity,
+        reservationToken,
+      );
     }
     throw error;
   }
@@ -217,6 +234,7 @@ export function resolveInterpretationAttempt(input: {
   const advances = integrityChanged
     || latest?.stage === 'interpretation_started'
     || latest?.stage === 'interpretation_interrupted'
+    || latest?.stage === 'interpretation_retryable_failure'
     || (latest?.stage === 'ledger_applied'
       && (latest.applicationResult === 'provisional_created'
         || latest.applicationResult === 'provisional_updated'
@@ -291,12 +309,35 @@ export async function completeInterpretations(
   return mutation.result;
 }
 
-export function releaseInterpretationReservations(
+export async function releaseInterpretationReservations(
   store: FindingManagerStore,
   ownedByKey: ReadonlyMap<string, string>,
-): void {
-  for (const reservationToken of ownedByKey.values()) {
-    store.releaseAdjudicationReservation(reservationToken);
+  observation: FindingObservation,
+): Promise<void> {
+  if (ownedByKey.size === 0) {
+    return;
+  }
+  try {
+    await store.updateLedger((ledger) => ({
+      ledger: {
+        ...ledger,
+        interpretations: ledger.interpretations.map((record) => (
+          record.stage === 'interpretation_started'
+          && record.reservationToken === ownedByKey.get(record.interpretationKey)
+            ? {
+                ...record,
+                stage: 'interpretation_interrupted' as const,
+                interruptedAt: { ...observation },
+              }
+            : record
+        )),
+      },
+      result: undefined,
+    }));
+  } finally {
+    for (const reservationToken of ownedByKey.values()) {
+      store.interpretationLiveClaims.release(store.ledgerIdentity, reservationToken);
+    }
   }
 }
 
@@ -363,7 +404,10 @@ export function countInterpretationEpochs(ledger: FindingLedger, lineageKey: str
 }
 
 /** interpretation epoch の正本は WAL だけである。 */
-export function normalizeProvisionalInterpretationEpochs(ledger: FindingLedger): FindingLedger {
+export function syncProvisionalInterpretationEpochs(
+  ledger: FindingLedger,
+  observation: FindingObservation,
+): FindingLedger {
   const epochsByLineage = new Map<string, number>();
   for (const record of ledger.interpretations) {
     if (!consumesInterpretationEpoch(record)) {
@@ -371,24 +415,36 @@ export function normalizeProvisionalInterpretationEpochs(ledger: FindingLedger):
     }
     epochsByLineage.set(record.lineageKey, (epochsByLineage.get(record.lineageKey) ?? 0) + 1);
   }
-  let changed = false;
-  const findings = ledger.findings.map((finding) => {
+  const commands = ledger.findings.flatMap((finding) => {
     if (finding.provisional === undefined) {
-      return finding;
+      return [];
     }
     const interpretationEpochs = epochsByLineage.get(finding.provisional.lineageKey) ?? 0;
     if (finding.provisional.interpretationEpochs === interpretationEpochs) {
-      return finding;
+      return [];
     }
-    changed = true;
-    return {
-      ...finding,
-      revision: finding.revision + 1,
-      provisional: {
-        ...finding.provisional,
-        interpretationEpochs,
+    return [{
+      operation: 'sync_interpretation_epoch' as const,
+      changes: {
+        findings: [{
+          ...finding,
+          provisional: {
+            ...finding.provisional,
+            interpretationEpochs,
+          },
+        }],
+        conflicts: [],
       },
-    };
+      authority: {
+        kind: 'system' as const,
+        action: 'sync_interpretation_epoch' as const,
+      },
+      evidenceSourcesByTarget: new Map(),
+    }];
   });
-  return changed ? { ...ledger, findings } : ledger;
+  return applyFindingLifecycleCommands({
+    ledger,
+    commands,
+    occurredAt: observation,
+  });
 }

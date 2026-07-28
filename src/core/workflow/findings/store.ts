@@ -25,6 +25,14 @@ import type {
 import { parseFindingLedger, parseRawFindings } from './schemas.js';
 import { assertFindingLedgerProjectionInvariant } from '../../models/finding-ledger-invariants.js';
 import {
+  processInterpretationLiveClaims,
+  type InterpretationLiveClaimRegistry,
+} from './interpretation-live-claims.js';
+import {
+  processAdjudicationLiveClaims,
+  type AdjudicationLiveClaimRegistry,
+} from './adjudication-live-claims.js';
+import {
   finalizeReportPublication,
   publishReportFile,
   writeReportFile,
@@ -66,6 +74,8 @@ export interface LedgerRepository {
   readonly runId: string;
   /** 同じ永続台帳を指す store 間で共有する、永続化方式に依存しない識別子。 */
   readonly ledgerIdentity: string;
+  readonly interpretationLiveClaims: InterpretationLiveClaimRegistry;
+  readonly adjudicationLiveClaims: AdjudicationLiveClaimRegistry;
   /**
    * この store が束縛する台帳の正準ワークフロー名。workflow_call の子が親から
    * store を継承した場合も親の名前のまま変わらない。ledger.json の
@@ -112,11 +122,6 @@ export interface FindingManagerCommitStager {
   ) => Promise<FindingLedgerMutation<Result>>;
 }
 
-export interface AdjudicationReservationRegistry {
-  claimAdjudicationReservation: (reservationToken: string) => boolean;
-  releaseAdjudicationReservation: (reservationToken: string) => void;
-}
-
 export interface FindingArtifactWriter {
   saveLedgerSnapshot: () => void;
   saveRawFindings: (runId: string, stepName: string, rawFindings: RawFinding[]) => void;
@@ -155,12 +160,10 @@ export interface FindingLedgerStore
     FindingManagerCommitStager,
     FindingArtifactWriter,
     FindingManagerCommitRebinder,
-    FindingManagerCommitFinalizer,
-    AdjudicationReservationRegistry {}
+    FindingManagerCommitFinalizer {}
 
 export type FindingManagerStore = LedgerRepository
   & FindingManagerCommitStager
-  & AdjudicationReservationRegistry
   & FindingManagerCommitRebinder
   & FindingManagerCommitFinalizer
   & Pick<
@@ -174,7 +177,6 @@ export type FindingManagerStore = LedgerRepository
   >;
 
 export type FindingAdjudicationStore = LedgerRepository
-  & AdjudicationReservationRegistry
   & Pick<FindingArtifactWriter, 'saveConflictAdjudicationReport'>;
 
 export interface FindingLedgerMutation<Result> {
@@ -315,6 +317,11 @@ function createEmptyLedger(workflowName: string): FindingLedger {
     nextId: 1,
     findings: [],
     evidenceRecords: [],
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawRecoveryAttempts: [],
+    rawRecoveryResults: [],
     rawFindings: [],
     conflicts: [],
     interpretations: [],
@@ -523,7 +530,6 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
       },
     );
   };
-  const adjudicationReservations = new Set<string>();
   const bindManagerValidationPublication = (
     roundMarker: string,
     publication: FindingManagerReportPublication,
@@ -646,6 +652,8 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
   return {
     runId: boundRunId,
     ledgerIdentity,
+    interpretationLiveClaims: processInterpretationLiveClaims,
+    adjudicationLiveClaims: processAdjudicationLiveClaims,
     workflowName: options.workflowName,
     loadLedger: loadLedgerImpl,
     updateLedger: (mutator, revalidateBeforeSave) => {
@@ -709,16 +717,6 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
           return mutation;
         });
       });
-    },
-    claimAdjudicationReservation: (reservationToken) => {
-      if (adjudicationReservations.has(reservationToken)) {
-        return false;
-      }
-      adjudicationReservations.add(reservationToken);
-      return true;
-    },
-    releaseAdjudicationReservation: (reservationToken) => {
-      adjudicationReservations.delete(reservationToken);
     },
     saveLedgerSnapshot: () => {
       const ledger = loadLedgerImpl();

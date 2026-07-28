@@ -24,7 +24,7 @@ import {
   toLedgerRawFinding,
 } from './raw-canonicalization.js';
 import { collectLandedRawIds } from './manager-utils.js';
-import type { FindingLedger, FindingObservation, RawFinding } from './types.js';
+import type { FindingLedger, FindingObservation } from './types.js';
 import { matchesProvisionalRecoveryOrigin } from './provisional-recovery-origin.js';
 
 function emptyIntake(): ReviewerIntakeResult {
@@ -47,19 +47,6 @@ function replayRawFindingId(input: {
 }): string {
   const digest = createHash('sha256').update(JSON.stringify(input)).digest('hex');
   return `replay-${digest}`;
-}
-
-function sourceRawForAttempt(
-  ledger: FindingLedger,
-  sourceRawFindingIds: readonly string[],
-  attempt: number,
-): { sourceRawFindingId: string; source?: RawFinding } {
-  if (sourceRawFindingIds.length === 0) {
-    return { sourceRawFindingId: `raw-adjudication:${attempt}:missing-source` };
-  }
-  const sourceRawFindingId = sourceRawFindingIds[(attempt - 1) % sourceRawFindingIds.length]!;
-  const source = ledger.rawFindings.find((raw) => raw.rawFindingId === sourceRawFindingId);
-  return { sourceRawFindingId, ...(source === undefined ? {} : { source }) };
 }
 
 function buildReplayIntake(input: {
@@ -94,14 +81,17 @@ function buildReplayIntake(input: {
       provisionalFindingId: finding.id,
       attempt,
     });
-    const sourceResult = sourceRawForAttempt(
-      input.ledger,
-      finding.provisional.sourceRawFindingIds,
-      attempt,
-    );
+    const sourceResult = {
+      sourceRawFindingId: reservation.sourceRawFindingId,
+      source: input.ledger.rawFindings.find(
+        (raw) => raw.rawFindingId === reservation.sourceRawFindingId,
+      ),
+    };
     origins.set(replayRawId, {
+      attemptId: reservation.attemptId,
       provisionalFindingId: finding.id,
       sourceRawFindingId: sourceResult.sourceRawFindingId,
+      expectedHead: reservation.expectedHead,
       expectedProvisionalRevision: reservation.expectedRevision,
       attempt,
       recoveryOrigin: reservation.recoveryOrigin,
@@ -200,7 +190,11 @@ export async function runRawAdjudicationRecovery(input: {
   observation: FindingObservation;
   reviewScopeSnapshotId: string;
 }): Promise<RawAdjudicationRecoveryResult> {
-  const reservation = await reserveRawAdjudicationRecovery(input.runInput.ledgerStore);
+  const reservation = await reserveRawAdjudicationRecovery(
+    input.runInput.ledgerStore,
+    input.observation,
+    input.reviewScopeSnapshotId,
+  );
   const reservationTokens = new Set(reservation.result.map((item) => item.reservationToken));
   try {
     return await runReservedRawAdjudicationRecovery({

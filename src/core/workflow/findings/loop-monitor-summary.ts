@@ -52,7 +52,7 @@ export function buildLoopMonitorFindingsSummaryData(
         kind: provisional.kind,
         title: finding.title,
         stalledRounds: roundsCompleted - provisional.firstObservedRound + 1,
-        dismissable: isDismissCandidate(finding, roundsCompleted),
+        dismissable: isDismissCandidate(ledger, finding, roundsCompleted),
       };
     }),
     activeConflictCount: ledger.conflicts.filter((conflict) => conflict.status === 'active').length,

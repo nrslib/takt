@@ -186,9 +186,19 @@ export function assertFindingEntryRows(rows: readonly SnapshotRow[]): void {
       ? 'rawFindingId'
       : row.entryKind === 'evidence'
         ? 'evidenceId'
-      : row.entryKind === 'interpretation'
-        ? 'interpretationKey'
-        : 'id';
+        : row.entryKind === 'evidence_binding'
+          ? 'bindingId'
+          : row.entryKind === 'lifecycle_reservation'
+            ? 'reservationId'
+            : row.entryKind === 'lifecycle_event'
+              ? 'eventId'
+            : row.entryKind === 'raw_recovery_attempt'
+              ? 'attemptId'
+            : row.entryKind === 'raw_recovery_result'
+              ? 'resultId'
+              : row.entryKind === 'interpretation'
+                ? 'interpretationKey'
+                : 'id';
     if (record[idKey] !== row.authorityId) {
       throw new Error('Resume snapshot Finding entry identity mismatch');
     }

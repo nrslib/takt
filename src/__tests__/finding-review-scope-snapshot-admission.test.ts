@@ -41,6 +41,7 @@ import { verifyFileQuoteEvidence } from '../core/workflow/findings/admission-val
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
+import { emptyFindingAuthorityProjection } from './helpers/finding-lifecycle-fixture.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
@@ -90,6 +91,7 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
       rawFindings: [],
       conflicts: [],
       interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     });
     const reservations = new Set<string>();
     const store: FindingLedgerStore = {

@@ -10,6 +10,7 @@ import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engin
 import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
 import { parseFindingLedger } from '../core/workflow/findings/schemas.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
+import { emptyFindingAuthorityProjection } from './helpers/finding-lifecycle-fixture.js';
 import {
   makeRule,
   makeStep,
@@ -344,6 +345,7 @@ describe('session compaction Phase 1 wiring', () => {
           rawFindings: [],
           conflicts: [],
           interpretations: [],
+          ...emptyFindingAuthorityProjection(),
         } satisfies FindingLedger),
       } as NonNullable<StepExecutorDeps['findingLedgerStore']>,
       refreshFindingsState: vi.fn(),

@@ -19,7 +19,15 @@ import type {
 } from './types.js';
 import type { InterpretationRecoveryFailure } from './interpretation-recovery.js';
 import { releaseRawAdjudicationReservations } from './raw-adjudication-reservation.js';
-import { releaseInterpretationReservations } from './interpretation-wal.js';
+import {
+  releaseInterpretationReservations,
+  syncProvisionalInterpretationEpochs,
+} from './interpretation-wal.js';
+import { issueManagerLifecycleAuthority } from './manager-lifecycle-authority.js';
+import { assembleAndApplyManagerLifecycleTransactions } from './manager-lifecycle-assembly.js';
+import { completeRawRecoveryAttempts } from './raw-recovery-result.js';
+import { applyRejectedObservationAttachments } from './manager-provisional-settlement.js';
+import { attachFixpointState } from './fixpoint.js';
 
 export interface CommitFindingManagerRoundResult {
   applied: boolean;
@@ -56,15 +64,107 @@ export async function commitFindingManagerRound(params: {
   try {
     const mutation = await params.input.ledgerStore.commitManagerLedger((freshLedger) => {
       const commitMutation = buildFindingManagerCommitMutation(params, freshLedger);
+      const recoveryOrigins = new Map([...params.managerDecision.rawRecovery.origins].map(
+        ([replayRawFindingId, origin]) => [origin.attemptId, replayRawFindingId],
+      ));
       if (!commitMutation.result.applied) {
-        return commitMutation;
+        return {
+          ...commitMutation,
+          ledger: completeRawRecoveryAttempts(
+            freshLedger,
+            freshLedger,
+            params.managerDecision.rawRecovery.reservationTokens,
+            recoveryOrigins,
+            params.observation,
+          ),
+        };
       }
+      const proofed = issueManagerLifecycleAuthority({
+        current: freshLedger,
+        managerDecisionCommands: commitMutation.result.managerDecisionCommands,
+        proposed: commitMutation.ledger,
+        managerOutput: {
+          ...commitMutation.result.lifecycleManagerOutput,
+          invalidatedFindings: [
+            ...commitMutation.result.lifecycleManagerOutput.invalidatedFindings,
+            ...(commitMutation.result.actionRecoveryPlan?.output.invalidatedFindings ?? []),
+          ],
+        },
+        cwd: params.input.cwd,
+        workflowName: params.input.workflowName,
+        runId: params.input.runId,
+        scopeIdentity: params.input.ledgerStore.ledgerIdentity,
+        reviewScopeSnapshotId: params.reviewScopeSnapshotId,
+        observation: params.observation,
+      });
+      const lifecycleLedger = assembleAndApplyManagerLifecycleTransactions({
+        current: freshLedger,
+        managerDecisionCommands: commitMutation.result.managerDecisionCommands,
+        managerDecisionProposed: {
+          ...proofed.ledger,
+          findings: commitMutation.result.managerDecisionLedger.findings.map((finding) => {
+            const proofedFinding = proofed.ledger.findings.find(
+              (candidate) => candidate.id === finding.id,
+            );
+            if (proofedFinding === undefined) {
+              return finding;
+            }
+            const proofEvidenceIds = proofedFinding.evidenceIds.filter((evidenceId) => (
+              proofed.ledger.evidenceRecords.some((record) => (
+                record.evidenceId === evidenceId && record.kind === 'engine_proof'
+              ))
+            ));
+            return {
+              ...finding,
+              evidenceIds: [...new Set([...finding.evidenceIds, ...proofEvidenceIds])].sort(),
+              ...(proofedFinding.invalidatedEvidence === undefined
+                ? {}
+                : { invalidatedEvidence: proofedFinding.invalidatedEvidence }),
+            };
+          }),
+          conflicts: commitMutation.result.managerDecisionLedger.conflicts,
+        },
+        proposed: proofed.ledger,
+        occurredAt: params.observation,
+        managerOutput: commitMutation.result.lifecycleManagerOutput,
+        resolutionRenotifications: commitMutation.result.resolutionRenotifications,
+        settlementCommands: commitMutation.result.settlementCommands,
+        actionRecoveryPlan: commitMutation.result.actionRecoveryPlan,
+        provisionalProofIdsByFinding: proofed.provisionalProofIdsByFinding,
+        invalidationProofIdsByFinding: proofed.invalidationProofIdsByFinding,
+        duplicateProofIdsByCommandKey: proofed.duplicateProofIdsByCommandKey,
+        invalidationReasonsByFinding: proofed.invalidationReasonsByFinding,
+      });
+      const withRejectedObservations = applyRejectedObservationAttachments(
+        lifecycleLedger,
+        commitMutation.result.rejectedObservationAttachments,
+        params.observation,
+      );
+      const epochSynchronized = syncProvisionalInterpretationEpochs(
+        withRejectedObservations,
+        params.observation,
+      );
+      const completedRecovery = completeRawRecoveryAttempts(
+        freshLedger,
+        epochSynchronized,
+        params.managerDecision.rawRecovery.reservationTokens,
+        recoveryOrigins,
+        params.observation,
+      );
+      const lifecycleMutation = {
+        ...commitMutation,
+        ledger: attachFixpointState(
+          freshLedger,
+          completedRecovery,
+          params.input.cwd,
+        ),
+      };
       const report = buildCommitReport(params, commitMutation.result);
       if (report === undefined) {
-        return commitMutation;
+        return lifecycleMutation;
       }
       return {
-        ...commitMutation,
+        ...lifecycleMutation,
         publication: {
           roundMarker: params.stopBudgetRoundMarker,
           report,
@@ -96,9 +196,10 @@ export async function commitFindingManagerRound(params: {
       reviewerAnomalyLandingCount: committed.reviewerAnomalyLandings.length,
     };
   } finally {
-    releaseInterpretationReservations(
+    await releaseInterpretationReservations(
       params.input.ledgerStore,
       params.managerDecision.ladder.interpretationReservations,
+      params.observation,
     );
     releaseRawAdjudicationReservations(
       params.input.ledgerStore,

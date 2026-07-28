@@ -43,6 +43,11 @@ interface JsonRecordRow {
 const ENTITY_TABLES = [
   ['finding_entries', 'finding_id', 'findings'],
   ['finding_evidence_records', 'evidence_id', 'evidenceRecords'],
+  ['finding_evidence_bindings', 'binding_id', 'evidenceBindings'],
+  ['finding_lifecycle_reservations', 'reservation_id', 'lifecycleReservations'],
+  ['finding_lifecycle_events', 'event_id', 'lifecycleEvents'],
+  ['finding_raw_recovery_attempts', 'attempt_id', 'rawRecoveryAttempts'],
+  ['finding_raw_recovery_results', 'result_id', 'rawRecoveryResults'],
   ['finding_raw_entries', 'raw_finding_id', 'rawFindings'],
   ['finding_conflict_entries', 'conflict_id', 'conflicts'],
   ['finding_interpretation_entries', 'interpretation_key', 'interpretations'],
@@ -74,6 +79,11 @@ export function bootstrapFindingAuthority(
     updatedAt: trustedIsoTime(input.createdAt),
     findings: [],
     evidenceRecords: [],
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawRecoveryAttempts: [],
+    rawRecoveryResults: [],
     rawFindings: [],
     conflicts: [],
     interpretations: [],
@@ -135,9 +145,11 @@ function writeInitialFindingAuthority(
     INSERT INTO finding_ledger_revisions (
       run_id, scope_id, revision, workflow_name, next_id,
       finding_count, raw_finding_count, conflict_count,
-      evidence_record_count, interpretation_count, reviewer_anomaly_count, control_count,
+      evidence_record_count, evidence_binding_count, lifecycle_reservation_count,
+      lifecycle_event_count, raw_recovery_attempt_count, raw_recovery_result_count,
+      interpretation_count, reviewer_anomaly_count, control_count,
       projection_digest, updated_at
-    ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   input.runId,
   input.scopeId,
@@ -147,6 +159,11 @@ function writeInitialFindingAuthority(
   input.ledger.rawFindings.length,
   input.ledger.conflicts.length,
   input.ledger.evidenceRecords.length,
+  input.ledger.evidenceBindings.length,
+  input.ledger.lifecycleReservations.length,
+  input.ledger.lifecycleEvents.length,
+  input.ledger.rawRecoveryAttempts.length,
+  input.ledger.rawRecoveryResults.length,
   input.ledger.interpretations.length,
   input.ledger.reviewerAnomalies?.length ?? 0,
   [
@@ -172,6 +189,16 @@ function entityId(entity: EntityTable, record: Record<string, unknown>): string 
     ? 'id'
     : entity[1] === 'evidence_id'
       ? 'evidenceId'
+    : entity[1] === 'binding_id'
+      ? 'bindingId'
+      : entity[1] === 'reservation_id'
+        ? 'reservationId'
+        : entity[1] === 'event_id'
+          ? 'eventId'
+        : entity[1] === 'attempt_id'
+          ? 'attemptId'
+        : entity[1] === 'result_id'
+          ? 'resultId'
     : entity[1] === 'raw_finding_id'
       ? 'rawFindingId'
       : entity[1] === 'conflict_id'
@@ -298,6 +325,11 @@ interface FindingRevisionIntegrityRow {
   readonly workflowDefinitionName: string | null;
   readonly findingCount: number;
   readonly evidenceRecordCount: number;
+  readonly evidenceBindingCount: number;
+  readonly lifecycleReservationCount: number;
+  readonly lifecycleEventCount: number;
+  readonly rawRecoveryAttemptCount: number;
+  readonly rawRecoveryResultCount: number;
   readonly rawFindingCount: number;
   readonly conflictCount: number;
   readonly interpretationCount: number;
@@ -394,6 +426,11 @@ function validateFindingAuthorityHistory(
       definitions.name AS workflowDefinitionName,
       revisions.finding_count AS findingCount,
       revisions.evidence_record_count AS evidenceRecordCount,
+      revisions.evidence_binding_count AS evidenceBindingCount,
+      revisions.lifecycle_reservation_count AS lifecycleReservationCount,
+      revisions.lifecycle_event_count AS lifecycleEventCount,
+      revisions.raw_recovery_attempt_count AS rawRecoveryAttemptCount,
+      revisions.raw_recovery_result_count AS rawRecoveryResultCount,
       revisions.raw_finding_count AS rawFindingCount,
       revisions.conflict_count AS conflictCount,
       revisions.interpretation_count AS interpretationCount,
@@ -451,10 +488,15 @@ function validateFindingAuthorityHistory(
     if (
       actualCounts[0] !== revision.findingCount
       || actualCounts[1] !== revision.evidenceRecordCount
-      || actualCounts[2] !== revision.rawFindingCount
-      || actualCounts[3] !== revision.conflictCount
-      || actualCounts[4] !== revision.interpretationCount
-      || actualCounts[5] !== revision.reviewerAnomalyCount
+      || actualCounts[2] !== revision.evidenceBindingCount
+      || actualCounts[3] !== revision.lifecycleReservationCount
+      || actualCounts[4] !== revision.lifecycleEventCount
+      || actualCounts[5] !== revision.rawRecoveryAttemptCount
+      || actualCounts[6] !== revision.rawRecoveryResultCount
+      || actualCounts[7] !== revision.rawFindingCount
+      || actualCounts[8] !== revision.conflictCount
+      || actualCounts[9] !== revision.interpretationCount
+      || actualCounts[10] !== revision.reviewerAnomalyCount
       || controlCount !== revision.controlCount
     ) {
       throw new Error('Finding authority sealed revision count mismatch');
@@ -589,6 +631,11 @@ export class FindingLedgerRepository {
         next_id,
         finding_count,
         evidence_record_count,
+        evidence_binding_count,
+        lifecycle_reservation_count,
+        lifecycle_event_count,
+        raw_recovery_attempt_count,
+        raw_recovery_result_count,
         raw_finding_count,
         conflict_count,
         interpretation_count,
@@ -596,7 +643,7 @@ export class FindingLedgerRepository {
         control_count,
         projection_digest,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     input.runId,
     input.scopeId,
@@ -605,6 +652,11 @@ export class FindingLedgerRepository {
     ledger.nextId,
     ledger.findings.length,
     ledger.evidenceRecords.length,
+    ledger.evidenceBindings.length,
+    ledger.lifecycleReservations.length,
+    ledger.lifecycleEvents.length,
+    ledger.rawRecoveryAttempts.length,
+    ledger.rawRecoveryResults.length,
     ledger.rawFindings.length,
     ledger.conflicts.length,
     ledger.interpretations.length,
@@ -620,36 +672,4 @@ export class FindingLedgerRepository {
     return readFindingLedgerProjection(context, input);
   }
 
-  claimAdjudicationReservation(context: RunWriteContext, input: {
-    readonly runId: string;
-    readonly scopeId: string;
-    readonly reservationToken: string;
-    readonly claimedAt: number;
-  }): boolean {
-    assertFindingContractEnabled(context, input.runId);
-    const result = context.run(`
-      INSERT INTO finding_adjudication_reservations (
-        run_id, scope_id, reservation_token, claimed_at
-      ) VALUES (?, ?, ?, ?)
-      ON CONFLICT (run_id, scope_id, reservation_token) DO NOTHING
-    `, input.runId, input.scopeId, input.reservationToken, input.claimedAt);
-    return Number(result.changes) === 1;
-  }
-
-  releaseAdjudicationReservation(context: RunWriteContext, input: {
-    readonly runId: string;
-    readonly scopeId: string;
-    readonly reservationToken: string;
-  }): void {
-    assertFindingContractEnabled(context, input.runId);
-    const result = context.run(`
-      DELETE FROM finding_adjudication_reservations
-      WHERE run_id = ? AND scope_id = ? AND reservation_token = ?
-    `, input.runId, input.scopeId, input.reservationToken);
-    if (Number(result.changes) !== 1) {
-      throw new Error(
-        `Finding adjudication reservation "${input.reservationToken}" does not exist`,
-      );
-    }
-  }
 }

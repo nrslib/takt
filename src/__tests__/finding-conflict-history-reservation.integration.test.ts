@@ -3,22 +3,33 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { reserveFindingConflictAdjudication } from '../core/workflow/findings/adjudication-reservation.js';
+import {
+  createFindingLifecycleReservation,
+} from '../core/models/finding-lifecycle-identity.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
-import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
+import { reserveFindingConflictAdjudication } from '../core/workflow/findings/adjudication-reservation.js';
+import { captureFindingMutationPrecondition } from '../core/workflow/findings/finding-preconditions.js';
+import {
+  captureFindingLifecycleHead,
+  reserveVerifiedLifecycleMutation,
+} from '../core/workflow/findings/lifecycle-mutation.js';
 import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
-import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
-import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
-import type { FindingLedger, FindingManagerOutput, RawFinding } from '../core/workflow/findings/types.js';
-import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import type { FindingLedger, RawFinding } from '../core/workflow/findings/types.js';
+import { verifiedFindingEvidenceFixture } from './helpers/finding-evidence.js';
+import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 
 const WORKFLOW_NAME = 'peer-review';
 const LEDGER_PATH = '.takt/findings/peer-review.json';
 const RAW_FINDINGS_PATH = '.takt/findings/raw';
 
-function makeRawFinding(rawFindingId: string): RawFinding {
-  return {
-    rawFindingId,
+function makeLedger(cwd: string): FindingLedger {
+  const observation = {
+    runId: 'run-1',
+    stepName: 'final-gate',
+    timestamp: '2017-01-01T00:00:00.000Z',
+  };
+  const baseRawFinding: RawFinding = {
+    rawFindingId: 'raw-base',
     stepName: 'reviewers',
     reviewer: 'coding-review',
     familyTag: 'bug',
@@ -30,130 +41,105 @@ function makeRawFinding(rawFindingId: string): RawFinding {
     targetFindingId: null,
     evidence: [],
   };
-}
-
-function makeManagerOutput(rawFindingId: string): FindingManagerOutput {
-  return {
-    matches: [],
-    newFindings: [],
-    resolvedFindings: [],
-    reopenedFindings: [],
-    conflicts: [{
-      findingIds: ['F-0001'],
-      rawFindingIds: [rawFindingId],
-      description: 'Reobserved conflict.',
-    }],
-    resolvedConflicts: [],
-    waivedFindings: [],
-    disputeNotes: [],
-    invalidatedFindings: [],
-    duplicateFindings: [],
-    dismissedFindings: [],
-  };
-}
-
-function makeLedger(): FindingLedger {
-  const olderObservation = {
-    runId: 'run-0',
-    stepName: 'reviewers',
-    timestamp: '2017-01-01T00:59:60.500+01:00',
-  };
-  const newerObservation = {
-    runId: 'run-1',
-    stepName: 'final-gate',
-    timestamp: '2017-01-01T00:00:00.000Z',
-  };
-  const generatedConflictId = formatConflictId({
-    findingIds: ['F-0001'],
-    rawFindingIds: ['raw-generated'],
-  });
-
-  return {
+  const baseLedger = authorizeFindingLedgerFixture({
     workflowName: WORKFLOW_NAME,
     nextId: 2,
-    updatedAt: newerObservation.timestamp,
+    updatedAt: observation.timestamp,
     findings: [{
       id: 'F-0001',
       status: 'open',
       lifecycle: 'new',
       revision: 1,
       severity: 'high',
-      title: 'Conflicting review conclusion',
+      title: baseRawFinding.title,
+      description: baseRawFinding.description,
       evidenceIds: [],
-      reviewers: ['coding-review'],
-      rawFindingIds: ['raw-previous'],
-      firstSeen: olderObservation,
-      lastSeen: newerObservation,
+      reviewers: [baseRawFinding.reviewer],
+      rawFindingIds: [baseRawFinding.rawFindingId],
+      firstSeen: observation,
+      lastSeen: observation,
     }],
     evidenceRecords: [],
-    rawFindings: [
-      makeRawFinding('raw-previous'),
-      makeRawFinding('raw-generated'),
-    ],
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawRecoveryAttempts: [],
+    rawRecoveryResults: [],
+    rawFindings: [baseRawFinding],
     interpretations: [],
-    conflicts: [
-      {
-        id: generatedConflictId,
-        status: 'active',
-        findingIds: ['F-0001'],
-        rawFindingIds: ['raw-previous', 'raw-generated'],
-        description: 'Existing conflict.',
-        firstSeen: olderObservation,
-        lastSeen: newerObservation,
-        adjudicationAttempts: [{
-          evidenceHash: 'older-pending-evidence',
-          reservationToken: 'older-reservation',
-          startedAt: olderObservation,
-          originStep: 'reviewers',
-        }, {
-          evidenceHash: 'newer-pending-evidence',
-          reservationToken: 'newer-reservation',
-          startedAt: newerObservation,
-          originStep: 'final-gate',
-        }],
-      },
-    ],
+    conflicts: [],
+  });
+  const evidence = verifiedFindingEvidenceFixture({
+    cwd,
+    path: 'src/example.ts',
+    startLine: 1,
+    title: 'Conflicting review conclusion',
+    description: 'The review evidence conflicts.',
+    targetFindingId: 'F-0001',
+  });
+  const rawFinding: RawFinding = {
+    rawFindingId: 'raw-current',
+    stepName: 'reviewers',
+    reviewer: 'coding-review',
+    familyTag: 'bug',
+    severity: 'high',
+    title: 'Conflicting review conclusion',
+    description: 'The review evidence conflicts.',
+    suggestion: null,
+    relation: 'persists',
+    targetFindingId: 'F-0001',
+    targetPrecondition: captureFindingMutationPrecondition(baseLedger, 'F-0001')!,
+    evidence: [evidence.evidence],
   };
-}
+  const conflictId = formatConflictId({
+    findingIds: ['F-0001'],
+    rawFindingIds: [rawFinding.rawFindingId],
+  });
 
-function reconcileCurrentRaw(): FindingLedger {
-  const rawFinding = makeRawFinding('raw-current');
-  return reconcileFindingLedger({
-    previousLedger: makeLedger(),
-    rawFindings: [rawFinding],
-    managerOutput: makeManagerOutput(rawFinding.rawFindingId),
-    provisionalFindings: [],
-    rawFindingDispositions: [],
-    verifiedEvidenceRecordsByRawFindingId: new Map(),
-    rawProvenanceByRawFindingId: new Map([[
-      rawFinding.rawFindingId,
-      storedRawReconcileProvenance(
-        rawFinding,
-        computeReviewerStableKey({
-          workflowName: WORKFLOW_NAME,
-          callNamespace: '',
-          parentStepName: 'reviewers',
-          reviewerPersonaKey: rawFinding.reviewer,
-        }),
-        computeLineageKey({
-          claimIdentityHash: computeClaimIdentityHash(rawFinding),
-        }),
-      ),
-    ]]),
-    context: {
-      workflowName: WORKFLOW_NAME,
-      stepName: 'reviewers',
-      runId: 'run-2',
-      timestamp: '2026-06-14T00:00:00.000Z',
-    },
+  return authorizeFindingLedgerFixture({
+    workflowName: WORKFLOW_NAME,
+    nextId: 2,
+    updatedAt: observation.timestamp,
+    findings: [{
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'new',
+      revision: 1,
+      severity: 'high',
+      title: rawFinding.title,
+      description: rawFinding.description,
+      evidenceIds: [],
+      reviewers: [rawFinding.reviewer],
+      rawFindingIds: [baseRawFinding.rawFindingId],
+      firstSeen: observation,
+      lastSeen: observation,
+    }],
+    evidenceRecords: [evidence.record],
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawRecoveryAttempts: [],
+    rawRecoveryResults: [],
+    rawFindings: [baseRawFinding, rawFinding],
+    interpretations: [],
+    conflicts: [{
+      id: conflictId,
+      status: 'active',
+      findingIds: ['F-0001'],
+      rawFindingIds: [rawFinding.rawFindingId],
+      description: 'Existing conflict.',
+      firstSeen: observation,
+      lastSeen: observation,
+      revision: 1,
+    }],
   });
 }
 
-describe('reconciled conflict history reservation', () => {
+describe('conflict lifecycle reservation persistence', () => {
   let cwd: string;
 
   beforeEach(() => {
-    cwd = mkdtempSync(join(tmpdir(), 'takt-conflict-history-'));
+    cwd = mkdtempSync(join(tmpdir(), 'takt-conflict-history-reservation-'));
     mkdirSync(join(cwd, 'src'), { recursive: true });
     mkdirSync(join(cwd, '.takt', 'runs', 'run-2', 'reports'), { recursive: true });
     writeFileSync(join(cwd, 'src', 'example.ts'), 'export const example = true;\n');
@@ -171,8 +157,8 @@ describe('reconciled conflict history reservation', () => {
     }
   });
 
-  it('should use the newest pending origin across equivalent RFC 3339 offset representations', async () => {
-    const store = createFindingLedgerStore({
+  function createStore() {
+    return createFindingLedgerStore({
       projectCwd: cwd,
       runId: 'run-2',
       reportDir: join(cwd, '.takt', 'runs', 'run-2', 'reports'),
@@ -180,20 +166,38 @@ describe('reconciled conflict history reservation', () => {
       ledgerPath: LEDGER_PATH,
       rawFindingsPath: RAW_FINDINGS_PATH,
     });
-    const reconciled = reconcileCurrentRaw();
-    expect(reconciled.conflicts[0]?.adjudicationAttempts?.map((attempt) => attempt.evidenceHash)).toEqual([
-      'older-pending-evidence',
-      'newer-pending-evidence',
-    ]);
-    await store.updateLedger(() => ({ ledger: reconciled, result: undefined }));
-    expect(store.loadLedger().conflicts[0]?.adjudicationAttempts?.map((attempt) => attempt.startedAt.timestamp)).toEqual([
-      '2016-12-31T23:59:60.500Z',
-      '2017-01-01T00:00:00.000Z',
-    ]);
+  }
 
-    const reservation = await reserveFindingConflictAdjudication({
+  it('reuses the persisted pending mutation with its original origin after reopening the store', async () => {
+    const store = createStore();
+    const initial = makeLedger(cwd);
+    await store.updateLedger(() => ({ ledger: initial, result: undefined }));
+    const conflictId = initial.conflicts[0]!.id;
+
+    const first = await reserveFindingConflictAdjudication({
       ledgerStore: store,
-      conflictId: reconciled.conflicts[0]!.id,
+      conflictId,
+      requestedOriginStep: 'final-gate',
+      runId: 'run-2',
+      observation: {
+        runId: 'run-2',
+        stepName: 'finding-conflict-adjudication',
+        timestamp: '2017-01-01T01:00:00.000+01:00',
+      },
+      cwd,
+    });
+    expect(first.result).toMatchObject({ started: true, originStep: 'final-gate' });
+    expect(first.ledger.lifecycleReservations).toHaveLength(
+      initial.lifecycleReservations.length + 1,
+    );
+    expect(first.ledger.lifecycleEvents).toEqual(initial.lifecycleEvents);
+    expect(first.ledger.lifecycleReservations.at(-1)?.reservedAt.timestamp)
+      .toBe('2017-01-01T00:00:00.000Z');
+
+    const reopenedStore = createStore();
+    const resumed = await reserveFindingConflictAdjudication({
+      ledgerStore: reopenedStore,
+      conflictId,
       requestedOriginStep: undefined,
       runId: 'run-2',
       observation: {
@@ -204,41 +208,53 @@ describe('reconciled conflict history reservation', () => {
       cwd,
     });
 
-    expect(reservation.result).toMatchObject({
-      started: true,
-      originStep: 'final-gate',
-    });
-    expect(reservation.ledger.conflicts).toHaveLength(1);
-    expect(reservation.ledger.conflicts[0]?.adjudicationAttempts).toEqual([
-      expect.objectContaining({ originStep: 'reviewers' }),
-      expect.objectContaining({ originStep: 'final-gate' }),
-      expect.objectContaining({ originStep: 'final-gate' }),
-    ]);
+    expect(resumed.result).toEqual(first.result);
+    expect(resumed.ledger.lifecycleReservations).toEqual(first.ledger.lifecycleReservations);
+    expect(resumed.ledger.lifecycleEvents).toEqual(first.ledger.lifecycleEvents);
   });
 
-  it('should preserve the reconciled reservation origin when rejecting submillisecond history timestamps', async () => {
-    const store = createFindingLedgerStore({
-      projectCwd: cwd,
-      runId: 'run-2',
-      reportDir: join(cwd, '.takt', 'runs', 'run-2', 'reports'),
-      workflowName: WORKFLOW_NAME,
-      ledgerPath: LEDGER_PATH,
-      rawFindingsPath: RAW_FINDINGS_PATH,
+  it('rejects a same-revision reservation when another full-head field is stale', () => {
+    const ledger = makeLedger(cwd);
+    const conflict = ledger.conflicts[0]!;
+    const currentHead = captureFindingLifecycleHead(ledger, 'conflict', conflict.id)!;
+    const reservation = createFindingLifecycleReservation({
+      operation: 'resolve_conflict',
+      targets: [{
+        entityKind: 'conflict',
+        entityId: conflict.id,
+        expectedHead: {
+          ...currentHead,
+          projectionDigest: 'f'.repeat(64),
+        },
+      }],
+      evidenceBindingIds: [],
+      authority: {
+        kind: 'engine_policy',
+        decisionKind: 'resolve_conflict',
+        decisionDigest: 'a'.repeat(64),
+      },
+      context: { kind: 'transaction' },
+      reservedAt: {
+        runId: 'run-2',
+        stepName: 'finding-conflict-adjudication',
+        timestamp: '2026-06-14T00:01:00.000Z',
+      },
     });
-    const reconciled = reconcileCurrentRaw();
-    await store.updateLedger(() => ({ ledger: reconciled, result: undefined }));
-    const ledger = structuredClone(reconciled);
-    ledger.conflicts[0]!.adjudicationAttempts![0]!.startedAt.timestamp = '2026-06-12T22:15:00.0001Z';
 
-    await expect(store.updateLedger(() => ({
-      ledger,
-      result: undefined,
-    }))).rejects.toThrow('Expected an RFC 3339 timestamp');
+    expect(() => reserveVerifiedLifecycleMutation(ledger, {
+      reservation,
+      evidenceBindings: [],
+    })).toThrow(/stale full head/);
+  });
 
-    const reservation = await reserveFindingConflictAdjudication({
+  it('rejects replacement of an existing reservation prefix and keeps the persisted pending entry', async () => {
+    const store = createStore();
+    const initial = makeLedger(cwd);
+    await store.updateLedger(() => ({ ledger: initial, result: undefined }));
+    const first = await reserveFindingConflictAdjudication({
       ledgerStore: store,
-      conflictId: reconciled.conflicts[0]!.id,
-      requestedOriginStep: undefined,
+      conflictId: initial.conflicts[0]!.id,
+      requestedOriginStep: 'final-gate',
       runId: 'run-2',
       observation: {
         runId: 'run-2',
@@ -247,7 +263,41 @@ describe('reconciled conflict history reservation', () => {
       },
       cwd,
     });
+    const reordered = {
+      ...first.ledger,
+      lifecycleReservations: [...first.ledger.lifecycleReservations].reverse(),
+    };
 
-    expect(reservation.result).toMatchObject({ started: true, originStep: 'final-gate' });
+    await expect(store.updateLedger(() => ({
+      ledger: reordered,
+      result: undefined,
+    }))).rejects.toThrow(/registry prefix changed/);
+    expect(store.loadLedger().lifecycleReservations).toEqual(first.ledger.lifecycleReservations);
+  });
+
+  it('rejects an invalid reservation timestamp without losing the reusable pending mutation', async () => {
+    const store = createStore();
+    const initial = makeLedger(cwd);
+    await store.updateLedger(() => ({ ledger: initial, result: undefined }));
+    const first = await reserveFindingConflictAdjudication({
+      ledgerStore: store,
+      conflictId: initial.conflicts[0]!.id,
+      requestedOriginStep: 'final-gate',
+      runId: 'run-2',
+      observation: {
+        runId: 'run-2',
+        stepName: 'finding-conflict-adjudication',
+        timestamp: '2026-06-14T00:01:00.000Z',
+      },
+      cwd,
+    });
+    const invalid = structuredClone(first.ledger);
+    invalid.lifecycleReservations.at(-1)!.reservedAt.timestamp = '2026-06-12T22:15:00.0001Z';
+
+    await expect(store.updateLedger(() => ({
+      ledger: invalid,
+      result: undefined,
+    }))).rejects.toThrow('Expected an RFC 3339 timestamp');
+    expect(store.loadLedger().lifecycleReservations).toEqual(first.ledger.lifecycleReservations);
   });
 });

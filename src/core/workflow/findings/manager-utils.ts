@@ -3,7 +3,11 @@ import {
   findingFileQuoteLocations,
   formatFileQuoteLocation,
 } from './evidence-location.js';
-import { classifyProvisionalRecovery, isOpenProvisional } from './provisional-recovery.js';
+import {
+  classifyProvisionalRecovery,
+  isOpenProvisional,
+  provisionalRecoveryAttemptCount,
+} from './provisional-recovery.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import type { AssembleManagerOutputResult } from './decision-assembly.js';
 import {
@@ -20,14 +24,22 @@ import {
  * 余地が無い provisional だけが内容の管轄裁定へ回る。
  * 分類は provisional-recovery.ts が正本。
  */
-export function isDismissCandidate(finding: FindingLedgerEntry, roundsCompleted: number): boolean {
+export function isDismissCandidate(
+  ledger: FindingLedger,
+  finding: FindingLedgerEntry,
+  roundsCompleted: number,
+): boolean {
   if (!isOpenProvisional(finding)) {
     return false;
   }
   if (!(DISMISSABLE_PROVISIONAL_KINDS as readonly string[]).includes(finding.provisional.kind)) {
     return false;
   }
-  return classifyProvisionalRecovery(finding.provisional, roundsCompleted) === 'terminal-adjudication';
+  return classifyProvisionalRecovery(
+    finding.provisional,
+    roundsCompleted,
+    provisionalRecoveryAttemptCount(ledger, finding.id),
+  ) === 'terminal-adjudication';
 }
 
 /**
@@ -40,7 +52,7 @@ export function computeDismissCandidates(
   const candidates = new Map<string, string>();
   const roundsCompleted = stopBudgetRoundsCompleted(ledger);
   for (const finding of ledger.findings) {
-    if (!isDismissCandidate(finding, roundsCompleted)) {
+    if (!isDismissCandidate(ledger, finding, roundsCompleted)) {
       continue;
     }
     candidates.set(

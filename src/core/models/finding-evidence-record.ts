@@ -129,3 +129,22 @@ export function findingEvidenceRecordIdentityViolation(
   }
   return undefined;
 }
+
+export function evidenceRecordMatchesRawEvidence(
+  record: FindingEvidenceRecord,
+  evidence: RawFindingEvidence,
+): boolean {
+  if (record.kind !== evidence.kind) {
+    return false;
+  }
+  if (record.kind === 'engine_proof') {
+    return evidence.kind === 'engine_proof'
+      && evidence.proofId === record.proofId;
+  }
+  return evidence.kind === 'file_quote'
+    && evidence.path === record.path
+    && evidence.startLine === record.startLine
+    && evidence.endLine === record.endLine
+    && evidence.verbatimExcerpt === record.verbatimExcerpt
+    && evidence.snapshotId === record.snapshotId;
+}

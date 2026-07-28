@@ -25,6 +25,11 @@ import {
   verifiedSourceQuoteFields,
 } from './helpers/finding-evidence.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
+import {
+  authorizeFindingLedgerFixture,
+  emptyFindingAuthorityProjection,
+} from './helpers/finding-lifecycle-fixture.js';
+import { createRawRecoveryAttempt } from '../core/models/finding-raw-recovery.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -130,6 +135,7 @@ function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     rawFindings: [],
     conflicts: [],
     interpretations: [],
+    ...emptyFindingAuthorityProjection(),
     ...overrides,
   };
 }
@@ -284,14 +290,24 @@ describe('computeFixpointSnapshot', () => {
       provisional: {
         ...provisionalFinding({ revision: 1 }).provisional!,
         kind: 'raw-adjudication-unresolved',
-        adjudicationAttempts: [{
-          attempt: 1,
-          replayRawFindingId: 'replay-1',
-          reason: 'no substantive outcome',
-          at: observation(),
-        }],
       },
-    })] });
+    })],
+    rawRecoveryAttempts: [createRawRecoveryAttempt({
+      provisionalFindingId: 'F-0001',
+      expectedHead: {
+        entityKind: 'finding',
+        entityId: 'F-0001',
+        revision: 1,
+        projectionDigest: '1'.repeat(64),
+        eventId: '2'.repeat(64),
+      },
+      sourceRawFindingId: 'raw-1',
+      sourceRawIntegrityDigest: null,
+      promptSnapshotDigest: '3'.repeat(64),
+      attempt: 1,
+      startedAt: observation(),
+    })],
+    });
 
     expect(computeFixpointSnapshot(before).provisionalKeys).toEqual(['stable-key-a']);
     expect(computeFixpointSnapshot(after).provisionalKeys).toEqual([
@@ -387,7 +403,7 @@ function makeRoundHarness(
   run: (reviewerRawFindings: Array<Record<string, unknown>>) => ReturnType<typeof runFindingManagerForStep>;
 } {
   const ledgerRepository = new RevisionedFindingLedgerTestRepository(
-    initialLedger,
+    authorizeFindingLedgerFixture(initialLedger),
   );
   const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {

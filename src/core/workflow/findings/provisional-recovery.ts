@@ -4,7 +4,7 @@ import {
   RAW_ADJUDICATION_RECOVERY_LIMITS,
   REVIEWER_ENVELOPE_RECOVERY_LIMITS,
 } from './raw-finding-limits.js';
-import type { FindingLedgerEntry, FindingProvisionalMetadata } from './types.js';
+import type { FindingLedger, FindingLedgerEntry, FindingProvisionalMetadata } from './types.js';
 
 /**
  * open provisional の recovery 分類。滞留クラス全廃の中核不変条件:
@@ -32,9 +32,42 @@ export type ProvisionalRecoveryClass =
   | 'process-failure'
   | 'terminal-adjudication';
 
-export function adjudicationAttemptsExhausted(provisional: FindingProvisionalMetadata): boolean {
-  return (provisional.adjudicationAttempts ?? []).length
-    >= RAW_ADJUDICATION_RECOVERY_LIMITS.maxReplayAttempts;
+export function provisionalRecoveryAttemptCount(
+  ledger: FindingLedger,
+  findingId: string,
+): number {
+  const durableAttempts = ledger.rawRecoveryAttempts.filter(
+    (attempt) => attempt.provisionalFindingId === findingId,
+  ).length;
+  const lineageKey = ledger.findings.find(
+    (finding) => finding.id === findingId,
+  )?.provisional?.lineageKey;
+  const interpretationFailureOrdinal = lineageKey === undefined
+    ? 0
+    : Math.max(
+        0,
+        ...ledger.interpretations
+          .filter((record) => (
+            record.lineageKey === lineageKey
+            && (
+              record.stage === 'interpretation_retryable_failure'
+              || record.stage === 'interpretation_terminal_failure'
+            )
+          ))
+          .map((record) => record.attemptOrdinal),
+      );
+  const hasTerminalFailure = lineageKey !== undefined
+    && ledger.interpretations.some((record) => (
+      record.lineageKey === lineageKey
+      && record.stage === 'interpretation_terminal_failure'
+    ));
+  return hasTerminalFailure
+    ? RAW_ADJUDICATION_RECOVERY_LIMITS.maxReplayAttempts
+    : Math.max(durableAttempts, interpretationFailureOrdinal);
+}
+
+export function recoveryAttemptsExhausted(attemptCount: number): boolean {
+  return attemptCount >= RAW_ADJUDICATION_RECOVERY_LIMITS.maxReplayAttempts;
 }
 
 // process failure は dismiss で消さず、既存 stop-budget/fixpoint/loop-monitor が有限停止へ運ぶ。
@@ -55,6 +88,7 @@ function actionRecoveryExhausted(provisional: FindingProvisionalMetadata): boole
 export function classifyProvisionalRecovery(
   provisional: FindingProvisionalMetadata,
   roundsCompleted: number,
+  attemptCount = 0,
 ): ProvisionalRecoveryClass {
   switch (provisional.kind) {
     case 'raw-meaning-ambiguous':
@@ -63,18 +97,18 @@ export function classifyProvisionalRecovery(
       if (provisional.interpretationEpochs >= MANAGER_INTERPRETATION_LIMITS.maxInterpretationEpochsPerLineage) {
         return 'terminal-adjudication';
       }
-      if (adjudicationAttemptsExhausted(provisional)) {
+      if (recoveryAttemptsExhausted(attemptCount)) {
         return 'terminal-adjudication';
       }
       return provisional.interpretationEpochs === 0 ? 'raw-adjudication' : 'interpretation';
     case 'raw-adjudication-unresolved':
-      return adjudicationAttemptsExhausted(provisional) ? 'terminal-adjudication' : 'raw-adjudication';
+      return recoveryAttemptsExhausted(attemptCount) ? 'terminal-adjudication' : 'raw-adjudication';
     case 'manager-output-discarded':
-      return adjudicationAttemptsExhausted(provisional) ? 'process-failure' : 'raw-adjudication';
+      return recoveryAttemptsExhausted(attemptCount) ? 'process-failure' : 'raw-adjudication';
     case 'manager-budget-exhausted':
     case 'interpretation-interrupted':
       return provisional.interpretationEpochs >= MANAGER_INTERPRETATION_LIMITS.maxInterpretationEpochsPerLineage
-        || adjudicationAttemptsExhausted(provisional)
+        || recoveryAttemptsExhausted(attemptCount)
         ? 'process-failure'
         : 'interpretation';
     case 'reviewer-output-overflow':
@@ -85,7 +119,7 @@ export function classifyProvisionalRecovery(
       // 保存済み source raw があれば再裁定できる。無い stale（invalidate /
       // waive / duplicate / dismiss の action 系）は対象状態の充足で機械 resolve。
       if (provisional.sourceRawFindingIds.length > 0) {
-        return adjudicationAttemptsExhausted(provisional) ? 'process-failure' : 'raw-adjudication';
+        return recoveryAttemptsExhausted(attemptCount) ? 'process-failure' : 'raw-adjudication';
       }
       return actionRecoveryExhausted(provisional) ? 'process-failure' : 'action';
   }

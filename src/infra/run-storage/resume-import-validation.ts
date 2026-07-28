@@ -34,6 +34,11 @@ export interface ValidatedResumeImportSnapshot {
 const FINDING_ENTRY_KINDS = new Set([
   'finding',
   'evidence',
+  'evidence_binding',
+  'lifecycle_reservation',
+  'lifecycle_event',
+  'raw_recovery_attempt',
+  'raw_recovery_result',
   'raw',
   'conflict',
   'interpretation',
@@ -168,7 +173,6 @@ function validateFindingContractDisabled(
   source: CompleteResumeSnapshot,
 ): void {
   const findingRows = [
-    source.findingReservations,
     source.findingPublications,
     source.findingRevisions,
     source.findingHeads,
@@ -222,7 +226,6 @@ function validateFindingContractEnabled(
   const entries = indexFindingEntries(source.findingEntries, expectedRevisionKeys);
   const controls = indexFindingControls(source.findingControls, expectedRevisionKeys);
   validateFindingRevisionCounts(revisions, entries, controls);
-  validateFindingReservations(source.findingReservations, heads);
   const allLedgers = reconstructFindingLedgerHistory(
     revisions,
     entries,
@@ -488,6 +491,11 @@ function validateFindingRevisionCounts(
   const countFields = new Map([
     ['finding', 'finding_count'],
     ['evidence', 'evidence_record_count'],
+    ['evidence_binding', 'evidence_binding_count'],
+    ['lifecycle_reservation', 'lifecycle_reservation_count'],
+    ['lifecycle_event', 'lifecycle_event_count'],
+    ['raw_recovery_attempt', 'raw_recovery_attempt_count'],
+    ['raw_recovery_result', 'raw_recovery_result_count'],
     ['raw', 'raw_finding_count'],
     ['conflict', 'conflict_count'],
     ['interpretation', 'interpretation_count'],
@@ -512,30 +520,6 @@ function validateFindingRevisionCounts(
     if ((controls.get(key)?.length ?? 0) !== expectedControls) {
       throw new Error(`Run resume Finding revision "${key}" control count mismatch`);
     }
-  }
-}
-
-function validateFindingReservations(
-  rows: readonly SnapshotRow[],
-  heads: ReadonlyMap<string, SnapshotRow>,
-): void {
-  const keys = new Set<string>();
-  for (const row of rows) {
-    const scopeId = requiredString(row.scopeId, 'Finding reservation scope');
-    const token = requiredString(
-      row.reservationToken,
-      'Finding reservation token',
-    );
-    if (!heads.has(scopeId)) {
-      throw new Error(
-        `Run resume Finding reservation references unknown scope "${scopeId}"`,
-      );
-    }
-    requireUnique(keys, `${scopeId}\0${token}`, 'Finding reservation');
-    requiredNonNegativeInteger(
-      row.claimedAt,
-      'Finding reservation claimed time',
-    );
   }
 }
 
@@ -609,6 +593,11 @@ function reconstructFindingLedgerHistory(
       ),
       findings: recordsForKind(entries.get(revisionKey), 'finding'),
       evidenceRecords: recordsForKind(entries.get(revisionKey), 'evidence'),
+      evidenceBindings: recordsForKind(entries.get(revisionKey), 'evidence_binding'),
+      lifecycleReservations: recordsForKind(entries.get(revisionKey), 'lifecycle_reservation'),
+      lifecycleEvents: recordsForKind(entries.get(revisionKey), 'lifecycle_event'),
+      rawRecoveryAttempts: recordsForKind(entries.get(revisionKey), 'raw_recovery_attempt'),
+      rawRecoveryResults: recordsForKind(entries.get(revisionKey), 'raw_recovery_result'),
       rawFindings: recordsForKind(entries.get(revisionKey), 'raw'),
       conflicts: recordsForKind(entries.get(revisionKey), 'conflict'),
       interpretations: recordsForKind(
@@ -748,6 +737,16 @@ function validateJsonRecord(
     ? 'rawFindingId'
     : kind === 'evidence'
       ? 'evidenceId'
+      : kind === 'evidence_binding'
+        ? 'bindingId'
+        : kind === 'lifecycle_reservation'
+          ? 'reservationId'
+          : kind === 'lifecycle_event'
+            ? 'eventId'
+          : kind === 'raw_recovery_attempt'
+            ? 'attemptId'
+          : kind === 'raw_recovery_result'
+            ? 'resultId'
     : kind === 'interpretation'
       ? 'interpretationKey'
       : 'id';

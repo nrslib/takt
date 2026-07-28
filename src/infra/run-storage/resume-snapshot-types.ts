@@ -39,7 +39,6 @@ export interface CompleteResumeSnapshot {
   readonly operationAttempts: readonly SnapshotRow[];
   readonly operationTransitions: readonly SnapshotRow[];
   readonly reports: readonly SnapshotRow[];
-  readonly findingReservations: readonly SnapshotRow[];
   readonly findingPublications: readonly SnapshotRow[];
   readonly findingRevisions: readonly SnapshotRow[];
   readonly findingHeads: readonly SnapshotRow[];

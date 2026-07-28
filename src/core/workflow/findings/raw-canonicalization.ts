@@ -36,7 +36,7 @@ import type {
   RawFindingRelation,
   ReviewerRawFindingCandidate,
 } from './types.js';
-import { normalizeFindingText } from './location.js';
+import { normalizeFindingText } from '../../models/finding-claim-identity.js';
 import {
   captureFindingMutationPrecondition,
 } from './finding-preconditions.js';

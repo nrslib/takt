@@ -47,6 +47,7 @@ import { stopBudgetRoundsCompleted } from '../core/workflow/findings/stop-budget
 import { addRoundMarker, computeRoundMarker } from '../core/workflow/findings/round-marker.js';
 import { captureFindingPreconditions } from '../core/workflow/findings/finding-preconditions.js';
 import { collectInterpretationRecoveryPlan } from '../core/workflow/findings/interpretation-recovery.js';
+import { processInterpretationLiveClaims } from '../core/workflow/findings/interpretation-live-claims.js';
 import { createFindingAdjudicationReservation } from './helpers/finding-adjudication-reservation.js';
 import {
   verifiedSourceQuoteFields,
@@ -56,6 +57,7 @@ import {
   observeFindingLedgerMutations,
   RevisionedFindingLedgerTestRepository,
 } from './helpers/finding-manager-publication.js';
+import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -122,6 +124,11 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     updatedAt: '2026-06-13T00:00:00.000Z',
     findings: [makeFinding({ revision: 1 })],
     evidenceRecords: [],
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawRecoveryAttempts: [],
+    rawRecoveryResults: [],
     rawFindings: [{
       rawFindingId: 'raw-existing',
       stepName: 'reviewers',
@@ -133,7 +140,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
       suggestion: null,
       relation: 'new',
       targetFindingId: null,
-      evidence: [],
+      evidence: reviewerEvidence('src/a.ts', 1),
     }],
     conflicts: [],
     interpretations: [],
@@ -187,6 +194,7 @@ function makeHarness(
   );
   const ledgerStore: FindingLedgerStore = {
     ledgerIdentity: '/test/finding-ladder-robustness/ledger.json',
+    interpretationLiveClaims: processInterpretationLiveClaims,
     workflowName: 'peer-review',
     loadLedger: () => ledgerRepository.loadLedger(),
     ...createFindingAdjudicationReservation(),
@@ -1257,15 +1265,35 @@ const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_K
   });
 
   it('ledger_applied 済みの解釈は no-op になり、finding ID の二重割当・rawFindingIds の二重追加が起きない', async () => {
+    const baseLedger = resolvedTargetLedger();
     const applied = makeFinding({ revision: 1,
       id: 'F-0002',
       title: 'Existing issue still present',
       description: 'Claims the resolved issue persists with different content.',
       rawFindingIds: ['crashed-run:reviewers:1:arch-review:p-1'],
     });
-    const harness = makeHarness(resolvedTargetLedger({
+    const harness = makeHarness({
+      ...baseLedger,
       nextId: 3,
       findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' }), applied],
+      rawFindings: [
+        ...baseLedger.rawFindings,
+        {
+          rawFindingId: 'crashed-run:reviewers:1:arch-review:p-1',
+          stepName: 'reviewers',
+          reviewer: 'arch-review',
+          familyTag: 'bug',
+          severity: 'high',
+          title: 'Existing issue still present',
+          description: 'Claims the resolved issue persists with different content.',
+          suggestion: null,
+          relation: 'persists',
+          targetFindingId: 'F-0001',
+          targetPrecondition: captureFindingPreconditions(baseLedger)
+            .get('F-0001')!.precondition,
+          evidence: reviewerEvidence('src/a.ts', 20),
+        },
+      ],
       interpretations: [{
         interpretationKey: INTERPRETATION_KEY,
         baseInterpretationKey: BASE_INTERPRETATION_KEY,
@@ -1286,7 +1314,7 @@ const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_K
         applicationResult: 'created',
         promptPreconditions: [],
       }],
-    }));
+    });
 
     const result = await harness.run({ reviewerRawFindings: [AMBIGUOUS_PERSISTS_RAW] });
     expect(result.status).toBe('updated');
@@ -1999,16 +2027,21 @@ describe('解釈梯子の追加必須テスト', () => {
         rawFindingsPath: '.takt/findings/raw',
       });
       await realStore.updateLedger(() => ({
-        ledger: {
+        ledger: authorizeFindingLedgerFixture({
           workflowName: 'peer-review',
           nextId: 2,
           updatedAt: '2026-06-13T00:00:00.000Z',
           findings: [makeFinding({ revision: 1 })],
           evidenceRecords: [],
+          evidenceBindings: [],
+          lifecycleReservations: [],
+          lifecycleEvents: [],
+          rawRecoveryAttempts: [],
+          rawRecoveryResults: [],
           rawFindings: [],
           conflicts: [],
           interpretations: [],
-        },
+        }),
         result: undefined,
       }));
       // intake 後の最初の永続化処理（WAL の beginInterpretations / 最終
@@ -2303,16 +2336,21 @@ describe('解釈梯子の追加必須テスト', () => {
         rawFindingsPath: '.takt/findings/raw',
       });
       await store.updateLedger(() => ({
-        ledger: {
+        ledger: authorizeFindingLedgerFixture({
           workflowName: 'peer-review',
           nextId: 2,
           updatedAt: '2026-06-13T00:00:00.000Z',
           findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })],
           evidenceRecords: [],
+          evidenceBindings: [],
+          lifecycleReservations: [],
+          lifecycleEvents: [],
+          rawRecoveryAttempts: [],
+          rawRecoveryResults: [],
           rawFindings: [],
           conflicts: [],
           interpretations: [],
-        },
+        }),
         result: undefined,
       }));
 

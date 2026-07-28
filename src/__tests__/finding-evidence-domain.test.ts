@@ -23,7 +23,10 @@ import {
 } from '../core/models/finding-evidence-record.js';
 import { verifyFindingEvidenceSet } from '../core/workflow/findings/evidence-verification.js';
 import { verifyFileQuoteEvidence } from '../core/workflow/findings/admission-validation.js';
-import { parseFindingLedger, parseRawFindings } from '../core/workflow/findings/schemas.js';
+import {
+  parseFindingLedger as parseFindingLedgerSchema,
+  parseRawFindings,
+} from '../core/workflow/findings/schemas.js';
 import { rawEvidenceFileQuoteLocations } from '../core/workflow/findings/evidence-location.js';
 import { buildManagerInputLedger } from '../core/workflow/findings/manager-agent.js';
 import { renderActionableFindingLedgerInstructionSummary } from '../core/workflow/findings/context.js';
@@ -35,11 +38,25 @@ import {
   cleanupRealRunStorages,
   createRealRunStorage,
 } from './helpers/run-storage.js';
+import {
+  authorizeFindingLedgerFixture,
+  emptyFindingAuthorityProjection,
+} from './helpers/finding-lifecycle-fixture.js';
 
 const temporaryDirectories: string[] = [];
 
 function sha256(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function parseFindingLedger(value: unknown) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return parseFindingLedgerSchema(value);
+  }
+  return parseFindingLedgerSchema({
+    ...emptyFindingAuthorityProjection(),
+    ...value,
+  });
 }
 
 afterEach(() => {
@@ -875,35 +892,36 @@ describe('Finding evidence domain', () => {
       stepName: 'review',
       timestamp: '2026-07-28T00:00:00.000Z',
     };
-    await store.updateLedger((ledger) => ({
-      ledger: {
-        ...ledger,
-        evidenceRecords: [evidenceRecord],
-        findings: [{
-          id: 'F-0001',
-          status: 'open',
-          lifecycle: 'new',
-          severity: 'high',
-          title: 'Claim',
-          evidenceIds: [evidenceRecord.evidenceId],
-          reviewers: ['reviewer'],
-          rawFindingIds: [],
-          firstSeen: observation,
-          lastSeen: observation,
-          revision: 1,
-        }],
-        nextId: 2,
-      },
+    const authorizedLedger = authorizeFindingLedgerFixture({
+      ...store.loadLedger(),
+      evidenceRecords: [evidenceRecord],
+      findings: [{
+        id: 'F-0001',
+        status: 'open',
+        lifecycle: 'new',
+        severity: 'high',
+        title: 'Claim',
+        evidenceIds: [evidenceRecord.evidenceId],
+        reviewers: ['reviewer'],
+        rawFindingIds: [],
+        firstSeen: observation,
+        lastSeen: observation,
+        revision: 1,
+      }],
+      nextId: 2,
+    });
+    await store.updateLedger(() => ({
+      ledger: authorizedLedger,
       result: undefined,
     }));
 
     const ledger = store.loadLedger();
     expect(parseFindingLedger(ledger)).toEqual(ledger);
-    expect(ledger.evidenceRecords).toEqual([evidenceRecord]);
-    expect(ledger.findings[0]?.evidenceIds).toEqual([evidenceRecord.evidenceId]);
+    expect(ledger.evidenceRecords).toEqual(authorizedLedger.evidenceRecords);
+    expect(ledger.findings[0]?.evidenceIds).toEqual(authorizedLedger.findings[0]?.evidenceIds);
     expect(() => store.updateLedger((current) => ({
       ledger: { ...current, evidenceRecords: [], findings: [] },
       result: undefined,
-    }))).toThrow(/cannot be removed/);
+    }))).toThrow(/references unknown evidence/);
   });
 });

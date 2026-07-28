@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
-import { normalizeFindingText } from './location.js';
+export { computeClaimIdentityHash } from '../../models/finding-claim-identity.js';
 import {
   canonicalRawFindingEvidenceIdentity,
   compareRawFindingEvidence,
@@ -20,20 +20,6 @@ import type {
 
 function sha256(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
-}
-
-export function computeClaimIdentityHash(input: {
-  targetFindingId: string | null | undefined;
-  title: string;
-  description: string;
-}): string {
-  return sha256({
-    domain: 'finding-claim-identity',
-    version: 1,
-    targetFindingId: input.targetFindingId ?? null,
-    title: normalizeFindingText(input.title),
-    description: input.description,
-  });
 }
 
 export function computeEvidenceSetHash(evidenceIds: readonly string[]): string {

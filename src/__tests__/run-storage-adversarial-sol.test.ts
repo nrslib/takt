@@ -1,10 +1,18 @@
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  createRawRecoveryAttempt,
+  createRawRecoveryResult,
+} from '../core/models/finding-raw-recovery.js';
+import { computeRawFindingIntegrityDigest } from '../core/models/finding-raw-integrity.js';
+import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
+import {
   createRunStorage,
   openRunStorage,
 } from '../infra/run-storage/root.js';
+import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 import {
   cleanupRealRunStorages,
   createRealRunStorage,
@@ -291,6 +299,170 @@ describe('run storage adversarial SOL contracts', () => {
     database.close();
   });
 
+  it('rejects terminalization when a raw recovery result borrows an unrelated lifecycle event', async () => {
+    const { databasePath, root } = createRealRunStorage({
+      findingContractEnabled: true,
+    });
+    const owner = lease(root);
+    const runtime = root.runtime({ lease: owner });
+    const execution = runtime.execution.startStep({
+      stepKey: 'raw-recovery-terminal-seal',
+      expectedScopeRevision: 0,
+    });
+    const store = runtime.findingManager({
+      workflowName: 'default',
+      producer: execution.handle,
+    });
+    const observation = {
+      runId: 'run-1',
+      stepName: 'raw-recovery-terminal-seal',
+      timestamp: '2026-07-29T00:00:00.000Z',
+    };
+    const sourceRaw = {
+      rawFindingId: 'raw-provisional-source',
+      stepName: observation.stepName,
+      reviewer: 'reviewer',
+      familyTag: 'correctness',
+      severity: 'high' as const,
+      title: 'Provisional target',
+      description: 'The target requires bounded recovery.',
+      suggestion: null,
+      relation: 'new' as const,
+      targetFindingId: null,
+      evidence: [{
+        kind: 'file_quote' as const,
+        path: 'src/provisional.ts',
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: 'provisional target',
+        snapshotId: '1'.repeat(64),
+      }],
+    };
+    const authorized = authorizeFindingLedgerFixture({
+      workflowName: 'default',
+      nextId: 3,
+      updatedAt: observation.timestamp,
+      findings: [
+        {
+          id: 'F-0001',
+          status: 'open',
+          lifecycle: 'new',
+          severity: 'high',
+          title: 'Provisional target',
+          description: 'The target requires bounded recovery.',
+          evidenceIds: [],
+          rawFindingIds: [sourceRaw.rawFindingId],
+          reviewers: ['reviewer'],
+          firstSeen: observation,
+          lastSeen: observation,
+          revision: 1,
+          disputes: [],
+          waivers: [],
+          provisional: {
+            kind: 'raw-adjudication-unresolved',
+            stableKey: 'stable-provisional',
+            lineageKey: 'lineage-provisional',
+            sourceRawFindingIds: [sourceRaw.rawFindingId],
+            reason: 'Recovery remains pending.',
+            firstObservedAt: observation,
+            lastObservedAt: observation,
+            interpretationEpochs: 0,
+            gateEffect: 'block',
+            firstObservedRound: 1,
+            recoveryReviewerStableKey: 'reviewer',
+          },
+        },
+        {
+          id: 'F-0002',
+          status: 'open',
+          lifecycle: 'new',
+          severity: 'medium',
+          title: 'Unrelated finding',
+          description: 'This event must not close recovery for F-0001.',
+          evidenceIds: [],
+          rawFindingIds: [],
+          reviewers: ['reviewer'],
+          firstSeen: observation,
+          lastSeen: observation,
+          revision: 1,
+          disputes: [],
+          waivers: [],
+        },
+      ],
+      evidenceRecords: [],
+      rawFindings: [sourceRaw],
+      conflicts: [],
+      interpretations: [],
+    });
+    const expectedHead = captureFindingLifecycleHead(
+      authorized,
+      'finding',
+      'F-0001',
+    )!;
+    const attempt = createRawRecoveryAttempt({
+      provisionalFindingId: 'F-0001',
+      expectedHead,
+      sourceRawFindingId: sourceRaw.rawFindingId,
+      sourceRawIntegrityDigest: computeRawFindingIntegrityDigest(sourceRaw),
+      promptSnapshotDigest: '2'.repeat(64),
+      attempt: 1,
+      startedAt: observation,
+    });
+    await store.updateLedger(() => ({
+      ledger: {
+        ...authorized,
+        rawRecoveryAttempts: [attempt],
+      },
+      result: undefined,
+    }));
+    const current = store.loadLedger();
+    const unrelatedEvent = current.lifecycleEvents.find((event) => (
+      event.transitions.some((transition) => (
+        transition.after.entityKind === 'finding'
+        && transition.after.entityId === 'F-0002'
+      ))
+    ))!;
+    const unrelatedBinding = current.evidenceBindings.find(
+      (binding) => unrelatedEvent.evidenceBindingIds.includes(binding.bindingId),
+    )!;
+    const forgedResult = createRawRecoveryResult({
+      attemptId: attempt.attemptId,
+      replayRawFindingId: unrelatedBinding.sourceRawFindingId,
+      mutationIds: [unrelatedEvent.mutationId],
+      outcome: 'applied',
+      completedAt: observation,
+    });
+
+    const database = new DatabaseSync(databasePath);
+    database.exec('PRAGMA foreign_keys = ON');
+    const head = database.prepare(`
+      SELECT current_revision AS revision
+      FROM finding_ledger_heads
+      WHERE run_id = 'run-1' AND scope_id = 'root'
+    `).get() as { readonly revision: number };
+    database.prepare(`
+      INSERT INTO finding_raw_recovery_results (
+        run_id, scope_id, revision, ordinal, result_id, record, digest
+      ) VALUES ('run-1', 'root', ?, 0, ?, ?, ?)
+    `).run(
+      head.revision,
+      forgedResult.resultId,
+      JSON.stringify(forgedResult),
+      createHash('sha256').update(JSON.stringify(forgedResult)).digest('hex'),
+    );
+
+    expect(() => root.finishRun(owner, {
+      status: 'completed',
+      publication: {
+        status: 'completed',
+        iteration: 1,
+        payload: '{}',
+      },
+    })).toThrow(/active authority/i);
+    database.close();
+    root.close();
+  });
+
   it('rejects partial Finding revisions and JSON authority ID mismatch at the database boundary', () => {
     const { databasePath, root } = createRealRunStorage({
       findingContractEnabled: true,
@@ -308,10 +480,13 @@ describe('run storage adversarial SOL contracts', () => {
       database.prepare(`
         INSERT INTO finding_ledger_revisions (
           run_id, scope_id, revision, workflow_name, next_id,
-          finding_count, evidence_record_count, raw_finding_count, conflict_count,
+          finding_count, evidence_record_count, evidence_binding_count,
+          lifecycle_reservation_count, lifecycle_event_count,
+          raw_recovery_attempt_count, raw_recovery_result_count,
+          raw_finding_count, conflict_count,
           interpretation_count, reviewer_anomaly_count, control_count,
           projection_digest, updated_at
-        ) VALUES (?, 'root', 2, 'default', 1, 0, 0, 0, 0, 0, 0, 0, ?, 2000)
+        ) VALUES (?, 'root', 2, 'default', 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?, 2000)
       `).run(runId, '0'.repeat(64));
       database.exec('COMMIT');
     } catch (error) {
@@ -325,10 +500,13 @@ describe('run storage adversarial SOL contracts', () => {
     expect(() => database.prepare(`
       INSERT INTO finding_ledger_revisions (
         run_id, scope_id, revision, workflow_name, next_id,
-        finding_count, evidence_record_count, raw_finding_count, conflict_count,
+        finding_count, evidence_record_count, evidence_binding_count,
+        lifecycle_reservation_count, lifecycle_event_count,
+        raw_recovery_attempt_count, raw_recovery_result_count,
+        raw_finding_count, conflict_count,
         interpretation_count, reviewer_anomaly_count, control_count,
         projection_digest, updated_at
-      ) VALUES (?, 'root', 2, 'default', 2, 1, 0, 0, 0, 0, 0, 0, ?, 2000)
+      ) VALUES (?, 'root', 2, 'default', 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?, 2000)
     `).run(runId, '0'.repeat(64))).toThrow(/incomplete/i);
     expect(() => database.prepare(`
       INSERT INTO finding_entries (
@@ -363,6 +541,30 @@ describe('run storage adversarial SOL contracts', () => {
 
     database.exec('BEGIN IMMEDIATE');
     database.prepare(`
+      INSERT INTO finding_raw_recovery_attempts (
+        run_id, scope_id, revision, ordinal, attempt_id, record, digest
+      ) VALUES (?, 'root', 2, 0, 'attempt-forged', '{"attemptId":"attempt-forged"}', ?)
+    `).run(runId, '0'.repeat(64));
+    database.prepare(`
+      INSERT INTO finding_revision_publications (
+        run_id, scope_id, revision, projection_digest, published_at
+      ) VALUES (?, 'root', 2, ?, 2000)
+    `).run(runId, '0'.repeat(64));
+    expect(() => database.prepare(`
+      INSERT INTO finding_ledger_revisions (
+        run_id, scope_id, revision, workflow_name, next_id,
+        finding_count, evidence_record_count, evidence_binding_count,
+        lifecycle_reservation_count, lifecycle_event_count,
+        raw_recovery_attempt_count, raw_recovery_result_count,
+        raw_finding_count, conflict_count,
+        interpretation_count, reviewer_anomaly_count, control_count,
+        projection_digest, updated_at
+      ) VALUES (?, 'root', 2, 'default', 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?, 2000)
+    `).run(runId, '0'.repeat(64))).toThrow(/incomplete/i);
+    database.exec('ROLLBACK');
+
+    database.exec('BEGIN IMMEDIATE');
+    database.prepare(`
       INSERT INTO finding_entries (
         run_id, scope_id, revision, ordinal, finding_id, record, digest
       ) VALUES (?, 'root', 2, 0, 'tampered', '{"id":"tampered"}', ?)
@@ -375,10 +577,13 @@ describe('run storage adversarial SOL contracts', () => {
     database.prepare(`
       INSERT INTO finding_ledger_revisions (
         run_id, scope_id, revision, workflow_name, next_id,
-        finding_count, evidence_record_count, raw_finding_count, conflict_count,
+        finding_count, evidence_record_count, evidence_binding_count,
+        lifecycle_reservation_count, lifecycle_event_count,
+        raw_recovery_attempt_count, raw_recovery_result_count,
+        raw_finding_count, conflict_count,
         interpretation_count, reviewer_anomaly_count, control_count,
         projection_digest, updated_at
-      ) VALUES (?, 'root', 2, 'default', 2, 1, 0, 0, 0, 0, 0, 0, ?, 2000)
+      ) VALUES (?, 'root', 2, 'default', 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?, 2000)
     `).run(runId, '0'.repeat(64));
     database.exec('COMMIT');
     database.close();

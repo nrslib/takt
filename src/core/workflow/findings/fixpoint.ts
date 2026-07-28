@@ -18,12 +18,14 @@ import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import { REVIEWER_ENVELOPE_RECOVERY_LIMITS } from './raw-finding-limits.js';
 import type { FindingLedger, FindingLedgerFixpointSnapshot, FindingLedgerFixpointState } from './types.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+import { provisionalRecoveryAttemptCount } from './provisional-recovery.js';
 
 function sortedUnique(values: Iterable<string>): string[] {
   return [...new Set(values)].sort(compareBinaryStrings);
 }
 
 function provisionalFixpointKey(
+  ledger: FindingLedger,
   finding: FindingLedger['findings'][number] & { provisional: NonNullable<FindingLedger['findings'][number]['provisional']> },
   roundsCompleted: number,
 ): string {
@@ -36,7 +38,7 @@ function provisionalFixpointKey(
     : 0;
   const progress = [
     provisional.interpretationEpochs,
-    provisional.adjudicationAttempts?.length ?? 0,
+    provisionalRecoveryAttemptCount(ledger, finding.id),
     provisional.actionRecoveryAttempts?.length ?? 0,
     envelopeRounds,
   ];
@@ -60,7 +62,7 @@ export function computeFixpointSnapshot(ledger: FindingLedger, cwd: string): Fin
       .filter((finding): finding is FindingLedger['findings'][number] & {
         provisional: NonNullable<FindingLedger['findings'][number]['provisional']>;
       } => finding.status === 'open' && finding.provisional !== undefined)
-      .map((finding) => provisionalFixpointKey(finding, roundsCompleted)),
+      .map((finding) => provisionalFixpointKey(ledger, finding, roundsCompleted)),
   );
 
   // 終端した provisional（dismissed 等）も id:status で含める: provisionalKeys

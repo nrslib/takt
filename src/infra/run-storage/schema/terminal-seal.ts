@@ -25,11 +25,15 @@ const SCOPED_AUTHORITY_TABLES = [
   ['finding_ledger_controls', 'scope_id'],
   ['finding_entries', 'scope_id'],
   ['finding_evidence_records', 'scope_id'],
+  ['finding_evidence_bindings', 'scope_id'],
+  ['finding_lifecycle_reservations', 'scope_id'],
+  ['finding_lifecycle_events', 'scope_id'],
+  ['finding_raw_recovery_attempts', 'scope_id'],
+  ['finding_raw_recovery_results', 'scope_id'],
   ['finding_raw_entries', 'scope_id'],
   ['finding_conflict_entries', 'scope_id'],
   ['finding_interpretation_entries', 'scope_id'],
   ['finding_reviewer_anomaly_entries', 'scope_id'],
-  ['finding_adjudication_reservations', 'scope_id'],
 ] as const;
 
 export const TERMINAL_SEAL_DDL = [
@@ -153,8 +157,225 @@ export const TERMINAL_SEAL_DDL = [
           WHERE run_id = NEW.run_id AND scope_id = NEW.scope_id AND status = 'pending'
         )
         OR EXISTS (
-          SELECT 1 FROM finding_adjudication_reservations
-          WHERE run_id = NEW.run_id AND scope_id = NEW.scope_id
+          SELECT 1
+          FROM finding_ledger_heads AS heads
+          JOIN finding_lifecycle_reservations AS reservations
+            ON reservations.run_id = heads.run_id
+            AND reservations.scope_id = heads.scope_id
+            AND reservations.revision = heads.current_revision
+          LEFT JOIN finding_lifecycle_events AS events
+            ON events.run_id = reservations.run_id
+            AND events.scope_id = reservations.scope_id
+            AND events.revision = reservations.revision
+            AND json_extract(events.record, '$.mutationId')
+              = json_extract(reservations.record, '$.mutationId')
+          WHERE
+            heads.run_id = NEW.run_id
+            AND heads.scope_id = NEW.scope_id
+            AND events.event_id IS NULL
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM finding_ledger_heads AS heads
+          JOIN finding_raw_recovery_attempts AS attempts
+            ON attempts.run_id = heads.run_id
+            AND attempts.scope_id = heads.scope_id
+            AND attempts.revision = heads.current_revision
+          LEFT JOIN finding_raw_recovery_results AS results
+            ON results.run_id = attempts.run_id
+            AND results.scope_id = attempts.scope_id
+            AND results.revision = attempts.revision
+            AND json_extract(results.record, '$.attemptId')
+              = json_extract(attempts.record, '$.attemptId')
+            AND (
+              (
+                json_extract(results.record, '$.outcome') IN ('stale', 'failed')
+                AND json_array_length(json_extract(results.record, '$.mutationIds')) = 0
+              )
+              OR (
+                json_extract(results.record, '$.outcome') = 'applied'
+                AND json_type(results.record, '$.replayRawFindingId') = 'text'
+                AND json_array_length(json_extract(results.record, '$.mutationIds')) > 0
+                AND json_array_length(json_extract(results.record, '$.mutationIds')) = (
+                  SELECT count(DISTINCT result_mutation.value)
+                  FROM json_each(results.record, '$.mutationIds') AS result_mutation
+                )
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(results.record, '$.mutationIds') AS result_mutation
+                  WHERE (
+                    SELECT count(*)
+                    FROM finding_lifecycle_events AS recovery_event
+                    WHERE
+                      recovery_event.run_id = results.run_id
+                      AND recovery_event.scope_id = results.scope_id
+                      AND recovery_event.revision = results.revision
+                      AND json_extract(recovery_event.record, '$.mutationId')
+                        = result_mutation.value
+                  ) <> 1
+                  OR (
+                    SELECT count(*)
+                    FROM finding_lifecycle_events AS recovery_event
+                    JOIN json_each(
+                      recovery_event.record,
+                      '$.transitions'
+                    ) AS recovery_transition
+                    WHERE
+                      recovery_event.run_id = results.run_id
+                      AND recovery_event.scope_id = results.scope_id
+                      AND recovery_event.revision = results.revision
+                      AND json_extract(recovery_event.record, '$.mutationId')
+                        = result_mutation.value
+                      AND json_extract(
+                        recovery_transition.value,
+                        '$.after.entityKind'
+                      ) = 'finding'
+                      AND json_extract(
+                        recovery_transition.value,
+                        '$.after.entityId'
+                      ) = json_extract(
+                        attempts.record,
+                        '$.provisionalFindingId'
+                      )
+                  ) <> 1
+                  OR NOT EXISTS (
+                    SELECT 1
+                    FROM finding_lifecycle_events AS recovery_event
+                    WHERE
+                      recovery_event.run_id = results.run_id
+                      AND recovery_event.scope_id = results.scope_id
+                      AND recovery_event.revision = results.revision
+                      AND json_extract(recovery_event.record, '$.mutationId')
+                        = result_mutation.value
+                      AND EXISTS (
+                        SELECT 1
+                        FROM json_each(
+                          recovery_event.record,
+                          '$.evidenceBindingIds'
+                        ) AS recovery_binding_id
+                        JOIN finding_evidence_bindings AS recovery_binding
+                          ON recovery_binding.run_id = recovery_event.run_id
+                          AND recovery_binding.scope_id = recovery_event.scope_id
+                          AND recovery_binding.revision = recovery_event.revision
+                          AND recovery_binding.binding_id = recovery_binding_id.value
+                        WHERE json_extract(
+                          recovery_binding.record,
+                          '$.sourceRawFindingId'
+                        ) = json_extract(
+                          results.record,
+                          '$.replayRawFindingId'
+                        )
+                      )
+                  )
+                )
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(results.record, '$.mutationIds') AS current_mutation
+                  JOIN json_each(results.record, '$.mutationIds') AS prior_mutation
+                    ON prior_mutation.key = current_mutation.key - 1
+                  JOIN finding_lifecycle_events AS current_event
+                    ON current_event.run_id = results.run_id
+                    AND current_event.scope_id = results.scope_id
+                    AND current_event.revision = results.revision
+                    AND json_extract(current_event.record, '$.mutationId')
+                      = current_mutation.value
+                  JOIN finding_lifecycle_events AS prior_event
+                    ON prior_event.run_id = results.run_id
+                    AND prior_event.scope_id = results.scope_id
+                    AND prior_event.revision = results.revision
+                    AND json_extract(prior_event.record, '$.mutationId')
+                      = prior_mutation.value
+                  WHERE current_event.ordinal <= prior_event.ordinal
+                )
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(results.record, '$.mutationIds') AS result_mutation
+                  JOIN finding_lifecycle_events AS recovery_event
+                    ON recovery_event.run_id = results.run_id
+                    AND recovery_event.scope_id = results.scope_id
+                    AND recovery_event.revision = results.revision
+                    AND json_extract(recovery_event.record, '$.mutationId')
+                      = result_mutation.value
+                  JOIN json_each(
+                    recovery_event.record,
+                    '$.transitions'
+                  ) AS recovery_transition
+                    ON json_extract(
+                      recovery_transition.value,
+                      '$.after.entityKind'
+                    ) = 'finding'
+                    AND json_extract(
+                      recovery_transition.value,
+                      '$.after.entityId'
+                    ) = json_extract(
+                      attempts.record,
+                      '$.provisionalFindingId'
+                    )
+                  WHERE result_mutation.key = 0
+                    AND (
+                      json_type(recovery_transition.value, '$.before') <> 'object'
+                      OR json_extract(recovery_transition.value, '$.before.entityKind')
+                        <> json_extract(attempts.record, '$.expectedHead.entityKind')
+                      OR json_extract(recovery_transition.value, '$.before.entityId')
+                        <> json_extract(attempts.record, '$.expectedHead.entityId')
+                      OR json_extract(recovery_transition.value, '$.before.revision')
+                        <> json_extract(attempts.record, '$.expectedHead.revision')
+                      OR json_extract(recovery_transition.value, '$.before.eventId')
+                        <> json_extract(attempts.record, '$.expectedHead.eventId')
+                      OR json_extract(recovery_transition.value, '$.before.projectionDigest')
+                        <> json_extract(attempts.record, '$.expectedHead.projectionDigest')
+                    )
+                )
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(results.record, '$.mutationIds') AS current_mutation
+                  JOIN json_each(results.record, '$.mutationIds') AS prior_mutation
+                    ON prior_mutation.key = current_mutation.key - 1
+                  JOIN finding_lifecycle_events AS current_event
+                    ON current_event.run_id = results.run_id
+                    AND current_event.scope_id = results.scope_id
+                    AND current_event.revision = results.revision
+                    AND json_extract(current_event.record, '$.mutationId')
+                      = current_mutation.value
+                  JOIN json_each(
+                    current_event.record,
+                    '$.transitions'
+                  ) AS current_transition
+                    ON json_extract(current_transition.value, '$.after.entityKind') = 'finding'
+                    AND json_extract(current_transition.value, '$.after.entityId')
+                      = json_extract(attempts.record, '$.provisionalFindingId')
+                  JOIN finding_lifecycle_events AS prior_event
+                    ON prior_event.run_id = results.run_id
+                    AND prior_event.scope_id = results.scope_id
+                    AND prior_event.revision = results.revision
+                    AND json_extract(prior_event.record, '$.mutationId')
+                      = prior_mutation.value
+                  JOIN json_each(
+                    prior_event.record,
+                    '$.transitions'
+                  ) AS prior_transition
+                    ON json_extract(prior_transition.value, '$.after.entityKind') = 'finding'
+                    AND json_extract(prior_transition.value, '$.after.entityId')
+                      = json_extract(attempts.record, '$.provisionalFindingId')
+                  WHERE
+                    json_type(current_transition.value, '$.before') <> 'object'
+                    OR json_extract(current_transition.value, '$.before.entityKind')
+                      <> json_extract(prior_transition.value, '$.after.entityKind')
+                    OR json_extract(current_transition.value, '$.before.entityId')
+                      <> json_extract(prior_transition.value, '$.after.entityId')
+                    OR json_extract(current_transition.value, '$.before.revision')
+                      <> json_extract(prior_transition.value, '$.after.revision')
+                    OR json_extract(current_transition.value, '$.before.eventId')
+                      <> json_extract(prior_transition.value, '$.after.eventId')
+                    OR json_extract(current_transition.value, '$.before.projectionDigest')
+                      <> json_extract(prior_transition.value, '$.after.projectionDigest')
+                )
+              )
+            )
+          WHERE
+            heads.run_id = NEW.run_id
+            AND heads.scope_id = NEW.scope_id
+            AND results.result_id IS NULL
         )
         OR EXISTS (
           SELECT 1

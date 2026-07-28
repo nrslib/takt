@@ -302,6 +302,7 @@
     {
       "id": "C-F1C4EEF6F9F4",
       "status": "active",
+      "revision": 1,
       "findingIds": [
         "F-0016"
       ],

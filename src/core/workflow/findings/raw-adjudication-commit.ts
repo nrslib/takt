@@ -21,6 +21,7 @@ import type {
 } from './types.js';
 import { matchesProvisionalRecoveryOrigin } from './provisional-recovery-origin.js';
 import { canonicalRawIntegrityDigestOf } from './raw-canonicalization.js';
+import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
 
 function filterReplayOutput(input: {
   output: FindingManagerOutput;
@@ -60,9 +61,16 @@ function collectFreshOrigins(input: {
   const failures = new Map(input.failures);
   for (const [rawFindingId, origin] of input.origins) {
     const process = input.freshLedger.findings.find((finding) => finding.id === origin.provisionalFindingId);
+    const currentHead = captureFindingLifecycleHead(
+      input.freshLedger,
+      'finding',
+      origin.provisionalFindingId,
+    );
     const isFresh = process !== undefined
       && matchesProvisionalRecoveryOrigin(process, origin.recoveryOrigin)
-      && (process.provisional.adjudicationAttempts ?? []).length === origin.attempt - 1;
+      && currentHead?.revision === origin.expectedHead.revision
+      && currentHead.eventId === origin.expectedHead.eventId
+      && currentHead.projectionDigest === origin.expectedHead.projectionDigest;
     if (isFresh) {
       origins.set(rawFindingId, origin);
       continue;
@@ -114,45 +122,6 @@ function collectEligibleOrigins(input: {
     origins.set(rawFindingId, origin);
   }
   return { origins, failures };
-}
-
-function recordReplayFailures(input: {
-  ledger: FindingLedger;
-  origins: ReadonlyMap<string, RawAdjudicationReplayOrigin>;
-  failures: ReadonlyMap<string, RawAdjudicationFailure>;
-  observation: FindingObservation;
-}): FindingLedger {
-  const failuresByProcess = new Map([...input.origins].flatMap(([replayRawFindingId, origin]) => {
-    const failure = input.failures.get(replayRawFindingId);
-    return failure === undefined
-      ? []
-      : [[origin.provisionalFindingId, { origin, replayRawFindingId, failure }] as const];
-  }));
-  return {
-    ...input.ledger,
-    findings: input.ledger.findings.map((finding) => {
-      const failure = failuresByProcess.get(finding.id);
-      if (failure === undefined
-        || !matchesProvisionalRecoveryOrigin(finding, failure.origin.recoveryOrigin)
-        || (finding.provisional.adjudicationAttempts ?? []).length !== failure.origin.attempt - 1) {
-        return finding;
-      }
-      const attempts = finding.provisional.adjudicationAttempts ?? [];
-      return {
-        ...finding,
-        revision: finding.revision + 1,
-        provisional: {
-          ...finding.provisional,
-          adjudicationAttempts: [...attempts, {
-            attempt: failure.origin.attempt,
-            replayRawFindingId: failure.replayRawFindingId,
-            reason: failure.failure.reason,
-            at: input.observation,
-          }],
-        },
-      };
-    }),
-  };
 }
 
 function dispositionForFailure(
@@ -352,12 +321,7 @@ export function applyRawAdjudicationRecovery(input: {
     input.runInput.timestamp,
   );
   return {
-    ledger: recordReplayFailures({
-      ledger: appliedSettlement,
-      origins,
-      failures,
-      observation: input.observation,
-    }),
+    ledger: appliedSettlement,
     rawFindingDispositions,
   };
 }

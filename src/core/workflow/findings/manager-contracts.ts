@@ -18,6 +18,7 @@ import type {
   CanonicalRawFinding,
   DeterministicSameProof,
   FindingLedger,
+  FindingLifecycleEntityHead,
   FindingManagerOutput,
   RawFinding,
   RawFindingDispositionOutcome,
@@ -131,8 +132,10 @@ export interface ManagerDecisionStageResult {
 }
 
 export interface RawAdjudicationReplayOrigin {
+  attemptId: string;
   provisionalFindingId: string;
   sourceRawFindingId: string;
+  expectedHead: FindingLifecycleEntityHead;
   expectedProvisionalRevision: number;
   attempt: number;
   recoveryOrigin: ProvisionalRecoveryOrigin;

@@ -11,6 +11,13 @@ import type {
   RawFinding,
 } from './types.js';
 import { computeClaimIdentityHash } from './evidence-domain.js';
+import { computeRawFindingIntegrityDigest } from '../../models/finding-raw-integrity.js';
+import type { FindingRejectedObservationCode } from '../../models/finding-types.js';
+import {
+  applyFindingLifecycleCommands,
+  type FindingLifecycleCommand,
+} from './lifecycle-transaction.js';
+import { FindingLedgerEntrySchema } from '../../models/finding-schemas.js';
 
 export interface ProvisionalSettlement {
   output: FindingManagerOutput;
@@ -271,42 +278,69 @@ export function settleProvisionalsWithCleanEvidence(input: {
  */
 export function applyRejectedObservationAttachments(
   ledger: FindingLedger,
-  attachments: ReadonlyArray<{ targetFindingId: string; rawFindingId: string; reason: string }>,
+  attachments: ReadonlyArray<{
+    targetFindingId: string;
+    rawFindingId: string;
+    reason: string;
+    rejectionCode: FindingRejectedObservationCode;
+  }>,
   observation: FindingObservation,
 ): FindingLedger {
-  if (attachments.length === 0) {
-    return ledger;
-  }
-  let byTarget = new Map<string, Array<{ rawFindingId: string; reason: string }>>();
+  let current = ledger;
   for (const attachment of attachments) {
-    const list = byTarget.get(attachment.targetFindingId) ?? [];
-    byTarget = new Map([...byTarget, [
-      attachment.targetFindingId,
-      [...list, { rawFindingId: attachment.rawFindingId, reason: attachment.reason }],
-    ]]);
+    const target = current.findings.find(
+      (finding) => finding.id === attachment.targetFindingId,
+    );
+    if (target === undefined) {
+      throw new Error(
+        `Rejected observation references unknown finding "${attachment.targetFindingId}"`,
+      );
+    }
+    if (target.rejectedObservations?.some(
+      (rejected) => rejected.rawFindingId === attachment.rawFindingId,
+    ) === true) {
+      continue;
+    }
+    const raw = current.rawFindings.find(
+      (candidate) => candidate.rawFindingId === attachment.rawFindingId,
+    );
+    if (raw === undefined) {
+      throw new Error(
+        `Rejected observation references unknown raw finding "${attachment.rawFindingId}"`,
+      );
+    }
+    const change: Partial<FindingLedgerEntry> = {
+      ...target,
+      rejectedObservations: [
+        ...(target.rejectedObservations ?? []),
+        {
+          rawFindingId: attachment.rawFindingId,
+          reason: attachment.reason,
+          observedAt: observation,
+        },
+      ],
+    };
+    delete change.revision;
+    current = applyFindingLifecycleCommands({
+      ledger: current,
+      commands: [{
+        operation: 'record_rejected_observation',
+        changes: {
+          findings: [change as Omit<FindingLedgerEntry, 'revision'>],
+          conflicts: [],
+        },
+        authority: {
+          kind: 'rejected_observation',
+          rawFindingId: raw.rawFindingId,
+          rawIntegrityDigest: computeRawFindingIntegrityDigest(raw),
+          rejectionCode: attachment.rejectionCode,
+        },
+        evidenceSourcesByTarget: new Map(),
+      }],
+      occurredAt: observation,
+    });
   }
-  return {
-    ...ledger,
-    findings: ledger.findings.map((finding) => {
-      const additions = byTarget.get(finding.id);
-      if (additions === undefined) {
-        return finding;
-      }
-      const existing = finding.rejectedObservations ?? [];
-      const seen = new Set(existing.map((entry) => entry.rawFindingId));
-      const appended = additions
-        .filter((entry) => !seen.has(entry.rawFindingId))
-        .map((entry) => ({ rawFindingId: entry.rawFindingId, reason: entry.reason, observedAt: observation }));
-      if (appended.length === 0) {
-        return finding;
-      }
-      return {
-        ...finding,
-        revision: finding.revision + 1,
-        rejectedObservations: [...existing, ...appended],
-      };
-    }),
-  };
+  return current;
 }
 
 export function applyProvisionalSettlement(
@@ -353,4 +387,85 @@ export function applyProvisionalSettlement(
       return finding;
     }),
   };
+}
+
+function findingWithoutRevision(
+  finding: FindingLedgerEntry,
+): Omit<FindingLedgerEntry, 'revision'> {
+  const parsed = FindingLedgerEntrySchema.parse(finding);
+  const change: Partial<FindingLedgerEntry> = { ...parsed };
+  delete change.revision;
+  return change as Omit<FindingLedgerEntry, 'revision'>;
+}
+
+function settlementRawFindingIds(
+  settlement: ProvisionalSettlement,
+  findingId: string,
+  mappedTargetFindingId?: string,
+): string[] {
+  return [...new Set([
+    ...settlement.output.matches.flatMap((decision) => (
+      decision.findingId === findingId
+      || decision.findingId === mappedTargetFindingId
+        ? decision.rawFindingIds
+        : []
+    )),
+    ...settlement.output.resolvedFindings.flatMap((decision) => (
+      decision.findingId === findingId ? decision.rawFindingIds : []
+    )),
+  ])];
+}
+
+export function buildProvisionalSettlementLifecycleCommands(input: {
+  after: FindingLedger;
+  settlement: ProvisionalSettlement;
+}): FindingLifecycleCommand[] {
+  const commands: FindingLifecycleCommand[] = [];
+  const append = (
+    operation: 'promote_provisional' | 'resolve_finding',
+    findingId: string,
+    sourceRawFindingIds: readonly string[],
+  ): void => {
+    const finding = input.after.findings.find((candidate) => candidate.id === findingId);
+    if (finding === undefined) {
+      throw new Error(`Provisional settlement references unknown finding "${findingId}"`);
+    }
+    if (sourceRawFindingIds.length === 0) {
+      throw new Error(`Provisional settlement for "${findingId}" has no clean evidence source`);
+    }
+    commands.push({
+      operation,
+      changes: {
+        findings: [findingWithoutRevision(finding)],
+        conflicts: [],
+      },
+      authority: { kind: 'verified_evidence' },
+      evidenceSourcesByTarget: new Map([[
+        `finding\0${findingId}`,
+        { sourceRawFindingIds, authorityEvidenceIds: [] },
+      ]]),
+    });
+  };
+  for (const findingId of input.settlement.promotedFindingIds) {
+    append(
+      'promote_provisional',
+      findingId,
+      settlementRawFindingIds(input.settlement, findingId),
+    );
+  }
+  for (const [findingId, targetFindingId] of input.settlement.resolvedByMapping) {
+    append(
+      'resolve_finding',
+      findingId,
+      settlementRawFindingIds(input.settlement, findingId, targetFindingId),
+    );
+  }
+  for (const findingId of input.settlement.resolvedByEvidence.keys()) {
+    append(
+      'resolve_finding',
+      findingId,
+      settlementRawFindingIds(input.settlement, findingId),
+    );
+  }
+  return commands;
 }

@@ -18,6 +18,160 @@ export type FindingStatus = typeof FINDING_STATUSES[number];
 export type FindingLifecycle = typeof FINDING_LIFECYCLES[number];
 export type FindingConflictStatus = typeof FINDING_CONFLICT_STATUSES[number];
 
+export const FINDING_LIFECYCLE_ENTITY_KINDS = ['finding', 'conflict'] as const;
+export const FINDING_LIFECYCLE_OPERATIONS = [
+  'create_finding',
+  'persist_finding',
+  'resolve_finding',
+  'reopen_finding',
+  'waive_finding',
+  'invalidate_finding',
+  'supersede_findings',
+  'dismiss_finding',
+  'record_dispute',
+  'update_provisional',
+  'promote_provisional',
+  'record_rejected_observation',
+  'record_recovery_attempt',
+  'sync_interpretation_epoch',
+  'create_conflict',
+  'observe_conflict',
+  'resolve_conflict',
+  'apply_conflict_adjudication',
+  'apply_resolution_renotification',
+] as const;
+
+export type FindingLifecycleEntityKind =
+  typeof FINDING_LIFECYCLE_ENTITY_KINDS[number];
+export type FindingLifecycleOperation =
+  typeof FINDING_LIFECYCLE_OPERATIONS[number];
+
+export const FINDING_REJECTED_OBSERVATION_CODES = [
+  'evidence_admission_failed',
+  'dismissed_same_round',
+] as const;
+export type FindingRejectedObservationCode =
+  typeof FINDING_REJECTED_OBSERVATION_CODES[number];
+
+export interface FindingLifecycleEntityHead {
+  entityKind: FindingLifecycleEntityKind;
+  entityId: string;
+  revision: number;
+  eventId: string;
+  projectionDigest: string;
+}
+
+export interface FindingLifecycleMutationTarget {
+  entityKind: FindingLifecycleEntityKind;
+  entityId: string;
+  expectedHead: FindingLifecycleEntityHead | null;
+}
+
+export interface FindingEvidenceBinding {
+  bindingId: string;
+  evidenceId: string;
+  claimIdentityHash: string;
+  sourceRawFindingId: string | null;
+  sourceRawIntegrityDigest: string | null;
+  operation: FindingLifecycleOperation;
+  target: FindingLifecycleMutationTarget;
+}
+
+export type FindingLifecycleAuthority =
+  | { kind: 'verified_evidence' }
+  | {
+      kind: 'engine_policy';
+      decisionKind: 'waive' | 'dispute' | 'dismiss' | 'resolve_conflict' | 'semantic_duplicate';
+      decisionDigest: string;
+    }
+  | {
+      kind: 'conflict_adjudication';
+      conflictId: string;
+      findingIds: string[];
+      evidenceHash: string;
+      inputBindingIds: string[];
+      originStep: string | null;
+    }
+  | {
+      kind: 'system';
+      action:
+        | 'record_recovery_attempt'
+        | 'settle_action_recovery'
+        | 'sync_interpretation_epoch';
+    }
+  | {
+      kind: 'rejected_observation';
+      rawFindingId: string;
+      rawIntegrityDigest: string;
+      rejectionCode: FindingRejectedObservationCode;
+    };
+
+export type FindingLifecycleReservationContext =
+  | { kind: 'transaction' }
+  | {
+      kind: 'conflict_adjudication';
+      conflictId: string;
+      evidenceHash: string;
+      originStep: string | null;
+    };
+
+export interface FindingLifecycleReservation {
+  reservationId: string;
+  mutationId: string;
+  operation: FindingLifecycleOperation;
+  targets: FindingLifecycleMutationTarget[];
+  evidenceBindingIds: string[];
+  authority: FindingLifecycleAuthority;
+  context: FindingLifecycleReservationContext;
+  reservedAt: FindingObservation;
+}
+
+export interface FindingLifecycleTransition {
+  before: FindingLifecycleEntityHead | null;
+  after: FindingLifecycleEntityHead;
+}
+
+export type FindingLifecycleOutcome =
+  | { kind: 'projection_applied' }
+  | {
+      kind: 'conflict_adjudication';
+      conflictId: string;
+      evidenceHash: string;
+      outcome: FindingConflictAdjudicationOutcome;
+    };
+
+export interface FindingLifecycleEvent {
+  eventId: string;
+  mutationId: string;
+  reservationId: string;
+  operation: FindingLifecycleOperation;
+  transitions: FindingLifecycleTransition[];
+  evidenceBindingIds: string[];
+  outcome: FindingLifecycleOutcome;
+  resultDigest: string;
+  occurredAt: FindingObservation;
+}
+
+export interface RawRecoveryAttempt {
+  attemptId: string;
+  provisionalFindingId: string;
+  expectedHead: FindingLifecycleEntityHead;
+  sourceRawFindingId: string;
+  sourceRawIntegrityDigest: string | null;
+  promptSnapshotDigest: string;
+  attempt: number;
+  startedAt: FindingObservation;
+}
+
+export interface RawRecoveryResult {
+  resultId: string;
+  attemptId: string;
+  replayRawFindingId: string | null;
+  mutationIds: string[];
+  outcome: 'applied' | 'stale' | 'failed';
+  completedAt: FindingObservation;
+}
+
 export interface FindingContractManagerConfig {
   persona: string;
   personaPath?: string;
@@ -163,20 +317,6 @@ export interface FindingDismissalRecord {
   decidedAt: FindingObservation;
 }
 
-/**
- * engine 主導の再裁定（RawAdjudicationRecovery）1回分の失敗記録。成功した
- * replay は provisional 自体を閉じるため記録されない — 残るのは失敗の監査だけ。
- * 正本はこの配列（interpretationEpochs とは別系統: あちらは WAL 由来）。
- */
-export interface FindingAdjudicationAttempt {
-  /** 1 始まりの通し番号。上限は raw-finding-limits.ts の RAW_ADJUDICATION_RECOVERY_LIMITS。 */
-  attempt: number;
-  /** この attempt のために採番した replay 専用 raw ID（過去 raw ID は current として再利用しない）。 */
-  replayRawFindingId: string;
-  reason: string;
-  at: FindingObservation;
-}
-
 export interface FindingActionRecoveryAttempt {
   attempt: number;
   reason: string;
@@ -210,8 +350,6 @@ export interface FindingProvisionalMetadata {
   /** この lineage に対する自動 manager 解釈の消費 epoch 数。上限は raw-finding-limits.ts の MAX_INTERPRETATION_EPOCHS_PER_LINEAGE。 */
   interpretationEpochs: number;
   gateEffect: 'block';
-  /** engine 主導の再裁定の失敗履歴（新しい順ではなく attempt 順）。 */
-  adjudicationAttempts?: FindingAdjudicationAttempt[];
   actionRecovery?: FindingActionRecovery;
   actionRecoveryAttempts?: FindingActionRecoveryAttempt[];
   recoveryReviewerStableKey?: string;
@@ -358,6 +496,11 @@ export interface FindingLedger {
   findings: FindingLedgerEntry[];
   /** 検証済み証拠の追記専用レジストリ。finding は evidenceIds で参照する。 */
   evidenceRecords: FindingEvidenceRecord[];
+  evidenceBindings: FindingEvidenceBinding[];
+  lifecycleReservations: FindingLifecycleReservation[];
+  lifecycleEvents: FindingLifecycleEvent[];
+  rawRecoveryAttempts: RawRecoveryAttempt[];
+  rawRecoveryResults: RawRecoveryResult[];
   rawFindings: RawFinding[];
   conflicts: FindingLedgerConflict[];
   /**
@@ -608,10 +751,21 @@ export interface ConfirmationProposal {
 export const INTERPRETATION_STAGES = [
   'interpretation_started',
   'interpretation_interrupted',
+  'interpretation_retryable_failure',
+  'interpretation_terminal_failure',
   'interpretation_completed',
   'ledger_applied',
 ] as const;
 export type InterpretationStage = typeof INTERPRETATION_STAGES[number];
+
+export const INTERPRETATION_RECOVERY_FAILURE_CODES = [
+  'source_missing',
+  'reviewer_provenance_missing',
+  'recovery_contract_mismatch',
+  'recovery_origin_stale',
+] as const;
+export type InterpretationRecoveryFailureCode =
+  typeof INTERPRETATION_RECOVERY_FAILURE_CODES[number];
 
 export const INTERPRETATION_APPLICATION_RESULTS = [
   'created',
@@ -645,6 +799,15 @@ export type FindingInterpretationRecord =
       stage: 'interpretation_interrupted';
       reservationToken: string;
       interruptedAt: FindingObservation;
+    }
+  | FindingInterpretationRecordBase & {
+      stage: 'interpretation_retryable_failure' | 'interpretation_terminal_failure';
+      failedAt: FindingObservation;
+      failureCode: InterpretationRecoveryFailureCode;
+      /** Annotation only. Retry and authority rules use failureCode/stage. */
+      failureReason: string;
+      sourceRawFindingId: string;
+      provisionalFindingId: string;
     }
   | FindingInterpretationRecordBase & {
       stage: 'interpretation_completed';
@@ -799,6 +962,11 @@ export interface FindingManagerCommitProjection {
   updatedAt: string;
   findings: FindingLedgerEntry[];
   evidenceRecords: FindingEvidenceRecord[];
+  evidenceBindings: FindingEvidenceBinding[];
+  lifecycleReservations: FindingLifecycleReservation[];
+  lifecycleEvents: FindingLifecycleEvent[];
+  rawRecoveryAttempts: RawRecoveryAttempt[];
+  rawRecoveryResults: RawRecoveryResult[];
   rawFindings: RawFinding[];
   conflicts: FindingLedgerConflict[];
   interpretations: FindingInterpretationRecord[];
@@ -876,6 +1044,16 @@ export type EngineProofSubject =
       kind: 'execution_result';
       executionId: string;
       expectedOutcome: 'passed' | 'failed';
+    }
+  | {
+      kind: 'finding_location_set_invalid';
+      findingId: string;
+      reason: string;
+    }
+  | {
+      kind: 'finding_claim_sets_equal';
+      findingIds: string[];
+      claimIdentityHashes: string[];
     };
 
 export interface EngineProofRecord {
@@ -1067,9 +1245,7 @@ export const FINDING_CONFLICT_ADJUDICATION_OUTCOMES = ['finding_valid', 'finding
 export type FindingConflictAdjudicationOutcome = typeof FINDING_CONFLICT_ADJUDICATION_OUTCOMES[number];
 
 // The finding-side effect of an adjudication outcome. Fixed 1:1 mapping from
-// outcome, enforced by the engine (adjudication-apply.ts) — never trusted from
-// the LLM's own findingTransition value alone; the engine derives it from
-// outcome and rejects output where the two disagree.
+// outcome and derived exclusively by the engine (adjudication-apply.ts).
 export const FINDING_CONFLICT_ADJUDICATION_TRANSITIONS = ['keep_open', 'resolved', 'invalidated'] as const;
 export type FindingConflictAdjudicationTransition = typeof FINDING_CONFLICT_ADJUDICATION_TRANSITIONS[number];
 
@@ -1077,17 +1253,15 @@ export type FindingConflictAdjudicationTransition = typeof FINDING_CONFLICT_ADJU
 export interface FindingConflictAdjudicationOutput {
   conflictId: string;
   outcome: FindingConflictAdjudicationOutcome;
-  findingTransition: FindingConflictAdjudicationTransition;
-  evidence: string[];
-  actionableFix: string;
+  actionableFix?: string;
+  rationale?: string;
 }
 
 /**
  * One completed adjudication recorded on a conflict, keyed by evidenceHash (see
  * adjudication-evidence.ts). The "1回制限" rule: a conflict is never adjudicated
  * twice against the same evidence — eligibility requires the current hash to be
- * absent from EVERY past record (and every started attempt, see
- * FindingConflictAdjudicationAttempt), not just the latest one, so evidence
+ * absent from every past completed record, not just the latest one, so evidence
  * that reverts to a previously-adjudicated state cannot be re-adjudicated.
  * New raw finding content or new disputes change the hash and re-open
  * eligibility.
@@ -1095,35 +1269,9 @@ export interface FindingConflictAdjudicationOutput {
 export interface FindingConflictAdjudicationRecord {
   evidenceHash: string;
   outcome: FindingConflictAdjudicationOutcome;
-  findingTransition: FindingConflictAdjudicationTransition;
-  evidence: string[];
-  actionableFix: string;
+  actionableFix?: string;
+  rationale?: string;
   decidedAt: FindingObservation;
-}
-
-/**
- * A started adjudication attempt, recorded BEFORE the adjudicator LLM is
- * invoked. If the run is interrupted (or the result is discarded because the
- * evidence changed mid-flight), the attempt stays on the ledger, so a resumed
- * run (a DIFFERENT runId) cannot re-adjudicate the same evidence — it falls
- * through to the workflow's ABORT rule instead. Within the SAME run
- * (startedAt.runId matches), a pending attempt — one whose evidenceHash has no
- * completed adjudication record — is a reusable reservation: a rate-limit
- * fallback re-execution of the step may retry the LLM call without recording
- * a second attempt (retry reservation requirement).
- */
-export interface FindingConflictAdjudicationAttempt {
-  evidenceHash: string;
-  reservationToken: string;
-  startedAt: FindingObservation;
-  /**
-   * Name of the step the workflow advanced from into the adjudication step
-   * when this attempt started. Durable record of the return-to-origin target
-   * (origin-step requirement): a resume that starts directly at the adjudication step has no
-   * WorkflowState.previousStep, and guessing among multiple wiring steps
-   * (reviewers vs final-gate) would misroute.
-   */
-  originStep?: string;
 }
 
 export interface FindingLedgerConflict {
@@ -1138,8 +1286,7 @@ export interface FindingLedgerConflict {
   resolvedEvidence?: string;
   /** Completed finding-conflict-adjudication decisions against this conflict, newest last. */
   adjudications?: FindingConflictAdjudicationRecord[];
-  /** Started (possibly interrupted or discarded) adjudication attempts, newest last. Recorded before the LLM call — see FindingConflictAdjudicationAttempt. */
-  adjudicationAttempts?: FindingConflictAdjudicationAttempt[];
+  revision: number;
 }
 
 export interface FindingManagerOutput {

@@ -6,7 +6,7 @@ import {
   parseFindingManagerDecisions,
 } from './schemas.js';
 import { RAW_FINDINGS_SCHEMA_REF } from './raw-canonicalization.js';
-import { normalizeFindingText } from './location.js';
+import { normalizeFindingText } from '../../models/finding-claim-identity.js';
 import type {
   FindingLedger,
   FindingManagerDecisions,

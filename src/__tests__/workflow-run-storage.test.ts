@@ -38,6 +38,7 @@ import {
 import {
   SqliteWorkflowRunStorageLifecycle,
 } from '../features/tasks/execute/sqliteWorkflowRunStorageLifecycle.js';
+import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 import {
   createWorkflowTerminalPayloadFactory,
 } from '../features/tasks/execute/workflowTerminalPayload.js';
@@ -291,7 +292,7 @@ function withOpenFinding(
     stepName: 'review',
     timestamp: ledger.updatedAt,
   };
-  return {
+  return authorizeFindingLedgerFixture({
     ...ledger,
     nextId: Number.parseInt(findingId.slice(2), 10) + 1,
     findings: [
@@ -316,7 +317,7 @@ function withOpenFinding(
       firstRoundAt: ledger.updatedAt,
       exhausted: false,
     },
-  };
+  });
 }
 
 function omitRunIdentity(

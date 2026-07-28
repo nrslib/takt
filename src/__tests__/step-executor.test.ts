@@ -31,6 +31,7 @@ import { RawFindingsOutputValidationJsonSchema } from '../core/models/finding-sc
 import { createFindingLedgerStore, type FindingManagerValidationReport } from '../core/workflow/findings/store.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 
 function makeState(): WorkflowState {
   return {
@@ -250,7 +251,7 @@ describe('StepExecutor', () => {
       rawFindingsPath: '.takt/findings/raw',
     });
     await findingLedgerStore.updateLedger(() => ({
-      ledger: {
+      ledger: authorizeFindingLedgerFixture({
         workflowName: 'test-workflow',
         nextId: 2,
         updatedAt: '2026-07-22T00:00:00.000Z',
@@ -283,7 +284,7 @@ describe('StepExecutor', () => {
       }],
       conflicts: [],
         interpretations: [],
-      },
+      }),
       result: undefined,
     }));
     const deps: StepExecutorDeps = {

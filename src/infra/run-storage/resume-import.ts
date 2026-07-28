@@ -238,21 +238,6 @@ function importFindingAuthorities(
   for (const head of input.finding.heads.values()) {
     importFindingAuthority(database, input, head);
   }
-  for (const reservation of input.source.findingReservations) {
-    database.prepare(`
-      INSERT INTO finding_adjudication_reservations (
-        run_id, scope_id, reservation_token, claimed_at
-      ) VALUES (?, ?, ?, ?)
-    `).run(
-      input.childRunId,
-      requiredString(reservation.scopeId, 'Finding reservation scope'),
-      requiredString(reservation.reservationToken, 'Finding reservation token'),
-      requiredNonNegativeInteger(
-        reservation.claimedAt,
-        'Finding reservation claimed time',
-      ),
-    );
-  }
 }
 
 function importFindingAuthority(
@@ -401,9 +386,11 @@ function importFindingRevision(
     INSERT INTO finding_ledger_revisions (
       run_id, scope_id, revision, workflow_name, next_id,
       finding_count, evidence_record_count, raw_finding_count, conflict_count,
+      evidence_binding_count, lifecycle_reservation_count, lifecycle_event_count,
+      raw_recovery_attempt_count, raw_recovery_result_count,
       interpretation_count, reviewer_anomaly_count, control_count,
       projection_digest, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.childRunId,
     authority.scopeId,
@@ -420,6 +407,26 @@ function importFindingRevision(
       'raw Finding count',
     ),
     requiredNonNegativeInteger(sourceRevision.conflict_count, 'conflict count'),
+    requiredNonNegativeInteger(
+      sourceRevision.evidence_binding_count,
+      'evidence binding count',
+    ),
+    requiredNonNegativeInteger(
+      sourceRevision.lifecycle_reservation_count,
+      'lifecycle reservation count',
+    ),
+    requiredNonNegativeInteger(
+      sourceRevision.lifecycle_event_count,
+      'lifecycle event count',
+    ),
+    requiredNonNegativeInteger(
+      sourceRevision.raw_recovery_attempt_count,
+      'raw recovery attempt count',
+    ),
+    requiredNonNegativeInteger(
+      sourceRevision.raw_recovery_result_count,
+      'raw recovery result count',
+    ),
     requiredNonNegativeInteger(
       sourceRevision.interpretation_count,
       'interpretation count',
@@ -454,6 +461,21 @@ function insertFindingEntry(
       return;
     case 'evidence':
       insertFindingEntryRow(database, childRunId, identity, 'finding_evidence_records', 'evidence_id');
+      return;
+    case 'evidence_binding':
+      insertFindingEntryRow(database, childRunId, identity, 'finding_evidence_bindings', 'binding_id');
+      return;
+    case 'lifecycle_reservation':
+      insertFindingEntryRow(database, childRunId, identity, 'finding_lifecycle_reservations', 'reservation_id');
+      return;
+    case 'lifecycle_event':
+      insertFindingEntryRow(database, childRunId, identity, 'finding_lifecycle_events', 'event_id');
+      return;
+    case 'raw_recovery_attempt':
+      insertFindingEntryRow(database, childRunId, identity, 'finding_raw_recovery_attempts', 'attempt_id');
+      return;
+    case 'raw_recovery_result':
+      insertFindingEntryRow(database, childRunId, identity, 'finding_raw_recovery_results', 'result_id');
       return;
     case 'raw':
       insertFindingEntryRow(database, childRunId, identity, 'finding_raw_entries', 'raw_finding_id');

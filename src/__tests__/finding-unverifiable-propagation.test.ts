@@ -15,7 +15,10 @@ vi.mock('../core/workflow/findings/admission-validation.js', async () => {
   };
 });
 
-import { applyFindingConflictAdjudication } from '../core/workflow/findings/adjudication-apply.js';
+import {
+  createFindingEvidenceBinding,
+  createFindingLifecycleReservation,
+} from '../core/models/finding-lifecycle-identity.js';
 import { evaluateRawAdmission } from '../core/workflow/findings/manager-admission.js';
 import { computeInvalidLocationCandidates } from '../core/workflow/findings/manager-utils.js';
 import {
@@ -24,9 +27,17 @@ import {
   toLedgerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
+import {
+  captureFindingLifecycleHead,
+  reserveVerifiedLifecycleMutation,
+} from '../core/workflow/findings/lifecycle-mutation.js';
+import {
+  authorizeFindingLedgerFixture,
+  emptyFindingAuthorityProjection,
+} from './helpers/finding-lifecycle-fixture.js';
 
 function makeLedger(): FindingLedger {
-  return {
+  return authorizeFindingLedgerFixture({
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-07-17T00:00:00.000Z',
@@ -48,6 +59,7 @@ function makeLedger(): FindingLedger {
     conflicts: [{
       id: 'C-FA2947446963',
       status: 'active',
+      revision: 1,
       findingIds: ['F-0001'],
       rawFindingIds: [],
       description: 'disputed',
@@ -55,7 +67,8 @@ function makeLedger(): FindingLedger {
       lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-17T00:00:00.000Z' },
     }],
     interpretations: [],
-  };
+    ...emptyFindingAuthorityProjection(),
+  });
 }
 
 describe('unverifiable propagation', () => {
@@ -112,27 +125,65 @@ describe('unverifiable propagation', () => {
     expect(ledger.findings[0]?.status).toBe('open');
   });
 
-  it('adjudication は resolved evidence の検証不能理由を保持して状態を変更しない', () => {
+  it('adjudication commit 境界は存在しない evidence binding を拒否して状態を変更しない', () => {
     const ledger = makeLedger();
-    expect(() => applyFindingConflictAdjudication({
-      ledger,
-      output: {
-        conflictId: 'C-FA2947446963',
-        outcome: 'finding_stale',
-        findingTransition: 'resolved',
-        evidence: ['src/a.ts:1'],
-        actionableFix: '',
+    const before = structuredClone(ledger);
+    const target = {
+      entityKind: 'conflict' as const,
+      entityId: 'C-FA2947446963',
+      expectedHead: captureFindingLifecycleHead(
+        ledger,
+        'conflict',
+        'C-FA2947446963',
+      )!,
+    };
+    const findingTarget = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: captureFindingLifecycleHead(
+        ledger,
+        'finding',
+        'F-0001',
+      )!,
+    };
+    const evidenceHash = '1'.repeat(64);
+    const binding = createFindingEvidenceBinding({
+      evidenceId: '2'.repeat(64),
+      claimIdentityHash: '3'.repeat(64),
+      sourceRawFindingId: null,
+      sourceRawIntegrityDigest: null,
+      operation: 'apply_conflict_adjudication',
+      target,
+    });
+    const reservation = createFindingLifecycleReservation({
+      operation: 'apply_conflict_adjudication',
+      targets: [target, findingTarget],
+      evidenceBindingIds: [binding.bindingId],
+      authority: {
+        kind: 'conflict_adjudication',
+        conflictId: target.entityId,
+        findingIds: [findingTarget.entityId],
+        evidenceHash,
+        inputBindingIds: [binding.bindingId],
+        originStep: 'finding-conflict-adjudication',
       },
-      evidenceHash: 'hash',
-      cwd: '/project',
       context: {
-        workflowName: 'peer-review',
-        stepName: 'finding-conflict-adjudication',
+        kind: 'conflict_adjudication',
+        conflictId: target.entityId,
+        evidenceHash,
+        originStep: 'finding-conflict-adjudication',
+      },
+      reservedAt: {
         runId: 'run-1',
+        stepName: 'finding-conflict-adjudication',
         timestamp: '2026-07-17T00:00:00.000Z',
       },
-    })).toThrow(/could not be verified: injected EIO/);
-    expect(ledger.findings[0]?.status).toBe('open');
-    expect(ledger.conflicts[0]?.status).toBe('active');
+    });
+
+    expect(() => reserveVerifiedLifecycleMutation(ledger, {
+      reservation,
+      evidenceBindings: [binding],
+    })).toThrow(/references unknown evidence/);
+    expect(ledger).toEqual(before);
   });
 });

@@ -37,6 +37,7 @@ import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
 import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
+import { authorizeFindingLedgerFixture, emptyFindingAuthorityProjection } from './helpers/finding-lifecycle-fixture.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -273,6 +274,7 @@ describe('codex 対策#4 red/green fixture: 実測の gemma 架空指摘7件（a
     const harness = makeHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-12T00:00:00.000Z',
       findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     });
 
     const result = await harness.run();
@@ -336,7 +338,7 @@ describe('codex 対策#4 red/green fixture: 実測の gemma 架空指摘7件（a
       lastSeen: { runId: 'run-0', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
       revision: 1,
     };
-    const harness = makeHarness({
+    const initialLedger = authorizeFindingLedgerFixture({
       workflowName: 'peer-review', nextId: 2, updatedAt: '2026-07-12T00:00:00.000Z',
       findings: [seedFinding],
       evidenceRecords: [evidenceRecord],
@@ -356,13 +358,14 @@ describe('codex 対策#4 red/green fixture: 実測の gemma 架空指摘7件（a
       conflicts: [],
       interpretations: [],
     });
+    const harness = makeHarness(initialLedger);
 
     await harness.run();
 
     const ledger = harness.currentLedger();
     // 既存 finding は状態・revision とも一切変更されない（別配列なので触りようがない）。
     const preserved = ledger.findings.find((finding) => finding.id === 'F-0001');
-    expect(preserved).toEqual(seedFinding);
+    expect(preserved).toEqual(initialLedger.findings[0]);
 
     // ReviewerAnomalyEntry には status/lifecycle/waivers フィールドが型として
     // 存在しない（invalidated/resolved/waived として扱えない）。

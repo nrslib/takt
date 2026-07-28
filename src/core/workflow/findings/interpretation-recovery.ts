@@ -1,10 +1,17 @@
+import { createHash } from 'node:crypto';
 import {
   candidateFromStoredRawFinding,
   canonicalizeReviewerRawFinding,
+  computeBaseInterpretationKey,
+  computeInterpretationAttemptKey,
   computeRawEvidenceHash,
   toLedgerRawFinding,
 } from './raw-canonicalization.js';
-import { classifyProvisionalRecovery, isOpenProvisional } from './provisional-recovery.js';
+import {
+  classifyProvisionalRecovery,
+  isOpenProvisional,
+  provisionalRecoveryAttemptCount,
+} from './provisional-recovery.js';
 import type {
   CanonicalIntakeItem,
   ProvisionalRecoveryOrigins,
@@ -13,8 +20,10 @@ import type {
 } from './manager-admission.js';
 import type {
   FindingLedger,
+  FindingInterpretationRecord,
   FindingObservation,
   FindingProvisionalMetadata,
+  InterpretationRecoveryFailureCode,
   RawFinding,
 } from './types.js';
 import {
@@ -23,10 +32,11 @@ import {
   type ProvisionalRecoveryOrigin,
 } from './provisional-recovery-origin.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+import { computeRawFindingIntegrityDigest } from '../../models/finding-raw-integrity.js';
+import { RAW_ADJUDICATION_RECOVERY_LIMITS } from './raw-finding-limits.js';
 
 interface InterpretationRecoveryFailureBase {
   recoveryOrigin: ProvisionalRecoveryOrigin;
-  attempt: number;
   sourceRawFindingId: string;
   reason: string;
 }
@@ -63,6 +73,18 @@ function sourceRawForRecovery(
   return ledger.rawFindings.find((raw) => raw.rawFindingId === sourceRawFindingId);
 }
 
+function nextInterpretationAttemptOrdinal(
+  ledger: FindingLedger,
+  lineageKey: string,
+): number {
+  return Math.max(
+    0,
+    ...ledger.interpretations
+      .filter((record) => record.lineageKey === lineageKey)
+      .map((record) => record.attemptOrdinal),
+  ) + 1;
+}
+
 function interpretationProcesses(
   ledger: FindingLedger,
   roundsCompleted: number,
@@ -70,7 +92,11 @@ function interpretationProcesses(
   return ledger.findings.filter((finding): finding is FindingLedger['findings'][number] & {
     provisional: FindingProvisionalMetadata;
   } => isOpenProvisional(finding)
-    && classifyProvisionalRecovery(finding.provisional, roundsCompleted) === 'interpretation');
+    && classifyProvisionalRecovery(
+      finding.provisional,
+      roundsCompleted,
+      provisionalRecoveryAttemptCount(ledger, finding.id),
+    ) === 'interpretation');
 }
 
 export function attachInterpretationRecoveryOrigins(input: {
@@ -158,7 +184,10 @@ export function collectInterpretationRecoveryPlan(input: {
     }
     const source = sourceRawForRecovery(input.ledger, finding.provisional);
     if (source === undefined) {
-      const attempt = (finding.provisional.adjudicationAttempts ?? []).length + 1;
+      const attempt = nextInterpretationAttemptOrdinal(
+        input.ledger,
+        finding.provisional.lineageKey,
+      );
       const sourceRawFindingId = finding.provisional.sourceRawFindingIds.at(-1)
         ?? `interpretation-recovery:${finding.id}:${attempt}`;
       const reason = finding.provisional.sourceRawFindingIds.length === 0
@@ -168,7 +197,6 @@ export function collectInterpretationRecoveryPlan(input: {
         kind: 'source_missing',
         outcome: 'audit_only',
         recoveryOrigin: snapshotProvisionalRecoveryOrigin(finding),
-        attempt,
         sourceRawFindingId,
         reason,
       });
@@ -176,12 +204,10 @@ export function collectInterpretationRecoveryPlan(input: {
     }
     const reviewerStableKey = finding.provisional.recoveryReviewerStableKey;
     if (reviewerStableKey === undefined) {
-      const attempt = (finding.provisional.adjudicationAttempts ?? []).length + 1;
       failures.push({
         kind: 'reviewer_provenance_missing',
         outcome: 'audit_only',
         recoveryOrigin: snapshotProvisionalRecoveryOrigin(finding),
-        attempt,
         sourceRawFindingId: source.rawFindingId,
         reason: `Interpretation recovery "${finding.provisional.stableKey}" has no reviewer provenance`,
       });
@@ -206,7 +232,6 @@ export function collectInterpretationRecoveryPlan(input: {
         kind: 'recovery_contract_mismatch',
         outcome: 'audit_only',
         recoveryOrigin: origin,
-        attempt: (finding.provisional.adjudicationAttempts ?? []).length + 1,
         sourceRawFindingId: source.rawFindingId,
         reason: `Interpretation recovery "${finding.provisional.stableKey}" does not match the reconstructed stored raw contract`,
       });
@@ -229,7 +254,6 @@ export function collectInterpretationRecoveryPlan(input: {
           kind: 'recovery_contract_mismatch',
           outcome: 'audit_only',
           recoveryOrigin: candidate.origin,
-          attempt: (candidate.finding.provisional.adjudicationAttempts ?? []).length + 1,
           sourceRawFindingId: candidate.source.rawFindingId,
           reason: `Interpretation recovery "${candidate.finding.provisional.stableKey}" shares a raw payload with a different recovery contract`,
         });
@@ -282,44 +306,62 @@ export function applyInterpretationRecoveryFailures(input: {
   failures: readonly InterpretationRecoveryCommitFailure[];
   observation: FindingObservation;
 }): FindingLedger {
-  const failuresByFindingId = new Map(
-    input.failures.flatMap((failure) => {
-      switch (failure.kind) {
-        case 'source_missing':
-        case 'reviewer_provenance_missing':
-        case 'recovery_contract_mismatch':
-          return [[failure.recoveryOrigin.provisionalFindingId, failure] as const];
-        case 'recovery_origin_stale':
-          return [];
-      }
-    }),
+  const interpretations = input.failures.reduce<FindingInterpretationRecord[]>(
+    (records, failure) => {
+      const related = records
+        .filter((record) => (
+          record.lineageKey === failure.recoveryOrigin.expectedProvisionalLineageKey
+        ))
+        .sort((left, right) => left.attemptOrdinal - right.attemptOrdinal);
+      const latest = related.at(-1);
+      const attemptOrdinal = (latest?.attemptOrdinal ?? 0) + 1;
+      const source = input.ledger.rawFindings.find(
+        (raw) => raw.rawFindingId === failure.sourceRawFindingId,
+      );
+      const reviewerStableKey = latest?.reviewerStableKey
+        ?? failure.recoveryOrigin.expectedRecoveryReviewerStableKey
+        ?? `unavailable:${failure.recoveryOrigin.expectedProvisionalStableKey}`;
+      const candidateEvidenceHash = latest?.candidateEvidenceHash
+        ?? (source === undefined
+          ? createHash('sha256').update(`missing:${failure.sourceRawFindingId}`).digest('hex')
+          : computeRawEvidenceHash(source));
+      const canonicalIntegrityDigest = latest?.canonicalIntegrityDigest
+        ?? (source === undefined
+          ? createHash('sha256').update(`missing-integrity:${failure.sourceRawFindingId}`).digest('hex')
+          : computeRawFindingIntegrityDigest(source));
+      const baseInterpretationKey = latest?.baseInterpretationKey
+        ?? computeBaseInterpretationKey({
+          reviewerStableKey,
+          lineageKey: failure.recoveryOrigin.expectedProvisionalLineageKey,
+          candidateEvidenceHash,
+        });
+      const terminal = failure.kind === 'recovery_origin_stale'
+        || attemptOrdinal >= RAW_ADJUDICATION_RECOVERY_LIMITS.maxReplayAttempts;
+      return [...records, {
+        interpretationKey: computeInterpretationAttemptKey(baseInterpretationKey, attemptOrdinal),
+        baseInterpretationKey,
+        attemptOrdinal,
+        reviewerStableKey,
+        lineageKey: failure.recoveryOrigin.expectedProvisionalLineageKey,
+        candidateEvidenceHash,
+        canonicalIntegrityDigest,
+        startedAt: { ...input.observation },
+        promptPreconditions: latest?.promptPreconditions.map((precondition) => ({
+          ...precondition,
+        })) ?? [],
+        stage: terminal
+          ? 'interpretation_terminal_failure'
+          : 'interpretation_retryable_failure',
+        failedAt: { ...input.observation },
+        failureCode: failure.kind satisfies InterpretationRecoveryFailureCode,
+        failureReason: failure.reason,
+        sourceRawFindingId: failure.sourceRawFindingId,
+        provisionalFindingId: failure.recoveryOrigin.provisionalFindingId,
+      }];
+    },
+    [...input.ledger.interpretations],
   );
-  return {
-    ...input.ledger,
-    findings: input.ledger.findings.map((finding) => {
-      const failure = failuresByFindingId.get(finding.id);
-      if (failure === undefined
-        || !matchesProvisionalRecoveryOrigin(finding, failure.recoveryOrigin)) {
-        return finding;
-      }
-      return {
-        ...finding,
-        revision: finding.revision + 1,
-        provisional: {
-          ...finding.provisional,
-          adjudicationAttempts: [
-            ...(finding.provisional.adjudicationAttempts ?? []),
-            {
-              attempt: failure.attempt,
-              replayRawFindingId: failure.sourceRawFindingId,
-              reason: failure.reason,
-              at: input.observation,
-            },
-          ],
-        },
-      };
-    }),
-  };
+  return { ...input.ledger, interpretations };
 }
 
 export function retainInterpretationRecoveryForLadder(

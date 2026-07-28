@@ -39,6 +39,7 @@ import {
   RevisionedFindingLedgerTestRepository,
 } from './helpers/finding-manager-publication.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
@@ -114,7 +115,7 @@ function historicalFileQuoteRecord(path: string, line: number): FindingEvidenceR
 }
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
-  return {
+  return authorizeFindingLedgerFixture({
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
@@ -124,7 +125,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     interpretations: [],
     findings: [makeFinding({ revision: 1 })],
     ...overrides,
-  };
+  });
 }
 
 type TestReconcileInput = Omit<
@@ -924,7 +925,9 @@ describe('B4: F-0016 raw-group replay against a coherent synthetic ledger', () =
   const fixturePath = fileURLToPath(new URL('./fixtures/finding-convergence-replay-ledger.json', import.meta.url));
 
   function loadFixtureLedger(): FindingLedger {
-    return parseFindingLedger(JSON.parse(readFileSync(fixturePath, 'utf-8')));
+    return parseFindingLedger(authorizeFindingLedgerFixture(
+      JSON.parse(readFileSync(fixturePath, 'utf-8')) as FindingLedger,
+    ));
   }
 
   function pickRaw(ledger: FindingLedger, idSuffix: string): RawFinding {

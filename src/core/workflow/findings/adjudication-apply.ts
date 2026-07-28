@@ -1,9 +1,3 @@
-import { validateLocationAdmission, validateLocationSetAdmission, type LocationAdmissionResult } from './admission-validation.js';
-import { parseFindingLocation, parseFindingLocationRange } from './location.js';
-import {
-  findingFileQuoteLocations,
-  formatFileQuoteLocation,
-} from './evidence-location.js';
 import type {
   FindingConflictAdjudicationOutcome,
   FindingConflictAdjudicationOutput,
@@ -15,14 +9,12 @@ import type {
 } from './types.js';
 
 /**
- * outcome -> findingTransition is a fixed, engine-owned mapping. The LLM's own
- * findingTransition value is validated against this and never trusted on its
- * own — see applyFindingConflictAdjudication's first check.
+ * outcome -> finding-side transition is a fixed, engine-owned mapping.
  *
  * finding_valid always keeps the FINDING open (the reviewer's finding is
  * legitimate either way); what varies with actionableFix is the CONFLICT's
  * fate and the workflow routing (FindingConflictAdjudicationDisposition below),
- * so the LLM-facing findingTransition contract stays a pure function of outcome.
+ * so the finding-side effect remains a pure function of outcome.
  */
 export const FINDING_CONFLICT_ADJUDICATION_OUTCOME_TRANSITION: Readonly<
   Record<FindingConflictAdjudicationOutcome, FindingConflictAdjudicationTransition>
@@ -57,7 +49,7 @@ export function resolveAdjudicationDisposition(
   if (output.outcome === 'finding_stale' || output.outcome === 'evidence_invalid') {
     return 'finding_closed';
   }
-  if (output.outcome === 'finding_valid' && output.actionableFix.trim().length > 0) {
+  if (output.outcome === 'finding_valid' && (output.actionableFix?.trim().length ?? 0) > 0) {
     return 'actionable_fix';
   }
   return 'unresolved';
@@ -80,71 +72,6 @@ export interface ApplyFindingConflictAdjudicationResult {
 
 function observationFromContext(context: FindingReconcileContext): FindingLedgerEntry['firstSeen'] {
   return { runId: context.runId, stepName: context.stepName, timestamp: context.timestamp };
-}
-
-type ResolvedEvidenceVerification =
-  | { outcome: 'verified'; evidence: string }
-  | { outcome: 'invalid'; reason: string }
-  | { outcome: 'unverifiable'; reason: string };
-
-function isLocationCitation(value: string): boolean {
-  return parseFindingLocationRange(value) !== undefined
-    || parseFindingLocation(value)?.line !== undefined;
-}
-
-function extractLocationCitations(evidence: string): string[] {
-  const trimmed = evidence.trim();
-  const candidates = [trimmed];
-  const citationPattern = /(?:^|[\s`"'“‘「『（［｛(\x5b{])([^\s`"'“”‘’「」『』（）［］｛｝()\x5b\x5d{}<>]+:\d+(?:-\d+)?)(?=$|[\s`"',.;:!?、。，；：！？“”‘’」』）］｝)}\x5d])/gu;
-  for (const match of trimmed.matchAll(citationPattern)) {
-    if (match[1] !== undefined) {
-      candidates.push(match[1]);
-    }
-  }
-  return [...new Set(candidates.filter(isLocationCitation))];
-}
-
-function validateResolvedEvidenceCitation(citation: string, cwd: string): LocationAdmissionResult {
-  const range = parseFindingLocationRange(citation);
-  if (range === undefined) {
-    return validateLocationAdmission(cwd, citation);
-  }
-  if (range.startLine < 1 || range.endLine < range.startLine) {
-    return { ok: false, outcome: 'invalid', reason: `location range "${citation}" is invalid` };
-  }
-  for (const line of [range.startLine, range.endLine]) {
-    const validation = validateLocationAdmission(cwd, `${range.path}:${line}`);
-    if (!validation.ok) {
-      return validation;
-    }
-  }
-  return { ok: true };
-}
-
-function verifyResolvedEvidence(evidence: readonly string[], cwd: string): ResolvedEvidenceVerification {
-  let unverifiableReason: string | undefined;
-  let invalidReason: string | undefined;
-  for (const entry of evidence) {
-    for (const citation of extractLocationCitations(entry)) {
-      const validation = validateResolvedEvidenceCitation(citation, cwd);
-      if (validation.ok) {
-        return { outcome: 'verified', evidence: citation };
-      }
-      if (validation.outcome === 'unverifiable' && unverifiableReason === undefined) {
-        unverifiableReason = validation.reason;
-      }
-      if (validation.outcome === 'invalid' && invalidReason === undefined) {
-        invalidReason = validation.reason;
-      }
-    }
-  }
-  if (unverifiableReason !== undefined) {
-    return { outcome: 'unverifiable', reason: unverifiableReason };
-  }
-  if (invalidReason !== undefined) {
-    return { outcome: 'invalid', reason: invalidReason };
-  }
-  return { outcome: 'invalid', reason: 'no path:line or path:start-end citation was found' };
 }
 
 function assertKnownConflict(
@@ -172,18 +99,13 @@ function appendActionableFixToSuggestion(existing: string | undefined, actionabl
 
 /**
  * Applies one finding-conflict-adjudication decision to the ledger. Pure
- * function over its inputs except for the deterministic filesystem check
- * (validateLocationAdmission, the shared location-admission boundary)
- * needed to verify "resolved" evidence and to attempt machine verification of
- * "invalidated". Throws on any invariant violation instead of silently
- * coercing bad output — the caller (adjudication-runner.ts) does not retry;
- * an invalid adjudication result must surface as a runtime error, not silently
- * open a gate or corrupt the ledger.
+ * function over its inputs. The adjudicator's free text is annotation only;
+ * the lifecycle authority is the typed, pre-reserved conflict evidence binding.
  */
 export function applyFindingConflictAdjudication(
   input: ApplyFindingConflictAdjudicationInput,
 ): ApplyFindingConflictAdjudicationResult {
-  const { ledger, output, evidenceHash, cwd, context } = input;
+  const { ledger, output, evidenceHash, context } = input;
   const conflictsById = new Map(ledger.conflicts.map((conflict) => [conflict.id, conflict]));
   const conflict = assertKnownConflict(conflictsById, output.conflictId);
   if (conflict.status !== 'active') {
@@ -191,12 +113,6 @@ export function applyFindingConflictAdjudication(
   }
 
   const expectedTransition = FINDING_CONFLICT_ADJUDICATION_OUTCOME_TRANSITION[output.outcome];
-  if (output.findingTransition !== expectedTransition) {
-    throw new Error(
-      `Adjudication output for conflict "${conflict.id}" is inconsistent: outcome "${output.outcome}" requires `
-      + `findingTransition "${expectedTransition}", got "${output.findingTransition}"`,
-    );
-  }
   const disposition = resolveAdjudicationDisposition(output);
 
   const decidedAt = context.timestamp;
@@ -204,19 +120,6 @@ export function applyFindingConflictAdjudication(
 
   let updatedFindings = ledger.findings;
   if (expectedTransition === 'resolved') {
-    const verification = verifyResolvedEvidence(output.evidence, cwd);
-    if (verification.outcome === 'unverifiable') {
-      throw new Error(
-        `Cannot resolve the finding(s) for conflict "${conflict.id}" because adjudication evidence could not be verified: `
-        + verification.reason,
-      );
-    }
-    if (verification.outcome === 'invalid') {
-      throw new Error(
-        `Cannot resolve the finding(s) for conflict "${conflict.id}": adjudication evidence must include at least `
-        + `one verifiable "path:line" or "path:start-end" citation: ${verification.reason}`,
-      );
-    }
     updatedFindings = ledger.findings.map((finding) => {
       if (!conflict.findingIds.includes(finding.id) || finding.status !== 'open') {
         return finding;
@@ -226,7 +129,7 @@ export function applyFindingConflictAdjudication(
         status: 'resolved',
         lifecycle: 'resolved',
         resolvedAt: decidedAt,
-        resolvedEvidence: verification.evidence,
+        resolvedEvidence: `Conflict adjudication ${conflict.id}@${evidenceHash}: finding_stale`,
         revision: finding.revision + 1,
       };
     });
@@ -235,30 +138,12 @@ export function applyFindingConflictAdjudication(
       if (!conflict.findingIds.includes(finding.id) || finding.status !== 'open') {
         return finding;
       }
-      // Machine verification through validateLocationAdmission when possible:
-      // the finding's own location fails a deterministic check (does not exist
-      // / out of range). When the finding has no location, or its location
-      // resolves fine (the claim is "the premise doesn't hold" in a way that
-      // is not a location check — e.g. the assertion itself is false), fall
-      // back to recording the adjudicator's structured evidence.
-      const locationResult = validateLocationSetAdmission(
-        cwd,
-        findingFileQuoteLocations(ledger, finding).map(formatFileQuoteLocation),
-      );
-      if (!locationResult.ok && locationResult.outcome === 'unverifiable') {
-        throw new Error(
-          `Cannot invalidate finding "${finding.id}" because its location could not be verified: ${locationResult.reason}`,
-        );
-      }
-      const evidenceText = locationResult.ok
-        ? output.evidence.join(' | ')
-        : locationResult.reason;
       return {
         ...finding,
         status: 'invalidated',
         lifecycle: 'invalidated',
         invalidatedAt: decidedAt,
-        invalidatedEvidence: evidenceText,
+        invalidatedEvidence: `Conflict adjudication ${conflict.id}@${evidenceHash}: evidence_invalid`,
         revision: finding.revision + 1,
       };
     });
@@ -272,21 +157,17 @@ export function applyFindingConflictAdjudication(
       }
       return {
         ...finding,
-        suggestion: appendActionableFixToSuggestion(finding.suggestion, output.actionableFix),
+        suggestion: appendActionableFixToSuggestion(finding.suggestion, output.actionableFix ?? ''),
         lastSeen: observation,
         revision: finding.revision + 1,
       };
     });
   }
-  // 'unresolved' (undetermined, or finding_valid without a fix): findings are
-  // left untouched — the disagreement stands and needs a human.
-
   const adjudicationRecord = {
     evidenceHash,
     outcome: output.outcome,
-    findingTransition: output.findingTransition,
-    evidence: output.evidence,
-    actionableFix: output.actionableFix,
+    ...(output.actionableFix !== undefined ? { actionableFix: output.actionableFix } : {}),
+    ...(output.rationale !== undefined ? { rationale: output.rationale } : {}),
     decidedAt: observation,
   };
 
@@ -297,6 +178,7 @@ export function applyFindingConflictAdjudication(
     const withRecord: FindingLedgerConflict = {
       ...candidate,
       adjudications: [...(candidate.adjudications ?? []), adjudicationRecord],
+      revision: candidate.revision + 1,
     };
     if (disposition === 'unresolved') {
       // Conflict stays active — it is adjudicated for this evidenceHash, but
@@ -308,9 +190,7 @@ export function applyFindingConflictAdjudication(
       ...withRecord,
       status: 'resolved',
       resolvedAt: decidedAt,
-      resolvedEvidence: disposition === 'actionable_fix'
-        ? `Adjudicated in favor of the reviewer finding(s); actionable fix: ${output.actionableFix.trim()}`
-        : output.evidence.join(' | '),
+      resolvedEvidence: `Conflict adjudication ${candidate.id}@${evidenceHash}: ${output.outcome}`,
     };
     return resolved;
   });

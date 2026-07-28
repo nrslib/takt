@@ -214,7 +214,11 @@ export async function runAmbiguousLadder(input: {
     return { ...applied, interpretationReservations: begin.ownedByKey };
   } finally {
     if (!retainReservationsForCommit) {
-      releaseInterpretationReservations(input.ledgerStore, begin.ownedByKey);
+      await releaseInterpretationReservations(
+        input.ledgerStore,
+        begin.ownedByKey,
+        input.observation,
+      );
     }
   }
 }

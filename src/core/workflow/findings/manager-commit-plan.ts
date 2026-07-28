@@ -23,10 +23,15 @@ import type { ManagerDecisionStageResult, RunFindingManagerForStepInput } from '
 
 import { mergeOutputs, revalidateManagerPlan } from './manager-commit-revalidation.js';
 import { buildLadderCommitPlan, selectCommittableLadder } from './manager-ladder-commit-plan.js';
-import { applyCommitLedgerStates, reconcileCommitPlan } from './manager-commit-finalization.js';
 import {
-  applyManagerActionRecovery,
+  applyCommitLedgerStates,
+  reconcileCommitPlan,
+  type RejectedObservationAttachment,
+} from './manager-commit-finalization.js';
+import {
   collectManagerActionRecoveryCandidates,
+  planManagerActionRecovery,
+  type ManagerActionRecoveryLifecyclePlan,
 } from './manager-action-recovery.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import { applyRawAdjudicationRecovery } from './raw-adjudication-commit.js';
@@ -44,14 +49,23 @@ import {
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import { compareCanonicalJsonValues } from '../../../shared/utils/canonical-json.js';
 import { canonicalRawIntegrityDigestOf } from './raw-canonicalization.js';
+import type { ResolutionRenotificationTransition } from './resolution-renotification.js';
+import type { FindingLifecycleCommand } from './lifecycle-transaction.js';
 export interface CommitMutationResult {
   applied: boolean;
+  managerDecisionLedger: FindingLedger;
+  managerDecisionCommands: FindingLifecycleCommand[];
+  lifecycleManagerOutput: FindingManagerOutput;
   staleRejections: string[];
   admissionRejections: RawAdmissionEvaluation['admissionRejections'];
   provisionalLandings: ProvisionalLandingReport[];
   reviewerAnomalyLandings: ReviewerAnomalyLandingReport[];
   rawFindingDispositions: RawFindingDisposition[];
   interpretationRecoverySettlements: InterpretationRecoveryOriginSettlement[];
+  resolutionRenotifications: ResolutionRenotificationTransition[];
+  rejectedObservationAttachments: RejectedObservationAttachment[];
+  settlementCommands: FindingLifecycleCommand[];
+  actionRecoveryPlan: ManagerActionRecoveryLifecyclePlan | null;
 }
 
 export interface FindingManagerCommitPlanInput {
@@ -363,12 +377,19 @@ export function buildFindingManagerCommitMutation(
       ledger: freshLedger,
       result: {
         applied: false,
+        managerDecisionLedger: freshLedger,
+        managerDecisionCommands: [],
+        lifecycleManagerOutput: params.managerDecision.managerOutput,
         staleRejections: [],
         admissionRejections: [],
         provisionalLandings: [],
         reviewerAnomalyLandings: [],
         rawFindingDispositions: [],
         interpretationRecoverySettlements: [],
+        resolutionRenotifications: [],
+        rejectedObservationAttachments: [],
+        settlementCommands: [],
+        actionRecoveryPlan: null,
       },
     };
   }
@@ -483,7 +504,7 @@ export function buildFindingManagerCommitMutation(
     healthyReviewerStableKeys: params.intake.healthyReviewerStableKeys,
     verifiedEvidenceRecordsByRawFindingId: admission.verifiedEvidenceRecordsByRawFindingId,
   });
-  const settled = applyManagerActionRecovery({
+  const actionRecoveryPlan = planManagerActionRecovery({
     ledger: reconcilePlan.ledger,
     candidates: actionRecoveryCandidates,
     cwd: input.cwd,
@@ -507,7 +528,7 @@ export function buildFindingManagerCommitMutation(
   const finalized = applyCommitLedgerStates({
     runInput: input,
     freshLedger,
-    settledLedger: settled,
+    settledLedger: actionRecoveryPlan.ledger,
     baseAnomalySpecs: prepared.anomalySpecs,
     pendingRejectedObservations: admission.pendingRejectedObservations,
     interpretationResults,
@@ -547,12 +568,22 @@ export function buildFindingManagerCommitMutation(
     ledger: finalized.ledger,
     result: {
       applied: true,
+      managerDecisionLedger: reconcilePlan.managerDecisionLedger,
+      managerDecisionCommands: reconcilePlan.managerDecisionCommands,
+      lifecycleManagerOutput: reconcilePlan.managerOutput,
       staleRejections: [...staleRejections, ...reconcilePlan.normalizationRejections],
       admissionRejections: admission.admissionRejections,
       provisionalLandings,
       reviewerAnomalyLandings: finalized.reviewerAnomalyLandings,
       rawFindingDispositions,
       interpretationRecoverySettlements,
+      resolutionRenotifications: revalidated.resolutionRenotifications,
+      rejectedObservationAttachments: [
+        ...reconcilePlan.rejectedObservationAttachments,
+        ...finalized.rejectedObservationAttachments,
+      ],
+      settlementCommands: reconcilePlan.settlementCommands,
+      actionRecoveryPlan,
     },
   };
 }

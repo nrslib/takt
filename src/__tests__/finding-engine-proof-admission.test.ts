@@ -23,6 +23,10 @@ import type {
   LadderResult,
   RunFindingManagerForStepInput,
 } from '../core/workflow/findings/manager-contracts.js';
+import {
+  authorizeFindingLedgerFixture,
+  emptyFindingAuthorityProjection,
+} from './helpers/finding-lifecycle-fixture.js';
 
 const SNAPSHOT_ID = '1'.repeat(64);
 const RUN_ID = 'run-1';
@@ -195,10 +199,11 @@ describe('engine proof admission authority', () => {
       },
       issuedAt: OBSERVATION.timestamp,
     });
-    const ledger = {
+    const ledger = authorizeFindingLedgerFixture({
       ...ledgerWithTarget(),
       evidenceRecords: [proof],
-    };
+      ...emptyFindingAuthorityProjection(),
+    });
     const admission = evaluate(cwd, ledger, intakeFor(ledger, [{
       ...raw,
       evidence: [{ kind: 'engine_proof', proofId: proof.proofId }],
@@ -319,10 +324,11 @@ describe('engine proof admission authority', () => {
       },
       issuedAt: OBSERVATION.timestamp,
     });
-    const ledger = {
+    const ledger = authorizeFindingLedgerFixture({
       ...ledgerWithTarget(),
       evidenceRecords: [proof],
-    };
+      ...emptyFindingAuthorityProjection(),
+    });
     const intake = intakeFor(ledger, [{
       ...raw,
       evidence: [{ kind: 'engine_proof', proofId: proof.proofId }],
@@ -466,10 +472,11 @@ describe('engine proof admission authority', () => {
       },
       issuedAt: OBSERVATION.timestamp,
     });
-    const ledger = {
+    const ledger = authorizeFindingLedgerFixture({
       ...ledgerWithTarget(),
       evidenceRecords: [proof],
-    };
+      ...emptyFindingAuthorityProjection(),
+    });
     const intake = intakeFor(ledger, [{
       rawFindingId: 'raw-tainted-proof',
       severity: 'high',

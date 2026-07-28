@@ -1,5 +1,5 @@
 import {
-  reconcileFindingLedger,
+  reconcileFindingLedgerPlan,
   type CanonicalRawReconcileProvenance,
   type ProvisionalFindingSpec,
 } from './reconciler.js';
@@ -9,12 +9,10 @@ import {
   linkPromotedReviewerAnomalies,
   type ReviewerAnomalySpec,
 } from './reviewer-anomalies.js';
-import { attachFixpointState } from './fixpoint.js';
 import { attachStopBudgetState, resolveStopBudgetLimits } from './stop-budget.js';
 import { attachReviewIntegrityState, resolveReviewIntegrityLimits } from './review-integrity.js';
 import {
   markInterpretationsApplied,
-  normalizeProvisionalInterpretationEpochs,
 } from './interpretation-wal.js';
 import type { ReviewerAnomalyLandingReport } from './store.js';
 import type {
@@ -30,20 +28,29 @@ import type { RawAdmissionEvaluation } from './manager-admission.js';
 import type { RunFindingManagerForStepInput } from './manager-contracts.js';
 import {
   applyProvisionalSettlement,
-  applyRejectedObservationAttachments,
+  buildProvisionalSettlementLifecycleCommands,
   settleProvisionalsWithCleanEvidence,
 } from './manager-provisional-settlement.js';
 import { collectActiveConflictFindingIds, normalizeMergedManagerPlan } from './manager-plan-normalization.js';
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import { collectRegeneratedConflictIds } from '../../models/finding-conflict-identity.js';
 import { collectLandedRawIds } from './manager-utils.js';
+import type { FindingRejectedObservationCode } from '../../models/finding-types.js';
+import type { FindingLifecycleCommand } from './lifecycle-transaction.js';
 import {
   applyResolutionRenotificationTransitions,
   type ResolutionRenotificationTransition,
 } from './resolution-renotification.js';
 
+export interface RejectedObservationAttachment {
+  targetFindingId: string;
+  rawFindingId: string;
+  reason: string;
+  rejectionCode: FindingRejectedObservationCode;
+}
+
 interface RejectedObservationPlan {
-  attachments: Array<{ targetFindingId: string; rawFindingId: string; reason: string }>;
+  attachments: RejectedObservationAttachment[];
   anomalySpecs: ReviewerAnomalySpec[];
 }
 
@@ -60,6 +67,7 @@ function classifyRejectedObservations(
           targetFindingId: pending.targetFindingId,
           rawFindingId: pending.item.wire.rawFindingId,
           reason: pending.reason,
+          rejectionCode: 'evidence_admission_failed',
         }],
       };
     }
@@ -103,9 +111,14 @@ export function reconcileCommitPlan(input: {
   >;
 }): {
   ledger: FindingLedger;
+  managerDecisionLedger: FindingLedger;
+  managerDecisionCommands: FindingLifecycleCommand[];
+  managerOutput: FindingManagerOutput;
   landedSpecs: ProvisionalFindingSpec[];
   normalizationRejections: string[];
   rawFindingDispositions: RawFindingDisposition[];
+  rejectedObservationAttachments: RejectedObservationAttachment[];
+  settlementCommands: FindingLifecycleCommand[];
 } {
   // ladder マージ（mergeOutputs）は matches / newFindings / conflicts を後着させる。
   // 閉じる決定との衝突をここで一括正規化し、残った統合の match 転写もこの1回で
@@ -245,7 +258,7 @@ export function reconcileCommitPlan(input: {
   const reconcileRawFindingIds = new Set(
     input.rawFindings.map((rawFinding) => rawFinding.rawFindingId),
   );
-  const reconciled = reconcileFindingLedger({
+  const reconciledPlan = reconcileFindingLedgerPlan({
     priorStepResponseText: input.runInput.priorStepResponseText,
     previousLedger: input.freshLedger,
     rawFindings: input.rawFindings,
@@ -263,6 +276,7 @@ export function reconcileCommitPlan(input: {
       timestamp: input.runInput.timestamp,
     },
   });
+  const reconciled = reconciledPlan.ledger;
   const transitioned = applyResolutionRenotificationTransitions({
     ledger: reconciled,
     transitions: input.resolutionRenotifications,
@@ -273,21 +287,25 @@ export function reconcileCommitPlan(input: {
     },
   });
   const settled = applyProvisionalSettlement(transitioned, settlement, input.runInput.timestamp);
-  const attached = attachSuppressedObservationsToDismissed(
+  const settlementCommands = buildProvisionalSettlementLifecycleCommands({
+    after: settled,
+    settlement,
+  });
+  const rejectedObservationAttachments = planSuppressedObservationsForDismissed(
     settled,
     suppressedSpecs,
     new Set(settledOutput.dismissedFindings.map((dismissed) => dismissed.findingId)),
-    {
-      runId: input.runInput.runId,
-      stepName: input.runInput.parentStep.name,
-      timestamp: input.runInput.timestamp,
-    },
   );
   return {
-    ledger: attached,
+    ledger: settled,
+    managerDecisionLedger: reconciled,
+    managerDecisionCommands: reconciledPlan.lifecycleCommands,
+    managerOutput: settledOutput,
     landedSpecs,
     normalizationRejections,
     rawFindingDispositions,
+    rejectedObservationAttachments,
+    settlementCommands,
   };
 }
 
@@ -337,14 +355,13 @@ function dropRegeneratedConflictResolves(
  * status / canonical evidence には影響しない
  * （rejectedObservations の既存契約と同じ）。
  */
-function attachSuppressedObservationsToDismissed(
+function planSuppressedObservationsForDismissed(
   ledger: FindingLedger,
   suppressedSpecs: readonly ProvisionalFindingSpec[],
   dismissedThisRoundFindingIds: ReadonlySet<string>,
-  observedAt: { runId: string; stepName: string; timestamp: string },
-): FindingLedger {
+): RejectedObservationAttachment[] {
   if (suppressedSpecs.length === 0) {
-    return ledger;
+    return [];
   }
   const rawIdsByStableKey = new Map<string, Set<string>>();
   for (const spec of suppressedSpecs) {
@@ -354,30 +371,21 @@ function attachSuppressedObservationsToDismissed(
     }
     rawIdsByStableKey.set(spec.stableKey, rawIds);
   }
-  return {
-    ...ledger,
-    findings: ledger.findings.map((finding) => {
-      if (!dismissedThisRoundFindingIds.has(finding.id) || finding.provisional === undefined) {
-        return finding;
-      }
-      const rawIds = rawIdsByStableKey.get(finding.provisional.stableKey);
-      if (rawIds === undefined) {
-        return finding;
-      }
-      return {
-        ...finding,
-        revision: finding.revision + 1,
-        rejectedObservations: [
-          ...(finding.rejectedObservations ?? []),
-          ...[...rawIds].map((rawFindingId) => ({
-            rawFindingId,
-            reason: 'Same-claim observation arrived in the round its provisional was dismissed; recorded for audit only — the dismissal covers this re-assertion',
-            observedAt: { runId: observedAt.runId, stepName: observedAt.stepName, timestamp: observedAt.timestamp },
-          })),
-        ],
-      };
-    }),
-  };
+  return ledger.findings.flatMap((finding) => {
+    if (!dismissedThisRoundFindingIds.has(finding.id) || finding.provisional === undefined) {
+      return [];
+    }
+    const rawIds = rawIdsByStableKey.get(finding.provisional.stableKey);
+    if (rawIds === undefined) {
+      return [];
+    }
+    return [...rawIds].map((rawFindingId) => ({
+      targetFindingId: finding.id,
+      rawFindingId,
+      reason: 'Same-claim observation arrived in the round its provisional was dismissed; recorded for audit only — the dismissal covers this re-assertion',
+      rejectionCode: 'dismissed_same_round' as const,
+    }));
+  });
 }
 
 export function applyCommitLedgerStates(input: {
@@ -394,7 +402,11 @@ export function applyCommitLedgerStates(input: {
   stopBudgetLimits: ReturnType<typeof resolveStopBudgetLimits>;
   stopBudgetRoundMarker: string;
   reviewIntegrityLimits: ReturnType<typeof resolveReviewIntegrityLimits>;
-}): { ledger: FindingLedger; reviewerAnomalyLandings: ReviewerAnomalyLandingReport[] } {
+}): {
+  ledger: FindingLedger;
+  reviewerAnomalyLandings: ReviewerAnomalyLandingReport[];
+  rejectedObservationAttachments: RejectedObservationAttachment[];
+} {
   const rejectedObservations = classifyRejectedObservations(
     input.pendingRejectedObservations,
     input.settledLedger,
@@ -410,24 +422,17 @@ export function applyCommitLedgerStates(input: {
       timestamp: input.runInput.timestamp,
     },
   );
-  const withRejectedObservations = applyRejectedObservationAttachments(
-    withAnomalies,
-    rejectedObservations.attachments,
-    input.observation,
-  );
   const applied = markInterpretationsApplied(
-    withRejectedObservations,
+    withAnomalies,
     input.interpretationResults,
     input.interpretationReservations,
     input.interpretationIntegrityDigests,
     input.observation,
   );
-  const normalized = normalizeProvisionalInterpretationEpochs(applied);
-  const withPromotions = linkPromotedReviewerAnomalies(normalized, input.verifiedEvidenceCandidates);
-  const withFixpoint = attachFixpointState(input.freshLedger, withPromotions, input.runInput.cwd);
+  const withPromotions = linkPromotedReviewerAnomalies(applied, input.verifiedEvidenceCandidates);
   const withStopBudget = attachStopBudgetState(
     input.freshLedger,
-    withFixpoint,
+    withPromotions,
     input.stopBudgetLimits,
     input.stopBudgetRoundMarker,
     input.runInput.timestamp,
@@ -446,5 +451,6 @@ export function applyCommitLedgerStates(input: {
       reason: spec.mismatchReason,
       sourceRawFindingIds: spec.sourceRawFindingIds,
     })),
+    rejectedObservationAttachments: rejectedObservations.attachments,
   };
 }

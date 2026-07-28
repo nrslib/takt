@@ -6,7 +6,6 @@ import {
 } from '../instruction/fenced-block.js';
 import type { ReviewScopeSnapshot, ReviewScopeUntrackedEvidence } from './snapshot.js';
 import type {
-  FindingConflictAdjudicationAttempt,
   FindingLedger,
   FindingLedgerConflict,
   FindingLedgerEntry,
@@ -25,7 +24,9 @@ interface AdjudicationConflictEvidence {
   lastSeen: FindingLedgerConflict['lastSeen'];
 }
 
-function snapshotFinding(finding: FindingLedgerEntry): FindingLedgerEntry {
+type AdjudicationFindingEvidence = Omit<FindingLedgerEntry, 'revision'>;
+
+function snapshotFinding(finding: FindingLedgerEntry): AdjudicationFindingEvidence {
   return structuredClone({
     id: finding.id,
     status: finding.status,
@@ -52,7 +53,6 @@ function snapshotFinding(finding: FindingLedgerEntry): FindingLedgerEntry {
       ? { supersededByFindingId: finding.supersededByFindingId }
       : {}),
     ...(finding.dismissal !== undefined ? { dismissal: finding.dismissal } : {}),
-    revision: finding.revision,
     ...(finding.provisional !== undefined ? { provisional: finding.provisional } : {}),
     ...(finding.rejectedObservations !== undefined
       ? { rejectedObservations: finding.rejectedObservations }
@@ -81,7 +81,7 @@ function snapshotRawFinding(rawFinding: RawFinding): RawFinding {
 
 export interface AdjudicationEvidenceSnapshot {
   conflict: AdjudicationConflictEvidence;
-  findings: FindingLedgerEntry[];
+  findings: AdjudicationFindingEvidence[];
   rawFindings: RawFinding[];
   reviewScopeSnapshotId: string;
   trackedDiffDigest: string;
@@ -207,11 +207,12 @@ export function renderAdjudicationInstruction(snapshot: AdjudicationEvidenceSnap
 }
 
 export function isConflictUnadjudicated(
-  conflict: Pick<FindingLedgerConflict, 'adjudications' | 'adjudicationAttempts'>,
+  conflict: Pick<FindingLedgerConflict, 'adjudications'>,
   currentEvidenceHash: string,
 ): boolean {
-  const seen = (conflict.adjudications ?? []).some((record) => record.evidenceHash === currentEvidenceHash)
-    || (conflict.adjudicationAttempts ?? []).some((attempt) => attempt.evidenceHash === currentEvidenceHash);
+  const seen = (conflict.adjudications ?? []).some(
+    (record) => record.evidenceHash === currentEvidenceHash,
+  );
   return !seen;
 }
 
@@ -224,18 +225,4 @@ export function isLedgerConflictUnadjudicated(
     conflict,
     computeConflictEvidenceHash(conflict, ledger, reviewScopeSnapshotId),
   );
-}
-
-export function findReusablePendingAttempt(
-  conflict: Pick<FindingLedgerConflict, 'adjudications' | 'adjudicationAttempts'>,
-  currentEvidenceHash: string,
-  runId: string,
-): FindingConflictAdjudicationAttempt | undefined {
-  const completed = (conflict.adjudications ?? []).some((record) => record.evidenceHash === currentEvidenceHash);
-  if (completed) {
-    return undefined;
-  }
-  return (conflict.adjudicationAttempts ?? []).find((attempt) => (
-    attempt.evidenceHash === currentEvidenceHash && attempt.startedAt.runId === runId
-  ));
 }

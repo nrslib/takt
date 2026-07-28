@@ -1,0 +1,2056 @@
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { computeClaimIdentityHash } from '../core/models/finding-claim-identity.js';
+import {
+  computeFileQuoteEvidenceRecordId,
+  createEngineProofRecord,
+} from '../core/models/finding-evidence-record.js';
+import {
+  createFindingEvidenceBinding,
+  createFindingLifecycleReservation,
+} from '../core/models/finding-lifecycle-identity.js';
+import { assertFindingLifecycleAuthorityInvariant } from '../core/models/finding-lifecycle-invariants.js';
+import { assertFindingLedgerProjectionInvariant } from '../core/models/finding-ledger-invariants.js';
+import { computeRawFindingIntegrityDigest } from '../core/models/finding-raw-integrity.js';
+import { FindingInterpretationRecordSchema } from '../core/models/finding-schemas.js';
+import {
+  createRawRecoveryAttempt,
+  createRawRecoveryResult,
+} from '../core/models/finding-raw-recovery.js';
+import type {
+  FindingEvidenceBinding,
+  FindingEvidenceRecord,
+  FindingLedger,
+  FindingLedgerEntry,
+  FindingLifecycleEntityHead,
+  FindingLifecycleMutationTarget,
+  FindingLifecycleOperation,
+  FindingObservation,
+  RawFinding,
+} from '../core/workflow/findings/types.js';
+import {
+  applyVerifiedLifecycleMutation,
+  reserveVerifiedLifecycleMutation,
+  type VerifiedLifecycleMutation,
+  type VerifiedLifecycleReservation,
+} from '../core/workflow/findings/lifecycle-mutation.js';
+import {
+  applyFindingLifecycleCommands,
+  mergeFindingLifecycleCommandState,
+  reserveFindingConflictAdjudicationLifecycle,
+} from '../core/workflow/findings/lifecycle-transaction.js';
+import { applyFindingConflictAdjudication } from '../core/workflow/findings/adjudication-apply.js';
+import { formatConflictId } from '../core/models/finding-conflict-identity.js';
+import { reconcileFindingLedgerPlan } from '../core/workflow/findings/reconciler.js';
+import { assembleAndApplyManagerLifecycleTransactions } from '../core/workflow/findings/manager-lifecycle-assembly.js';
+import { issueManagerLifecycleAuthority } from '../core/workflow/findings/manager-lifecycle-authority.js';
+import {
+  computeLineageKey,
+  computeReviewerStableKey,
+} from '../core/workflow/findings/raw-canonicalization.js';
+import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import type { FindingManagerOutput } from '../core/workflow/findings/types.js';
+import { assertFindingLedgerAppendOnlyTransition } from '../core/workflow/findings/finding-integrity.js';
+import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
+import { reserveRawAdjudicationRecovery } from '../core/workflow/findings/raw-adjudication-reservation.js';
+import { parseFindingConflictAdjudicationOutput } from '../core/workflow/findings/schemas.js';
+import { applyInterpretationRecoveryFailures } from '../core/workflow/findings/interpretation-recovery.js';
+import {
+  cleanupRealRunStorages,
+  createRealRunStorage,
+  resumeRealRunStorage,
+} from './helpers/run-storage.js';
+
+const OBSERVATION: FindingObservation = {
+  runId: 'run-1',
+  stepName: 'findings-manager',
+  timestamp: '2026-07-29T00:00:00.000Z',
+};
+
+const temporaryDirectories = new Set<string>();
+
+afterEach(() => {
+  cleanupRealRunStorages();
+  for (const directory of temporaryDirectories) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  temporaryDirectories.clear();
+});
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+interface EvidenceSource {
+  readonly raw: RawFinding;
+  readonly record: FindingEvidenceRecord;
+  readonly claimIdentityHash: string;
+}
+
+function evidenceSource(input: {
+  rawFindingId: string;
+  targetFindingId: string | null;
+  title: string;
+  description: string;
+  relation?: RawFinding['relation'];
+}): EvidenceSource {
+  const claimIdentityHash = computeClaimIdentityHash(input);
+  const recordPayload = {
+    kind: 'file_quote' as const,
+    path: `src/${input.rawFindingId}.ts`,
+    startLine: 1,
+    endLine: 1,
+    verbatimExcerpt: input.description,
+    snapshotId: sha256(`snapshot:${input.rawFindingId}`),
+    claimIdentityHash,
+    fileHash: sha256(`file:${input.rawFindingId}`),
+  };
+  const record: FindingEvidenceRecord = {
+    evidenceId: computeFileQuoteEvidenceRecordId(recordPayload),
+    ...recordPayload,
+  };
+  return {
+    claimIdentityHash,
+    record,
+    raw: {
+      rawFindingId: input.rawFindingId,
+      stepName: OBSERVATION.stepName,
+      reviewer: 'reviewer',
+      familyTag: 'bug',
+      severity: 'high',
+      title: input.title,
+      description: input.description,
+      suggestion: null,
+      relation: input.relation ?? (input.targetFindingId === null ? 'new' : 'persists'),
+      targetFindingId: input.targetFindingId,
+      evidence: [{
+        kind: 'file_quote',
+        path: record.path,
+        startLine: record.startLine,
+        endLine: record.endLine,
+        verbatimExcerpt: record.verbatimExcerpt,
+        snapshotId: record.snapshotId,
+      }],
+    },
+  };
+}
+
+function emptyLedger(sources: readonly EvidenceSource[]): FindingLedger {
+  return {
+    workflowName: 'default',
+    nextId: 1,
+    updatedAt: '1970-01-01T00:00:01.000Z',
+    findings: [],
+    evidenceRecords: sources.map((source) => source.record),
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawRecoveryAttempts: [],
+    rawRecoveryResults: [],
+    rawFindings: sources.map((source) => source.raw),
+    conflicts: [],
+    interpretations: [],
+  };
+}
+
+function finding(input: {
+  id: string;
+  source: EvidenceSource;
+  revision: number;
+  evidenceIds?: string[];
+  status?: FindingLedgerEntry['status'];
+  lifecycle?: FindingLedgerEntry['lifecycle'];
+}): FindingLedgerEntry {
+  return {
+    id: input.id,
+    status: input.status ?? 'open',
+    lifecycle: input.lifecycle ?? 'new',
+    revision: input.revision,
+    severity: 'high',
+    title: input.source.raw.title,
+    description: input.source.raw.description,
+    evidenceIds: input.evidenceIds ?? [input.source.record.evidenceId],
+    reviewers: ['reviewer'],
+    rawFindingIds: [input.source.raw.rawFindingId],
+    firstSeen: { ...OBSERVATION },
+    lastSeen: { ...OBSERVATION },
+    ...(input.status === 'resolved'
+      ? {
+          resolvedAt: OBSERVATION.timestamp,
+          resolvedEvidence: 'verified evidence',
+        }
+      : {}),
+  };
+}
+
+function reservation(input: {
+  operation: FindingLifecycleOperation;
+  targets: FindingLifecycleMutationTarget[];
+  sources: EvidenceSource[];
+}): VerifiedLifecycleReservation {
+  const evidenceBindings = input.targets.map((target, index) => {
+    const source = input.sources[index]!;
+    return createFindingEvidenceBinding({
+      evidenceId: source.record.evidenceId,
+      claimIdentityHash: source.claimIdentityHash,
+      sourceRawFindingId: source.raw.rawFindingId,
+      sourceRawIntegrityDigest: computeRawFindingIntegrityDigest(source.raw),
+      operation: input.operation,
+      target,
+    });
+  }).sort((left, right) => left.bindingId.localeCompare(right.bindingId));
+  return {
+    reservation: createFindingLifecycleReservation({
+      operation: input.operation,
+      targets: input.targets,
+      evidenceBindingIds: evidenceBindings.map((binding) => binding.bindingId),
+      authority: { kind: 'verified_evidence' },
+      context: { kind: 'transaction' },
+      reservedAt: OBSERVATION,
+    }),
+    evidenceBindings,
+  };
+}
+
+function mutation(input: {
+  reservation: VerifiedLifecycleReservation;
+  findings: FindingLedgerEntry[];
+}): VerifiedLifecycleMutation {
+  return {
+    mutationId: input.reservation.reservation.mutationId,
+    findings: input.findings,
+    conflicts: [],
+    occurredAt: OBSERVATION,
+  };
+}
+
+function latestHead(ledger: FindingLedger, entityId: string): FindingLifecycleEntityHead {
+  const transition = [...ledger.lifecycleEvents].reverse().flatMap(
+    (event) => event.transitions,
+  ).find((candidate) => candidate.after.entityId === entityId);
+  if (transition === undefined) {
+    throw new Error(`Missing lifecycle head for "${entityId}"`);
+  }
+  return transition.after;
+}
+
+function adjudicationLedger(): FindingLedger {
+  const findingSources = [
+    evidenceSource({
+      rawFindingId: 'raw-adjudication-a',
+      targetFindingId: null,
+      title: 'Finding A',
+      description: 'First adjudication target.',
+    }),
+    evidenceSource({
+      rawFindingId: 'raw-adjudication-b',
+      targetFindingId: null,
+      title: 'Finding B',
+      description: 'Second adjudication target.',
+    }),
+  ];
+  const conflictSource = evidenceSource({
+    rawFindingId: 'raw-adjudication-conflict',
+    targetFindingId: 'F-0001',
+    title: 'Conflicting observation',
+    description: 'The findings have conflicting evidence.',
+    relation: 'persists',
+  });
+  const sources = [...findingSources, conflictSource];
+  const conflictId = formatConflictId({
+    findingIds: ['F-0001', 'F-0002'],
+    rawFindingIds: [conflictSource.raw.rawFindingId],
+  });
+  const conflict = {
+    id: conflictId,
+    status: 'active' as const,
+    findingIds: ['F-0001', 'F-0002'],
+    rawFindingIds: [conflictSource.raw.rawFindingId],
+    description: 'The two findings require adjudication.',
+    firstSeen: OBSERVATION,
+    lastSeen: OBSERVATION,
+  };
+  return applyFindingLifecycleCommands({
+    ledger: emptyLedger(sources),
+    commands: [
+      ...findingSources.map((source, index) => {
+        const created = finding({
+          id: `F-${String(index + 1).padStart(4, '0')}`,
+          source,
+          revision: 1,
+        });
+        const { revision: _revision, ...projection } = created;
+        return {
+          operation: 'create_finding' as const,
+          changes: { findings: [projection], conflicts: [] },
+          authority: { kind: 'verified_evidence' as const },
+          evidenceSourcesByTarget: new Map([[
+            `finding\0${created.id}`,
+            {
+              sourceRawFindingIds: [source.raw.rawFindingId],
+              authorityEvidenceIds: [],
+            },
+          ]]),
+        };
+      }),
+      {
+        operation: 'create_conflict',
+        changes: { findings: [], conflicts: [conflict] },
+        authority: { kind: 'verified_evidence' },
+        evidenceSourcesByTarget: new Map([[
+          `conflict\0${conflictId}`,
+          {
+            sourceRawFindingIds: [conflictSource.raw.rawFindingId],
+            authorityEvidenceIds: [],
+          },
+        ]]),
+      },
+    ],
+    occurredAt: OBSERVATION,
+  });
+}
+
+function semanticDuplicateLedger(count: number): FindingLedger {
+  const sources = Array.from({ length: count }, (_, index) => evidenceSource({
+    rawFindingId: `raw-semantic-duplicate-${index + 1}`,
+    targetFindingId: null,
+    title: 'Same duplicate claim',
+    description: 'Every candidate has the same claim identity.',
+  }));
+  return applyFindingLifecycleCommands({
+    ledger: emptyLedger(sources),
+    commands: sources.map((source, index) => {
+      const created = finding({
+        id: `F-${String(index + 1).padStart(4, '0')}`,
+        source,
+        revision: 1,
+      });
+      const { revision: _revision, ...projection } = created;
+      return {
+        operation: 'create_finding' as const,
+        changes: { findings: [projection], conflicts: [] },
+        authority: { kind: 'verified_evidence' as const },
+        evidenceSourcesByTarget: new Map([[
+          `finding\0${created.id}`,
+          {
+            sourceRawFindingIds: [source.raw.rawFindingId],
+            authorityEvidenceIds: [],
+          },
+        ]]),
+      };
+    }),
+    occurredAt: OBSERVATION,
+  });
+}
+
+function semanticManagerPlan(input: {
+  current: FindingLedger;
+  sources: readonly EvidenceSource[];
+  managerOutput: FindingManagerOutput;
+}) {
+  return reconcileFindingLedgerPlan({
+    previousLedger: input.current,
+    rawFindings: input.sources.map((source) => source.raw),
+    managerOutput: input.managerOutput,
+    provisionalFindings: [],
+    rawFindingDispositions: [],
+    verifiedEvidenceRecordsByRawFindingId: new Map(input.sources.map((source) => [
+      source.raw.rawFindingId,
+      [source.record],
+    ])),
+    rawProvenanceByRawFindingId: new Map(input.sources.map((source) => [
+      source.raw.rawFindingId,
+      storedRawReconcileProvenance(
+        source.raw,
+        computeReviewerStableKey({
+          workflowName: input.current.workflowName,
+          callNamespace: '',
+          parentStepName: OBSERVATION.stepName,
+          reviewerPersonaKey: source.raw.reviewer,
+        }),
+        computeLineageKey({
+          claimIdentityHash: computeClaimIdentityHash(source.raw),
+          ...(source.raw.targetFindingId === null
+            ? {}
+            : { targetFindingId: source.raw.targetFindingId }),
+        }),
+      ),
+    ])),
+    context: {
+      workflowName: input.current.workflowName,
+      ...OBSERVATION,
+    },
+  });
+}
+
+function applySemanticManagerPlan(input: {
+  current: FindingLedger;
+  plan: ReturnType<typeof semanticManagerPlan>;
+  managerOutput: FindingManagerOutput;
+}): FindingLedger {
+  return assembleAndApplyManagerLifecycleTransactions({
+    current: input.current,
+    managerDecisionProposed: input.plan.ledger,
+    managerDecisionCommands: input.plan.lifecycleCommands,
+    proposed: input.plan.ledger,
+    managerOutput: input.managerOutput,
+    provisionalProofIdsByFinding: new Map(),
+    invalidationProofIdsByFinding: new Map(),
+    duplicateProofIdsByCommandKey: new Map(),
+    invalidationReasonsByFinding: new Map(),
+    resolutionRenotifications: [],
+    settlementCommands: [],
+    actionRecoveryPlan: null,
+    occurredAt: OBSERVATION,
+  });
+}
+
+function applyProofedSemanticManagerPlan(input: {
+  current: FindingLedger;
+  plan: ReturnType<typeof semanticManagerPlan>;
+  managerOutput: FindingManagerOutput;
+}): FindingLedger {
+  const proofed = issueManagerLifecycleAuthority({
+    current: input.current,
+    proposed: input.plan.ledger,
+    managerDecisionCommands: input.plan.lifecycleCommands,
+    managerOutput: input.managerOutput,
+    cwd: process.cwd(),
+    workflowName: input.current.workflowName,
+    runId: OBSERVATION.runId,
+    scopeIdentity: 'semantic-command-production-test',
+    reviewScopeSnapshotId: sha256('semantic-command-production-snapshot'),
+    observation: OBSERVATION,
+  });
+  const managerDecisionProposed: FindingLedger = {
+    ...proofed.ledger,
+    findings: input.plan.ledger.findings.map((finding) => {
+      const proofedFinding = proofed.ledger.findings.find(
+        (candidate) => candidate.id === finding.id,
+      )!;
+      const proofEvidenceIds = proofedFinding.evidenceIds.filter((evidenceId) => (
+        proofed.ledger.evidenceRecords.some((record) => (
+          record.evidenceId === evidenceId && record.kind === 'engine_proof'
+        ))
+      ));
+      return {
+        ...finding,
+        evidenceIds: [...new Set([...finding.evidenceIds, ...proofEvidenceIds])].sort(),
+      };
+    }),
+    conflicts: input.plan.ledger.conflicts,
+  };
+  return assembleAndApplyManagerLifecycleTransactions({
+    current: input.current,
+    managerDecisionProposed,
+    managerDecisionCommands: input.plan.lifecycleCommands,
+    proposed: proofed.ledger,
+    managerOutput: input.managerOutput,
+    provisionalProofIdsByFinding: proofed.provisionalProofIdsByFinding,
+    invalidationProofIdsByFinding: proofed.invalidationProofIdsByFinding,
+    duplicateProofIdsByCommandKey: proofed.duplicateProofIdsByCommandKey,
+    invalidationReasonsByFinding: proofed.invalidationReasonsByFinding,
+    resolutionRenotifications: [],
+    settlementCommands: [],
+    actionRecoveryPlan: null,
+    occurredAt: OBSERVATION,
+  });
+}
+
+describe('verified finding lifecycle mutation', () => {
+  it('rejects lifecycle transaction projection deletion and orphan lifecycle heads', () => {
+    const source = evidenceSource({
+      rawFindingId: 'raw-delete-rejection',
+      targetFindingId: null,
+      title: 'Deletion must be explicit',
+      description: 'Lifecycle projections cannot disappear without an event.',
+    });
+    const target = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: null,
+    };
+    const createReservation = reservation({
+      operation: 'create_finding',
+      targets: [target],
+      sources: [source],
+    });
+    const current = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(emptyLedger([source]), createReservation),
+      mutation({
+        reservation: createReservation,
+        findings: [finding({ id: target.entityId, source, revision: 1 })],
+      }),
+    );
+
+    expect(() => mergeFindingLifecycleCommandState(
+      current,
+      { ...current, findings: [] },
+    )).toThrow(/cannot delete finding projection "F-0001"/);
+    expect(() => assertFindingLifecycleAuthorityInvariant({
+      ...current,
+      findings: [],
+    })).toThrow(/has no current entity projection/);
+  });
+
+  it('revalidates every reserved target before applying a partial multi-target result', () => {
+    const sourceA = evidenceSource({
+      rawFindingId: 'raw-create-a',
+      targetFindingId: null,
+      title: 'Finding A',
+      description: 'The first reserved finding.',
+    });
+    const sourceB = evidenceSource({
+      rawFindingId: 'raw-create-b',
+      targetFindingId: null,
+      title: 'Finding B',
+      description: 'The second reserved finding.',
+    });
+    const createReservationA = reservation({
+      operation: 'create_finding',
+      targets: [{
+        entityKind: 'finding',
+        entityId: 'F-0001',
+        expectedHead: null,
+      }],
+      sources: [sourceA],
+    });
+    const createdA = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(
+        emptyLedger([sourceA, sourceB]),
+        createReservationA,
+      ),
+      mutation({
+        reservation: createReservationA,
+        findings: [finding({ id: 'F-0001', source: sourceA, revision: 1 })],
+      }),
+    );
+    const createReservationB = reservation({
+      operation: 'create_finding',
+      targets: [{
+        entityKind: 'finding',
+        entityId: 'F-0002',
+        expectedHead: null,
+      }],
+      sources: [sourceB],
+    });
+    const created = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(createdA, createReservationB),
+      mutation({
+        reservation: createReservationB,
+        findings: [finding({ id: 'F-0002', source: sourceB, revision: 1 })],
+      }),
+    );
+    const supersedeReservation: VerifiedLifecycleReservation = {
+      reservation: createFindingLifecycleReservation({
+        operation: 'supersede_findings',
+        targets: [
+          {
+            entityKind: 'finding',
+            entityId: 'F-0001',
+            expectedHead: latestHead(created, 'F-0001'),
+          },
+          {
+            entityKind: 'finding',
+            entityId: 'F-0002',
+            expectedHead: latestHead(created, 'F-0002'),
+          },
+        ],
+        evidenceBindingIds: [],
+        authority: {
+          kind: 'engine_policy',
+          decisionKind: 'semantic_duplicate',
+          decisionDigest: sha256('supersede-a-b'),
+        },
+        context: { kind: 'transaction' },
+        reservedAt: OBSERVATION,
+      }),
+      evidenceBindings: [],
+    };
+    const pending = reserveVerifiedLifecycleMutation(created, supersedeReservation);
+    const waiverReservation: VerifiedLifecycleReservation = {
+      reservation: createFindingLifecycleReservation({
+        operation: 'waive_finding',
+        targets: [{
+          entityKind: 'finding',
+          entityId: 'F-0001',
+          expectedHead: latestHead(created, 'F-0001'),
+        }],
+        evidenceBindingIds: [],
+        authority: {
+          kind: 'engine_policy',
+          decisionKind: 'waive',
+          decisionDigest: sha256('waive-a-before-persist'),
+        },
+        context: { kind: 'transaction' },
+        reservedAt: OBSERVATION,
+      }),
+      evidenceBindings: [],
+    };
+    const withWaiverReservation = reserveVerifiedLifecycleMutation(
+      pending,
+      waiverReservation,
+    );
+    const findingA = withWaiverReservation.findings.find(
+      (candidate) => candidate.id === 'F-0001',
+    )!;
+    const findingB = withWaiverReservation.findings.find(
+      (candidate) => candidate.id === 'F-0002',
+    )!;
+    const changedA = applyVerifiedLifecycleMutation(
+      withWaiverReservation,
+      mutation({
+        reservation: waiverReservation,
+        findings: [{
+          ...findingA,
+          status: 'waived',
+          lifecycle: 'waived',
+          revision: 2,
+          waivers: [{
+            reason: 'Accepted for the CAS regression.',
+            evidence: 'Policy decision.',
+            decidedAt: OBSERVATION,
+          }],
+        }],
+      }),
+    );
+
+    expect(() => applyVerifiedLifecycleMutation(
+      changedA,
+      mutation({
+        reservation: supersedeReservation,
+        findings: [{
+          ...findingB,
+          status: 'superseded',
+          lifecycle: 'superseded',
+          revision: 2,
+          supersededByFindingId: 'F-0001',
+        }],
+      }),
+    )).toThrow(/stale full head for "F-0001"/);
+  });
+
+  it('rejects a generic structural proof reused for an unrelated lifecycle operation', () => {
+    const claimIdentityHash = computeClaimIdentityHash({
+      targetFindingId: null,
+      title: 'Unrelated create',
+      description: 'A provisional isolation proof cannot authorize creation.',
+    });
+    const proof = createEngineProofRecord({
+      kind: 'engine_proof',
+      verifierId: 'takt.finding-lifecycle-policy',
+      verifierVersion: '1',
+      workflowName: 'default',
+      runId: OBSERVATION.runId,
+      scopeIdentity: 'lifecycle-test-scope',
+      snapshotId: sha256('generic-proof-snapshot'),
+      claimIdentityHash,
+      targetFindingId: null,
+      subject: {
+        kind: 'named_structural_check',
+        checkId: 'finding-provisional-isolation',
+        parameters: {
+          provisionalKind: 'interpretation-interrupted',
+          stableKey: 'unrelated',
+        },
+      },
+      dependencyDigests: [sha256('generic-proof-dependency')],
+      resultDigest: sha256('generic-proof-result'),
+      issuedAt: OBSERVATION.timestamp,
+    });
+    const target = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: null,
+    };
+    const binding = createFindingEvidenceBinding({
+      evidenceId: proof.evidenceId,
+      claimIdentityHash,
+      sourceRawFindingId: null,
+      sourceRawIntegrityDigest: null,
+      operation: 'create_finding',
+      target,
+    });
+    const proofReservation = createFindingLifecycleReservation({
+      operation: 'create_finding',
+      targets: [target],
+      evidenceBindingIds: [binding.bindingId],
+      authority: { kind: 'verified_evidence' },
+      context: { kind: 'transaction' },
+      reservedAt: OBSERVATION,
+    });
+
+    expect(() => reserveVerifiedLifecycleMutation({
+      ...emptyLedger([]),
+      evidenceRecords: [proof],
+    }, {
+      reservation: proofReservation,
+      evidenceBindings: [binding],
+    })).toThrow(/is not eligible for lifecycle operation "create_finding"/);
+  });
+
+  it('rejects a resolution renotification without its exact finding-conflict pair', () => {
+    const invalidReservation = createFindingLifecycleReservation({
+      operation: 'apply_resolution_renotification',
+      targets: [{
+        entityKind: 'finding',
+        entityId: 'F-0001',
+        expectedHead: null,
+      }],
+      evidenceBindingIds: [],
+      authority: { kind: 'verified_evidence' },
+      context: { kind: 'transaction' },
+      reservedAt: OBSERVATION,
+    });
+
+    expect(() => reserveVerifiedLifecycleMutation(emptyLedger([]), {
+      reservation: invalidReservation,
+      evidenceBindings: [],
+    })).toThrow(/requires exactly one finding and one conflict target/);
+  });
+
+  it('rejects an engine policy projection delta that changes an unrelated title', () => {
+    const source = evidenceSource({
+      rawFindingId: 'raw-policy-title',
+      targetFindingId: null,
+      title: 'Original policy target',
+      description: 'Policy authority must not rewrite this claim.',
+    });
+    const createReservation = reservation({
+      operation: 'create_finding',
+      targets: [{
+        entityKind: 'finding',
+        entityId: 'F-0001',
+        expectedHead: null,
+      }],
+      sources: [source],
+    });
+    const created = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(emptyLedger([source]), createReservation),
+      mutation({
+        reservation: createReservation,
+        findings: [finding({ id: 'F-0001', source, revision: 1 })],
+      }),
+    );
+    const waiverReservation: VerifiedLifecycleReservation = {
+      reservation: createFindingLifecycleReservation({
+        operation: 'waive_finding',
+        targets: [{
+          entityKind: 'finding',
+          entityId: 'F-0001',
+          expectedHead: latestHead(created, 'F-0001'),
+        }],
+        evidenceBindingIds: [],
+        authority: {
+          kind: 'engine_policy',
+          decisionKind: 'waive',
+          decisionDigest: sha256('policy-title-change'),
+        },
+        context: { kind: 'transaction' },
+        reservedAt: OBSERVATION,
+      }),
+      evidenceBindings: [],
+    };
+    const pending = reserveVerifiedLifecycleMutation(created, waiverReservation);
+
+    expect(() => applyVerifiedLifecycleMutation(pending, mutation({
+      reservation: waiverReservation,
+      findings: [{
+        ...pending.findings[0]!,
+        title: 'Policy-rewritten title',
+        status: 'waived',
+        lifecycle: 'waived',
+        revision: 2,
+        waivers: [{
+          reason: 'Accepted risk.',
+          evidence: 'Policy decision.',
+          decidedAt: { ...OBSERVATION },
+        }],
+        lastSeen: { ...OBSERVATION },
+      }],
+    }))).toThrow(/changed forbidden projection fields.*title/);
+  });
+
+  it('detaches repeated observation references at the lifecycle transaction projection boundary', () => {
+    const source = evidenceSource({
+      rawFindingId: 'raw-shared-reference',
+      targetFindingId: null,
+      title: 'Shared reference finding',
+      description: 'The proposal intentionally reuses one observation object.',
+    });
+    const target = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: null,
+    };
+    const createReservation = reservation({
+      operation: 'create_finding',
+      targets: [target],
+      sources: [source],
+    });
+    const current = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(emptyLedger([source]), createReservation),
+      mutation({
+        reservation: createReservation,
+        findings: [finding({ id: target.entityId, source, revision: 1 })],
+      }),
+    );
+    const sharedObservation = { ...OBSERVATION };
+    const proposedFinding: FindingLedgerEntry = {
+      ...current.findings[0]!,
+      status: 'waived',
+      lifecycle: 'waived',
+      revision: 2,
+      firstSeen: sharedObservation,
+      lastSeen: sharedObservation,
+      waivers: [{
+        reason: 'Accepted operational risk.',
+        evidence: 'Policy decision.',
+        decidedAt: sharedObservation,
+      }],
+    };
+
+    const { revision: _revision, ...findingChange } = proposedFinding;
+    const next = applyFindingLifecycleCommands({
+      ledger: current,
+      commands: [{
+        operation: 'waive_finding',
+        changes: {
+          findings: [findingChange],
+          conflicts: [],
+        },
+        authority: {
+          kind: 'engine_policy',
+          decisionKind: 'waive',
+          decisionDigest: sha256('waive-shared-reference'),
+        },
+        evidenceSourcesByTarget: new Map(),
+      }],
+      occurredAt: OBSERVATION,
+    });
+
+    const persisted = next.findings[0]!;
+    expect(persisted.status).toBe('waived');
+    expect(persisted.firstSeen).not.toBe(sharedObservation);
+    expect(persisted.firstSeen).not.toBe(persisted.lastSeen);
+    expect(persisted.lastSeen).not.toBe(persisted.waivers?.[0]?.decidedAt);
+  });
+
+  it('accepts only the closed conflict adjudication outcome contract', () => {
+    expect(parseFindingConflictAdjudicationOutput({
+      conflictId: 'C-123',
+      outcome: 'finding_valid',
+      actionableFix: 'Guard the nullable branch.',
+      rationale: 'The bound inputs still demonstrate the defect.',
+    })).toEqual({
+      conflictId: 'C-123',
+      outcome: 'finding_valid',
+      actionableFix: 'Guard the nullable branch.',
+      rationale: 'The bound inputs still demonstrate the defect.',
+    });
+    expect(() => parseFindingConflictAdjudicationOutput({
+      conflictId: 'C-123',
+      outcome: 'finding_stale',
+      findingTransition: 'resolved',
+      evidence: ['src/a.ts:5'],
+    })).toThrow();
+  });
+
+  it.each([
+    ['finding_stale', undefined, 2, 'resolved'],
+    ['evidence_invalid', undefined, 2, 'invalidated'],
+    ['finding_valid', 'Apply the concrete fix.', 2, 'open'],
+    ['finding_valid', undefined, 0, 'open'],
+    ['undetermined', undefined, 0, 'open'],
+  ] as const)(
+    'enforces the adjudication outcome mapping for %s',
+    (outcome, actionableFix, expectedFindingTransitions, expectedStatus) => {
+      const current = adjudicationLedger();
+      const conflict = current.conflicts[0]!;
+      const reserved = reserveFindingConflictAdjudicationLifecycle({
+        ledger: current,
+        conflictId: conflict.id,
+        evidenceHash: sha256(`adjudication:${outcome}:${actionableFix ?? ''}`),
+        originStep: 'reviewers',
+        reservedAt: OBSERVATION,
+      });
+      const applied = applyFindingConflictAdjudication({
+        ledger: reserved.ledger,
+        output: {
+          conflictId: conflict.id,
+          outcome,
+          ...(actionableFix === undefined ? {} : { actionableFix }),
+        },
+        evidenceHash: reserved.ledger.lifecycleReservations.at(-1)!.context.kind
+          === 'conflict_adjudication'
+          ? reserved.ledger.lifecycleReservations.at(-1)!.context.evidenceHash
+          : '',
+        cwd: process.cwd(),
+        context: {
+          workflowName: current.workflowName,
+          ...OBSERVATION,
+        },
+      });
+      const changedFindings = applied.ledger.findings.filter((finding) => (
+        finding.revision
+          !== reserved.ledger.findings.find((candidate) => candidate.id === finding.id)!.revision
+      ));
+      const changedConflict = applied.ledger.conflicts.find(
+        (candidate) => candidate.id === conflict.id,
+      )!;
+      const result = applyVerifiedLifecycleMutation(reserved.ledger, {
+        mutationId: reserved.mutationId,
+        findings: changedFindings,
+        conflicts: [changedConflict],
+        occurredAt: OBSERVATION,
+      });
+
+      expect(changedFindings).toHaveLength(expectedFindingTransitions);
+      expect(result.findings.map((finding) => finding.status))
+        .toEqual([expectedStatus, expectedStatus]);
+      expect(result.lifecycleEvents.at(-1)?.transitions).toHaveLength(
+        expectedFindingTransitions + 1,
+      );
+    },
+  );
+
+  it('applies reopened + conflict through production assembly', () => {
+    let current = adjudicationLedger();
+    const resolutionSource = evidenceSource({
+      rawFindingId: 'raw-semantic-resolution',
+      targetFindingId: 'F-0001',
+      title: 'Finding A was resolved',
+      description: 'The original finding was fixed.',
+      relation: 'resolution_confirmation',
+    });
+    const before = current.findings.find((finding) => finding.id === 'F-0001')!;
+    current = applyFindingLifecycleCommands({
+      ledger: {
+        ...current,
+        rawFindings: [...current.rawFindings, resolutionSource.raw],
+        evidenceRecords: [...current.evidenceRecords, resolutionSource.record],
+      },
+      commands: [{
+        operation: 'resolve_finding',
+        changes: {
+          findings: [{
+            ...before,
+            status: 'resolved',
+            lifecycle: 'resolved',
+            rawFindingIds: [...before.rawFindingIds, resolutionSource.raw.rawFindingId].sort(),
+            evidenceIds: [...before.evidenceIds, resolutionSource.record.evidenceId].sort(),
+            resolvedAt: OBSERVATION.timestamp,
+            resolvedEvidence: 'Verified resolution.',
+          }],
+          conflicts: [],
+        },
+        authority: { kind: 'verified_evidence' },
+        evidenceSourcesByTarget: new Map([[
+          'finding\0F-0001',
+          {
+            sourceRawFindingIds: [resolutionSource.raw.rawFindingId],
+            authorityEvidenceIds: [],
+          },
+        ]]),
+      }],
+      occurredAt: OBSERVATION,
+    });
+    const reopenedSource = evidenceSource({
+      rawFindingId: 'raw-semantic-reopened',
+      targetFindingId: 'F-0001',
+      title: 'Finding A recurred',
+      description: 'The resolved issue is observable again.',
+      relation: 'reopened',
+    });
+    const conflictSource = evidenceSource({
+      rawFindingId: 'raw-semantic-reopened-conflict',
+      targetFindingId: 'F-0001',
+      title: 'Reopened conflict',
+      description: 'The reopened finding has conflicting evidence.',
+      relation: 'persists',
+    });
+    const managerOutput: FindingManagerOutput = {
+      matches: [],
+      newFindings: [],
+      resolvedFindings: [],
+      reopenedFindings: [{
+        findingId: 'F-0001',
+        rawFindingIds: [reopenedSource.raw.rawFindingId],
+        evidence: 'The defect recurred.',
+      }],
+      conflicts: [{
+        findingIds: ['F-0001'],
+        rawFindingIds: [conflictSource.raw.rawFindingId],
+        description: 'The reopened claim remains disputed.',
+      }],
+      resolvedConflicts: [],
+      waivedFindings: [],
+      disputeNotes: [],
+      invalidatedFindings: [],
+      duplicateFindings: [],
+      dismissedFindings: [],
+    };
+    const plan = semanticManagerPlan({
+      current,
+      sources: [reopenedSource, conflictSource],
+      managerOutput,
+    });
+    const applied = applySemanticManagerPlan({ current, plan, managerOutput });
+
+    expect(applied.lifecycleEvents.slice(current.lifecycleEvents.length).map(
+      (event) => event.operation,
+    )).toEqual(['reopen_finding', 'create_conflict']);
+  });
+
+  it('rejects missing, extra, and revision-only adjudication finding deltas', () => {
+    const current = adjudicationLedger();
+    const conflict = current.conflicts[0]!;
+    const evidenceHash = sha256('adjudication-invalid-deltas');
+    const reserved = reserveFindingConflictAdjudicationLifecycle({
+      ledger: current,
+      conflictId: conflict.id,
+      evidenceHash,
+      originStep: 'reviewers',
+      reservedAt: OBSERVATION,
+    });
+    const applied = applyFindingConflictAdjudication({
+      ledger: reserved.ledger,
+      output: { conflictId: conflict.id, outcome: 'finding_stale' },
+      evidenceHash,
+      cwd: process.cwd(),
+      context: {
+        workflowName: current.workflowName,
+        ...OBSERVATION,
+      },
+    });
+    const changedConflict = applied.ledger.conflicts[0]!;
+    const changedFindings = applied.ledger.findings;
+
+    expect(() => applyVerifiedLifecycleMutation(reserved.ledger, {
+      mutationId: reserved.mutationId,
+      findings: changedFindings.slice(0, 1),
+      conflicts: [changedConflict],
+      occurredAt: OBSERVATION,
+    })).toThrow(/finding transitions do not match its outcome/);
+
+    expect(() => applyVerifiedLifecycleMutation(reserved.ledger, {
+      mutationId: reserved.mutationId,
+      findings: [
+        ...changedFindings,
+        { ...changedFindings[0]!, id: 'F-9999' },
+      ],
+      conflicts: [changedConflict],
+      occurredAt: OBSERVATION,
+    })).toThrow(/outside its reservation/);
+
+    expect(() => applyVerifiedLifecycleMutation(reserved.ledger, {
+      mutationId: reserved.mutationId,
+      findings: reserved.ledger.findings.map((finding) => ({
+        ...finding,
+        revision: finding.revision + 1,
+      })),
+      conflicts: [changedConflict],
+      occurredAt: OBSERVATION,
+    })).toThrow(/revision-only finding transition/);
+
+    expect(() => applyVerifiedLifecycleMutation(reserved.ledger, {
+      mutationId: reserved.mutationId,
+      findings: changedFindings.map((finding, index) => (
+        index === 0 ? { ...finding, suggestion: 'Unrelated mutation.' } : finding
+      )),
+      conflicts: [changedConflict],
+      occurredAt: OBSERVATION,
+    })).toThrow(/invalid finding delta/);
+  });
+
+  it.each([
+    ['match + dispute', true, false, true],
+    ['match + conflict', true, true, false],
+    ['match + conflict + dispute', true, true, true],
+  ] as const)(
+    'applies %s as ordered semantic commands through production assembly',
+    (_label, includeMatch, includeConflict, includeDispute) => {
+      const current = adjudicationLedger();
+      const matchSource = evidenceSource({
+        rawFindingId: `raw-semantic-match-${includeConflict}-${includeDispute}`,
+        targetFindingId: 'F-0001',
+        title: 'Finding A persists',
+        description: 'The first finding remains observable.',
+        relation: 'persists',
+      });
+      const conflictSource = evidenceSource({
+        rawFindingId: `raw-semantic-conflict-${includeDispute}`,
+        targetFindingId: 'F-0001',
+        title: 'Conflicting manager observation',
+        description: 'A separate observation conflicts with F-0001.',
+        relation: 'persists',
+      });
+      const sources = [
+        ...(includeMatch ? [matchSource] : []),
+        ...(includeConflict ? [conflictSource] : []),
+      ];
+      const managerOutput: FindingManagerOutput = {
+        matches: includeMatch
+          ? [{ findingId: 'F-0001', rawFindingIds: [matchSource.raw.rawFindingId] }]
+          : [],
+        newFindings: [],
+        resolvedFindings: [],
+        reopenedFindings: [],
+        conflicts: includeConflict
+          ? [{
+              findingIds: ['F-0001'],
+              rawFindingIds: [conflictSource.raw.rawFindingId],
+              description: 'The manager retained both incompatible claims.',
+            }]
+          : [],
+        resolvedConflicts: [],
+        waivedFindings: [],
+        disputeNotes: includeDispute
+          ? [{
+              findingId: 'F-0001',
+              reason: 'The proposed dispute was rejected.',
+              evidence: 'The persisted observation remains authoritative.',
+            }]
+          : [],
+        invalidatedFindings: [],
+        duplicateFindings: [],
+        dismissedFindings: [],
+      };
+      const plan = semanticManagerPlan({ current, sources, managerOutput });
+      const applied = applySemanticManagerPlan({ current, plan, managerOutput });
+      const operations = applied.lifecycleEvents
+        .slice(current.lifecycleEvents.length)
+        .map((event) => event.operation);
+
+      expect(operations).toEqual([
+        ...(includeMatch ? ['persist_finding' as const] : []),
+        ...(includeDispute ? ['record_dispute' as const] : []),
+        ...(includeConflict ? ['create_conflict' as const] : []),
+      ]);
+      expect(applied.findings.find((finding) => finding.id === 'F-0001')?.disputes ?? [])
+        .toHaveLength(includeDispute ? 1 : 0);
+    },
+  );
+
+  it.each([
+    ['canonical + match', 'match'],
+    ['canonical + conflict', 'conflict'],
+    ['canonical + canonical', 'canonical'],
+  ] as const)(
+    'applies %s without final-projection operation preemption',
+    (_label, overlay) => {
+      let current = adjudicationLedger();
+      if (overlay === 'canonical') {
+        const thirdSource = evidenceSource({
+          rawFindingId: 'raw-semantic-third',
+          targetFindingId: null,
+          title: 'Finding C',
+          description: 'Third duplicate candidate.',
+        });
+        const created = finding({ id: 'F-0003', source: thirdSource, revision: 1 });
+        const { revision: _revision, ...projection } = created;
+        current = applyFindingLifecycleCommands({
+          ledger: {
+            ...current,
+            rawFindings: [...current.rawFindings, thirdSource.raw],
+            evidenceRecords: [...current.evidenceRecords, thirdSource.record],
+          },
+          commands: [{
+            operation: 'create_finding',
+            changes: { findings: [projection], conflicts: [] },
+            authority: { kind: 'verified_evidence' },
+            evidenceSourcesByTarget: new Map([[
+              'finding\0F-0003',
+              {
+                sourceRawFindingIds: [thirdSource.raw.rawFindingId],
+                authorityEvidenceIds: [],
+              },
+            ]]),
+          }],
+          occurredAt: OBSERVATION,
+        });
+      }
+      const overlaySource = evidenceSource({
+        rawFindingId: `raw-semantic-${overlay}`,
+        targetFindingId: 'F-0001',
+        title: `Canonical ${overlay} observation`,
+        description: `Canonical overlay for ${overlay}.`,
+        relation: 'persists',
+      });
+      const sources = overlay === 'canonical' ? [] : [overlaySource];
+      const managerOutput: FindingManagerOutput = {
+        matches: overlay === 'match'
+          ? [{ findingId: 'F-0001', rawFindingIds: [overlaySource.raw.rawFindingId] }]
+          : [],
+        newFindings: [],
+        resolvedFindings: [],
+        reopenedFindings: [],
+        conflicts: overlay === 'conflict'
+          ? [{
+              findingIds: ['F-0001'],
+              rawFindingIds: [overlaySource.raw.rawFindingId],
+              description: 'Canonical finding also participates in a conflict.',
+            }]
+          : [],
+        resolvedConflicts: [],
+        waivedFindings: [],
+        disputeNotes: [],
+        invalidatedFindings: [],
+        duplicateFindings: [
+          { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0002'] },
+          ...(overlay === 'canonical'
+            ? [{ canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0003'] }]
+            : []),
+        ],
+        dismissedFindings: [],
+      };
+      const plan = semanticManagerPlan({ current, sources, managerOutput });
+      const applied = applySemanticManagerPlan({ current, plan, managerOutput });
+      const operations = applied.lifecycleEvents
+        .slice(current.lifecycleEvents.length)
+        .map((event) => event.operation);
+
+      expect(operations.filter((operation) => operation === 'supersede_findings'))
+        .toHaveLength(overlay === 'canonical' ? 2 : 1);
+      expect(applied.findings.find((finding) => finding.id === 'F-0001')?.status)
+        .toBe('open');
+    },
+  );
+
+  it.each([
+    ['canonical + canonical', false],
+    ['canonical + match', true],
+  ] as const)(
+    'binds duplicate engine proofs to each exact command in %s production flow',
+    (_label, includeMatch) => {
+      const current = semanticDuplicateLedger(includeMatch ? 2 : 3);
+      const matchSource = evidenceSource({
+        rawFindingId: 'raw-semantic-proofed-match',
+        targetFindingId: 'F-0001',
+        title: 'Same duplicate claim',
+        description: 'Every candidate has the same claim identity.',
+        relation: 'persists',
+      });
+      const managerOutput: FindingManagerOutput = {
+        matches: includeMatch
+          ? [{ findingId: 'F-0001', rawFindingIds: [matchSource.raw.rawFindingId] }]
+          : [],
+        newFindings: [],
+        resolvedFindings: [],
+        reopenedFindings: [],
+        conflicts: [],
+        resolvedConflicts: [],
+        waivedFindings: [],
+        disputeNotes: [],
+        invalidatedFindings: [],
+        duplicateFindings: [
+          { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0002'] },
+          ...(!includeMatch
+            ? [{ canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0003'] }]
+            : []),
+        ],
+        dismissedFindings: [],
+      };
+      const plan = semanticManagerPlan({
+        current,
+        sources: includeMatch ? [matchSource] : [],
+        managerOutput,
+      });
+      const applied = applyProofedSemanticManagerPlan({ current, plan, managerOutput });
+      const events = applied.lifecycleEvents.slice(current.lifecycleEvents.length);
+
+      expect(events.map((event) => event.operation)).toEqual(
+        includeMatch
+          ? ['persist_finding', 'supersede_findings']
+          : ['supersede_findings', 'supersede_findings'],
+      );
+      const supersedeEvents = events.filter(
+        (event) => event.operation === 'supersede_findings',
+      );
+      const expectedTargetSets = includeMatch
+        ? [['F-0001', 'F-0002']]
+        : [['F-0001', 'F-0002'], ['F-0001', 'F-0003']];
+      supersedeEvents.forEach((event, index) => {
+        const proofSubjects = event.evidenceBindingIds.flatMap((bindingId) => {
+          const binding = applied.evidenceBindings.find(
+            (candidate) => candidate.bindingId === bindingId,
+          )!;
+          const record = applied.evidenceRecords.find(
+            (candidate) => candidate.evidenceId === binding.evidenceId,
+          )!;
+          return record.kind === 'engine_proof'
+            && record.subject.kind === 'finding_claim_sets_equal'
+            ? [record.subject.findingIds]
+            : [];
+        });
+        expect(proofSubjects).toHaveLength(2);
+        expect(proofSubjects).toEqual([
+          expectedTargetSets[index],
+          expectedTargetSets[index],
+        ]);
+        expect(event.transitions.map((transition) => transition.after.entityId))
+          .toEqual(expectedTargetSets[index]);
+      });
+      if (includeMatch) {
+        const persistEvent = events[0]!;
+        expect(persistEvent.evidenceBindingIds.some((bindingId) => {
+          const binding = applied.evidenceBindings.find(
+            (candidate) => candidate.bindingId === bindingId,
+          )!;
+          return applied.evidenceRecords.some((record) => (
+            record.evidenceId === binding.evidenceId && record.kind === 'engine_proof'
+          ));
+        })).toBe(false);
+      }
+    },
+  );
+
+  it('records interpretation recovery failures in the WAL without mutating findings', () => {
+    const baseInterpretationKey = sha256('interpretation-base');
+    const firstFailure = {
+      interpretationKey: sha256('interpretation-attempt-1'),
+      baseInterpretationKey,
+      attemptOrdinal: 1,
+      reviewerStableKey: 'reviewer',
+      lineageKey: 'lineage',
+      candidateEvidenceHash: sha256('candidate'),
+      canonicalIntegrityDigest: sha256('canonical'),
+      startedAt: { ...OBSERVATION },
+      promptPreconditions: [],
+      stage: 'interpretation_retryable_failure' as const,
+      failedAt: { ...OBSERVATION },
+      failureCode: 'source_missing' as const,
+      failureReason: 'The source was unavailable.',
+      sourceRawFindingId: 'missing-raw',
+      provisionalFindingId: 'F-0001',
+    };
+    const ledger = {
+      ...emptyLedger([]),
+      interpretations: [firstFailure],
+    };
+    const next = applyInterpretationRecoveryFailures({
+      ledger,
+      failures: [{
+        kind: 'recovery_contract_mismatch',
+        outcome: 'audit_only',
+        recoveryOrigin: {
+          provisionalFindingId: 'F-0001',
+          expectedProvisionalRevision: 1,
+          expectedProvisionalStableKey: 'stable',
+          expectedProvisionalLineageKey: 'lineage',
+          expectedRecoveryReviewerStableKey: 'reviewer',
+        },
+        sourceRawFindingId: 'missing-raw',
+        reason: 'The recovered payload no longer matches its contract.',
+      }],
+      observation: { ...OBSERVATION, timestamp: '2026-07-29T00:01:00.000Z' },
+    });
+
+    expect(next.findings).toBe(ledger.findings);
+    expect(next.interpretations).toHaveLength(2);
+    expect(next.interpretations[1]).toMatchObject({
+      attemptOrdinal: 2,
+      stage: 'interpretation_terminal_failure',
+      failureCode: 'recovery_contract_mismatch',
+    });
+    expect(() => FindingInterpretationRecordSchema.parse(next.interpretations[1])).not.toThrow();
+  });
+
+  it('persists a pending reservation before applying its decision exactly once', () => {
+    const source = evidenceSource({
+      rawFindingId: 'raw-create',
+      targetFindingId: null,
+      title: 'Created finding',
+      description: 'Verified create claim.',
+    });
+    const target = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: null,
+    };
+    const reservedInput = reservation({
+      operation: 'create_finding',
+      targets: [target],
+      sources: [source],
+    });
+    const base = emptyLedger([source]);
+    const pending = reserveVerifiedLifecycleMutation(base, reservedInput);
+
+    expect(pending.findings).toEqual([]);
+    expect(pending.lifecycleReservations).toHaveLength(1);
+    expect(pending.lifecycleEvents).toEqual([]);
+    expect(reserveVerifiedLifecycleMutation(pending, {
+      ...reservedInput,
+      reservation: createFindingLifecycleReservation({
+        operation: 'create_finding',
+        targets: [target],
+        evidenceBindingIds: reservedInput.reservation.evidenceBindingIds,
+        authority: { kind: 'verified_evidence' },
+        context: { kind: 'transaction' },
+        reservedAt: { ...OBSERVATION, timestamp: '2026-07-29T00:01:00.000Z' },
+      }),
+    })).toBe(pending);
+
+    const result = mutation({
+      reservation: reservedInput,
+      findings: [finding({
+        id: target.entityId,
+        source,
+        revision: 1,
+      })],
+    });
+    const applied = applyVerifiedLifecycleMutation(pending, result);
+
+    expect(applied.lifecycleReservations).toHaveLength(1);
+    expect(applied.lifecycleEvents).toHaveLength(1);
+    expect(applyVerifiedLifecycleMutation(applied, result)).toBe(applied);
+    expect(() => applyVerifiedLifecycleMutation(applied, {
+      ...result,
+      findings: [{ ...result.findings[0]!, title: 'Different result' }],
+    })).toThrow(/changed its result payload/);
+    expect(() => assertFindingLifecycleAuthorityInvariant(applied)).not.toThrow();
+  });
+
+  it('requires a full event head and rejects implicit genesis or stale premises', () => {
+    const createSource = evidenceSource({
+      rawFindingId: 'raw-create',
+      targetFindingId: null,
+      title: 'Finding',
+      description: 'Finding description.',
+    });
+    const createTarget = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: null,
+    };
+    const createReservation = reservation({
+      operation: 'create_finding',
+      targets: [createTarget],
+      sources: [createSource],
+    });
+    const created = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(emptyLedger([createSource]), createReservation),
+      mutation({
+        reservation: createReservation,
+        findings: [finding({
+          id: createTarget.entityId,
+          source: createSource,
+          revision: 1,
+        })],
+      }),
+    );
+    const resolveSource = evidenceSource({
+      rawFindingId: 'raw-resolve',
+      targetFindingId: 'F-0001',
+      title: 'Finding',
+      description: 'Finding description.',
+      relation: 'resolution_confirmation',
+    });
+    const withResolveEvidence: FindingLedger = {
+      ...created,
+      evidenceRecords: [...created.evidenceRecords, resolveSource.record],
+      rawFindings: [...created.rawFindings, resolveSource.raw],
+    };
+    const resolveTarget = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: latestHead(created, 'F-0001'),
+    };
+    const resolveReservation = reservation({
+      operation: 'resolve_finding',
+      targets: [resolveTarget],
+      sources: [resolveSource],
+    });
+    const pending = reserveVerifiedLifecycleMutation(
+      withResolveEvidence,
+      resolveReservation,
+    );
+    const resolved = applyVerifiedLifecycleMutation(pending, mutation({
+      reservation: resolveReservation,
+      findings: [finding({
+        id: 'F-0001',
+        source: createSource,
+        revision: 2,
+        evidenceIds: [
+          createSource.record.evidenceId,
+          resolveSource.record.evidenceId,
+        ],
+        status: 'resolved',
+        lifecycle: 'resolved',
+      })],
+    }));
+
+    expect(resolved.lifecycleEvents[1]?.transitions[0]?.before)
+      .toEqual(resolveTarget.expectedHead);
+    const persistSource = evidenceSource({
+      rawFindingId: 'raw-persist',
+      targetFindingId: 'F-0001',
+      title: 'Finding',
+      description: 'Finding description.',
+      relation: 'persists',
+    });
+    const resolvedWithPersistEvidence = {
+      ...resolved,
+      evidenceRecords: [...resolved.evidenceRecords, persistSource.record],
+      rawFindings: [...resolved.rawFindings, persistSource.raw],
+    };
+    expect(() => reserveVerifiedLifecycleMutation(resolvedWithPersistEvidence, reservation({
+      operation: 'persist_finding',
+      targets: [{
+        ...resolveTarget,
+        expectedHead: {
+          ...latestHead(resolved, 'F-0001'),
+          projectionDigest: sha256('stale-projection'),
+        },
+      }],
+      sources: [persistSource],
+    }))).toThrow(/stale full head/);
+    expect(() => assertFindingLifecycleAuthorityInvariant({
+      ...emptyLedger([createSource]),
+      findings: [finding({
+        id: 'F-0001',
+        source: createSource,
+        revision: 1,
+      })],
+    })).toThrow(/does not match the current entity projection/);
+  });
+
+  it('binds evidence to raw integrity, claim identity, and proof target semantics', () => {
+    const source = evidenceSource({
+      rawFindingId: 'raw-create',
+      targetFindingId: null,
+      title: 'Expected claim',
+      description: 'Expected description.',
+    });
+    const target = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: null,
+    };
+    const valid = reservation({
+      operation: 'create_finding',
+      targets: [target],
+      sources: [source],
+    });
+    const forgedBinding: FindingEvidenceBinding = {
+      ...valid.evidenceBindings[0]!,
+      sourceRawIntegrityDigest: sha256('stale-raw'),
+    };
+    const forged = {
+      reservation: createFindingLifecycleReservation({
+        operation: 'create_finding',
+        targets: [target],
+        evidenceBindingIds: [forgedBinding.bindingId],
+        authority: { kind: 'verified_evidence' },
+        context: { kind: 'transaction' },
+        reservedAt: OBSERVATION,
+      }),
+      evidenceBindings: [forgedBinding],
+    };
+    expect(() => reserveVerifiedLifecycleMutation(emptyLedger([source]), forged))
+      .toThrow(/canonical content address/);
+
+    const pending = reserveVerifiedLifecycleMutation(emptyLedger([source]), valid);
+    expect(() => applyVerifiedLifecycleMutation(pending, mutation({
+      reservation: valid,
+      findings: [{
+        ...finding({
+          id: 'F-0001',
+          source,
+          revision: 1,
+        }),
+        title: 'Unrelated claim',
+      }],
+    }))).toThrow(/does not match the created finding claim/);
+  });
+
+  it('enforces the closed operation-authority allowlist and empty policy bindings', () => {
+    const source = evidenceSource({
+      rawFindingId: 'raw-create',
+      targetFindingId: null,
+      title: 'Policy target',
+      description: 'Policy target description.',
+    });
+    const createTarget = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: null,
+    };
+    const createReservation = reservation({
+      operation: 'create_finding',
+      targets: [createTarget],
+      sources: [source],
+    });
+    const created = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(emptyLedger([source]), createReservation),
+      mutation({
+        reservation: createReservation,
+        findings: [finding({ id: 'F-0001', source, revision: 1 })],
+      }),
+    );
+    const target = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: latestHead(created, 'F-0001'),
+    };
+    const policyReservation = createFindingLifecycleReservation({
+      operation: 'waive_finding',
+      targets: [target],
+      evidenceBindingIds: [],
+      authority: {
+        kind: 'engine_policy',
+        decisionKind: 'waive',
+        decisionDigest: sha256('waive-policy'),
+      },
+      context: { kind: 'transaction' },
+      reservedAt: OBSERVATION,
+    });
+    expect(() => reserveVerifiedLifecycleMutation(created, {
+      reservation: policyReservation,
+      evidenceBindings: [],
+    })).not.toThrow();
+
+    const mismatchedPolicy = createFindingLifecycleReservation({
+      operation: 'waive_finding',
+      targets: [target],
+      evidenceBindingIds: [],
+      authority: {
+        kind: 'engine_policy',
+        decisionKind: 'dismiss',
+        decisionDigest: sha256('dismiss-policy'),
+      },
+      context: { kind: 'transaction' },
+      reservedAt: OBSERVATION,
+    });
+    expect(() => reserveVerifiedLifecycleMutation(created, {
+      reservation: mismatchedPolicy,
+      evidenceBindings: [],
+    })).toThrow(/rejects authority "engine_policy:dismiss"/);
+
+    const policySource = evidenceSource({
+      rawFindingId: 'raw-policy',
+      targetFindingId: 'F-0001',
+      title: source.raw.title,
+      description: source.raw.description,
+      relation: 'persists',
+    });
+    const binding = createFindingEvidenceBinding({
+      evidenceId: policySource.record.evidenceId,
+      claimIdentityHash: policySource.claimIdentityHash,
+      sourceRawFindingId: policySource.raw.rawFindingId,
+      sourceRawIntegrityDigest: computeRawFindingIntegrityDigest(policySource.raw),
+      operation: 'waive_finding',
+      target,
+    });
+    const withPolicySource = {
+      ...created,
+      evidenceRecords: [...created.evidenceRecords, policySource.record],
+      rawFindings: [...created.rawFindings, policySource.raw],
+    };
+    const boundPolicy = createFindingLifecycleReservation({
+      operation: 'waive_finding',
+      targets: [target],
+      evidenceBindingIds: [binding.bindingId],
+      authority: {
+        kind: 'engine_policy',
+        decisionKind: 'waive',
+        decisionDigest: sha256('bound-policy'),
+      },
+      context: { kind: 'transaction' },
+      reservedAt: OBSERVATION,
+    });
+    expect(() => reserveVerifiedLifecycleMutation(withPolicySource, {
+      reservation: boundPolicy,
+      evidenceBindings: [binding],
+    })).toThrow(/ineligible operation|must not carry evidence bindings/);
+
+    const wrongSystemOperation = createFindingLifecycleReservation({
+      operation: 'waive_finding',
+      targets: [target],
+      evidenceBindingIds: [],
+      authority: { kind: 'system', action: 'record_recovery_attempt' },
+      context: { kind: 'transaction' },
+      reservedAt: OBSERVATION,
+    });
+    expect(() => reserveVerifiedLifecycleMutation(created, {
+      reservation: wrongSystemOperation,
+      evidenceBindings: [],
+    })).toThrow(/rejects authority "system:record_recovery_attempt"/);
+  });
+
+  it('rejects reservation or event history reordering and noncanonical binding order', () => {
+    const sources = ['F-0001', 'F-0002'].map((entityId, index) => evidenceSource({
+      rawFindingId: `raw-${index + 1}`,
+      targetFindingId: null,
+      title: `Finding ${entityId}`,
+      description: `Description ${entityId}.`,
+    }));
+    const inputs = sources.map((source, index) => {
+      const target = {
+        entityKind: 'finding' as const,
+        entityId: `F-${String(index + 1).padStart(4, '0')}`,
+        expectedHead: null,
+      };
+      const reserved = reservation({
+        operation: 'create_finding',
+        targets: [target],
+        sources: [source],
+      });
+      return {
+        reserved,
+        result: mutation({
+          reservation: reserved,
+          findings: [finding({
+            id: target.entityId,
+            source,
+            revision: 1,
+          })],
+        }),
+      };
+    });
+    const firstPending = reserveVerifiedLifecycleMutation(
+      emptyLedger(sources),
+      inputs[0]!.reserved,
+    );
+    const bothPending = reserveVerifiedLifecycleMutation(
+      firstPending,
+      inputs[1]!.reserved,
+    );
+    expect(() => assertFindingLedgerAppendOnlyTransition(firstPending, {
+      ...bothPending,
+      lifecycleReservations: [...bothPending.lifecycleReservations].reverse(),
+    })).toThrow(/registry prefix changed/);
+    expect(() => assertFindingLedgerAppendOnlyTransition(firstPending, {
+      ...bothPending,
+      evidenceBindings: [...bothPending.evidenceBindings].reverse(),
+    })).toThrow(/canonical binary-sorted set/);
+
+    const firstApplied = applyVerifiedLifecycleMutation(bothPending, inputs[0]!.result);
+    const bothApplied = applyVerifiedLifecycleMutation(firstApplied, inputs[1]!.result);
+    expect(() => assertFindingLedgerAppendOnlyTransition(firstApplied, {
+      ...bothApplied,
+      lifecycleEvents: [...bothApplied.lifecycleEvents].reverse(),
+    })).toThrow(/registry prefix changed/);
+  });
+
+  it('durably reuses a pending raw recovery attempt bound to the full lifecycle head', async () => {
+    const source = evidenceSource({
+      rawFindingId: 'raw-provisional',
+      targetFindingId: null,
+      title: 'Ambiguous finding',
+      description: 'Needs replay adjudication.',
+    });
+    const target = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: null,
+    };
+    const createReservation = reservation({
+      operation: 'create_finding',
+      targets: [target],
+      sources: [source],
+    });
+    const provisionalFinding: FindingLedgerEntry = {
+      ...finding({ id: 'F-0001', source, revision: 1 }),
+      provisional: {
+        kind: 'raw-adjudication-unresolved',
+        stableKey: sha256('stable-key'),
+        lineageKey: sha256('lineage-key'),
+        sourceRawFindingIds: [source.raw.rawFindingId],
+        reason: 'The raw claim needs another bounded interpretation.',
+        firstObservedAt: { ...OBSERVATION },
+        lastObservedAt: { ...OBSERVATION },
+        interpretationEpochs: 0,
+        gateEffect: 'block',
+        firstObservedRound: 1,
+        recoveryReviewerStableKey: 'reviewer',
+      },
+    };
+    const created = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(emptyLedger([source]), createReservation),
+      mutation({
+        reservation: createReservation,
+        findings: [provisionalFinding],
+      }),
+    );
+    const projectCwd = mkdtempSync(join(tmpdir(), 'takt-raw-recovery-'));
+    temporaryDirectories.add(projectCwd);
+    const reportDir = join(projectCwd, '.takt', 'runs', 'run-1', 'reports');
+    mkdirSync(reportDir, { recursive: true });
+    const store = createFindingLedgerStore({
+      projectCwd,
+      reportDir,
+      runId: 'run-1',
+      workflowName: 'default',
+      ledgerPath: '.takt/findings/default.json',
+      rawFindingsPath: '.takt/findings/raw',
+    });
+    await store.updateLedger(() => ({ ledger: created, result: undefined }));
+
+    const first = await reserveRawAdjudicationRecovery(
+      store,
+      OBSERVATION,
+      sha256('review-scope'),
+    );
+    const second = await reserveRawAdjudicationRecovery(store, {
+      ...OBSERVATION,
+      runId: 'run-resumed',
+      timestamp: '2026-07-29T00:05:00.000Z',
+    }, sha256('review-scope'));
+
+    expect(first.result).toHaveLength(1);
+    expect(second.result).toHaveLength(1);
+    expect(second.result[0]?.attemptId).toBe(first.result[0]?.attemptId);
+    expect(second.ledger.rawRecoveryAttempts).toHaveLength(1);
+    expect(second.result[0]?.expectedHead).toEqual(latestHead(created, 'F-0001'));
+  });
+
+  it('keeps File and SQLite authority equivalent across pending, apply, stage, and resume', async () => {
+    const projectCwd = mkdtempSync(join(tmpdir(), 'takt-lifecycle-file-'));
+    temporaryDirectories.add(projectCwd);
+    const reportDir = join(projectCwd, '.takt', 'runs', 'run-1', 'reports');
+    mkdirSync(reportDir, { recursive: true });
+    const fileStore = createFindingLedgerStore({
+      projectCwd,
+      reportDir,
+      runId: 'run-1',
+      workflowName: 'default',
+      ledgerPath: '.takt/findings/default.json',
+      rawFindingsPath: '.takt/findings/raw',
+    });
+    const sqlite = createRealRunStorage({ findingContractEnabled: true });
+    sqlite.clock.set(Date.parse(OBSERVATION.timestamp));
+    const owner = sqlite.root.claimLease({
+      ownerKey: 'lifecycle-parity',
+      leaseDurationMs: 10_000,
+    });
+    const runtime = sqlite.root.runtime({ lease: owner });
+    const execution = runtime.execution.startStep({
+      stepKey: 'lifecycle-parity',
+      expectedScopeRevision: 0,
+    });
+    const sqliteStore = runtime.findingManager({
+      workflowName: 'default',
+      producer: execution.handle,
+    });
+    const source = evidenceSource({
+      rawFindingId: 'raw-create',
+      targetFindingId: null,
+      title: 'Stored finding',
+      description: 'Stored description.',
+    });
+    for (const store of [fileStore, sqliteStore]) {
+      await store.updateLedger((current) => ({
+        ledger: {
+          ...current,
+          evidenceRecords: [source.record],
+          rawFindings: [source.raw],
+        },
+        result: undefined,
+      }));
+    }
+    const target = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: null,
+    };
+    const reservedInput = reservation({
+      operation: 'create_finding',
+      targets: [target],
+      sources: [source],
+    });
+    const result = mutation({
+      reservation: reservedInput,
+      findings: [finding({
+        id: 'F-0001',
+        source,
+        revision: 1,
+      })],
+    });
+    for (const store of [fileStore, sqliteStore]) {
+      await store.updateLedger((current) => ({
+        ledger: reserveVerifiedLifecycleMutation(current, reservedInput),
+        result: undefined,
+      }));
+      expect(store.loadLedger().lifecycleEvents).toEqual([]);
+      await store.updateLedger((current) => ({
+        ledger: applyVerifiedLifecycleMutation(current, result),
+        result: undefined,
+      }));
+      await store.updateLedger((current) => {
+        const attempt = createRawRecoveryAttempt({
+          provisionalFindingId: 'F-0001',
+          expectedHead: latestHead(current, 'F-0001'),
+          sourceRawFindingId: source.raw.rawFindingId,
+          sourceRawIntegrityDigest: computeRawFindingIntegrityDigest(source.raw),
+          promptSnapshotDigest: sha256('raw-recovery-prompt'),
+          attempt: 1,
+          startedAt: OBSERVATION,
+        });
+        return {
+          ledger: {
+            ...current,
+            rawRecoveryAttempts: [...current.rawRecoveryAttempts, attempt],
+            rawRecoveryResults: [
+              ...current.rawRecoveryResults,
+              createRawRecoveryResult({
+                attemptId: attempt.attemptId,
+                replayRawFindingId: null,
+                mutationIds: [],
+                outcome: 'failed',
+                completedAt: OBSERVATION,
+              }),
+            ],
+          },
+          result: undefined,
+        };
+      });
+    }
+    const authority = (ledger: FindingLedger) => ({
+      findings: ledger.findings,
+      evidenceBindings: ledger.evidenceBindings,
+      lifecycleReservations: ledger.lifecycleReservations,
+      lifecycleEvents: ledger.lifecycleEvents,
+      rawRecoveryAttempts: ledger.rawRecoveryAttempts,
+      rawRecoveryResults: ledger.rawRecoveryResults,
+    });
+    expect(authority(sqliteStore.loadLedger())).toEqual(authority(fileStore.loadLedger()));
+
+    const roundMarker = 'lifecycle-pending-round';
+    for (const store of [fileStore, sqliteStore]) {
+      await store.commitManagerLedger((current) => ({
+        ledger: {
+          ...current,
+          stopBudget: {
+            roundMarkers: [roundMarker],
+            firstRoundAt: current.updatedAt,
+            exhausted: false,
+          },
+        },
+        publication: {
+          roundMarker,
+          report: {
+            version: 1,
+            runId: store.runId,
+            stepName: 'findings-manager',
+            retryCount: 0,
+            ledgerUpdated: true,
+            finalErrors: [],
+            attempts: [],
+          },
+        },
+        result: undefined,
+      }));
+    }
+    expect(sqliteStore.loadLedger().pendingManagerCommit?.completed.lifecycleEvents)
+      .toEqual(fileStore.loadLedger().pendingManagerCommit?.completed.lifecycleEvents);
+
+    const resumed = resumeRealRunStorage(sqlite.root, {
+      slug: 'lifecycle-resume',
+      findingContractEnabled: true,
+    });
+    const resumedLedger = resumed.root.readResumeSnapshot().findingLedger?.ledger;
+    expect(resumedLedger).toBeDefined();
+    expect(authority(resumedLedger!)).toEqual(authority(sqliteStore.loadLedger()));
+    expect(resumedLedger?.pendingManagerCommit?.completed.lifecycleEvents)
+      .toEqual(sqliteStore.loadLedger().pendingManagerCommit?.completed.lifecycleEvents);
+  });
+
+  it('rejects a raw recovery result that borrows an unrelated lifecycle event', () => {
+    const source = evidenceSource({
+      rawFindingId: 'raw-recovery-source',
+      targetFindingId: null,
+      title: 'Recovery source',
+      description: 'The provisional finding under recovery.',
+    });
+    const provisionalReservation = reservation({
+      operation: 'create_finding',
+      targets: [{
+        entityKind: 'finding',
+        entityId: 'F-0001',
+        expectedHead: null,
+      }],
+      sources: [source],
+    });
+    const provisional = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(emptyLedger([source]), provisionalReservation),
+      mutation({
+        reservation: provisionalReservation,
+        findings: [{
+          ...finding({ id: 'F-0001', source, revision: 1 }),
+          provisional: {
+            kind: 'raw-adjudication-unresolved',
+            stableKey: sha256('raw-recovery-stable'),
+            lineageKey: sha256('raw-recovery-lineage'),
+            sourceRawFindingIds: [source.raw.rawFindingId],
+            reason: 'Needs replay.',
+            firstObservedAt: { ...OBSERVATION },
+            lastObservedAt: { ...OBSERVATION },
+            interpretationEpochs: 0,
+            gateEffect: 'block',
+            firstObservedRound: 1,
+            recoveryReviewerStableKey: 'reviewer',
+          },
+        }],
+      }),
+    );
+    const attempt = createRawRecoveryAttempt({
+      provisionalFindingId: 'F-0001',
+      expectedHead: latestHead(provisional, 'F-0001'),
+      sourceRawFindingId: source.raw.rawFindingId,
+      sourceRawIntegrityDigest: computeRawFindingIntegrityDigest(source.raw),
+      promptSnapshotDigest: sha256('raw-recovery-unrelated-event-prompt'),
+      attempt: 1,
+      startedAt: OBSERVATION,
+    });
+    const replaySource: EvidenceSource = {
+      ...source,
+      raw: {
+        ...source.raw,
+        rawFindingId: 'replay-unrelated-event',
+      },
+    };
+    const unrelatedReservation = reservation({
+      operation: 'create_finding',
+      targets: [{
+        entityKind: 'finding',
+        entityId: 'F-0002',
+        expectedHead: null,
+      }],
+      sources: [replaySource],
+    });
+    const withReplayRaw = {
+      ...provisional,
+      rawFindings: [...provisional.rawFindings, replaySource.raw],
+      rawRecoveryAttempts: [attempt],
+    };
+    const unrelated = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(withReplayRaw, unrelatedReservation),
+      mutation({
+        reservation: unrelatedReservation,
+        findings: [finding({
+          id: 'F-0002',
+          source: replaySource,
+          revision: 1,
+        })],
+      }),
+    );
+    const unrelatedMutationId = unrelated.lifecycleEvents.at(-1)!.mutationId;
+    const forged = {
+      ...unrelated,
+      rawRecoveryResults: [createRawRecoveryResult({
+        attemptId: attempt.attemptId,
+        replayRawFindingId: replaySource.raw.rawFindingId,
+        mutationIds: [unrelatedMutationId],
+        outcome: 'applied',
+        completedAt: OBSERVATION,
+      })],
+    };
+
+    expect(() => assertFindingLedgerProjectionInvariant(forged))
+      .toThrow(/broken target transition chain/);
+  });
+});

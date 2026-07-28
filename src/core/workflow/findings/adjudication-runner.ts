@@ -11,12 +11,14 @@ import {
 } from './adjudication-apply.js';
 import {
   computeConflictEvidenceHash,
-  findReusablePendingAttempt,
   isLedgerConflictUnadjudicated,
   renderAdjudicationInstruction,
 } from './adjudication-evidence.js';
 import { captureReviewScopeSnapshot } from './snapshot.js';
-import { reserveFindingConflictAdjudication } from './adjudication-reservation.js';
+import {
+  findPendingFindingConflictAdjudication,
+  reserveFindingConflictAdjudication,
+} from './adjudication-reservation.js';
 import { commitFindingConflictAdjudication } from './adjudication-commit.js';
 import { parseFindingConflictAdjudicationOutput } from './schemas.js';
 import type {
@@ -63,22 +65,15 @@ const DISPOSITION_RULE_INDEX: Record<FindingConflictAdjudicationDisposition, num
  * AgentResponse whose matchedRuleIndex selects one of the step's synthesized
  * rules, and the standard transition machinery routes from there.
  *
- * The "1回制限" gate is enforced with two ledger-resident mechanisms:
- * - a started attempt is recorded (adjudicationAttempts) BEFORE the LLM call,
- *   so an interrupted run cannot re-adjudicate the same evidence after resume;
- * - the decision is applied only when the evidence hash at apply time EQUALS
+ * The decision is applied only when the evidence hash at apply time EQUALS
  *   the hash the LLM was prompted with (evidence CAS requirement); otherwise the decision is
  *   discarded (audited via saveConflictAdjudicationReport) and the conflict
  *   stays unadjudicated for its NEW evidence, so the next round can adjudicate
  *   the fresh state.
  *
  * Provider failures (error / rate_limited / blocked) are returned as-is so the
- * run loop's standard handling applies. A rate-limit fallback re-execution of
- * this step within the SAME run reuses the pending attempt reservation and may
- * retry the LLM call on the fallback provider (retry reservation requirement —
- * findReusablePendingAttempt); a pending attempt from a DIFFERENT run
- * (interrupted -> resumed) stays blocking as the intended safe-side
- * escalation, and a completed adjudication blocks regardless of runId.
+ * run loop's standard handling applies. Concurrent decisions race only at the
+ * atomic evidence-CAS commit; a completed adjudication blocks later attempts.
  *
  * getLastOriginStep exposes the origin (the step the workflow advanced from
  * into this step) that this runner last resolved — from WorkflowState
@@ -130,14 +125,26 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
     const initialReviewScopeSnapshot = captureReviewScopeSnapshot(cwd);
     const targetConflict = selectConflictForAdjudication(
       initialLedger,
-      (conflict) => (
-        isLedgerConflictUnadjudicated(conflict, initialLedger, initialReviewScopeSnapshot.reviewScopeSnapshotId)
-        || findReusablePendingAttempt(
+      (conflict) => {
+        const evidenceHash = computeConflictEvidenceHash(
           conflict,
-          computeConflictEvidenceHash(conflict, initialLedger, initialReviewScopeSnapshot.reviewScopeSnapshotId),
-          deps.runId,
-        ) !== undefined
-      ),
+          initialLedger,
+          initialReviewScopeSnapshot.reviewScopeSnapshotId,
+        );
+        const pending = findPendingFindingConflictAdjudication({
+          ledger: initialLedger,
+          conflictId: conflict.id,
+          evidenceHash,
+        });
+        return (
+          isLedgerConflictUnadjudicated(
+            conflict,
+            initialLedger,
+            initialReviewScopeSnapshot.reviewScopeSnapshotId,
+          )
+          && (pending === undefined || pending.reservedAt.runId === deps.runId)
+        );
+      },
     );
     const noTargetResult = (ledger: FindingLedger, reason: string): StepRunResult => {
       const hasActiveConflicts = ledger.conflicts.some((conflict) => conflict.status === 'active');
@@ -173,8 +180,14 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
     lastOriginStep = attemptMutation.result.originStep;
     const promptedEvidenceHash = attemptMutation.result.evidenceHash;
     const reservationToken = attemptMutation.result.reservationToken;
-    if (!deps.ledgerStore.claimAdjudicationReservation(reservationToken)) {
-      return noTargetResult(ledgerAtAttempt, `conflict "${targetConflict.id}" is already being adjudicated`);
+    if (!deps.ledgerStore.adjudicationLiveClaims.claim(
+      deps.ledgerStore.ledgerIdentity,
+      reservationToken,
+    )) {
+      return noTargetResult(
+        ledgerAtAttempt,
+        `conflict "${targetConflict.id}" is already being adjudicated`,
+      );
     }
     try {
       deps.emitEvent('findings:ledger', structuredClone(ledgerAtAttempt), {
@@ -210,12 +223,14 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
         ledgerStore: deps.ledgerStore,
         conflictId: promptConflict.id,
         promptedEvidenceHash,
+        reservationMutationId: reservationToken,
         output,
         cwd,
         workflowName: deps.workflowName,
         stepName: step.name,
         runId: deps.runId,
         timestamp: observation.timestamp,
+        ...(lastOriginStep === undefined ? {} : { originStep: lastOriginStep }),
       });
       const nextLedger = applyMutation.ledger;
 
@@ -259,8 +274,10 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
       const disposition: FindingConflictAdjudicationDisposition = applyMutation.result.disposition;
       const summary = [
         `Adjudicated conflict ${promptConflict.id}: outcome ${output.outcome} (${disposition}).`,
-        ...(output.actionableFix.trim().length > 0 ? [`Actionable fix: ${output.actionableFix.trim()}`] : []),
-        `Evidence: ${output.evidence.join(' | ')}`,
+        ...((output.actionableFix?.trim().length ?? 0) > 0
+          ? [`Actionable fix: ${output.actionableFix!.trim()}`]
+          : []),
+        ...(output.rationale !== undefined ? [`Rationale: ${output.rationale}`] : []),
       ].join('\n');
       const doneResponse = buildResponse({
         step,
@@ -268,9 +285,16 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
         matchedRuleIndex: DISPOSITION_RULE_INDEX[disposition],
         structuredOutput: output as unknown as Record<string, unknown>,
       });
-      return { response: finishResponse(state, step, doneResponse), instruction: phase1Instruction, providerInfo };
+      return {
+        response: finishResponse(state, step, doneResponse),
+        instruction: phase1Instruction,
+        providerInfo,
+      };
     } finally {
-      deps.ledgerStore.releaseAdjudicationReservation(reservationToken);
+      deps.ledgerStore.adjudicationLiveClaims.release(
+        deps.ledgerStore.ledgerIdentity,
+        reservationToken,
+      );
     }
   };
 

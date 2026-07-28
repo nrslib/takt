@@ -144,13 +144,13 @@ function makeSourceQuoteFinding(persona: string | undefined, schema: unknown): R
 }
 
 function readFindingLedger(cwd: string): {
-  findings: unknown[];
+  findings: Array<{ title: string; evidenceIds: string[] }>;
   reviewerAnomalies?: Array<{ kind: string }>;
 } {
   return JSON.parse(
     readFileSync(join(cwd, '.takt/findings/peer-review.json'), 'utf-8'),
   ) as {
-    findings: unknown[];
+    findings: Array<{ title: string; evidenceIds: string[] }>;
     reviewerAnomalies?: Array<{ kind: string }>;
   };
 }
@@ -405,6 +405,13 @@ describe('finding reviewer observability wiring', () => {
     expect(existsSync(join(cwd, 'review-raw'))).toBe(true);
     const ledger = readFindingLedger(cwd);
     expect(ledger.findings).toHaveLength(2);
+    expect(ledger.findings.map((finding) => finding.evidenceIds)).toEqual([
+      [expect.any(String)],
+      [expect.any(String)],
+    ]);
+    expect(ledger.findings[0]?.evidenceIds[0]).not.toBe(
+      ledger.findings[1]?.evidenceIds[0],
+    );
     expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
   });
 

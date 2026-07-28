@@ -96,15 +96,6 @@ export function readCompleteResumeSnapshot(
         transitions.transition_seq
     `, run.runId),
     reports,
-    findingReservations: context.all<SnapshotRow>(`
-      SELECT
-        scope_id AS scopeId,
-        reservation_token AS reservationToken,
-        claimed_at AS claimedAt
-      FROM finding_adjudication_reservations
-      WHERE run_id = ?
-      ORDER BY scope_id, reservation_token
-    `, run.runId),
     findingPublications: context.all<SnapshotRow>(`
       SELECT
         scope_id AS scopeId,

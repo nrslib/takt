@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -5,20 +6,33 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, AgentWorkflowStep, WorkflowStep } from '../core/models/types.js';
 import type {
   FindingLedger,
+  FindingLedgerConflict,
   FindingLedgerEntry,
   RawFinding,
 } from '../core/workflow/findings/types.js';
+import { computeClaimIdentityHash } from '../core/models/finding-claim-identity.js';
+import {
+  computeFileQuoteEvidenceRecordId,
+  createEngineProofRecord,
+} from '../core/models/finding-evidence-record.js';
+import {
+  createRawRecoveryAttempt,
+  createRawRecoveryResult,
+} from '../core/models/finding-raw-recovery.js';
+import { computeRawFindingIntegrityDigest } from '../core/models/finding-raw-integrity.js';
+import {
+  createFindingEvidenceBinding,
+  createFindingLifecycleReservation,
+} from '../core/models/finding-lifecycle-identity.js';
 import type {
   FindingManagerStore,
   FindingManagerValidationReport,
 } from '../core/workflow/findings/store.js';
 import type { RunFindingManagerForStepInput } from '../core/workflow/findings/manager-contracts.js';
 import { applyRawAdjudicationRecovery } from '../core/workflow/findings/raw-adjudication-commit.js';
+import { completeRawRecoveryAttempts } from '../core/workflow/findings/raw-recovery-result.js';
 import { runRawAdjudicationRecovery } from '../core/workflow/findings/raw-adjudication-recovery.js';
-import {
-  releaseRawAdjudicationReservations,
-  reserveRawAdjudicationRecovery,
-} from '../core/workflow/findings/raw-adjudication-reservation.js';
+import { reserveRawAdjudicationRecovery } from '../core/workflow/findings/raw-adjudication-reservation.js';
 import {
   estimateTokens,
   findRawFieldLimitViolation,
@@ -38,6 +52,11 @@ import { captureFindingPreconditions } from '../core/workflow/findings/finding-p
 import { snapshotProvisionalRecoveryOrigin } from '../core/workflow/findings/provisional-recovery-origin.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
 import { deduplicateRawEvidence } from '../core/workflow/findings/evidence-domain.js';
+import {
+  applyVerifiedLifecycleMutation,
+  captureFindingLifecycleHead,
+  reserveVerifiedLifecycleMutation,
+} from '../core/workflow/findings/lifecycle-mutation.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
 vi.mock('../core/workflow/findings/snapshot.js', () => ({
@@ -79,6 +98,14 @@ const quote = {
   verbatimExcerpt: '{',
   snapshotId: '1'.repeat(64),
 };
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function cloneFixture<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
 
 function findingId(index: number): string {
   return `F-${String(index).padStart(4, '0')}`;
@@ -149,7 +176,6 @@ function provisionalFinding(input: {
   source: RawFinding;
   firstObservedRound: number;
   firstObservedAt?: string;
-  attempts?: number;
 }): FindingLedgerEntry {
   const firstObservedAt = {
     ...observation,
@@ -165,8 +191,8 @@ function provisionalFinding(input: {
     description: input.source.description,
     reviewers: ['reviewer-a'],
     rawFindingIds: [input.source.rawFindingId],
-    firstSeen: firstObservedAt,
-    lastSeen: firstObservedAt,
+    firstSeen: { ...firstObservedAt },
+    lastSeen: { ...firstObservedAt },
     revision: 1,
     provisional: {
       kind: 'raw-adjudication-unresolved',
@@ -174,22 +200,401 @@ function provisionalFinding(input: {
       lineageKey: `lineage-${input.index}`,
       sourceRawFindingIds: [input.source.rawFindingId],
       reason: 'pending raw adjudication',
-      firstObservedAt,
-      lastObservedAt: firstObservedAt,
+      firstObservedAt: { ...firstObservedAt },
+      lastObservedAt: { ...firstObservedAt },
       interpretationEpochs: 0,
       gateEffect: 'block',
       firstObservedRound: input.firstObservedRound,
-      ...(input.attempts === undefined ? {} : {
-        adjudicationAttempts: Array.from({ length: input.attempts }, (_, attemptIndex) => ({
-          attempt: attemptIndex + 1,
-          replayRawFindingId: `prior-replay-${input.index}-${attemptIndex + 1}`,
-          reason: 'prior failure',
-          at: observation,
-        })),
-      }),
       recoveryReviewerStableKey: 'reviewer-stable-a',
     },
   };
+}
+
+function authorizeInitialEntity(
+  ledger: FindingLedger,
+  entity: FindingLedgerEntry | FindingLedgerConflict,
+  entityKind: 'finding' | 'conflict',
+): FindingLedger {
+  if (entity.revision !== 1) {
+    throw new Error(`Initial fixture entity "${entity.id}" must start at revision 1`);
+  }
+  const isProvisional = entityKind === 'finding'
+    && (entity as FindingLedgerEntry).provisional !== undefined;
+  const operation = entityKind === 'conflict'
+    ? 'create_conflict'
+    : isProvisional
+      ? 'update_provisional'
+      : 'create_finding';
+  const initialClaimIdentityHash = entityKind === 'finding'
+    ? computeClaimIdentityHash({
+        targetFindingId: null,
+        title: entity.title,
+        description: entity.description ?? '',
+      })
+    : sha256(`fixture-conflict:${entity.id}`);
+  const rawSource: RawFinding | undefined = isProvisional
+    ? undefined
+    : {
+        rawFindingId: `fixture-raw:${entityKind}:${entity.id}`,
+        stepName: observation.stepName,
+        reviewer: 'fixture-reviewer',
+        familyTag: 'fixture',
+        severity: 'high',
+        title: entityKind === 'finding' ? entity.title : `Conflict ${entity.id}`,
+        description: entity.description ?? `Conflict ${entity.id}`,
+        suggestion: null,
+        relation: entityKind === 'finding' ? 'new' : 'persists',
+        targetFindingId: entityKind === 'finding'
+          ? null
+          : (entity as FindingLedgerConflict).findingIds[0] ?? 'F-0001',
+        evidence: [{
+          kind: 'file_quote',
+          path: `fixtures/${entity.id}.ts`,
+          startLine: 1,
+          endLine: 1,
+          verbatimExcerpt: entity.description ?? entity.id,
+          snapshotId: sha256(`fixture-snapshot:${entityKind}:${entity.id}`),
+        }],
+      };
+  const claimIdentityHash = rawSource === undefined
+    ? initialClaimIdentityHash
+    : computeClaimIdentityHash(rawSource);
+  const evidenceRecord = rawSource === undefined
+    ? createEngineProofRecord({
+        kind: 'engine_proof',
+        verifierId: 'takt.finding-lifecycle-policy',
+        verifierVersion: '1',
+        workflowName: ledger.workflowName,
+        runId: observation.runId,
+        scopeIdentity: 'raw-adjudication-bounds',
+        snapshotId: sha256(`fixture-snapshot:${entityKind}:${entity.id}`),
+        claimIdentityHash,
+        targetFindingId: null,
+        subject: {
+          kind: 'named_structural_check',
+          checkId: 'finding-provisional-isolation',
+          parameters: {
+            provisionalKind: (entity as FindingLedgerEntry).provisional!.kind,
+            stableKey: (entity as FindingLedgerEntry).provisional!.stableKey,
+          },
+        },
+        dependencyDigests: [],
+        resultDigest: sha256(`fixture-result:${entityKind}:${entity.id}`),
+        issuedAt: observation.timestamp,
+      })
+    : (() => {
+        const quote = rawSource.evidence[0]!;
+        if (quote.kind !== 'file_quote') {
+          throw new Error('Expected fixture file quote');
+        }
+        const payload = {
+          ...quote,
+          claimIdentityHash,
+          fileHash: sha256(`fixture-file:${entityKind}:${entity.id}`),
+        };
+        return {
+          evidenceId: computeFileQuoteEvidenceRecordId(payload),
+          ...payload,
+        };
+      })();
+  const target = {
+    entityKind,
+    entityId: entity.id,
+    expectedHead: null,
+  } as const;
+  const binding = createFindingEvidenceBinding({
+    evidenceId: evidenceRecord.evidenceId,
+    claimIdentityHash,
+    sourceRawFindingId: rawSource?.rawFindingId ?? null,
+    sourceRawIntegrityDigest: rawSource === undefined
+      ? null
+      : computeRawFindingIntegrityDigest(rawSource),
+    operation,
+    target,
+  });
+  const reservation = createFindingLifecycleReservation({
+    operation,
+    targets: [target],
+    evidenceBindingIds: [binding.bindingId],
+    authority: { kind: 'verified_evidence' },
+    context: { kind: 'transaction' },
+    reservedAt: observation,
+  });
+  const withReservation = reserveVerifiedLifecycleMutation({
+    ...ledger,
+    evidenceRecords: [...ledger.evidenceRecords, evidenceRecord],
+    rawFindings: rawSource === undefined
+      ? ledger.rawFindings
+      : [...ledger.rawFindings, rawSource],
+  }, {
+    reservation,
+    evidenceBindings: [binding],
+  });
+  const authorizedEntity = entityKind === 'finding'
+    ? {
+        ...(entity as FindingLedgerEntry),
+        evidenceIds: [
+          ...(entity as FindingLedgerEntry).evidenceIds,
+          evidenceRecord.evidenceId,
+        ],
+      }
+    : entity;
+  return applyVerifiedLifecycleMutation(withReservation, {
+    mutationId: reservation.mutationId,
+    findings: entityKind === 'finding' ? [authorizedEntity as FindingLedgerEntry] : [],
+    conflicts: entityKind === 'conflict' ? [authorizedEntity as FindingLedgerConflict] : [],
+    occurredAt: observation,
+  });
+}
+
+function authorizeInitialLedgerFixture(input: FindingLedger): FindingLedger {
+  let ledger: FindingLedger = {
+    ...cloneFixture(input),
+    findings: [],
+    conflicts: [],
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawRecoveryAttempts: [],
+    rawRecoveryResults: [],
+  };
+  for (const finding of input.findings) {
+    if (
+      finding.provisional === undefined
+      && finding.status === 'resolved'
+    ) {
+      const genesis = cloneFixture({
+        ...finding,
+        status: 'open' as const,
+        lifecycle: 'new' as const,
+        revision: 1,
+      });
+      delete genesis.resolvedAt;
+      delete genesis.resolvedEvidence;
+      ledger = authorizeInitialEntity(ledger, genesis, 'finding');
+      const expectedHead = captureFindingLifecycleHead(ledger, 'finding', finding.id)!;
+      const raw: RawFinding = {
+        rawFindingId: `fixture-resolution:${finding.id}`,
+        stepName: observation.stepName,
+        reviewer: 'fixture-reviewer',
+        familyTag: 'fixture',
+        severity: finding.severity,
+        title: finding.title,
+        description: finding.description ?? finding.title,
+        suggestion: null,
+        relation: 'resolution_confirmation',
+        targetFindingId: finding.id,
+        targetPrecondition: captureFindingPreconditions(ledger).get(finding.id)!.precondition,
+        evidence: [{
+          kind: 'file_quote',
+          path: `fixtures/${finding.id}-resolution.ts`,
+          startLine: 1,
+          endLine: 1,
+          verbatimExcerpt: finding.description ?? finding.title,
+          snapshotId: sha256(`fixture-resolution-snapshot:${finding.id}`),
+        }],
+      };
+      const claimIdentityHash = computeClaimIdentityHash(raw);
+      const quote = raw.evidence[0]!;
+      if (quote.kind !== 'file_quote') {
+        throw new Error('Expected fixture resolution quote');
+      }
+      const recordPayload = {
+        ...quote,
+        claimIdentityHash,
+        fileHash: sha256(`fixture-resolution-file:${finding.id}`),
+      };
+      const record = {
+        evidenceId: computeFileQuoteEvidenceRecordId(recordPayload),
+        ...recordPayload,
+      };
+      const target = {
+        entityKind: 'finding' as const,
+        entityId: finding.id,
+        expectedHead,
+      };
+      const binding = createFindingEvidenceBinding({
+        evidenceId: record.evidenceId,
+        claimIdentityHash,
+        sourceRawFindingId: raw.rawFindingId,
+        sourceRawIntegrityDigest: computeRawFindingIntegrityDigest(raw),
+        operation: 'resolve_finding',
+        target,
+      });
+      const reservation = createFindingLifecycleReservation({
+        operation: 'resolve_finding',
+        targets: [target],
+        evidenceBindingIds: [binding.bindingId],
+        authority: { kind: 'verified_evidence' },
+        context: { kind: 'transaction' },
+        reservedAt: observation,
+      });
+      const pending = reserveVerifiedLifecycleMutation({
+        ...ledger,
+        evidenceRecords: [...ledger.evidenceRecords, record],
+        rawFindings: [...ledger.rawFindings, raw],
+      }, {
+        reservation,
+        evidenceBindings: [binding],
+      });
+      ledger = applyVerifiedLifecycleMutation(pending, {
+        mutationId: reservation.mutationId,
+        findings: [{
+          ...cloneFixture(finding),
+          revision: 2,
+          resolvedAt: finding.resolvedAt ?? observation.timestamp,
+          resolvedEvidence: finding.resolvedEvidence ?? 'Fixture resolution evidence.',
+          evidenceIds: [...new Set([
+            ...ledger.findings.find((candidate) => candidate.id === finding.id)!.evidenceIds,
+            ...finding.evidenceIds,
+            record.evidenceId,
+          ])].sort(),
+        }],
+        conflicts: [],
+        occurredAt: observation,
+      });
+      continue;
+    }
+    ledger = authorizeInitialEntity(ledger, cloneFixture(finding), 'finding');
+  }
+  for (const conflict of input.conflicts) {
+    ledger = authorizeInitialEntity(ledger, cloneFixture(conflict), 'conflict');
+  }
+  return {
+    ...ledger,
+    nextId: input.nextId,
+    updatedAt: input.updatedAt,
+  };
+}
+
+function rawRecoveryAttemptsFor(
+  ledger: FindingLedger,
+  provisionalFindingId: string,
+) {
+  return ledger.rawRecoveryAttempts.filter(
+    (attempt) => attempt.provisionalFindingId === provisionalFindingId,
+  );
+}
+
+function rawRecoveryResultsFor(
+  ledger: FindingLedger,
+  provisionalFindingId: string,
+) {
+  const attemptIds = new Set(
+    rawRecoveryAttemptsFor(ledger, provisionalFindingId)
+      .map((attempt) => attempt.attemptId),
+  );
+  return ledger.rawRecoveryResults.filter((result) => attemptIds.has(result.attemptId));
+}
+
+function pendingRawRecoveryAttempts(ledger: FindingLedger) {
+  const completedAttemptIds = new Set(
+    ledger.rawRecoveryResults.map((result) => result.attemptId),
+  );
+  return ledger.rawRecoveryAttempts.filter(
+    (attempt) => !completedAttemptIds.has(attempt.attemptId),
+  );
+}
+
+function appendFailedRawRecoveryResults(
+  ledger: FindingLedger,
+  attemptIds: ReadonlySet<string>,
+): FindingLedger {
+  const completedAttemptIds = new Set(
+    ledger.rawRecoveryResults.map((result) => result.attemptId),
+  );
+  return {
+    ...ledger,
+    rawRecoveryResults: [
+      ...ledger.rawRecoveryResults,
+      ...ledger.rawRecoveryAttempts
+        .filter((attempt) => (
+          attemptIds.has(attempt.attemptId)
+          && !completedAttemptIds.has(attempt.attemptId)
+        ))
+        .map((attempt) => createRawRecoveryResult({
+          attemptId: attempt.attemptId,
+          replayRawFindingId: null,
+          mutationIds: [],
+          outcome: 'failed',
+          completedAt: observation,
+        })),
+    ],
+  };
+}
+
+function appendFailedRawRecoveryAttempt(
+  ledger: FindingLedger,
+  provisionalFindingId: string,
+): FindingLedger {
+  const finding = ledger.findings.find((candidate) => candidate.id === provisionalFindingId);
+  const expectedHead = captureFindingLifecycleHead(ledger, 'finding', provisionalFindingId);
+  if (finding?.provisional === undefined || expectedHead === undefined) {
+    throw new Error(`Missing provisional fixture "${provisionalFindingId}"`);
+  }
+  const sourceRawFindingId = finding.provisional.sourceRawFindingIds[0]
+    ?? `raw-adjudication:${finding.id}:missing-source`;
+  const sourceRaw = ledger.rawFindings.find(
+    (raw) => raw.rawFindingId === sourceRawFindingId,
+  );
+  const attempt = createRawRecoveryAttempt({
+    provisionalFindingId,
+    expectedHead,
+    sourceRawFindingId,
+    sourceRawIntegrityDigest: sourceRaw === undefined
+      ? null
+      : computeRawFindingIntegrityDigest(sourceRaw),
+    promptSnapshotDigest: sha256(`fixture-prompt:${provisionalFindingId}`),
+    attempt: rawRecoveryAttemptsFor(ledger, provisionalFindingId).length + 1,
+    startedAt: observation,
+  });
+  return {
+    ...ledger,
+    rawRecoveryAttempts: [...ledger.rawRecoveryAttempts, attempt],
+    rawRecoveryResults: [
+      ...ledger.rawRecoveryResults,
+      createRawRecoveryResult({
+        attemptId: attempt.attemptId,
+        replayRawFindingId: null,
+        mutationIds: [],
+        outcome: 'failed',
+        completedAt: observation,
+      }),
+    ],
+  };
+}
+
+function advanceFindingFixture(
+  ledger: FindingLedger,
+  provisionalFindingId: string,
+): FindingLedger {
+  const finding = ledger.findings.find((candidate) => candidate.id === provisionalFindingId);
+  const expectedHead = captureFindingLifecycleHead(ledger, 'finding', provisionalFindingId);
+  if (finding === undefined || expectedHead === undefined) {
+    throw new Error(`Missing finding fixture "${provisionalFindingId}"`);
+  }
+  const reservation = createFindingLifecycleReservation({
+    operation: 'record_recovery_attempt',
+    targets: [{
+      entityKind: 'finding',
+      entityId: finding.id,
+      expectedHead,
+    }],
+    evidenceBindingIds: [],
+    authority: { kind: 'system', action: 'record_recovery_attempt' },
+    context: { kind: 'transaction' },
+    reservedAt: observation,
+  });
+  const pending = reserveVerifiedLifecycleMutation(ledger, {
+    reservation,
+    evidenceBindings: [],
+  });
+  return applyVerifiedLifecycleMutation(pending, {
+    mutationId: reservation.mutationId,
+    findings: [{ ...finding, revision: finding.revision + 1 }],
+    conflicts: [],
+    occurredAt: observation,
+  });
 }
 
 function makeBacklog(input: {
@@ -213,6 +618,11 @@ function makeBacklog(input: {
     nextId: startIndex + input.count + 1,
     updatedAt: observation.timestamp,
     evidenceRecords: [],
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawRecoveryAttempts: [],
+    rawRecoveryResults: [],
     rawFindings: raws,
     conflicts: [],
     interpretations: [],
@@ -245,8 +655,6 @@ function stampTargetRaw(
 
 interface RecoveryHarness {
   store: FindingManagerStore;
-  claimed: Set<string>;
-  released: string[];
   savedRawFindings: RawFinding[][];
   savedReports: FindingManagerValidationReport[];
   current: () => FindingLedger;
@@ -260,10 +668,10 @@ function makeHarness(
   initialLedger: FindingLedger,
   options?: { provider: 'codex' | 'cursor' },
 ): RecoveryHarness {
-  const ledgerRepository = new RevisionedFindingLedgerTestRepository(initialLedger);
+  const ledgerRepository = new RevisionedFindingLedgerTestRepository(
+    authorizeInitialLedgerFixture(initialLedger),
+  );
   const provider = options?.provider ?? 'codex';
-  const claimed = new Set<string>();
-  const released: string[] = [];
   const savedRawFindings: RawFinding[][] = [];
   const savedReports: FindingManagerValidationReport[] = [];
   const store: FindingManagerStore = {
@@ -271,17 +679,6 @@ function makeHarness(
     workflowName: initialLedger.workflowName,
     loadLedger: () => ledgerRepository.loadLedger(),
     updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
-    claimAdjudicationReservation: (token) => {
-      if (claimed.has(token)) {
-        return false;
-      }
-      claimed.add(token);
-      return true;
-    },
-    releaseAdjudicationReservation: (token) => {
-      claimed.delete(token);
-      released.push(token);
-    },
     saveLedgerSnapshot: () => {},
     saveRawFindings: (_runId, _stepName, rawFindings) => {
       savedRawFindings.push(rawFindings);
@@ -337,8 +734,6 @@ function makeHarness(
   } as RunFindingManagerForStepInput;
   return {
     store,
-    claimed,
-    released,
     savedRawFindings,
     savedReports,
     current: () => ledgerRepository.loadLedger(),
@@ -390,13 +785,24 @@ function managerResponse(instruction: string, evidence = 'Independent issue.'): 
 }
 
 function applyRecovery(harness: RecoveryHarness, recovery: Awaited<ReturnType<RecoveryHarness['runRecovery']>>): FindingLedger {
-  return applyRawAdjudicationRecovery({
-    freshLedger: harness.current(),
+  const before = harness.current();
+  const applied = applyRawAdjudicationRecovery({
+    freshLedger: before,
     recovery,
     runInput: harness.runInput,
     observation,
     reviewScopeSnapshotId: quote.snapshotId,
-  }).ledger;
+  });
+  return completeRawRecoveryAttempts(
+    before,
+    applied.ledger,
+    recovery.reservationTokens,
+    new Map([...recovery.origins].map(([rawFindingId, origin]) => [
+      origin.attemptId,
+      rawFindingId,
+    ])),
+    observation,
+  );
 }
 
 beforeEach(() => {
@@ -492,11 +898,18 @@ describe('bounded raw adjudication recovery', () => {
     const initial = makeBacklog({ count: 70, firstObservedRound: 1 });
     const harness = makeHarness(initial);
 
-    const reservation = await reserveRawAdjudicationRecovery(harness.store);
+    const reservation = await reserveRawAdjudicationRecovery(
+      harness.store,
+      observation,
+      quote.snapshotId,
+    );
 
     expect(reservation.result).toHaveLength(RAW_ADJUDICATION_RECOVERY_LIMITS.maxReplayTargetsPerStep);
     expect(reservation.result.at(-1)?.provisionalFindingId).toBe(findingId(64));
-    expect(harness.current().findings.slice(64)).toEqual(initial.findings.slice(64));
+    expect(harness.current().findings.slice(64).map((finding) => finding.id))
+      .toEqual(initial.findings.slice(64).map((finding) => finding.id));
+    expect(harness.current().rawRecoveryAttempts).toHaveLength(64);
+    expect(harness.current().rawRecoveryResults).toEqual([]);
   });
 
   it('splits replay candidates across calls whose prompts stay within count and input limits', async () => {
@@ -528,7 +941,7 @@ describe('bounded raw adjudication recovery', () => {
 
     expect(executeAgentMock).not.toHaveBeenCalled();
     expect(recovery.origins).toHaveLength(1);
-    expect(harness.released).toHaveLength(0);
+    expect(harness.current().rawRecoveryAttempts).toHaveLength(1);
     expect([...recovery.failures.values()][0]).toMatchObject({
       kind: 'input_budget_exceeded',
       outcome: 'audit_only',
@@ -543,11 +956,14 @@ describe('bounded raw adjudication recovery', () => {
     }).rawFindingDispositions).toEqual([
       expect.objectContaining({ outcome: 'audit_only' }),
     ]);
-    expect(committed.findings[0]?.provisional?.adjudicationAttempts).toHaveLength(1);
-    expect(committed.findings[0]?.revision).toBe(2);
+    expect(rawRecoveryAttemptsFor(committed, findingId(1))).toHaveLength(1);
+    expect(rawRecoveryResultsFor(committed, findingId(1))).toEqual([
+      expect.objectContaining({ outcome: 'failed' }),
+    ]);
+    expect(committed.findings[0]?.revision).toBe(1);
   });
 
-  it('rejects a replay failure when the expected attempt was already recorded', async () => {
+  it('replays an already completed failure idempotently without duplicating its attempt or result', async () => {
     const harness = makeHarness(makeBacklog({
       count: 1,
       evidenceExcerptChars: RAW_FINDING_LIMITS.maxVerbatimExcerptChars,
@@ -566,10 +982,11 @@ describe('bounded raw adjudication recovery', () => {
     });
     const duplicateCommit = duplicateResult.ledger;
 
-    expect(duplicateCommit.findings[0]?.provisional?.adjudicationAttempts).toHaveLength(1);
-    expect(duplicateCommit.findings[0]?.revision).toBe(2);
+    expect(rawRecoveryAttemptsFor(duplicateCommit, findingId(1))).toHaveLength(1);
+    expect(rawRecoveryResultsFor(duplicateCommit, findingId(1))).toHaveLength(1);
+    expect(duplicateCommit.findings[0]?.revision).toBe(1);
     expect(duplicateResult.rawFindingDispositions).toEqual([
-      expect.objectContaining({ outcome: 'stale' }),
+      expect.objectContaining({ outcome: 'audit_only' }),
     ]);
   });
 
@@ -588,11 +1005,20 @@ describe('bounded raw adjudication recovery', () => {
       observation,
       reviewScopeSnapshotId: quote.snapshotId,
     });
-    const firstCommit = firstResult.ledger;
+    const firstCommit = completeRawRecoveryAttempts(
+      harness.current(),
+      firstResult.ledger,
+      firstRecovery.reservationTokens,
+      new Map([...firstRecovery.origins].map(([rawFindingId, origin]) => [
+        origin.attemptId,
+        rawFindingId,
+      ])),
+      observation,
+    );
     expect(firstResult.rawFindingDispositions).toEqual([
       expect.objectContaining({ outcome: 'audit_only' }),
     ]);
-    expect(firstCommit.findings[0]?.provisional?.adjudicationAttempts).toEqual([
+    expect(rawRecoveryAttemptsFor(firstCommit, findingId(1))).toEqual([
       expect.objectContaining({ attempt: 1 }),
     ]);
     await harness.replaceLedger(() => firstCommit);
@@ -605,8 +1031,9 @@ describe('bounded raw adjudication recovery', () => {
     const secondCommit = applyRecovery(harness, secondRecovery);
     const provisional = secondCommit.findings[0]?.provisional;
 
-    expect(provisional?.adjudicationAttempts?.map((attempt) => attempt.attempt)).toEqual([1, 2]);
-    expect(classifyProvisionalRecovery(provisional!, 2)).toBe('terminal-adjudication');
+    expect(rawRecoveryAttemptsFor(secondCommit, findingId(1))
+      .map((attempt) => attempt.attempt)).toEqual([1, 2]);
+    expect(classifyProvisionalRecovery(provisional!, 2, 2)).toBe('terminal-adjudication');
   });
 
   it('persists a source-missing finite outcome in the final manager report without synthesizing replay payload', async () => {
@@ -650,9 +1077,7 @@ describe('bounded raw adjudication recovery', () => {
     const recovery = await harness.runRecovery();
     const committed = applyRecovery(harness, recovery);
     const instructions = executeAgentMock.mock.calls.map((call) => call[1] as string);
-    const attempted = committed.findings.filter(
-      (finding) => (finding.provisional?.adjudicationAttempts ?? []).length > 0,
-    );
+    const completedAttempts = committed.rawRecoveryResults;
 
     expect(executeAgentMock.mock.calls.length).toBeGreaterThan(0);
     expect(executeAgentMock.mock.calls.length).toBeLessThanOrEqual(
@@ -661,8 +1086,8 @@ describe('bounded raw adjudication recovery', () => {
     expect(instructions.reduce((total, instruction) => total + estimateTokens(instruction), 0))
       .toBeLessThanOrEqual(RAW_ADJUDICATION_RECOVERY_LIMITS.maxInputTokensPerStep);
     expect(recovery.origins.size).toBeLessThan(64);
-    expect(harness.released.length).toBe(64 - recovery.origins.size);
-    expect(attempted).toHaveLength(0);
+    expect(pendingRawRecoveryAttempts(committed)).toHaveLength(64 - recovery.origins.size);
+    expect(completedAttempts).toHaveLength(recovery.origins.size);
     expect(committed.findings.filter((finding) => finding.provisional !== undefined)).toHaveLength(
       64 - recovery.origins.size,
     );
@@ -684,13 +1109,9 @@ describe('bounded raw adjudication recovery', () => {
       observation,
       reviewScopeSnapshotId: quote.snapshotId,
     }).rawFindingDispositions).toHaveLength(16);
-    expect(harness.released).toHaveLength(4);
-    expect(committed.findings.slice(0, 16).every(
-      (finding) => finding.provisional?.adjudicationAttempts?.length === 1,
-    )).toBe(true);
-    expect(committed.findings.slice(16).every(
-      (finding) => finding.provisional?.adjudicationAttempts === undefined,
-    )).toBe(true);
+    expect(committed.rawRecoveryResults).toHaveLength(16);
+    expect(pendingRawRecoveryAttempts(committed)).toHaveLength(4);
+    expect(committed.rawRecoveryResults.every((result) => result.outcome === 'failed')).toBe(true);
   });
 
   it('settles mechanical replay outcomes without adding failure attempts when a residual call fails', async () => {
@@ -732,8 +1153,12 @@ describe('bounded raw adjudication recovery', () => {
 
     expect(recovery.output.matches.some((match) => match.findingId === target.id)).toBe(true);
     expect(mechanicalOrigin?.status).toBe('resolved');
-    expect(mechanicalOrigin?.provisional?.adjudicationAttempts).toBeUndefined();
-    expect(residualOrigin?.provisional?.adjudicationAttempts).toHaveLength(1);
+    expect(rawRecoveryResultsFor(committed, mechanicalOrigin!.id)).toEqual([
+      expect.objectContaining({ outcome: 'failed', mutationIds: [] }),
+    ]);
+    expect(rawRecoveryResultsFor(committed, residualOrigin!.id)).toEqual([
+      expect.objectContaining({ outcome: 'failed' }),
+    ]);
   });
 
   it('classifies an explicit replay-manager unsupported decision as unsupported in both recovery audit views', async () => {
@@ -742,6 +1167,7 @@ describe('bounded raw adjudication recovery', () => {
       ...provisionalFinding({ index: 9000, source: targetSource, firstObservedRound: 1 }),
       status: 'resolved',
       lifecycle: 'resolved',
+      revision: 2,
       provisional: undefined,
     };
     const targetSnapshot: FindingLedger = {
@@ -791,7 +1217,7 @@ describe('bounded raw adjudication recovery', () => {
     const recovery = await harness.runRecovery();
     const [replayRawFindingId] = recovery.origins.keys();
     const committed = applyRawAdjudicationRecovery({
-      freshLedger: current,
+      freshLedger: harness.current(),
       recovery,
       runInput: harness.runInput,
       observation,
@@ -841,12 +1267,8 @@ describe('bounded raw adjudication recovery', () => {
 
       expect(executeAgentMock).toHaveBeenCalledTimes(1);
       expect(recovery.origins).toHaveLength(16);
-      expect(committed.findings.slice(0, 16).every(
-        (finding) => finding.provisional?.adjudicationAttempts?.length === 1,
-      )).toBe(true);
-      expect(committed.findings.slice(16).every(
-        (finding) => finding.provisional?.adjudicationAttempts === undefined,
-      )).toBe(true);
+      expect(committed.rawRecoveryResults).toHaveLength(16);
+      expect(pendingRawRecoveryAttempts(committed)).toHaveLength(4);
     },
   );
 
@@ -916,13 +1338,10 @@ describe('bounded raw adjudication recovery', () => {
 
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
     expect(recovery.origins).toHaveLength(16);
-    expect(harness.released).toHaveLength(4);
-    expect(replayed.every(
-      (finding) => finding.provisional?.adjudicationAttempts?.length === 1,
-    )).toBe(true);
-    expect(untouched.every(
-      (finding) => finding.provisional?.adjudicationAttempts === undefined,
-    )).toBe(true);
+    expect(committed.rawRecoveryResults).toHaveLength(16);
+    expect(pendingRawRecoveryAttempts(committed)).toHaveLength(4);
+    expect(replayed).toHaveLength(16);
+    expect(untouched).toHaveLength(4);
   });
 
   it('normalizes same-identity new decisions once across the batch boundary', async () => {
@@ -980,7 +1399,9 @@ describe('bounded raw adjudication recovery', () => {
     expect(canonicalOrigin?.provisional).toBeUndefined();
     expect(newerOrigin?.status).toBe('resolved');
     expect(newerOrigin?.resolvedEvidence).toContain(canonicalOrigin!.id);
-    expect(newerOrigin?.provisional?.adjudicationAttempts).toBeUndefined();
+    expect(rawRecoveryResultsFor(committed, newerOrigin!.id)).toEqual([
+      expect.objectContaining({ outcome: 'failed', mutationIds: [] }),
+    ]);
   });
 
   it('keeps never-selected findings replayable after two rounds and advances only twice-failed findings', async () => {
@@ -992,96 +1413,63 @@ describe('bounded raw adjudication recovery', () => {
       rawFindings: [...old.rawFindings, ...newer.rawFindings],
       findings: [...old.findings, ...newer.findings],
     });
-    const first = await reserveRawAdjudicationRecovery(harness.store);
-    releaseRawAdjudicationReservations(
+    const first = await reserveRawAdjudicationRecovery(
       harness.store,
-      new Set(first.result.map((reservation) => reservation.reservationToken)),
+      observation,
+      quote.snapshotId,
     );
-    const firstIds = new Set(first.result.map((reservation) => reservation.provisionalFindingId));
-    await harness.replaceLedger((ledger) => ({
-      ...ledger,
-      findings: ledger.findings.map((finding) => firstIds.has(finding.id)
-        ? {
-          ...finding,
-          provisional: {
-            ...finding.provisional!,
-            adjudicationAttempts: [{
-              attempt: 1,
-              replayRawFindingId: `first-${finding.id}`,
-              reason: 'failure',
-              at: observation,
-            }],
-          },
-        }
-        : finding),
-    }));
-    const second = await reserveRawAdjudicationRecovery(harness.store);
-    releaseRawAdjudicationReservations(
+    await harness.replaceLedger((ledger) => appendFailedRawRecoveryResults(
+      ledger,
+      new Set(first.result.map((reservation) => reservation.attemptId)),
+    ));
+    const second = await reserveRawAdjudicationRecovery(
       harness.store,
-      new Set(second.result.map((reservation) => reservation.reservationToken)),
+      observation,
+      quote.snapshotId,
     );
-    const secondIds = new Set(second.result.map((reservation) => reservation.provisionalFindingId));
-    await harness.replaceLedger((ledger) => ({
-      ...ledger,
-      findings: ledger.findings.map((finding) => secondIds.has(finding.id)
-        ? {
-          ...finding,
-          provisional: {
-            ...finding.provisional!,
-            adjudicationAttempts: [
-              ...(finding.provisional?.adjudicationAttempts ?? []),
-              {
-                attempt: (finding.provisional?.adjudicationAttempts ?? []).length + 1,
-                replayRawFindingId: `second-${finding.id}`,
-                reason: 'failure',
-                at: observation,
-              },
-            ],
-          },
-        }
-        : finding),
-    }));
+    await harness.replaceLedger((ledger) => appendFailedRawRecoveryResults(
+      ledger,
+      new Set(second.result.map((reservation) => reservation.attemptId)),
+    ));
 
     const twiceFailed = harness.current().findings.filter(
-      (finding) => finding.provisional?.adjudicationAttempts?.length === 2,
+      (finding) => rawRecoveryAttemptsFor(harness.current(), finding.id).length === 2,
     );
     const neverSelected = harness.current().findings.filter((finding) => Number(finding.id.slice(2)) > 70);
     expect(twiceFailed.length).toBeGreaterThan(0);
     expect(twiceFailed.every((finding) => (
-      classifyProvisionalRecovery(finding.provisional!, 2) === 'terminal-adjudication'
+      classifyProvisionalRecovery(finding.provisional!, 2, 2) === 'terminal-adjudication'
     ))).toBe(true);
     expect(neverSelected.every((finding) => (
-      finding.provisional?.adjudicationAttempts === undefined
-      && classifyProvisionalRecovery(finding.provisional!, 2) === 'raw-adjudication'
+      rawRecoveryAttemptsFor(harness.current(), finding.id).length === 1
+      && classifyProvisionalRecovery(finding.provisional!, 2, 1) === 'raw-adjudication'
     ))).toBe(true);
   });
 
-  it('gives concurrent reservations disjoint bounded ownership and skips already claimed candidates', async () => {
+  it('reuses the same durable pending reservations across serialized concurrent callers', async () => {
     const harness = makeHarness(makeBacklog({ count: 100, firstObservedRound: 1 }));
 
     const [left, right] = await Promise.all([
-      reserveRawAdjudicationRecovery(harness.store),
-      reserveRawAdjudicationRecovery(harness.store),
+      reserveRawAdjudicationRecovery(harness.store, observation, quote.snapshotId),
+      reserveRawAdjudicationRecovery(harness.store, observation, quote.snapshotId),
     ]);
     const leftTokens = new Set(left.result.map((reservation) => reservation.reservationToken));
     const rightTokens = new Set(right.result.map((reservation) => reservation.reservationToken));
 
     expect(left.result.length).toBeLessThanOrEqual(RAW_ADJUDICATION_RECOVERY_LIMITS.maxReplayTargetsPerStep);
     expect(right.result.length).toBeLessThanOrEqual(RAW_ADJUDICATION_RECOVERY_LIMITS.maxReplayTargetsPerStep);
-    expect([...leftTokens].filter((token) => rightTokens.has(token))).toEqual([]);
-    expect(new Set([
-      ...left.result.map((reservation) => reservation.provisionalFindingId),
-      ...right.result.map((reservation) => reservation.provisionalFindingId),
-    ])).toHaveLength(100);
+    expect(rightTokens).toEqual(leftTokens);
+    expect(right.result.map((reservation) => reservation.provisionalFindingId))
+      .toEqual(left.result.map((reservation) => reservation.provisionalFindingId));
+    expect(harness.current().rawRecoveryAttempts).toHaveLength(
+      RAW_ADJUDICATION_RECOVERY_LIMITS.maxReplayTargetsPerStep,
+    );
   });
 
-  it('rejects a stale revision at commit and releases its reservation token', async () => {
+  it('rejects a stale full lifecycle head at commit and closes its durable attempt', async () => {
     const harness = makeHarness(makeBacklog({ count: 1, firstObservedRound: 1 }));
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
-      await harness.replaceLedger((ledger) => ({
-        ...ledger,
-        findings: ledger.findings.map((finding) => ({ ...finding, revision: 2 })),
-      }));
+      await harness.replaceLedger((ledger) => advanceFindingFixture(ledger, findingId(1)));
       return managerResponse(instruction as string);
     });
 
@@ -1089,17 +1477,19 @@ describe('bounded raw adjudication recovery', () => {
     const origin = result.ledger.findings.find((finding) => finding.id === findingId(1));
 
     expect(origin?.revision).toBe(2);
-    expect(origin?.provisional?.adjudicationAttempts).toBeUndefined();
     expect(result.ledger.findings.some((finding) => finding.id !== findingId(1))).toBe(false);
-    expect(harness.claimed).toHaveLength(0);
+    expect(rawRecoveryResultsFor(result.ledger, findingId(1))).toEqual([
+      expect.objectContaining({ outcome: 'stale' }),
+    ]);
   });
 
-  it('rejects every replay entry that mixes a stale raw with a fresh raw across all landing arrays', () => {
+  it('rejects every replay entry that mixes a stale raw with a fresh raw across all landing arrays', async () => {
     const targetSources = Array.from({ length: 4 }, (_, offset) => sourceRaw(9000 + offset));
     const targets: FindingLedgerEntry[] = targetSources.map((source, offset) => ({
       ...provisionalFinding({ index: 9000 + offset, source, firstObservedRound: 1 }),
       status: offset === 3 ? 'resolved' : 'open',
       lifecycle: offset === 3 ? 'resolved' : 'new',
+      revision: offset === 3 ? 2 : 1,
       provisional: undefined,
       ...(offset === 3
         ? { resolvedAt: observation.timestamp, resolvedEvidence: 'Previously fixed.' }
@@ -1110,6 +1500,11 @@ describe('bounded raw adjudication recovery', () => {
       nextId: 9004,
       updatedAt: observation.timestamp,
       evidenceRecords: [],
+      evidenceBindings: [],
+      lifecycleReservations: [],
+      lifecycleEvents: [],
+      rawRecoveryAttempts: [],
+      rawRecoveryResults: [],
       rawFindings: targetSources,
       conflicts: [],
       interpretations: [],
@@ -1137,6 +1532,11 @@ describe('bounded raw adjudication recovery', () => {
       nextId: 9010,
       updatedAt: observation.timestamp,
       evidenceRecords: [],
+      evidenceBindings: [],
+      lifecycleReservations: [],
+      lifecycleEvents: [],
+      rawRecoveryAttempts: [],
+      rawRecoveryResults: [],
       rawFindings: [...targetSources, ...actionSources],
       conflicts: [],
       interpretations: [],
@@ -1154,20 +1554,33 @@ describe('bounded raw adjudication recovery', () => {
       replayItems[pairIndex * 2]!.wire.rawFindingId,
       replayItems[pairIndex * 2 + 1]!.wire.rawFindingId,
     ];
-    const freshLedger: FindingLedger = {
-      ...originalLedger,
-      findings: originalLedger.findings.map((finding) => {
-        const processIndex = processes.findIndex((process) => process.id === finding.id);
-        return processIndex >= 0 && processIndex % 2 === 0
-          ? { ...finding, revision: finding.revision + 1 }
-          : finding;
-      }),
-    };
+    const harness = makeHarness(originalLedger);
+    const reservation = await reserveRawAdjudicationRecovery(
+      harness.store,
+      observation,
+      quote.snapshotId,
+    );
+    const authorizedOriginalLedger = harness.current();
+    const freshLedger = processes.reduce((ledger, process, processIndex) => (
+      processIndex % 2 === 0
+        ? advanceFindingFixture(ledger, process.id)
+        : ledger
+    ), authorizedOriginalLedger);
+    const reservationByFindingId = new Map(reservation.result.map((item) => [
+      item.provisionalFindingId,
+      item,
+    ]));
     const origins = new Map(replayItems.map((item, offset) => {
       const process = processes[offset]!;
+      const reserved = reservationByFindingId.get(process.id);
+      if (reserved === undefined) {
+        throw new Error(`Missing raw recovery reservation for "${process.id}"`);
+      }
       return [item.wire.rawFindingId, {
+        attemptId: reserved.attemptId,
         provisionalFindingId: process.id,
         sourceRawFindingId: actionSources[offset]!.rawFindingId,
+        expectedHead: reserved.expectedHead,
         expectedProvisionalRevision: process.revision,
         attempt: 1,
         recoveryOrigin: snapshotProvisionalRecoveryOrigin({
@@ -1225,14 +1638,14 @@ describe('bounded raw adjudication recovery', () => {
         output,
         origins,
         failures: new Map(),
-        capturedPreconditions: captureFindingPreconditions(originalLedger),
+        capturedPreconditions: captureFindingPreconditions(authorizedOriginalLedger),
         invalidAttempts: [],
         unsupportedRawFindingReports: [],
         cleanWireById: new Map(),
         cleanCanonicalById: new Map(),
         reservationTokens: new Set(),
       },
-      runInput: makeHarness(originalLedger).runInput,
+      runInput: harness.runInput,
       observation,
       reviewScopeSnapshotId: quote.snapshotId,
     });
@@ -1255,11 +1668,11 @@ describe('bounded raw adjudication recovery', () => {
     )).every((finding) => finding.provisional !== undefined)).toBe(true);
   });
 
-  it('orders older cohorts first, then fewer attempts, observation time, and finding id', async () => {
+  it('orders fewer attempts first, then older cohorts, observation time, and finding id', async () => {
     const sources = Array.from({ length: 7 }, (_, offset) => sourceRaw(offset + 1));
     const findings = [
       provisionalFinding({ index: 1, source: sources[0]!, firstObservedRound: 2 }),
-      provisionalFinding({ index: 2, source: sources[1]!, firstObservedRound: 1, attempts: 1 }),
+      provisionalFinding({ index: 2, source: sources[1]!, firstObservedRound: 1 }),
       provisionalFinding({ index: 3, source: sources[2]!, firstObservedRound: 1 }),
       provisionalFinding({ index: 4, source: sources[3]!, firstObservedRound: 1 }),
       provisionalFinding({
@@ -1267,7 +1680,6 @@ describe('bounded raw adjudication recovery', () => {
         source: sources[4]!,
         firstObservedRound: 1,
         firstObservedAt: '2026-07-19T00:00:00.000Z',
-        attempts: 1,
       }),
       provisionalFinding({
         index: 6,
@@ -1283,17 +1695,25 @@ describe('bounded raw adjudication recovery', () => {
       rawFindings: sources,
       findings,
     });
+    await harness.replaceLedger((ledger) => appendFailedRawRecoveryAttempt(
+      appendFailedRawRecoveryAttempt(ledger, findingId(2)),
+      findingId(5),
+    ));
 
-    const reservation = await reserveRawAdjudicationRecovery(harness.store);
+    const reservation = await reserveRawAdjudicationRecovery(
+      harness.store,
+      observation,
+      quote.snapshotId,
+    );
 
     expect(reservation.result.map((item) => item.provisionalFindingId)).toEqual([
       findingId(6),
       findingId(3),
       findingId(4),
       findingId(7),
+      findingId(1),
       findingId(5),
       findingId(2),
-      findingId(1),
     ]);
   });
 });

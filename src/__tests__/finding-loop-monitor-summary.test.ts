@@ -9,6 +9,7 @@ import type {
   ReviewerAnomalyEntry,
 } from '../core/workflow/findings/types.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 
 function provisionalEntry(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
@@ -41,7 +42,7 @@ function provisionalEntry(
 }
 
 function makeLedger(findings: FindingLedgerEntry[], roundMarkers: string[] = []): FindingLedger {
-  return {
+  return authorizeFindingLedgerFixture({
     workflowName: 'peer-review',
     nextId: findings.length + 1,
     updatedAt: '2026-07-01T00:00:00.000Z',
@@ -53,7 +54,7 @@ function makeLedger(findings: FindingLedgerEntry[], roundMarkers: string[] = [])
     ...(roundMarkers.length > 0
       ? { stopBudget: { roundMarkers, firstRoundAt: '2026-07-01T00:00:00.000Z', exhausted: false } }
       : {}),
-  };
+  });
 }
 
 function reviewerAnomaly(overrides: Partial<ReviewerAnomalyEntry> = {}): ReviewerAnomalyEntry {

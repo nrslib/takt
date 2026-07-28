@@ -19,7 +19,10 @@ import type { FindingManagerDecisions } from '../core/models/finding-types.js';
 import { reconcileCommitPlan } from '../core/workflow/findings/manager-commit-finalization.js';
 import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
+import { createRawRecoveryAttempt } from '../core/models/finding-raw-recovery.js';
+import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
 import {
   createFindingManagerPublicationDouble,
   RevisionedFindingLedgerTestRepository,
@@ -63,7 +66,7 @@ function provisionalEntry(
 }
 
 function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLedger> = {}): FindingLedger {
-  return {
+  return authorizeFindingLedgerFixture({
     workflowName: 'peer-review',
     nextId: findings.length + 1,
     updatedAt: '2026-07-01T00:00:00.000Z',
@@ -73,7 +76,7 @@ function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLe
     interpretations: [],
     findings,
     ...overrides,
-  };
+  });
 }
 
 type TestReconcileInput = Omit<
@@ -153,12 +156,6 @@ describe('computeDismissCandidates', () => {
           ...provisionalEntry({ revision: 1 }).provisional!,
           kind: 'raw-adjudication-unresolved',
           stableKey: 'stable-9',
-          adjudicationAttempts: [1, 2].map((attempt) => ({
-            attempt,
-            replayRawFindingId: `replay-${attempt}`,
-            reason: 'no substantive outcome',
-            at: provisionalEntry({ revision: 1 }).lastSeen,
-          })),
         },
       }),
       // provisional でない open finding — 候補にしない
@@ -167,15 +164,22 @@ describe('computeDismissCandidates', () => {
       provisionalEntry({ revision: 1, id: 'F-0006', status: 'resolved' }),
     ];
 
+    const baseLedger = makeLedger(findings);
+    const expectedHead = captureFindingLifecycleHead(baseLedger, 'finding', 'F-0009');
+    if (expectedHead === undefined) {
+      throw new Error('Missing lifecycle head for F-0009');
+    }
     const candidates = computeDismissCandidates({
-      workflowName: 'test',
-      nextId: 11,
-      updatedAt: '2026-01-01T00:00:00.000Z',
-      findings,
-      evidenceRecords: [],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [],
+      ...baseLedger,
+      rawRecoveryAttempts: [1, 2].map((attempt) => createRawRecoveryAttempt({
+        provisionalFindingId: 'F-0009',
+        expectedHead,
+        sourceRawFindingId: `replay-${attempt}`,
+        sourceRawIntegrityDigest: null,
+        promptSnapshotDigest: String(attempt).repeat(64),
+        attempt,
+        startedAt: provisionalEntry({ revision: 1 }).lastSeen,
+      })),
     });
 
     expect([...candidates.keys()].sort()).toEqual(['F-0001', 'F-0002', 'F-0009']);
@@ -255,8 +259,9 @@ describe('assembleManagerOutput dismissDecisions', () => {
   it('active conflict が参照する finding への dismiss は拒否する（裁定経路を迂回させない）', () => {
     const ledger = makeLedger([provisionalEntry({ revision: 1 })], {
       conflicts: [{
-        id: 'C-FA2947446963',
-        status: 'active',
+    id: 'C-FA2947446963',
+    status: 'active',
+    revision: 1,
         findingIds: ['F-0001'],
         rawFindingIds: [],
         description: 'contradiction',
@@ -372,9 +377,13 @@ describe('reconcileFindingLedger dismissedFindings', () => {
 
     const dismissed = result.ledger.findings[0]!;
     expect(dismissed.status).toBe('dismissed');
-    expect(dismissed.revision).toBe(5);
-    expect(dismissed.rejectedObservations).toEqual([
-      expect.objectContaining({ rawFindingId: rawFinding.rawFindingId }),
+    expect(dismissed.revision).toBe(4);
+    expect(dismissed.rejectedObservations ?? []).toEqual([]);
+    expect(result.rejectedObservationAttachments).toEqual([
+      expect.objectContaining({
+        rawFindingId: rawFinding.rawFindingId,
+        rejectionCode: 'dismissed_same_round',
+      }),
     ]);
   });
 

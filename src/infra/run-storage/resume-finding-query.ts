@@ -18,6 +18,26 @@ export function readAllFindingEntries(
       evidence_id, record, digest
     FROM finding_evidence_records WHERE run_id = ?
     UNION ALL
+    SELECT 'evidence_binding', scope_id, revision, ordinal,
+      binding_id, record, digest
+    FROM finding_evidence_bindings WHERE run_id = ?
+    UNION ALL
+    SELECT 'lifecycle_reservation', scope_id, revision, ordinal,
+      reservation_id, record, digest
+    FROM finding_lifecycle_reservations WHERE run_id = ?
+    UNION ALL
+    SELECT 'lifecycle_event', scope_id, revision, ordinal,
+      event_id, record, digest
+    FROM finding_lifecycle_events WHERE run_id = ?
+    UNION ALL
+    SELECT 'raw_recovery_attempt', scope_id, revision, ordinal,
+      attempt_id, record, digest
+    FROM finding_raw_recovery_attempts WHERE run_id = ?
+    UNION ALL
+    SELECT 'raw_recovery_result', scope_id, revision, ordinal,
+      result_id, record, digest
+    FROM finding_raw_recovery_results WHERE run_id = ?
+    UNION ALL
     SELECT 'raw', scope_id, revision, ordinal,
       raw_finding_id, record, digest
     FROM finding_raw_entries WHERE run_id = ?
@@ -34,7 +54,7 @@ export function readAllFindingEntries(
       anomaly_id, record, digest
     FROM finding_reviewer_anomaly_entries WHERE run_id = ?
     ORDER BY scopeId, revision, entryKind, ordinal
-  `, runId, runId, runId, runId, runId, runId);
+  `, runId, runId, runId, runId, runId, runId, runId, runId, runId, runId, runId);
   assertFindingEntryRows(rows);
   return rows;
 }

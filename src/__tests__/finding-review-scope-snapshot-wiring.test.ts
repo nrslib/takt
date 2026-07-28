@@ -37,6 +37,10 @@ import type { FindingManagerValidationReport } from '../core/workflow/findings/s
 import { makeRule, makeStep } from './test-helpers.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
+import {
+  authorizeFindingLedgerFixture,
+  emptyFindingAuthorityProjection,
+} from './helpers/finding-lifecycle-fixture.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -217,6 +221,7 @@ function makeRunner(options: {
     rawFindings: [],
     conflicts: [],
     interpretations: [],
+    ...emptyFindingAuthorityProjection(),
   });
   let findingLedgerStore: NonNullable<ParallelRunnerDeps['findingLedgerStore']>;
   findingLedgerStore = {
@@ -364,7 +369,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         targetFindingId: 'F-0001',
         evidence: [evidence],
       }];
-      let ledger: FindingLedger = {
+      let ledger: FindingLedger = authorizeFindingLedgerFixture({
         workflowName: 'test-workflow',
         nextId: 2,
         updatedAt: '2026-07-13T00:00:00.000Z',
@@ -397,7 +402,8 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         evidenceRecords: [],
         conflicts: [],
         interpretations: [],
-      };
+        ...emptyFindingAuthorityProjection(),
+      });
       const ledgerStore = deps.findingLedgerStore!;
       await ledgerStore.updateLedger(() => ({ ledger, result: undefined }));
       vi.mocked(ledgerStore.saveRawFindings).mockReturnValue(join(projectCwd, 'raw-findings.json'));

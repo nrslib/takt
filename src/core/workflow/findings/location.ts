@@ -56,8 +56,3 @@ export function parseFindingLocationRange(location: string | undefined): ParsedF
   }
   return { path: match[1]!.trim(), startLine: Number(match[2]), endLine: Number(match[3]) };
 }
-
-/** Normalizes free text for identity comparisons: trims and collapses internal whitespace. Case is preserved because exact-duplicate checks should not conflate differently-cased identifiers. */
-export function normalizeFindingText(value: string): string {
-  return value.trim().replace(/\s+/g, ' ');
-}

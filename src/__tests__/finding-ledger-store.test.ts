@@ -79,6 +79,16 @@ import type {
   RawFinding,
 } from '../core/workflow/findings/types.js';
 import { parseFindingLedger } from '../core/models/finding-schemas.js';
+import { computeClaimIdentityHash } from '../core/models/finding-claim-identity.js';
+import {
+  computeFileQuoteEvidenceRecordId,
+  createEngineProofRecord,
+} from '../core/models/finding-evidence-record.js';
+import { computeRawFindingIntegrityDigest } from '../core/models/finding-raw-integrity.js';
+import {
+  createFindingEvidenceBinding,
+  createFindingLifecycleReservation,
+} from '../core/models/finding-lifecycle-identity.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import { runManagerRoundExclusive } from '../core/workflow/findings/manager-round-lock.js';
 import { runLedgerUpdateExclusive } from '../core/workflow/findings/ledger-identity-queue.js';
@@ -89,10 +99,20 @@ import {
 } from '../core/workflow/findings/manager-pending-commit.js';
 import { resumePendingManagerCommit } from '../core/workflow/findings/manager-commit.js';
 import {
+  applyVerifiedLifecycleMutation,
+  captureFindingLifecycleHead,
+  reserveVerifiedLifecycleMutation,
+} from '../core/workflow/findings/lifecycle-mutation.js';
+import { captureFindingMutationPrecondition } from '../core/workflow/findings/finding-preconditions.js';
+import {
   publishReportFile,
   writeReportFile,
 } from '../core/workflow/report-writer.js';
 import * as privateFile from '../shared/utils/private-file.js';
+import {
+  authorizeFindingLedgerFixture,
+  emptyFindingAuthorityProjection,
+} from './helpers/finding-lifecycle-fixture.js';
 
 const TEST_INTEGRITY_DIGEST = 'a'.repeat(64);
 const cleanupDirs = new Set<string>();
@@ -110,7 +130,7 @@ function makeRunReportDir(projectCwd: string, runId = `run-${randomUUID()}`): st
 }
 
 function makeLedger(): FindingLedger {
-  return {
+  return authorizeFindingLedgerFixture({
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
@@ -118,22 +138,224 @@ function makeLedger(): FindingLedger {
     rawFindings: [],
     conflicts: [],
     interpretations: [],
-    findings: [
-      {
-        id: 'F-0001',
-        status: 'open',
-        lifecycle: 'new',
-        revision: 1,
-        severity: 'high',
-        title: 'Open issue',
-        evidenceIds: [],
-        reviewers: ['coding-reviewer'],
-        rawFindingIds: ['raw-1'],
-        firstSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
-        lastSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
-      },
-    ],
+    findings: [{
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'new',
+      revision: 1,
+      severity: 'high',
+      title: 'Open issue',
+      description: 'Open issue evidence.',
+      evidenceIds: [],
+      reviewers: ['coding-reviewer'],
+      rawFindingIds: [],
+      firstSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+      lastSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+    }],
+    ...emptyFindingAuthorityProjection(),
+  });
+}
+
+function applyFixtureFindingMutation(
+  ledger: FindingLedger,
+  finding: FindingLedger['findings'][number],
+  operation: 'update_provisional' | 'resolve_finding',
+): FindingLedger {
+  const expectedHead = captureFindingLifecycleHead(ledger, 'finding', finding.id);
+  if (expectedHead === undefined) {
+    throw new Error(`Missing fixture lifecycle head for "${finding.id}"`);
+  }
+  const raw: RawFinding | undefined = operation === 'resolve_finding'
+    ? {
+        rawFindingId: `fixture-resolution:${finding.id}:${finding.revision}`,
+        stepName: finding.lastSeen.stepName,
+        reviewer: 'fixture-reviewer',
+        familyTag: 'fixture',
+        severity: finding.severity,
+        title: finding.title,
+        description: finding.description ?? finding.title,
+        suggestion: null,
+        relation: 'resolution_confirmation',
+        targetFindingId: finding.id,
+        targetPrecondition: captureFindingMutationPrecondition(ledger, finding.id)!,
+        evidence: [{
+          kind: 'file_quote',
+          path: `fixtures/${finding.id}-resolution.ts`,
+          startLine: 1,
+          endLine: 1,
+          verbatimExcerpt: finding.description ?? finding.title,
+          snapshotId: sha256(`fixture-resolution-snapshot:${finding.id}:${finding.revision}`),
+        }],
+      }
+    : undefined;
+  const claimIdentityHash = raw === undefined
+    ? computeClaimIdentityHash({
+        targetFindingId: finding.id,
+        title: finding.title,
+        description: finding.description ?? '',
+      })
+    : computeClaimIdentityHash(raw);
+  const evidenceRecord = raw === undefined
+    ? createEngineProofRecord({
+        kind: 'engine_proof',
+        verifierId: 'takt.finding-lifecycle-policy',
+        verifierVersion: '1',
+        workflowName: ledger.workflowName,
+        runId: finding.lastSeen.runId,
+        scopeIdentity: 'finding-ledger-store-fixture',
+        snapshotId: sha256(`fixture-snapshot:${operation}:${finding.id}:${finding.revision}`),
+        claimIdentityHash,
+        targetFindingId: finding.id,
+        subject: {
+          kind: 'named_structural_check',
+          checkId: 'finding-provisional-isolation',
+          parameters: {
+            provisionalKind: finding.provisional!.kind,
+            stableKey: finding.provisional!.stableKey,
+          },
+        },
+        dependencyDigests: [expectedHead.projectionDigest],
+        resultDigest: sha256(`fixture-result:${operation}:${finding.id}:${finding.revision}`),
+        issuedAt: finding.lastSeen.timestamp,
+      })
+    : (() => {
+        const quote = raw.evidence[0]!;
+        if (quote.kind !== 'file_quote') {
+          throw new Error('Expected fixture resolution quote');
+        }
+        const payload = {
+          ...quote,
+          claimIdentityHash,
+          fileHash: sha256(`fixture-resolution-file:${finding.id}:${finding.revision}`),
+        };
+        return {
+          evidenceId: computeFileQuoteEvidenceRecordId(payload),
+          ...payload,
+        };
+      })();
+  const target = {
+    entityKind: 'finding' as const,
+    entityId: finding.id,
+    expectedHead,
   };
+  const binding = createFindingEvidenceBinding({
+    evidenceId: evidenceRecord.evidenceId,
+    claimIdentityHash,
+    sourceRawFindingId: raw?.rawFindingId ?? null,
+    sourceRawIntegrityDigest: raw === undefined
+      ? null
+      : computeRawFindingIntegrityDigest(raw),
+    operation,
+    target,
+  });
+  const reservation = createFindingLifecycleReservation({
+    operation,
+    targets: [target],
+    evidenceBindingIds: [binding.bindingId],
+    authority: { kind: 'verified_evidence' },
+    context: { kind: 'transaction' },
+    reservedAt: finding.lastSeen,
+  });
+  const pending = reserveVerifiedLifecycleMutation({
+    ...ledger,
+    evidenceRecords: [...ledger.evidenceRecords, evidenceRecord],
+    rawFindings: raw === undefined ? ledger.rawFindings : [...ledger.rawFindings, raw],
+  }, {
+    reservation,
+    evidenceBindings: [binding],
+  });
+  return applyVerifiedLifecycleMutation(pending, {
+    mutationId: reservation.mutationId,
+    findings: [{
+      ...finding,
+      evidenceIds: [...new Set([
+        ...finding.evidenceIds,
+        evidenceRecord.evidenceId,
+      ])].sort(),
+      rawFindingIds: raw === undefined
+        ? finding.rawFindingIds
+        : [...new Set([...finding.rawFindingIds, raw.rawFindingId])].sort(),
+    }],
+    conflicts: [],
+    occurredAt: finding.lastSeen,
+  });
+}
+
+function applyFixtureConflictCreation(
+  ledger: FindingLedger,
+  conflict: FindingLedger['conflicts'][number],
+): FindingLedger {
+  const rawTargetFindingId = conflict.findingIds[0]!;
+  const raw: RawFinding = {
+    rawFindingId: `fixture-conflict:${conflict.id}`,
+    stepName: conflict.lastSeen.stepName,
+    reviewer: 'fixture-reviewer',
+    familyTag: 'fixture',
+    severity: 'high',
+    title: `Conflict ${conflict.id}`,
+    description: conflict.description,
+    suggestion: null,
+    relation: 'persists',
+    targetFindingId: rawTargetFindingId,
+    targetPrecondition: captureFindingMutationPrecondition(ledger, rawTargetFindingId)!,
+    evidence: [{
+      kind: 'file_quote',
+      path: `fixtures/${conflict.id}.ts`,
+      startLine: 1,
+      endLine: 1,
+      verbatimExcerpt: conflict.description,
+      snapshotId: sha256(`fixture-conflict-snapshot:${conflict.id}`),
+    }],
+  };
+  const claimIdentityHash = computeClaimIdentityHash(raw);
+  const quote = raw.evidence[0]!;
+  if (quote.kind !== 'file_quote') {
+    throw new Error('Expected fixture conflict quote');
+  }
+  const recordPayload = {
+    ...quote,
+    claimIdentityHash,
+    fileHash: sha256(`fixture-conflict-file:${conflict.id}`),
+  };
+  const record = {
+    evidenceId: computeFileQuoteEvidenceRecordId(recordPayload),
+    ...recordPayload,
+  };
+  const target = {
+    entityKind: 'conflict' as const,
+    entityId: conflict.id,
+    expectedHead: null,
+  };
+  const binding = createFindingEvidenceBinding({
+    evidenceId: record.evidenceId,
+    claimIdentityHash,
+    sourceRawFindingId: raw.rawFindingId,
+    sourceRawIntegrityDigest: computeRawFindingIntegrityDigest(raw),
+    operation: 'create_conflict',
+    target,
+  });
+  const reservation = createFindingLifecycleReservation({
+    operation: 'create_conflict',
+    targets: [target],
+    evidenceBindingIds: [binding.bindingId],
+    authority: { kind: 'verified_evidence' },
+    context: { kind: 'transaction' },
+    reservedAt: conflict.lastSeen,
+  });
+  const pending = reserveVerifiedLifecycleMutation({
+    ...ledger,
+    evidenceRecords: [...ledger.evidenceRecords, record],
+    rawFindings: [...ledger.rawFindings, raw],
+  }, {
+    reservation,
+    evidenceBindings: [binding],
+  });
+  return applyVerifiedLifecycleMutation(pending, {
+    mutationId: reservation.mutationId,
+    findings: [],
+    conflicts: [conflict],
+    occurredAt: conflict.lastSeen,
+  });
 }
 
 function createStore(options: {
@@ -294,6 +516,7 @@ describe('FindingLedgerStore', () => {
         conflicts: [{
           id: formatConflictId({ findingIds: ['F-0001'], rawFindingIds: ['raw-1'] }),
           status: 'resolved',
+          revision: 1,
           findingIds: ['F-0001'],
           rawFindingIds: ['raw-1'],
           description: 'Resolved conflict.',
@@ -316,31 +539,13 @@ describe('FindingLedgerStore', () => {
     }
   });
 
-  it('should normalize every semantic timestamp before saving the ledger', async () => {
+  it('should normalize top-level and budget semantic timestamps before saving the ledger', async () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeRunReportDir(projectCwd);
     const store = createStore({ projectCwd, reportDir });
     const ledger = {
       ...makeLedger(),
       updatedAt: '2026-06-13T00:15:00+02:00',
-      findings: makeLedger().findings.map((finding) => ({
-        ...finding,
-        firstSeen: { ...finding.firstSeen, timestamp: '2026-06-13T00:15:00+02:00' },
-        lastSeen: { ...finding.lastSeen, timestamp: '2026-06-13T00:15:00+02:00' },
-        resolvedAt: '2026-06-13T00:15:00+02:00',
-        invalidatedAt: '2026-06-13T00:15:00+02:00',
-      })),
-      conflicts: [{
-        id: formatConflictId({ findingIds: ['F-0001'], rawFindingIds: ['raw-1'] }),
-        status: 'resolved',
-        findingIds: ['F-0001'],
-        rawFindingIds: ['raw-1'],
-        description: 'Resolved conflict.',
-        firstSeen: makeLedger().findings[0]!.firstSeen,
-        lastSeen: makeLedger().findings[0]!.lastSeen,
-        resolvedAt: '2026-06-13T00:15:00+02:00',
-        resolvedEvidence: 'evidence',
-      }],
       stopBudget: { roundMarkers: ['round-1'], firstRoundAt: '2026-06-13T00:15:00+02:00', exhausted: false },
       reviewIntegrity: { roundMarkers: ['round-1'], firstRoundAt: '2026-06-13T00:15:00+02:00', exhausted: false },
     };
@@ -350,12 +555,7 @@ describe('FindingLedgerStore', () => {
     const saved = parseFindingLedger(JSON.parse(
       readFileSync(join(projectCwd, '.takt/findings/peer-review.json'), 'utf-8'),
     ));
-    expect(saved.findings[0]?.firstSeen.timestamp).toBe('2026-06-12T22:15:00.000Z');
-    expect(saved.findings[0]?.lastSeen.timestamp).toBe('2026-06-12T22:15:00.000Z');
     expect(saved.updatedAt).toBe('2026-06-12T22:15:00.000Z');
-    expect(saved.findings[0]?.resolvedAt).toBe('2026-06-12T22:15:00.000Z');
-    expect(saved.findings[0]?.invalidatedAt).toBe('2026-06-12T22:15:00.000Z');
-    expect(saved.conflicts[0]?.resolvedAt).toBe('2026-06-12T22:15:00.000Z');
     expect(saved.stopBudget?.firstRoundAt).toBe('2026-06-12T22:15:00.000Z');
     expect(saved.reviewIntegrity?.firstRoundAt).toBe('2026-06-12T22:15:00.000Z');
   });
@@ -401,23 +601,24 @@ describe('FindingLedgerStore', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeRunReportDir(projectCwd);
     const store = createStore({ projectCwd, reportDir });
-    const ledger = makeLedger();
+    let ledger = makeLedger();
     const lineageKey = 'lineage-interrupted';
-    ledger.findings[0] = {
+    ledger = applyFixtureFindingMutation(ledger, {
       ...ledger.findings[0]!,
+      revision: ledger.findings[0]!.revision + 1,
       provisional: {
         kind: 'interpretation-interrupted',
         stableKey: 'provisional-interrupted',
         lineageKey,
         sourceRawFindingIds: ['raw-1'],
         reason: 'interrupted',
-        firstObservedAt: ledger.findings[0]!.firstSeen,
-        lastObservedAt: ledger.findings[0]!.lastSeen,
+        firstObservedAt: { ...ledger.findings[0]!.firstSeen },
+        lastObservedAt: { ...ledger.findings[0]!.lastSeen },
         interpretationEpochs: 0,
         gateEffect: 'block',
         firstObservedRound: 1,
       },
-    };
+    }, 'update_provisional');
     ledger.interpretations = [{
       interpretationKey: 'interpretation-1',
       baseInterpretationKey: 'interpretation-base-1',
@@ -441,23 +642,24 @@ describe('FindingLedgerStore', () => {
   it('should not consume a pending interpretation epoch in a run-local copy', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeRunReportDir(projectCwd);
-    const ledger = makeLedger();
+    let ledger = makeLedger();
     const lineageKey = 'lineage-run-copy';
-    ledger.findings[0] = {
+    ledger = applyFixtureFindingMutation(ledger, {
       ...ledger.findings[0]!,
+      revision: ledger.findings[0]!.revision + 1,
       provisional: {
         kind: 'interpretation-interrupted',
         stableKey: 'provisional-run-copy',
         lineageKey,
         sourceRawFindingIds: ['raw-1'],
         reason: 'interrupted',
-        firstObservedAt: ledger.findings[0]!.firstSeen,
-        lastObservedAt: ledger.findings[0]!.lastSeen,
+        firstObservedAt: { ...ledger.findings[0]!.firstSeen },
+        lastObservedAt: { ...ledger.findings[0]!.lastSeen },
         interpretationEpochs: 0,
         gateEffect: 'block',
         firstObservedRound: 1,
       },
-    };
+    }, 'update_provisional');
     ledger.interpretations = [{
       interpretationKey: 'interpretation-run-copy',
       baseInterpretationKey: 'interpretation-base-run-copy',
@@ -487,23 +689,24 @@ describe('FindingLedgerStore', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeRunReportDir(projectCwd);
     const store = createStore({ projectCwd, reportDir });
-    const ledger = makeLedger();
+    let ledger = makeLedger();
     const lineageKey = 'lineage-revalidated';
-    ledger.findings[0] = {
+    ledger = applyFixtureFindingMutation(ledger, {
       ...ledger.findings[0]!,
+      revision: ledger.findings[0]!.revision + 1,
       provisional: {
         kind: 'interpretation-interrupted',
         stableKey: 'provisional-revalidated',
         lineageKey,
         sourceRawFindingIds: ['raw-1'],
         reason: 'interrupted',
-        firstObservedAt: ledger.findings[0]!.firstSeen,
-        lastObservedAt: ledger.findings[0]!.lastSeen,
+        firstObservedAt: { ...ledger.findings[0]!.firstSeen },
+        lastObservedAt: { ...ledger.findings[0]!.lastSeen },
         interpretationEpochs: 0,
         gateEffect: 'block',
         firstObservedRound: 1,
       },
-    };
+    }, 'update_provisional');
     ledger.interpretations = [{
       interpretationKey: 'interpretation-revalidated',
       baseInterpretationKey: 'interpretation-base-revalidated',
@@ -527,19 +730,12 @@ describe('FindingLedgerStore', () => {
           ...mutation,
           ledger: {
             ...mutation.ledger,
-            findings: mutation.ledger.findings.map((finding) => (
-              finding.id === 'F-0001'
-                ? {
-                  ...finding,
-                  firstSeen: { ...finding.firstSeen, timestamp: '2026-06-13T00:15:00+02:00' },
-                  lastSeen: { ...finding.lastSeen, timestamp: '2026-06-13T00:15:00+02:00' },
-                  provisional: {
-                    ...finding.provisional!,
-                    interpretationEpochs: 0,
-                  },
-                }
-                : finding
-            )),
+            findings: mutation.ledger.findings.map((finding) => ({
+              ...finding,
+              provisional: finding.provisional === undefined
+                ? undefined
+                : { ...finding.provisional, interpretationEpochs: 0 },
+            })),
           },
         },
       }),
@@ -550,8 +746,6 @@ describe('FindingLedgerStore', () => {
       readFileSync(join(projectCwd, '.takt/findings/peer-review.json'), 'utf-8'),
     ));
     expect(persisted.findings[0]?.provisional?.interpretationEpochs).toBe(0);
-    expect(persisted.findings[0]?.firstSeen.timestamp).toBe('2026-06-12T22:15:00.000Z');
-    expect(persisted.findings[0]?.lastSeen.timestamp).toBe('2026-06-12T22:15:00.000Z');
     expect(store.loadLedger().findings[0]?.provisional?.interpretationEpochs).toBe(0);
   });
 
@@ -630,7 +824,7 @@ describe('FindingLedgerStore', () => {
     expect(existsSync(join(projectCwd, '.takt/findings/peer-review.json'))).toBe(true);
   });
 
-  it('should reject adjudication attempts without reservation tokens through normal schema validation', () => {
+  it('should reject removed conflict adjudication attempt registries through normal schema validation', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeRunReportDir(projectCwd);
     const projectLedgerPath = join(projectCwd, '.takt/findings/peer-review.json');
@@ -640,6 +834,7 @@ describe('FindingLedgerStore', () => {
       conflicts: [{
         id: 'C-FA2947446963',
         status: 'active',
+        revision: 1,
         findingIds: ['F-0001'],
         rawFindingIds: [],
         description: 'active conflict',
@@ -657,7 +852,7 @@ describe('FindingLedgerStore', () => {
     }), 'utf-8');
     const store = createStore({ projectCwd, reportDir });
 
-    expect(() => store.loadLedger()).toThrow(/reservationToken/);
+    expect(() => store.loadLedger()).toThrow(/adjudicationAttempts/);
   });
 
   it('should create the run-local ledger copy as owner-only read-only', async () => {
@@ -996,6 +1191,10 @@ describe('FindingLedgerStore', () => {
       ...makeLedger(),
       nextId: 1,
       findings: [],
+      evidenceRecords: [],
+      evidenceBindings: [],
+      lifecycleReservations: [],
+      lifecycleEvents: [],
     }), 'utf-8');
     const store = createStore({ projectCwd, reportDir });
 
@@ -1248,6 +1447,7 @@ describe('FindingLedgerStore', () => {
     const roundMarker = 'round-pending';
     const conflictWithoutId = {
       status: 'active' as const,
+      revision: 1,
       findingIds: ['F-0001'],
       rawFindingIds: ['raw-pending'],
       description: 'Pending conflict.',
@@ -1262,35 +1462,40 @@ describe('FindingLedgerStore', () => {
         timestamp: '2026-06-14T00:00:00.000Z',
       },
     };
-    const completedLedger: FindingLedger = {
+    const pendingRaw: RawFinding = {
+      rawFindingId: 'raw-pending',
+      stepName: 'reviewers',
+      reviewer: 'reviewer',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Pending raw',
+      description: 'Pending raw description.',
+      suggestion: null,
+      relation: 'new',
+      targetFindingId: null,
+      evidence: [],
+    };
+    const resolvedFinding = {
+      ...previousLedger.findings[0]!,
+      status: 'resolved' as const,
+      lifecycle: 'resolved' as const,
+      revision: previousLedger.findings[0]!.revision + 1,
+      resolvedAt: '2026-06-14T00:00:00.000Z',
+      resolvedEvidence: 'Resolved in the pending round.',
+      lastSeen: conflictWithoutId.lastSeen,
+    };
+    const withResolvedFinding = applyFixtureFindingMutation({
       ...previousLedger,
+      rawFindings: [...previousLedger.rawFindings, pendingRaw],
+    }, resolvedFinding, 'resolve_finding');
+    const withPendingConflict = applyFixtureConflictCreation(withResolvedFinding, {
+      id: formatConflictId(conflictWithoutId),
+      ...conflictWithoutId,
+    });
+    const completedLedger: FindingLedger = {
+      ...withPendingConflict,
       nextId: 3,
       updatedAt: '2026-06-14T00:00:00.000Z',
-      findings: previousLedger.findings.map((finding) => ({
-        ...finding,
-        status: 'resolved',
-        lifecycle: 'resolved',
-        revision: finding.revision + 1,
-        resolvedAt: '2026-06-14T00:00:00.000Z',
-        resolvedEvidence: 'Resolved in the pending round.',
-      })),
-      rawFindings: [{
-        rawFindingId: 'raw-pending',
-        stepName: 'reviewers',
-        reviewer: 'reviewer',
-        familyTag: 'bug',
-        severity: 'high',
-        title: 'Pending raw',
-        description: 'Pending raw description.',
-        suggestion: null,
-        relation: 'new',
-        targetFindingId: null,
-        evidence: [],
-      }],
-      conflicts: [{
-        id: formatConflictId(conflictWithoutId),
-        ...conflictWithoutId,
-      }],
       interpretations: [{
         interpretationKey: 'pending-interpretation:1',
         baseInterpretationKey: 'pending-interpretation',

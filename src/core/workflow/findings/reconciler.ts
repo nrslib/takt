@@ -40,7 +40,14 @@ import {
   assertRawFindingsAppendOnly,
   computeCanonicalRawIntegrityDigest,
 } from './finding-integrity.js';
-import { findingEvidenceRecordIdentityViolation } from '../../models/finding-evidence-record.js';
+import {
+  evidenceRecordMatchesRawEvidence,
+  findingEvidenceRecordIdentityViolation,
+} from '../../models/finding-evidence-record.js';
+import type {
+  FindingLifecycleCommand,
+  LifecycleEvidenceSource,
+} from './lifecycle-transaction.js';
 
 /**
  * provisional finding の upsert 指示。stableKey が同じ
@@ -350,9 +357,7 @@ function withoutConflictResolutionFields(
     firstSeen: conflict.firstSeen,
     lastSeen: conflict.lastSeen,
     ...(conflict.adjudications !== undefined ? { adjudications: conflict.adjudications } : {}),
-    ...(conflict.adjudicationAttempts !== undefined
-      ? { adjudicationAttempts: conflict.adjudicationAttempts }
-      : {}),
+    revision: conflict.revision,
   };
 }
 
@@ -363,8 +368,33 @@ function reconcileLedgerConflicts(input: {
   rawFindingIds: Set<string>;
   usedRawFindingIds: Set<string>;
   context: FindingReconcileContext;
-}): FindingLedgerConflict[] {
+}): {
+  conflicts: FindingLedgerConflict[];
+  lifecycleCommands: FindingLifecycleCommand[];
+} {
   const conflictsById = new Map(input.previousLedger.conflicts.map((conflict) => [conflict.id, { ...conflict }]));
+  const lifecycleCommands: FindingLifecycleCommand[] = [];
+  const appendCommand = (
+    operation: 'create_conflict' | 'observe_conflict' | 'resolve_conflict',
+    conflict: FindingLedgerConflict,
+    authority: FindingLifecycleCommand['authority'],
+    rawFindingIds: readonly string[],
+  ): void => {
+    const { revision: _revision, ...projection } = conflict;
+    void _revision;
+    lifecycleCommands.push({
+      operation,
+      changes: { findings: [], conflicts: [projection] },
+      authority,
+      evidenceSourcesByTarget: new Map([[
+        `conflict\0${conflict.id}`,
+        {
+          sourceRawFindingIds: [...rawFindingIds].sort(compareBinaryStrings),
+          authorityEvidenceIds: [],
+        },
+      ]]),
+    });
+  };
 
   for (const resolvedConflict of input.managerOutput.resolvedConflicts) {
     assertKnownConflict(conflictsById, resolvedConflict.conflictId);
@@ -372,12 +402,26 @@ function reconcileLedgerConflicts(input: {
     if (conflict.status !== 'active') {
       throw new Error(`Cannot resolve conflict "${conflict.id}" because it is not active`);
     }
-    conflictsById.set(conflict.id, {
+    const updated: FindingLedgerConflict = {
       ...conflict,
       status: 'resolved',
       resolvedAt: input.context.timestamp,
       resolvedEvidence: resolvedConflict.evidence,
-    });
+      revision: conflict.revision + 1,
+    };
+    conflictsById.set(conflict.id, updated);
+    appendCommand(
+      'resolve_conflict',
+      updated,
+      {
+        kind: 'engine_policy',
+        decisionKind: 'resolve_conflict',
+        decisionDigest: createHash('sha256')
+          .update(canonicalJson(resolvedConflict))
+          .digest('hex'),
+      },
+      [],
+    );
   }
 
   for (const conflict of input.managerOutput.conflicts) {
@@ -405,23 +449,46 @@ function reconcileLedgerConflicts(input: {
         description: conflict.description,
         firstSeen: observationFromContext(input.context),
         lastSeen: observationFromContext(input.context),
+        revision: 1,
       };
 
-    conflictsById.set(conflictId, {
+    const updated: FindingLedgerConflict = {
       ...base,
       status: 'active',
       rawFindingIds: mergeBinarySortedUniqueStrings(base.rawFindingIds, conflict.rawFindingIds),
       description: conflict.description,
       lastSeen: observationFromContext(input.context),
-    });
+      revision: existing === undefined ? 1 : existing.revision + 1,
+    };
+    conflictsById.set(conflictId, updated);
+    appendCommand(
+      existing === undefined ? 'create_conflict' : 'observe_conflict',
+      updated,
+      { kind: 'verified_evidence' },
+      conflict.rawFindingIds,
+    );
   }
 
-  return [...conflictsById.values()];
+  return {
+    conflicts: [...conflictsById.values()],
+    lifecycleCommands,
+  };
 }
 
 type ManagerOutputValidator = typeof validateFindingManagerOutput;
 
 export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): FindingLedger {
+  return reconcileFindingLedgerPlan(input).ledger;
+}
+
+export interface ReconcileFindingLedgerPlan {
+  ledger: FindingLedger;
+  lifecycleCommands: FindingLifecycleCommand[];
+}
+
+export function reconcileFindingLedgerPlan(
+  input: ReconcileFindingLedgerInput,
+): ReconcileFindingLedgerPlan {
   assertCanonicalReconcileInput(input);
   return reconcileFindingLedgerWithValidator(input, validateFindingManagerOutput);
 }
@@ -440,7 +507,7 @@ export function reconcileManagerActionRecovery(input: Pick<
       verifiedEvidenceRecordsByRawFindingId: new Map(),
     },
     validateManagerActionRecoveryOutput,
-  );
+  ).ledger;
 }
 
 function assertCanonicalReconcileInput(input: ReconcileFindingLedgerInput): void {
@@ -538,21 +605,10 @@ function assertVerifiedEvidenceBindings(input: ReconcileFindingLedgerInput): voi
           `Verified evidence record "${record.evidenceId}" claim identity does not match raw finding "${rawFindingId}"`,
         );
       }
-      const evidenceIndex = raw.evidence.findIndex((evidence, index) => {
-        if (matchedRawEvidence.has(index) || evidence.kind !== record.kind) {
-          return false;
-        }
-        if (record.kind === 'engine_proof') {
-          return evidence.kind === 'engine_proof'
-            && evidence.proofId === record.proofId;
-        }
-        return evidence.kind === 'file_quote'
-          && evidence.path === record.path
-          && evidence.startLine === record.startLine
-          && evidence.endLine === record.endLine
-          && evidence.verbatimExcerpt === record.verbatimExcerpt
-          && evidence.snapshotId === record.snapshotId;
-      });
+      const evidenceIndex = raw.evidence.findIndex((evidence, index) => (
+        !matchedRawEvidence.has(index)
+        && evidenceRecordMatchesRawEvidence(record, evidence)
+      ));
       if (evidenceIndex < 0) {
         throw new Error(
           `Verified evidence record "${record.evidenceId}" is not bound to raw finding "${rawFindingId}" evidence`,
@@ -690,7 +746,7 @@ function assertExactlyOneRawOutcome(input: ReconcileFindingLedgerInput): void {
 function reconcileFindingLedgerWithValidator(
   input: ReconcileFindingLedgerInput,
   validateOutput: ManagerOutputValidator,
-): FindingLedger {
+): ReconcileFindingLedgerPlan {
   const validation = validateOutput({
     previousLedger: input.previousLedger,
     rawFindings: input.rawFindings,
@@ -717,6 +773,45 @@ function reconcileFindingLedgerWithValidator(
   const updatedById = new Map<string, FindingRecord>(
     input.previousLedger.findings.map((finding) => [finding.id, { ...finding }]),
   );
+  const lifecycleCommands: FindingLifecycleCommand[] = [];
+  const findingCommand = (
+    operation: FindingLifecycleCommand['operation'],
+    findings: readonly FindingRecord[],
+    authority: FindingLifecycleCommand['authority'],
+    sources: ReadonlyMap<string, LifecycleEvidenceSource>,
+  ): void => {
+    lifecycleCommands.push({
+      operation,
+      changes: {
+        findings: findings.map((finding) => {
+          const { revision: _revision, ...projection } = finding;
+          void _revision;
+          return projection;
+        }),
+        conflicts: [],
+      },
+      authority,
+      evidenceSourcesByTarget: sources,
+    });
+  };
+  const verifiedFindingSources = (
+    findingIds: readonly string[],
+    rawFindingIds: readonly string[],
+  ): Map<string, LifecycleEvidenceSource> => new Map(findingIds.map((findingId) => [
+    `finding\0${findingId}`,
+    {
+      sourceRawFindingIds: [...rawFindingIds].sort(compareBinaryStrings),
+      authorityEvidenceIds: [],
+    },
+  ]));
+  const policyAuthority = (
+    decisionKind: 'waive' | 'dispute' | 'dismiss' | 'semantic_duplicate',
+    decision: unknown,
+  ): FindingLifecycleCommand['authority'] => ({
+    kind: 'engine_policy',
+    decisionKind,
+    decisionDigest: createHash('sha256').update(canonicalJson(decision)).digest('hex'),
+  });
 
   for (const match of input.managerOutput.matches) {
     assertKnownFinding(knownFindingIds, match.findingId);
@@ -730,7 +825,7 @@ function reconcileFindingLedgerWithValidator(
       rawFindings: matchedRawFindings,
       observation: observationFromContext(input.context),
     });
-    updatedById.set(match.findingId, {
+    const updated: FindingRecord = {
       ...finding,
       status: 'open',
       lifecycle: finding.lifecycle === 'reopened' ? 'reopened' : 'persists',
@@ -743,7 +838,14 @@ function reconcileFindingLedgerWithValidator(
         ),
       ),
       ...evidence,
-    });
+    };
+    updatedById.set(match.findingId, updated);
+    findingCommand(
+      'persist_finding',
+      [updated],
+      { kind: 'verified_evidence' },
+      verifiedFindingSources([match.findingId], match.rawFindingIds),
+    );
   }
 
   for (const resolved of input.managerOutput.resolvedFindings) {
@@ -760,7 +862,7 @@ function reconcileFindingLedgerWithValidator(
       usedRawFindingIds,
       resolved.rawFindingIds.filter((rawFindingId) => currentRawFindingsById.has(rawFindingId)),
     );
-    updatedById.set(resolved.findingId, {
+    const updated: FindingRecord = {
       ...finding,
       status: 'resolved',
       lifecycle: 'resolved',
@@ -783,7 +885,14 @@ function reconcileFindingLedgerWithValidator(
       lastSeen: observationFromContext(input.context),
       resolvedAt: input.context.timestamp,
       resolvedEvidence: resolved.evidence,
-    });
+    };
+    updatedById.set(resolved.findingId, updated);
+    findingCommand(
+      'resolve_finding',
+      [updated],
+      { kind: 'verified_evidence' },
+      verifiedFindingSources([resolved.findingId], resolved.rawFindingIds),
+    );
   }
 
   for (const reopened of input.managerOutput.reopenedFindings) {
@@ -804,7 +913,7 @@ function reconcileFindingLedgerWithValidator(
     if (finding.status === 'dismissed') {
       delete reopenedFinding.provisional;
     }
-    updatedById.set(reopened.findingId, {
+    const updated: FindingRecord = {
       ...reopenedFinding,
       status: 'open',
       lifecycle: 'reopened',
@@ -818,7 +927,14 @@ function reconcileFindingLedgerWithValidator(
       ),
       ...evidence,
       reopenedEvidence: reopened.evidence,
-    });
+    };
+    updatedById.set(reopened.findingId, updated);
+    findingCommand(
+      'reopen_finding',
+      [updated],
+      { kind: 'verified_evidence' },
+      verifiedFindingSources([reopened.findingId], reopened.rawFindingIds),
+    );
   }
 
   for (const waived of input.managerOutput.waivedFindings) {
@@ -828,7 +944,7 @@ function reconcileFindingLedgerWithValidator(
     if (finding.severity === 'critical') {
       throw new Error(`Cannot waive finding "${finding.id}" because critical findings must stay open`);
     }
-    updatedById.set(waived.findingId, {
+    const updated: FindingRecord = {
       ...finding,
       status: 'waived',
       lifecycle: 'waived',
@@ -838,7 +954,14 @@ function reconcileFindingLedgerWithValidator(
         { reason: waived.reason, evidence: waived.evidence, decidedAt: observationFromContext(input.context) },
       ],
       lastSeen: observationFromContext(input.context),
-    });
+    };
+    updatedById.set(waived.findingId, updated);
+    findingCommand(
+      'waive_finding',
+      [updated],
+      policyAuthority('waive', waived),
+      verifiedFindingSources([waived.findingId], []),
+    );
   }
 
   for (const note of input.managerOutput.disputeNotes) {
@@ -846,14 +969,21 @@ function reconcileFindingLedgerWithValidator(
     const finding = updatedById.get(note.findingId)!;
     assertFindingStatus(finding, 'open', 'record a dispute on');
     // 却下された異議は記録のみ: status は open のまま（ゲートを塞ぎ続ける）
-    updatedById.set(note.findingId, {
+    const updated: FindingRecord = {
       ...finding,
       revision: bumpRevision(finding),
       disputes: [
         ...(finding.disputes ?? []),
         { reason: note.reason, evidence: note.evidence, recordedAt: observationFromContext(input.context) },
       ],
-    });
+    };
+    updatedById.set(note.findingId, updated);
+    findingCommand(
+      'record_dispute',
+      [updated],
+      policyAuthority('dispute', note),
+      verifiedFindingSources([note.findingId], []),
+    );
   }
 
   // invalidate はエンジンが decision-assembly.ts / manager-runner.ts で既に
@@ -863,14 +993,21 @@ function reconcileFindingLedgerWithValidator(
     assertKnownFinding(knownFindingIds, invalidated.findingId);
     const finding = updatedById.get(invalidated.findingId)!;
     assertFindingStatus(finding, 'open', 'invalidate');
-    updatedById.set(invalidated.findingId, {
+    const updated: FindingRecord = {
       ...finding,
       status: 'invalidated',
       lifecycle: 'invalidated',
       revision: bumpRevision(finding),
       invalidatedAt: input.context.timestamp,
       invalidatedEvidence: invalidated.evidence,
-    });
+    };
+    updatedById.set(invalidated.findingId, updated);
+    findingCommand(
+      'invalidate_finding',
+      [updated],
+      { kind: 'verified_evidence' },
+      verifiedFindingSources([invalidated.findingId], []),
+    );
   }
 
   // dismiss はエンジンが decision-assembly.ts で候補集合（open な provisional
@@ -883,7 +1020,7 @@ function reconcileFindingLedgerWithValidator(
     if (finding.provisional === undefined) {
       throw new Error(`Cannot dismiss finding "${dismissed.findingId}" because it is not provisional`);
     }
-    updatedById.set(dismissed.findingId, {
+    const updated: FindingRecord = {
       ...finding,
       status: 'dismissed',
       lifecycle: 'dismissed',
@@ -893,7 +1030,14 @@ function reconcileFindingLedgerWithValidator(
         reason: dismissed.reason,
         decidedAt: observationFromContext(input.context),
       },
-    });
+    };
+    updatedById.set(dismissed.findingId, updated);
+    findingCommand(
+      'dismiss_finding',
+      [updated],
+      policyAuthority('dismiss', dismissed),
+      verifiedFindingSources([dismissed.findingId], []),
+    );
   }
 
   // duplicateDecisions: duplicate 側の rawFindingIds/reviewers/disputes を
@@ -944,6 +1088,16 @@ function reconcileFindingLedgerWithValidator(
       ...(mergedDisputes !== undefined && mergedDisputes.length > 0 ? { disputes: mergedDisputes } : {}),
       lastSeen: observationFromContext(input.context),
     });
+    const duplicateFindingIds = [
+      duplicate.canonicalFindingId,
+      ...duplicate.duplicateFindingIds,
+    ];
+    findingCommand(
+      'supersede_findings',
+      duplicateFindingIds.map((findingId) => updatedById.get(findingId)!),
+      policyAuthority('semantic_duplicate', duplicate),
+      verifiedFindingSources(duplicateFindingIds, []),
+    );
   }
 
   const orderedNewFindings = [...input.managerOutput.newFindings].sort((left, right) => (
@@ -959,7 +1113,7 @@ function reconcileFindingLedgerWithValidator(
     const primaryRawFinding = selectPrimaryRawFinding(newRawFindings);
     const id = formatFindingId(nextId);
     nextId += 1;
-    return buildNewFinding({
+    const created = buildNewFinding({
       id,
       severity: newFinding.severity,
       title: newFinding.title,
@@ -972,9 +1126,16 @@ function reconcileFindingLedgerWithValidator(
         input.verifiedEvidenceRecordsByRawFindingId,
       ),
     });
+    findingCommand(
+      'create_finding',
+      [created],
+      { kind: 'verified_evidence' },
+      verifiedFindingSources([created.id], newFinding.rawFindingIds),
+    );
+    return created;
   });
 
-  const conflicts = reconcileLedgerConflicts({
+  const conflictPlan = reconcileLedgerConflicts({
     previousLedger: input.previousLedger,
     managerOutput: input.managerOutput,
     knownFindingIds,
@@ -982,8 +1143,16 @@ function reconcileFindingLedgerWithValidator(
     usedRawFindingIds,
     context: input.context,
   });
+  lifecycleCommands.push(...conflictPlan.lifecycleCommands);
+  const conflicts = conflictPlan.conflicts;
 
   const provisionalSpecs = input.provisionalFindings;
+  const provisionalBeforeById = new Map(
+    [...updatedById.entries()].map(([id, finding]) => [
+      id,
+      canonicalJson(JSON.parse(JSON.stringify(finding))),
+    ]),
+  );
   const provisionalNewFindings = applyProvisionalFindingSpecs({
     updatedById,
     ledger: input.previousLedger,
@@ -995,8 +1164,24 @@ function reconcileFindingLedgerWithValidator(
     },
     context: input.context,
   });
+  const provisionalChanges = [
+    ...[...updatedById.values()].filter((finding) => (
+      finding.provisional !== undefined
+      && provisionalBeforeById.get(finding.id)
+        !== canonicalJson(JSON.parse(JSON.stringify(finding)))
+    )),
+    ...provisionalNewFindings,
+  ];
+  for (const finding of provisionalChanges) {
+    findingCommand(
+      'update_provisional',
+      [finding],
+      { kind: 'verified_evidence' },
+      verifiedFindingSources([finding.id], []),
+    );
+  }
 
-  return {
+  const ledger: FindingLedger = {
     workflowName: input.context.workflowName,
     nextId,
     updatedAt: input.context.timestamp,
@@ -1006,6 +1191,11 @@ function reconcileFindingLedgerWithValidator(
       input.previousLedger.evidenceRecords,
       input.verifiedEvidenceRecordsByRawFindingId,
     ),
+    evidenceBindings: input.previousLedger.evidenceBindings,
+    lifecycleReservations: input.previousLedger.lifecycleReservations,
+    lifecycleEvents: input.previousLedger.lifecycleEvents,
+    rawRecoveryAttempts: input.previousLedger.rawRecoveryAttempts,
+    rawRecoveryResults: input.previousLedger.rawRecoveryResults,
     rawFindings: mergeRawFindingDetails(input.previousLedger.rawFindings, input.rawFindings),
     conflicts: [...conflicts].sort((left, right) => compareBinaryStrings(left.id, right.id)),
     interpretations: input.previousLedger.interpretations,
@@ -1013,6 +1203,7 @@ function reconcileFindingLedgerWithValidator(
       ? { reviewerAnomalies: input.previousLedger.reviewerAnomalies }
       : {}),
   };
+  return { ledger, lifecycleCommands };
 }
 
 /**
@@ -1169,3 +1360,4 @@ function applyProvisionalFindingSpecs(input: {
   }
   return created;
 }
+import { createHash } from 'node:crypto';

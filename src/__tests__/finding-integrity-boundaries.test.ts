@@ -4,6 +4,7 @@ import type {
   FindingLedgerEntry,
   RawFinding,
 } from '../core/workflow/findings/types.js';
+import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 import {
   candidateFromStoredRawFinding,
   canonicalRawIntegrityDigestOf,
@@ -35,6 +36,7 @@ import {
   computeRawFindingIntegrityDigest,
 } from '../core/workflow/findings/finding-integrity.js';
 import { normalizeFindingLedgerMutation } from '../core/workflow/findings/ledger-mutation.js';
+import { processInterpretationLiveClaims } from '../core/workflow/findings/interpretation-live-claims.js';
 
 const observation = {
   runId: 'run-integrity',
@@ -56,13 +58,11 @@ function openFinding(): FindingLedgerEntry {
     firstSeen: observation,
     lastSeen: observation,
     revision: 1,
-    disputes: [],
-    waivers: [],
   };
 }
 
 function ledger(): FindingLedger {
-  return {
+  return authorizeFindingLedgerFixture({
     workflowName: 'peer-review',
     nextId: 2,
     findings: [openFinding()],
@@ -71,7 +71,7 @@ function ledger(): FindingLedger {
     conflicts: [],
     interpretations: [],
     updatedAt: observation.timestamp,
-  };
+  });
 }
 
 function rawWithEvidence(
@@ -107,6 +107,7 @@ function inMemoryStore(initial: FindingLedger): {
     current: () => current,
     store: {
       ledgerIdentity: '/test/finding-integrity-boundaries/ledger.json',
+      interpretationLiveClaims: processInterpretationLiveClaims,
       workflowName: initial.workflowName,
       loadLedger: () => current,
       updateLedger: async (mutator) => {
@@ -182,7 +183,7 @@ describe('finding integrity boundaries', () => {
       observation,
       'round-integrity',
     );
-    releaseInterpretationReservations(memory.store, first.ownedByKey);
+    await releaseInterpretationReservations(memory.store, first.ownedByKey, observation);
 
     const conflict = {
       findingIds: ['F-0001'],
@@ -283,13 +284,12 @@ describe('finding integrity boundaries', () => {
 
     const current = {
       ...baseLedger,
-      findings: [finding],
-      rawFindings: [rawE1],
+      rawFindings: [...baseLedger.rawFindings, rawE1],
     };
     expect(() => normalizeFindingLedgerMutation(current, {
       ledger: {
         ...current,
-        rawFindings: [rawE2],
+        rawFindings: [...baseLedger.rawFindings, rawE2],
       },
       result: undefined,
     }, current.workflowName)).toThrow('cannot be replaced with different content');

@@ -21,6 +21,8 @@ import {
   normalizePendingManagerCommitStage,
 } from '../../core/workflow/findings/ledger-mutation.js';
 import type { ReportPublicationReceipt } from '../../core/workflow/report-publication.js';
+import { processInterpretationLiveClaims } from '../../core/workflow/findings/interpretation-live-claims.js';
+import { processAdjudicationLiveClaims } from '../../core/workflow/findings/adjudication-live-claims.js';
 import { canonicalJson, sha256 } from './canonical-json.js';
 import {
   computeFindingManagerReportPublicationId,
@@ -271,6 +273,8 @@ export function createRunFindingManagerStore(
   return {
     runId: options.runId,
     ledgerIdentity,
+    interpretationLiveClaims: processInterpretationLiveClaims,
+    adjudicationLiveClaims: processAdjudicationLiveClaims,
     workflowName: options.workflowName,
     loadLedger,
     updateLedger: <Result>(
@@ -353,25 +357,6 @@ export function createRunFindingManagerStore(
         };
       });
       return Promise.resolve(committed);
-    },
-    claimAdjudicationReservation: (reservationToken) => (
-      access.write(options.owner, (context, now) => (
-        findings.claimAdjudicationReservation(context, {
-          runId: options.runId,
-          scopeId: options.scopeId,
-          reservationToken,
-          claimedAt: now,
-        })
-      ))
-    ),
-    releaseAdjudicationReservation: (reservationToken) => {
-      access.write(options.owner, (context) => {
-        findings.releaseAdjudicationReservation(context, {
-          runId: options.runId,
-          scopeId: options.scopeId,
-          reservationToken,
-        });
-      });
     },
     saveLedgerSnapshot: () => {
       access.write(options.owner, (context, now) => {

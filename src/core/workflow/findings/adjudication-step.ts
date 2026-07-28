@@ -9,9 +9,8 @@ import { parseWorkflowRuleCondition } from '../../models/workflow-rule-condition
 import { FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
 import { FindingConflictAdjudicationOutputJsonSchema } from './schemas.js';
 
-// Current output: { conflictId, outcome, findingTransition, evidence, actionableFix }. See
-// adjudication-apply.ts for the outcome/findingTransition invariant the engine
-// enforces on this shape.
+// Current output is a closed outcome plus optional actionableFix/rationale.
+// Finding transitions are engine-owned and derived from the outcome.
 export const FINDING_CONFLICT_ADJUDICATION_SCHEMA_REF = 'takt.findings.adjudication';
 
 /** The engine-owned adjudication step always uses the supervisor facet resolved into finding_contract.adjudicator. */

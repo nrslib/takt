@@ -19,6 +19,7 @@ import type {
   RawFinding,
 } from '../core/workflow/findings/types.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
 
 const DEFAULT_CONFLICT_ID = formatConflictId({
@@ -81,6 +82,7 @@ function makeConflict(overrides: Partial<FindingLedgerConflict> = {}): FindingLe
   return {
     id: DEFAULT_CONFLICT_ID,
     status: 'active',
+    revision: 1,
     findingIds: ['F-0001'],
     rawFindingIds: ['raw-existing'],
     description: 'Reviewers disagree about F-0001.',
@@ -91,7 +93,7 @@ function makeConflict(overrides: Partial<FindingLedgerConflict> = {}): FindingLe
 }
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
-  return {
+  return authorizeFindingLedgerFixture({
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
@@ -101,7 +103,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     interpretations: [],
     findings: [makeFinding({ revision: 1 })],
     ...overrides,
-  };
+  });
 }
 
 type TestReconcileInput = Omit<
