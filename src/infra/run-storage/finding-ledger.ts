@@ -27,7 +27,6 @@ export interface FindingLedgerRecord {
 }
 
 interface LedgerHeadRow {
-  readonly workflowName: string;
   readonly revision: number;
   readonly nextId: number;
   readonly updatedAt: number;
@@ -62,6 +61,12 @@ function trustedIsoTime(now: number): string {
     throw new Error('Finding ledger trusted timestamp is outside the ISO range');
   }
   return value.toISOString();
+}
+
+export function storedFindingProjectionDigest(ledger: FindingLedger): string {
+  const storedProjection: Partial<FindingLedger> = { ...ledger };
+  delete storedProjection.workflowName;
+  return sha256(canonicalJson(storedProjection));
 }
 
 export function bootstrapFindingAuthority(
@@ -133,27 +138,21 @@ function writeInitialFindingAuthority(
     readonly updatedAt: number;
   },
 ): string {
-  const projectionDigest = sha256(canonicalJson(input.ledger));
+  const projectionDigest = storedFindingProjectionDigest(input.ledger);
   insertEntities(context, input, 1, input.ledger);
   insertControls(context, input, 1, input.ledger);
   context.run(`
-    INSERT INTO finding_revision_publications (
-      run_id, scope_id, revision, projection_digest, published_at
-    ) VALUES (?, ?, 1, ?, ?)
-  `, input.runId, input.scopeId, projectionDigest, input.updatedAt);
-  context.run(`
     INSERT INTO finding_ledger_revisions (
-      run_id, scope_id, revision, workflow_name, next_id,
+      run_id, scope_id, revision, next_id,
       finding_count, raw_finding_count, conflict_count,
       evidence_record_count, evidence_binding_count, lifecycle_reservation_count,
       lifecycle_event_count, raw_recovery_attempt_count, raw_recovery_result_count,
       interpretation_count, reviewer_anomaly_count, control_count,
       projection_digest, updated_at
-    ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   input.runId,
   input.scopeId,
-  input.workflowName,
   input.ledger.nextId,
   input.ledger.findings.length,
   input.ledger.rawFindings.length,
@@ -218,6 +217,7 @@ export function readFindingLedgerProjection(
   input: {
     readonly runId: string;
     readonly scopeId: string;
+    readonly workflowName: string;
     readonly revision?: number;
   },
 ): FindingLedgerRecord {
@@ -225,7 +225,6 @@ export function readFindingLedgerProjection(
   const head = input.revision === undefined
     ? context.get<LedgerHeadRow>(`
     SELECT
-      heads.workflow_name AS workflowName,
       heads.current_revision AS revision,
       revisions.next_id AS nextId,
       revisions.updated_at AS updatedAt,
@@ -239,7 +238,6 @@ export function readFindingLedgerProjection(
   `, input.runId, input.scopeId)
     : context.get<LedgerHeadRow>(`
       SELECT
-        workflow_name AS workflowName,
         revision,
         next_id AS nextId,
         updated_at AS updatedAt,
@@ -252,7 +250,7 @@ export function readFindingLedgerProjection(
   }
 
   const projection: Record<string, unknown> = {
-    workflowName: head.workflowName,
+    workflowName: input.workflowName,
     nextId: head.nextId,
     updatedAt: trustedIsoTime(head.updatedAt),
   };
@@ -300,7 +298,7 @@ export function readFindingLedgerProjection(
     }
   }
   const ledger = parseFindingLedger(projection);
-  if (sha256(canonicalJson(ledger)) !== head.projectionDigest) {
+  if (storedFindingProjectionDigest(ledger) !== head.projectionDigest) {
     throw new Error(
       `Finding ledger projection digest mismatch for "${input.runId}/${input.scopeId}/${head.revision}"`,
     );
@@ -308,7 +306,7 @@ export function readFindingLedgerProjection(
   return {
     runId: input.runId,
     scopeId: input.scopeId,
-    workflowName: head.workflowName,
+    workflowName: input.workflowName,
     revision: head.revision,
     ledger,
     updatedAt: head.updatedAt,
@@ -317,12 +315,7 @@ export function readFindingLedgerProjection(
 
 interface FindingRevisionIntegrityRow {
   readonly scopeId: string;
-  readonly authorityScopeId: string | null;
-  readonly headScopeId: string | null;
   readonly revision: number;
-  readonly headRevision: number | null;
-  readonly workflowName: string;
-  readonly workflowDefinitionName: string | null;
   readonly findingCount: number;
   readonly evidenceRecordCount: number;
   readonly evidenceBindingCount: number;
@@ -335,7 +328,6 @@ interface FindingRevisionIntegrityRow {
   readonly interpretationCount: number;
   readonly reviewerAnomalyCount: number;
   readonly controlCount: number;
-  readonly publicationCount: number;
 }
 
 export function validateFindingAuthority(
@@ -343,7 +335,7 @@ export function validateFindingAuthority(
   runId: string,
 ): void {
   validateFindingAuthorityScopes(context, runId);
-  validateFindingAuthorityHistory(context, runId);
+  validateCurrentFindingAuthority(context, runId);
 }
 
 function validateFindingAuthorityScopes(
@@ -359,28 +351,14 @@ function validateFindingAuthorityScopes(
       (
         SELECT count(*)
         FROM scopes
-        LEFT JOIN workflow_definitions AS definitions
-          ON definitions.definition_id = scopes.workflow_definition_id
         LEFT JOIN finding_ledger_heads AS heads
           ON heads.run_id = scopes.run_id
           AND heads.scope_id = scopes.scope_id
         WHERE
           scopes.run_id = ?
           AND (
-            definitions.definition_id IS NULL
-            OR (
-              (
-                scopes.finding_contract_enabled = 1
-                AND (
-                  heads.scope_id IS NULL
-                  OR heads.workflow_name <> definitions.name
-                )
-              )
-              OR (
-                scopes.finding_contract_enabled = 0
-                AND heads.scope_id IS NOT NULL
-              )
-            )
+            scopes.finding_contract_enabled = 0
+            AND heads.scope_id IS NOT NULL
           )
       ) AS authorityMismatchCount,
       (
@@ -411,19 +389,14 @@ function validateFindingAuthorityScopes(
   }
 }
 
-function validateFindingAuthorityHistory(
+function validateCurrentFindingAuthority(
   context: FindingAuthorityReader,
   runId: string,
 ): void {
   const revisions = context.all<FindingRevisionIntegrityRow>(`
     SELECT
       revisions.scope_id AS scopeId,
-      scopes.scope_id AS authorityScopeId,
-      heads.scope_id AS headScopeId,
       revisions.revision,
-      heads.current_revision AS headRevision,
-      revisions.workflow_name AS workflowName,
-      definitions.name AS workflowDefinitionName,
       revisions.finding_count AS findingCount,
       revisions.evidence_record_count AS evidenceRecordCount,
       revisions.evidence_binding_count AS evidenceBindingCount,
@@ -435,46 +408,16 @@ function validateFindingAuthorityHistory(
       revisions.conflict_count AS conflictCount,
       revisions.interpretation_count AS interpretationCount,
       revisions.reviewer_anomaly_count AS reviewerAnomalyCount,
-      revisions.control_count AS controlCount,
-      (
-        SELECT count(*) FROM finding_revision_publications AS publications
-        WHERE
-          publications.run_id = revisions.run_id
-          AND publications.scope_id = revisions.scope_id
-          AND publications.revision = revisions.revision
-          AND publications.projection_digest = revisions.projection_digest
-          AND publications.published_at = revisions.updated_at
-      ) AS publicationCount
-    FROM finding_ledger_revisions AS revisions
-    LEFT JOIN finding_ledger_heads AS heads
-      ON heads.run_id = revisions.run_id
-      AND heads.scope_id = revisions.scope_id
-    LEFT JOIN scopes
-      ON scopes.run_id = revisions.run_id
-      AND scopes.scope_id = revisions.scope_id
-    LEFT JOIN workflow_definitions AS definitions
-      ON definitions.definition_id = scopes.workflow_definition_id
-    WHERE revisions.run_id = ?
-    ORDER BY revisions.scope_id, revisions.revision
+      revisions.control_count AS controlCount
+    FROM finding_ledger_heads AS heads
+    JOIN finding_ledger_revisions AS revisions
+      ON revisions.run_id = heads.run_id
+      AND revisions.scope_id = heads.scope_id
+      AND revisions.revision = heads.current_revision
+    WHERE heads.run_id = ?
+    ORDER BY revisions.scope_id
   `, runId);
-  const expectedRevision = new Map<string, number>();
-  const maximumRevision = new Map<string, number>();
   for (const revision of revisions) {
-    const expected = expectedRevision.get(revision.scopeId) ?? 1;
-    if (
-      revision.authorityScopeId === null
-      || revision.headScopeId === null
-      || revision.headRevision === null
-      || revision.workflowDefinitionName === null
-    ) {
-      throw new Error('Finding Contract scope authority invariant mismatch');
-    }
-    if (revision.workflowName !== revision.workflowDefinitionName) {
-      throw new Error('Finding authority revision workflow mismatch');
-    }
-    if (revision.revision !== expected || revision.publicationCount !== 1) {
-      throw new Error('Finding authority revision sequence or publication mismatch');
-    }
     const actualCounts = ENTITY_TABLES.map(([table]) => (
       context.get<{ readonly count: number }>(`
         SELECT count(*) AS count FROM ${table}
@@ -504,15 +447,8 @@ function validateFindingAuthorityHistory(
     readFindingLedgerProjection(context, {
       runId,
       scopeId: revision.scopeId,
-      revision: revision.revision,
+      workflowName: 'runtime-workflow',
     });
-    expectedRevision.set(revision.scopeId, expected + 1);
-    maximumRevision.set(revision.scopeId, revision.revision);
-  }
-  for (const revision of revisions) {
-    if (maximumRevision.get(revision.scopeId) !== revision.headRevision) {
-      throw new Error('Finding authority head does not match maximum revision');
-    }
   }
 }
 
@@ -583,7 +519,11 @@ function insertControls(
 export class FindingLedgerRepository {
   loadLedger(
     context: RunReadContext,
-    input: { readonly runId: string; readonly scopeId: string },
+    input: {
+      readonly runId: string;
+      readonly scopeId: string;
+      readonly workflowName: string;
+    },
   ): FindingLedgerRecord {
     return readFindingLedgerProjection(context, input);
   }
@@ -611,23 +551,12 @@ export class FindingLedgerRepository {
     const revision = input.expectedRevision + 1;
     insertEntities(context, input, revision, ledger);
     insertControls(context, input, revision, ledger);
-    const projectionDigest = sha256(canonicalJson(ledger));
-    context.run(`
-      INSERT INTO finding_revision_publications (
-        run_id, scope_id, revision, projection_digest, published_at
-      ) VALUES (?, ?, ?, ?, ?)
-    `,
-    input.runId,
-    input.scopeId,
-    revision,
-    projectionDigest,
-    input.updatedAt);
+    const projectionDigest = storedFindingProjectionDigest(ledger);
     context.run(`
       INSERT INTO finding_ledger_revisions (
         run_id,
         scope_id,
         revision,
-        workflow_name,
         next_id,
         finding_count,
         evidence_record_count,
@@ -643,12 +572,11 @@ export class FindingLedgerRepository {
         control_count,
         projection_digest,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     input.runId,
     input.scopeId,
     revision,
-    input.workflowName,
     ledger.nextId,
     ledger.findings.length,
     ledger.evidenceRecords.length,

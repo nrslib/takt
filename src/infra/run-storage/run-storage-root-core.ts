@@ -97,11 +97,6 @@ export interface TerminalPublicationStageClaim {
   readonly expiresAt: number;
 }
 
-const TRUSTED_RESUME_SNAPSHOT_READERS = new WeakMap<
-  object,
-  () => CompleteResumeSnapshot
->();
-
 class RunStorageRootImpl {
   readonly #database: DatabaseSync;
   readonly #databaseFile: RunDatabaseFile;
@@ -151,10 +146,6 @@ class RunStorageRootImpl {
       },
     });
     this.#rootScope = this.#handles.issueScope('root');
-    TRUSTED_RESUME_SNAPSHOT_READERS.set(this, () => {
-      this.assertOpen();
-      return this.#unitOfWork.read(readCompleteResumeSnapshot);
-    });
   }
 
   get rootScope(): ScopeHandle {
@@ -994,19 +985,10 @@ export type RunStorageTerminalRecovery = Pick<
 export function createRunStorageResumeSource(
   root: RunStorageRoot,
 ): RunStorageResumeSource {
-  const readTrustedSnapshot = TRUSTED_RESUME_SNAPSHOT_READERS.get(root);
-  if (readTrustedSnapshot === undefined) {
-    throw new Error('Run storage resume source is forged');
-  }
-  const source = Object.freeze({
-    readResumeSnapshot: readTrustedSnapshot,
+  return Object.freeze({
+    readResumeSnapshot: root.readResumeSnapshot.bind(root),
     close: root.close.bind(root),
   });
-  TRUSTED_RESUME_SNAPSHOT_READERS.set(
-    source,
-    readTrustedSnapshot,
-  );
-  return source;
 }
 
 export function createRunStorageTerminalRecovery(
@@ -1025,16 +1007,6 @@ export function createRunStorageTerminalRecovery(
       root.expireTerminalPublicationStageClaim.bind(root),
     close: root.close.bind(root),
   });
-}
-
-export function readTrustedRunStorageResumeSnapshot(
-  root: RunStorageResumeSource,
-): CompleteResumeSnapshot {
-  const read = TRUSTED_RESUME_SNAPSHOT_READERS.get(root);
-  if (read === undefined) {
-    throw new Error('Run storage resume source is forged');
-  }
-  return read();
 }
 
 function isTerminal(status: string): boolean {

@@ -46,9 +46,6 @@ import {
   type PublicReportStreamIdentity,
 } from './report-stream-identity.js';
 import {
-  type TrustedFindingResumeSource,
-} from './finding-resume-source.js';
-import {
   createFindingManagerResumeBinding,
   sameManagerPublication,
 } from './finding-manager-resume-binding.js';
@@ -66,7 +63,6 @@ interface RunFindingManagerStoreOptions {
   readonly workflowName: string;
   readonly producerScopeId: string;
   readonly producerExecutionId: string;
-  readonly trustedResumeSource?: TrustedFindingResumeSource;
 }
 
 export function createRunFindingManagerStore(
@@ -91,15 +87,13 @@ export function createRunFindingManagerStore(
     scopeId: options.scopeId,
     workflowName: options.workflowName,
     publicationDomainId,
-    ...(options.trustedResumeSource === undefined
-      ? {}
-      : { trustedResumeSource: options.trustedResumeSource }),
   });
 
   const loadLedger = (): FindingLedger => access.read((context) => {
     const record = findings.loadLedger(context, {
       runId: options.runId,
       scopeId: options.scopeId,
+      workflowName: options.workflowName,
     });
     return normalizeFindingLedger(record.ledger, options.workflowName);
   });
@@ -288,6 +282,7 @@ export function createRunFindingManagerStore(
         const record = findings.loadLedger(context, {
           runId: options.runId,
           scopeId: options.scopeId,
+          workflowName: options.workflowName,
         });
         const current = normalizeFindingLedger(record.ledger, options.workflowName);
         const mutation = normalizeFindingLedgerMutation(
@@ -336,6 +331,7 @@ export function createRunFindingManagerStore(
         const record = findings.loadLedger(context, {
           runId: options.runId,
           scopeId: options.scopeId,
+          workflowName: options.workflowName,
         });
         const current = normalizeFindingLedger(record.ledger, options.workflowName);
         const mutation = normalizeManagerCommit(
@@ -363,6 +359,7 @@ export function createRunFindingManagerStore(
         const ledger = findings.loadLedger(context, {
           runId: options.runId,
           scopeId: options.scopeId,
+          workflowName: options.workflowName,
         });
         const content = canonicalJson(
           normalizeFindingLedger(ledger.ledger, options.workflowName),
@@ -430,6 +427,7 @@ export function createRunFindingManagerStore(
         const record = findings.loadLedger(context, {
           runId: options.runId,
           scopeId: options.scopeId,
+          workflowName: options.workflowName,
         });
         const current = normalizeFindingLedger(record.ledger, options.workflowName);
         const pending = current.pendingManagerCommit;
@@ -481,6 +479,7 @@ export function createRunFindingManagerStore(
         const record = findings.loadLedger(context, {
           runId: options.runId,
           scopeId: options.scopeId,
+          workflowName: options.workflowName,
         });
         const current = normalizeFindingLedger(record.ledger, options.workflowName);
         const pending = current.pendingManagerCommit;

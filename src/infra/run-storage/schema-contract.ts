@@ -1,11 +1,9 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
-import { sha256 } from './canonical-json.js';
 import { CODEC_CONTRACT } from './codec-contract.js';
 import {
   APPLICATION_ID,
   EXPECTED_SCHEMA_HASH,
   SCHEMA_VERSION,
-  STORAGE_CONTRACT_FINGERPRINT,
 } from './contract.js';
 import { actualSchemaHash } from './schema-hash.js';
 import { FINDING_AUTHORITY_TABLES } from './schema/findings.js';
@@ -21,7 +19,6 @@ interface StoredContractRow {
   readonly schemaVersion: number;
   readonly applicationId: number;
   readonly schemaHash: string;
-  readonly fingerprint: string;
 }
 
 function pragmaNumber(database: DatabaseSync, name: string): number {
@@ -104,15 +101,13 @@ export function createFixedSchema(
         database_instance_id,
         schema_version,
         application_id,
-        schema_hash,
-        fingerprint
-      ) VALUES (1, ?, ?, ?, ?, ?)
+        schema_hash
+      ) VALUES (1, ?, ?, ?, ?)
     `).run(
       databaseInstanceId,
       SCHEMA_VERSION,
       APPLICATION_ID,
       EXPECTED_SCHEMA_HASH,
-      STORAGE_CONTRACT_FINGERPRINT,
     );
     database.exec('COMMIT');
   } catch (error) {
@@ -295,7 +290,6 @@ export function validateAuthoritySeed(database: DatabaseSync): void {
     readonly runId: string;
     readonly findingContractEnabled: number;
   };
-  validateResumeProvenance(database, run);
   if (run.findingContractEnabled === 0) {
     for (const table of FINDING_AUTHORITY_TABLES) {
       const row = database.prepare(`SELECT count(*) AS count FROM ${table}`).get() as {
@@ -308,16 +302,6 @@ export function validateAuthoritySeed(database: DatabaseSync): void {
       }
     }
   } else {
-    const findingSeed = database.prepare(`
-      SELECT count(*) AS authorityCount
-      FROM finding_ledger_revisions
-      WHERE run_id = ? AND revision = 1
-    `).get(run.runId) as {
-      readonly authorityCount: number;
-    };
-    if (findingSeed.authorityCount === 0) {
-      throw new Error('Finding Contract authority bootstrap invariant mismatch');
-    }
     const findingContext = {
       get: <Row>(sql: string, ...parameters: SQLInputValue[]) => (
         database.prepare(sql).get(...parameters) as Row | undefined
@@ -326,187 +310,7 @@ export function validateAuthoritySeed(database: DatabaseSync): void {
         database.prepare(sql).all(...parameters) as Row[]
       ),
     };
-    validateFindingAuthority(findingContext, run.runId);
-  }
-}
-
-function validateResumeProvenance(
-  database: DatabaseSync,
-  run: {
-    readonly runId: string;
-    readonly findingContractEnabled: number;
-  },
-): void {
-  const ancestry = database.prepare(`
-    SELECT
-      ancestor_run_id AS ancestorRunId,
-      depth,
-      snapshot_digest AS snapshotDigest
-    FROM run_ancestry
-    WHERE run_id = ?
-    ORDER BY depth
-  `).all(run.runId) as Array<{
-    readonly ancestorRunId: string;
-    readonly depth: number;
-    readonly snapshotDigest: string;
-  }>;
-  const source = database.prepare(`
-    SELECT
-      source_run_id AS sourceRunId,
-      source_snapshot_digest AS sourceSnapshotDigest
-    FROM run_resume_sources
-    WHERE run_id = ?
-  `).get(run.runId) as {
-    readonly sourceRunId: string;
-    readonly sourceSnapshotDigest: string;
-  } | undefined;
-  if (source === undefined) {
-    if (ancestry.length !== 0) {
-      throw new Error('Run resume ancestry has no direct source provenance');
-    }
-    return;
-  }
-  if (
-    ancestry.length === 0
-    || ancestry.some((entry, index) => entry.depth !== index + 1)
-    || ancestry[0]?.ancestorRunId !== source.sourceRunId
-    || ancestry[0]?.snapshotDigest !== source.sourceSnapshotDigest
-  ) {
-    throw new Error('Run resume direct source provenance mismatch');
-  }
-  if (run.findingContractEnabled === 0) {
-    const authority = database.prepare(`
-      SELECT 1 AS found
-      FROM finding_resume_authorities
-      WHERE run_id = ?
-      LIMIT 1
-    `).get(run.runId);
-    if (authority !== undefined) {
-      throw new Error('Run resume imported Finding authority while disabled');
-    }
-    return;
-  }
-  const authorityProvenance = database.prepare(`
-    SELECT
-      (SELECT count(*) FROM finding_resume_authorities
-       WHERE run_id = ?) AS provenanceCount,
-      (SELECT count(*)
-       FROM finding_resume_authorities AS provenance
-       JOIN finding_ledger_revisions AS revisions
-         ON revisions.run_id = provenance.run_id
-         AND revisions.scope_id = provenance.scope_id
-         AND revisions.revision = provenance.imported_revision
-         AND revisions.projection_digest = provenance.projection_digest
-       WHERE provenance.run_id = ?
-         AND provenance.source_run_id = ?
-         AND provenance.source_scope_id = provenance.scope_id
-         AND provenance.source_revision = provenance.imported_revision
-       ) AS validCount
-  `).get(
-    run.runId,
-    run.runId,
-    source.sourceRunId,
-  ) as {
-    readonly provenanceCount: number;
-    readonly validCount: number;
-  };
-  if (
-    authorityProvenance.provenanceCount === 0
-    || authorityProvenance.validCount !== authorityProvenance.provenanceCount
-  ) {
-    throw new Error('Run resume imported Finding authority provenance mismatch');
-  }
-}
-
-export function validateEngineProvenance(
-  database: DatabaseSync,
-  expected: {
-    readonly buildId: string;
-    readonly version: string;
-    readonly digest: string;
-  },
-): void {
-  const actual = database.prepare(`
-    SELECT
-      engine_builds.build_id AS buildId,
-      engine_builds.version,
-      engine_builds.digest
-    FROM runs
-    JOIN engine_builds ON engine_builds.build_id = runs.engine_build_id
-  `).get() as typeof expected | undefined;
-  if (
-    actual === undefined
-    || actual.buildId !== expected.buildId
-    || actual.version !== expected.version
-    || actual.digest !== expected.digest
-  ) {
-    throw new Error('Run storage engine build provenance mismatch');
-  }
-}
-
-export function validateRecordedEngineProvenance(
-  database: DatabaseSync,
-): void {
-  const rows = database.prepare(`
-    SELECT
-      engine_builds.build_id AS buildId,
-      engine_builds.version,
-      engine_builds.digest
-    FROM runs
-    JOIN engine_builds ON engine_builds.build_id = runs.engine_build_id
-  `).all() as Array<{
-    readonly buildId: unknown;
-    readonly version: unknown;
-    readonly digest: unknown;
-  }>;
-  if (rows.length !== 1) {
-    throw new Error('Run storage recorded engine build provenance is invalid');
-  }
-  const recorded = rows[0]!;
-  if (
-    typeof recorded.buildId !== 'string'
-    || typeof recorded.version !== 'string'
-    || recorded.version.length === 0
-    || typeof recorded.digest !== 'string'
-    || !/^[0-9a-f]{64}$/.test(recorded.digest)
-    || recorded.buildId
-      !== `takt@${recorded.version}+${recorded.digest.slice(0, 16)}`
-  ) {
-    throw new Error('Run storage recorded engine build provenance is invalid');
-  }
-}
-
-export function validateWorkflowDefinitionDigests(database: DatabaseSync): void {
-  const definitions = database.prepare(`
-    SELECT
-      definition_id AS definitionId,
-      name,
-      codec_name AS codecName,
-      definition,
-      digest
-    FROM workflow_definitions
-  `).all() as Array<{
-    readonly definitionId: string;
-    readonly name: string;
-    readonly codecName: string;
-    readonly definition: string;
-    readonly digest: string;
-  }>;
-  for (const definition of definitions) {
-    const digest = sha256(definition.definition);
-    const definitionId = sha256([
-      definition.name,
-      definition.codecName,
-      digest,
-    ].join('\0'));
-    if (
-      digest !== definition.digest
-      || definitionId !== definition.definitionId
-    ) {
-      throw new Error(
-        `Workflow definition identity mismatch for "${definition.definitionId}"`,
-      );
-    }
+      validateFindingAuthority(findingContext, run.runId);
   }
 }
 
@@ -534,8 +338,7 @@ export function validateFixedSchema(database: DatabaseSync): string {
       database_instance_id AS databaseInstanceId,
       schema_version AS schemaVersion,
       application_id AS applicationId,
-      schema_hash AS schemaHash,
-      fingerprint
+      schema_hash AS schemaHash
     FROM storage_contract
     WHERE singleton_id = 1
   `).get() as StoredContractRow | undefined;
@@ -550,9 +353,6 @@ export function validateFixedSchema(database: DatabaseSync): string {
   }
   if (stored.schemaHash !== EXPECTED_SCHEMA_HASH) {
     throw new Error('Run storage stored schema hash mismatch');
-  }
-  if (stored.fingerprint !== STORAGE_CONTRACT_FINGERPRINT) {
-    throw new Error('Run storage stored fingerprint mismatch');
   }
   if (
     stored.databaseInstanceId.length !== 36
@@ -576,18 +376,12 @@ export function validateFixedSchema(database: DatabaseSync): string {
   if (JSON.stringify(codecs) !== JSON.stringify(expectedCodecs)) {
     throw new Error('Run storage codec registry mismatch');
   }
-  validateWorkflowDefinitionDigests(database);
   return stored.databaseInstanceId;
 }
 
 export function validateRunDatabase(
   database: DatabaseSync,
   expectedJournalMode: 'delete' | 'wal',
-  expectedEngineBuild?: {
-    readonly buildId: string;
-    readonly version: string;
-    readonly digest: string;
-  },
 ): string {
   const databaseInstanceId = validateFixedSchema(database);
   validateIntegrity(database);
@@ -600,9 +394,6 @@ export function validateRunDatabase(
       database.prepare(sql).all(...parameters) as Row[]
     ),
   }, run.runId);
-  if (expectedEngineBuild !== undefined) {
-    validateEngineProvenance(database, expectedEngineBuild);
-  }
   validateJournalMode(database, expectedJournalMode);
   return databaseInstanceId;
 }

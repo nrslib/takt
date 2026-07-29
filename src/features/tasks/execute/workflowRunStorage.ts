@@ -678,11 +678,6 @@ class SqliteWorkflowRunStorageAdapter
             const scope = runtime.scopes.resolveWorkflowCallChild({
               scopeKey: authorityKey,
               findingContractEnabled: true,
-              workflowDefinition: {
-                name: workflowConfig.name,
-                codecName: 'json-v1',
-                definition: JSON.stringify(workflowConfig),
-              },
             });
             const childRuntime = root.runtime({ lease, scope });
             const childExecution = childRuntime.execution.startStep({
@@ -991,12 +986,8 @@ function createSqliteRunStorageRoot(
     databasePath: input.runPaths.databaseAbs,
     run: {
       runId: input.runPaths.slug,
+      workflowName: input.workflowConfig.name,
       findingContractEnabled,
-    },
-    workflowDefinition: {
-      name: input.workflowConfig.name,
-      codecName: 'json-v1',
-      definition: JSON.stringify(input.workflowConfig),
     },
     bootstrapSeed: input.bootstrapSeed,
   } as const);
@@ -1026,21 +1017,8 @@ function createSqliteRunStorageRoot(
         + `does not match requested source run "${sourceRunSlug}"`,
       );
     }
-    const sourceRoot = sourceSnapshot.scopes.find(
-      (scope) => scope.scopeId === 'root',
-    );
-    if (
-      sourceRoot?.findingContractEnabled
-        !== (rootFindingContractEnabled ? 1 : 0)
-    ) {
-      throw new Error(
-        'SQLite resume source root Finding Contract does not match the workflow',
-      );
-    }
-    const sourceFindingContractEnabled =
-      sourceSnapshot.run.findingContractEnabled === 1;
     target = resumeRunStorage({
-      ...createOptions(sourceFindingContractEnabled),
+      ...createOptions(rootFindingContractEnabled),
       source,
     });
   } catch (error) {

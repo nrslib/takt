@@ -11,13 +11,11 @@ import {
   createRunStorageResumeSource,
   createRunStorageRoot,
   createRunStorageTerminalRecovery,
-  readTrustedRunStorageResumeSnapshot,
   type RunStorageResumeSource,
   type RunStorageRoot,
   type RunStorageTerminalRecovery,
 } from './run-storage-root-core.js';
 import type { BusyRetryPolicy } from './unit-of-work.js';
-import { captureTrustedRunStorageResumeSnapshot } from './resume-import.js';
 import type {
   BootstrapRecoverySeed,
 } from '../../core/workflow/run/bootstrap-recovery-seed.js';
@@ -32,21 +30,15 @@ const DEFAULT_BUSY_RETRY: BusyRetryPolicy = Object.freeze({
   },
 });
 
-interface WorkflowDefinitionInput {
-  readonly name: string;
-  readonly codecName: string;
-  readonly definition: string;
-}
-
 interface RunInput {
   readonly runId: string;
+  readonly workflowName: string;
   readonly findingContractEnabled: boolean;
 }
 
 export interface CreateRunStorageOptions {
   readonly databasePath: string;
   readonly run: RunInput;
-  readonly workflowDefinition: WorkflowDefinitionInput;
   readonly bootstrapSeed: BootstrapRecoverySeed;
   readonly busyRetry?: BusyRetryPolicy;
 }
@@ -76,7 +68,6 @@ export function createRunStorage(
     [
       'databasePath',
       'run',
-      'workflowDefinition',
       'bootstrapSeed',
       'busyRetry',
     ],
@@ -84,15 +75,9 @@ export function createRunStorage(
   );
   assertExactPublicInput(
     options.run,
-    ['runId', 'findingContractEnabled'],
+    ['runId', 'workflowName', 'findingContractEnabled'],
     'run',
   );
-  assertExactPublicInput(
-    options.workflowDefinition,
-    ['name', 'codecName', 'definition'],
-    'workflowDefinition',
-  );
-  rejectPublicEngineIdentityInput(options);
   assertNoFileAuthority(options.databasePath);
   return createRunStorageRoot(
     createPublishedRunDatabase(options),
@@ -109,7 +94,6 @@ export function openRunStorage(
     ['databasePath', 'busyRetry'],
     'openRunStorage',
   );
-  rejectPublicEngineIdentityInput(options);
   assertNoFileAuthority(options.databasePath);
   return createRunStorageRoot(
     openPublishedRunDatabase(options.databasePath),
@@ -126,7 +110,6 @@ export function openRunStorageResumeSource(
     ['databasePath', 'busyRetry'],
     'openRunStorageResumeSource',
   );
-  rejectPublicEngineIdentityInput(options);
   assertNoFileAuthority(options.databasePath);
   return createRunStorageResumeSource(
     createRunStorageRoot(
@@ -145,7 +128,6 @@ export function openRunStorageTerminalRecovery(
     ['databasePath', 'busyRetry'],
     'openRunStorageTerminalRecovery',
   );
-  rejectPublicEngineIdentityInput(options);
   assertNoFileAuthority(options.databasePath);
   return createRunStorageTerminalRecovery(
     createRunStorageRoot(
@@ -164,7 +146,6 @@ export function resumeRunStorage(
     [
       'databasePath',
       'run',
-      'workflowDefinition',
       'bootstrapSeed',
       'busyRetry',
       'source',
@@ -173,19 +154,11 @@ export function resumeRunStorage(
   );
   assertExactPublicInput(
     options.run,
-    ['runId', 'findingContractEnabled'],
+    ['runId', 'workflowName', 'findingContractEnabled'],
     'run',
   );
-  assertExactPublicInput(
-    options.workflowDefinition,
-    ['name', 'codecName', 'definition'],
-    'workflowDefinition',
-  );
-  rejectPublicEngineIdentityInput(options);
   assertNoFileAuthority(options.databasePath);
-  const source = captureTrustedRunStorageResumeSnapshot(
-    readTrustedRunStorageResumeSnapshot(options.source),
-  );
+  const source = options.source.readResumeSnapshot();
   return createRunStorageRoot(
     createPublishedResumedRunDatabase(options, source),
     options.busyRetry ?? DEFAULT_BUSY_RETRY,
@@ -198,17 +171,6 @@ function assertNoFileAuthority(databasePath: string): void {
     throw new Error(
       `Run directory corruption: SQLite and file authorities coexist at `
       + `"${dirname(databasePath)}"`,
-    );
-  }
-}
-
-function rejectPublicEngineIdentityInput(options: object): void {
-  if (
-    Reflect.has(options, 'engineBuild')
-    || Reflect.has(options, 'expectedEngineBuild')
-  ) {
-    throw new Error(
-      'Run storage engine artifact identity is internally derived',
     );
   }
 }

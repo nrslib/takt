@@ -150,12 +150,8 @@ describe('forceFailRunningTask', () => {
           bootstrapSeed: sqliteBootstrapSeed(projectDir),
           run: {
             runId: runSlug,
+            workflowName: 'default',
             findingContractEnabled: false,
-          },
-          workflowDefinition: {
-            name: 'default',
-            codecName: 'json-v1',
-            definition: JSON.stringify({ name: 'default' }),
           },
         });
         root.close();
@@ -590,12 +586,8 @@ describe('forceFailRunningTask', () => {
       bootstrapSeed: sqliteBootstrapSeed(projectDir),
       run: {
         runId: runSlug,
+        workflowName: 'default',
         findingContractEnabled: false,
-      },
-      workflowDefinition: {
-        name: 'default',
-        codecName: 'json-v1',
-        definition: JSON.stringify({ name: 'default' }),
       },
     });
     const lease = root.claimLease({
@@ -667,12 +659,8 @@ describe('forceFailRunningTask', () => {
       bootstrapSeed: sqliteBootstrapSeed(projectDir),
       run: {
         runId: runSlug,
+        workflowName: 'default',
         findingContractEnabled: false,
-      },
-      workflowDefinition: {
-        name: 'default',
-        codecName: 'json-v1',
-        definition: JSON.stringify({ name: 'default' }),
       },
     });
     root.claimLease({
@@ -711,12 +699,8 @@ describe('forceFailRunningTask', () => {
       bootstrapSeed: sqliteBootstrapSeed(projectDir),
       run: {
         runId: runSlug,
+        workflowName: 'default',
         findingContractEnabled: false,
-      },
-      workflowDefinition: {
-        name: 'default',
-        codecName: 'json-v1',
-        definition: JSON.stringify({ name: 'default' }),
       },
     });
     root.close();

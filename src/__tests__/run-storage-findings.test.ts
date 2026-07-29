@@ -48,19 +48,22 @@ describe('Finding authority boundary', () => {
     expect(store.loadLedger().rawFindings).toEqual([
       expect.objectContaining({ rawFindingId: 'raw-1' }),
     ]);
-    expect(root.readResumeSnapshot().findingLedger?.revision).toBe(2);
+    expect(root.readResumeSnapshot().findingHeads).toEqual([
+      expect.objectContaining({ scope_id: 'root', current_revision: 2 }),
+    ]);
   });
 
   it('keeps Finding authority empty when Finding Contract is disabled', () => {
     const { root } = createRealRunStorage({ findingContractEnabled: false });
 
-    expect(root.readResumeSnapshot().findingLedger).toBeNull();
+    expect(root.readResumeSnapshot().findingHeads).toEqual([]);
+    expect(root.readResumeSnapshot().findingRevisions).toEqual([]);
     expect(root.readResumeSnapshot().scopes).toEqual([
       expect.objectContaining({ scopeId: 'root' }),
     ]);
   });
 
-  it('bootstraps child Finding authority atomically with its scope runtime', () => {
+  it('creates child Finding authority on its first mutation', async () => {
     const { root } = createRealRunStorage({ findingContractEnabled: true });
     const owner = root.claimLease({
       ownerKey: 'owner',
@@ -82,13 +85,16 @@ describe('Finding authority boundary', () => {
       workflowName: 'default',
       nextId: 1,
     });
+    await childStore.updateLedger((ledger) => ({
+      ledger: { ...ledger, nextId: 2 },
+      result: undefined,
+    }));
     const snapshot = root.readResumeSnapshot();
-    expect(snapshot.findingLedger).toMatchObject({
-      revision: 1,
-      ledger: { workflowName: 'default' },
-    });
-    expect(snapshot.findingHeads).toHaveLength(2);
-    expect(snapshot.findingPublications).toHaveLength(2);
+    expect(snapshot.findingHeads).toEqual([
+      expect.objectContaining({ current_revision: 2 }),
+    ]);
+    expect(snapshot.findingHeads[0]?.scope_id).not.toBe('root');
+    expect(snapshot.findingRevisions).toHaveLength(1);
   });
 
   it('validates root and parallel histories beyond their bootstrap revisions', async () => {
@@ -139,7 +145,10 @@ describe('Finding authority boundary', () => {
       slug: 'revision-history-resume',
       findingContractEnabled: true,
     });
-    expect(resumed.root.readResumeSnapshot().findingLedger?.revision).toBe(2);
+    expect(resumed.root.readResumeSnapshot().findingHeads).toEqual([
+      expect.objectContaining({ current_revision: 1 }),
+      expect.objectContaining({ current_revision: 1 }),
+    ]);
   });
 
   it('rejects root, parallel, and workflow_call sibling producer handles', () => {
@@ -158,11 +167,6 @@ describe('Finding authority boundary', () => {
     });
     const workflowScope = rootRuntime.scopes.createWorkflowCallChild({
       scopeKey: 'workflow-review',
-      workflowDefinition: {
-        name: 'child',
-        codecName: 'json-v1',
-        definition: '{"name":"child"}',
-      },
     });
     const parallelRuntime = root.runtime({ lease: owner, scope: parallelScope });
     const workflowRuntime = root.runtime({ lease: owner, scope: workflowScope });

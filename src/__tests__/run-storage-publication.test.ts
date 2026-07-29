@@ -31,14 +31,6 @@ function databasePath(name = 'run.sqlite'): string {
   return join(directory, name);
 }
 
-function workflowDefinition() {
-  return {
-    name: 'publication',
-    codecName: 'json-v1',
-    definition: '{"name":"publication"}',
-  } as const;
-}
-
 function createAt(path: string) {
   return createRunStorage({
     databasePath: path,
@@ -48,9 +40,9 @@ function createAt(path: string) {
     }),
     run: {
       runId: 'publication-run',
+      workflowName: 'publication',
       findingContractEnabled: false,
     },
-    workflowDefinition: workflowDefinition(),
   });
 }
 
@@ -84,9 +76,9 @@ describe('run storage publication', () => {
       }),
       run: {
         runId: 'resumed-run',
+        workflowName: 'publication',
         findingContractEnabled: false,
       },
-      workflowDefinition: workflowDefinition(),
     });
     const resumedRunId = resumed.readResumeSnapshot().run.runId;
 
@@ -140,13 +132,9 @@ describe('run storage publication', () => {
         sessionId: 'invalid-publication-session',
       }),
       run: {
-        runId: 'invalid-publication',
+        runId: undefined as unknown as string,
+        workflowName: 'invalid-publication',
         findingContractEnabled: false,
-      },
-      workflowDefinition: {
-        name: 'invalid-publication',
-        codecName: 'json-v1',
-        definition: 'not-json',
       },
     })).toThrow(/publication failed/i);
 

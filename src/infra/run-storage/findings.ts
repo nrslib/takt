@@ -15,7 +15,11 @@ export interface FindingCounts {
 export class FindingRepository extends FindingLedgerRepository {
   counts(
     context: RunReadContext,
-    input: { readonly runId: string; readonly scopeId: string },
+    input: {
+      readonly runId: string;
+      readonly scopeId: string;
+      readonly workflowName: string;
+    },
   ): FindingCounts {
     const ledger = this.loadLedger(context, input).ledger;
     return {
@@ -29,7 +33,11 @@ export class FindingRepository extends FindingLedgerRepository {
 
   projection(
     context: RunReadContext,
-    input: { readonly runId: string; readonly scopeId: string },
+    input: {
+      readonly runId: string;
+      readonly scopeId: string;
+      readonly workflowName: string;
+    },
   ): FindingLedgerRecord {
     return this.loadLedger(context, input);
   }

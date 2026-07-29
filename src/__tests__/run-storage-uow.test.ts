@@ -158,14 +158,14 @@ describe('RunUnitOfWork and lease fencing', () => {
 
     expect(() => runtime.scopes.createWorkflowCallChild({
       scopeKey: 'invalid-child',
+      // Removed fields fail loudly instead of being treated as stored workflow state.
       workflowDefinition: {
         name: 'invalid',
         codecName: 'json-v1',
         definition: 'not-json',
       },
-    })).toThrow(/JSON/);
+    } as never)).toThrow(/Unknown/);
     const after = root.readResumeSnapshot();
-    expect(after.workflowDefinitions).toEqual(before.workflowDefinitions);
     expect(after.scopes).toEqual(before.scopes);
   });
 

@@ -13,47 +13,10 @@ const JSON_RECORD_TABLES = [
 ] as const;
 
 export const FINDINGS_DDL = [
-  `CREATE TABLE finding_resume_authorities (
-    run_id TEXT NOT NULL,
-    scope_id TEXT NOT NULL,
-    source_run_id TEXT NOT NULL,
-    source_scope_id TEXT NOT NULL,
-    source_revision INTEGER NOT NULL CHECK (source_revision > 0),
-    imported_revision INTEGER NOT NULL CHECK (imported_revision > 0),
-    projection_digest TEXT NOT NULL CHECK (
-      length(projection_digest) = 64
-      AND projection_digest NOT GLOB '*[^0-9a-f]*'
-    ),
-    PRIMARY KEY (run_id, scope_id),
-    FOREIGN KEY (run_id, scope_id)
-      REFERENCES scopes(run_id, scope_id) ON DELETE CASCADE,
-    FOREIGN KEY (run_id, source_run_id)
-      REFERENCES run_ancestry(run_id, ancestor_run_id),
-    FOREIGN KEY (run_id, scope_id, imported_revision, projection_digest)
-      REFERENCES finding_ledger_revisions(
-        run_id, scope_id, revision, projection_digest
-      ) DEFERRABLE INITIALLY DEFERRED
-  ) STRICT`,
-  `CREATE TABLE finding_revision_publications (
-    run_id TEXT NOT NULL,
-    scope_id TEXT NOT NULL,
-    revision INTEGER NOT NULL CHECK (revision > 0),
-    projection_digest TEXT NOT NULL CHECK (
-      length(projection_digest) = 64
-      AND projection_digest NOT GLOB '*[^0-9a-f]*'
-    ),
-    published_at INTEGER NOT NULL CHECK (published_at >= 0),
-    PRIMARY KEY (run_id, scope_id, revision),
-    UNIQUE (run_id, scope_id, revision, projection_digest),
-    FOREIGN KEY (run_id, scope_id, revision)
-      REFERENCES finding_ledger_revisions(run_id, scope_id, revision)
-      DEFERRABLE INITIALLY DEFERRED
-  ) STRICT`,
   `CREATE TABLE finding_ledger_revisions (
     run_id TEXT NOT NULL,
     scope_id TEXT NOT NULL,
     revision INTEGER NOT NULL CHECK (revision > 0),
-    workflow_name TEXT NOT NULL CHECK (length(workflow_name) > 0),
     next_id INTEGER NOT NULL CHECK (next_id > 0),
     finding_count INTEGER NOT NULL CHECK (finding_count >= 0),
     evidence_record_count INTEGER NOT NULL CHECK (evidence_record_count >= 0),
@@ -73,18 +36,12 @@ export const FINDINGS_DDL = [
     ),
     updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
     PRIMARY KEY (run_id, scope_id, revision),
-    UNIQUE (run_id, scope_id, revision, projection_digest),
     FOREIGN KEY (run_id, scope_id)
-      REFERENCES scope_runtime(run_id, scope_id) ON DELETE CASCADE,
-    FOREIGN KEY (run_id, scope_id, revision, projection_digest)
-      REFERENCES finding_revision_publications(
-        run_id, scope_id, revision, projection_digest
-      ) DEFERRABLE INITIALLY DEFERRED
+      REFERENCES scope_runtime(run_id, scope_id) ON DELETE CASCADE
   ) STRICT`,
   `CREATE TABLE finding_ledger_heads (
     run_id TEXT NOT NULL,
     scope_id TEXT NOT NULL,
-    workflow_name TEXT NOT NULL CHECK (length(workflow_name) > 0),
     current_revision INTEGER NOT NULL CHECK (current_revision > 0),
     updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
     PRIMARY KEY (run_id, scope_id),
@@ -218,20 +175,6 @@ FINDINGS_DDL.push(
         WHERE run_id = NEW.run_id AND scope_id = NEW.scope_id
           AND revision = NEW.revision
       )
-      AND coalesce((
-        SELECT workflow_name
-        FROM finding_ledger_heads
-        WHERE run_id = NEW.run_id AND scope_id = NEW.scope_id
-      ), NEW.workflow_name) = NEW.workflow_name
-      AND EXISTS (
-        SELECT 1 FROM finding_revision_publications
-        WHERE
-          run_id = NEW.run_id
-          AND scope_id = NEW.scope_id
-          AND revision = NEW.revision
-          AND projection_digest = NEW.projection_digest
-          AND published_at = NEW.updated_at
-      )
     )
     BEGIN
       SELECT RAISE(ABORT, 'finding ledger revision is incomplete');
@@ -240,9 +183,9 @@ FINDINGS_DDL.push(
     AFTER INSERT ON finding_ledger_revisions
     BEGIN
       INSERT INTO finding_ledger_heads (
-        run_id, scope_id, workflow_name, current_revision, updated_at
+        run_id, scope_id, current_revision, updated_at
       ) VALUES (
-        NEW.run_id, NEW.scope_id, NEW.workflow_name, NEW.revision, NEW.updated_at
+        NEW.run_id, NEW.scope_id, NEW.revision, NEW.updated_at
       )
       ON CONFLICT (run_id, scope_id) DO UPDATE SET
         current_revision = excluded.current_revision,
@@ -256,7 +199,6 @@ FINDINGS_DDL.push(
         run_id = NEW.run_id
         AND scope_id = NEW.scope_id
         AND revision = NEW.current_revision
-        AND workflow_name = NEW.workflow_name
         AND updated_at = NEW.updated_at
     )
     BEGIN
@@ -267,7 +209,6 @@ FINDINGS_DDL.push(
     WHEN NOT (
       NEW.run_id IS OLD.run_id
       AND NEW.scope_id IS OLD.scope_id
-      AND NEW.workflow_name IS OLD.workflow_name
       AND NEW.current_revision = OLD.current_revision + 1
       AND NEW.updated_at >= OLD.updated_at
       AND EXISTS (
@@ -276,7 +217,6 @@ FINDINGS_DDL.push(
           run_id = NEW.run_id
           AND scope_id = NEW.scope_id
           AND revision = NEW.current_revision
-          AND workflow_name = NEW.workflow_name
           AND updated_at = NEW.updated_at
       )
     )
@@ -292,16 +232,6 @@ FINDINGS_DDL.push(
     BEFORE UPDATE ON finding_ledger_revisions
     BEGIN
       SELECT RAISE(ABORT, 'finding ledger revisions are append-only');
-    END`,
-  `CREATE TRIGGER finding_revision_publications_update_guard
-    BEFORE UPDATE ON finding_revision_publications
-    BEGIN
-      SELECT RAISE(ABORT, 'finding revision publications are append-only');
-    END`,
-  `CREATE TRIGGER finding_revision_publications_delete_guard
-    BEFORE DELETE ON finding_revision_publications
-    BEGIN
-      SELECT RAISE(ABORT, 'finding revision publications cannot be deleted');
     END`,
   `CREATE TRIGGER finding_ledger_revisions_delete_guard
     BEFORE DELETE ON finding_ledger_revisions
@@ -321,8 +251,6 @@ FINDINGS_DDL.push(
 );
 
 export const FINDING_AUTHORITY_TABLES = Object.freeze([
-  'finding_resume_authorities',
-  'finding_revision_publications',
   'finding_ledger_revisions',
   'finding_ledger_heads',
   'finding_entries',
@@ -354,16 +282,3 @@ for (const table of FINDING_AUTHORITY_TABLES) {
       SELECT RAISE(ABORT, 'Finding Contract is disabled');
     END`);
 }
-
-FINDINGS_DDL.push(
-  `CREATE TRIGGER finding_resume_authorities_update_guard
-    BEFORE UPDATE ON finding_resume_authorities
-    BEGIN
-      SELECT RAISE(ABORT, 'finding resume authority is immutable');
-    END`,
-  `CREATE TRIGGER finding_resume_authorities_delete_guard
-    BEFORE DELETE ON finding_resume_authorities
-    BEGIN
-      SELECT RAISE(ABORT, 'finding resume authority cannot be deleted');
-    END`,
-);

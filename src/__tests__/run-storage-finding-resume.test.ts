@@ -65,6 +65,7 @@ function stagePendingPublication(
 function findingStore(
   root: ReturnType<typeof createRealRunStorage>['root'],
   ownerKey: string,
+  workflowName = 'default',
 ): FindingLedgerStore {
   const owner = root.claimLease({
     ownerKey,
@@ -76,7 +77,7 @@ function findingStore(
     expectedScopeRevision: 0,
   });
   return runtime.findingManager({
-    workflowName: 'default',
+    workflowName,
     producer: execution.handle,
   });
 }
@@ -145,7 +146,7 @@ describe('SQLite Finding resume authority', () => {
       pending.roundMarker,
       pending.publication,
     );
-    await childStore.rebindPendingManagerValidationPublication(childPublication);
+    expect(childPublication.destinationRunId).toBe(childRunId);
 
     const grandchild = resumeRealRunStorage(child.root, {
       slug: 'run-grandchild',
@@ -155,11 +156,7 @@ describe('SQLite Finding resume authority', () => {
     const grandchildRunSlug = grandchild.root.readResumeSnapshot().run.runId;
     const importedPublication = grandchildStore.loadLedger()
       .pendingManagerCommit!.publication;
-    expect(importedPublication.destinationRunId).toBe(childRunId);
-    await expect(grandchildStore.rebindPendingManagerValidationPublication({
-      ...importedPublication,
-      destinationRunId: pending.publication.destinationRunId,
-    })).rejects.toThrow(/not authorized for pending rebind/i);
+    expect(importedPublication.destinationRunId).toBe(grandchildRunSlug);
 
     const grandchildPublication = grandchildStore.bindManagerValidationPublication(
       pending.roundMarker,
@@ -173,9 +170,6 @@ describe('SQLite Finding resume authority', () => {
       contentSha256: pending.publication.contentSha256,
       report: pending.publication.report,
     });
-    await grandchildStore.rebindPendingManagerValidationPublication(
-      grandchildPublication,
-    );
     const finalized = await resumePendingManagerCommit(
       { ledgerStore: grandchildStore } as never,
       grandchildStore.loadLedger(),
@@ -188,13 +182,7 @@ describe('SQLite Finding resume authority', () => {
       publicationKey: pending.publication.publicationId,
       digest: pending.publication.contentSha256,
     }));
-    expect(grandchildSnapshot.ancestry).toEqual([
-      expect.objectContaining({ ancestorRunId: childRunId, depth: 1 }),
-      expect.objectContaining({
-        ancestorRunId: parent.root.readResumeSnapshot().run.runId,
-        depth: 2,
-      }),
-    ]);
+    expect(grandchildSnapshot.run.runId).toBe(grandchildRunSlug);
   });
 
   it('lets a workflow_call sharing root authority finish a resumed pending publication', async () => {
@@ -211,11 +199,6 @@ describe('SQLite Finding resume authority', () => {
     const rootRuntime = child.root.runtime({ lease: owner });
     const workflowScope = rootRuntime.scopes.createWorkflowCallChild({
       scopeKey: 'resume-publication',
-      workflowDefinition: {
-        name: 'child-workflow',
-        codecName: 'json-v1',
-        definition: '{"name":"child-workflow"}',
-      },
     });
     const workflowRuntime = child.root.runtime({
       lease: owner,
@@ -279,115 +262,108 @@ describe('SQLite Finding resume authority', () => {
     expect(store.loadLedger().pendingManagerCommit).toBeUndefined();
   });
 
-  it('keeps the parent immutable and publishes no child database when import validation fails', async () => {
+  it('keeps the parent immutable when the target input disables Finding Contract', async () => {
     const parent = createRealRunStorage({ findingContractEnabled: true });
     await stagePendingPublication(parent.root);
     const parentState = parent.root.readResumeSnapshot();
     const parentBytes = readFileSync(parent.databasePath);
-    const failedDatabasePath = `${parent.databasePath}.invalid-child`;
+    const childDatabasePath = `${parent.databasePath}.disabled-input-child`;
 
-    expect(() => resumeRunStorage({
-      databasePath: failedDatabasePath,
+    const child = resumeRunStorage({
+      databasePath: childDatabasePath,
       source: parent.root,
       bootstrapSeed: createTestBootstrapSeed({
-        sessionId: 'invalid-child-session',
+        sessionId: 'disabled-input-child-session',
       }),
       run: {
-        runId: 'run-invalid-child',
+        runId: 'run-disabled-input-child',
+        workflowName: 'default',
         findingContractEnabled: false,
       },
-      workflowDefinition: {
-        name: 'default',
-        codecName: 'json-v1',
-        definition: '{"name":"default"}',
-      },
-    })).toThrow(/Finding Contract does not match/i);
-    expect(existsSync(failedDatabasePath)).toBe(false);
+    });
+    expect(child.readResumeSnapshot().run.findingContractEnabled).toBe(1);
+    child.close();
+    expect(existsSync(childDatabasePath)).toBe(true);
     expect(parent.root.readResumeSnapshot()).toEqual(parentState);
     expect(readFileSync(parent.databasePath)).toEqual(parentBytes);
   });
 
-  it('rejects an ancestor skip when the direct parent has not rebound the pending publication', async () => {
+  it('enables the resumed root when the target requests Finding Contract', () => {
+    const source = createRealRunStorage({ findingContractEnabled: false });
+    const child = resumeRunStorage({
+      databasePath: `${source.databasePath}.enabled-input-child`,
+      source: source.root,
+      bootstrapSeed: createTestBootstrapSeed({
+        sessionId: 'enabled-input-child-session',
+      }),
+      run: {
+        runId: 'run-enabled-input-child',
+        workflowName: 'target-workflow',
+        findingContractEnabled: true,
+      },
+    });
+    expect(child.readResumeSnapshot()).toMatchObject({
+      run: { findingContractEnabled: 1 },
+      scopes: [
+        {
+          scopeId: 'root',
+          findingContractEnabled: 1,
+        },
+      ],
+      findingHeads: [],
+    });
+
+    const owner = child.claimLease({
+      ownerKey: 'enabled-input-child-owner',
+      leaseDurationMs: 10_000,
+    });
+    const runtime = child.runtime({ lease: owner });
+    const execution = runtime.execution.startStep({
+      stepKey: 'review',
+      expectedScopeRevision: 0,
+    });
+    expect(runtime.findingManager({
+      workflowName: 'target-workflow',
+      producer: execution.handle,
+    }).loadLedger()).toMatchObject({
+      workflowName: 'target-workflow',
+      nextId: 1,
+    });
+    expect(child.readResumeSnapshot().findingHeads).toHaveLength(1);
+    child.close();
+  });
+
+  it('rebinds a pending publication on every direct resume', async () => {
     const parent = createRealRunStorage({ findingContractEnabled: true });
     await stagePendingPublication(parent.root);
     const child = resumeRealRunStorage(parent.root, {
       slug: 'run-unbound-child',
       findingContractEnabled: true,
     });
-    const skippedDatabasePath = `${child.databasePath}.skipped`;
-    const childState = child.root.readResumeSnapshot();
-
-    expect(() => resumeRunStorage({
-      databasePath: skippedDatabasePath,
+    const grandchild = resumeRunStorage({
+      databasePath: `${child.databasePath}.grandchild`,
       source: child.root,
       bootstrapSeed: createTestBootstrapSeed({
         sessionId: 'skipped-grandchild-session',
       }),
       run: {
-        runId: 'run-skipped-grandchild',
+        runId: 'run-grandchild',
+        workflowName: 'renamed-workflow',
         findingContractEnabled: true,
       },
-      workflowDefinition: {
-        name: 'default',
-        codecName: 'json-v1',
-        definition: '{"name":"default"}',
-      },
-    })).toThrow(/failed resume provenance validation/i);
-    expect(existsSync(skippedDatabasePath)).toBe(false);
-    expect(child.root.readResumeSnapshot()).toEqual(childState);
-  });
-
-  it('rejects forged resume roots before creating a database', () => {
-    const target = createRealRunStorage();
-    target.root.close();
-
-    expect(() => resumeRunStorage({
-      databasePath: `${target.databasePath}.forged`,
-      source: Object.freeze({}) as never,
-      bootstrapSeed: createTestBootstrapSeed({
-        sessionId: 'forged-child-session',
-      }),
-      run: {
-        runId: 'forged-child',
-        findingContractEnabled: false,
-      },
-      workflowDefinition: {
-        name: 'default',
-        codecName: 'json-v1',
-        definition: '{"name":"default"}',
-      },
-    })).toThrow(/resume source is forged/i);
-    expect(existsSync(`${target.databasePath}.forged`)).toBe(false);
-  });
-
-  it('does not trust an overridden public snapshot reader on a live source root', () => {
-    const source = createRealRunStorage({ findingContractEnabled: false });
-    const sourceRunId = source.root.readResumeSnapshot().run.runId;
-    Reflect.set(source.root, 'readResumeSnapshot', () => ({
-      run: { runId: 'forged-source-run' },
-    }));
-    const childDatabasePath = `${source.databasePath}.trusted-child`;
-    const child = resumeRunStorage({
-      databasePath: childDatabasePath,
-      source: source.root,
-      bootstrapSeed: createTestBootstrapSeed({
-        sessionId: 'trusted-child-session',
-      }),
-      run: {
-        runId: 'trusted-child',
-        findingContractEnabled: false,
-      },
-      workflowDefinition: {
-        name: 'default',
-        codecName: 'json-v1',
-        definition: '{"name":"default"}',
+    });
+    const store = findingStore(
+      grandchild,
+      'renamed-workflow-owner',
+      'renamed-workflow',
+    );
+    expect(store.loadLedger()).toMatchObject({
+      workflowName: 'renamed-workflow',
+      pendingManagerCommit: {
+        publication: { destinationRunId: 'run-grandchild' },
       },
     });
-
-    expect(child.readResumeSnapshot().ancestry).toEqual([
-      expect.objectContaining({ ancestorRunId: sourceRunId, depth: 1 }),
-    ]);
-    child.close();
+    grandchild.close();
   });
 
   it('shares the parent Finding authority with workflow_call scopes', async () => {
@@ -399,11 +375,6 @@ describe('SQLite Finding resume authority', () => {
     const rootRuntime = root.runtime({ lease: owner });
     const childScope = rootRuntime.scopes.createWorkflowCallChild({
       scopeKey: 'child',
-      workflowDefinition: {
-        name: 'child',
-        codecName: 'json-v1',
-        definition: '{"name":"child"}',
-      },
     });
     const childRuntime = root.runtime({ lease: owner, scope: childScope });
     const execution = childRuntime.execution.startStep({
@@ -433,5 +404,242 @@ describe('SQLite Finding resume authority', () => {
       workflowName: 'default',
       producer: rootExecution.handle,
     }).loadLedger().nextId).toBe(2);
+  });
+
+  it('promotes an imported workflow_call scope when the target enables Finding Contract', () => {
+    const source = createRealRunStorage({ findingContractEnabled: false });
+    const sourceLease = source.root.claimLease({
+      ownerKey: 'workflow-promote-source',
+      leaseDurationMs: 10_000,
+    });
+    source.root.runtime({ lease: sourceLease }).scopes.createWorkflowCallChild({
+      scopeKey: 'workflow-promote',
+      findingContractEnabled: false,
+    });
+    const child = resumeRunStorage({
+      databasePath: `${source.databasePath}.workflow-promote`,
+      source: source.root,
+      bootstrapSeed: createTestBootstrapSeed({
+        sessionId: 'workflow-promote-session',
+      }),
+      run: {
+        runId: 'workflow-promote-target',
+        workflowName: 'target-workflow',
+        findingContractEnabled: false,
+      },
+    });
+    const childLease = child.claimLease({
+      ownerKey: 'workflow-promote-target',
+      leaseDurationMs: 10_000,
+    });
+    const rootRuntime = child.runtime({ lease: childLease });
+    const childScope = rootRuntime.scopes.resolveWorkflowCallChild({
+      scopeKey: 'workflow-promote',
+      findingContractEnabled: true,
+    });
+    expect(child.readResumeSnapshot()).toMatchObject({
+      run: { findingContractEnabled: 1 },
+      findingHeads: [],
+    });
+    expect(rootRuntime.scopes.get().findingContractEnabled).toBe(false);
+    expect(child.runtime({
+      lease: childLease,
+      scope: childScope,
+    }).scopes.get().findingContractEnabled).toBe(true);
+    child.close();
+  });
+
+  it('retains an imported workflow_call Finding Contract when the target disables it', () => {
+    const source = createRealRunStorage({ findingContractEnabled: false });
+    const sourceLease = source.root.claimLease({
+      ownerKey: 'workflow-retain-source',
+      leaseDurationMs: 10_000,
+    });
+    source.root.runtime({ lease: sourceLease }).scopes.createWorkflowCallChild({
+      scopeKey: 'workflow-retain',
+      findingContractEnabled: true,
+    });
+    const child = resumeRunStorage({
+      databasePath: `${source.databasePath}.workflow-retain`,
+      source: source.root,
+      bootstrapSeed: createTestBootstrapSeed({
+        sessionId: 'workflow-retain-session',
+      }),
+      run: {
+        runId: 'workflow-retain-target',
+        workflowName: 'target-workflow',
+        findingContractEnabled: false,
+      },
+    });
+    const childLease = child.claimLease({
+      ownerKey: 'workflow-retain-target',
+      leaseDurationMs: 10_000,
+    });
+    const rootRuntime = child.runtime({ lease: childLease });
+    const childScope = rootRuntime.scopes.resolveWorkflowCallChild({
+      scopeKey: 'workflow-retain',
+      findingContractEnabled: false,
+    });
+    expect(child.readResumeSnapshot().run.findingContractEnabled).toBe(1);
+    expect(child.runtime({
+      lease: childLease,
+      scope: childScope,
+    }).scopes.get().findingContractEnabled).toBe(true);
+    child.close();
+  });
+
+  it('promotes an imported parallel scope when the resumed parent enables Finding Contract', () => {
+    const source = createRealRunStorage({ findingContractEnabled: false });
+    const sourceLease = source.root.claimLease({
+      ownerKey: 'parallel-promote-source',
+      leaseDurationMs: 10_000,
+    });
+    source.root.runtime({ lease: sourceLease }).scopes.createParallelChild({
+      scopeKey: 'parallel-promote',
+    });
+    const child = resumeRunStorage({
+      databasePath: `${source.databasePath}.parallel-promote`,
+      source: source.root,
+      bootstrapSeed: createTestBootstrapSeed({
+        sessionId: 'parallel-promote-session',
+      }),
+      run: {
+        runId: 'parallel-promote-target',
+        workflowName: 'target-workflow',
+        findingContractEnabled: true,
+      },
+    });
+    const childLease = child.claimLease({
+      ownerKey: 'parallel-promote-target',
+      leaseDurationMs: 10_000,
+    });
+    const rootRuntime = child.runtime({ lease: childLease });
+    const childScope = rootRuntime.scopes.resolveParallelChild({
+      scopeKey: 'parallel-promote',
+    });
+    expect(rootRuntime.scopes.get().findingContractEnabled).toBe(true);
+    expect(child.runtime({
+      lease: childLease,
+      scope: childScope,
+    }).scopes.get().findingContractEnabled).toBe(true);
+    child.close();
+  });
+
+  it('retains an imported parallel Finding Contract when the target disables it', () => {
+    const source = createRealRunStorage({ findingContractEnabled: true });
+    const sourceLease = source.root.claimLease({
+      ownerKey: 'parallel-retain-source',
+      leaseDurationMs: 10_000,
+    });
+    source.root.runtime({ lease: sourceLease }).scopes.createParallelChild({
+      scopeKey: 'parallel-retain',
+    });
+    const child = resumeRunStorage({
+      databasePath: `${source.databasePath}.parallel-retain`,
+      source: source.root,
+      bootstrapSeed: createTestBootstrapSeed({
+        sessionId: 'parallel-retain-session',
+      }),
+      run: {
+        runId: 'parallel-retain-target',
+        workflowName: 'target-workflow',
+        findingContractEnabled: false,
+      },
+    });
+    const childLease = child.claimLease({
+      ownerKey: 'parallel-retain-target',
+      leaseDurationMs: 10_000,
+    });
+    const rootRuntime = child.runtime({ lease: childLease });
+    const childScope = rootRuntime.scopes.resolveParallelChild({
+      scopeKey: 'parallel-retain',
+    });
+    expect(rootRuntime.scopes.get().findingContractEnabled).toBe(true);
+    expect(child.runtime({
+      lease: childLease,
+      scope: childScope,
+    }).scopes.get().findingContractEnabled).toBe(true);
+    child.close();
+  });
+
+  it('resumes nested-only Finding Contract state with a disabled root', async () => {
+    const source = createRealRunStorage({ findingContractEnabled: false });
+    const sourceLease = source.root.claimLease({
+      ownerKey: 'nested-only-source',
+      leaseDurationMs: 10_000,
+    });
+    const sourceRoot = source.root.runtime({ lease: sourceLease });
+    const sourceChildScope = sourceRoot.scopes.createWorkflowCallChild({
+      scopeKey: 'nested-finding',
+      findingContractEnabled: true,
+    });
+    const sourceChild = source.root.runtime({
+      lease: sourceLease,
+      scope: sourceChildScope,
+    });
+    const sourceExecution = sourceChild.execution.startStep({
+      stepKey: 'nested-review',
+      expectedScopeRevision: 0,
+    });
+    const sourceStore = sourceChild.findingManager({
+      workflowName: 'nested-source',
+      producer: sourceExecution.handle,
+    });
+    await sourceStore.updateLedger((ledger) => ({
+      ledger: { ...ledger, nextId: 7 },
+      result: undefined,
+    }));
+
+    const child = resumeRunStorage({
+      databasePath: `${source.databasePath}.nested-child`,
+      source: source.root,
+      bootstrapSeed: createTestBootstrapSeed({
+        workflowName: 'nested-target',
+        sessionId: 'nested-target-session',
+      }),
+      run: {
+        runId: 'nested-target-run',
+        workflowName: 'nested-target',
+        findingContractEnabled: false,
+      },
+    });
+    const snapshot = child.readResumeSnapshot();
+    expect(snapshot.run.findingContractEnabled).toBe(1);
+    expect(snapshot.scopes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        scopeId: 'root',
+        findingContractEnabled: 0,
+      }),
+      expect.objectContaining({
+        kind: 'workflow_call',
+        findingContractEnabled: 1,
+      }),
+    ]));
+
+    const childLease = child.claimLease({
+      ownerKey: 'nested-only-target',
+      leaseDurationMs: 10_000,
+    });
+    const childRoot = child.runtime({ lease: childLease });
+    const targetChildScope = childRoot.scopes.resolveWorkflowCallChild({
+      scopeKey: 'nested-finding',
+      findingContractEnabled: true,
+    });
+    const targetChild = child.runtime({
+      lease: childLease,
+      scope: targetChildScope,
+    });
+    const targetExecution = targetChild.execution.startStep({
+      stepKey: 'nested-review',
+      expectedScopeRevision: 0,
+    });
+    expect(targetChild.findingManager({
+      workflowName: 'nested-target',
+      producer: targetExecution.handle,
+    }).loadLedger()).toMatchObject({
+      workflowName: 'nested-target',
+      nextId: 7,
+    });
+    child.close();
   });
 });

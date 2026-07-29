@@ -20,7 +20,6 @@ const SCOPED_AUTHORITY_TABLES = [
   ['report_streams', 'owner_scope_id'],
   ['report_revisions', 'owner_scope_id'],
   ['finding_ledger_revisions', 'scope_id'],
-  ['finding_revision_publications', 'scope_id'],
   ['finding_ledger_heads', 'scope_id'],
   ['finding_ledger_controls', 'scope_id'],
   ['finding_entries', 'scope_id'],

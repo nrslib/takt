@@ -114,30 +114,3 @@ export function assertPublication(
   assertPublicationIntent(publication, roundMarker);
   assertNativePublicationContent(publication, domainId, runId);
 }
-
-export function assertResumePublicationProvenance(
-  publication: FindingManagerReportPublication,
-  roundMarker: string,
-  input: {
-    readonly directSourceRunId: string;
-    readonly originRunIds: ReadonlySet<string>;
-    readonly originScopeId: string;
-    readonly workflowName: string;
-  },
-): void {
-  assertPublicationIntent(publication, roundMarker);
-  const expectedDomainId = findingManagerPublicationDomainId({
-    runId: publication.originRunId,
-    scopeId: input.originScopeId,
-    workflowName: input.workflowName,
-  });
-  if (
-    publication.destinationRunId !== input.directSourceRunId
-    || !input.originRunIds.has(publication.originRunId)
-    || publication.domainId !== expectedDomainId
-  ) {
-    throw new Error(
-      `Finding manager publication "${publication.publicationId}" failed resume provenance validation`,
-    );
-  }
-}

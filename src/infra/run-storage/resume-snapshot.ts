@@ -1,6 +1,5 @@
 import type { RunReadContext } from './context.js';
 import {
-  readFindingLedgerProjection,
   validateFindingAuthority,
 } from './finding-ledger.js';
 import {
@@ -20,7 +19,6 @@ import {
   assertOperationIdentities,
   assertReportIdentities,
   assertRunSessionIdentities,
-  assertWorkflowDefinitions,
 } from './resume-snapshot-validation.js';
 import { validateStoredReportHistory } from './reports.js';
 
@@ -33,37 +31,27 @@ export function readCompleteResumeSnapshot(
   context: RunReadContext,
 ): CompleteResumeSnapshot {
   const run = readRun(context);
-  const workflowDefinitions = readWorkflowDefinitions(context);
   const scopeRows = readScopeRows(context, run.runId);
   const operations = readOperations(context, run.runId);
   const sessions = readSessions(context, run.runId);
   const reports = readReports(context, run.runId);
-  const rootFindingEnabled = scopeRows.find(
-    (scope) => scope.scopeId === 'root',
-  )?.findingContractEnabled === 1;
-  const finding = rootFindingEnabled
-    ? readFindingProjection(context, run.runId)
-    : null;
-  if (run.findingContractEnabled === 1 && !rootFindingEnabled) {
-    validateFindingAuthority(context, run.runId);
-  }
+  const findingHeads = context.all<SnapshotRow>(`
+    SELECT * FROM finding_ledger_heads
+    WHERE run_id = ?
+    ORDER BY scope_id
+  `, run.runId);
+  const currentRevisions = new Map(
+    findingHeads.map((head) => [head.scope_id, head.current_revision]),
+  );
+  const findingEntries = readAllFindingEntries(context, run.runId).filter(
+    (entry) => currentRevisions.get(entry.scopeId) === entry.revision,
+  );
+  const findingControls = readFindingControls(context, run.runId).filter(
+    (control) => currentRevisions.get(control.scopeId) === control.revision,
+  );
+  validateFindingAuthority(context, run.runId);
   return {
     run,
-    workflowDefinitions,
-    engineBuilds: context.all<SnapshotRow>(`
-      SELECT build_id AS buildId, version, digest
-      FROM engine_builds
-      ORDER BY build_id
-    `),
-    ancestry: context.all<SnapshotRow>(`
-      SELECT
-        ancestor_run_id AS ancestorRunId,
-        depth,
-        snapshot_digest AS snapshotDigest
-      FROM run_ancestry
-      WHERE run_id = ?
-      ORDER BY depth
-    `, run.runId),
     scopes: scopeRows.map((scope) => (
       readScopeSnapshot(context, run.runId, scope)
     )),
@@ -96,29 +84,19 @@ export function readCompleteResumeSnapshot(
         transitions.transition_seq
     `, run.runId),
     reports,
-    findingPublications: context.all<SnapshotRow>(`
-      SELECT
-        scope_id AS scopeId,
-        revision,
-        projection_digest AS projectionDigest,
-        published_at AS publishedAt
-      FROM finding_revision_publications
-      WHERE run_id = ?
-      ORDER BY scope_id, revision
-    `, run.runId),
     findingRevisions: context.all<SnapshotRow>(`
-      SELECT * FROM finding_ledger_revisions
-      WHERE run_id = ?
-      ORDER BY scope_id, revision
+      SELECT revisions.*
+      FROM finding_ledger_revisions AS revisions
+      JOIN finding_ledger_heads AS heads
+        ON heads.run_id = revisions.run_id
+        AND heads.scope_id = revisions.scope_id
+        AND heads.current_revision = revisions.revision
+      WHERE revisions.run_id = ?
+      ORDER BY revisions.scope_id
     `, run.runId),
-    findingHeads: context.all<SnapshotRow>(`
-      SELECT * FROM finding_ledger_heads
-      WHERE run_id = ?
-      ORDER BY scope_id
-    `, run.runId),
-    findingEntries: readAllFindingEntries(context, run.runId),
-    findingControls: readFindingControls(context, run.runId),
-    findingLedger: finding,
+    findingHeads,
+    findingEntries,
+    findingControls,
   };
 }
 
@@ -128,8 +106,6 @@ function readRun(
   const run = context.get<CompleteResumeSnapshot['run']>(`
     SELECT
       run_id AS runId,
-      engine_build_id AS engineBuildId,
-      workflow_definition_id AS workflowDefinitionId,
       finding_contract_enabled AS findingContractEnabled,
       status,
       created_at AS createdAt,
@@ -151,7 +127,6 @@ function readScopeRows(
       scope_id AS scopeId,
       parent_scope_id AS parentScopeId,
       kind,
-      workflow_definition_id AS workflowDefinitionId,
       finding_contract_enabled AS findingContractEnabled,
       created_at AS createdAt,
       terminal_at AS terminalAt
@@ -159,23 +134,6 @@ function readScopeRows(
     WHERE run_id = ?
     ORDER BY created_at, scope_id
   `, runId);
-}
-
-function readWorkflowDefinitions(
-  context: RunReadContext,
-): SnapshotRow[] {
-  const definitions = context.all<SnapshotRow>(`
-    SELECT
-      definition_id AS definitionId,
-      name,
-      codec_name AS codecName,
-      definition,
-      digest
-    FROM workflow_definitions
-    ORDER BY definition_id
-  `);
-  assertWorkflowDefinitions(definitions);
-  return definitions;
 }
 
 function readOperations(
@@ -270,20 +228,4 @@ function readReports(
   `, runId);
   assertReportIdentities(runId, reports);
   return reports;
-}
-
-function readFindingProjection(
-  context: RunReadContext,
-  runId: string,
-): NonNullable<CompleteResumeSnapshot['findingLedger']> {
-  validateFindingAuthority(context, runId);
-  const finding = readFindingLedgerProjection(
-    context,
-    { runId, scopeId: 'root' },
-  );
-  return {
-    revision: finding.revision,
-    updatedAt: finding.updatedAt,
-    ledger: finding.ledger,
-  };
 }

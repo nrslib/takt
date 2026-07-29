@@ -1,7 +1,7 @@
 import type { FindingLedgerStore } from '../../core/workflow/findings/store.js';
 import type { RunReadContext } from './context.js';
 import { createRunFindingManagerStore } from './finding-manager-adapter.js';
-import { readTrustedFindingResumeSource } from './finding-resume-source.js';
+import { bootstrapFindingAuthority } from './finding-ledger.js';
 import {
   assertExactInput,
   type RuntimeBinding,
@@ -29,22 +29,23 @@ export function createRuntimeFindingCommands(
         );
       }
       assertProducerExecution(binding, producer);
-      const { ledger, trustedResumeSource } = binding.executor.read((context) => {
-        const resolvedLedger = readFindingAuthority(context, binding);
-        return {
-          ledger: resolvedLedger,
-          trustedResumeSource: readTrustedFindingResumeSource(
-            context,
-            binding.runId,
-            resolvedLedger.scopeId,
-          ),
-        };
+      const ledger = binding.executor.write(binding.owner, (context, now) => {
+        const resolved = readFindingAuthority(context, binding);
+        const head = context.get<{ readonly found: number }>(`
+          SELECT 1 AS found
+          FROM finding_ledger_heads
+          WHERE run_id = ? AND scope_id = ?
+        `, binding.runId, resolved.scopeId);
+        if (head === undefined) {
+          bootstrapFindingAuthority(context, {
+            runId: binding.runId,
+            scopeId: resolved.scopeId,
+            workflowName: input.workflowName,
+            createdAt: now,
+          });
+        }
+        return resolved;
       });
-      if (ledger.workflowName !== input.workflowName) {
-        throw new Error(
-          `Finding authority workflow mismatch: expected "${input.workflowName}", got "${ledger.workflowName}"`,
-        );
-      }
       return createRunFindingManagerStore({
         executor: binding.executor,
         owner: binding.owner,
@@ -53,9 +54,6 @@ export function createRuntimeFindingCommands(
         workflowName: input.workflowName,
         producerScopeId: producer.scopeId,
         producerExecutionId: producer.executionId,
-        ...(trustedResumeSource !== undefined
-          ? { trustedResumeSource }
-          : {}),
       });
     },
   };
@@ -102,10 +100,9 @@ function assertProducerExecution(
 function readFindingAuthority(
   context: RunReadContext,
   binding: RuntimeBinding,
-): { readonly scopeId: string; readonly workflowName: string } {
+): { readonly scopeId: string } {
   const row = context.get<{
     readonly scopeId: string;
-    readonly workflowName: string;
   }>(`
     WITH RECURSIVE authority_scope(
       scope_id,
@@ -130,12 +127,12 @@ function readFindingAuthority(
       WHERE parent.run_id = ?
     )
     SELECT
-      heads.scope_id AS scopeId,
-      heads.workflow_name AS workflowName
+      authority_scope.scope_id AS scopeId
     FROM authority_scope
-    JOIN finding_ledger_heads AS heads
-      ON heads.run_id = ?
-      AND heads.scope_id = authority_scope.scope_id
+    JOIN scopes
+      ON scopes.run_id = ?
+      AND scopes.scope_id = authority_scope.scope_id
+      AND scopes.finding_contract_enabled = 1
     WHERE
       authority_scope.distance = 0
       OR (

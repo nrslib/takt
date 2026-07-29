@@ -10,12 +10,8 @@ const resumed: RunStorageRoot = resumeRunStorage({
   source,
   run: {
     runId: 'child',
+    workflowName: 'default',
     findingContractEnabled: true,
-  },
-  workflowDefinition: {
-    name: 'default',
-    codecName: 'json-v1',
-    definition: '{"name":"default"}',
   },
   bootstrapSeed: {
     version: 1,
@@ -35,12 +31,8 @@ resumeRunStorage({
   source: source.readResumeSnapshot(),
   run: {
     runId: 'forged',
+    workflowName: 'default',
     findingContractEnabled: true,
-  },
-  workflowDefinition: {
-    name: 'default',
-    codecName: 'json-v1',
-    definition: '{"name":"default"}',
   },
   bootstrapSeed: {
     version: 1,

@@ -103,12 +103,8 @@ function terminalizeRun(
     }),
     run: {
       runId: runPaths.slug,
+      workflowName: 'terminal-workflow',
       findingContractEnabled: false,
-    },
-    workflowDefinition: {
-      name: 'terminal-workflow',
-      codecName: 'json-v1',
-      definition: '{"name":"terminal-workflow"}',
     },
   });
   const lease = root.claimLease({

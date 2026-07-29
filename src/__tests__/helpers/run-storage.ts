@@ -21,8 +21,6 @@ import { projectWorkflowTerminalStage } from '../../features/tasks/execute/workf
 import { TEST_RUN_STORAGE_CLOCK } from './run-storage-clock.js';
 
 const roots: string[] = [];
-const TEST_WORKFLOW_DEFINITION = '{"name":"default"}';
-
 export function createWorkflowRunStorageCompositionTestDouble(
   createComposition: (
     backend: RunStorageBackend,
@@ -155,12 +153,8 @@ export function createRealRunStorage(options?: {
       bootstrapSeed: createTestBootstrapSeed(),
       run: {
         runId: 'run-1',
+        workflowName: 'default',
         findingContractEnabled: options?.findingContractEnabled === true,
-      },
-      workflowDefinition: {
-        name: 'default',
-        codecName: 'json-v1',
-        definition: TEST_WORKFLOW_DEFINITION,
       },
       busyRetry: {
         delaysMs: options?.busyRetryDelaysMs ?? [1, 2, 4],
@@ -197,13 +191,9 @@ export function resumeRealRunStorage(
       source,
       run: {
         runId: options?.slug ?? 'run-resume',
+        workflowName: 'default',
         findingContractEnabled: options?.findingContractEnabled
           ?? source.readResumeSnapshot().run.findingContractEnabled === 1,
-      },
-      workflowDefinition: {
-        name: 'default',
-        codecName: 'json-v1',
-        definition: TEST_WORKFLOW_DEFINITION,
       },
       busyRetry: {
         delaysMs: options?.busyRetryDelaysMs ?? [1, 2, 4],

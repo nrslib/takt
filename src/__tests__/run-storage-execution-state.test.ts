@@ -22,11 +22,6 @@ describe('run execution authority', () => {
 
     runtime.scopes.createWorkflowCallChild({
       scopeKey: 'call-1',
-      workflowDefinition: {
-        name: 'child',
-        codecName: 'json-v1',
-        definition: '{"name":"child"}',
-      },
     });
     runtime.scopes.createParallelChild({ scopeKey: 'parallel-1' });
 

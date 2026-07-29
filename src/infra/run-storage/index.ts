@@ -2,8 +2,6 @@ export {
   APPLICATION_ID,
   EXPECTED_SCHEMA_HASH,
   SCHEMA_VERSION,
-  STORAGE_CONTRACT_FINGERPRINT,
-  computeStorageContractFingerprint,
 } from './contract.js';
 export {
   createRunStorage,

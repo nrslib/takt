@@ -234,12 +234,13 @@ describe('run storage authority redesign', () => {
     database.prepare(`
       INSERT INTO scopes (
         run_id, scope_id, parent_scope_id, kind,
-        workflow_definition_id, finding_contract_enabled, created_at
+        finding_contract_enabled, created_at
       )
       SELECT
         run_id, 'ghost', 'root', 'parallel',
-        workflow_definition_id, finding_contract_enabled, created_at
-      FROM runs
+        finding_contract_enabled, created_at
+      FROM scopes
+      WHERE scope_id = 'root'
     `).run();
     expect(() => database.exec('COMMIT')).toThrow(/foreign key/i);
     database.exec('ROLLBACK');
@@ -358,7 +359,7 @@ describe('run storage authority redesign', () => {
     expect(history[0]?.publicationId).not.toBe(history[1]?.publicationId);
   });
 
-  it('returns a complete run snapshot from one read transaction and bootstraps FC atomically', () => {
+  it('returns a complete run snapshot and keeps unused FC state lazy', () => {
     const enabled = createRealRunStorage({ findingContractEnabled: true });
     const owner = claim(enabled.root);
     const runtime = enabled.root.runtime({ lease: owner });
@@ -400,10 +401,7 @@ describe('run storage authority redesign', () => {
     });
     expect(snapshot.sessions).toHaveLength(1);
     expect(snapshot.operations).toHaveLength(1);
-    expect(snapshot.findingLedger).toMatchObject({
-      revision: 1,
-      ledger: emptyLedger(),
-    });
+    expect(snapshot.findingHeads).toEqual([]);
 
     const disabled = createRealRunStorage({ findingContractEnabled: false });
     const disabledOwner = claim(disabled.root);
@@ -412,7 +410,7 @@ describe('run storage authority redesign', () => {
       stepKey: 'normal-run',
       expectedScopeRevision: 0,
     }).iteration).toBe(1);
-    expect(disabled.root.readResumeSnapshot().findingLedger).toBeNull();
+    expect(disabled.root.readResumeSnapshot().findingHeads).toEqual([]);
     expect(() => disabledRuntime.findingManager({
       workflowName: 'default',
       producer: Object.freeze({}) as never,

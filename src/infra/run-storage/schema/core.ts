@@ -9,35 +9,16 @@ export const CORE_DDL = [
       AND substr(database_instance_id, 24, 1) = '-'
       AND replace(database_instance_id, '-', '') NOT GLOB '*[^0-9a-f]*'
     ),
-    schema_version INTEGER NOT NULL CHECK (schema_version = 2),
+    schema_version INTEGER NOT NULL CHECK (schema_version = 3),
     application_id INTEGER NOT NULL CHECK (application_id = 1413565268),
     schema_hash TEXT NOT NULL CHECK (
       length(schema_hash) = 64 AND schema_hash NOT GLOB '*[^0-9a-f]*'
-    ),
-    fingerprint TEXT NOT NULL CHECK (
-      length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'
     )
   ) STRICT`,
   `CREATE TABLE storage_codecs (
     codec_name TEXT PRIMARY KEY,
     content_kind TEXT NOT NULL CHECK (content_kind IN ('json', 'text')),
     digest_algorithm TEXT NOT NULL CHECK (digest_algorithm = 'sha256')
-  ) STRICT`,
-  `CREATE TABLE engine_builds (
-    build_id TEXT PRIMARY KEY,
-    version TEXT NOT NULL CHECK (length(version) > 0),
-    digest TEXT NOT NULL CHECK (
-      length(digest) = 64 AND digest NOT GLOB '*[^0-9a-f]*'
-    )
-  ) STRICT`,
-  `CREATE TABLE workflow_definitions (
-    definition_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL CHECK (length(name) > 0),
-    codec_name TEXT NOT NULL REFERENCES storage_codecs(codec_name),
-    definition TEXT NOT NULL,
-    digest TEXT NOT NULL CHECK (
-      length(digest) = 64 AND digest NOT GLOB '*[^0-9a-f]*'
-    )
   ) STRICT`,
   `CREATE TABLE runs (
     singleton_id INTEGER PRIMARY KEY DEFAULT 1 CHECK (singleton_id = 1),
@@ -46,8 +27,6 @@ export const CORE_DDL = [
       AND run_id NOT LIKE '%/%'
       AND run_id NOT LIKE '%\\%'
     ),
-    engine_build_id TEXT NOT NULL REFERENCES engine_builds(build_id),
-    workflow_definition_id TEXT NOT NULL REFERENCES workflow_definitions(definition_id),
     finding_contract_enabled INTEGER NOT NULL CHECK (finding_contract_enabled IN (0, 1)),
     bootstrap_seed_codec_name TEXT NOT NULL REFERENCES storage_codecs(codec_name),
     bootstrap_seed TEXT NOT NULL,
@@ -112,26 +91,6 @@ export const CORE_DDL = [
       )
     )
   ) STRICT`,
-  `CREATE TABLE run_ancestry (
-    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
-    ancestor_run_id TEXT NOT NULL,
-    depth INTEGER NOT NULL CHECK (depth > 0),
-    snapshot_digest TEXT NOT NULL CHECK (
-      length(snapshot_digest) = 64 AND snapshot_digest NOT GLOB '*[^0-9a-f]*'
-    ),
-    PRIMARY KEY (run_id, ancestor_run_id),
-    UNIQUE (run_id, depth)
-  ) STRICT`,
-  `CREATE TABLE run_resume_sources (
-    run_id TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE,
-    source_run_id TEXT NOT NULL,
-    source_snapshot_digest TEXT NOT NULL CHECK (
-      length(source_snapshot_digest) = 64
-      AND source_snapshot_digest NOT GLOB '*[^0-9a-f]*'
-    ),
-    FOREIGN KEY (run_id, source_run_id)
-      REFERENCES run_ancestry(run_id, ancestor_run_id)
-  ) STRICT`,
   `CREATE TABLE run_sessions (
     run_id TEXT NOT NULL,
     scope_id TEXT NOT NULL,
@@ -193,7 +152,6 @@ export const CORE_DDL = [
     scope_id TEXT NOT NULL CHECK (length(scope_id) > 0),
     parent_scope_id TEXT,
     kind TEXT NOT NULL CHECK (kind IN ('root', 'workflow_call', 'parallel')),
-    workflow_definition_id TEXT NOT NULL REFERENCES workflow_definitions(definition_id),
     finding_contract_enabled INTEGER NOT NULL CHECK (
       finding_contract_enabled IN (0, 1)
     ),
@@ -227,10 +185,6 @@ export const CORE_DDL = [
           AND parent.scope_id = NEW.parent_scope_id
           AND parent.terminal_at IS NULL
           AND parent_runtime.status IN ('ready', 'running')
-          AND (
-            NEW.kind <> 'parallel'
-            OR NEW.workflow_definition_id = parent.workflow_definition_id
-          )
       )
     BEGIN
       SELECT RAISE(ABORT, 'child scope parent relationship is invalid');
@@ -263,8 +217,6 @@ export const CORE_DDL = [
     WHEN
       NEW.singleton_id <> OLD.singleton_id
       OR NEW.run_id <> OLD.run_id
-      OR NEW.engine_build_id <> OLD.engine_build_id
-      OR NEW.workflow_definition_id <> OLD.workflow_definition_id
       OR NEW.created_at <> OLD.created_at
     BEGIN
       SELECT RAISE(ABORT, 'run authority identity is immutable');
@@ -382,26 +334,6 @@ export const CORE_DDL = [
     BEFORE DELETE ON terminal_publication_stages
     BEGIN
       SELECT RAISE(ABORT, 'terminal publication stage cannot be deleted');
-    END`,
-  `CREATE TRIGGER run_ancestry_update_guard
-    BEFORE UPDATE ON run_ancestry
-    BEGIN
-      SELECT RAISE(ABORT, 'run ancestry is immutable');
-    END`,
-  `CREATE TRIGGER run_ancestry_delete_guard
-    BEFORE DELETE ON run_ancestry
-    BEGIN
-      SELECT RAISE(ABORT, 'run ancestry cannot be deleted');
-    END`,
-  `CREATE TRIGGER run_resume_sources_update_guard
-    BEFORE UPDATE ON run_resume_sources
-    BEGIN
-      SELECT RAISE(ABORT, 'run resume source is immutable');
-    END`,
-  `CREATE TRIGGER run_resume_sources_delete_guard
-    BEFORE DELETE ON run_resume_sources
-    BEGIN
-      SELECT RAISE(ABORT, 'run resume source cannot be deleted');
     END`,
   `CREATE TRIGGER run_leases_delete_guard
     BEFORE DELETE ON run_leases
@@ -560,7 +492,10 @@ export const CORE_DDL = [
         OR NEW.scope_id <> OLD.scope_id
         OR NEW.parent_scope_id IS NOT OLD.parent_scope_id
         OR NEW.kind <> OLD.kind
-        OR NEW.workflow_definition_id <> OLD.workflow_definition_id
+        OR (
+          OLD.finding_contract_enabled = 1
+          AND NEW.finding_contract_enabled = 0
+        )
         OR NEW.created_at <> OLD.created_at
         OR (
           OLD.terminal_at IS NOT NULL
@@ -592,7 +527,10 @@ export const CORE_DDL = [
         OR NEW.scope_id <> OLD.scope_id
         OR NEW.parent_scope_id IS NOT OLD.parent_scope_id
         OR NEW.kind <> OLD.kind
-        OR NEW.workflow_definition_id <> OLD.workflow_definition_id
+        OR (
+          OLD.finding_contract_enabled = 1
+          AND NEW.finding_contract_enabled = 0
+        )
         OR NEW.created_at <> OLD.created_at
         OR (
           OLD.terminal_at IS NOT NULL

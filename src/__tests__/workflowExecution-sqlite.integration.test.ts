@@ -19,6 +19,7 @@ import {
 } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { createBootstrapRecoverySeed } from '../core/workflow/run/bootstrap-recovery-seed.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import type { WorkflowExecutionEvent } from '../features/tasks/execute/types.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import {
@@ -46,6 +47,15 @@ const terminal = vi.hoisted(() => ({
 
 const storageFault = vi.hoisted(() => ({
   mode: 'none' as 'none' | 'terminalize' | 'heartbeat' | 'close' | 'setup',
+}));
+
+const directResumePrompt = vi.hoisted(() => ({
+  selectOption: vi.fn(),
+}));
+
+vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
+  selectOption: directResumePrompt.selectOption,
 }));
 
 vi.mock('../infra/claude-terminal/tmux-backend.js', () => ({
@@ -262,6 +272,8 @@ describe('executeWorkflow SQLite integration', () => {
       assistantText: 'done',
       events: [],
     });
+    directResumePrompt.selectOption.mockReset();
+    directResumePrompt.selectOption.mockResolvedValue(null);
     projectDir = mkdtempSync(join(tmpdir(), 'takt-sqlite-execution-'));
     globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-sqlite-global-'));
     originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
@@ -278,6 +290,165 @@ describe('executeWorkflow SQLite integration', () => {
     }
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(globalConfigDir, { recursive: true, force: true });
+  });
+
+  it('direct CLI resume loads the target meta workflow and inherits SQLite Finding state', async () => {
+    const sourceSlug = 'direct-resume-source';
+    const sourcePaths = buildRunPaths(projectDir, sourceSlug);
+    const sourceStartedAt = '2026-07-30T00:00:00.000Z';
+    mkdirSync(sourcePaths.runRootAbs, { recursive: true });
+    const { RunMetaManager } = await import(
+      '../features/tasks/execute/runMeta.js'
+    );
+    new RunMetaManager(
+      sourcePaths,
+      'Resume the source task.',
+      'source-workflow',
+      'sqlite',
+      undefined,
+      { startTime: sourceStartedAt },
+    );
+    const {
+      createSessionLog,
+      initNdjsonLog,
+    } = await import('../infra/fs/index.js');
+    const ndjsonLogPath = initNdjsonLog(
+      'direct-resume-source-session',
+      'Resume the source task.',
+      'source-workflow',
+      { logsDir: sourcePaths.logsAbs, startTime: sourceStartedAt },
+    );
+    const {
+      createWorkflowTerminalPayloadFactory,
+      serializeWorkflowTerminalPublication,
+    } = await import(
+      '../features/tasks/execute/workflowTerminalPayload.js'
+    );
+    const terminalPayload = createWorkflowTerminalPayloadFactory({
+      runSlug: sourceSlug,
+      projectCwd: projectDir,
+      task: 'Resume the source task.',
+      workflowName: 'source-workflow',
+      sessionLog: createSessionLog(
+        'Resume the source task.',
+        projectDir,
+        'source-workflow',
+        { startTime: sourceStartedAt },
+      ),
+      sessionId: 'direct-resume-source-session',
+      ndjsonLogPath,
+      traceReportMode: 'redacted',
+      metaSeed: {
+        backend: 'sqlite',
+        startedAt: sourceStartedAt,
+        resumeSource: null,
+      },
+    }).create({
+      status: 'failed',
+      reason: 'resume integration source',
+      iterations: 1,
+      lastStepContent: 'implementation stopped',
+      lastStepName: 'implement',
+      endTime: '2026-07-30T00:01:00.000Z',
+    });
+    const { createRunStorage, openRunStorage } = await import(
+      '../infra/run-storage/index.js'
+    );
+    const source = createRunStorage({
+      databasePath: sourcePaths.databaseAbs,
+      bootstrapSeed: createBootstrapRecoverySeed({
+        task: 'Resume the source task.',
+        workflowName: 'source-workflow',
+        projectCwd: projectDir,
+        backend: 'sqlite',
+        startedAt: sourceStartedAt,
+        sessionId: 'direct-resume-source-session',
+      }),
+      run: {
+        runId: sourceSlug,
+        workflowName: 'source-workflow',
+        findingContractEnabled: true,
+      },
+    });
+    const sourceLease = source.claimLease({
+      ownerKey: 'direct-resume-source-owner',
+      leaseDurationMs: 10_000,
+    });
+    const sourceRuntime = source.runtime({ lease: sourceLease });
+    const sourceExecution = sourceRuntime.execution.startStep({
+      stepKey: 'implement',
+      expectedScopeRevision: 0,
+    });
+    const sourceFindings = sourceRuntime.findingManager({
+      workflowName: 'source-workflow',
+      producer: sourceExecution.handle,
+    });
+    await sourceFindings.updateLedger((ledger) => ({
+      ledger: { ...ledger, nextId: 7 },
+      result: undefined,
+    }));
+    source.finishRun(sourceLease, {
+      status: 'failed',
+      failureReason: 'resume integration source',
+      publication: {
+        status: 'failed',
+        iteration: 1,
+        reason: 'resume integration source',
+        payload: serializeWorkflowTerminalPublication(terminalPayload),
+      },
+    });
+    source.close();
+
+    const { reconcileWorkflowTerminalPublication } = await import(
+      '../features/tasks/execute/workflowTerminalPublication.js'
+    );
+    await expect(reconcileWorkflowTerminalPublication({
+      databasePath: sourcePaths.databaseAbs,
+      expectedRunId: sourceSlug,
+    })).resolves.toEqual({ issues: [] });
+    const sourceMeta = readMeta(sourcePaths.runRootAbs);
+    writeFileSync(sourcePaths.metaAbs, JSON.stringify({
+      ...sourceMeta,
+      workflow: 'target-workflow',
+    }));
+    const workflowsDir = join(projectDir, '.takt', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    writeFileSync(join(workflowsDir, 'target-workflow.yaml'), [
+      'name: target-workflow',
+      'finding_contract:',
+      '  ledger_path: .takt/findings/target-workflow.json',
+      '  raw_findings_path: .takt/findings/target-workflow/raw',
+      '  manager:',
+      '    persona: findings-manager',
+      '    instruction: findings-manager',
+      '    output_contract: findings-manager',
+      'max_steps: 1',
+      'initial_step: implement',
+      'steps:',
+      '  - name: implement',
+      '    persona: coder',
+      '    instruction: implement',
+      '    provider: claude-terminal',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+      '',
+    ].join('\n'));
+    directResumePrompt.selectOption.mockResolvedValueOnce('requeue');
+
+    const { resumeDirectRun } = await import('../features/tasks/resume/index.js');
+    await expect(resumeDirectRun(projectDir)).resolves.toBe(true);
+
+    const runSlugs = readdirSync(join(projectDir, '.takt', 'runs'))
+      .filter((slug) => slug !== sourceSlug);
+    expect(runSlugs).toHaveLength(1);
+    const targetPaths = buildRunPaths(projectDir, runSlugs[0]!);
+    expect(readMeta(targetPaths.runRootAbs).workflow).toBe('target-workflow');
+    const target = openRunStorage({ databasePath: targetPaths.databaseAbs });
+    expect(target.readResumeSnapshot().findingRevisions).toEqual([
+      expect.objectContaining({ next_id: 7 }),
+    ]);
+    target.close();
   });
 
   it.each(['file', 'sqlite'] as const)(
@@ -560,13 +731,7 @@ steps:
       iteration: 2,
       publishedAt: expect.any(Number),
     }));
-    expect(snapshot.workflowDefinitions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'parent' }),
-      expect.objectContaining({ name: 'child' }),
-    ]));
-    expect(snapshot.findingHeads).toEqual(expect.arrayContaining([
-      expect.objectContaining({ workflow_name: 'child' }),
-    ]));
+    expect(snapshot.findingHeads).toHaveLength(1);
     expect(snapshot.scopes).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'workflow_call',
@@ -752,9 +917,6 @@ steps:
     });
     const snapshot = root.readResumeSnapshot();
     root.close();
-    expect(snapshot.findingHeads.map((head) => head.workflow_name)).toEqual(
-      expect.arrayContaining(['fast-child', 'slow-child']),
-    );
     expect(snapshot.findingHeads).toHaveLength(2);
     const workflowCallScopes = snapshot.scopes.filter(
       (scope) => scope.kind === 'workflow_call',
@@ -853,11 +1015,8 @@ steps:
     });
     const snapshot = root.readResumeSnapshot();
     root.close();
-    const sharedFindingHeads = snapshot.findingHeads.filter(
-      (head) => head.workflow_name === 'shared-child',
-    );
-    expect(sharedFindingHeads).toHaveLength(2);
-    expect(new Set(sharedFindingHeads.map((head) => head.scope_id)).size).toBe(2);
+    expect(snapshot.findingHeads).toHaveLength(2);
+    expect(new Set(snapshot.findingHeads.map((head) => head.scope_id)).size).toBe(2);
     const workflowCallScopes = snapshot.scopes.filter(
       (scope) => scope.kind === 'workflow_call',
     );
@@ -1519,12 +1678,8 @@ steps:
       }),
       run: {
         runId: pendingRunSlug,
+        workflowName: 'pending-workflow',
         findingContractEnabled: false,
-      },
-      workflowDefinition: {
-        name: 'pending-workflow',
-        codecName: 'json-v1',
-        definition: JSON.stringify({ name: 'pending-workflow' }),
       },
     });
     const lease = pendingRoot.claimLease({

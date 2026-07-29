@@ -12,12 +12,7 @@ import {
   assertNativePublicationContent,
   assertPublication,
   assertPublicationIntent,
-  assertResumePublicationProvenance,
 } from './finding-manager-adapter-contract.js';
-import {
-  readImportedFindingLedger,
-  type TrustedFindingResumeSource,
-} from './finding-resume-source.js';
 
 interface FindingManagerResumeBindingOptions {
   readonly findings: FindingRepository;
@@ -25,7 +20,6 @@ interface FindingManagerResumeBindingOptions {
   readonly scopeId: string;
   readonly workflowName: string;
   readonly publicationDomainId: string;
-  readonly trustedResumeSource?: TrustedFindingResumeSource;
 }
 
 export function createFindingManagerResumeBinding(
@@ -36,13 +30,14 @@ export function createFindingManagerResumeBinding(
       options.findings.loadLedger(context, {
         runId: options.runId,
         scopeId: options.scopeId,
+        workflowName: options.workflowName,
       }).ledger,
       options.workflowName,
     )
   );
 
   const deriveBoundPublication = (
-    context: RunReadContext,
+    _context: RunReadContext,
     current: FindingLedger,
   ): FindingManagerReportPublication => {
     const pending = current.pendingManagerCommit;
@@ -50,53 +45,12 @@ export function createFindingManagerResumeBinding(
       throw new Error('Finding manager resume binding requires a pending publication');
     }
     assertPublicationIntent(pending.publication, pending.roundMarker);
-    if (pending.publication.destinationRunId === options.runId) {
-      return pending.publication;
-    }
-    const trusted = options.trustedResumeSource;
-    if (trusted === undefined) {
+    if (pending.publication.destinationRunId !== options.runId) {
       throw new Error(
-        `Finding manager publication "${pending.publication.publicationId}" has no trusted direct resume source`,
+        `Finding manager publication "${pending.publication.publicationId}" is not bound to this run`,
       );
     }
-    const imported = readImportedFindingLedger(
-      context,
-      options.runId,
-      options.scopeId,
-      trusted,
-    );
-    const importedPending = imported.pendingManagerCommit;
-    const ancestry = context.all<{ readonly ancestorRunId: string }>(`
-      SELECT ancestor_run_id AS ancestorRunId
-      FROM run_ancestry
-      WHERE run_id = ?
-    `, options.runId);
-    assertResumePublicationProvenance(
-      pending.publication,
-      pending.roundMarker,
-      {
-        directSourceRunId: trusted.sourceRunId,
-        originRunIds: new Set(
-          ancestry.map(({ ancestorRunId }) => ancestorRunId),
-        ),
-        originScopeId: trusted.sourceScopeId,
-        workflowName: options.workflowName,
-      },
-    );
-    if (
-      importedPending === undefined
-      || importedPending.roundMarker !== pending.roundMarker
-      || importedPending.publication.destinationRunId !== trusted.sourceRunId
-      || !sameManagerPublication(importedPending.publication, pending.publication)
-    ) {
-      throw new Error(
-        `Finding manager publication "${pending.publication.publicationId}" does not match the direct parent snapshot`,
-      );
-    }
-    return {
-      ...importedPending.publication,
-      destinationRunId: options.runId,
-    };
+    return pending.publication;
   };
 
   return {
@@ -110,7 +64,7 @@ export function createFindingManagerResumeBinding(
       if (
         pending === undefined
         || pending.roundMarker !== roundMarker
-        || !sameManagerPublication(pending.publication, publication)
+        || !sameManagerPublicationIntent(pending.publication, publication)
       ) {
         assertPublication(
           publication,
@@ -147,6 +101,19 @@ export function createFindingManagerResumeBinding(
       }
     },
   };
+}
+
+function sameManagerPublicationIntent(
+  left: FindingManagerReportPublication,
+  right: FindingManagerReportPublication,
+): boolean {
+  return left.publicationId === right.publicationId
+    && left.domainId === right.domainId
+    && left.originRunId === right.originRunId
+    && left.fileName === right.fileName
+    && left.contentSha256 === right.contentSha256
+    && serializeFindingManagerValidationReport(left.report)
+      === serializeFindingManagerValidationReport(right.report);
 }
 
 export function sameManagerPublication(

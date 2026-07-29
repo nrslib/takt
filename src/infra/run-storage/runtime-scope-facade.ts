@@ -36,17 +36,11 @@ class BoundScopeCommands {
     this.#binding.executor.write(
       this.#binding.owner,
       (context, now) => {
-        const parent = this.#repository.get(
-          context,
-          this.#binding.runId,
-          this.#binding.scopeId,
-        );
         this.#repository.createChild(context, {
           runId: this.#binding.runId,
           scopeId,
           parentScopeId: this.#binding.scopeId,
           kind: 'parallel',
-          workflowDefinitionId: parent.workflowDefinitionId,
           createdAt: now,
         });
       },
@@ -60,25 +54,32 @@ class BoundScopeCommands {
     this.#binding.executor.write(
       this.#binding.owner,
       (context, now) => {
-        const parent = this.#repository.get(
-          context,
-          this.#binding.runId,
-          this.#binding.scopeId,
-        );
         const existing = this.#repository.find(
           context,
           this.#binding.runId,
           scopeId,
         );
         if (existing !== undefined) {
+          const parent = this.#repository.get(
+            context,
+            this.#binding.runId,
+            this.#binding.scopeId,
+          );
           if (
             existing.parentScopeId !== this.#binding.scopeId
             || existing.kind !== 'parallel'
-            || existing.workflowDefinitionId !== parent.workflowDefinitionId
-            || existing.findingContractEnabled
-              !== parent.findingContractEnabled
           ) {
             throw new Error(`Parallel scope identity "${scopeId}" does not match`);
+          }
+          if (
+            parent.findingContractEnabled
+            && !existing.findingContractEnabled
+          ) {
+            this.#repository.promoteFindingContract(
+              context,
+              this.#binding.runId,
+              scopeId,
+            );
           }
           return;
         }
@@ -87,7 +88,6 @@ class BoundScopeCommands {
           scopeId,
           parentScopeId: this.#binding.scopeId,
           kind: 'parallel',
-          workflowDefinitionId: parent.workflowDefinitionId,
           createdAt: now,
         });
       },
@@ -98,32 +98,20 @@ class BoundScopeCommands {
   createWorkflowCallChild(input: {
     readonly scopeKey: string;
     readonly findingContractEnabled?: boolean;
-    readonly workflowDefinition: {
-      readonly name: string;
-      readonly codecName: string;
-      readonly definition: string;
-    };
   }): ScopeHandle {
     assertExactInput(input, [
       'scopeKey',
       'findingContractEnabled',
-      'workflowDefinition',
     ]);
-    assertExactInput(input.workflowDefinition, ['name', 'codecName', 'definition']);
     const scopeId = this.deriveChildScopeId('workflow_call', input.scopeKey);
     this.#binding.executor.write(
       this.#binding.owner,
       (context, now) => {
-        const definitionId = this.#repository.registerWorkflowDefinition(
-          context,
-          input.workflowDefinition,
-        );
         this.#repository.createChild(context, {
           runId: this.#binding.runId,
           scopeId,
           parentScopeId: this.#binding.scopeId,
           kind: 'workflow_call',
-          workflowDefinitionId: definitionId,
           findingContractEnabled: input.findingContractEnabled === true,
           createdAt: now,
         });
@@ -135,26 +123,15 @@ class BoundScopeCommands {
   resolveWorkflowCallChild(input: {
     readonly scopeKey: string;
     readonly findingContractEnabled?: boolean;
-    readonly workflowDefinition: {
-      readonly name: string;
-      readonly codecName: string;
-      readonly definition: string;
-    };
   }): ScopeHandle {
     assertExactInput(input, [
       'scopeKey',
       'findingContractEnabled',
-      'workflowDefinition',
     ]);
-    assertExactInput(input.workflowDefinition, ['name', 'codecName', 'definition']);
     const scopeId = this.deriveChildScopeId('workflow_call', input.scopeKey);
     this.#binding.executor.write(
       this.#binding.owner,
       (context, now) => {
-        const definitionId = this.#repository.registerWorkflowDefinition(
-          context,
-          input.workflowDefinition,
-        );
         const existing = this.#repository.find(
           context,
           this.#binding.runId,
@@ -164,11 +141,18 @@ class BoundScopeCommands {
           if (
             existing.parentScopeId !== this.#binding.scopeId
             || existing.kind !== 'workflow_call'
-            || existing.workflowDefinitionId !== definitionId
-            || existing.findingContractEnabled
-              !== (input.findingContractEnabled === true)
           ) {
             throw new Error(`Workflow-call scope identity "${scopeId}" does not match`);
+          }
+          if (
+            input.findingContractEnabled === true
+            && !existing.findingContractEnabled
+          ) {
+            this.#repository.promoteFindingContract(
+              context,
+              this.#binding.runId,
+              scopeId,
+            );
           }
           return;
         }
@@ -177,7 +161,6 @@ class BoundScopeCommands {
           scopeId,
           parentScopeId: this.#binding.scopeId,
           kind: 'workflow_call',
-          workflowDefinitionId: definitionId,
           findingContractEnabled: input.findingContractEnabled === true,
           createdAt: now,
         });

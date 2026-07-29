@@ -320,22 +320,17 @@ function withOpenFinding(
   });
 }
 
-function omitRunIdentity(
-  rows: readonly Readonly<Record<string, unknown>>[],
-): Array<Record<string, unknown>> {
-  return rows.map(({ run_id: _runId, ...row }) => row);
-}
-
 function writeRunMeta(
   cwd: string,
   slug: string,
   storageBackend: 'file' | 'sqlite',
+  workflowName = 'storage-test',
 ): void {
   const paths = buildRunPaths(cwd, slug);
   mkdirSync(paths.runRootAbs, { recursive: true });
   writeFileSync(paths.metaAbs, JSON.stringify({
     task: 'task',
-    workflow: 'storage-test',
+    workflow: workflowName,
     runSlug: slug,
     runRoot: paths.runRootRel,
     reportDirectory: paths.reportsRel,
@@ -763,7 +758,7 @@ describe('workflow run storage composition', () => {
     });
   });
 
-  it('imports every Finding authority history and reuses imported workflow-call scopes', async () => {
+  it('imports every current Finding projection and reuses imported workflow-call scopes', async () => {
     const cwd = createRoot();
     const rootWorkflow = findingWorkflow('root-authority');
     const childA = findingWorkflow('child-authority-a');
@@ -833,9 +828,6 @@ describe('workflow run storage composition', () => {
     });
     writeRunMeta(cwd, sourcePaths.slug, 'sqlite');
 
-    const sourceRoot = openRunStorage({ databasePath: sourcePaths.databaseAbs });
-    const expected = sourceRoot.readResumeSnapshot();
-    sourceRoot.close();
     const targetPaths = buildRunPaths(cwd, 'multi-authority-target');
     const target = await createTestWorkflowRunStorage({
       backend: 'sqlite',
@@ -854,27 +846,12 @@ describe('workflow run storage composition', () => {
     });
     const imported = importedRoot.readResumeSnapshot();
     importedRoot.close();
-    expect(imported.workflowDefinitions.map((definition) => definition.name))
-      .toEqual(expect.arrayContaining([
-        'root-authority',
-        'child-authority-a',
-        'child-authority-b',
-      ]));
-    expect(omitRunIdentity(imported.findingHeads))
-      .toEqual(omitRunIdentity(expected.findingHeads));
-    expect(omitRunIdentity(imported.findingRevisions))
-      .toEqual(omitRunIdentity(expected.findingRevisions));
-    expect(imported.findingEntries).toEqual(expected.findingEntries);
-    expect(imported.findingControls).toEqual(expected.findingControls);
-    expect(imported.findingPublications).toEqual(expected.findingPublications);
     expect(imported.findingHeads).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        workflow_name: 'child-authority-a',
-        current_revision: 4,
+        current_revision: 1,
       }),
       expect.objectContaining({
-        workflow_name: 'child-authority-b',
-        current_revision: 3,
+        current_revision: 1,
       }),
     ]));
 
@@ -916,11 +893,9 @@ describe('workflow run storage composition', () => {
     )).toBe(true);
     expect(completedSnapshot.findingHeads).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        workflow_name: 'child-authority-b',
-        current_revision: 3,
+        current_revision: 1,
       }),
       expect.objectContaining({
-        workflow_name: 'child-authority-c',
         current_revision: 1,
       }),
     ]));
@@ -1014,6 +989,63 @@ describe('workflow run storage composition', () => {
     ]));
   });
 
+  it('uses the current meta workflow when resuming SQLite Finding state', async () => {
+    const cwd = createRoot();
+    const sourceWorkflow = findingWorkflow('source-workflow');
+    const targetWorkflow = findingWorkflow('target-workflow');
+    const sourcePaths = buildRunPaths(cwd, 'workflow-switch-source');
+    const source = await createTestWorkflowRunStorage({
+      backend: 'sqlite',
+      workflowConfig: sourceWorkflow,
+      projectCwd: cwd,
+      cwd,
+      runPaths: sourcePaths,
+    });
+    const sourceStore = source.findingAuthorityResolver.resolve({
+      workflowConfig: sourceWorkflow,
+      runPaths: sourcePaths,
+    });
+    await sourceStore.updateLedger((ledger) => ({
+      ledger: { ...ledger, nextId: 7 },
+      result: undefined,
+    }));
+    await source.complete({
+      status: 'failed',
+      iteration: 1,
+      reason: 'resume under another workflow',
+      publicationPayload: TERMINAL_PUBLICATION_PAYLOAD,
+    });
+    writeRunMeta(cwd, sourcePaths.slug, 'sqlite', sourceWorkflow.name);
+
+    const targetPaths = buildRunPaths(cwd, 'workflow-switch-target');
+    const target = await createTestWorkflowRunStorage({
+      backend: 'sqlite',
+      workflowConfig: targetWorkflow,
+      projectCwd: cwd,
+      cwd,
+      runPaths: targetPaths,
+      resumeSource: {
+        sourceRunSlug: sourcePaths.slug,
+        resumeMode: 'retry',
+      },
+    });
+    const targetStore = target.findingAuthorityResolver.resolve({
+      workflowConfig: targetWorkflow,
+      runPaths: targetPaths,
+    });
+
+    expect(readRunMeta(targetPaths.metaAbs)?.workflow).toBe('target-workflow');
+    expect(targetStore.loadLedger()).toMatchObject({
+      workflowName: 'target-workflow',
+      nextId: 7,
+    });
+    await target.complete({
+      status: 'completed',
+      iteration: 1,
+      publicationPayload: TERMINAL_PUBLICATION_PAYLOAD,
+    });
+  });
+
   it('fails loudly when resume authority selects another backend', async () => {
     const cwd = createRoot();
     const sourcePaths = buildRunPaths(cwd, 'file-source');
@@ -1050,12 +1082,8 @@ describe('workflow run storage composition', () => {
       }),
       run: {
         runId: actualPaths.slug,
+        workflowName: 'storage-test',
         findingContractEnabled: true,
-      },
-      workflowDefinition: {
-        name: 'storage-test',
-        codecName: 'json-v1',
-        definition: JSON.stringify(workflow(true)),
       },
     });
     actual.close();
@@ -1097,12 +1125,8 @@ describe('workflow run storage composition', () => {
       }),
       run: {
         runId: sourcePaths.slug,
+        workflowName: 'storage-test',
         findingContractEnabled: true,
-      },
-      workflowDefinition: {
-        name: 'storage-test',
-        codecName: 'json-v1',
-        definition: JSON.stringify(workflow(true)),
       },
     }).close();
     const targetPaths = buildRunPaths(cwd, 'file-target');

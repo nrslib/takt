@@ -1,7 +1,4 @@
 import type { RunReadContext, RunWriteContext } from './context.js';
-import { assertCodecContent } from './codec-contract.js';
-import { sha256 } from './canonical-json.js';
-import { bootstrapFindingAuthority } from './finding-ledger.js';
 
 export type ScopeKind = 'root' | 'workflow_call' | 'parallel';
 export type ScopeRuntimeStatus =
@@ -16,7 +13,6 @@ export interface ScopeRecord {
   readonly scopeId: string;
   readonly parentScopeId: string | null;
   readonly kind: ScopeKind;
-  readonly workflowDefinitionId: string;
   readonly findingContractEnabled: boolean;
   readonly createdAt: number;
   readonly terminalAt: number | null;
@@ -54,7 +50,6 @@ function scopeSelect(): string {
       scopes.scope_id AS scopeId,
       scopes.parent_scope_id AS parentScopeId,
       scopes.kind,
-      scopes.workflow_definition_id AS workflowDefinitionId,
       scopes.finding_contract_enabled AS findingContractEnabled,
       scopes.created_at AS createdAt,
       scopes.terminal_at AS terminalAt,
@@ -75,52 +70,11 @@ function scopeSelect(): string {
   `;
 }
 
-function definitionIdentity(input: {
-  readonly name: string;
-  readonly codecName: string;
-  readonly definition: string;
-}): { readonly definitionId: string; readonly digest: string } {
-  assertCodecContent(input.codecName, input.definition);
-  const digest = sha256(input.definition);
-  return {
-    definitionId: sha256([input.name, input.codecName, digest].join('\0')),
-    digest,
-  };
-}
-
 function isTerminal(status: ScopeRuntimeStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 
 export class ScopeRepository {
-  registerWorkflowDefinition(context: RunWriteContext, input: {
-    readonly name: string;
-    readonly codecName: string;
-    readonly definition: string;
-  }): string {
-    const identity = definitionIdentity(input);
-    const existing = context.get<{ readonly digest: string }>(`
-      SELECT digest FROM workflow_definitions WHERE definition_id = ?
-    `, identity.definitionId);
-    if (existing !== undefined) {
-      if (existing.digest !== identity.digest) {
-        throw new Error(`Workflow definition "${identity.definitionId}" collision`);
-      }
-      return identity.definitionId;
-    }
-    context.run(`
-      INSERT INTO workflow_definitions (
-        definition_id, name, codec_name, definition, digest
-      ) VALUES (?, ?, ?, ?, ?)
-    `,
-    identity.definitionId,
-    input.name,
-    input.codecName,
-    input.definition,
-    identity.digest);
-    return identity.definitionId;
-  }
-
   get(context: RunReadContext, runId: string, scopeId: string): ScopeRecord {
     const scope = this.find(context, runId, scopeId);
     if (scope === undefined) {
@@ -202,19 +156,12 @@ export class ScopeRepository {
     readonly scopeId: string;
     readonly parentScopeId: string;
     readonly kind: Exclude<ScopeKind, 'root'>;
-    readonly workflowDefinitionId: string;
     readonly findingContractEnabled?: boolean;
     readonly createdAt: number;
   }): void {
     const parent = this.get(context, input.runId, input.parentScopeId);
     if (parent.terminalAt !== null || isTerminal(parent.status)) {
       throw new Error(`Terminal parent scope "${parent.scopeId}" cannot create children`);
-    }
-    if (
-      input.kind === 'parallel'
-      && input.workflowDefinitionId !== parent.workflowDefinitionId
-    ) {
-      throw new Error(`Parallel scope "${input.scopeId}" must use parent workflow definition`);
     }
     const ownsFindingAuthority = input.kind === 'parallel'
       ? parent.findingContractEnabled
@@ -232,16 +179,14 @@ export class ScopeRepository {
         scope_id,
         parent_scope_id,
         kind,
-        workflow_definition_id,
         finding_contract_enabled,
         created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?)
     `,
     input.runId,
     input.scopeId,
     input.parentScopeId,
     input.kind,
-    input.workflowDefinitionId,
     ownsFindingAuthority ? 1 : 0,
     input.createdAt);
     context.run(`
@@ -249,21 +194,34 @@ export class ScopeRepository {
         run_id, scope_id, status, updated_at
       ) VALUES (?, ?, 'ready', ?)
     `, input.runId, input.scopeId, input.createdAt);
-    const finding = context.get<{
-      readonly workflowName: string;
-    }>(`
-      SELECT
-        definitions.name AS workflowName
-      FROM workflow_definitions AS definitions
-      WHERE definitions.definition_id = ?
-    `, input.workflowDefinitionId);
-    if (finding !== undefined && ownsFindingAuthority) {
-      bootstrapFindingAuthority(context, {
-        runId: input.runId,
-        scopeId: input.scopeId,
-        workflowName: finding.workflowName,
-        createdAt: input.createdAt,
-      });
+  }
+
+  promoteFindingContract(
+    context: RunWriteContext,
+    runId: string,
+    scopeId: string,
+  ): void {
+    const scope = this.get(context, runId, scopeId);
+    if (scope.findingContractEnabled) {
+      return;
+    }
+    context.run(`
+      UPDATE runs
+      SET finding_contract_enabled = 1
+      WHERE run_id = ? AND finding_contract_enabled = 0
+    `, runId);
+    const result = context.run(`
+      UPDATE scopes
+      SET finding_contract_enabled = 1
+      WHERE
+        run_id = ?
+        AND scope_id = ?
+        AND finding_contract_enabled = 0
+    `, runId, scopeId);
+    if (Number(result.changes) !== 1) {
+      throw new Error(
+        `Scope Finding Contract promotion failed for "${runId}/${scopeId}"`,
+      );
     }
   }
 

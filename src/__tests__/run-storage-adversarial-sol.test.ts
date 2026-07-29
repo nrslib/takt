@@ -77,13 +77,9 @@ describe('run storage adversarial SOL contracts', () => {
       bootstrapSeed: createTestBootstrapSeed(),
       run: {
         runId: 'forged',
+        workflowName: 'default',
         findingContractEnabled: false,
         slug: 'forged',
-      },
-      workflowDefinition: {
-        name: 'default',
-        codecName: 'json-v1',
-        definition: '{}',
       },
     } as never)).toThrow(/unknown run field/i);
 
@@ -466,136 +462,92 @@ describe('run storage adversarial SOL contracts', () => {
     root.close();
   });
 
-  it('rejects partial Finding revisions and JSON authority ID mismatch at the database boundary', () => {
+  it('enforces current Finding revision completeness, identity, append-only, and digest contracts', async () => {
     const { databasePath, root } = createRealRunStorage({
       findingContractEnabled: true,
     });
+    const owner = lease(root);
+    const runtime = root.runtime({ lease: owner });
+    const execution = runtime.execution.startStep({
+      stepKey: 'finding-contract-boundaries',
+      expectedScopeRevision: 0,
+    });
+    const store = runtime.findingManager({
+      workflowName: 'default',
+      producer: execution.handle,
+    });
+    await store.updateLedger((current) => ({
+      ledger: { ...current, nextId: 2 },
+      result: undefined,
+    }));
+    expect(root.readResumeSnapshot().findingRevisions).toEqual([
+      expect.objectContaining({ revision: 2 }),
+    ]);
     root.close();
+
     const database = new DatabaseSync(databasePath);
     database.exec('PRAGMA foreign_keys = ON');
-    const runId = (database.prepare('SELECT run_id AS runId FROM runs').get() as {
-      readonly runId: string;
-    }).runId;
-
-    database.exec('BEGIN IMMEDIATE');
-    let emptyRevisionError: unknown;
-    try {
-      database.prepare(`
-        INSERT INTO finding_ledger_revisions (
-          run_id, scope_id, revision, workflow_name, next_id,
-          finding_count, evidence_record_count, evidence_binding_count,
-          lifecycle_reservation_count, lifecycle_event_count,
-          raw_recovery_attempt_count, raw_recovery_result_count,
-          raw_finding_count, conflict_count,
-          interpretation_count, reviewer_anomaly_count, control_count,
-          projection_digest, updated_at
-        ) VALUES (?, 'root', 2, 'default', 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?, 2000)
-      `).run(runId, '0'.repeat(64));
-      database.exec('COMMIT');
-    } catch (error) {
-      emptyRevisionError = error;
-      if (database.isTransaction) {
-        database.exec('ROLLBACK');
-      }
-    }
-    expect(emptyRevisionError).toBeInstanceOf(Error);
-
-    expect(() => database.prepare(`
-      INSERT INTO finding_ledger_revisions (
-        run_id, scope_id, revision, workflow_name, next_id,
-        finding_count, evidence_record_count, evidence_binding_count,
-        lifecycle_reservation_count, lifecycle_event_count,
-        raw_recovery_attempt_count, raw_recovery_result_count,
-        raw_finding_count, conflict_count,
-        interpretation_count, reviewer_anomaly_count, control_count,
-        projection_digest, updated_at
-      ) VALUES (?, 'root', 2, 'default', 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?, 2000)
-    `).run(runId, '0'.repeat(64))).toThrow(/incomplete/i);
-    expect(() => database.prepare(`
-      INSERT INTO finding_entries (
-        run_id, scope_id, revision, ordinal, finding_id, record, digest
-      ) VALUES (?, 'root', 2, 0, 'finding-a', ?, ?)
-    `).run(
-      runId,
-      '{"id":"finding-b"}',
-      '0'.repeat(64),
-    )).toThrow(/constraint/i);
-
+    const findingRecord = '{"id":"finding-a"}';
     database.exec('BEGIN IMMEDIATE');
     database.prepare(`
       INSERT INTO finding_entries (
         run_id, scope_id, revision, ordinal, finding_id, record, digest
-      ) VALUES (?, 'root', 2, 0, 'orphan', '{"id":"orphan"}', ?)
-    `).run(runId, '0'.repeat(64));
-    expect(() => database.exec('COMMIT')).toThrow(/constraint/i);
-    if (database.isTransaction) {
-      database.exec('ROLLBACK');
-    }
+      ) VALUES ('run-1', 'root', 3, 0, 'finding-a', ?, ?)
+    `).run(
+      findingRecord,
+      createHash('sha256').update(findingRecord).digest('hex'),
+    );
     expect(() => database.prepare(`
-      UPDATE finding_ledger_heads
-      SET current_revision = 2
-      WHERE run_id = ? AND scope_id = 'root'
-    `).run(runId)).toThrow(/head transition/i);
+      INSERT INTO finding_ledger_revisions (
+        run_id, scope_id, revision, next_id,
+        finding_count, evidence_record_count, evidence_binding_count,
+        lifecycle_reservation_count, lifecycle_event_count,
+        raw_recovery_attempt_count, raw_recovery_result_count,
+        raw_finding_count, conflict_count, interpretation_count,
+        reviewer_anomaly_count, control_count,
+        projection_digest, updated_at
+      ) VALUES (
+        'run-1', 'root', 3, 2,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?, 2000
+      )
+    `).run('0'.repeat(64))).toThrow(/incomplete/i);
+    database.exec('ROLLBACK');
+
+    expect(() => database.prepare(`
+      INSERT INTO finding_entries (
+        run_id, scope_id, revision, ordinal, finding_id, record, digest
+      ) VALUES (
+        'run-1', 'root', 3, 0, 'finding-a',
+        '{"id":"finding-b"}', ?
+      )
+    `).run('0'.repeat(64))).toThrow(/constraint/i);
+
     expect(() => database.prepare(`
       UPDATE finding_ledger_revisions
       SET projection_digest = ?
-      WHERE run_id = ? AND scope_id = 'root' AND revision = 1
-    `).run('f'.repeat(64), runId)).toThrow(/append-only/i);
+      WHERE run_id = 'run-1' AND scope_id = 'root' AND revision = 2
+    `).run('f'.repeat(64))).toThrow(/append-only/i);
 
-    database.exec('BEGIN IMMEDIATE');
+    const updateGuard = database.prepare(`
+      SELECT sql
+      FROM sqlite_schema
+      WHERE type = 'trigger'
+        AND name = 'finding_ledger_revisions_update_guard'
+    `).get() as { readonly sql: string };
+    database.exec('DROP TRIGGER finding_ledger_revisions_update_guard');
     database.prepare(`
-      INSERT INTO finding_raw_recovery_attempts (
-        run_id, scope_id, revision, ordinal, attempt_id, record, digest
-      ) VALUES (?, 'root', 2, 0, 'attempt-forged', '{"attemptId":"attempt-forged"}', ?)
-    `).run(runId, '0'.repeat(64));
-    database.prepare(`
-      INSERT INTO finding_revision_publications (
-        run_id, scope_id, revision, projection_digest, published_at
-      ) VALUES (?, 'root', 2, ?, 2000)
-    `).run(runId, '0'.repeat(64));
-    expect(() => database.prepare(`
-      INSERT INTO finding_ledger_revisions (
-        run_id, scope_id, revision, workflow_name, next_id,
-        finding_count, evidence_record_count, evidence_binding_count,
-        lifecycle_reservation_count, lifecycle_event_count,
-        raw_recovery_attempt_count, raw_recovery_result_count,
-        raw_finding_count, conflict_count,
-        interpretation_count, reviewer_anomaly_count, control_count,
-        projection_digest, updated_at
-      ) VALUES (?, 'root', 2, 'default', 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?, 2000)
-    `).run(runId, '0'.repeat(64))).toThrow(/incomplete/i);
-    database.exec('ROLLBACK');
-
-    database.exec('BEGIN IMMEDIATE');
-    database.prepare(`
-      INSERT INTO finding_entries (
-        run_id, scope_id, revision, ordinal, finding_id, record, digest
-      ) VALUES (?, 'root', 2, 0, 'tampered', '{"id":"tampered"}', ?)
-    `).run(runId, '0'.repeat(64));
-    database.prepare(`
-      INSERT INTO finding_revision_publications (
-        run_id, scope_id, revision, projection_digest, published_at
-      ) VALUES (?, 'root', 2, ?, 2000)
-    `).run(runId, '0'.repeat(64));
-    database.prepare(`
-      INSERT INTO finding_ledger_revisions (
-        run_id, scope_id, revision, workflow_name, next_id,
-        finding_count, evidence_record_count, evidence_binding_count,
-        lifecycle_reservation_count, lifecycle_event_count,
-        raw_recovery_attempt_count, raw_recovery_result_count,
-        raw_finding_count, conflict_count,
-        interpretation_count, reviewer_anomaly_count, control_count,
-        projection_digest, updated_at
-      ) VALUES (?, 'root', 2, 'default', 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?, 2000)
-    `).run(runId, '0'.repeat(64));
-    database.exec('COMMIT');
+      UPDATE finding_ledger_revisions
+      SET projection_digest = ?
+      WHERE run_id = 'run-1' AND scope_id = 'root' AND revision = 2
+    `).run('f'.repeat(64));
+    database.exec(updateGuard.sql);
     database.close();
-    expect(() => openRunStorage({ databasePath })).toThrow(
-      /Finding|digest mismatch/i,
-    );
+
+    expect(() => openRunStorage({ databasePath }))
+      .toThrow(/Finding|digest mismatch/i);
   });
 
-  it('returns raw Finding history and validates encoded authority in one snapshot', async () => {
+  it('returns the current Finding projection in one snapshot', async () => {
     const { root } = createRealRunStorage({ findingContractEnabled: true });
     const owner = lease(root);
     const runtime = root.runtime({ lease: owner });
@@ -613,7 +565,8 @@ describe('run storage adversarial SOL contracts', () => {
     }));
 
     const snapshot = root.readResumeSnapshot();
-    expect(snapshot.findingRevisions).toHaveLength(2);
+    expect(snapshot.findingRevisions).toHaveLength(1);
+    expect(snapshot.findingRevisions[0]).toMatchObject({ revision: 2 });
     expect(snapshot.findingHeads).toHaveLength(1);
     expect(snapshot.findingEntries).toEqual([]);
     expect(snapshot.scopes[0]?.personaSessionHistory).toEqual([]);

@@ -1,32 +1,54 @@
-import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
-import { canonicalJson } from '../shared/utils/canonical-json.js';
 import {
   APPLICATION_ID,
   EXPECTED_SCHEMA_HASH,
   SCHEMA_VERSION,
-  STORAGE_CONTRACT_FINGERPRINT,
 } from '../infra/run-storage/contract.js';
-import {
-  openRunStorage,
-  resumeRunStorage,
-} from '../infra/run-storage/root.js';
+import { openRunStorage } from '../infra/run-storage/root.js';
 import {
   cleanupRealRunStorages,
   createRealRunStorage,
-  createTestBootstrapSeed,
+  resumeRealRunStorage,
 } from './helpers/run-storage.js';
 
 afterEach(cleanupRealRunStorages);
+
+function tableNames(databasePath: string): string[] {
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return database.prepare(`
+      SELECT name
+      FROM sqlite_schema
+      WHERE type = 'table'
+      ORDER BY name
+    `).all().map((row) => String(row.name));
+  } finally {
+    database.close();
+  }
+}
+
+function columnNames(databasePath: string, table: string): string[] {
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return database.prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .map((row) => String(row.name));
+  } finally {
+    database.close();
+  }
+}
 
 function mutateDatabase(
   databasePath: string,
   command: (database: DatabaseSync) => void,
 ): void {
   const database = new DatabaseSync(databasePath);
-  command(database);
-  database.close();
+  try {
+    command(database);
+  } finally {
+    database.close();
+  }
 }
 
 function mutateWithTriggerDisabled(
@@ -34,115 +56,122 @@ function mutateWithTriggerDisabled(
   triggerName: string,
   command: (database: DatabaseSync) => void,
 ): void {
-  mutateWithTriggersDisabled(databasePath, [triggerName], command);
-}
-
-function mutateWithTriggersDisabled(
-  databasePath: string,
-  triggerNames: readonly string[],
-  command: (database: DatabaseSync) => void,
-): void {
-  const database = new DatabaseSync(databasePath);
-  const triggers = triggerNames.map((triggerName) => database.prepare(`
-    SELECT sql
-    FROM sqlite_schema
-    WHERE type = 'trigger' AND name = ?
-  `).get(triggerName) as { readonly sql: string });
-  for (const triggerName of triggerNames) {
-    database.exec(`DROP TRIGGER ${triggerName}`);
-  }
-  try {
-    command(database);
-  } finally {
-    if (database.isTransaction) {
-      database.exec('ROLLBACK');
+  mutateDatabase(databasePath, (database) => {
+    const trigger = database.prepare(`
+      SELECT sql
+      FROM sqlite_schema
+      WHERE type = 'trigger' AND name = ?
+    `).get(triggerName) as { readonly sql: string } | undefined;
+    if (trigger === undefined) {
+      throw new Error(`Missing test trigger "${triggerName}"`);
     }
-    for (const trigger of triggers) {
+    database.exec(`DROP TRIGGER ${triggerName}`);
+    try {
+      command(database);
+    } finally {
+      if (database.isTransaction) {
+        database.exec('ROLLBACK');
+      }
       database.exec(trigger.sql);
     }
-    database.close();
-  }
+  });
 }
 
 describe('run storage schema contract', () => {
-  it('creates one fixed schema for FC on and off without legacy authority tables', () => {
+  it('keeps workflow and engine identity outside the SQLite schema', () => {
     const disabled = createRealRunStorage({ findingContractEnabled: false });
     const enabled = createRealRunStorage({ findingContractEnabled: true });
     disabled.root.close();
     enabled.root.close();
 
-    const disabledDb = new DatabaseSync(disabled.databasePath, { readOnly: true });
-    const enabledDb = new DatabaseSync(enabled.databasePath, { readOnly: true });
-    const tableNames = (database: DatabaseSync) => database.prepare(`
-      SELECT name
-      FROM sqlite_schema
-      WHERE type = 'table'
-      ORDER BY name
-    `).all().map((row) => row.name);
-    expect(tableNames(disabledDb)).toEqual(tableNames(enabledDb));
-    expect(tableNames(disabledDb)).toContain('finding_ledger_revisions');
-    expect(tableNames(disabledDb)).not.toContain('finding_ledger_state');
-    expect(tableNames(disabledDb)).not.toContain('run_head');
-    expect(disabledDb.prepare(`
-      SELECT count(*) AS count FROM finding_ledger_heads
-    `).get()).toEqual({ count: 0 });
-    expect(enabledDb.prepare(`
-      SELECT count(*) AS count FROM finding_ledger_heads
-    `).get()).toEqual({ count: 1 });
-    const runColumns = disabledDb.prepare('PRAGMA table_info(runs)')
-      .all()
-      .map((column) => column.name);
-    expect(runColumns).toContain('run_id');
-    expect(runColumns).not.toContain('slug');
-    disabledDb.close();
-    enabledDb.close();
+    for (const databasePath of [disabled.databasePath, enabled.databasePath]) {
+      expect(tableNames(databasePath)).not.toEqual(expect.arrayContaining([
+        'engine_builds',
+        'workflow_definitions',
+        'finding_resume_authorities',
+        'finding_revision_publications',
+        'run_ancestry',
+        'run_resume_sources',
+      ]));
+      expect(columnNames(databasePath, 'runs')).not.toEqual(
+        expect.arrayContaining(['engine_build_id', 'workflow_definition_id']),
+      );
+      expect(columnNames(databasePath, 'scopes')).not.toContain(
+        'workflow_definition_id',
+      );
+      expect(columnNames(databasePath, 'finding_ledger_revisions')).not.toContain(
+        'workflow_name',
+      );
+      expect(columnNames(databasePath, 'finding_ledger_heads')).not.toContain(
+        'workflow_name',
+      );
+    }
   });
 
-  it('stores the fixed schema and fingerprint contract', () => {
+  it('uses schema version 3 without migrating old schemas', () => {
     const { databasePath, root } = createRealRunStorage();
     root.close();
     const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(database.prepare('PRAGMA user_version').get()).toEqual({
+        user_version: 3,
+      });
+      expect(database.prepare(`
+        SELECT schema_version AS schemaVersion
+        FROM storage_contract
+      `).get()).toEqual({ schemaVersion: 3 });
+    } finally {
+      database.close();
+    }
+  });
 
-    expect(database.prepare('PRAGMA application_id').get())
-      .toEqual({ application_id: APPLICATION_ID });
-    expect(database.prepare('PRAGMA user_version').get())
-      .toEqual({ user_version: SCHEMA_VERSION });
-    expect(database.prepare(`
-      SELECT schema_hash AS schemaHash, fingerprint
-      FROM storage_contract
-    `).get()).toEqual({
-      schemaHash: EXPECTED_SCHEMA_HASH,
-      fingerprint: STORAGE_CONTRACT_FINGERPRINT,
-    });
-    database.close();
+  it('stores the fixed schema identity contract', () => {
+    const { databasePath, root } = createRealRunStorage();
+    root.close();
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(database.prepare('PRAGMA application_id').get()).toEqual({
+        application_id: APPLICATION_ID,
+      });
+      expect(database.prepare('PRAGMA user_version').get()).toEqual({
+        user_version: SCHEMA_VERSION,
+      });
+      expect(database.prepare(`
+        SELECT schema_hash AS schemaHash
+        FROM storage_contract
+      `).get()).toEqual({
+        schemaHash: EXPECTED_SCHEMA_HASH,
+      });
+    } finally {
+      database.close();
+    }
   });
 
   it.each([
     {
       label: 'application id',
-      mutate: (database: DatabaseSync) => database.exec('PRAGMA application_id = 1'),
+      mutate: (database: DatabaseSync) => {
+        database.exec('PRAGMA application_id = 1');
+      },
       expected: /application_id mismatch/i,
     },
     {
       label: 'schema version',
-      mutate: (database: DatabaseSync) => database.exec('PRAGMA user_version = 99'),
+      mutate: (database: DatabaseSync) => {
+        database.exec('PRAGMA user_version = 99');
+      },
       expected: /schema_version mismatch/i,
     },
     {
       label: 'stored schema hash',
-      mutate: (database: DatabaseSync) => database.prepare(`
-        UPDATE storage_contract SET schema_hash = ?
-      `).run('0'.repeat(64)),
+      mutate: (database: DatabaseSync) => {
+        database.prepare(`
+          UPDATE storage_contract SET schema_hash = ?
+        `).run('0'.repeat(64));
+      },
       expected: /stored schema hash mismatch/i,
     },
-    {
-      label: 'stored fingerprint',
-      mutate: (database: DatabaseSync) => database.prepare(`
-        UPDATE storage_contract SET fingerprint = ?
-      `).run('0'.repeat(64)),
-      expected: /stored fingerprint mismatch/i,
-    },
-  ])('fails fast for invalid $label', ({ mutate, expected }) => {
+  ])('rejects invalid $label when opening a run', ({ mutate, expected }) => {
     const { databasePath, root } = createRealRunStorage();
     root.close();
     mutateDatabase(databasePath, mutate);
@@ -150,130 +179,97 @@ describe('run storage schema contract', () => {
     expect(() => openRunStorage({ databasePath })).toThrow(expected);
   });
 
-  it('fails fast when the fixed DDL is changed', () => {
+  it('rejects a fixed DDL mismatch when opening a run', () => {
     const { databasePath, root } = createRealRunStorage();
     root.close();
     mutateDatabase(databasePath, (database) => {
-      database.exec('CREATE TABLE injected (value TEXT) STRICT');
-    });
-
-    expect(() => openRunStorage({ databasePath })).toThrow(/schema hash mismatch/i);
-  });
-
-  it('derives workflow identity and verifies definition content on open', () => {
-    const { databasePath, root } = createRealRunStorage();
-    const snapshot = root.readResumeSnapshot();
-    expect(snapshot.workflowDefinitions[0]).toMatchObject({
-      name: 'default',
-      codecName: 'json-v1',
-      definition: '{"name":"default"}',
-    });
-    root.close();
-    mutateDatabase(databasePath, (database) => {
-      database.prepare(`
-        UPDATE workflow_definitions SET definition = '{"name":"tampered"}'
-      `).run();
+      database.exec('CREATE TABLE unexpected_table (value TEXT) STRICT');
     });
 
     expect(() => openRunStorage({ databasePath }))
-      .toThrow(/workflow definition identity mismatch/i);
+      .toThrow(/schema hash mismatch/i);
   });
 
-  it('uses composite scope authority in execution, reports, and Finding history', () => {
+  it('keeps composite scope authority in execution, reports, and Finding state', () => {
+    const { databasePath, root } = createRealRunStorage();
+    root.close();
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      const foreignKeyColumns = (table: string) => database.prepare(
+        `PRAGMA foreign_key_list(${table})`,
+      ).all().map((row) => String(row.from));
+
+      expect(foreignKeyColumns('phase_executions')).toEqual(
+        expect.arrayContaining(['run_id', 'scope_id', 'step_execution_id']),
+      );
+      expect(foreignKeyColumns('report_revisions')).toEqual(
+        expect.arrayContaining([
+          'run_id',
+          'owner_scope_id',
+          'producer_scope_id',
+          'producer_execution_id',
+        ]),
+      );
+      expect(foreignKeyColumns('finding_raw_entries')).toEqual(
+        expect.arrayContaining(['run_id', 'scope_id', 'revision']),
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it('creates Finding state lazily from the resolved runtime workflow', () => {
     const { databasePath, root } = createRealRunStorage({
       findingContractEnabled: true,
     });
+    expect(root.readResumeSnapshot().findingHeads).toEqual([]);
+    const lease = root.claimLease({
+      ownerKey: 'lazy-finding',
+      leaseDurationMs: 10_000,
+    });
+    const runtime = root.runtime({ lease });
+    const execution = runtime.execution.startStep({
+      stepKey: 'review',
+      expectedScopeRevision: 0,
+    });
+    const store = runtime.findingManager({
+      workflowName: 'runtime-workflow',
+      producer: execution.handle,
+    });
+    expect(store.loadLedger().workflowName).toBe('runtime-workflow');
+    expect(root.readResumeSnapshot().findingHeads).toHaveLength(1);
     root.close();
-    const database = new DatabaseSync(databasePath, { readOnly: true });
-    const foreignKeyColumns = (table: string) => database.prepare(
-      `PRAGMA foreign_key_list(${table})`,
-    ).all().map((row) => row.from);
-
-    expect(foreignKeyColumns('phase_executions')).toEqual(
-      expect.arrayContaining(['run_id', 'scope_id', 'step_execution_id']),
+    expect(columnNames(databasePath, 'finding_ledger_heads')).not.toContain(
+      'workflow_name',
     );
-    expect(foreignKeyColumns('report_revisions')).toEqual(
-      expect.arrayContaining([
-        'run_id',
-        'owner_scope_id',
-        'producer_scope_id',
-        'producer_execution_id',
-      ]),
-    );
-    expect(foreignKeyColumns('finding_raw_entries')).toEqual(
-      expect.arrayContaining(['run_id', 'scope_id', 'revision']),
-    );
-    database.close();
   });
 
-  it('fails fast when a parallel Finding authority head is missing', () => {
+  it('rejects an enabled Finding scope whose current head is missing', () => {
     const { databasePath, root } = createRealRunStorage({
       findingContractEnabled: true,
     });
     const owner = root.claimLease({
-      ownerKey: 'parallel-head-owner',
-      leaseDurationMs: 9_000,
+      ownerKey: 'missing-current-head',
+      leaseDurationMs: 10_000,
     });
-    root.runtime({ lease: owner }).scopes.createParallelChild({
-      scopeKey: 'parallel-head',
+    const runtime = root.runtime({ lease: owner });
+    const execution = runtime.execution.startStep({
+      stepKey: 'review',
+      expectedScopeRevision: 0,
     });
-    const parallelScopeId = root.readResumeSnapshot().scopes.find(
-      (scope) => scope.kind === 'parallel',
-    )!.scopeId;
+    runtime.findingManager({
+      workflowName: 'runtime-workflow',
+      producer: execution.handle,
+    }).loadLedger();
     root.close();
+
     mutateWithTriggerDisabled(
       databasePath,
       'finding_ledger_heads_delete_guard',
       (database) => {
         database.prepare(`
-          DELETE FROM finding_ledger_heads WHERE scope_id = ?
-        `).run(parallelScopeId);
-      },
-    );
-
-    expect(() => openRunStorage({ databasePath }))
-      .toThrow(/Finding Contract scope authority invariant/i);
-  });
-
-  it('accepts a workflow_call Finding authority matching its definition', () => {
-    const { databasePath, root } = createRealRunStorage({
-      findingContractEnabled: true,
-    });
-    const owner = root.claimLease({
-      ownerKey: 'workflow-head-owner',
-      leaseDurationMs: 9_000,
-    });
-    root.runtime({ lease: owner }).scopes.createWorkflowCallChild({
-      scopeKey: 'owned-finding-authority',
-      findingContractEnabled: true,
-      workflowDefinition: {
-        name: 'child',
-        codecName: 'json-v1',
-        definition: '{"name":"child"}',
-      },
-    });
-    root.close();
-
-    const reopened = openRunStorage({ databasePath });
-    expect(reopened.readResumeSnapshot().findingHeads).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ workflow_name: 'child' }),
-      ]),
-    );
-    reopened.close();
-  });
-
-  it('fails fast when a Finding head workflow differs from its scope definition', () => {
-    const { databasePath, root } = createRealRunStorage({
-      findingContractEnabled: true,
-    });
-    root.close();
-    mutateWithTriggerDisabled(
-      databasePath,
-      'finding_ledger_head_transition_guard',
-      (database) => {
-        database.prepare(`
-          UPDATE finding_ledger_heads SET workflow_name = 'forged-workflow'
+          DELETE FROM finding_ledger_heads
+          WHERE run_id = 'run-1' AND scope_id = 'root'
         `).run();
       },
     );
@@ -282,263 +278,106 @@ describe('run storage schema contract', () => {
       .toThrow(/Finding Contract scope authority invariant/i);
   });
 
-  it.each([
-    'missing workflow definition',
-    'missing parallel scope',
-    'missing parallel head',
-    'missing current revision',
-    'workflow_call head mismatch',
-    'workflow name mismatch',
-  ])('fails fast for live Finding authority corruption: %s', (corruption) => {
+  it('rejects Finding Contract scope demotion at the DDL boundary', () => {
     const { databasePath, root } = createRealRunStorage({
       findingContractEnabled: true,
     });
     const owner = root.claimLease({
-      ownerKey: `live-finding-${corruption}`,
-      leaseDurationMs: 9_000,
+      ownerKey: 'scope-demotion',
+      leaseDurationMs: 10_000,
     });
-    const rootRuntime = root.runtime({ lease: owner });
-    rootRuntime.scopes.createParallelChild({
-      scopeKey: 'live-finding-parallel',
+    root.runtime({ lease: owner }).scopes.createParallelChild({
+      scopeKey: 'scope-demotion-child',
     });
-    const parallelScopeId = root.readResumeSnapshot().scopes.find(
+    const childScopeId = root.readResumeSnapshot().scopes.find(
       (scope) => scope.kind === 'parallel',
     )!.scopeId;
+    root.close();
 
-    if (corruption === 'missing workflow definition') {
-      mutateDatabase(databasePath, (database) => {
-        database.exec('PRAGMA foreign_keys = OFF');
-        database.exec('DELETE FROM workflow_definitions');
-      });
-    } else if (corruption === 'missing parallel scope') {
-      mutateWithTriggerDisabled(
-        databasePath,
-        'child_scope_delete_guard',
-        (database) => {
-          database.exec('PRAGMA foreign_keys = OFF');
-          database.prepare(`
-            DELETE FROM scopes WHERE scope_id = ?
-          `).run(parallelScopeId);
-        },
-      );
-    } else if (corruption === 'missing parallel head') {
-      mutateWithTriggerDisabled(
-        databasePath,
-        'finding_ledger_heads_delete_guard',
-        (database) => {
-          database.prepare(`
-            DELETE FROM finding_ledger_heads WHERE scope_id = ?
-          `).run(parallelScopeId);
-        },
-      );
-    } else if (corruption === 'missing current revision') {
-      mutateWithTriggerDisabled(
-        databasePath,
-        'finding_ledger_revisions_delete_guard',
-        (database) => {
-          database.exec('PRAGMA foreign_keys = OFF');
-          database.prepare(`
-            DELETE FROM finding_ledger_revisions WHERE scope_id = ?
-          `).run(parallelScopeId);
-        },
-      );
-    } else if (corruption === 'workflow_call head mismatch') {
-      mutateWithTriggerDisabled(
-        databasePath,
-        'child_scope_identity_guard',
-        (database) => {
-          database.prepare(`
-            UPDATE scopes SET kind = 'workflow_call' WHERE scope_id = ?
-          `).run(parallelScopeId);
-        },
-      );
-      mutateWithTriggerDisabled(
-        databasePath,
-        'finding_ledger_head_transition_guard',
-        (database) => {
-          database.prepare(`
-            UPDATE finding_ledger_heads
-            SET workflow_name = 'forged-workflow'
-            WHERE scope_id = ?
-          `).run(parallelScopeId);
-        },
-      );
-    } else {
-      mutateWithTriggerDisabled(
-        databasePath,
-        'finding_ledger_head_transition_guard',
-        (database) => {
-          database.prepare(`
-            UPDATE finding_ledger_heads
-            SET workflow_name = 'forged-workflow'
-            WHERE scope_id = ?
-          `).run(parallelScopeId);
-        },
-      );
+    const database = new DatabaseSync(databasePath);
+    try {
+      expect(() => database.prepare(`
+        UPDATE scopes
+        SET finding_contract_enabled = 0
+        WHERE run_id = 'run-1' AND scope_id = 'root'
+      `).run()).toThrow(/root scope identity/i);
+      expect(() => database.prepare(`
+        UPDATE scopes
+        SET finding_contract_enabled = 0
+        WHERE run_id = 'run-1' AND scope_id = ?
+      `).run(childScopeId)).toThrow(/child scope identity/i);
+    } finally {
+      database.close();
     }
-
-    const expected = /foreign_key_check|Finding Contract scope authority invariant/i;
-    expect(() => openRunStorage({ databasePath })).toThrow(expected);
-    expect(() => root.readResumeSnapshot()).toThrow(expected);
-    expect(() => resumeRunStorage({
-      databasePath: `${databasePath}.corrupt-resume-${corruption.replaceAll(' ', '-')}`,
-      source: root,
-      bootstrapSeed: createTestBootstrapSeed({
-        sessionId: 'corrupt-finding-resume-session',
-      }),
-      run: {
-        runId: 'corrupt-finding-resume',
-        findingContractEnabled: true,
-      },
-      workflowDefinition: {
-        name: 'default',
-        codecName: 'json-v1',
-        definition: '{"name":"default"}',
-      },
-    })).toThrow(expected);
   });
 
-  it('rejects a self-consistent non-head Finding revision workflow mismatch', async () => {
-    const { databasePath, root } = createRealRunStorage({
-      findingContractEnabled: true,
-    });
-    const initialLedger = root.readResumeSnapshot().findingLedger!.ledger;
-    const owner = root.claimLease({
-      ownerKey: 'historical-workflow-mismatch',
-      leaseDurationMs: 9_000,
-    });
-    const runtime = root.runtime({ lease: owner });
-    const execution = runtime.execution.startStep({
-      stepKey: 'historical-workflow-mismatch',
-      expectedScopeRevision: 0,
-    });
-    const store = runtime.findingManager({
-      workflowName: 'default',
-      producer: execution.handle,
-    });
-    await store.updateLedger((current) => ({
-      ledger: {
-        ...current,
-        nextId: current.nextId + 1,
-      },
-      result: undefined,
-    }));
-
-    const forgedLedger = {
-      ...initialLedger,
-      workflowName: 'forged-workflow',
-    };
-    const forgedDigest = createHash('sha256')
-      .update(canonicalJson(forgedLedger))
-      .digest('hex');
-    mutateWithTriggersDisabled(
-      databasePath,
-      [
-        'finding_ledger_revisions_update_guard',
-        'finding_revision_publications_update_guard',
-      ],
-      (database) => {
-        database.exec('BEGIN');
-        database.prepare(`
-          UPDATE finding_ledger_revisions
-          SET workflow_name = 'forged-workflow', projection_digest = ?
-          WHERE scope_id = 'root' AND revision = 1
-        `).run(forgedDigest);
-        database.prepare(`
-          UPDATE finding_revision_publications
-          SET projection_digest = ?
-          WHERE scope_id = 'root' AND revision = 1
-        `).run(forgedDigest);
-        database.exec('COMMIT');
-      },
-    );
-
-    const expected = /Finding authority revision workflow mismatch/i;
-    expect(() => openRunStorage({ databasePath })).toThrow(expected);
-    expect(() => root.readResumeSnapshot()).toThrow(expected);
-    expect(() => resumeRunStorage({
-      databasePath: `${databasePath}.corrupt-resume`,
-      source: root,
-      bootstrapSeed: createTestBootstrapSeed({
-        sessionId: 'corrupt-finding-history-resume-session',
-      }),
-      run: {
-        runId: 'corrupt-finding-history-resume',
-        findingContractEnabled: true,
-      },
-      workflowDefinition: {
-        name: 'default',
-        codecName: 'json-v1',
-        definition: '{"name":"default"}',
-      },
-    })).toThrow(expected);
-  });
-
-  it('stores portable report identity and enforces owner-scoped uniqueness', () => {
+  it('stores portable report identity with owner-scoped uniqueness', () => {
     const { databasePath, root } = createRealRunStorage();
     root.close();
     const database = new DatabaseSync(databasePath, { readOnly: true });
-    const columns = database.prepare('PRAGMA table_info(report_streams)')
-      .all()
-      .map((row) => row.name);
-    const uniqueIndexes = database.prepare('PRAGMA index_list(report_streams)')
-      .all()
-      .filter((row) => row.unique === 1)
-      .map((row) => database.prepare(`PRAGMA index_info(${String(row.name)})`)
+    try {
+      const columns = database.prepare('PRAGMA table_info(report_streams)')
         .all()
-        .map((column) => column.name));
+        .map((row) => String(row.name));
+      const uniqueIndexes = database.prepare('PRAGMA index_list(report_streams)')
+        .all()
+        .filter((row) => Number(row.unique) === 1)
+        .map((row) => database.prepare(
+          `PRAGMA index_info(${String(row.name)})`,
+        ).all().map((column) => String(column.name)));
 
-    expect(columns).toEqual(expect.arrayContaining([
-      'portable_identity',
-    ]));
-    expect(uniqueIndexes).toContainEqual([
-      'run_id',
-      'owner_scope_id',
-      'portable_identity',
-    ]);
-    database.close();
+      expect(columns).toContain('portable_identity');
+      expect(uniqueIndexes).toContainEqual([
+        'run_id',
+        'owner_scope_id',
+        'portable_identity',
+      ]);
+    } finally {
+      database.close();
+    }
   });
 
   it('rejects a gap in the append-only step iteration sequence', () => {
     const { databasePath, root } = createRealRunStorage();
     root.close();
     const database = new DatabaseSync(databasePath);
-    database.exec('PRAGMA foreign_keys = ON');
-    const authority = database.prepare(`
-      SELECT run_id AS runId, scope_id AS scopeId
-      FROM scopes
-      WHERE parent_scope_id IS NULL
-    `).get() as { readonly runId: string; readonly scopeId: string };
-    database.prepare(`
-      UPDATE scope_runtime
-      SET
-        status = 'running',
-        current_step_id = 'review',
-        revision = 1,
-        updated_at = 1000
-      WHERE run_id = ? AND scope_id = ?
-    `).run(authority.runId, authority.scopeId);
+    try {
+      database.exec('PRAGMA foreign_keys = ON');
+      const authority = database.prepare(`
+        SELECT run_id AS runId, scope_id AS scopeId
+        FROM scopes
+        WHERE parent_scope_id IS NULL
+      `).get() as { readonly runId: string; readonly scopeId: string };
+      database.prepare(`
+        UPDATE scope_runtime
+        SET current_step_id = 'review', status = 'running',
+          revision = 1, updated_at = 1000
+        WHERE run_id = ? AND scope_id = ?
+      `).run(authority.runId, authority.scopeId);
 
-    expect(() => database.prepare(`
-      INSERT INTO step_executions (
-        run_id, scope_id, execution_id, step_id,
-        iteration, status, started_at
-      ) VALUES (
-        ?, ?, 'forged-gap', 'review',
-        2, 'running', 1000
-      )
-    `).run(authority.runId, authority.scopeId))
-      .toThrow(/step iteration sequence/i);
-    database.close();
+      expect(() => database.prepare(`
+        INSERT INTO step_executions (
+          run_id, scope_id, execution_id, step_id,
+          iteration, status, started_at
+        ) VALUES (
+          ?, ?, 'invalid-gap', 'review',
+          2, 'running', 1000
+        )
+      `).run(authority.runId, authority.scopeId))
+        .toThrow(/step iteration sequence/i);
+    } finally {
+      database.close();
+    }
   });
 
-  it('terminalizes run, root scope, and lease together without resurrection', () => {
+  it('terminalizes run, root scope, and lease atomically without resurrection', () => {
     const { root, clock } = createRealRunStorage();
     const owner = root.claimLease({
-      ownerKey: 'owner',
+      ownerKey: 'terminal-owner',
       leaseDurationMs: 9_000,
     });
     clock.set(2_000);
+
     root.finishRun(owner, {
       status: 'failed',
       failureReason: 'test failure',
@@ -551,7 +390,10 @@ describe('run storage schema contract', () => {
     });
     const snapshot = root.readResumeSnapshot();
 
-    expect(snapshot.run).toMatchObject({ status: 'failed', terminalAt: 2_000 });
+    expect(snapshot.run).toMatchObject({
+      status: 'failed',
+      terminalAt: 2_000,
+    });
     expect(snapshot.scopes[0]).toMatchObject({
       terminalAt: 2_000,
       runtime: { status: 'failed', updatedAt: 2_000 },
@@ -567,19 +409,75 @@ describe('run storage schema contract', () => {
         iteration: 1,
         payload: '{}',
       },
-    }))
-      .toThrow(/stale|terminal/i);
+    })).toThrow(/stale|terminal/i);
   });
 
-  it('takes bootstrap timestamps from the trusted clock', () => {
+  it('takes bootstrap and lazy Finding timestamps from the trusted clock', () => {
     const { root } = createRealRunStorage({ findingContractEnabled: true });
-    const snapshot = root.readResumeSnapshot();
-
-    expect(snapshot.run.createdAt).toBe(1_000);
-    expect(snapshot.scopes[0]).toMatchObject({
+    const bootstrap = root.readResumeSnapshot();
+    expect(bootstrap.run.createdAt).toBe(1_000);
+    expect(bootstrap.scopes[0]).toMatchObject({
       createdAt: 1_000,
       runtime: { updatedAt: 1_000 },
     });
-    expect(snapshot.findingLedger?.updatedAt).toBe(1_000);
+
+    const lease = root.claimLease({
+      ownerKey: 'trusted-clock-finding',
+      leaseDurationMs: 10_000,
+    });
+    const runtime = root.runtime({ lease });
+    const execution = runtime.execution.startStep({
+      stepKey: 'trusted-clock-review',
+      expectedScopeRevision: 0,
+    });
+    runtime.findingManager({
+      workflowName: 'trusted-clock-workflow',
+      producer: execution.handle,
+    }).loadLedger();
+    expect(root.readResumeSnapshot().findingRevisions[0]?.updated_at).toBe(1_000);
+  });
+
+  it('resumes Finding state under a different workflow name', async () => {
+    const source = createRealRunStorage({ findingContractEnabled: true });
+    const lease = source.root.claimLease({
+      ownerKey: 'source-finding',
+      leaseDurationMs: 10_000,
+    });
+    const sourceRuntime = source.root.runtime({ lease });
+    const execution = sourceRuntime.execution.startStep({
+      stepKey: 'review',
+      expectedScopeRevision: 0,
+    });
+    const sourceStore = sourceRuntime.findingManager({
+      workflowName: 'source-workflow',
+      producer: execution.handle,
+    });
+    await sourceStore.updateLedger((current) => ({
+      ledger: { ...current, nextId: 7 },
+      result: undefined,
+    }));
+
+    const target = resumeRealRunStorage(source.root, {
+      slug: 'renamed-workflow-run',
+      findingContractEnabled: true,
+    });
+    const targetLease = target.root.claimLease({
+      ownerKey: 'target-finding',
+      leaseDurationMs: 10_000,
+    });
+    const targetRuntime = target.root.runtime({ lease: targetLease });
+    const targetExecution = targetRuntime.execution.startStep({
+      stepKey: 'review',
+      expectedScopeRevision: 0,
+    });
+    const targetStore = targetRuntime.findingManager({
+      workflowName: 'target-workflow',
+      producer: targetExecution.handle,
+    });
+    expect(targetStore.loadLedger()).toMatchObject({
+      workflowName: 'target-workflow',
+      nextId: 7,
+    });
+    expect(target.root.readResumeSnapshot().findingRevisions).toHaveLength(1);
   });
 });

@@ -28,14 +28,9 @@ const DML_ACTIONS = new Set([
 const BOOTSTRAP_AUTHORITY_TABLES = new Set([
   'storage_contract',
   'storage_codecs',
-  'engine_builds',
-  'workflow_definitions',
   'runs',
   'terminal_publications',
   'terminal_publication_stages',
-  'run_ancestry',
-  'run_resume_sources',
-  'finding_resume_authorities',
   'run_leases',
 ]);
 
@@ -58,9 +53,6 @@ function permitsDml(
     case 'read':
       return false;
     case 'normal-write':
-      if (tableName === 'workflow_definitions') {
-        return actionCode === constants.SQLITE_INSERT;
-      }
       if (tableName === 'runs') {
         return actionCode === constants.SQLITE_UPDATE;
       }

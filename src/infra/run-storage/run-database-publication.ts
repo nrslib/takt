@@ -11,28 +11,20 @@ import {
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { sha256 } from './canonical-json.js';
 import { readClock, SYSTEM_RUN_STORAGE_CLOCK } from './clock.js';
-import { assertCodecContent } from './codec-contract.js';
 import {
   openDatabaseFileFromDescriptor,
   openExistingDatabaseFile,
   type RunDatabaseFile,
 } from './database-file.js';
 import {
-  currentEngineArtifactIdentity,
-  type EngineArtifactIdentity,
-} from './engine-artifact.js';
-import { bootstrapFindingAuthority } from './finding-ledger.js';
-import {
   seedRunResumeImport,
-  type TrustedRunStorageResumeSnapshot,
 } from './resume-import.js';
+import type { CompleteResumeSnapshot } from './resume-snapshot-types.js';
 import {
   configureConnectionSafety,
   createFixedSchema,
   setJournalMode,
-  validateRecordedEngineProvenance,
   validateRunDatabase,
 } from './schema-contract.js';
 import { throwAfterCleanup } from './cleanup-error.js';
@@ -48,12 +40,8 @@ interface RunDatabaseCreationInput {
   readonly databasePath: string;
   readonly run: {
     readonly runId: string;
+    readonly workflowName: string;
     readonly findingContractEnabled: boolean;
-  };
-  readonly workflowDefinition: {
-    readonly name: string;
-    readonly codecName: string;
-    readonly definition: string;
   };
   readonly bootstrapSeed: BootstrapRecoverySeed;
 }
@@ -72,7 +60,7 @@ export function createPublishedRunDatabase(
 
 export function createPublishedResumedRunDatabase(
   input: RunDatabaseCreationInput,
-  source: TrustedRunStorageResumeSnapshot,
+  source: CompleteResumeSnapshot,
 ): PublishedRunDatabase {
   return publishRunDatabase(input, { kind: 'resume', source });
 }
@@ -83,7 +71,7 @@ function publishRunDatabase(
     readonly kind: 'new';
   } | {
     readonly kind: 'resume';
-    readonly source: TrustedRunStorageResumeSnapshot;
+    readonly source: CompleteResumeSnapshot;
   },
 ): PublishedRunDatabase {
   if (existsSync(input.databasePath)) {
@@ -91,7 +79,6 @@ function publishRunDatabase(
   }
   const directory = dirname(input.databasePath);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const engineArtifact = currentEngineArtifactIdentity();
   const runId = input.run.runId;
   const databaseInstanceId = randomUUID();
   const temporaryPath = join(
@@ -123,14 +110,12 @@ function publishRunDatabase(
     initializeRunDatabase(
       opened.database,
       input,
-      engineArtifact,
       databaseInstanceId,
       runId,
       seed,
     );
     validateWritablePublication(
       opened.database,
-      engineArtifact,
       databaseInstanceId,
       runId,
     );
@@ -144,13 +129,9 @@ function publishRunDatabase(
     temporaryExists = false;
     fsyncPath(directory);
 
-    opened = openValidatedWritable(
-      input.databasePath,
-      engineArtifact,
-    );
+    opened = openValidatedWritable(input.databasePath);
     assertPublicationIdentity(
       opened.database,
-      engineArtifact,
       databaseInstanceId,
       runId,
     );
@@ -189,10 +170,7 @@ export function openPublishedRunDatabase(
   if (!existsSync(databasePath)) {
     throw new Error(`Run database does not exist: ${databasePath}`);
   }
-  const opened = openValidatedWritable(
-    databasePath,
-    currentEngineArtifactIdentity(),
-  );
+  const opened = openValidatedWritable(databasePath);
   const run = opened.database.prepare(
     'SELECT run_id AS runId FROM runs',
   ).get() as { readonly runId: string };
@@ -205,7 +183,7 @@ export function openPublishedRunDatabaseForRecovery(
   if (!existsSync(databasePath)) {
     throw new Error(`Run database does not exist: ${databasePath}`);
   }
-  const opened = openValidatedRecordedEngineDatabase(databasePath);
+  const opened = openValidatedWritable(databasePath);
   const run = opened.database.prepare(
     'SELECT run_id AS runId FROM runs',
   ).get() as { readonly runId: string };
@@ -215,23 +193,21 @@ export function openPublishedRunDatabaseForRecovery(
 function initializeRunDatabase(
   database: DatabaseSync,
   input: RunDatabaseCreationInput,
-  engineArtifact: EngineArtifactIdentity,
   databaseInstanceId: string,
   runId: string,
   seed: {
     readonly kind: 'new';
   } | {
     readonly kind: 'resume';
-    readonly source: TrustedRunStorageResumeSnapshot;
+    readonly source: CompleteResumeSnapshot;
   },
 ): void {
   setJournalMode(database, 'delete');
   createFixedSchema(database, databaseInstanceId);
-  seedRun(database, input, engineArtifact, runId, seed);
+  seedRun(database, input, runId, seed);
   assertDatabaseIdentity(
     database,
     'delete',
-    engineArtifact,
     databaseInstanceId,
     runId,
   );
@@ -239,7 +215,6 @@ function initializeRunDatabase(
   assertDatabaseIdentity(
     database,
     'wal',
-    engineArtifact,
     databaseInstanceId,
     runId,
   );
@@ -248,7 +223,6 @@ function initializeRunDatabase(
 
 function validateWritablePublication(
   database: DatabaseSync,
-  engineArtifact: EngineArtifactIdentity,
   databaseInstanceId: string,
   runId: string,
 ): void {
@@ -257,7 +231,6 @@ function validateWritablePublication(
     assertDatabaseIdentity(
       database,
       'wal',
-      engineArtifact,
       databaseInstanceId,
       runId,
     );
@@ -275,14 +248,12 @@ function validateWritablePublication(
 
 function assertPublicationIdentity(
   database: DatabaseSync,
-  engineArtifact: EngineArtifactIdentity,
   databaseInstanceId: string,
   runId: string,
 ): void {
   assertDatabaseIdentity(
     database,
     'wal',
-    engineArtifact,
     databaseInstanceId,
     runId,
   );
@@ -291,14 +262,12 @@ function assertPublicationIdentity(
 function assertDatabaseIdentity(
   database: DatabaseSync,
   journalMode: 'delete' | 'wal',
-  engineArtifact: EngineArtifactIdentity,
   databaseInstanceId: string,
   runId: string,
 ): void {
   const actualDatabaseInstanceId = validateRunDatabase(
     database,
     journalMode,
-    engineArtifact,
   );
   if (actualDatabaseInstanceId !== databaseInstanceId) {
     throw new Error(
@@ -316,27 +285,19 @@ function assertDatabaseIdentity(
 function seedRun(
   database: DatabaseSync,
   input: RunDatabaseCreationInput,
-  engineArtifact: EngineArtifactIdentity,
   runId: string,
   seed: {
     readonly kind: 'new';
   } | {
     readonly kind: 'resume';
-    readonly source: TrustedRunStorageResumeSnapshot;
+    readonly source: CompleteResumeSnapshot;
   },
 ): void {
-  const workflow = input.workflowDefinition;
-  assertCodecContent(workflow.codecName, workflow.definition);
   const createdAt = readClock(SYSTEM_RUN_STORAGE_CLOCK);
-  const definitionDigest = sha256(workflow.definition);
-  const definitionId = sha256([
-    workflow.name,
-    workflow.codecName,
-    definitionDigest,
-  ].join('\0'));
-  const rootFindingContractEnabled = seed.kind === 'new'
-    ? input.run.findingContractEnabled
-    : readRootFindingContractEnabled(seed.source);
+  const rootFindingContractEnabled = resolveRootFindingContractEnabled(
+    input.run.findingContractEnabled,
+    seed,
+  );
   const bootstrapSeed = serializeBootstrapRecoverySeed(input.bootstrapSeed);
   const bootstrapSeedSha256 = bootstrapRecoverySeedSha256(
     input.bootstrapSeed,
@@ -344,48 +305,24 @@ function seedRun(
   database.exec('BEGIN IMMEDIATE');
   try {
     database.prepare(`
-      INSERT INTO engine_builds (build_id, version, digest)
-      VALUES (?, ?, ?)
-    `).run(
-      engineArtifact.buildId,
-      engineArtifact.version,
-      engineArtifact.digest,
-    );
-    database.prepare(`
-      INSERT INTO workflow_definitions (
-        definition_id, name, codec_name, definition, digest
-      ) VALUES (?, ?, ?, ?, ?)
-    `).run(
-      definitionId,
-      workflow.name,
-      workflow.codecName,
-      workflow.definition,
-      definitionDigest,
-    );
-    database.prepare(`
       INSERT INTO runs (
-        singleton_id, run_id, engine_build_id,
-        workflow_definition_id, finding_contract_enabled,
+        singleton_id, run_id, finding_contract_enabled,
         bootstrap_seed_codec_name, bootstrap_seed, bootstrap_seed_sha256,
         status, created_at
-      ) VALUES (1, ?, ?, ?, ?, 'json-v1', ?, ?, 'running', ?)
+      ) VALUES (1, ?, ?, 'json-v1', ?, ?, 'running', ?)
     `).run(
       runId,
-      engineArtifact.buildId,
-      definitionId,
-      input.run.findingContractEnabled ? 1 : 0,
+      rootFindingContractEnabled ? 1 : 0,
       bootstrapSeed,
       bootstrapSeedSha256,
       createdAt,
     );
     database.prepare(`
       INSERT INTO scopes (
-        run_id, scope_id, kind, workflow_definition_id,
-        finding_contract_enabled, created_at
-      ) VALUES (?, 'root', 'root', ?, ?, ?)
+        run_id, scope_id, kind, finding_contract_enabled, created_at
+      ) VALUES (?, 'root', 'root', ?, ?)
     `).run(
       runId,
-      definitionId,
       rootFindingContractEnabled ? 1 : 0,
       createdAt,
     );
@@ -396,18 +333,8 @@ function seedRun(
     if (seed.kind === 'resume') {
       seedRunResumeImport(database, {
         childRunId: runId,
-        childWorkflowName: workflow.name,
-        findingContractEnabled: input.run.findingContractEnabled,
+        childWorkflowName: input.run.workflowName,
         source: seed.source,
-      });
-    } else if (input.run.findingContractEnabled) {
-      bootstrapFindingAuthority({
-        run: (sql, ...parameters) => database.prepare(sql).run(...parameters),
-      }, {
-        runId,
-        scopeId: 'root',
-        workflowName: workflow.name,
-        createdAt,
       });
     }
     database.exec('COMMIT');
@@ -422,10 +349,24 @@ function seedRun(
   }
 }
 
-function readRootFindingContractEnabled(
-  source: TrustedRunStorageResumeSnapshot,
+function resolveRootFindingContractEnabled(
+  requested: boolean,
+  seed: {
+    readonly kind: 'new';
+  } | {
+    readonly kind: 'resume';
+    readonly source: CompleteResumeSnapshot;
+  },
 ): boolean {
-  const root = source.snapshot.scopes.find((scope) => scope.scopeId === 'root');
+  return seed.kind === 'new'
+    ? requested
+    : requested || readRootFindingContractEnabled(seed.source);
+}
+
+function readRootFindingContractEnabled(
+  source: CompleteResumeSnapshot,
+): boolean {
+  const root = source.scopes.find((scope) => scope.scopeId === 'root');
   if (
     root?.findingContractEnabled !== 0
     && root?.findingContractEnabled !== 1
@@ -446,31 +387,12 @@ function checkpointWal(database: DatabaseSync): void {
   }
 }
 
-function openValidatedWritable(
-  databasePath: string,
-  expectedEngineBuild: EngineArtifactIdentity,
-): {
-  readonly database: DatabaseSync;
-  readonly file: RunDatabaseFile;
-} {
-  return openValidatedDatabase(databasePath, (database) => {
-    validateRunDatabase(
-      database,
-      'wal',
-      expectedEngineBuild,
-    );
-  });
-}
-
-function openValidatedRecordedEngineDatabase(
-  databasePath: string,
-): {
+function openValidatedWritable(databasePath: string): {
   readonly database: DatabaseSync;
   readonly file: RunDatabaseFile;
 } {
   return openValidatedDatabase(databasePath, (database) => {
     validateRunDatabase(database, 'wal');
-    validateRecordedEngineProvenance(database);
   });
 }
 

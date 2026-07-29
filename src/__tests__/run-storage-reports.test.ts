@@ -439,12 +439,8 @@ describe('run report authority', () => {
       }),
       run: {
         runId: 'corrupt-report-resume',
+        workflowName: 'default',
         findingContractEnabled: false,
-      },
-      workflowDefinition: {
-        name: 'default',
-        codecName: 'json-v1',
-        definition: '{"name":"default"}',
       },
     })).toThrow(expected);
   });

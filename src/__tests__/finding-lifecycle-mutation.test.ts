@@ -95,6 +95,23 @@ afterEach(() => {
   temporaryDirectories.clear();
 });
 
+function loadRootFindingLedger(
+  root: ReturnType<typeof createRealRunStorage>['root'],
+  ownerKey: string,
+): FindingLedger {
+  const lease = root.claimLease({ ownerKey, leaseDurationMs: 10_000 });
+  const runtime = root.runtime({ lease });
+  const scope = runtime.scopes.get();
+  const execution = runtime.execution.startStep({
+    stepKey: `${ownerKey}-load`,
+    expectedScopeRevision: scope.revision,
+  });
+  return runtime.findingManager({
+    workflowName: 'default',
+    producer: execution.handle,
+  }).loadLedger();
+}
+
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -3127,10 +3144,12 @@ describe('verified finding lifecycle mutation', () => {
       slug: 'lifecycle-resume',
       findingContractEnabled: true,
     });
-    const resumedLedger = resumed.root.readResumeSnapshot().findingLedger?.ledger;
-    expect(resumedLedger).toBeDefined();
-    expect(authority(resumedLedger!)).toEqual(authority(sqliteStore.loadLedger()));
-    expect(resumedLedger?.pendingManagerCommit?.completed.lifecycleEvents)
+    const resumedLedger = loadRootFindingLedger(
+      resumed.root,
+      'lifecycle-resume-load',
+    );
+    expect(authority(resumedLedger)).toEqual(authority(sqliteStore.loadLedger()));
+    expect(resumedLedger.pendingManagerCommit?.completed.lifecycleEvents)
       .toEqual(sqliteStore.loadLedger().pendingManagerCommit?.completed.lifecycleEvents);
   });
 
@@ -3241,8 +3260,10 @@ describe('verified finding lifecycle mutation', () => {
       slug: 'nullable-provisional-resume',
       findingContractEnabled: true,
     });
-    const resumedFinding = resumed.root.readResumeSnapshot()
-      .findingLedger?.ledger.findings[0];
+    const resumedFinding = loadRootFindingLedger(
+      resumed.root,
+      'nullable-provisional-resume-load',
+    ).findings[0];
 
     expect(resumedFinding).toMatchObject({
       id: provisional.id,
@@ -3290,8 +3311,10 @@ describe('verified finding lifecycle mutation', () => {
       slug: 'provisional-transition-proof-resume',
       findingContractEnabled: true,
     });
-    const resumedProof = resumed.root.readResumeSnapshot()
-      .findingLedger?.ledger.evidenceRecords.find(
+    const resumedProof = loadRootFindingLedger(
+      resumed.root,
+      'provisional-proof-resume-load',
+    ).evidenceRecords.find(
         (record) => record.evidenceId === proof?.evidenceId,
       );
     expect(resumedProof).toEqual(proof);

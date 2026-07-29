@@ -32,6 +32,15 @@ import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.
 
 afterEach(cleanupRealRunStorages);
 
+function rootFindingRevision(
+  root: ReturnType<typeof createRealRunStorage>['root'],
+): number {
+  const head = root.readResumeSnapshot().findingHeads.find(
+    (candidate) => candidate.scope_id === 'root',
+  );
+  return Number(head?.current_revision ?? 0);
+}
+
 describe('Finding manager SQLite adapter', () => {
   it('reopens valid authority after ledger, pending, finalized, and parallel updates', async () => {
     const createFindingStore = () => {
@@ -60,7 +69,7 @@ describe('Finding manager SQLite adapter', () => {
     >['root']) => {
       root.close();
       const reopened = openRunStorage({ databasePath });
-      expect(reopened.readResumeSnapshot().findingLedger).not.toBeNull();
+      expect(reopened.readResumeSnapshot().findingHeads).not.toEqual([]);
       reopened.close();
     };
 
@@ -69,7 +78,7 @@ describe('Finding manager SQLite adapter', () => {
       ledger: { ...current, nextId: current.nextId + 1 },
       result: undefined,
     }));
-    expect(updated.root.readResumeSnapshot().findingLedger?.revision).toBe(2);
+    expect(rootFindingRevision(updated.root)).toBe(2);
     reopen(updated.databasePath, updated.root);
 
     const pending = createFindingStore();
@@ -503,7 +512,6 @@ describe('Finding manager SQLite adapter', () => {
     database.exec(`
       DROP TRIGGER finding_ledger_controls_update_guard;
       DROP TRIGGER finding_ledger_revisions_update_guard;
-      DROP TRIGGER finding_revision_publications_update_guard;
       BEGIN;
     `);
     database.prepare(`
@@ -523,17 +531,12 @@ describe('Finding manager SQLite adapter', () => {
       SET projection_digest = ?
       WHERE run_id = ? AND scope_id = ? AND revision = ?
     `).run(projectionDigest, internalRunId, head.scopeId, head.revision);
-    database.prepare(`
-      UPDATE finding_revision_publications
-      SET projection_digest = ?
-      WHERE run_id = ? AND scope_id = ? AND revision = ?
-    `).run(projectionDigest, internalRunId, head.scopeId, head.revision);
     database.exec('COMMIT');
     database.close();
 
     await expect(Promise.resolve().then(() => (
       store.finalizeManagerValidationPublication(publication, receipt)
-    ))).rejects.toThrow(/append-only|replaced with different content/);
+    ))).rejects.toThrow(/append-only|replaced with different content|digest mismatch/);
   });
 
   it('rejects exact pending finalization through general SQLite ledger mutations', async () => {
@@ -655,7 +658,16 @@ describe('Finding manager SQLite adapter', () => {
       workflowName: 'default',
       producer: childExecution.handle,
     });
-    expect(childStore.loadLedger()).toEqual(parentStaged.ledger);
+    expect(childStore.loadLedger()).toEqual({
+      ...parentStaged.ledger,
+      pendingManagerCommit: {
+        ...parentStaged.ledger.pendingManagerCommit!,
+        publication: {
+          ...parentStaged.ledger.pendingManagerCommit!.publication,
+          destinationRunId: childRunId,
+        },
+      },
+    });
 
     const bound = childStore.bindManagerValidationPublication(
       roundMarker,
@@ -681,32 +693,21 @@ describe('Finding manager SQLite adapter', () => {
     ];
     for (const attack of forged) {
       await expect(childStore.rebindPendingManagerValidationPublication(attack))
-        .rejects.toThrow(/not authorized for pending rebind/i);
+        .rejects.toThrow(/already rebound/i);
     }
-    const importedRevision = child.root.readResumeSnapshot().findingLedger!.revision;
+    const importedRevision = rootFindingRevision(child.root);
     const importedLedger = childStore.loadLedger();
     await expect(childStore.updateLedger((current) => ({
       ledger: current,
       result: undefined,
     }))).resolves.toEqual({ ledger: importedLedger, result: undefined });
-    expect(child.root.readResumeSnapshot().findingLedger!.revision)
-      .toBe(importedRevision);
+    expect(rootFindingRevision(child.root)).toBe(importedRevision);
     await expect(Promise.resolve().then(() => childStore.updateLedger(() => ({
       ledger: {
         ...parentStaged.ledger,
-        pendingManagerCommit: {
-          ...parentStaged.ledger.pendingManagerCommit!,
-          publication: bound,
-        },
       },
       result: undefined,
     })))).rejects.toThrow(/pending.*dedicated.*rebind/i);
-    await expect(childStore.rebindPendingManagerValidationPublication(bound))
-      .resolves.toMatchObject({
-        pendingManagerCommit: {
-          publication: { destinationRunId: childRunId },
-        },
-      });
     await expect(childStore.rebindPendingManagerValidationPublication(bound))
       .rejects.toThrow(/already rebound/i);
 
@@ -770,7 +771,7 @@ describe('Finding manager SQLite adapter', () => {
       stepName: 'security-reviewers',
     });
     const otherReceipt = store.publishManagerValidationPublication(otherPublication);
-    const revisionBeforeFailures = root.readResumeSnapshot().findingLedger?.revision;
+    const revisionBeforeFailures = rootFindingRevision(root);
 
     await expect(Promise.resolve().then(() => (
       store.finalizeManagerValidationPublication(publication, {
@@ -785,7 +786,7 @@ describe('Finding manager SQLite adapter', () => {
       })
     ))).rejects.toThrow(/receipt mismatch/);
 
-    expect(root.readResumeSnapshot().findingLedger?.revision).toBe(revisionBeforeFailures);
+    expect(rootFindingRevision(root)).toBe(revisionBeforeFailures);
     expect(store.loadLedger().pendingManagerCommit?.publication.publicationId)
       .toBe(publication.publicationId);
 
@@ -909,7 +910,7 @@ describe('Finding manager SQLite adapter', () => {
       result: undefined,
     }));
     const receipt = store.publishManagerValidationPublication(publication);
-    const revisionBeforeFailure = root.readResumeSnapshot().findingLedger?.revision;
+    const revisionBeforeFailure = rootFindingRevision(root);
     const database = new DatabaseSync(databasePath);
     database.exec(`
       CREATE TRIGGER reject_manager_finalize
@@ -924,7 +925,7 @@ describe('Finding manager SQLite adapter', () => {
       store.finalizeManagerValidationPublication(publication, receipt)
     ))).rejects.toThrow(/injected ledger finalization failure/);
 
-    expect(root.readResumeSnapshot().findingLedger?.revision).toBe(revisionBeforeFailure);
+    expect(rootFindingRevision(root)).toBe(revisionBeforeFailure);
     expect(store.loadLedger().pendingManagerCommit?.publication.publicationId)
       .toBe(publication.publicationId);
 
@@ -1209,10 +1210,7 @@ describe('Finding manager SQLite adapter', () => {
       nextId: 2,
       updatedAt: '1970-01-01T00:00:01.200Z',
     });
-    expect(root.readResumeSnapshot().findingLedger).toMatchObject({
-      revision: 2,
-      ledger: { nextId: 2 },
-    });
+    expect(rootFindingRevision(root)).toBe(2);
   });
 
   it('rejects Finding authority when FC is disabled without affecting execution', () => {
