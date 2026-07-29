@@ -10,7 +10,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import type { Language } from '../../core/models/index.js';
 import { LanguageSchema } from '../../core/models/schema-base.js';
-import { getLanguageResourcesDir } from '../resources/index.js';
+import { getLanguageResourcesDir, getResourcesDir } from '../resources/index.js';
 
 import type { FacetKind } from 'faceted-prompting';
 import { REPERTOIRE_DIR_NAME } from './constants.js';
@@ -48,6 +48,10 @@ export function getGlobalProviderOptionsDir(): string {
   return join(getGlobalConfigDir(), 'provider-options');
 }
 
+export function getGlobalStepsDir(): string {
+  return join(getGlobalConfigDir(), 'steps');
+}
+
 /** Get takt global logs directory */
 export function getGlobalLogsDir(): string {
   return join(getGlobalConfigDir(), 'logs');
@@ -65,6 +69,14 @@ export function getBuiltinWorkflowsDir(lang: Language): string {
 
 export function getBuiltinProviderOptionsDir(lang: Language): string {
   return join(getLanguageResourcesDir(lang), 'provider-options');
+}
+
+export function getBuiltinStepsDir(): string {
+  return join(getResourcesDir(), 'steps');
+}
+
+export function getBuiltinLanguageStepsDir(lang: Language): string {
+  return join(getLanguageResourcesDir(lang), 'steps');
 }
 
 export function isBuiltinWorkflowPath(filePath: string): boolean {
@@ -94,6 +106,10 @@ export function getProjectSchemasDir(projectDir: string): string {
 
 export function getProjectProviderOptionsDir(projectDir: string): string {
   return join(getProjectConfigDir(projectDir), 'provider-options');
+}
+
+export function getProjectStepsDir(projectDir: string): string {
+  return join(getProjectConfigDir(projectDir), 'steps');
 }
 
 /** Get project config file path */
@@ -163,6 +179,11 @@ export function getRepertoireFacetDir(owner: string, repo: string, facetType: Fa
 export function getRepertoireProviderOptionsDir(owner: string, repo: string, repertoireDir?: string): string {
   const base = repertoireDir ?? getRepertoireDir();
   return join(base, `@${owner}`, repo, 'provider-options');
+}
+
+export function getRepertoireStepsDir(owner: string, repo: string, repertoireDir?: string): string {
+  const base = repertoireDir ?? getRepertoireDir();
+  return join(base, `@${owner}`, repo, 'steps');
 }
 
 /** Validate path is safe (no directory traversal) */

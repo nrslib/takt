@@ -1,9 +1,21 @@
 import type { WorkflowStep } from '../../models/types.js';
 
-export function findingContractFormatRef(step: Pick<WorkflowStep, 'outputContracts'>): string | undefined {
-  return step.outputContracts?.find((contract) => contract.formatRef?.endsWith('-finding-contract') === true)?.formatRef;
+export interface FindingContractFormatReference {
+  format: string;
+  index: number;
+}
+
+export function findFindingContractFormat(
+  step: Pick<WorkflowStep, 'outputContracts'>,
+): FindingContractFormatReference | undefined {
+  for (const [index, contract] of (step.outputContracts ?? []).entries()) {
+    if (contract.formatRef?.endsWith('-finding-contract') === true) {
+      return { format: contract.formatRef, index };
+    }
+  }
+  return undefined;
 }
 
 export function hasFindingContractFormat(step: Pick<WorkflowStep, 'outputContracts'>): boolean {
-  return findingContractFormatRef(step) !== undefined;
+  return findFindingContractFormat(step) !== undefined;
 }

@@ -1,0 +1,19 @@
+name: fix
+tags: [coding]
+edit: true
+session: compact
+persona: coder
+policy: [coding, testing]
+knowledge: [takt, architecture, implementation-semantics]
+required_permission_mode: edit
+instruction: fix
+output_contracts:
+  report:
+    - name: fix-report.md
+      format: fix-report
+      use_judge: false
+rules:
+  - condition: 修正完了
+    next: reviewers
+  - condition: 修正を進められない、または実装方針の再定義が必要
+    next: replan

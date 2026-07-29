@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { resolveNamedResourceWithSource } from '../infra/config/loaders/namedResourceResolver.js';
 
 describe('resolveNamedResourceWithSource', () => {
@@ -82,6 +82,16 @@ describe('resolveNamedResourceWithSource', () => {
     }
   });
 
+  it.each([' review', 'review ', 'review\nnext', 'review\u0000next'])(
+    'should reject whitespace and control characters in a bare resource name: %j',
+    (name) => {
+      expect(() => resolveNamedResourceWithSource(name, {
+        candidateDirs: [],
+        extensions: ['.yaml', '.yml'],
+      })).toThrow(/bare name/i);
+    },
+  );
+
   it('should reject a symlinked candidate directory', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-named-resource-dir-symlink-'));
     const outsideDir = mkdtempSync(join(tmpdir(), 'takt-named-resource-dir-symlink-outside-'));
@@ -98,5 +108,84 @@ describe('resolveNamedResourceWithSource', () => {
       rmSync(tempDir, { recursive: true, force: true });
       rmSync(outsideDir, { recursive: true, force: true });
     }
+  });
+
+  it('should resolve a symlink whose target is inside a candidate directory beginning with two dots', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-named-resource-dot-prefix-'));
+    try {
+      const candidateDir = join(tempDir, 'steps');
+      const targetDir = join(candidateDir, '..visible');
+      const targetPath = join(targetDir, 'review.yaml');
+      mkdirSync(targetDir, { recursive: true });
+      writeFileSync(targetPath, 'review\n');
+      symlinkSync(targetPath, join(candidateDir, 'review.yaml'));
+
+      const result = resolveNamedResourceWithSource('review', {
+        candidateDirs: [candidateDir],
+        extensions: ['.yaml', '.yml'],
+      });
+
+      expect(result?.path).toBe(join(candidateDir, 'review.yaml'));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should continue to a lower-priority root when an empty symlinked candidate directory has no matching file', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-named-resource-empty-dir-symlink-'));
+    const outsideDir = mkdtempSync(join(tmpdir(), 'takt-named-resource-empty-dir-symlink-outside-'));
+    try {
+      const symlinkedDir = join(tempDir, 'project-provider-options');
+      const globalDir = join(tempDir, 'global-provider-options');
+      mkdirSync(globalDir, { recursive: true });
+      writeFileSync(join(globalDir, 'review.yaml'), 'global\n');
+      symlinkSync(outsideDir, symlinkedDir);
+
+      const result = resolveNamedResourceWithSource('review', {
+        candidateDirs: [symlinkedDir, globalDir],
+        extensions: ['.yaml', '.yml'],
+      });
+
+      expect(result?.path).toBe(join(globalDir, 'review.yaml'));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject a dangling symlinked candidate directory before checking lower-priority roots', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-named-resource-dangling-dir-symlink-'));
+    try {
+      const symlinkedDir = join(tempDir, 'project-steps');
+      const globalDir = join(tempDir, 'global-steps');
+      mkdirSync(globalDir, { recursive: true });
+      writeFileSync(join(globalDir, 'gather.yaml'), 'global\n');
+      symlinkSync(join(tempDir, 'missing-steps'), symlinkedDir);
+
+      expect(() => resolveNamedResourceWithSource('gather', {
+        candidateDirs: [symlinkedDir, globalDir],
+        extensions: ['.yaml', '.yml'],
+        rejectSymlinkedCandidateDirs: true,
+      })).toThrow(/candidate directory must not be a symlink/i);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should use injected file access to reject a dangling candidate directory symlink', () => {
+    const isSymlink = vi.fn(() => true);
+
+    expect(() => resolveNamedResourceWithSource('gather', {
+      candidateDirs: ['/project/steps'],
+      extensions: ['.yaml', '.yml'],
+      fileAccess: {
+        exists: () => false,
+        realpath: (path) => path,
+        isSymlink,
+      },
+      rejectSymlinkedCandidateDirs: true,
+    })).toThrow(/candidate directory must not be a symlink/i);
+
+    expect(isSymlink).toHaveBeenCalledWith('/project/steps');
   });
 });

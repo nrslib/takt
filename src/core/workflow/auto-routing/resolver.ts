@@ -2,6 +2,7 @@ import type { AutoRoutingCandidate, AutoRoutingConfig, AutoRoutingStrategy } fro
 import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { ProviderResolutionSource } from '../provider-options-trace.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
+import { withProviderValidationErrorSource } from '../provider-validation-error.js';
 import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import type { RoutingWorkSnapshot, WorkRequirementEstimate, WorkRequirementEstimator } from './contracts.js';
 import { normalizeRoutingWorkSnapshot } from './normalizer.js';
@@ -103,12 +104,19 @@ export function resolveAutoRoutingCandidateProviderInfo(candidate: AutoRoutingCa
 }): StepProviderInfo {
   const modelResolvedByAuto = currentProviderInfo.modelSource === undefined;
   const model = modelResolvedByAuto ? candidate.model : currentProviderInfo.model;
-  validateAutoRoutingResolvedProviderModel(candidate.provider, model);
-  return {
+  const providerInfo = {
     provider: candidate.provider,
     model,
     providerSource: source,
     modelSource: currentProviderInfo.modelSource ?? source,
+  };
+  try {
+    validateAutoRoutingResolvedProviderModel(providerInfo.provider, providerInfo.model);
+  } catch (error) {
+    throw withProviderValidationErrorSource(error, providerInfo);
+  }
+  return {
+    ...providerInfo,
     ...(candidate.providerOptions !== undefined ? { providerOptions: candidate.providerOptions, providerOptionsSources: collectProviderOptionsSources(candidate.providerOptions, source) } : {}),
     autoRoutingDecision: {
       candidateName: candidate.name,

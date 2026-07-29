@@ -48,7 +48,7 @@ const nodeFileAccess: ProviderOptionsFileAccess = {
   exists: (path) => fs.existsSync(path),
   readText: (path) => fs.readFileSync(path, 'utf-8'),
   realpath: (path) => fs.realpathSync(path),
-  isSymlink: (path) => fs.lstatSync(path).isSymbolicLink(),
+  isSymlink: (path) => fs.lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() ?? false,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {

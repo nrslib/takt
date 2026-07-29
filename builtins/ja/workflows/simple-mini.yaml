@@ -1,0 +1,127 @@
+name: simple-mini
+description: 強いモデルの判断力を信頼する軽量な開発ワークフロー（plan → implement → review ⇄ fix → COMPLETE）。独立したテスト作成と最終監督を省き、利用可能な関連SKILLをモデル自身が選ぶ。
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+      skills:
+        repo: true
+        user: true
+    opencode:
+      network_access: true
+max_steps: 20
+initial_step: plan
+steps:
+  - name: plan
+    tags:
+      - plan
+    edit: false
+    persona: planner
+    knowledge: architecture
+    provider_options:
+      extends: review-readonly
+    instruction: simple-plan
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+    rules:
+      - condition: 要件が明確で実装可能
+        next: implement
+      - condition: ユーザーが質問をしている（実装タスクではない）
+        next: COMPLETE
+      - condition: 要件が不明確、情報不足
+        next: ABORT
+        appendix: |
+          確認事項:
+          - {質問1}
+          - {質問2}
+
+  - name: implement
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - architecture
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    instruction: simple-implement
+    output_contracts:
+      report:
+        - name: coder-scope.md
+          format: coder-scope
+          use_judge: false
+        - name: coder-decisions.md
+          format: coder-decisions
+          use_judge: false
+    rules:
+      - condition: 実装が完了した
+        next: review
+      - condition: 計画の見直しが必要
+        next: plan
+      - condition: 実装を進行できない
+        next: ABORT
+      - condition: ユーザーへの確認事項があるためユーザー入力が必要
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+
+  - name: review
+    tags:
+      - review
+    edit: false
+    persona: coding-reviewer
+    policy:
+      - review
+      - coding
+      - testing
+    knowledge:
+      - architecture
+      - unit-testing
+      - e2e-testing
+    provider_options:
+      extends: review-readonly
+    pass_previous_response: false
+    instruction: simple-review-coding
+    output_contracts:
+      report:
+        - name: coding-review.md
+          format: coding-review
+    rules:
+      - condition: approved
+        next: COMPLETE
+      - condition: needs_fix
+        next: fix
+
+  - name: fix
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - architecture
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    pass_previous_response: false
+    instruction: simple-fix
+    output_contracts:
+      report:
+        - name: fix-report.md
+          format: fix-report
+          use_judge: false
+    rules:
+      - condition: 修正完了
+        next: review
+      - condition: 再計画が必要
+        next: plan
+      - condition: 修正を進行できない
+        next: ABORT

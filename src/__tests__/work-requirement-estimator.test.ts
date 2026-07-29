@@ -2,9 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWorkRequirementEstimator } from '../agents/auto-routing-usecase.js';
 import { runAgent } from '../agents/runner.js';
 import type { RoutingModelInput } from '../core/workflow/auto-routing/contracts.js';
+import { StructuredOutputSchemaError } from '../core/workflow/engine/structured-output-schema-validator.js';
+
+const { assertStrictStructuredOutputSchema } = vi.hoisted(() => ({
+  assertStrictStructuredOutputSchema: vi.fn(),
+}));
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
+}));
+
+vi.mock('../core/workflow/engine/structured-output-schema-validator.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../core/workflow/engine/structured-output-schema-validator.js')>(),
+  assertStrictStructuredOutputSchema,
 }));
 
 function createModelInput(): RoutingModelInput {
@@ -35,6 +45,20 @@ describe('createWorkRequirementEstimator', () => {
     vi.useRealTimers();
   });
 
+  it('Given the estimator output schema is invalid, When constructing the estimator, Then it fails before calling a provider', () => {
+    const schemaError = new StructuredOutputSchemaError('Structured output schema is not strict');
+    assertStrictStructuredOutputSchema.mockImplementationOnce(() => {
+      throw schemaError;
+    });
+
+    expect(() => createWorkRequirementEstimator({
+      cwd: '/repo',
+      provider: 'codex',
+      model: 'gpt-5.6-luna',
+    })).toThrow(schemaError);
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
   it('Given a normalized model input, When the router returns a tier estimate, Then the adapter returns requiredTier and reason codes', async () => {
     vi.mocked(runAgent).mockResolvedValue({
       persona: 'auto-router',
@@ -61,6 +85,28 @@ describe('createWorkRequirementEstimator', () => {
     });
   });
 
+  it('Given a router without native structured output, When its JSON response omits optional confidence, Then the estimate is accepted', async () => {
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'auto-router',
+      status: 'done',
+      content: JSON.stringify({
+        required_tier: 'medium',
+        reason_codes: ['focused-change'],
+      }),
+      timestamp: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const estimator = createWorkRequirementEstimator({
+      cwd: '/repo',
+      provider: 'cursor',
+      model: 'cursor/gpt-5',
+    });
+
+    await expect(estimator.estimate(createModelInput())).resolves.toEqual({
+      requiredTier: 'medium',
+      reasonCodes: ['focused-change'],
+    });
+  });
+
   it('Given provider-native structured output, When content is not JSON, Then the structured estimate is used', async () => {
     vi.mocked(runAgent).mockResolvedValue({
       persona: 'auto-router',
@@ -69,6 +115,7 @@ describe('createWorkRequirementEstimator', () => {
       structuredOutput: {
         required_tier: 'high',
         reason_codes: ['critical-finding'],
+        confidence: null,
       },
       timestamp: new Date('2026-01-01T00:00:00.000Z'),
     });
@@ -88,7 +135,11 @@ describe('createWorkRequirementEstimator', () => {
     vi.mocked(runAgent).mockResolvedValue({
       persona: 'auto-router',
       status: 'done',
-      content: JSON.stringify({ required_tier: 'high', reason_codes: ['critical-finding'] }),
+      content: JSON.stringify({
+        required_tier: 'high',
+        reason_codes: ['critical-finding'],
+        confidence: null,
+      }),
       timestamp: new Date('2026-01-01T00:00:00.000Z'),
     });
     const estimator = createWorkRequirementEstimator({
@@ -117,9 +168,50 @@ describe('createWorkRequirementEstimator', () => {
         properties: {
           required_tier: { type: 'string' },
           reason_codes: { type: 'array' },
+          confidence: { type: ['number', 'null'] },
         },
-        required: ['required_tier', 'reason_codes'],
+        required: ['required_tier', 'reason_codes', 'confidence'],
       },
+    });
+    const outputProperties = options?.outputSchema?.properties as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    expect(outputProperties?.reason_codes).not.toHaveProperty('maxItems');
+    expect(outputProperties?.reason_codes?.items).not.toHaveProperty('maxLength');
+  });
+
+  it('Given a Codex router, When the strict output schema is submitted, Then the estimator returns a dynamic tier instead of failing', async () => {
+    vi.mocked(runAgent).mockImplementation(async (_persona, _prompt, options) => {
+      const schema = options?.outputSchema;
+      const properties = schema?.properties;
+      const required = schema?.required;
+      if (typeof properties !== 'object' || properties === null || !Array.isArray(required)) {
+        throw new Error('Codex rejected an invalid structured output schema');
+      }
+      expect(new Set(required)).toEqual(new Set(Object.keys(properties)));
+      expect(properties).toMatchObject({
+        confidence: { type: ['number', 'null'] },
+      });
+      return {
+        persona: 'auto-router',
+        status: 'done',
+        content: JSON.stringify({
+          required_tier: 'medium',
+          reason_codes: ['focused-change'],
+          confidence: null,
+        }),
+        timestamp: new Date('2026-01-01T00:00:00.000Z'),
+      };
+    });
+    const estimator = createWorkRequirementEstimator({
+      cwd: '/repo',
+      provider: 'codex',
+      model: 'gpt-5.6-luna',
+    });
+
+    await expect(estimator.estimate(createModelInput())).resolves.toEqual({
+      requiredTier: 'medium',
+      reasonCodes: ['focused-change'],
     });
   });
 
@@ -149,6 +241,37 @@ describe('createWorkRequirementEstimator', () => {
       return;
     }
     throw new Error('Expected invalid estimator response to reject');
+  });
+
+  it.each([
+    {
+      name: 'too many reason codes',
+      reasonCodes: Array.from({ length: 5 }, () => 'focused-change'),
+    },
+    {
+      name: 'an oversized reason code',
+      reasonCodes: ['x'.repeat(33)],
+    },
+  ])('Given $name, When parsing the estimate, Then runtime validation rejects it', async ({ reasonCodes }) => {
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'auto-router',
+      status: 'done',
+      content: JSON.stringify({
+        required_tier: 'medium',
+        reason_codes: reasonCodes,
+        confidence: null,
+      }),
+      timestamp: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const estimator = createWorkRequirementEstimator({
+      cwd: '/repo',
+      provider: 'claude-sdk',
+      model: 'claude-haiku-4-5-20251001',
+    });
+
+    await expect(estimator.estimate(createModelInput())).rejects.toThrow(
+      'Auto routing estimator response has invalid reason_codes',
+    );
   });
 
   it('Given an already aborted parent signal, When estimating work requirements, Then no provider call starts', async () => {

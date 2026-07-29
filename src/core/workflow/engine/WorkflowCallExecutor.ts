@@ -33,6 +33,10 @@ import type {
   WorkflowSharedRuntimeState,
 } from '../types.js';
 import { validateFindingContractManagerProviderModel } from './WorkflowValidator.js';
+import { getProviderValidationErrorSource } from '../provider-validation-error.js';
+import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
+import { findWorkflowStepLocation } from '../workflow-step-location.js';
+import { translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
 
 export interface WorkflowCallSessionUpdate {
   expectedSessionId: string | undefined;
@@ -49,6 +53,26 @@ interface ChildRoutingRuntime {
   estimator: WorkRequirementEstimator;
   runtime: RoutingRuntime;
   estimatorSource: Exclude<AutoRoutingEstimatorSource, 'absent'>;
+}
+
+function workflowCallOverrideErrorPath(
+  step: WorkflowCallStep,
+  error: unknown,
+): readonly PropertyKey[] | undefined {
+  if (!step.overrides) {
+    return undefined;
+  }
+  const validationSource = getProviderValidationErrorSource(error);
+  if (validationSource?.source !== 'workflow_call') {
+    return undefined;
+  }
+  if (validationSource.field === 'model' && step.overrides.model !== undefined) {
+    return ['overrides', 'model'];
+  }
+  if (validationSource.field === 'provider' && step.overrides.provider !== undefined) {
+    return ['overrides', 'provider'];
+  }
+  return undefined;
 }
 
 function applyWorkflowCallOverridesToProviderEntries<T extends PersonaProviderEntry>(
@@ -422,8 +446,9 @@ export class WorkflowCallExecutor {
     executeOptions: ExecuteWorkflowCallOptions,
   ): Promise<WorkflowCallExecutionResult> {
     const options = this.deps.getOptions();
+    const parentConfig = this.deps.getConfig();
     const stepIterationIdentity = buildWorkflowStackStepIterationIdentity(
-      this.deps.getConfig(),
+      parentConfig,
       request.step.name,
       executeOptions.resumeStackPrefix,
     );
@@ -528,9 +553,19 @@ export class WorkflowCallExecutor {
     // 契約入り options に対してもう一度行わないと、不正な組み合わせが素通り
     // したまま manager 起動時に初めて失敗する（WorkflowValidator.ts はここで
     // 検証済みの childOptions を再利用する）。
-    validateFindingContractManagerProviderModel(request.childWorkflow, childOptions);
-
-    const childEngine = this.deps.createEngine(request.childWorkflow, this.deps.getCwd(), this.deps.task, childOptions);
+    let childEngine: WorkflowCallChildEngine;
+    try {
+      validateFindingContractManagerProviderModel(request.childWorkflow, childOptions);
+      childEngine = this.deps.createEngine(request.childWorkflow, this.deps.getCwd(), this.deps.task, childOptions);
+    } catch (error) {
+      const overridePath = workflowCallOverrideErrorPath(request.step, error);
+      const parentStepPath = findWorkflowStepLocation(parentConfig, request.step);
+      if (!overridePath || !parentStepPath) {
+        throw error;
+      }
+      const located = withWorkflowConfigErrorPath(error, [...parentStepPath, ...overridePath]);
+      throw translateWorkflowConfigError(parentConfig, located);
+    }
 
     this.relayChildEvents(childEngine, request.step.name);
     const childResult = await childEngine.runWithResult();

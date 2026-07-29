@@ -42,9 +42,11 @@ my-takt-repertoire/
     expert.yaml
   provider-options/
     review-readonly.yaml
+  steps/
+    final-gate.yaml
 ```
 
-Only `facets/`, `workflows/`, and `provider-options/` directories are imported. Other files are ignored.
+Only `facets/`, `workflows/`, `provider-options/`, and `steps/` directories are imported. Other files are ignored.
 
 ### takt-repertoire.yaml
 
@@ -78,12 +80,12 @@ takt repertoire add github:{owner}/{repo}@{ref}
 
 The `@{ref}` is optional. Without it, the repository's default branch is used.
 
-Before installing, TAKT displays a summary of the package contents (facet counts by type, workflow names, and edit permission warnings) and asks for confirmation.
+Before installing, TAKT displays a summary of the package contents (facet counts by type, workflow names, root-level step fragment names, and edit permission warnings) and asks for confirmation.
 
 ### What happens during install
 
 1. Downloads the tarball from GitHub via `gh api`
-2. Extracts package files from `facets/`, `workflows/`, and `provider-options/` (`.md`, `.yaml`, `.yml`)
+2. Extracts package files from `facets/`, `workflows/`, and `provider-options/` (`.md`, `.yaml`, `.yml`), plus root-level `.yaml` / `.yml` step fragments from `steps/`
 3. Validates the `takt-repertoire.yaml` manifest
 4. Checks TAKT version compatibility
 5. Copies files to `~/.takt/repertoire/@{owner}/{repo}/`
@@ -95,10 +97,11 @@ Installation is atomic — if it fails partway, no partial state is left behind.
 
 - Only `.md`, `.yaml`, `.yml` files are copied
 - Symbolic links are skipped
-- Files exceeding 1 MB are skipped
+- Files exceeding 1 MB are skipped, except root-level step fragments in `steps/`, which reject the package installation
 - Packages with more than 500 files are rejected
 - Directory traversal in `path` field is rejected
 - Symlink-based traversal is detected via realpath validation
+- `steps/` accepts only root-level `.yaml` and `.yml` step fragments; nested files and non-YAML files are not installed
 
 ## Using Package Content
 
@@ -160,7 +163,7 @@ Shows installed packages with their scope, description, ref, and commit SHA.
 takt repertoire remove @{owner}/{repo}
 ```
 
-Before removing, TAKT checks if any user/project workflows reference the package's facets and warns about potential breakage.
+Before removing, TAKT checks whether user or project workflows, provider-options presets, or step fragments reference the package and warns about potential breakage.
 
 ## Directory Structure
 
@@ -180,4 +183,6 @@ Installed packages are stored under `~/.takt/repertoire/`:
         expert.yaml
       provider-options/        # Shared provider_options presets
         review-readonly.yaml
+      steps/                   # Reusable step fragments
+        final-gate.yaml
 ```

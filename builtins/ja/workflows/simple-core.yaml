@@ -1,0 +1,260 @@
+name: simple-core
+description: simpleシリーズの中核となる内部開発ワークフロー。注入された instruction、ポリシー、ナレッジを使い、plan → write_tests → implement → review ⇄ fix → supervise を実行する。
+subworkflow:
+  callable: true
+  visibility: internal
+  params:
+    plan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: plan
+    testing_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: write-tests-first
+    implement_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: implement-after-tests
+    review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: review-coding
+    fix_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: fix
+    supervise_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: supervise
+    plan_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - design-planning
+    testing_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+    development_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+    review_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - review
+        - coding
+        - testing
+    development_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+    testing_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+        - unit-testing
+        - e2e-testing
+    review_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+        - unit-testing
+        - e2e-testing
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 30
+initial_step: plan
+steps:
+  - name: plan
+    tags:
+      - plan
+    edit: false
+    persona: planner
+    policy:
+      $param: plan_policy
+    knowledge:
+      $param: development_knowledge
+    provider_options:
+      extends: review-readonly
+    instruction:
+      $param: plan_instruction
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+    rules:
+      - condition: 要件が明確で実装可能
+        next: write_tests
+      - condition: ユーザーが質問をしている（実装タスクではない）
+        next: COMPLETE
+      - condition: 要件が不明確、情報不足
+        next: ABORT
+        appendix: |
+          確認事項:
+          - {質問1}
+          - {質問2}
+
+  - name: write_tests
+    tags:
+      - coding
+      - test-planning
+    edit: true
+    persona: coder
+    policy:
+      $param: testing_policy
+    knowledge:
+      $param: testing_knowledge
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    instruction:
+      $param: testing_instruction
+    output_contracts:
+      report:
+        - name: test-report.md
+          format: test-report
+    rules:
+      - condition: テスト作成が完了した
+        next: implement
+      - condition: テスト対象が未実装のためテスト作成をスキップする
+        next: implement
+      - condition: テスト作成を進行できない
+        next: ABORT
+      - condition: ユーザーへの確認事項があるためユーザー入力が必要
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+
+  - name: implement
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      $param: development_policy
+    knowledge:
+      $param: development_knowledge
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    instruction:
+      $param: implement_instruction
+    output_contracts:
+      report:
+        - name: coder-scope.md
+          format: coder-scope
+          use_judge: false
+        - name: coder-decisions.md
+          format: coder-decisions
+          use_judge: false
+    rules:
+      - condition: 実装が完了した
+        next: review
+      - condition: 計画の見直しが必要
+        next: plan
+      - condition: 実装を進行できない
+        next: ABORT
+      - condition: ユーザーへの確認事項があるためユーザー入力が必要
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+
+  - name: review
+    tags:
+      - review
+    edit: false
+    persona: coding-reviewer
+    policy:
+      $param: review_policy
+    knowledge:
+      $param: review_knowledge
+    provider_options:
+      extends: review-readonly
+    pass_previous_response: false
+    instruction:
+      $param: review_instruction
+    output_contracts:
+      report:
+        - name: coding-review.md
+          format: coding-review
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        next: fix
+
+  - name: fix
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      $param: development_policy
+    knowledge:
+      $param: development_knowledge
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    pass_previous_response: false
+    instruction:
+      $param: fix_instruction
+    output_contracts:
+      report:
+        - name: fix-report.md
+          format: fix-report
+          use_judge: false
+    rules:
+      - condition: 修正完了
+        next: review
+      - condition: 再計画が必要
+        next: plan
+      - condition: 修正を進行できない
+        next: ABORT
+
+  - name: supervise
+    tags:
+      - review
+      - final-gate
+      - supervise
+    edit: false
+    persona: supervisor
+    policy:
+      $param: review_policy
+    knowledge:
+      $param: review_knowledge
+    provider_options:
+      extends: review-readonly
+    pass_previous_response: false
+    instruction:
+      $param: supervise_instruction
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: supervisor-summary
+          use_judge: false
+    rules:
+      - condition: BLOCKED
+        next: ABORT
+      - condition: approved
+        next: COMPLETE
+      - condition: need_replan
+        next: plan
+      - condition: needs_fix
+        next: fix

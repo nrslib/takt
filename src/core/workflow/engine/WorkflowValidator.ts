@@ -12,15 +12,14 @@ import {
   resolveStepProviderModel,
 } from '../provider-resolution.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
-import { getWorkflowStepKind, isDelegatedWorkflowStep } from '../step-kind.js';
-import { collectWorkflowCallSteps } from '../workflow-step-traversal.js';
+import { getWorkflowStepKind, isDelegatedWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
 import {
   findSemanticAppendixConflicts,
   hasAggregateCondition,
   hasFindingsReference,
 } from '../../models/workflow-rule-condition.js';
 import { buildFindingInterpretationStep, buildFindingManagerStep } from '../findings/manager-step.js';
-import { findingContractFormatRef, hasFindingContractFormat } from '../findings/finding-contract-format.js';
+import { findFindingContractFormat, hasFindingContractFormat } from '../findings/finding-contract-format.js';
 import {
   resolveAutoRoutingCandidateProviderInfo,
   resolveDeterministicAutoRoutingProviderInfo,
@@ -28,8 +27,27 @@ import {
   validateAutoRoutingResolvedProviderModel,
 } from '../auto-routing/resolver.js';
 import { resolveExecutableRoutingCandidates } from '../auto-routing/selector.js';
+import { findDuplicateWorkflowStepName } from '../../../shared/workflowStepNameValidator.js';
+import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
+import { findWorkflowStepLocation } from '../workflow-step-location.js';
+import { getProviderValidationErrorSource, withProviderValidationErrorSource } from '../provider-validation-error.js';
 
 type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
+const withWorkflowStepErrorPath = withWorkflowConfigErrorPath;
+
+function providerValidationField(error: unknown, fallback: 'provider' | 'model'): 'provider' | 'model' {
+  return getProviderValidationErrorSource(error)?.field ?? fallback;
+}
+
+function withConfigStepErrorPath(
+  config: WorkflowConfig,
+  step: WorkflowStep,
+  fallbackPath: readonly PropertyKey[],
+  fieldPath: readonly PropertyKey[],
+  error: unknown,
+): Error {
+  return withWorkflowConfigErrorPath(error, [...(findWorkflowStepLocation(config, step) ?? fallbackPath), ...fieldPath]);
+}
 
 interface ValidationProviderInfo {
   providerInfo: ResolvedProviderInfo;
@@ -70,9 +88,13 @@ function validateResolvedProviderInfo(
   modelFieldName: string,
   autoRouted: boolean,
 ): void {
-  validateProviderModelRequirements(providerInfo.provider, providerInfo.model, { modelFieldName });
-  if (autoRouted && providerInfo.provider !== undefined) {
-    validateAutoRoutingResolvedProviderModel(providerInfo.provider, providerInfo.model);
+  try {
+    validateProviderModelRequirements(providerInfo.provider, providerInfo.model, { modelFieldName });
+    if (autoRouted && providerInfo.provider !== undefined) {
+      validateAutoRoutingResolvedProviderModel(providerInfo.provider, providerInfo.model);
+    }
+  } catch (error) {
+    throw withProviderValidationErrorSource(error, providerInfo);
   }
 }
 
@@ -94,16 +116,25 @@ function validateAggregateRulePlacement(
   rules: readonly (WorkflowRule | LoopMonitorRule)[],
   aggregateAllowed: boolean,
   source: string,
+  rulesPath: readonly PropertyKey[],
 ): void {
   if (aggregateAllowed) {
     return;
   }
-  if (rules.some((rule) => hasAggregateCondition(rule.condition))) {
-    throw new Error(`${source}: aggregate conditions are only allowed on parallel parent steps with sub-steps`);
+  const ruleIndex = rules.findIndex((rule) => hasAggregateCondition(rule.condition));
+  if (ruleIndex >= 0) {
+    throw withWorkflowConfigErrorPath(
+      new Error(`${source}: aggregate conditions are only allowed on parallel parent steps with sub-steps`),
+      [...rulesPath, ruleIndex],
+    );
   }
 }
 
-function validateSemanticAppendices(rules: readonly WorkflowRule[], source: string): void {
+function validateSemanticAppendices(
+  rules: readonly WorkflowRule[],
+  source: string,
+  rulesPath: readonly PropertyKey[],
+): void {
   const conflicts = findSemanticAppendixConflicts(rules.map((rule, ruleIndex) => ({
     ruleIndex,
     condition: rule.condition,
@@ -111,8 +142,9 @@ function validateSemanticAppendices(rules: readonly WorkflowRule[], source: stri
   })));
   const conflict = conflicts[0];
   if (conflict !== undefined) {
-    throw new Error(
-      `${source}: Rules sharing semantic label "${conflict.label}" must use the same appendix`,
+    throw withWorkflowConfigErrorPath(
+      new Error(`${source}: Rules sharing semantic label "${conflict.label}" must use the same appendix`),
+      [...rulesPath, conflict.ruleIndex],
     );
   }
 }
@@ -148,14 +180,19 @@ function validateFindingConflictAdjudicationRuleContract(
  * entry and goes through validateAgentStepProviderModel like any other step.
  */
 function validateFindingConflictAdjudicationReservedName(config: WorkflowConfig): void {
-  const collectSteps = (steps: readonly WorkflowStep[]): WorkflowStep[] => steps.flatMap((step) => [
-    step,
-    ...collectSteps(step.parallel ?? []),
-  ]);
-  for (const step of collectSteps(config.steps)) {
+  const collectSteps = (steps: readonly WorkflowStep[], path: readonly PropertyKey[]): Array<{ step: WorkflowStep; path: readonly PropertyKey[] }> =>
+    steps.flatMap((step, index) => {
+      const stepPath = [...path, index];
+      return [{ step, path: stepPath }, ...collectSteps(step.parallel ?? [], [...stepPath, 'parallel'])];
+    });
+  for (const { step, path } of collectSteps(config.steps, ['steps'])) {
     if (step.name === FINDING_CONFLICT_ADJUDICATION_STEP && step.engineSynthesized !== true) {
-      throw new Error(
-        `Configuration error: step name "${FINDING_CONFLICT_ADJUDICATION_STEP}" is reserved for the engine-synthesized conflict adjudication step`,
+      throw withConfigStepErrorPath(
+        config,
+        step,
+        path,
+        ['name'],
+        new Error(`Configuration error: step name "${FINDING_CONFLICT_ADJUDICATION_STEP}" is reserved for the engine-synthesized conflict adjudication step`),
       );
     }
   }
@@ -165,16 +202,24 @@ function validateFindingContractStructuredOutput(config: WorkflowConfig, finding
   if (!findingContractEnabled) {
     return;
   }
-  for (const step of config.steps) {
+  for (const [stepIndex, step] of config.steps.entries()) {
     if (step.structuredOutput && hasFindingContractFormat(step)) {
-      throw new Error(
-        `Invalid step "${step.name}": cannot combine finding_contract raw findings with structured_output`,
+      throw withConfigStepErrorPath(
+        config,
+        step,
+        ['steps', stepIndex],
+        ['structured_output'],
+        new Error(`Invalid step "${step.name}": cannot combine finding_contract raw findings with structured_output`),
       );
     }
-    for (const subStep of step.parallel ?? []) {
+    for (const [subStepIndex, subStep] of (step.parallel ?? []).entries()) {
       if (subStep.structuredOutput) {
-        throw new Error(
-          `Invalid parallel sub-step "${subStep.name}" in step "${step.name}": cannot combine finding_contract raw findings with structured_output`,
+        throw withConfigStepErrorPath(
+          config,
+          subStep,
+          ['steps', stepIndex, 'parallel', subStepIndex],
+          ['structured_output'],
+          new Error(`Invalid parallel sub-step "${subStep.name}" in step "${step.name}": cannot combine finding_contract raw findings with structured_output`),
         );
       }
     }
@@ -255,19 +300,25 @@ export function validateFindingContractManagerProviderModel(config: WorkflowConf
  */
 function collectFindingContractFormatViolations(
   config: WorkflowConfig,
-): Array<{ stepName: string; format: string }> {
-  const violations: Array<{ stepName: string; format: string }> = [];
-  const collectFromStep = (step: WorkflowStep, label: string): void => {
-    const format = findingContractFormatRef(step);
-    if (format !== undefined) {
-      violations.push({ stepName: label, format });
+): Array<{ step: WorkflowStep; fallbackPath: readonly PropertyKey[]; stepName: string; format: string; formatIndex: number }> {
+  const violations: Array<{ step: WorkflowStep; fallbackPath: readonly PropertyKey[]; stepName: string; format: string; formatIndex: number }> = [];
+  const collectFromStep = (step: WorkflowStep, label: string, fallbackPath: readonly PropertyKey[]): void => {
+    const findingContractFormat = findFindingContractFormat(step);
+    if (findingContractFormat) {
+      violations.push({
+        step,
+        fallbackPath,
+        stepName: label,
+        format: findingContractFormat.format,
+        formatIndex: findingContractFormat.index,
+      });
     }
-    for (const subStep of step.parallel ?? []) {
-      collectFromStep(subStep, `${label}.${subStep.name}`);
+    for (const [subStepIndex, subStep] of (step.parallel ?? []).entries()) {
+      collectFromStep(subStep, `${label}.${subStep.name}`, [...fallbackPath, 'parallel', subStepIndex]);
     }
   };
-  for (const step of config.steps) {
-    collectFromStep(step, step.name);
+  for (const [stepIndex, step] of config.steps.entries()) {
+    collectFromStep(step, step.name, ['steps', stepIndex]);
   }
   return violations;
 }
@@ -284,36 +335,64 @@ function validateFindingContractOutputFormatRequiresContract(
     return;
   }
   const detail = violations.map((v) => `step "${v.stepName}" uses format "${v.format}"`).join(', ');
-  throw new Error(
-    `Configuration error: workflow "${config.name}" has no finding_contract (own or inherited via workflow_call), `
-    + `but ${detail} which requires a Finding Contract ledger to ingest its raw findings`,
+  const violation = violations[0]!;
+  throw withConfigStepErrorPath(
+    config,
+    violation.step,
+    violation.fallbackPath,
+    ['output_contracts', 'report', violation.formatIndex, 'format'],
+    new Error(
+      `Configuration error: workflow "${config.name}" has no finding_contract (own or inherited via workflow_call), `
+      + `but ${detail} which requires a Finding Contract ledger to ingest its raw findings`,
+    ),
   );
+}
+
+function delegatedExecutionFieldPath(step: WorkflowStep): readonly PropertyKey[] {
+  if (step.teamLeader !== undefined) {
+    return ['team_leader'];
+  }
+  if (step.arpeggio !== undefined) {
+    return ['arpeggio'];
+  }
+  throw new Error(`Invalid delegated step "${step.name}": missing delegated execution configuration`);
 }
 
 function validateFindingContractDelegatedIntake(config: WorkflowConfig, findingContractEnabled: boolean): void {
   if (!findingContractEnabled) {
     return;
   }
-  for (const step of config.steps) {
+  for (const [stepIndex, step] of config.steps.entries()) {
     if (!isDelegatedWorkflowStep(step) || (step.parallel?.length ?? 0) > 0) {
       continue;
     }
-    const format = findingContractFormatRef(step);
-    if (format !== undefined) {
-      throw new Error(
-        `Invalid delegated step "${step.name}": format "${format}" cannot be used because finding_contract intake is unavailable`,
+    const findingContractFormat = findFindingContractFormat(step);
+    if (findingContractFormat) {
+      throw withConfigStepErrorPath(
+        config,
+        step,
+        ['steps', stepIndex],
+        delegatedExecutionFieldPath(step),
+        new Error(
+          `Invalid delegated step "${step.name}": format "${findingContractFormat.format}" cannot be used because finding_contract intake is unavailable`,
+        ),
       );
     }
   }
 }
 
 function validateFindingContractTeamLeaderMode(config: WorkflowConfig, findingContractEnabled: boolean): void {
-  const steps = config.steps.filter((step) => step.teamLeader?.mode === 'finding_contract_fix');
-  if (steps.length === 0 || findingContractEnabled) {
+  const violation = config.steps.find((step) => step.teamLeader?.mode === 'finding_contract_fix');
+  if (!violation || findingContractEnabled) {
     return;
   }
-  throw new Error(
-    `Configuration error: team_leader.mode "finding_contract_fix" on step "${steps[0]!.name}" requires finding_contract`,
+  const stepIndex = config.steps.indexOf(violation);
+  throw withConfigStepErrorPath(
+    config,
+    violation,
+    ['steps', stepIndex],
+    ['team_leader', 'mode'],
+    new Error(`Configuration error: team_leader.mode "finding_contract_fix" on step "${violation.name}" requires finding_contract`),
   );
 }
 
@@ -355,6 +434,7 @@ function validateAgentStepProviderModel(
   step: WorkflowConfig['steps'][number],
   options: WorkflowEngineOptions,
   source: string,
+  stepPath: readonly PropertyKey[],
 ): void {
   if (getWorkflowStepKind(step) !== 'agent') {
     return;
@@ -370,17 +450,36 @@ function validateAgentStepProviderModel(
     providerRouting: options.providerRouting,
     personaProviders: options.personaProviders,
   });
-  for (const validationInfo of expandAutoRoutingProviderInfos(agentStep, providerInfo, options.autoRouting)) {
-    validateResolvedProviderInfo(
-      validationInfo.providerInfo,
-      `${source}.model`,
-      validationInfo.autoRouted,
-    );
+  let validationInfos: ValidationProviderInfo[];
+  try {
+    validationInfos = expandAutoRoutingProviderInfos(agentStep, providerInfo, options.autoRouting);
+  } catch (error) {
+    const field = providerValidationField(error, agentStep.model !== undefined ? 'model' : 'provider');
+    throw withWorkflowConfigErrorPath(error, [
+      ...stepPath,
+      field,
+    ]);
+  }
+  for (const validationInfo of validationInfos) {
+    try {
+      validateResolvedProviderInfo(
+        validationInfo.providerInfo,
+        `${source}.model`,
+        validationInfo.autoRouted,
+      );
+    } catch (error) {
+      const field = providerValidationField(error, agentStep.model !== undefined ? 'model' : 'provider');
+      throw withWorkflowConfigErrorPath(error, [
+        ...stepPath,
+        field,
+      ]);
+    }
     validatePromotionProviderModels(
       agentStep,
       validationInfo.providerInfo,
       source,
       validationInfo.autoRouted,
+      stepPath,
     );
   }
 }
@@ -411,6 +510,7 @@ function validatePromotionProviderModels(
   baseProviderInfo: ResolvedProviderInfo,
   source: string,
   autoRouted: boolean,
+  stepPath: readonly PropertyKey[],
 ): void {
   for (const [index, promotion] of (step.promotion ?? []).entries()) {
     const promotedProviderInfo = applyProviderModelOverride(baseProviderInfo, {
@@ -420,28 +520,54 @@ function validatePromotionProviderModels(
       modelSpecified: promotion.model !== undefined,
       source: 'promotion',
     });
-    validateResolvedProviderInfo(
-      promotedProviderInfo,
-      `${source}.promotion[${index}].model`,
-      autoRouted,
-    );
+    try {
+      validateResolvedProviderInfo(
+        promotedProviderInfo,
+        `${source}.promotion[${index}].model`,
+        autoRouted,
+      );
+    } catch (error) {
+      const field = providerValidationField(error, promotion.model !== undefined ? 'model' : 'provider');
+      throw withWorkflowConfigErrorPath(error, [
+        ...stepPath,
+        'promotion', index, field,
+      ]);
+    }
   }
 }
 
-function validateParallelSubStepNamesUnique(config: WorkflowConfig): void {
-  const validateSiblingNames = (steps: readonly WorkflowStep[]): void => {
-    for (const step of steps) {
-      const names = new Set<string>();
-      for (const subStep of step.parallel ?? []) {
-        if (names.has(subStep.name)) {
-          throw new Error(`Configuration error: parallel step "${step.name}" contains duplicate sub-step name "${subStep.name}"`);
-        }
-        names.add(subStep.name);
-      }
-      validateSiblingNames(step.parallel ?? []);
+function validateWorkflowStepNamesUnique(config: WorkflowConfig): void {
+  const duplicate = findDuplicateWorkflowStepName(config.steps);
+  if (!duplicate) {
+    return;
+  }
+  if (duplicate.parentName) {
+    throw withWorkflowConfigErrorPath(
+      new Error(`Configuration error: parallel step "${duplicate.parentName}" contains duplicate sub-step name "${duplicate.name}"`),
+      duplicate.path,
+    );
+  }
+  throw withWorkflowConfigErrorPath(
+    new Error(`Configuration error: workflow contains duplicate step name "${duplicate.name}"`),
+    duplicate.path,
+  );
+}
+
+function findWorkflowCallStep(
+  steps: readonly WorkflowStep[],
+  parentPath: readonly PropertyKey[] = ['steps'],
+): { step: WorkflowStep; path: readonly PropertyKey[] } | undefined {
+  for (const [index, step] of steps.entries()) {
+    const path = [...parentPath, index];
+    if (isWorkflowCallStep(step)) {
+      return { step, path };
     }
-  };
-  validateSiblingNames(config.steps);
+    const nested = findWorkflowCallStep(step.parallel ?? [], [...path, 'parallel']);
+    if (nested !== undefined) {
+      return nested;
+    }
+  }
+  return undefined;
 }
 
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
@@ -459,7 +585,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   validateFindingContractStructuredOutput(config, findingContractEnabled);
   validateFindingContractManagerProviderModel(config, options);
   validateFindingConflictAdjudicationReservedName(config);
-  validateParallelSubStepNamesUnique(config);
+  validateWorkflowStepNamesUnique(config);
   validateRequiredInheritedFindingContract(config, options);
   validateFindingContractInheritanceConflict(config, options);
   validateFindingContractOutputFormatRequiresContract(config, findingContractEnabled);
@@ -473,8 +599,15 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
     }
   }
 
-  if (collectWorkflowCallSteps(config.steps).length > 0 && !options.workflowCallResolver) {
-    throw new Error('Configuration error: workflowCallResolver is required when workflow contains workflow_call steps');
+  const workflowCallStep = findWorkflowCallStep(config.steps);
+  if (workflowCallStep !== undefined && !options.workflowCallResolver) {
+    throw withConfigStepErrorPath(
+      config,
+      workflowCallStep.step,
+      workflowCallStep.path,
+      ['call'],
+      new Error('Configuration error: workflowCallResolver is required when workflow contains workflow_call steps'),
+    );
   }
 
   const stepNames = new Set(config.steps.map((step) => step.name));
@@ -482,69 +615,112 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   stepNames.add(ABORT_STEP);
   stepNames.add(FINDING_CONFLICT_ADJUDICATION_STEP);
 
-  for (const step of config.steps) {
-    validateSessionEntrypoint(step, `Configuration error: step "${step.name}"`);
-    validateAgentStepProviderModel(step, options, `Configuration error: step "${step.name}"`);
-    validateAggregateRulePlacement(
-      step.rules ?? [],
-      (step.parallel?.length ?? 0) > 0,
-      `Invalid rule in step "${step.name}"`,
-    );
-    validateSemanticAppendices(step.rules ?? [], `Invalid rule in step "${step.name}"`);
-    for (const rule of step.rules ?? []) {
-      if (rule.next && !stepNames.has(rule.next)) {
-        throw new Error(`Invalid rule in step "${step.name}": target step "${rule.next}" does not exist`);
+  for (const [stepIndex, step] of config.steps.entries()) {
+    try {
+      const stepPath = findWorkflowStepLocation(config, step) ?? ['steps', stepIndex];
+      try {
+        validateSessionEntrypoint(step, `Configuration error: step "${step.name}"`);
+      } catch (error) {
+        throw withWorkflowStepErrorPath(error, [...stepPath, 'session']);
       }
-      validateFindingsRuleContract(
-        findingContractEnabled,
-        rule,
-        `Invalid rule in step "${step.name}"`,
-      );
-      validateFindingConflictAdjudicationRuleContract(
-        findingContractEnabled,
-        rule,
-        `Invalid rule in step "${step.name}"`,
-      );
-    }
-    for (const subStep of step.parallel ?? []) {
+      try {
+        validateAgentStepProviderModel(step, options, `Configuration error: step "${step.name}"`, stepPath);
+      } catch (error) {
+        throw withWorkflowStepErrorPath(error, stepPath);
+      }
       validateAggregateRulePlacement(
-        subStep.rules ?? [],
-        false,
-        `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
+        step.rules ?? [],
+        (step.parallel?.length ?? 0) > 0,
+        `Invalid rule in step "${step.name}"`,
+        [...stepPath, 'rules'],
       );
-      validateSemanticAppendices(
-        subStep.rules ?? [],
-        `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
-      );
-      validateSessionEntrypoint(
-        subStep,
-        `Configuration error: parallel sub-step "${subStep.name}" of step "${step.name}"`,
-      );
-      validateAgentStepProviderModel(
-        subStep,
-        options,
-        `Configuration error: parallel sub-step "${subStep.name}" of step "${step.name}"`,
-      );
-      for (const rule of subStep.rules ?? []) {
-        validateFindingsRuleContract(
-          findingContractEnabled,
-          rule,
-          `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
-        );
-        validateFindingConflictAdjudicationRuleContract(
-          findingContractEnabled,
-          rule,
-          `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
-        );
+      validateSemanticAppendices(step.rules ?? [], `Invalid rule in step "${step.name}"`, [...stepPath, 'rules']);
+      for (const [ruleIndex, rule] of (step.rules ?? []).entries()) {
+        if (rule.next && !stepNames.has(rule.next)) {
+          throw withWorkflowStepErrorPath(
+            new Error(`Invalid rule in step "${step.name}": target step "${rule.next}" does not exist`),
+            [...stepPath, 'rules', ruleIndex],
+          );
+        }
+        try {
+          validateFindingsRuleContract(
+            findingContractEnabled,
+            rule,
+            `Invalid rule in step "${step.name}"`,
+          );
+          validateFindingConflictAdjudicationRuleContract(
+            findingContractEnabled,
+            rule,
+            `Invalid rule in step "${step.name}"`,
+          );
+        } catch (error) {
+          throw withWorkflowStepErrorPath(error, [...stepPath, 'rules', ruleIndex]);
+        }
       }
+      for (const [subStepIndex, subStep] of (step.parallel ?? []).entries()) {
+        try {
+          const subStepPath = findWorkflowStepLocation(config, subStep)
+            ?? ['steps', stepIndex, 'parallel', subStepIndex];
+          validateAggregateRulePlacement(
+            subStep.rules ?? [],
+            false,
+            `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
+            [...subStepPath, 'rules'],
+          );
+          validateSemanticAppendices(
+            subStep.rules ?? [],
+            `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
+            [...subStepPath, 'rules'],
+          );
+          try {
+            validateSessionEntrypoint(
+              subStep,
+              `Configuration error: parallel sub-step "${subStep.name}" of step "${step.name}"`,
+            );
+          } catch (error) {
+            throw withWorkflowStepErrorPath(error, [...subStepPath, 'session']);
+          }
+          try {
+            validateAgentStepProviderModel(
+              subStep,
+              options,
+              `Configuration error: parallel sub-step "${subStep.name}" of step "${step.name}"`,
+              subStepPath,
+            );
+          } catch (error) {
+            throw withWorkflowStepErrorPath(error, subStepPath);
+          }
+          for (const [ruleIndex, rule] of (subStep.rules ?? []).entries()) {
+            try {
+              validateFindingsRuleContract(
+                findingContractEnabled,
+                rule,
+                `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
+              );
+              validateFindingConflictAdjudicationRuleContract(
+                findingContractEnabled,
+                rule,
+                `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
+              );
+            } catch (error) {
+              throw withWorkflowStepErrorPath(error, [...subStepPath, 'rules', ruleIndex]);
+            }
+          }
+        } catch (error) {
+          throw withWorkflowStepErrorPath(error, ['steps', stepIndex, 'parallel', subStepIndex]);
+        }
+      }
+    } catch (error) {
+      throw withWorkflowStepErrorPath(error, ['steps', stepIndex]);
     }
   }
 
-  for (const monitor of config.loopMonitors ?? []) {
+  for (const [monitorIndex, monitor] of (config.loopMonitors ?? []).entries()) {
     validateAggregateRulePlacement(
       monitor.judge.rules,
       false,
       'Invalid loop_monitor judge rule',
+      ['loop_monitors', monitorIndex, 'judge', 'rules'],
     );
     for (const cycleName of monitor.cycle) {
       if (!stepNames.has(cycleName)) {

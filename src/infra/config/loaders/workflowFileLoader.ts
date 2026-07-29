@@ -63,13 +63,29 @@ function loadWorkflowFromFileInternal(
     context,
     projectConfig.workflowOverrides,
     globalConfig.workflowOverrides,
-    resolveWorkflowRuntimePreparePolicy(globalConfig.workflowRuntimePrepare, projectConfig.workflowRuntimePrepare),
-    resolveWorkflowArpeggioPolicy(globalConfig.workflowArpeggio, projectConfig.workflowArpeggio),
-    resolveWorkflowMcpServersPolicy(globalConfig.workflowMcpServers, projectConfig.workflowMcpServers),
-    options?.callableArgs,
-    options?.callableArgPolicy,
-    loadMode,
-    resolveWorkflowCommandGatesPolicy(globalConfig.workflowCommandGates, projectConfig.workflowCommandGates),
+    resolveWorkflowRuntimePreparePolicy(
+      globalConfig.workflowRuntimePrepare,
+      projectConfig.workflowRuntimePrepare,
+    ),
+    resolveWorkflowArpeggioPolicy(
+      globalConfig.workflowArpeggio,
+      projectConfig.workflowArpeggio,
+    ),
+    resolveWorkflowMcpServersPolicy(
+      globalConfig.workflowMcpServers,
+      projectConfig.workflowMcpServers,
+    ),
+    {
+      callableArgs: options?.callableArgs,
+      callableArgPolicy: options?.callableArgPolicy,
+      callableArgMode: loadMode,
+      workflowCommandGatesPolicy: resolveWorkflowCommandGatesPolicy(
+        globalConfig.workflowCommandGates,
+        projectConfig.workflowCommandGates,
+      ),
+      workflowPath: filePath,
+      workflowTrustInfo: trustInfo,
+    },
   );
   attachWorkflowOpaqueRef(config, buildOpaqueWorkflowRef(filePath, trustInfo));
   attachWorkflowSourcePath(config, filePath);

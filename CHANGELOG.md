@@ -6,6 +6,66 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.54.1] - 2026-07-29
+
+### Fixed
+
+- Codex auto-routing no longer falls back for every routed step because of an invalid strict structured-output schema (#1123). Router output schemas are now validated when the estimator is created, so deterministic schema incompatibilities fail fast while runtime estimation failures continue to use the configured pool fallback. The shared Codex/Claude schema path is covered through the Claude Agent SDK query boundary.
+
+## [0.54.0] - 2026-07-28
+
+### Added
+
+- The `simple` workflow family (#1117). Seven builtin workflows for capable models that trust the model's judgment and keep orchestration minimal: `simple` (plan → write tests → implement → code review → fix loop → final supervision), `simple-mini` (omits dedicated test writing and final supervision), and the domain variants `simple-frontend`, `simple-backend`, `simple-cqrs`, `simple-dual`, and `simple-dual-cqrs`, which inject the matching knowledge and policies into a shared internal `simple-core` subworkflow. The steps direct the model to select relevant available skills on its own, and on codex the family inherits repository and user Skills (`provider_options.codex.skills.repo/user: true`). The catalog gained a ✨ Simple category, and `simple` now leads the 🚀 Quick Start category.
+
+### Internal
+
+- Prose-coupled assertions were removed from the skill-docs tests, and the builtin-facet deployment test covers the new `use-relevant-skills` instruction partial (#1117).
+
+## [0.53.0] - 2026-07-27
+
+### Removed
+
+- **BREAKING:** The `for-local-llm` workflow family was removed (#1070): `takt-default-for-local-llm`, `frontend-for-local-llm`, `backend-for-local-llm`, `backend-cqrs-for-local-llm`, `dual-for-local-llm`, and `peer-review-for-local-llm`. Use `takt-default`, `takt-default-high`, or the corresponding domain workflows instead. Saved tasks or runs that reference a removed workflow must switch workflows before retrying or resuming.
+- **BREAKING:** The MCP tools `takt_create_issue_and_enqueue_task` and `takt_run_next_task` were removed (#1104). `takt_enqueue_task` is now the only MCP tool: pass `issue: { number }` to link an existing issue, or `issue: { title?, labels? }` to create one before enqueueing. Run queued tasks with `takt run` or `takt watch`.
+
+### Added
+
+- `takt-default-team-high` workflow (#1055). A Team Leader variant of `takt-default-high`: plan, tests, Team Leader-directed implementation, six compact specialist reviews, Team Leader-directed fixes, and a fail-closed final gate.
+- Team Leader Finding Contract fix mode (#1089, #1090, #1091, #1100). `team_leader.mode: finding_contract_fix` turns a team_leader step into a Finding Contract repair step: every part is assigned to explicit actionable findings, `complete` requires successful verification plus `fixCoverage` for every actionable finding present at step start, and the decision routes via mechanical conditions such as `when(structured.fix.decision == "complete")`. Wildcard contract paths are rejected (#1090), and part `writePaths` document coordination between parallel parts rather than acting as a sandbox (#1100).
+- The findings-manager now acts as an adjudicator (#1053): dismiss adjudication and duplicate consolidation actually take effect in the ledger, manager state is injected into the review-fix judge, and manager/interpreter LLM calls are recorded in usage events instead of being a token-accounting blind spot.
+- Multi-select facet prompts (#1065). The exec facet editor now offers multi-select prompts, so facet references can be picked in one pass instead of one-at-a-time dialogs.
+- Codex Skill inheritance control (#1081). New `provider_options.codex.skills.repo` / `.user` flags (plus `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` env overrides) control whether Codex discovers repository (`.agents/skills`) and user (`~/.agents/skills`, `$CODEX_HOME/skills`) Skills. Workflows now default to not inheriting either scope; `takt exec` defaults to inheriting and snapshots the resolved values into the generated workflow.
+- Resumed runs inherit review reports (#1059). Resuming a run carries prior review reports over (best effort), so a resumed fix step no longer starts blind; same-run requeues skip the resume snapshot.
+- Shared fix steps now persist a structured `fix-report` (#1116). The builtin workflows that use the shared fix instruction write addressed/unaddressed findings, verification results, and family coverage as a non-judging output contract, so the next iteration or a resumed run can pick up where the fix left off. Rules, transitions, and completion judgment are unchanged.
+
+### Changed
+
+- **BREAKING:** Node.js `>=24.15.0` is now required (#1111), up from `^20.20.0 || >=22.22.0`, because the new run storage uses the built-in `node:sqlite` module.
+- **BREAKING:** Auto-routing candidates were reworked around pools and tiers (#1103). `cost_tier` was renamed to `routing_tier` (`high` | `medium` | `low`), and `default_pool` plus `candidate_pools` (each with a pool-local `fallback`) are now required; optional `pool_rules` pin tags/steps/personas to a pool. The router now only estimates the required tier — from the normalized task, the raw step instruction, and current remaining work — and TAKT deterministically picks the candidate: `cost` and `balanced` take the lowest sufficient `routing_tier` in the selected pool, `performance` the highest. Existing configs must rename `cost_tier` and add `default_pool` / `candidate_pools`.
+- High workflows are capped at 50 steps (#1061): `max_steps` dropped from 200 to 50 on `takt-default-high`, `review-fix-takt-default-high`, and `takt-default-team-high`.
+- Merge-readiness now runs before final supervision in the high workflows (#1060), and the Finding Contract final gate was extracted into `merge-readiness-finding-contract-final-gate`.
+- The stop-budget time cap is now opt-in (#1052). `stop_budget.max_minutes` no longer defaults to 90 minutes — churn shows up in round counts, not minutes, and the time default had falsely stopped healthy large runs; the round cap (default 40) remains the deterministic stop guarantee. Reviewers are also barred from filing demands for quality-gate execution evidence as findings; evaluating verification results is the final gate's job.
+- The Team Leader total part limit was removed (#1084): the leader may keep adding batches until it judges the work complete, and `initial_max_parts` bounds only the first decomposition batch.
+
+### Fixed
+
+- Team Leader robustness: obsolete running parts are cancelled and completion judgment waits for still-running parts (#1105); invalid decompositions are regenerated with validation diagnostics instead of failing (#1113); the feedback fallback stops on abort (#1085); reviewer-anomaly invariants are passed to loop monitors (#1114); and the implementation judgment receives the agent's completion report (#1101).
+- Finding Contract convergence and recovery hardening (#1056, #1058, #1063, #1067, #1069, #1072, #1074, #1086, #1087, #1092, #1093). The findings-manager no longer discards its entire output on dedup/evidence conflicts and degrades to mechanical classification instead of an empty result (#1056); convergence state survives retries (#1058) and finding context survives resumes (#1074); stalled Finding Contract workflows re-plan and final-gate `needs_fix` decisions are honored (#1069); review target snapshots are bound to the structured output contract (#1086); reviewer anomalies are kept after re-matching (#1087); invalid manager decisions are retried (#1092) with hardened recovery (#1093); explanatory adjudication evidence citations are accepted (#1063); post-fix loop monitor states are distinguished (#1067); and re-plans justified only by external blockers abort instead of looping (#1072).
+- The fix loop now aborts with an explicit verdict when verification is impossible for environmental reasons (#1102), instead of spinning on unfixable findings.
+- PR-derived tasks and Instruct now use the same diff basis (#1106), with PR diff refs materialized so review context matches what is actually being merged.
+- Concurrent clone/worktree path collisions were fixed (#1110): clone directories get a unique random suffix, covering same-second task starts and PR-sync worktrees.
+- Isolated temporary paths were shortened (#1071) to stay within platform path-length limits, with Windows temp-env precedence covered.
+- `auto-improvement-loop` now completes a full issue → implement → PR → self-review → merge cycle on codex (#1045); it previously aborted at `plan_from_issue`.
+- OpenCode runs on local models were stabilized (#1017): tool-call failures now log the offending arguments to the debug log, and Finding Contract freezes under weak models were resolved.
+
+### Internal
+
+- Run-scoped SQLite storage foundation (#1111): a `node:sqlite`-backed per-run store (artifacts, findings, reports, unit-of-work) landed under `src/infra/run-storage/`, alongside a consolidation of the Finding Contract integrity model. Engine wiring comes later; `.takt/` output is unchanged in this release.
+- Builtin TAKT workflows were unified on first-match rule semantics (#1083).
+- The MCP stdio integration test now passes the isolated `TAKT_CONFIG_DIR` to the spawned server, so it no longer reads the operator's real `~/.takt/config.yaml`.
+- Docs: reusable TAKT overview assets (#1108, #1109) and YouTube tutorial links (#1112).
+
 ## [0.52.0] - 2026-07-19
 
 ### Removed

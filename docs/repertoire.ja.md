@@ -42,9 +42,11 @@ my-takt-repertoire/
     expert.yaml
   provider-options/
     review-readonly.yaml
+  steps/
+    final-gate.yaml
 ```
 
-`facets/`、`workflows/`、`provider-options/` ディレクトリだけがインポートされます。その他のファイルは無視されます。
+`facets/`、`workflows/`、`provider-options/`、`steps/` ディレクトリだけがインポートされます。その他のファイルは無視されます。
 
 ### takt-repertoire.yaml
 
@@ -78,12 +80,12 @@ takt repertoire add github:{owner}/{repo}@{ref}
 
 `@{ref}` は省略可能です。省略した場合、リポジトリのデフォルトブランチが使用されます。
 
-インストール前に、パッケージの内容サマリ（ファセット種別ごとの数、workflow 名、edit 権限の警告）が表示され、確認を求められます。
+インストール前に、パッケージの内容サマリ（ファセット種別ごとの数、workflow 名、`steps/`直下のfragment名、edit 権限の警告）が表示され、確認を求められます。
 
 ### インストール時の処理
 
 1. `gh api` 経由で GitHub から tarball をダウンロード
-2. `facets/`、`workflows/`、`provider-options/` からパッケージファイルを展開（`.md`、`.yaml`、`.yml`）
+2. `facets/`、`workflows/`、`provider-options/` からパッケージファイルを展開（`.md`、`.yaml`、`.yml`）。`steps/` は直下の `.yaml` / `.yml` step fragmentのみを展開
 3. `takt-repertoire.yaml` マニフェストをバリデーション
 4. TAKT バージョン互換性チェック
 5. `~/.takt/repertoire/@{owner}/{repo}/` にファイルをコピー
@@ -95,10 +97,11 @@ takt repertoire add github:{owner}/{repo}@{ref}
 
 - `.md`、`.yaml`、`.yml` ファイルのみコピー
 - シンボリックリンクはスキップ
-- 1 MB を超えるファイルはスキップ
+- 1 MB を超えるファイルはスキップ。ただし、`steps/` 直下の step fragment はパッケージのインストールを拒否
 - 500 ファイルを超えるパッケージは拒否
 - `path` フィールドのディレクトリトラバーサルを拒否
 - realpath による symlink ベースのトラバーサル検出
+- `steps/` は直下の `.yaml` / `.yml` step fragmentのみを受理し、ネストしたファイルと非YAMLファイルはインストールしない
 
 ## パッケージの使い方
 
@@ -160,7 +163,7 @@ takt repertoire list
 takt repertoire remove @{owner}/{repo}
 ```
 
-削除前に、ユーザーやプロジェクトの workflow がパッケージのファセットを参照していないかチェックし、影響がある場合は警告します。
+削除前に、ユーザーやプロジェクトの workflow、provider-options preset、step fragment がパッケージを参照していないかチェックし、影響がある場合は警告します。
 
 ## ディレクトリ構造
 
@@ -180,4 +183,6 @@ takt repertoire remove @{owner}/{repo}
         expert.yaml
       provider-options/        # 共有 provider_options プリセット
         review-readonly.yaml
+      steps/                   # 再利用可能な step fragment
+        final-gate.yaml
 ```

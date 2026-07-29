@@ -6,6 +6,7 @@ type RawWorkflow = ReturnType<typeof WorkflowConfigRawSchema.parse>;
 
 type DoctorGraphRule = {
   next?: string;
+  path: readonly PropertyKey[];
 };
 
 type DoctorGraphStep = {
@@ -99,19 +100,28 @@ function collectReachableSteps(config: DoctorGraph): Set<string> {
 function createDoctorGraph(raw: RawWorkflow): DoctorGraph {
   return {
     initialStep: raw.initial_step ?? raw.steps[0]!.name,
-    loopMonitors: raw.loop_monitors?.map((monitor) => ({
+    loopMonitors: raw.loop_monitors?.map((monitor, monitorIndex) => ({
       cycle: [...monitor.cycle],
       judge: {
-        rules: monitor.judge.rules.map((rule) => ({ next: rule.next })),
+        rules: monitor.judge.rules.map((rule, ruleIndex) => ({
+          next: rule.next,
+          path: ['loop_monitors', monitorIndex, 'judge', 'rules', ruleIndex, 'next'],
+        })),
       },
     })),
-    steps: raw.steps.map((step) => ({
+    steps: raw.steps.map((step, stepIndex) => ({
       name: step.name,
-      parallel: step.parallel?.map((substep) => ({
+      parallel: step.parallel?.map((substep, subStepIndex) => ({
         name: substep.name,
-        rules: substep.rules?.map((rule) => ({ next: rule.next })),
+        rules: substep.rules?.map((rule, ruleIndex) => ({
+          next: rule.next,
+          path: ['steps', stepIndex, 'parallel', subStepIndex, 'rules', ruleIndex, 'next'],
+        })),
       })),
-      rules: step.rules?.map((rule) => ({ next: rule.next })),
+      rules: step.rules?.map((rule, ruleIndex) => ({
+        next: rule.next,
+        path: ['steps', stepIndex, 'rules', ruleIndex, 'next'],
+      })),
     })),
   };
 }
@@ -142,6 +152,7 @@ export function validateDoctorGraph(
     diagnostics.push({
       level: 'error',
       message: `initial_step references missing step "${config.initialStep}"`,
+      path: ['initial_step'],
     });
   }
 
@@ -151,6 +162,7 @@ export function validateDoctorGraph(
         diagnostics.push({
           level: 'error',
           message: `Step "${step.name}" routes to "${rule.next}" but finding_contract is not configured`,
+          path: rule.path,
         });
       }
 
@@ -160,6 +172,7 @@ export function validateDoctorGraph(
       diagnostics.push({
         level: 'error',
         message: `Step "${step.name}" routes to unknown next step "${rule.next}"`,
+        path: rule.path,
       });
     }
 
@@ -170,6 +183,7 @@ export function validateDoctorGraph(
             diagnostics.push({
               level: 'error',
               message: `Step "${step.name}/${sub.name}" routes to "${rule.next}" but finding_contract is not configured`,
+              path: rule.path,
             });
           }
           // 事実確認済み: parallel サブステップの rules[].next はエンジンで
@@ -181,6 +195,7 @@ export function validateDoctorGraph(
           diagnostics.push({
             level: 'warning',
             message: `Step "${step.name}/${sub.name}" routes to "${rule.next}" from a parallel sub-step, but sub-step "next" is ignored by parallel aggregation; wire the parent step's rules instead`,
+            path: rule.path,
           });
         }
 
@@ -190,6 +205,7 @@ export function validateDoctorGraph(
         diagnostics.push({
           level: 'error',
           message: `Step "${step.name}/${sub.name}" routes to unknown next step "${rule.next}"`,
+          path: rule.path,
         });
       }
     }
@@ -202,6 +218,7 @@ export function validateDoctorGraph(
         diagnostics.push({
           level: 'error',
           message: `Loop monitor "${label}" routes to "${rule.next}" but finding_contract is not configured`,
+          path: rule.path,
         });
       }
 
@@ -211,6 +228,7 @@ export function validateDoctorGraph(
       diagnostics.push({
         level: 'error',
         message: `Loop monitor "${label}" routes to unknown next step "${rule.next}"`,
+        path: rule.path,
       });
     }
   }

@@ -22,6 +22,7 @@ function appendMissingRef(
   label: string,
   ref: string | undefined,
   resolver: () => boolean,
+  path: readonly PropertyKey[],
 ): void {
   if (!ref || resolver()) {
     return;
@@ -29,6 +30,7 @@ function appendMissingRef(
   diagnostics.push({
     level: 'error',
     message: `${label} references missing resource "${ref}"`,
+    path,
   });
 }
 
@@ -92,6 +94,7 @@ function validateScalarRefs(
   label: string,
   refs: string | string[] | undefined,
   resolver: (ref: string) => boolean,
+  path: readonly PropertyKey[],
 ): void {
   if (refs === undefined) {
     return;
@@ -104,6 +107,7 @@ function validateScalarRefs(
     diagnostics.push({
       level: 'error',
       message: `${label} references missing resource "${ref}"`,
+      path,
     });
   }
 }
@@ -188,6 +192,7 @@ function validateStepRefs(
   context: FacetResolutionContext,
   diagnostics: WorkflowDiagnostic[],
   label: string,
+  stepPath: readonly PropertyKey[],
 ): void {
   const workflowDir = context.workflowDir!;
   if (step.persona && isNamedRef(step.persona)) {
@@ -197,6 +202,7 @@ function validateStepRefs(
       step.persona,
       () => sections.personas?.[step.persona!] !== undefined
         || resolvePersona(step.persona, sections, workflowDir, context).personaPath !== undefined,
+      [...stepPath, 'persona'],
     );
   }
   if (step.team_leader?.persona && isNamedRef(step.team_leader.persona)) {
@@ -206,6 +212,7 @@ function validateStepRefs(
       step.team_leader.persona,
       () => sections.personas?.[step.team_leader!.persona!] !== undefined
         || resolvePersona(step.team_leader!.persona, sections, workflowDir, context).personaPath !== undefined,
+      [...stepPath, 'team_leader', 'persona'],
     );
   }
   if (step.team_leader?.part_persona && isNamedRef(step.team_leader.part_persona)) {
@@ -215,6 +222,7 @@ function validateStepRefs(
       step.team_leader.part_persona,
       () => sections.personas?.[step.team_leader!.part_persona!] !== undefined
         || resolvePersona(step.team_leader!.part_persona, sections, workflowDir, context).personaPath !== undefined,
+      [...stepPath, 'team_leader', 'part_persona'],
     );
   }
   validateScalarRefs(
@@ -222,12 +230,14 @@ function validateStepRefs(
     `${label} policy`,
     collectNamedRefsFromField(raw, step.policy, ['facet_ref', 'facet_ref[]'], 'policy'),
     (ref) => canResolveNamedFacetRef(ref, sections.resolvedPolicies, 'policies', context),
+    [...stepPath, 'policy'],
   );
   validateScalarRefs(
     diagnostics,
     `${label} knowledge`,
     collectNamedRefsFromField(raw, step.knowledge, ['facet_ref', 'facet_ref[]'], 'knowledge'),
     (ref) => canResolveNamedFacetRef(ref, sections.resolvedKnowledge, 'knowledge', context),
+    [...stepPath, 'knowledge'],
   );
   for (const ref of collectNamedRefsFromField(raw, step.instruction, ['facet_ref'], 'instruction')) {
     appendMissingRef(
@@ -235,20 +245,30 @@ function validateStepRefs(
       `${label} instruction`,
       ref,
       () => canResolveNamedFacetRef(ref, sections.resolvedInstructions, 'instructions', context),
+      [...stepPath, 'instruction'],
     );
   }
-  for (const report of step.output_contracts?.report ?? []) {
+  for (const [reportIndex, report] of (step.output_contracts?.report ?? []).entries()) {
     for (const ref of collectNamedRefsFromField(raw, report.format, ['facet_ref'], 'report_format')) {
       appendMissingRef(
         diagnostics,
         `${label} output_contract format`,
         ref,
         () => canResolveNamedFacetRef(ref, sections.resolvedReportFormats, 'output-contracts', context),
+        [...stepPath, 'output_contracts', 'report', reportIndex, 'format'],
       );
     }
   }
-  for (const sub of step.parallel ?? []) {
-    validateStepRefs(raw, sub as RawStep, sections, context, diagnostics, `${label}/${sub.name}`);
+  for (const [subStepIndex, sub] of (step.parallel ?? []).entries()) {
+    validateStepRefs(
+      raw,
+      sub as RawStep,
+      sections,
+      context,
+      diagnostics,
+      `${label}/${sub.name}`,
+      [...stepPath, 'parallel', subStepIndex],
+    );
   }
 }
 
@@ -259,7 +279,7 @@ function validateLoopMonitorRefs(
   diagnostics: WorkflowDiagnostic[],
 ): void {
   const workflowDir = context.workflowDir!;
-  for (const monitor of raw.loop_monitors ?? []) {
+  for (const [monitorIndex, monitor] of (raw.loop_monitors ?? []).entries()) {
     const label = `loop monitor (${monitor.cycle.join(' -> ')})`;
     if (monitor.judge.persona && isNamedRef(monitor.judge.persona)) {
       appendMissingRef(
@@ -268,6 +288,7 @@ function validateLoopMonitorRefs(
         monitor.judge.persona,
         () => sections.personas?.[monitor.judge.persona!] !== undefined
           || resolvePersona(monitor.judge.persona, sections, workflowDir, context).personaPath !== undefined,
+        ['loop_monitors', monitorIndex, 'judge', 'persona'],
       );
     }
     if (monitor.judge.instruction && isNamedRef(monitor.judge.instruction)) {
@@ -281,6 +302,7 @@ function validateLoopMonitorRefs(
           'instructions',
           context,
         ),
+        ['loop_monitors', monitorIndex, 'judge', 'instruction'],
       );
     }
   }
@@ -292,8 +314,8 @@ export function validateWorkflowReferences(
   context: FacetResolutionContext,
   diagnostics: WorkflowDiagnostic[],
 ): void {
-  for (const step of raw.steps) {
-    validateStepRefs(raw, step, sections, context, diagnostics, `step "${step.name}"`);
+  for (const [stepIndex, step] of raw.steps.entries()) {
+    validateStepRefs(raw, step, sections, context, diagnostics, `step "${step.name}"`, ['steps', stepIndex]);
   }
   validateLoopMonitorRefs(raw, sections, context, diagnostics);
   collectUnusedSectionWarnings(raw, diagnostics);

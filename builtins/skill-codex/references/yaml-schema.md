@@ -47,6 +47,8 @@ step 定義内では**キー名**で参照する（パスを直接書かない�
 
 ## Step 定義（`steps` の各要素）
 
+`uses: <name>` で `steps/<name>.yaml` または `steps/<name>.yml` の単一 step fragment を参照できる。top-level agent / `workflow_call` step、parallel parent、parallel sub-step で利用できる。bare name は project、global、言語別 builtin、共有 builtin の順に検索し、repertoire workflow は package-local を最優先にする。`@owner/repo/name` は指定した repertoire package の fragment を参照する。候補層ごとに `.yaml` を `.yml` より先に採用し、nested bare 参照は親 fragment の解決元以降の候補層だけを検索する。展開は64段、参照は512個までで、fragment は1 MiB以下の読み取り可能な通常ファイルでなければならない。呼び出し側の object field は deep merge で上書きし、配列 field は呼び出し側の値で全置換する。名前は呼び出し側、fragment、`uses` の順で決定する。不明な参照、読み取り不能、循環、上限超過、object 以外の定義、解決後の `system`、絶対 path、traversal、ネストしたpath、symlink の root、root 外 symlink は設定エラーになる。project trust の workflow は、project 外の fragment から `workflow_call` または `allow_git_commit: true` を受け取れない。fragment 由来の `allow_git_commit` は呼び出し側で明示的に `false` を指定して上書きできる。
+
 ### 通常の step
 
 ```yaml

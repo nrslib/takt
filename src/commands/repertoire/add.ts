@@ -13,8 +13,12 @@ import { createRequire } from 'node:module';
 import { stringify as stringifyYaml } from 'yaml';
 import {
   getBuiltinProviderOptionsDir,
+  getBuiltinLanguageStepsDir,
+  getBuiltinStepsDir,
   getGlobalProviderOptionsDir,
+  getGlobalStepsDir,
   getProjectProviderOptionsDir,
+  getProjectStepsDir,
   getRepertoireDir,
   getRepertoirePackageDir,
 } from '../../infra/config/paths.js';
@@ -42,8 +46,11 @@ import {
   formatEditWorkflowWarnings,
 } from '../../features/repertoire/pack-summary.js';
 import { getScopedProviderOptionsCandidateKey } from '../../infra/config/loaders/providerOptionsLookupDirectories.js';
+import { getScopedStepFragmentCandidateKey } from '../../infra/config/loaders/stepFragmentLookupDirectories.js';
+import { assertCopiedStepFragmentReferences } from '../../features/repertoire/step-fragment-integrity.js';
 import { confirm } from '../../shared/prompt/index.js';
 import { info, success } from '../../shared/ui/index.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { createLogger, ensureCurrentTmpDirExists, getErrorMessage } from '../../shared/utils/index.js';
 
 const require = createRequire(import.meta.url);
@@ -52,6 +59,14 @@ const { version: TAKT_VERSION } = require('../../../package.json') as { version:
 const GH_API_MAX_BUFFER_BYTES = 100 * 1024 * 1024;
 
 const log = createLogger('repertoire-add');
+
+function readRequiredPackageSource(absolutePath: string, relativePath: string): string {
+  try {
+    return readFileSync(absolutePath, 'utf-8');
+  } catch (error) {
+    throw new Error(`Failed to read required package source: ${relativePath}`, { cause: error });
+  }
+}
 
 export async function repertoireAddCommand(spec: string): Promise<void> {
   const { owner, repo, ref: specRef } = parseGithubSpec(spec);
@@ -79,6 +94,9 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
   });
 
   const ref = resolveRef(specRef, owner, repo, execGh);
+  const displayOwner = sanitizeTerminalText(owner);
+  const displayRepo = sanitizeTerminalText(repo);
+  const displayRef = sanitizeTerminalText(ref);
 
   const tmpBase = mkdtempSync(join(ensureCurrentTmpDirExists(), 'takt-import-'));
   const tmpTarPath = join(tmpBase, 'archive.tar.gz');
@@ -88,7 +106,7 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
   try {
     mkdirSync(tmpExtractDir, { recursive: true });
 
-    info(`📦 ${owner}/${repo} @${ref} をダウンロード中...`);
+    info(`📦 ${displayOwner}/${displayRepo} @${displayRef} をダウンロード中...`);
     const tarballBuffer = execGhBinary([
       'api',
       `/repos/${owner}/${repo}/tarball/${ref}`,
@@ -142,22 +160,32 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
     const facetFiles = targets.filter(t => t.relativePath.startsWith('facets/'));
     const workflowFiles = targets.filter(t => t.relativePath.startsWith('workflows/'));
     const providerOptionsFiles = targets.filter(t => t.relativePath.startsWith('provider-options/'));
+    const stepFiles = targets.filter(t => t.relativePath.startsWith('steps/'));
+    const copiedStepNames = new Set(stepFiles.map((target) => target.relativePath.replace(/^steps\//, '').replace(/\.ya?ml$/, '')));
 
     const facetSummary = summarizeFacetsByType(facetFiles.map(t => t.relativePath));
 
     const workflowYamls: Array<{ name: string; content: string; relativePath: string }> = [];
     for (const workflowFile of workflowFiles) {
-      try {
-        const content = readFileSync(workflowFile.absolutePath, 'utf-8');
-        workflowYamls.push({
-          name: workflowFile.relativePath.replace(/^workflows\//, ''),
-          content,
-          relativePath: workflowFile.relativePath,
-        });
-      } catch (err) {
-        log.debug('Failed to parse workflow YAML for edit check', { path: workflowFile.absolutePath, error: getErrorMessage(err) });
-      }
+      const content = readRequiredPackageSource(workflowFile.absolutePath, workflowFile.relativePath);
+      workflowYamls.push({
+        name: workflowFile.relativePath.replace(/^workflows\//, ''),
+        content,
+        relativePath: workflowFile.relativePath,
+      });
     }
+    const stepSources = [];
+    for (const stepFile of stepFiles) {
+      const content = readRequiredPackageSource(stepFile.absolutePath, stepFile.relativePath);
+      stepSources.push({ content, path: stepFile.relativePath });
+    }
+    assertCopiedStepFragmentReferences({
+      sources: [...workflowYamls.map(({ content, relativePath }) => ({ content, path: relativePath })), ...stepSources],
+      packageRoot,
+      copiedStepNames,
+      owner,
+      repo,
+    });
     const providerOptionsYamls: Array<{ name: string; content: string; relativePath: string }> = [];
     const workflowRelativeProviderOptionsFiles = workflowFiles.filter(t => t.relativePath.includes('/provider-options/'));
     for (const providerOptionsFile of [...providerOptionsFiles, ...workflowRelativeProviderOptionsFiles]) {
@@ -185,6 +213,16 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
       providerOptionsScopedCandidateDirs: new Map([
         [getScopedProviderOptionsCandidateKey(owner, repo), [PACKAGE_PROVIDER_OPTIONS_DIR]],
       ]),
+      stepFragmentCandidateDirs: [
+        join(packageRoot, 'steps'),
+        getProjectStepsDir(projectCwd),
+        getGlobalStepsDir(),
+        getBuiltinLanguageStepsDir(language),
+        getBuiltinStepsDir(),
+      ],
+      stepFragmentScopedCandidateDirs: new Map([
+        [getScopedStepFragmentCandidateKey(owner, repo), [join(packageRoot, 'steps')]],
+      ]),
       context: {
         projectDir: projectCwd,
         lang: language,
@@ -193,15 +231,23 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
       },
     });
 
-    info(`\n📦 ${owner}/${repo} @${ref}`);
-    info(`   facets:  ${facetSummary}`);
+    info(`\n📦 ${displayOwner}/${displayRepo} @${displayRef}`);
+    info(`   facets:  ${sanitizeTerminalText(facetSummary)}`);
     if (workflowFiles.length > 0) {
       const workflowNames = workflowFiles.map(t =>
         t.relativePath.replace(/^workflows\//, '').replace(/\.yaml$/, ''),
       );
-      info(`   workflows:  ${workflowFiles.length} (${workflowNames.join(', ')})`);
+      info(`   workflows:  ${workflowFiles.length} (${workflowNames.map(sanitizeTerminalText).join(', ')})`);
     } else {
       info('   workflows:  0');
+    }
+    if (stepFiles.length > 0) {
+      const stepNames = stepFiles.map(t =>
+        t.relativePath.replace(/^steps\//, '').replace(/\.ya?ml$/, ''),
+      );
+      info(`   steps:  ${stepFiles.length} (${stepNames.map(sanitizeTerminalText).join(', ')})`);
+    } else {
+      info('   steps:  0');
     }
     for (const workflow of editWorkflows) {
       for (const warning of formatEditWorkflowWarnings(workflow)) {
@@ -219,7 +265,7 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
     const packageDir = getRepertoirePackageDir(owner, repo);
 
     if (existsSync(packageDir)) {
-      info(`⚠ パッケージ @${owner}/${repo} は既にインストールされています`);
+      info(`⚠ パッケージ @${displayOwner}/${displayRepo} は既にインストールされています`);
       const overwrite = await confirm(
         '上書きしますか？',
         false,
@@ -252,7 +298,7 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
       },
     });
 
-    success(`✅ ${owner}/${repo} @${ref} をインストールしました`);
+    success(`✅ ${displayOwner}/${displayRepo} @${displayRef} をインストールしました`);
   } finally {
     if (existsSync(tmpBase)) rmSync(tmpBase, { recursive: true, force: true });
   }

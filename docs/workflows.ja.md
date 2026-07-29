@@ -95,6 +95,28 @@ steps:
 
 step はキー名で section map を参照します (例: `persona: coder`)。ファイルパスではありません。section map の中のパスは workflow YAML ファイルのディレクトリからの相対で解決されます。
 
+### 再利用可能な step fragment
+
+`steps/` 直下の `<name>.yaml` または `<name>.yml` に step object をちょうど1つ定義し、`uses` で参照できます。`uses` は top-level の agent / `workflow_call` step、parallel parent、parallel sub-step で利用できます。loader が workflow schema 検証前に展開するため、runtime、doctor、preview は同じ通常 step として扱います。
+
+```yaml
+steps:
+  - uses: final-gate
+    name: final-gate
+```
+
+例えば `.takt/steps/final-gate.yaml` は次のように定義できます。
+
+```yaml
+kind: workflow_call
+call: merge-readiness-finding-contract-final-gate
+rules:
+  - condition: COMPLETE
+    next: COMPLETE
+```
+
+呼び出し側のフィールドが fragment を上書きします。object は deep merge、`rules` や `parallel` などの配列は呼び出し側の配列全体で置換します。名前は呼び出し側の `name`、fragment の `name`、`uses` の末尾名の順に決まります。fragment から別 fragment を参照できますが、循環参照は設定エラーです。bare name は project、global、言語別 builtin、共有 builtin の `steps/` を順に検索し、package workflow では package-local `steps/` が最優先です。各候補層では `.yaml` を `.yml` より先に最初の一致として採用し、nested bare 参照は親 fragment の解決元以降の候補層を検索します。workflow 全体で nested 展開は64段、参照は512個までで、各 fragment は1 MiB以下の読み取り可能な通常ファイルでなければなりません。不明な参照、不正な scoped 参照、object 以外のfragment、読み取り不能なファイル、循環参照、上限超過、絶対 path、traversal、ネストしたpath、symlink の `steps/` root、`steps/` root 外を指す symlink、解決後の `system` step は設定エラーになります。project trust の workflow は、project 外の fragment から `workflow_call` または `allow_git_commit: true` を受け取れません。fragment 由来の `allow_git_commit` は呼び出し側で明示的に `false` を指定して上書きできます。
+
 `persona_name` は表示名専用です。config の `provider_routing.personas` は raw `persona` キーに一致し、`provider_routing.tags` は step の任意の `tags` 配列に書かれた順で一致します。同じ provider / model / provider_options leaf では後ろの tag が前の tag を上書きします。
 
 `session_key` は通常の agent step、parallel sub-step、`loop_monitors.judge` で指定できます。system step、workflow-call step、parallel parent step では agent session を所有しないため指定できません。同じ persona を使う複数の agent step のセッションを分離したい場合、または別の agent step で意図的に同じセッションを共有したい場合に使います。実行時の有効キーは `session_key` に解決済み provider を付けた形になり、例: `shared-coder:claude` です。`session_key` を省略した場合は persona キー、persona が無い場合は step 名が使われます。空文字列と空白のみの値は workflow 検証で拒否されます。

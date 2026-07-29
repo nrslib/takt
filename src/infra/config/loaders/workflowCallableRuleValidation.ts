@@ -1,34 +1,36 @@
 import type { z } from 'zod/v4';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import { isWorkflowParamReference } from './workflowCallableParamRef.js';
+import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 
 type RawWorkflowConfig = z.output<typeof WorkflowConfigRawSchema>;
 
 const RESERVED_WORKFLOW_CALL_RESULTS = new Set(['COMPLETE', 'ABORT']);
 
-export function assertNoParamReferences(steps: RawWorkflowConfig['steps']): void {
-  for (const step of steps) {
+export function assertNoParamReferences(steps: RawWorkflowConfig['steps'], parentPath: readonly PropertyKey[] = ['steps']): void {
+  for (const [stepIndex, step] of steps.entries()) {
+    const stepPath = [...parentPath, stepIndex];
     if (isWorkflowParamReference(step.policy)) {
-      throw new Error(`Step "${step.name}" cannot use $param in policy outside a callable subworkflow`);
+      throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in policy outside a callable subworkflow`), [...stepPath, 'policy']);
     }
     if (isWorkflowParamReference(step.knowledge)) {
-      throw new Error(`Step "${step.name}" cannot use $param in knowledge outside a callable subworkflow`);
+      throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in knowledge outside a callable subworkflow`), [...stepPath, 'knowledge']);
     }
     if (isWorkflowParamReference(step.instruction)) {
-      throw new Error(`Step "${step.name}" cannot use $param in instruction outside a callable subworkflow`);
+      throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in instruction outside a callable subworkflow`), [...stepPath, 'instruction']);
     }
     for (const [argName, value] of Object.entries(step.args ?? {})) {
       if (isWorkflowParamReference(value)) {
-        throw new Error(`Step "${step.name}" cannot use $param in args.${argName} outside a callable subworkflow`);
+        throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in args.${argName} outside a callable subworkflow`), [...stepPath, 'args', argName]);
       }
     }
-    for (const report of step.output_contracts?.report ?? []) {
+    for (const [reportIndex, report] of (step.output_contracts?.report ?? []).entries()) {
       if (isWorkflowParamReference(report.format)) {
-        throw new Error(`Step "${step.name}" cannot use $param in output_contracts.report.${report.name}.format outside a callable subworkflow`);
+        throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in output_contracts.report.${report.name}.format outside a callable subworkflow`), [...stepPath, 'output_contracts', 'report', reportIndex, 'format']);
       }
     }
     if (step.parallel) {
-      assertNoParamReferences(step.parallel as RawWorkflowConfig['steps']);
+      assertNoParamReferences(step.parallel as RawWorkflowConfig['steps'], [...stepPath, 'parallel']);
     }
   }
 }
@@ -38,31 +40,34 @@ export function validateReturnRules(
   isCallable: boolean,
   declaredReturns: Set<string>,
   insideParallel = false,
+  parentPath: readonly PropertyKey[] = ['steps'],
 ): void {
-  for (const step of steps) {
-    for (const rule of step.rules ?? []) {
+  for (const [stepIndex, step] of steps.entries()) {
+    const stepPath = [...parentPath, stepIndex];
+    for (const [ruleIndex, rule] of (step.rules ?? []).entries()) {
+      const rulePath = [...stepPath, 'rules', ruleIndex];
       if (rule.return !== undefined && rule.next !== undefined) {
-        throw new Error(`Step "${step.name}" cannot declare both next and return in the same rule`);
+        throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot declare both next and return in the same rule`), rulePath);
       }
       if (rule.return === undefined) {
         continue;
       }
       if (insideParallel) {
-        throw new Error(`Parallel sub-step "${step.name}" cannot use return`);
+        throw withWorkflowStepErrorPath(new Error(`Parallel sub-step "${step.name}" cannot use return`), rulePath);
       }
       if (!isCallable) {
-        throw new Error(`Step "${step.name}" cannot use return outside a callable subworkflow`);
+        throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use return outside a callable subworkflow`), rulePath);
       }
       if (RESERVED_WORKFLOW_CALL_RESULTS.has(rule.return)) {
-        throw new Error(`Step "${step.name}" cannot return reserved value "${rule.return}"`);
+        throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot return reserved value "${rule.return}"`), rulePath);
       }
       if (!declaredReturns.has(rule.return)) {
-        throw new Error(`Step "${step.name}" returns undeclared value "${rule.return}"`);
+        throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" returns undeclared value "${rule.return}"`), rulePath);
       }
     }
 
     if (step.parallel) {
-      validateReturnRules(step.parallel as RawWorkflowConfig['steps'], isCallable, declaredReturns, true);
+      validateReturnRules(step.parallel as RawWorkflowConfig['steps'], isCallable, declaredReturns, true, [...stepPath, 'parallel']);
     }
   }
 }

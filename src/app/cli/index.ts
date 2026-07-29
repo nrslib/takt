@@ -6,6 +6,7 @@
 
 import { CommanderError } from 'commander';
 import { getErrorMessage } from '../../shared/utils/error.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { error as errorLog } from '../../shared/ui/index.js';
 import { resolveRemovedRootCommand, resolveSlashFallbackTask } from './helpers.js';
 import { installImmediateSigintExit } from './immediateSigintExit.js';
@@ -52,6 +53,6 @@ import './commands.js';
     cleanupImmediateSigintExit();
   }
 })().catch((err) => {
-  errorLog(getErrorMessage(err));
+  errorLog(sanitizeTerminalText(getErrorMessage(err)));
   process.exit(1);
 });

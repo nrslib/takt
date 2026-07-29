@@ -443,3 +443,8 @@ steps:
       - condition: 修正を進行できない
         next: plan
     instruction: fix
+    output_contracts:
+      report:
+        - name: fix-report.md
+          format: fix-report
+          use_judge: false

@@ -280,8 +280,29 @@ describe('checkPackageHasContent', () => {
     expect(() => checkPackageHasContent(tempDir)).not.toThrow();
   });
 
+  it('should not throw when only steps/ exists', () => {
+    mkdirSync(join(tempDir, 'steps'), { recursive: true });
+    writeFileSync(join(tempDir, 'steps', 'review.yaml'), 'instruction: review');
+
+    expect(() => checkPackageHasContent(tempDir)).not.toThrow();
+  });
+
+  it('should reject a steps-only package without a resolvable root-level YAML fragment', () => {
+    mkdirSync(join(tempDir, 'steps', 'nested'), { recursive: true });
+    writeFileSync(join(tempDir, 'steps', 'README.md'), 'not a fragment');
+    writeFileSync(join(tempDir, 'steps', 'nested', 'review.yaml'), 'instruction: review');
+
+    expect(() => checkPackageHasContent(tempDir)).toThrow(/empty package rejected/);
+  });
+
+  it('should reject an empty steps-only package', () => {
+    mkdirSync(join(tempDir, 'steps'), { recursive: true });
+
+    expect(() => checkPackageHasContent(tempDir)).toThrow(/empty package rejected/);
+  });
+
   it('should reject supported content paths that are regular files', () => {
-    for (const dir of ['facets', 'workflows', 'provider-options']) {
+    for (const dir of ['facets', 'workflows', 'provider-options', 'steps']) {
       const packageRoot = join(tempDir, `file-${dir}`);
       mkdirSync(packageRoot, { recursive: true });
       writeFileSync(join(packageRoot, dir), 'not a directory');

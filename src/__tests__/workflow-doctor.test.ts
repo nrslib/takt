@@ -222,6 +222,30 @@ steps:
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining("provider 'opencode' requires model"));
   });
 
+  it('attributes runtime validation errors to the referenced step fragment', async () => {
+    const fragmentPath = writeWorkflow(projectDir, '.takt/steps/opencode-review.yaml', `provider: opencode
+instruction: review the implementation
+rules:
+  - condition: done
+    next: COMPLETE
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/fragment-runtime-error.yaml', `name: fragment-runtime-error
+max_steps: 1
+initial_step: review
+steps:
+  - uses: opencode-review
+    name: review
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+
+    const output = mockError.mock.calls.flat().join('\n');
+    expect(output).toContain("provider 'opencode' requires model");
+    expect(output).toContain(filePath);
+    expect(output).toContain('from step fragment "opencode-review"');
+    expect(output).toContain(fragmentPath);
+  });
+
   it('warns when a finding_contract workflow has no provisional routing', async () => {
     // persona facet を用意する（missing-resource エラーを避ける）。
     writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
@@ -1791,6 +1815,42 @@ steps:
       level: 'warning',
       message: 'Step "step1/sub-review" routes to "finding-conflict-adjudication" from a parallel sub-step, but sub-step "next" is ignored by parallel aggregation; wire the parent step\'s rules instead',
     }]);
+  });
+
+  it('attributes a parallel sub-step routing warning to its fragment next field', () => {
+    const fragmentPath = writeWorkflow(projectDir, '.takt/steps/reviewers.yaml', `parallel:
+  - name: sub-review
+    rules:
+      - condition: conflict
+        next: finding-conflict-adjudication
+      - condition: approved
+        next: COMPLETE
+rules:
+  - condition: done
+    next: COMPLETE
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/adjudication-parallel-fragment.yaml', `name: adjudication-parallel-fragment
+max_steps: 10
+initial_step: step1
+finding_contract:
+  ledger_path: .takt/findings/adjudication-parallel-fragment.json
+  raw_findings_path: .takt/findings/adjudication-parallel-fragment/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+steps:
+  - uses: reviewers
+    name: step1
+`);
+
+    const warning = inspectWorkflowFile(filePath, projectDir).diagnostics.find(
+      (diagnostic) => diagnostic.level === 'warning',
+    );
+
+    expect(warning?.message).toContain('ignored by parallel aggregation');
+    expect(warning?.message).toContain('from step fragment "reviewers"');
+    expect(warning?.message).toContain(fragmentPath);
   });
 
   it('reports a parallel sub-step routing to finding-conflict-adjudication without finding_contract configured', () => {

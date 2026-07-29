@@ -128,15 +128,6 @@ export function injectFindingConflictAdjudicationStep(
   if (!contract || !workflowWiresFindingConflictAdjudication(config.steps, config.loopMonitors)) {
     return config;
   }
-  // A user-authored step squatting on the reserved name would collide with the
-  // injection; WorkflowValidator also rejects it (via the engineSynthesized
-  // flag) for configs that never reach injection.
-  const existing = config.steps.find((step) => step.name === FINDING_CONFLICT_ADJUDICATION_STEP);
-  if (existing) {
-    throw new Error(
-      `Configuration error: step name "${FINDING_CONFLICT_ADJUDICATION_STEP}" is reserved for the engine-synthesized conflict adjudication step`,
-    );
-  }
   return {
     ...config,
     steps: [

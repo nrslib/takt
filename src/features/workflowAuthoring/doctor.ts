@@ -24,6 +24,7 @@ import { isMissingWorkflowCallArgError } from '../../infra/config/loaders/workfl
 import { loadWorkflowFileWithResolutionOptions } from '../../infra/config/loaders/workflowResolvedLoader.js';
 import type { WorkflowConfig, WorkflowRule, WorkflowState, WorkflowStep } from '../../core/models/types.js';
 import type { WorkflowDoctorReport, WorkflowDoctorTarget } from '../../infra/config/loaders/workflowDoctor.js';
+import { translateWorkflowConfigError } from '../../shared/workflowConfigMetadata.js';
 
 function reportHasErrors(report: WorkflowDoctorReport): boolean {
   return report.diagnostics.some((diagnostic) => diagnostic.level === 'error');
@@ -62,8 +63,9 @@ function validateWorkflowRuntimeContract(
     return;
   }
 
+  let workflow: ReturnType<typeof loadWorkflowForRuntimeValidation> | undefined;
   try {
-    const workflow = loadWorkflowForRuntimeValidation(target, projectDir);
+    workflow = loadWorkflowForRuntimeValidation(target, projectDir);
     const config = resolveWorkflowConfigValues(
       projectDir,
       ['provider', 'model', 'personaProviders', 'providerRouting', 'autoRouting'],
@@ -82,9 +84,12 @@ function validateWorkflowRuntimeContract(
     warnOnMissingReviewerAnomalyRouting(report, workflow);
     warnOnUnproducibleReportReferences(report, workflow);
   } catch (validationError) {
+    const translatedError = workflow === undefined
+      ? validationError
+      : translateWorkflowConfigError(workflow, validationError);
     report.diagnostics.push({
       level: 'error',
-      message: getErrorMessage(validationError),
+      message: getErrorMessage(translatedError),
     });
   }
 }

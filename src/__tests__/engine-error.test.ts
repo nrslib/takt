@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -24,8 +25,14 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
 }));
 
+vi.mock('../core/runtime/runtime-environment.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  prepareRuntimeEnvironment: vi.fn(),
+}));
+
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
+import { prepareRuntimeEnvironment } from '../core/runtime/runtime-environment.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
@@ -54,6 +61,25 @@ describe('WorkflowEngine Integration: Error Handling', () => {
     if (existsSync(tmpDir)) {
       rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('should prepare run resources before reporting an invalid workflow configuration', () => {
+    const config = buildDefaultWorkflowConfig({
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('done', 'missing-step')],
+        }),
+      ],
+    });
+
+    expect(() => new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      reportDirName: 'invalid-workflow',
+    }))
+      .toThrow('target step "missing-step" does not exist');
+
+    expect(existsSync(join(tmpDir, '.takt/runs/invalid-workflow/reports'))).toBe(true);
+    expect(vi.mocked(prepareRuntimeEnvironment)).toHaveBeenCalledWith(tmpDir, config.runtime);
   });
 
   describe('No rule matched', () => {

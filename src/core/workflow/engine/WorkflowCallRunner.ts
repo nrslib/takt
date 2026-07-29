@@ -19,6 +19,8 @@ import {
   getWorkflowReference,
 } from '../workflow-reference.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../workflow-call-depth.js';
+import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
+import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import type {
   RuntimeStepResolution,
   StepProviderInfo,
@@ -38,6 +40,7 @@ import {
 } from './WorkflowCallExecutor.js';
 import { terminalLabelOf } from '../../models/workflow-rule-condition.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
+import { translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
 
 interface WorkflowCallRunnerDeps {
   getConfig: () => WorkflowConfig;
@@ -238,6 +241,22 @@ export class WorkflowCallRunner {
     return childResult.isolatedStateSync;
   }
 
+  private translateWorkflowCallConfigError(
+    parentConfig: WorkflowConfig,
+    step: WorkflowCallStep,
+    error: unknown,
+    fieldPath: readonly PropertyKey[],
+  ): Error {
+    const stepPath = findWorkflowStepLocation(parentConfig, step);
+    if (!stepPath) {
+      return error instanceof Error ? error : new Error(String(error));
+    }
+    return translateWorkflowConfigError(
+      parentConfig,
+      withWorkflowConfigErrorPath(error, [...stepPath, ...fieldPath]),
+    );
+  }
+
   private async executeChildWorkflow(
     step: WorkflowCallStep,
     runtime: RuntimeStepResolution,
@@ -255,10 +274,20 @@ export class WorkflowCallRunner {
       lookupCwd: this.deps.getCwd(),
     });
     if (!childWorkflow) {
-      throw new Error(`workflow_call step "${step.name}" references unknown workflow "${step.call}"`);
+      throw this.translateWorkflowCallConfigError(
+        parentConfig,
+        step,
+        new Error(`workflow_call step "${step.name}" references unknown workflow "${step.call}"`),
+        ['call'],
+      );
     }
     if (childWorkflow.subworkflow?.callable !== true) {
-      throw new Error(`workflow "${childWorkflow.name}" is not callable`);
+      throw this.translateWorkflowCallConfigError(
+        parentConfig,
+        step,
+        new Error(`workflow "${childWorkflow.name}" is not callable`),
+        ['call'],
+      );
     }
 
     const workflowChain = [
@@ -269,7 +298,12 @@ export class WorkflowCallRunner {
     ];
     const childWorkflowRef = getWorkflowReference(childWorkflow);
     if (workflowChain.includes(childWorkflowRef)) {
-      throw new Error(`Detected workflow_call cycle: ${[...workflowChain, childWorkflow.name].join(' -> ')}`);
+      throw this.translateWorkflowCallConfigError(
+        parentConfig,
+        step,
+        new Error(`Detected workflow_call cycle: ${[...workflowChain, childWorkflow.name].join(' -> ')}`),
+        ['call'],
+      );
     }
 
     const currentDepth = resumeStackPrefix.filter(
@@ -277,12 +311,22 @@ export class WorkflowCallRunner {
     ).length + 1;
     const nextDepth = currentDepth + 1;
     if (nextDepth > MAX_WORKFLOW_CALL_DEPTH) {
-      throw new Error(`workflow_call depth exceeds limit (${MAX_WORKFLOW_CALL_DEPTH}): ${childWorkflow.name}`);
+      throw this.translateWorkflowCallConfigError(
+        parentConfig,
+        step,
+        new Error(`workflow_call depth exceeds limit (${MAX_WORKFLOW_CALL_DEPTH}): ${childWorkflow.name}`),
+        ['call'],
+      );
     }
 
     const runtimeProviderInfo = runtime.providerInfo ?? this.resolveRuntime(step).providerInfo;
     if (!runtimeProviderInfo) {
-      throw new Error(`workflow_call step "${step.name}" could not resolve provider context`);
+      throw this.translateWorkflowCallConfigError(
+        parentConfig,
+        step,
+        new Error(`workflow_call step "${step.name}" could not resolve provider context`),
+        step.overrides === undefined ? ['call'] : ['overrides'],
+      );
     }
     const childProviderInfo = runtime.fallback
       ? runtimeProviderInfo

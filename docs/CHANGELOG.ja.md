@@ -6,6 +6,66 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.54.1] - 2026-07-29
+
+### Fixed
+
+- strict structured outputスキーマの不整合により、Codexのauto-routingが全ルーティング対象ステップでfallbackしていた問題を修正 (#1123)。ルーター出力スキーマをestimator生成時に検証し、決定的なスキーマ非互換はFail Fastとする一方、実行時の推定失敗では設定されたpool fallbackを引き続き使用します。CodexとClaudeの共通スキーマ経路をClaude Agent SDKのquery境界まで統合テストで検証します。
+
+## [0.54.0] - 2026-07-28
+
+### Added
+
+- `simple` ワークフローファミリー (#1117)。有能なモデルの判断を信頼し、オーケストレーションを最小限に抑えた 7 つのビルトインワークフローです。`simple`（計画 → テスト作成 → 実装 → コードレビュー → 修正ループ → 最終監督）、`simple-mini`（専用のテスト作成と最終監督を省略）、およびドメイン別の `simple-frontend`、`simple-backend`、`simple-cqrs`、`simple-dual`、`simple-dual-cqrs` で、各バリアントは共有の内部サブワークフロー `simple-core` に対応するナレッジとポリシーを注入します。各ステップはモデル自身に関連する利用可能スキルの選択を指示し、codex ではリポジトリ・ユーザーの Skill を継承します（`provider_options.codex.skills.repo/user: true`）。カタログに ✨ Simple カテゴリが追加され、🚀 Quick Start カテゴリの先頭が `simple` になりました。
+
+### Internal
+
+- スキルドキュメントのテストから文面に結合したアサーションを削除し、ビルトインファセット配備テストが新しい `use-relevant-skills` インストラクションパーシャルをカバーするようにしました (#1117)。
+
+## [0.53.0] - 2026-07-27
+
+### Removed
+
+- **BREAKING:** `for-local-llm` ワークフローファミリーを削除しました (#1070)。対象は `takt-default-for-local-llm`、`frontend-for-local-llm`、`backend-for-local-llm`、`backend-cqrs-for-local-llm`、`dual-for-local-llm`、`peer-review-for-local-llm` です。代わりに `takt-default` / `takt-default-high` または対応するドメインワークフローを使用してください。削除されたワークフローを参照している保存済みタスクや run は、リトライ・再開の前にワークフローを切り替えるか作り直す必要があります。
+- **BREAKING:** MCP ツール `takt_create_issue_and_enqueue_task` と `takt_run_next_task` を削除しました (#1104)。MCP ツールは `takt_enqueue_task` のみになります。既存 issue の紐付けは `issue: { number }`、enqueue 前の issue 作成は `issue: { title?, labels? }` を渡してください。積んだタスクの実行は `takt run` または `takt watch` で行います。
+
+### Added
+
+- `takt-default-team-high` ワークフロー (#1055)。`takt-default-high` の Team Leader 版です。計画、テスト、Team Leader 主導の実装、6 つのコンパクトな専門レビュー、Team Leader 主導の修正、fail-closed な最終ゲートで構成されます。
+- Team Leader の Finding Contract 修正モード (#1089, #1090, #1091, #1100)。`team_leader.mode: finding_contract_fix` を設定すると team_leader ステップが Finding Contract の修正専用ステップになります。各 part は明示的な actionable finding に割り当てられ、`complete` には検証成功とステップ開始時点の全 actionable finding の `fixCoverage` が必要で、判定は `when(structured.fix.decision == "complete")` のような機械的条件でルーティングします。ワイルドカードの contract path は拒否され (#1090)、part の `writePaths` はサンドボックスではなく並行作業間の協調契約として扱われます (#1100)。
+- findings-manager が判定者に拡張されました (#1053)。dismiss 裁定と重複統合が ledger に実際に反映されるようになり、manager の状態が review-fix の judge に注入され、manager / interpreter の LLM 呼び出しが usage イベントに記録されてトークン集計の死角ではなくなりました。
+- ファセットのマルチセレクト選択 (#1065)。exec のファセットエディタがマルチセレクトプロンプトに対応し、ファセット参照を 1 つずつのダイアログではなく一括で選択できるようになりました。
+- Codex Skill 継承の制御 (#1081)。新しい `provider_options.codex.skills.repo` / `.user` フラグ（および `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` 環境変数オーバーライド）で、Codex がリポジトリ（`.agents/skills`）とユーザー（`~/.agents/skills`、`$CODEX_HOME/skills`）の Skill を発見するかを制御できます。ワークフローはデフォルトでどちらのスコープも継承しなくなりました。`takt exec` はデフォルトで継承し、解決済みの値を生成ワークフローにスナップショットします。
+- 再開した run がレビューレポートを引き継ぐようになりました (#1059)。run の再開時に過去のレビューレポートをベストエフォートで引き継ぐため、再開後の修正ステップがゼロから始まりません。同一 run 内の requeue では resume スナップショットをスキップします。
+- 共有 fix ステップが構造化された `fix-report` を保存するようになりました (#1116)。共有 fix instruction を使うビルトインワークフローが、対応済み・未対応の finding、検証結果、family coverage を非判定の output contract として書き出すため、次の反復や再開した run が修正の続きから始められます。rules・遷移・完了判定は変更ありません。
+
+### Changed
+
+- **BREAKING:** Node.js `>=24.15.0` が必須になりました (#1111)。従来は `^20.20.0 || >=22.22.0` でしたが、新しい run ストレージが組み込みの `node:sqlite` モジュールを使うためです。
+- **BREAKING:** Auto Routing の candidates をプールとティア中心に再設計しました (#1103)。`cost_tier` は `routing_tier`（`high` | `medium` | `low`）にリネームされ、`default_pool` と `candidate_pools`（各プールにプールローカルな `fallback`）が必須になりました。任意の `pool_rules` で tags / steps / personas をプールに固定できます。router は正規化されたタスク・ステップ指示・現在の残作業から必要ティアの推定のみを行い、候補は TAKT が決定的に選択します。`cost` と `balanced` は選択プール内で必要ティアを満たす最小の `routing_tier` を、`performance` は最大を選びます。既存の設定は `cost_tier` のリネームと `default_pool` / `candidate_pools` の追加が必要です。
+- high 系ワークフローのステップ上限を 50 にしました (#1061)。`takt-default-high`、`review-fix-takt-default-high`、`takt-default-team-high` の `max_steps` を 200 から 50 に引き下げました。
+- high 系ワークフローで merge-readiness を最終監督より前に実行するようにしました (#1060)。Finding Contract 用の最終ゲートは `merge-readiness-finding-contract-final-gate` として切り出されました。
+- stop budget の時間上限をオプトインにしました (#1052)。`stop_budget.max_minutes` の既定値（90 分）を廃止しました。守るべき病理（churn）はラウンド数に現れるのであって時間には現れず、時間の既定上限が健全な大型 run を誤停止させた実測があるためです。ラウンド上限（既定 40）は決定的な停止保証として残ります。また、品質ゲートの実行証跡を要求する指摘を finding として起票することを全レビュアーで禁止しました。検証結果の評価は最終ゲートの職掌です。
+- Team Leader の総 part 数上限を撤廃しました (#1084)。leader は作業完了と判断するまでバッチを追加でき、`initial_max_parts` は最初の分解バッチのみを制限します。
+
+### Fixed
+
+- Team Leader の堅牢化。旧 part を取り消し、完了判定で実行中 part を待つようになりました (#1105)。不正な分解は失敗ではなく検証診断付きで再生成されます (#1113)。中断時にフィードバックフォールバックが停止します (#1085)。reviewer anomaly の不変条件が loop monitor に渡されます (#1114)。実装判定にエージェントの完了報告が引き継がれます (#1101)。
+- Finding Contract の収束と復旧の強化 (#1056, #1058, #1063, #1067, #1069, #1072, #1074, #1086, #1087, #1092, #1093)。findings-manager は dedup と証拠衝突で出力全体を破棄せず、空の結果ではなく機械分類へ縮退します (#1056)。収束状態がリトライを跨いで維持され (#1058)、finding コンテキストが再開を跨いで維持されます (#1074)。滞留した Finding Contract ワークフローは再計画し、最終ゲートの `needs_fix` 判定が尊重されます (#1069)。レビュー対象スナップショットは構造化出力契約に束縛され (#1086)、reviewer anomaly は再照合後も保持されます (#1087)。不正な manager 判定はリトライされ (#1092)、その復旧が強化されました (#1093)。説明的な裁定証拠の引用が受理されます (#1063)。修正後の loop monitor 状態が区別されます (#1067)。外部要因のみを理由とする再計画はループせず中断します (#1072)。
+- 環境要因で検証不能な場合、修正ループが明示的な判定付きで中断するようになりました (#1102)。修正不能な finding で空転しません。
+- PR 由来タスクと Instruct の差分基準を統一しました (#1106)。PR の diff ref を実体化し、レビューコンテキストが実際にマージされる内容と一致します。
+- 並行実行時の clone / worktree パス衝突を修正しました (#1110)。clone ディレクトリに一意なランダムサフィックスが付き、同一秒のタスク開始や PR 同期 worktree でも衝突しません。
+- 隔離一時パスを短縮しました (#1071)。プラットフォームのパス長制限に収まるようにし、Windows の一時ディレクトリ環境変数の優先順位もカバーしています。
+- `auto-improvement-loop` が codex で Issue → 実装 → PR → セルフレビュー → マージの一巡を完走できるようになりました (#1045)。従来は `plan_from_issue` で即座に中断していました。
+- ローカルモデルでの OpenCode 実行を安定化しました (#1017)。ツール呼び出し失敗時に問題の引数が debug ログに記録されるようになり、弱いモデルでの Finding Contract の凍結が解消されました。
+
+### Internal
+
+- run 単位の SQLite ストレージ基盤 (#1111)。`node:sqlite` ベースの run 単位ストア（artifacts、findings、reports、unit-of-work）が `src/infra/run-storage/` に追加され、Finding Contract の整合性モデルの単一形式への再構成も行われました。エンジンへの接続は今後のリリースで行われ、本リリースでは `.takt/` の出力は変わりません。
+- ビルトインの TAKT ワークフローをルールの first-match セマンティクスに統一しました (#1083)。
+- MCP stdio 統合テストが隔離済み `TAKT_CONFIG_DIR` を起動したサーバーに渡すようになり、実行者の実際の `~/.takt/config.yaml` を読まなくなりました。
+- ドキュメント: 再利用可能な TAKT 概要アセット (#1108, #1109) と YouTube チュートリアルリンク (#1112) を追加しました。
+
 ## [0.52.0] - 2026-07-19
 
 ### Removed

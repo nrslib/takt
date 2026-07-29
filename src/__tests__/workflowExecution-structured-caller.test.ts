@@ -718,7 +718,7 @@ steps:
     expect(childWorkflow?.name).toBe('default');
   });
 
-  it('should resolve workflow_call relative path from explicit execution context even when spread config drops loader metadata', async () => {
+  it('should resolve workflow_call relative path after effective config retains loader metadata', async () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-project-'));
     const externalDir = mkdtempSync(join(tmpdir(), 'takt-external-'));
     cleanupDirs.push(projectDir, externalDir);
@@ -758,7 +758,7 @@ steps:
       projectCwd: projectDir,
     });
 
-    expect(getWorkflowSourcePath(MockWorkflowEngine.lastInstance.receivedConfig)).toBeUndefined();
+    expect(getWorkflowSourcePath(MockWorkflowEngine.lastInstance.receivedConfig)).toBe(externalParentPath);
 
     const childWorkflow = (
       MockWorkflowEngine.lastInstance.receivedOptions.workflowCallResolver as (args: {

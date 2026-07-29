@@ -3,11 +3,11 @@
  *
  * Extracted to keep install summary parsing testable.
  */
-
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import { dirname, resolve } from 'node:path';
 import { createLogger, getErrorMessage, isPathInside } from '../../shared/utils/index.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import { mergeProviderOptions } from '../../infra/config/providerOptions.js';
 import type { FacetResolutionContext } from '../../infra/config/loaders/workflowPackageScope.js';
@@ -16,6 +16,8 @@ import {
   resolveWorkflowProviderOptionsWithHost,
 } from '../../infra/config/loaders/workflowProviderOptionsResolver.js';
 import type { ScopedProviderOptionsCandidateDirs } from '../../infra/config/loaders/providerOptionsLookupDirectories.js';
+import { resolveWorkflowStepFragments } from '../../infra/config/loaders/workflowStepFragmentResolver.js';
+import type { ScopedStepFragmentCandidateDirs } from '../../infra/config/loaders/stepFragmentLookupDirectories.js';
 
 const log = createLogger('pack-summary');
 const PACKAGE_ROOT = '/__takt_repertoire_package__';
@@ -37,6 +39,8 @@ interface PackageYaml {
 export interface DetectEditWorkflowsOptions {
   providerOptionsCandidateDirs?: readonly string[];
   providerOptionsScopedCandidateDirs?: ScopedProviderOptionsCandidateDirs;
+  stepFragmentCandidateDirs?: readonly string[];
+  stepFragmentScopedCandidateDirs?: ScopedStepFragmentCandidateDirs;
   fileAccess?: ProviderOptionsFileAccess;
   context?: FacetResolutionContext;
 }
@@ -97,7 +101,7 @@ const nodeFileAccess: ProviderOptionsFileAccess = {
   exists: (path) => existsSync(path),
   readText: (path) => readFileSync(path, 'utf-8'),
   realpath: (path) => realpathSync(path),
-  isSymlink: (path) => lstatSync(path).isSymbolicLink(),
+  isSymlink: (path) => lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() ?? false,
 };
 
 function isPackageVirtualPath(path: string): boolean {
@@ -232,7 +236,8 @@ export function summarizeFacetsByType(facetRelativePaths: string[]): string {
 }
 
 /**
- * Detect workflows that require permissions in any step.
+ * Detect workflows that require permissions in any step after expanding their
+ * step fragments.
  *
  * A step is considered permission-relevant when any of:
  * - `edit: true` is set
@@ -262,8 +267,14 @@ export function detectEditWorkflows(
     } | undefined;
     if (!raw) continue;
 
-    const steps = normalizeSummarySteps(raw.steps);
     const workflowPath = toPackageAbsolutePath(relativePath ?? `workflows/${name}`);
+    const expanded = resolveWorkflowStepFragments(raw, {
+      candidateDirs: options?.stepFragmentCandidateDirs,
+      scopedCandidateDirs: options?.stepFragmentScopedCandidateDirs,
+      context: options?.context,
+      workflowPath,
+    }).raw as { steps?: unknown };
+    const steps = normalizeSummarySteps(expanded.steps);
     const workflowProviderOptions = resolveProviderOptionsRecord(
       raw?.workflow_config?.provider_options,
       workflowPath,
@@ -342,14 +353,14 @@ export function formatEditWorkflowWarnings(workflow: EditWorkflowInfo): string[]
   const warnings: string[] = [];
   if (workflow.hasEdit) {
     const toolStr = workflow.allowedTools.length > 0
-      ? `, provider_options.allowed_tools: [${workflow.allowedTools.join(', ')}]`
+      ? `, provider_options.allowed_tools: [${workflow.allowedTools.map(sanitizeTerminalText).join(', ')}]`
       : '';
-    warnings.push(`\n   ⚠ ${workflow.name}: edit: true${toolStr}`);
+    warnings.push(`\n   ⚠ ${sanitizeTerminalText(workflow.name)}: edit: true${toolStr}`);
   } else if (workflow.allowedTools.length > 0) {
-    warnings.push(`\n   ⚠ ${workflow.name}: provider_options.allowed_tools: [${workflow.allowedTools.join(', ')}]`);
+    warnings.push(`\n   ⚠ ${sanitizeTerminalText(workflow.name)}: provider_options.allowed_tools: [${workflow.allowedTools.map(sanitizeTerminalText).join(', ')}]`);
   }
   for (const mode of workflow.requiredPermissionModes) {
-    warnings.push(`\n   ⚠ ${workflow.name}: required_permission_mode: ${mode}`);
+    warnings.push(`\n   ⚠ ${sanitizeTerminalText(workflow.name)}: required_permission_mode: ${sanitizeTerminalText(mode)}`);
   }
   return warnings;
 }

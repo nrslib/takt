@@ -95,6 +95,28 @@ steps:
 
 Steps reference section maps by key name (e.g., `persona: coder`), not by file path. Paths in section maps are resolved relative to the workflow YAML file's directory.
 
+### Reusable step fragments
+
+Put exactly one step object in a root-level `<name>.yaml` or `<name>.yml` file under a `steps/` directory, then reference it with `uses`. `uses` is supported on top-level agent and `workflow_call` steps, parallel parents, and parallel sub-steps. The loader expands it before workflow schema validation, so runtime, doctor, and previews use the same ordinary step.
+
+```yaml
+steps:
+  - uses: final-gate
+    name: final-gate
+```
+
+For example, `.takt/steps/final-gate.yaml` can contain:
+
+```yaml
+kind: workflow_call
+call: merge-readiness-finding-contract-final-gate
+rules:
+  - condition: COMPLETE
+    next: COMPLETE
+```
+
+The caller overrides fragment fields. Objects are deep-merged; arrays such as `rules` and `parallel` are replaced as a whole. Names resolve in this order: caller `name`, fragment `name`, then the final name in `uses`. Fragments may reference other fragments, but circular references fail. Bare names resolve project, global, language-specific builtin, then shared builtin `steps/`; package workflows check package-local `steps/` first, and `@owner/repo/name` selects a repertoire package. Each lookup uses the first matching `.yaml` before `.yml`; nested bare references continue from the layer that supplied their parent fragment, rather than restarting at higher-priority layers. A workflow may expand at most 64 nested fragments and 512 references in total; each fragment must be a readable regular file no larger than 1 MiB. Unknown references, malformed scoped references, non-object fragments, unreadable files, circular references, size-limit violations, absolute paths, traversal, nested paths, a symlinked `steps/` root, symlink targets outside a `steps/` root, and a resolved `system` step are configuration errors. A project-trusted workflow also cannot receive a `workflow_call` or `allow_git_commit: true` from a non-project fragment. A caller may explicitly override fragment-provided `allow_git_commit` with `false`.
+
 `persona_name` is only a display name. `provider_routing.personas` in config matches the raw `persona` key, while `provider_routing.tags` matches the optional `tags` array in the order written on the step. Later tags override earlier tags for the same provider/model/provider_options leaf.
 
 `session_key` is supported on normal agent steps, parallel sub-steps, and `loop_monitors.judge`. It is not supported on system steps, workflow-call steps, or parallel parent steps because those entries do not own an agent session. Use it when multiple agent steps share a persona but must keep separate sessions, or when different agent steps must intentionally share one session. The effective runtime key is `session_key` plus the resolved provider suffix, for example `shared-coder:claude`. When `session_key` is omitted, TAKT uses the persona key, or the step name when no persona is set. Empty strings and whitespace-only values are rejected during workflow validation.

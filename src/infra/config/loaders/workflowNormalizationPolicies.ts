@@ -7,6 +7,7 @@ import type {
   WorkflowRuntimePrepareConfig,
 } from '../../../core/models/config-types.js';
 import type { WorkflowConfig, WorkflowStepRawSchema } from '../../../core/models/index.js';
+import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
 type RawParallelSubStep = NonNullable<RawStep['parallel']>[number];
@@ -49,10 +50,15 @@ export function validateWorkflowCommandGates(
   steps: RawStep[],
   policy?: WorkflowCommandGatesConfig,
 ): void {
-  for (const step of steps) {
-    validateStepCommandGates(step, step.name, policy);
-    for (const subStep of step.parallel ?? []) {
-      validateStepCommandGates(subStep, `${step.name}.${subStep.name}`, policy);
+  for (const [stepIndex, step] of steps.entries()) {
+    validateStepCommandGates(step, step.name, ['steps', stepIndex], policy);
+    for (const [subStepIndex, subStep] of step.parallel?.entries() ?? []) {
+      validateStepCommandGates(
+        subStep,
+        `${step.name}.${subStep.name}`,
+        ['steps', stepIndex, 'parallel', subStepIndex],
+        policy,
+      );
     }
   }
 }
@@ -60,15 +66,19 @@ export function validateWorkflowCommandGates(
 function validateStepCommandGates(
   step: Pick<RawStep | RawParallelSubStep, 'quality_gates'>,
   stepName: string,
+  stepPath: readonly PropertyKey[],
   policy?: WorkflowCommandGatesConfig,
 ): void {
-  for (const gate of step.quality_gates ?? []) {
+  for (const [gateIndex, gate] of (step.quality_gates ?? []).entries()) {
     if (typeof gate === 'string') continue;
     if (gate.type !== 'command') continue;
     if (policy?.customScripts === true) continue;
-    throw new Error(
-      `Step "${stepName}" uses command quality gate "${gate.command}", which is disabled by default for workflows. `
-      + 'Configure workflow_command_gates.custom_scripts in project/global config to allow it.',
+    throw withWorkflowStepErrorPath(
+      new Error(
+        `Step "${stepName}" uses command quality gate "${gate.command}", which is disabled by default for workflows. `
+        + 'Configure workflow_command_gates.custom_scripts in project/global config to allow it.',
+      ),
+      [...stepPath, 'quality_gates', gateIndex],
     );
   }
 }
@@ -90,26 +100,27 @@ export function resolveWorkflowArpeggioPolicy(
 export function validateWorkflowArpeggio(
   stepName: string,
   raw: RawStep['arpeggio'],
+  stepPath: readonly PropertyKey[],
   policy?: WorkflowArpeggioConfig,
 ): void {
   if (!raw) return;
   if (raw.source !== 'csv' && policy?.customDataSourceModules !== true) {
-    throw new Error(
+    throw withWorkflowStepErrorPath(new Error(
       `Step "${stepName}" uses Arpeggio source "${raw.source}", which is disabled by default for workflows. `
       + 'Configure workflow_arpeggio.custom_data_source_modules in project/global config to allow it.',
-    );
+    ), [...stepPath, 'arpeggio', 'source']);
   }
   if (raw.merge?.inline_js && policy?.customMergeInlineJs !== true) {
-    throw new Error(
+    throw withWorkflowStepErrorPath(new Error(
       `Step "${stepName}" uses Arpeggio inline_js, which is disabled by default for workflows. `
       + 'Configure workflow_arpeggio.custom_merge_inline_js in project/global config to allow it.',
-    );
+    ), [...stepPath, 'arpeggio', 'merge', 'inline_js']);
   }
   if (raw.merge?.file && policy?.customMergeFiles !== true) {
-    throw new Error(
+    throw withWorkflowStepErrorPath(new Error(
       `Step "${stepName}" uses Arpeggio merge.file, which is disabled by default for workflows. `
       + 'Configure workflow_arpeggio.custom_merge_files in project/global config to allow it.',
-    );
+    ), [...stepPath, 'arpeggio', 'merge', 'file']);
   }
 }
 
@@ -130,6 +141,7 @@ export function resolveWorkflowMcpServersPolicy(
 export function validateWorkflowMcpServers(
   stepName: string,
   mcpServers: RawStep['mcp_servers'],
+  stepPath: readonly PropertyKey[],
   policy: WorkflowMcpServersConfig | undefined,
 ): void {
   if (!mcpServers) return;
@@ -141,10 +153,12 @@ export function validateWorkflowMcpServers(
         ? (policy?.sse ?? false)
         : (policy?.http ?? false);
     if (allowed) continue;
-    throw new Error(
+    throw withWorkflowStepErrorPath(new Error(
       `Step "${stepName}" uses MCP server "${serverName}" with transport "${transport}", `
       + 'which is disabled by default for workflows. '
       + 'Configure workflow_mcp_servers in project/global config to allow it.',
-    );
+    ), config.type === undefined
+      ? [...stepPath, 'mcp_servers', serverName]
+      : [...stepPath, 'mcp_servers', serverName, 'type']);
   }
 }

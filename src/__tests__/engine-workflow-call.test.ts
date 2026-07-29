@@ -3864,6 +3864,7 @@ steps:
       - condition: done
         next: COMPLETE
 `);
+    const childConfig = loadWorkflowOrThrow('takt/coding', tmpDir);
 
     const config = createParentWorkflow(tmpDir, {
       name: 'parent',
@@ -3922,7 +3923,7 @@ steps:
     });
     expect(capturedResumePoint?.stack[1]).toEqual(expect.objectContaining({
       workflow: 'takt/coding',
-      workflow_ref: 'takt/coding',
+      workflow_ref: getWorkflowReference(childConfig),
       step: 'fix',
       kind: 'agent',
       occurrence: 1,

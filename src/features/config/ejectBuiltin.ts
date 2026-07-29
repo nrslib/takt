@@ -15,6 +15,8 @@ import type { FacetType } from '../../infra/config/paths.js';
 import {
   getGlobalWorkflowsDir,
   getProjectWorkflowsDir,
+  getGlobalStepsDir,
+  getProjectStepsDir,
   getBuiltinWorkflowsDir,
   getProjectFacetDir,
   getGlobalFacetDir,
@@ -25,6 +27,11 @@ import {
 import { header, success, info, warn, error, blankLine } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { VALID_FACET_TYPES } from './facetTypes.js';
+import {
+  copyReferencedBuiltinStepFragments,
+  pathExistsForEject,
+  writeNewEjectedFile,
+} from './ejectStepFragments.js';
 
 export interface EjectOptions {
   global?: boolean;
@@ -36,10 +43,6 @@ function resolveEjectPath(baseDir: string, name: string, extension: '.yaml' | '.
   return isPathSafe(baseDir, candidatePath) ? candidatePath : undefined;
 }
 
-/**
- * Eject a builtin workflow YAML to project or global space for customization.
- * Only copies the workflow YAML — facets are resolved via layer system.
- */
 export async function ejectBuiltin(name: string | undefined, options: EjectOptions): Promise<void> {
   header('Eject Builtin');
 
@@ -75,13 +78,25 @@ export async function ejectBuiltin(name: string | undefined, options: EjectOptio
     return;
   }
   const safeWorkflowDest = sanitizeTerminalText(workflowDest);
-  if (existsSync(workflowDest)) {
+  if (pathExistsForEject(workflowDest)) {
     warn(`User workflow already exists: ${safeWorkflowDest}`);
     warn('Skipping workflow copy (user version takes priority).');
   } else {
-    mkdirSync(dirname(workflowDest), { recursive: true });
     const content = readFileSync(builtinPath, 'utf-8');
-    writeFileSync(workflowDest, content, 'utf-8');
+    const targetStepsDir = options.global ? getGlobalStepsDir() : getProjectStepsDir(options.projectDir);
+    const rollbackStepFragments = copyReferencedBuiltinStepFragments(
+      content,
+      lang,
+      targetStepsDir,
+      workflowDest,
+      !options.global,
+    );
+    try {
+      writeNewEjectedFile(options.global ? dirname(dirname(targetWorkflowsDir)) : options.projectDir, workflowDest, content);
+    } catch (error) {
+      rollbackStepFragments();
+      throw error;
+    }
     success(`Ejected workflow: ${safeWorkflowDest}`);
   }
 }

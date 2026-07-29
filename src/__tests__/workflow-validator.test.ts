@@ -3,6 +3,7 @@ import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import type { NormalAgentWorkflowStep, WorkflowConfig, WorkflowRule } from '../core/models/index.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
+import { getProviderValidationErrorSource } from '../core/workflow/provider-validation-error.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 function createFakeLedgerStore(): FindingLedgerStore {
@@ -275,6 +276,35 @@ describe('validateWorkflowConfig', () => {
     })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
   });
 
+  it('retains a workflow_call model source when auto-routing rejects the finding manager', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+    });
+    let validationError: unknown;
+
+    try {
+      validateWorkflowConfig(workflow, {
+        projectCwd: process.cwd(),
+        model: 'sonnet',
+        modelSource: 'workflow_call',
+        autoRouting: createValidatorAutoRouting({ steps: { 'findings-manager': 'codex' } }),
+      });
+    } catch (error) {
+      validationError = error;
+    }
+
+    expect(validationError).toBeInstanceOf(Error);
+    expect(getProviderValidationErrorSource(validationError)).toMatchObject({ field: 'model', source: 'workflow_call' });
+  });
+
   it('fails fast for incompatible auto-routing on the finding interpreter synthesized step', () => {
     // findings-interpreter は findings-manager と設定を共有するが名前が異なる
     // 合成ステップで、auto_routing.rules.steps で別々に routing され得る。
@@ -297,6 +327,35 @@ describe('validateWorkflowConfig', () => {
       projectCwd: process.cwd(),
       autoRouting: createValidatorAutoRouting({ steps: { 'findings-interpreter': 'codex' } }),
     })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
+  });
+
+  it('retains a workflow_call model source when auto-routing rejects the finding interpreter', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+    });
+    let validationError: unknown;
+
+    try {
+      validateWorkflowConfig(workflow, {
+        projectCwd: process.cwd(),
+        model: 'sonnet',
+        modelSource: 'workflow_call',
+        autoRouting: createValidatorAutoRouting({ steps: { 'findings-interpreter': 'codex' } }),
+      });
+    } catch (error) {
+      validationError = error;
+    }
+
+    expect(validationError).toBeInstanceOf(Error);
+    expect(getProviderValidationErrorSource(validationError)).toMatchObject({ field: 'model', source: 'workflow_call' });
   });
 
   it('validates the finding manager against the deterministic strategy default, not every auto-routing candidate', () => {

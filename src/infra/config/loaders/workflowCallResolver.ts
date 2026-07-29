@@ -6,6 +6,9 @@ import { validateWorkflowCallRulesAgainstChildReturns } from './workflowCallCont
 import { getWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
 import { loadWorkflowByIdentifierForWorkflowCall, isWorkflowPath } from './workflowResolver.js';
 import { validateWorkflowCallTrustBoundary } from './workflowTrustBoundary.js';
+import { annotateWorkflowConfigFragmentError } from './workflowRawParser.js';
+import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
+import { findWorkflowStepLocation } from '../../../core/workflow/workflow-step-location.js';
 
 export interface WorkflowCallParentContext {
   sourcePath?: string;
@@ -29,10 +32,20 @@ export function resolveWorkflowCallTarget(
   lookupCwd = projectCwd,
   parentContext?: WorkflowCallParentContext,
 ): WorkflowConfig | null {
+  const stepPath = findWorkflowStepLocation(parentWorkflow, parentStep);
+  const decorateParentError = (error: unknown): Error => {
+    const located = stepPath ? withWorkflowStepErrorPath(error, [...stepPath, 'call']) : error;
+    return annotateWorkflowConfigFragmentError(located, parentWorkflow);
+  };
+
   const stepName = parentStep.name;
   const identifier = parentStep.call;
   if (!isScopeRef(identifier) && !isWorkflowPath(identifier)) {
-    validateWorkflowCallNamedIdentifier(identifier, stepName);
+    try {
+      validateWorkflowCallNamedIdentifier(identifier, stepName);
+    } catch (error) {
+      throw decorateParentError(error);
+    }
   }
 
   const parentSourcePath = getWorkflowSourcePath(parentWorkflow) ?? parentContext?.sourcePath;
@@ -47,16 +60,13 @@ export function resolveWorkflowCallTarget(
     parentTrustInfo,
   });
 
-  if (!childWorkflow) {
-    return null;
-  }
+  if (!childWorkflow) return null;
 
-  validateWorkflowCallTrustBoundary(
-    parentTrustInfo,
-    childWorkflow,
-    stepName,
-    projectCwd,
-  );
-  validateWorkflowCallRulesAgainstChildReturns(parentStep, childWorkflow);
-  return childWorkflow;
+  try {
+    validateWorkflowCallTrustBoundary(parentTrustInfo, childWorkflow, stepName, projectCwd);
+    validateWorkflowCallRulesAgainstChildReturns(parentStep, childWorkflow, stepPath);
+    return childWorkflow;
+  } catch (error) {
+    throw decorateParentError(error);
+  }
 }

@@ -13,6 +13,12 @@
   <a href="./docs/README.ja.md">日本語</a>
 </p>
 
+<p align="center">
+  <a href="https://nrslib.github.io/takt/#tutorial">
+    <img src="./docs/assets/tutorial-preview.gif" alt="TAKT tutorial preview showing a task being described, queued, and executed by multiple AI agents" width="720">
+  </a>
+</p>
+
 **Stop babysitting AI coding agents.**
 
 TAKT is an open-source CLI that turns AI coding agents into repeatable development workflows. Define planning, implementation, review, fix loops, human checkpoints, permissions, and output contracts in YAML, then run tasks with isolated worktrees and traceable logs.
@@ -221,6 +227,8 @@ steps:
 ```
 
 Rules determine the next step. `COMPLETE` ends the workflow successfully, `ABORT` ends with failure. See the [Workflow Guide](./docs/workflows.md) for the full schema, parallel steps, and rule condition types.
+
+Reusable step definitions can be stored in `.takt/steps/` and expanded with `uses` before validation. See the Workflow Guide for fragment lookup and override rules.
 
 Workflow files live in `workflows/` as the official directory name.
 

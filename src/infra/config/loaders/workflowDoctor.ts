@@ -2,13 +2,16 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import { getProjectWorkflowsDir, getRepertoireDir, isPathSafe } from '../paths.js';
 import { resolveWorkflowConfigValue } from '../resolveWorkflowConfigValue.js';
 import { validateDoctorGraph } from './workflowDoctorGraph.js';
 import { validateWorkflowReferences } from './workflowDoctorRefValidator.js';
 import type { WorkflowDiagnostic, WorkflowDoctorReport } from './workflowDoctorTypes.js';
 import { formatWorkflowLoadWarning } from './workflowLoadWarning.js';
+import {
+  annotateWorkflowFragmentError,
+  parseWorkflowRaw,
+} from './workflowRawParser.js';
 import { isMissingWorkflowCallArgError } from './workflowCallableArgResolver.js';
 import {
   findWorkflowInLookupDirs,
@@ -16,7 +19,7 @@ import {
 } from './workflowLookupDirectories.js';
 import { isWorkflowPath, validateWorkflowCallContracts } from './workflowResolver.js';
 import { loadWorkflowFileWithResolutionOptions } from './workflowResolvedLoader.js';
-import type { WorkflowTrustSource } from './workflowTrustSource.js';
+import { resolveWorkflowTrustInfo, type WorkflowTrustSource } from './workflowTrustSource.js';
 import {
   type FacetResolutionContext,
   type WorkflowSections,
@@ -26,7 +29,7 @@ import {
 
 export type { WorkflowDiagnostic, WorkflowDoctorReport } from './workflowDoctorTypes.js';
 
-type RawWorkflow = ReturnType<typeof WorkflowConfigRawSchema.parse>;
+type RawWorkflow = ReturnType<typeof parseWorkflowRaw>;
 
 export interface WorkflowDoctorTarget {
   filePath: string;
@@ -221,26 +224,51 @@ export function inspectWorkflowFile(
   },
 ): WorkflowDoctorReport {
   try {
-    const raw = WorkflowConfigRawSchema.parse(parseYaml(readFileSync(filePath, 'utf-8')));
+    const context = buildContext(projectDir, filePath);
+    const raw = parseWorkflowRaw(parseYaml(readFileSync(filePath, 'utf-8')), {
+      context,
+      workflowPath: filePath,
+      trustInfo: resolveWorkflowTrustInfo({
+        filePath,
+        projectCwd: projectDir,
+        lookupCwd: options?.lookupCwd,
+        source: options?.source,
+      }),
+    });
     const lookupCwd = options?.lookupCwd ?? projectDir;
     try {
       const workflow = loadWorkflowForDoctorValidation(filePath, projectDir, raw, options);
       validateWorkflowCallContracts(workflow, projectDir, lookupCwd, { allowPathBasedCalls: false });
     } catch (error) {
       return {
-        diagnostics: [{ level: 'error', message: formatWorkflowLoadWarning(basename(filePath), error) }],
+        diagnostics: [{
+          level: 'error',
+          message: formatWorkflowLoadWarning(
+            basename(filePath),
+            annotateWorkflowFragmentError(error, raw, filePath),
+          ),
+        }],
         filePath,
       };
     }
 
-    const context = buildContext(projectDir, filePath);
     const sections = buildSections(raw, context);
     const diagnostics: WorkflowDiagnostic[] = [];
     validateWorkflowReferences(raw, sections, context, diagnostics);
     validateDoctorGraph(raw, diagnostics);
 
     return {
-      diagnostics,
+      diagnostics: diagnostics.map(({ path, ...diagnostic }) => ({
+        ...diagnostic,
+        message: path === undefined
+          ? diagnostic.message
+          : annotateWorkflowFragmentError(
+            new Error(diagnostic.message),
+            raw,
+            filePath,
+            path,
+          ).message,
+      })),
       filePath,
     };
   } catch (error) {

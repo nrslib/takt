@@ -6,7 +6,7 @@ import { createLogger, isRealPathInside } from '../../shared/utils/index.js';
 
 const log = createLogger('project-local-takt-sync');
 
-const SYNCED_TAKT_RESOURCES = ['config.yaml', 'workflows', 'facets', 'quality-gates'] as const;
+const SYNCED_TAKT_RESOURCES = ['config.yaml', 'workflows', 'facets', 'steps', 'quality-gates'] as const;
 const QUALITY_GATES_GENERATED_DIRS = new Set(['logs']);
 const TAKT_RUNS_GIT_EXCLUDE_PATTERN = '/.takt/runs/';
 

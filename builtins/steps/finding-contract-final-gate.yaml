@@ -1,0 +1,19 @@
+kind: workflow_call
+call: merge-readiness-finding-contract-final-gate
+args:
+  supervise_knowledge:
+    - architecture
+    - takt
+rules:
+  - condition: COMPLETE
+    next: COMPLETE
+  - condition: needs_review
+    next: reviewers
+  - condition: need_replan
+    next: replan
+  - condition: needs_fix
+    next: fix
+  - condition: needs_conflict_adjudication
+    next: finding-conflict-adjudication
+  - condition: ABORT
+    next: ABORT

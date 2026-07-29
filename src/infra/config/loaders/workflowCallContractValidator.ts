@@ -4,6 +4,9 @@ import { collectWorkflowCallSteps } from '../../../core/workflow/workflow-step-t
 import { validateWorkflowCallRulesAgainstChildReturns } from './workflowCallContracts.js';
 import { getWorkflowSourcePath } from './workflowSourceMetadata.js';
 import { getWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
+import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
+import { findWorkflowStepLocation } from '../../../core/workflow/workflow-step-location.js';
+import { annotateWorkflowConfigFragmentError } from './workflowRawParser.js';
 
 interface WorkflowCallValidationLookupOptions {
   basePath?: string;
@@ -54,6 +57,7 @@ function validateWorkflowCallContractsRecursive(
   const parentTrustInfo = getWorkflowTrustInfo(workflow, projectCwd);
 
   for (const step of collectWorkflowCallSteps(workflow.steps)) {
+    const stepPath = findWorkflowStepLocation(workflow, step);
     if (!allowPathBasedCalls && deps.isWorkflowPath(step.call)) {
       continue;
     }
@@ -73,9 +77,13 @@ function validateWorkflowCallContractsRecursive(
     const parentProvidesFindingContract = workflow.findingContract !== undefined
       || workflow.subworkflow?.requiresFindingContract === true;
     if (childWorkflow.subworkflow?.requiresFindingContract === true && !parentProvidesFindingContract) {
-      throw new Error(
-        `Configuration error: workflow_call step "${step.name}" calls workflow "${childWorkflow.name}", `
-        + 'which requires a finding_contract inherited from its caller, but the calling workflow does not provide one',
+      const error = new Error(
+          `Configuration error: workflow_call step "${step.name}" calls workflow "${childWorkflow.name}", `
+          + 'which requires a finding_contract inherited from its caller, but the calling workflow does not provide one',
+      );
+      throw annotateWorkflowConfigFragmentError(
+        stepPath ? withWorkflowStepErrorPath(error, [...stepPath, 'call']) : error,
+        workflow,
       );
     }
 
@@ -87,7 +95,11 @@ function validateWorkflowCallContractsRecursive(
       deps,
       allowPathBasedCalls,
     );
-    validateWorkflowCallRulesAgainstChildReturns(step, childWorkflow);
+    try {
+      validateWorkflowCallRulesAgainstChildReturns(step, childWorkflow, stepPath);
+    } catch (error) {
+      throw annotateWorkflowConfigFragmentError(error, workflow);
+    }
   }
 }
 

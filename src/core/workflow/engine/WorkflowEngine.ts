@@ -60,6 +60,7 @@ import {
 } from '../review-report-discovery.js';
 import { getRemoteRepositoryIdentifiers } from '../../../infra/git/detect.js';
 import { WorkflowResumeContinuation } from './workflow-resume-continuation.js';
+import { inheritWorkflowConfigMetadata, translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
 const log = createLogger('workflow-engine');
 
 type WorkflowEngineRuntimeOptions = WorkflowEngineOptions & {
@@ -178,6 +179,7 @@ export class WorkflowEngine extends EventEmitter {
       config,
       options.inheritedFindingContract?.contract ?? config.findingContract,
     );
+    inheritWorkflowConfigMetadata(config, this.config);
     this.options = {
       ...options,
       rateLimitFallback: config.rateLimitFallback ?? options.rateLimitFallback,
@@ -204,7 +206,11 @@ export class WorkflowEngine extends EventEmitter {
     this.reportDir = this.runPaths.reportsRel;
     ensureRunDirsExist(this.runPaths);
     applyRuntimeEnvironment(this.cwd, this.config, 'init');
-    validateWorkflowConfig(this.config, this.options);
+    try {
+      validateWorkflowConfig(this.config, this.options);
+    } catch (error) {
+      throw translateWorkflowConfigError(this.config, error);
+    }
 
     this.state = createInitialState(this.config, this.options);
     this.resumeContinuation = new WorkflowResumeContinuation(

@@ -331,7 +331,9 @@ const WorkflowCallOverridesRawSchema = z.object({
 
 const AgentParallelSubStepRawSchema = z.object({
   name: WorkflowStepNameSchema,
+  description: z.never().optional(),
   kind: z.never().optional(),
+  mode: z.never().optional(),
   call: z.never().optional(),
   args: z.never().optional(),
   overrides: z.never().optional(),
@@ -355,10 +357,18 @@ const AgentParallelSubStepRawSchema = z.object({
   requires_user_input: z.never().optional(),
   instruction: WorkflowFacetRefOrParamSchema.optional(),
   instruction_template: z.never().optional(),
+  delay_before_ms: z.never().optional(),
+  structured_output: z.never().optional(),
+  system_inputs: z.never().optional(),
+  effects: z.never().optional(),
   rules: WorkflowRulesSchema.optional(),
   output_contracts: OutputContractsFieldSchema,
   quality_gates: QualityGatesSchema,
   pass_previous_response: z.boolean().optional(),
+  parallel: z.never().optional(),
+  concurrency: z.never().optional(),
+  arpeggio: z.never().optional(),
+  team_leader: z.never().optional(),
 }).superRefine((data, ctx) => {
   validateParallelSubStepRules(data.rules, ctx);
   data.rules?.forEach((rule, index) => {
@@ -375,11 +385,13 @@ const AgentParallelSubStepRawSchema = z.object({
 const WorkflowCallParallelSubStepRawSchema = z.object({
   name: WorkflowStepNameSchema,
   kind: z.literal('workflow_call').optional(),
+  mode: z.never().optional(),
   call: z.string().min(1),
   overrides: WorkflowCallOverridesRawSchema.optional(),
   args: WorkflowCallArgsRawSchema.optional(),
   description: z.string().optional(),
   session_key: z.never().optional(),
+  session: z.never().optional(),
   persona: z.never().optional(),
   persona_name: z.never().optional(),
   tags: z.never().optional(),
@@ -398,10 +410,18 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   requires_user_input: z.never().optional(),
   instruction: z.never().optional(),
   instruction_template: z.never().optional(),
+  delay_before_ms: z.never().optional(),
+  structured_output: z.never().optional(),
+  system_inputs: z.never().optional(),
+  effects: z.never().optional(),
   rules: WorkflowRulesSchema.optional(),
   output_contracts: z.never().optional(),
   quality_gates: z.never().optional(),
   pass_previous_response: z.never().optional(),
+  parallel: z.never().optional(),
+  concurrency: z.never().optional(),
+  arpeggio: z.never().optional(),
+  team_leader: z.never().optional(),
 }).superRefine((data, ctx) => {
   validateParallelSubStepRules(data.rules, ctx);
   validateWorkflowCallRules(data.rules, ctx, { allowExtendedConditions: true });

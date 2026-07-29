@@ -208,3 +208,8 @@ steps:
       - condition: 判断できない、情報不足
         return: need_replan
     instruction: fix
+    output_contracts:
+      report:
+        - name: fix-report.md
+          format: fix-report
+          use_judge: false

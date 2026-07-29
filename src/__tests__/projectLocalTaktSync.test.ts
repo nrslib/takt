@@ -104,6 +104,23 @@ describe('syncProjectLocalTaktForRetry', () => {
     expect(existsSync(join(worktreePath, '.takt', 'quality-gates'))).toBe(false);
   });
 
+  it('should synchronize new, changed, and removed step fragments for retry worktrees', () => {
+    const projectDir = createTempDir('takt-sync-project-');
+    const worktreePath = createTempDir('takt-sync-worktree-');
+    mkdirSync(join(projectDir, '.takt', 'steps'), { recursive: true });
+    mkdirSync(join(worktreePath, '.takt', 'steps'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'steps', 'review.yaml'), 'instruction: current\n', 'utf-8');
+    writeFileSync(join(projectDir, '.takt', 'steps', 'added.yaml'), 'instruction: added\n', 'utf-8');
+    writeFileSync(join(worktreePath, '.takt', 'steps', 'review.yaml'), 'instruction: stale\n', 'utf-8');
+    writeFileSync(join(worktreePath, '.takt', 'steps', 'removed.yaml'), 'instruction: removed\n', 'utf-8');
+
+    syncProjectLocalTaktForRetry(projectDir, worktreePath);
+
+    expect(readFileSync(join(worktreePath, '.takt', 'steps', 'review.yaml'), 'utf-8')).toBe('instruction: current\n');
+    expect(readFileSync(join(worktreePath, '.takt', 'steps', 'added.yaml'), 'utf-8')).toBe('instruction: added\n');
+    expect(existsSync(join(worktreePath, '.takt', 'steps', 'removed.yaml'))).toBe(false);
+  });
+
   it('should not sync generated quality gate logs into retry worktrees', () => {
     const projectDir = createTempDir('takt-sync-project-');
     const worktreePath = createTempDir('takt-sync-worktree-');

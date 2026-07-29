@@ -8,7 +8,13 @@
   <meta property="og:title" content="TAKT — Multi-Agent Workflow Orchestration CLI">
   <meta property="og:description" content="Stop babysitting AI coding agents. Orchestrate multiple AI agents through YAML-defined workflows.">
   <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nrslib.github.io/takt/">
+  <meta property="og:image" content="https://nrslib.github.io/takt/assets/tutorial-preview.jpg">
+  <meta property="og:image:width" content="720">
+  <meta property="og:image:height" content="405">
+  <meta property="og:image:alt" content="TAKT turns an instruction into a queued multi-agent workflow">
   <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://nrslib.github.io/takt/assets/tutorial-preview.jpg">
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwindcss.config = {
@@ -56,9 +62,119 @@
           <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
           GitHub
         </a>
+        <a href="#tutorial" class="inline-flex items-center gap-2 border border-white/30 text-white font-semibold px-6 py-3 rounded-lg hover:bg-white/10 transition">
+          <svg class="w-5 h-5" aria-hidden="true" fill="currentColor" viewBox="0 0 20 20"><path d="M6.5 4.9a1 1 0 0 1 1.53-.85l7 4.6a1 1 0 0 1 0 1.7l-7 4.6A1 1 0 0 1 6.5 14.1V4.9Z"/></svg>
+          Watch TAKT Run
+        </a>
         <a href="https://github.com/nrslib/takt#quick-start" class="inline-flex items-center gap-2 border border-takt-400 text-takt-300 font-semibold px-6 py-3 rounded-lg hover:bg-takt-400/10 transition">
           Get Started
         </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tutorial -->
+  <section id="tutorial" class="scroll-mt-6 border-y border-white/5 bg-slate-950/20 px-6 py-20">
+    <div class="max-w-5xl mx-auto">
+      <div class="text-center mb-10">
+        <p class="text-takt-400 font-mono text-sm tracking-widest uppercase mb-3">See TAKT in Action</p>
+        <h2 class="text-3xl md:text-4xl font-bold mb-4">Describe it. Queue it. Let TAKT run.</h2>
+        <p class="text-gray-400 max-w-3xl mx-auto leading-relaxed">
+          Refine the instruction in a conversation, save it as a task, then run <code class="text-takt-300 font-mono text-sm">takt run</code>.
+          TAKT coordinates planning, implementation, and parallel review in an isolated worktree.
+        </p>
+      </div>
+
+      <figure class="mb-12">
+        <div class="rounded-2xl border border-takt-400/20 bg-slate-950/80 p-2 md:p-3 shadow-2xl shadow-sky-950/40">
+          <picture>
+            <source media="(prefers-reduced-motion: reduce)" srcset="./assets/tutorial-preview.jpg">
+            <img
+              src="./assets/tutorial-preview.gif"
+              width="720"
+              height="405"
+              loading="lazy"
+              decoding="async"
+              alt="TAKT tutorial preview showing an instruction being refined, queued as a task, and executed through planning, coding, and parallel AI review"
+              class="w-full rounded-xl"
+            >
+          </picture>
+        </div>
+        <figcaption class="mt-4 text-center text-sm text-gray-500">
+          A task moves through a repeatable workflow: describe, queue, run, and review. Animated preview, 35 seconds, no audio.
+        </figcaption>
+      </figure>
+
+      <div class="text-center mb-7">
+        <h3 class="text-2xl font-semibold mb-2">Watch the full tutorial</h3>
+        <p class="text-gray-400 text-sm">Continue with the complete hands-on walkthrough on YouTube.</p>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+        <a
+          href="https://youtu.be/HUcFFvOy39I"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Watch TAKT Video Tutorial Chapter 1 on YouTube"
+          class="feature-card group overflow-hidden rounded-xl transition focus:outline-none focus-visible:ring-2 focus-visible:ring-takt-400"
+        >
+          <div class="relative aspect-video overflow-hidden bg-slate-900">
+            <img
+              src="https://i.ytimg.com/vi/HUcFFvOy39I/hqdefault.jpg"
+              width="480"
+              height="360"
+              loading="lazy"
+              decoding="async"
+              alt=""
+              class="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+            >
+            <span class="absolute inset-0 flex items-center justify-center bg-slate-950/20 transition group-hover:bg-slate-950/5">
+              <span class="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white shadow-lg">
+                <svg class="ml-1 h-6 w-6" aria-hidden="true" fill="currentColor" viewBox="0 0 20 20"><path d="M6.5 4.9a1 1 0 0 1 1.53-.85l7 4.6a1 1 0 0 1 0 1.7l-7 4.6A1 1 0 0 1 6.5 14.1V4.9Z"/></svg>
+              </span>
+            </span>
+          </div>
+          <div class="p-5">
+            <p class="text-takt-400 font-mono text-xs tracking-widest uppercase mb-2">Video Tutorial</p>
+            <h4 class="text-lg font-semibold text-white">Chapter 1</h4>
+          </div>
+        </a>
+
+        <a
+          href="https://youtu.be/UIlM2iM-rmA"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Watch TAKT Video Tutorial Chapter 2 on YouTube"
+          class="feature-card group overflow-hidden rounded-xl transition focus:outline-none focus-visible:ring-2 focus-visible:ring-takt-400"
+        >
+          <div class="relative aspect-video overflow-hidden bg-slate-900">
+            <img
+              src="https://i.ytimg.com/vi/UIlM2iM-rmA/hqdefault.jpg"
+              width="480"
+              height="360"
+              loading="lazy"
+              decoding="async"
+              alt=""
+              class="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+            >
+            <span class="absolute inset-0 flex items-center justify-center bg-slate-950/20 transition group-hover:bg-slate-950/5">
+              <span class="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white shadow-lg">
+                <svg class="ml-1 h-6 w-6" aria-hidden="true" fill="currentColor" viewBox="0 0 20 20"><path d="M6.5 4.9a1 1 0 0 1 1.53-.85l7 4.6a1 1 0 0 1 0 1.7l-7 4.6A1 1 0 0 1 6.5 14.1V4.9Z"/></svg>
+              </span>
+            </span>
+          </div>
+          <div class="p-5">
+            <p class="text-takt-400 font-mono text-xs tracking-widest uppercase mb-2">Video Tutorial</p>
+            <h4 class="text-lg font-semibold text-white">Chapter 2</h4>
+          </div>
+        </a>
+      </div>
+
+      <div class="mt-7 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-sm text-gray-500">
+        <span>Japanese videos:</span>
+        <a href="https://youtu.be/H_L_slDJNqs" target="_blank" rel="noopener noreferrer" class="text-takt-300 hover:text-takt-200 underline underline-offset-4">Chapter 1</a>
+        <a href="https://youtu.be/cfM9USMkh2Y" target="_blank" rel="noopener noreferrer" class="text-takt-300 hover:text-takt-200 underline underline-offset-4">Chapter 2</a>
+        <a href="https://github.com/nrslib/takt/blob/main/docs/tutorial.md" target="_blank" rel="noopener noreferrer" class="text-takt-300 hover:text-takt-200 underline underline-offset-4">Written tutorial</a>
       </div>
     </div>
   </section>

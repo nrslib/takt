@@ -49,6 +49,7 @@ describe('CLI dynamic import error boundary', () => {
   it('should propagate a command module load error to the CLI boundary', async () => {
     process.argv = ['node', 'takt', 'run'];
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    mockGetErrorMessage.mockReturnValueOnce('run \x1b[31mmodule\x1b[0m load \x1b]0;title\x07failed\x1f\n\t');
 
     await import('../app/cli/index.js');
     await vi.waitFor(() => expect(mockErrorLog).toHaveBeenCalled());
@@ -56,7 +57,8 @@ describe('CLI dynamic import error boundary', () => {
     const boundaryError = mockGetErrorMessage.mock.calls[0]?.[0];
     expect(boundaryError).toBeInstanceOf(Error);
     expect((boundaryError as Error & { cause?: unknown }).cause).toBe(importError);
-    expect(mockErrorLog).toHaveBeenCalledWith((boundaryError as Error).message);
+    expect(mockErrorLog).toHaveBeenCalledWith('run module load failed\\x1f\\n\\t');
+    expect(mockErrorLog).not.toHaveBeenCalledWith(expect.stringContaining('\x1b'));
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });

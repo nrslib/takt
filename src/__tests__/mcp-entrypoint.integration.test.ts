@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { describe, expect, it } from 'vitest';
 
 const SOURCE_STDIO_ENTRYPOINT_RUNNER = 'src/__tests__/helpers/mcp-source-stdio-entrypoint.ts';
@@ -20,6 +20,14 @@ describe('MCP stdio entrypoint integration', () => {
         SOURCE_STDIO_ENTRYPOINT_RUNNER,
       ],
       cwd: process.cwd(),
+      env: {
+        ...getDefaultEnvironment(),
+        // Keep the spawned MCP server hermetic: without this it falls back to
+        // the operator's real ~/.takt/config.yaml.
+        ...(process.env.TAKT_CONFIG_DIR !== undefined
+          ? { TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR }
+          : {}),
+      },
       stderr: 'pipe',
     });
     const stderrChunks: Buffer[] = [];

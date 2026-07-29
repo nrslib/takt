@@ -11,7 +11,7 @@ import type {
   WorkflowStep,
   WorkflowSubworkflowConfig,
 } from '../../../core/models/index.js';
-import { hasFindingsReference } from '../../../core/models/workflow-rule-condition.js';
+import { hasFindingsReference, parseWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
 import {
   FINDING_CONFLICT_ADJUDICATION_PERSONA,
   workflowWiresFindingConflictAdjudication,
@@ -37,6 +37,13 @@ import {
   type WorkflowCallArgResolutionPolicy,
 } from './workflowCallableArgResolver.js';
 import { prepareCallableSubworkflowDiscoveryArgs } from './workflowCallableDiscoveryArgs.js';
+import {
+  annotateWorkflowFragmentError,
+  parseWorkflowRaw,
+  registerWorkflowFragmentErrorSource,
+} from './workflowRawParser.js';
+import type { WorkflowTrustInfo } from './workflowTrustSource.js';
+import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 
 function normalizeSubworkflowConfig(
   raw: ReturnType<typeof WorkflowConfigRawSchema.parse>['subworkflow'],
@@ -184,7 +191,7 @@ function resolveFindingConflictAdjudicator(
 }
 
 function validateFindingsRulesRequireContract(
-  steps: readonly WorkflowStep[],
+  steps: ReturnType<typeof WorkflowConfigRawSchema.parse>['steps'],
   loopMonitors: readonly LoopMonitorConfig[] | undefined,
   findingContract: FindingContractConfig | undefined,
   requiresInheritedFindingContract: boolean,
@@ -193,20 +200,26 @@ function validateFindingsRulesRequireContract(
     return;
   }
 
-  for (const step of steps) {
-    for (const rule of step.rules ?? []) {
-      if (!hasFindingsReference(rule.condition)) {
+  for (const [stepIndex, step] of steps.entries()) {
+    for (const [ruleIndex, rule] of (step.rules ?? []).entries()) {
+      if (!hasFindingsReference(parseWorkflowRuleCondition(rule.condition))) {
         continue;
       }
-      throw new Error(`Configuration error: step "${step.name}" uses findings.* rule but finding_contract is not configured`);
+      throw withWorkflowStepErrorPath(
+        new Error(`Configuration error: step "${step.name}" uses findings.* rule but finding_contract is not configured`),
+        ['steps', stepIndex, 'rules', ruleIndex],
+      );
     }
-    for (const subStep of step.parallel ?? []) {
-      for (const rule of subStep.rules ?? []) {
-        if (!hasFindingsReference(rule.condition)) {
+    for (const [subStepIndex, subStep] of (step.parallel ?? []).entries()) {
+      for (const [ruleIndex, rule] of (subStep.rules ?? []).entries()) {
+        if (!hasFindingsReference(parseWorkflowRuleCondition(rule.condition))) {
           continue;
         }
-        throw new Error(
-          `Configuration error: parallel sub-step "${subStep.name}" in step "${step.name}" uses findings.* rule but finding_contract is not configured`,
+        throw withWorkflowStepErrorPath(
+          new Error(
+            `Configuration error: parallel sub-step "${subStep.name}" in step "${step.name}" uses findings.* rule but finding_contract is not configured`,
+          ),
+          ['steps', stepIndex, 'parallel', subStepIndex, 'rules', ruleIndex],
         );
       }
     }
@@ -222,6 +235,15 @@ function validateFindingsRulesRequireContract(
   }
 }
 
+interface NormalizeWorkflowConfigOptions {
+  callableArgs?: Record<string, string | string[]>,
+  callableArgPolicy?: WorkflowCallArgResolutionPolicy,
+  callableArgMode?: 'runtime' | 'discovery',
+  workflowCommandGatesPolicy?: WorkflowCommandGatesConfig,
+  workflowPath?: string,
+  workflowTrustInfo?: WorkflowTrustInfo,
+}
+
 export function normalizeWorkflowConfig(
   raw: unknown,
   workflowDir: string,
@@ -231,12 +253,22 @@ export function normalizeWorkflowConfig(
   workflowRuntimePreparePolicy?: WorkflowRuntimePrepareConfig,
   workflowArpeggioPolicy?: WorkflowArpeggioConfig,
   workflowMcpServersPolicy?: WorkflowMcpServersConfig,
-  callableArgs?: Record<string, string | string[]>,
-  callableArgPolicy?: WorkflowCallArgResolutionPolicy,
-  callableArgMode: 'runtime' | 'discovery' = 'runtime',
-  workflowCommandGatesPolicy?: WorkflowCommandGatesConfig,
+  options: NormalizeWorkflowConfigOptions = {},
 ): WorkflowConfig {
-  const parsedRaw = WorkflowConfigRawSchema.parse(raw);
+  const {
+    callableArgs,
+    callableArgPolicy,
+    callableArgMode = 'runtime',
+    workflowCommandGatesPolicy,
+    workflowPath,
+    workflowTrustInfo,
+  } = options;
+  const parsedRaw = parseWorkflowRaw(raw, {
+    context,
+    workflowPath: workflowPath ?? workflowDir,
+    trustInfo: workflowTrustInfo,
+  });
+  try {
   if (
     parsedRaw.finding_contract !== undefined
     && parsedRaw.subworkflow?.requires_finding_contract === true
@@ -283,12 +315,13 @@ export function normalizeWorkflowConfig(
     workflowDir,
     context,
   );
-  const steps: WorkflowStep[] = parsed.steps.map((step) =>
+  const steps: WorkflowStep[] = parsed.steps.map((step, index) =>
     normalizeStepFromRaw(
       step,
       workflowDir,
       sections,
       parsed.schemas,
+      ['steps', index],
       normalizedWorkflowProvider.provider,
       normalizedWorkflowProvider.model,
       normalizedWorkflowProvider.modelSpecified,
@@ -308,14 +341,14 @@ export function normalizeWorkflowConfig(
   const loopMonitors = normalizeLoopMonitors(parsed.loop_monitors, workflowDir, sections, context);
   const findingContract = normalizeFindingContractConfig(parsed.finding_contract, workflowDir, sections, context);
   validateFindingsRulesRequireContract(
-    steps,
+    parsed.steps,
     loopMonitors,
     findingContract,
     parsed.subworkflow?.requires_finding_contract === true,
   );
   resolveFindingConflictAdjudicator(findingContract, steps, loopMonitors, workflowDir, sections, context);
 
-  return {
+  const config: WorkflowConfig = {
     name: parsed.name,
     description: parsed.description,
     subworkflow: normalizeSubworkflowConfig(parsed.subworkflow),
@@ -338,4 +371,13 @@ export function normalizeWorkflowConfig(
     loopMonitors,
     interactiveMode: parsed.interactive_mode,
   };
+  registerWorkflowFragmentErrorSource(config, parsedRaw, workflowPath ?? workflowDir);
+  return config;
+  } catch (error) {
+    throw annotateWorkflowFragmentError(
+      error,
+      parsedRaw,
+      workflowPath ?? workflowDir,
+    );
+  }
 }

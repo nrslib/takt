@@ -4,6 +4,7 @@ import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
+import { resolveWorkflowProviderOptionsWithHost } from '../infra/config/loaders/workflowProviderOptionsResolver.js';
 import { mergeProviderOptions } from '../infra/config/providerOptions.js';
 
 function writeProviderOptionsPreset(providerOptionsDir: string, name: string, lines: string[]): void {
@@ -675,7 +676,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の名前 extends は project に無い場合 global provider-options を解決する', () => {
+  it('provider_options の名前 extends は存在しない project provider-options 候補を飛ばして global を解決する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-global-'));
     const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-global-config-'));
     try {
@@ -718,6 +719,33 @@ describe('normalizeWorkflowConfig provider_options', () => {
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(globalConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options resolver は存在しない上位候補を飛ばして次の候補を解決する', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-resolver-missing-candidate-'));
+    try {
+      const providerOptionsDir = join(tempDir, 'provider-options');
+      writeProviderOptionsPreset(providerOptionsDir, 'review-readonly', [
+        'opencode:',
+        '  allowed_tools:',
+        '    - read',
+      ]);
+
+      const result = resolveWorkflowProviderOptionsWithHost(
+        { extends: 'review-readonly' },
+        tempDir,
+        {
+          rootDir: tempDir,
+          candidateDirs: [join(tempDir, 'missing-provider-options'), providerOptionsDir],
+        },
+      );
+
+      expect(result).toEqual({
+        opencode: { allowedTools: ['read'] },
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
@@ -1035,6 +1063,51 @@ describe('normalizeWorkflowConfig provider_options', () => {
       })).toThrow(/candidate directory must not be a symlink/);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の名前 extends は空の symlink project provider-options を越えて global preset を解決する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-empty-dir-symlink-project-'));
+    const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-empty-dir-symlink-global-'));
+    const outsideDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-empty-dir-symlink-outside-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      mkdirSync(workflowDir, { recursive: true });
+      symlinkSync(outsideDir, join(projectDir, '.takt', 'provider-options'));
+      writeProviderOptionsPreset(join(globalConfigDir, 'provider-options'), 'review', [
+        'opencode:',
+        '  allowed_tools:',
+        '    - global-read',
+      ]);
+      const raw = {
+        name: 'named-provider-options-empty-dir-symlink',
+        workflow_config: {
+          provider_options: {
+            extends: 'review',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      const config = withTaktConfigDir(globalConfigDir, () => normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir: join(globalConfigDir, 'repertoire'),
+      }));
+
+      expect(config.providerOptions).toEqual({
+        opencode: { allowedTools: ['global-read'] },
+      });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
       rmSync(outsideDir, { recursive: true, force: true });
     }
   });

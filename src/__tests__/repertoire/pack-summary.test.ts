@@ -18,6 +18,7 @@ import {
   formatEditWorkflowWarnings,
 } from '../../features/repertoire/pack-summary.js';
 import { getScopedProviderOptionsCandidateKey } from '../../infra/config/loaders/providerOptionsLookupDirectories.js';
+import { getScopedStepFragmentCandidateKey } from '../../infra/config/loaders/stepFragmentLookupDirectories.js';
 
 // ---------------------------------------------------------------------------
 // summarizeFacetsByType
@@ -77,6 +78,85 @@ describe('detectEditWorkflows', () => {
       { name: 'simple.yaml', content: 'steps:\n  - name: run\n    edit: false\n' },
     ];
     expect(detectEditWorkflows(workflows)).toEqual([]);
+  });
+
+  it('should detect all permission fields inherited from a package step fragment', () => {
+    const packageRoot = mkdtempSync(join(tmpdir(), 'takt-pack-summary-step-fragment-'));
+    try {
+      const stepsDir = join(packageRoot, 'steps');
+      mkdirSync(stepsDir, { recursive: true });
+      writeFileSync(join(stepsDir, 'permissioned.yaml'), `edit: true
+required_permission_mode: bypassPermissions
+provider_options:
+  claude:
+    allowed_tools: [Write]
+`);
+
+      const result = detectEditWorkflows(
+        [{ name: 'workflow.yaml', content: 'steps:\n  - uses: permissioned\n', relativePath: 'workflows/workflow.yaml' }],
+        [],
+        {
+          stepFragmentCandidateDirs: [stepsDir],
+          context: {
+            lang: 'en',
+            projectDir: packageRoot,
+            repertoireDir: join(packageRoot, 'repertoire'),
+            workflowDir: join(packageRoot, 'workflows'),
+          },
+        },
+      );
+
+      expect(result).toEqual([{
+        name: 'workflow.yaml',
+        allowedTools: ['Write'],
+        hasEdit: true,
+        requiredPermissionModes: ['bypassPermissions'],
+      }]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('should resolve self-scoped step fragments from an uninstalled package', () => {
+    const packageRoot = mkdtempSync(join(tmpdir(), 'takt-pack-summary-scoped-step-fragment-'));
+    try {
+      const stepsDir = join(packageRoot, 'steps');
+      mkdirSync(stepsDir, { recursive: true });
+      writeFileSync(join(stepsDir, 'permissioned.yaml'), `edit: true
+required_permission_mode: bypassPermissions
+provider_options:
+  claude:
+    allowed_tools: [Write]
+`);
+
+      const result = detectEditWorkflows(
+        [{
+          name: 'workflow.yaml',
+          content: 'steps:\n  - uses: "@nrslib/takt-review/permissioned"\n',
+          relativePath: 'workflows/workflow.yaml',
+        }],
+        [],
+        {
+          stepFragmentCandidateDirs: [stepsDir],
+          stepFragmentScopedCandidateDirs: new Map([
+            [getScopedStepFragmentCandidateKey('nrslib', 'takt-review'), [stepsDir]],
+          ]),
+          context: {
+            lang: 'en',
+            repertoireDir: join(packageRoot, 'not-installed-yet'),
+          },
+        },
+      );
+
+      expect(result).toEqual([{
+        name: 'workflow.yaml',
+        allowedTools: ['Write'],
+        hasEdit: true,
+        requiredPermissionModes: ['bypassPermissions'],
+      }]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
   });
 
   it('should detect a workflow with edit: true and collect provider_options.claude.allowed_tools', () => {
@@ -489,6 +569,34 @@ steps:
     }
   });
 
+  it('should skip missing fallback provider-options candidate directories', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-pack-summary-provider-options-missing-fallback-'));
+    try {
+      const missingProviderOptionsDir = join(tempDir, 'missing', 'provider-options');
+      const builtinProviderOptionsDir = join(tempDir, 'builtins', 'ja', 'provider-options');
+      mkdirSync(builtinProviderOptionsDir, { recursive: true });
+      writeFileSync(join(builtinProviderOptionsDir, 'review-readonly.yaml'), 'claude:\n  allowed_tools: [Read]\n');
+
+      const content = `
+steps:
+  - name: review
+    provider_options:
+      extends: review-readonly
+`.trim();
+
+      const result = detectEditWorkflows(
+        [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
+        [],
+        { providerOptionsCandidateDirs: [missingProviderOptionsDir, builtinProviderOptionsDir] },
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.allowedTools).toEqual(['Read']);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('should prefer package provider-options over fallback candidate directories', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-pack-summary-provider-options-priority-'));
     try {
@@ -636,6 +744,31 @@ steps:
 // ---------------------------------------------------------------------------
 
 describe('formatEditWorkflowWarnings', () => {
+  it('should sanitize terminal control sequences in workflow warnings', () => {
+    const warnings = formatEditWorkflowWarnings({
+      name: '\x1b]0;spoof\x07workflow.yaml',
+      hasEdit: false,
+      allowedTools: ['Bash\x1b[2J'],
+      requiredPermissionModes: ['\x1b[31mbypassPermissions'],
+    });
+
+    expect(warnings.join('\n')).not.toContain('\x1b');
+    expect(warnings.join('\n')).toContain('workflow.yaml');
+  });
+
+  it('should keep remote workflow warning values on one terminal line', () => {
+    const warnings = formatEditWorkflowWarnings({
+      name: 'review.yaml',
+      hasEdit: false,
+      allowedTools: ['Write\n[forged] installed'],
+      requiredPermissionModes: [],
+    });
+
+    expect(warnings).toEqual([
+      '\n   ⚠ review.yaml: provider_options.allowed_tools: [Write\\n[forged] installed]',
+    ]);
+  });
+
   it('should format edit:true warning without provider_options.claude.allowed_tools', () => {
     const warnings = formatEditWorkflowWarnings({
       name: 'workflow.yaml',

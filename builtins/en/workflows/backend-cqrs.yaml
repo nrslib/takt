@@ -451,3 +451,8 @@ steps:
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction: fix
+    output_contracts:
+      report:
+        - name: fix-report.md
+          format: fix-report
+          use_judge: false

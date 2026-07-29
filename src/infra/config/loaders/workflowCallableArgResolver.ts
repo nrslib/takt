@@ -14,6 +14,7 @@ import {
 } from './resource-resolver.js';
 import { isWorkflowParamReference, type WorkflowParamReference } from './workflowCallableParamRef.js';
 import { assertNoParamReferences, validateReturnRules } from './workflowCallableRuleValidation.js';
+import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 
 type RawWorkflowConfig = z.output<typeof WorkflowConfigRawSchema>;
 type RawWorkflowStep = RawWorkflowConfig['steps'][number];
@@ -180,21 +181,22 @@ function resolveExpandedParamValue(
   expectedKind: WorkflowFacetKind,
   params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
   resolvedArgs: Record<string, WorkflowCallArgValue>,
+  errorPath: readonly PropertyKey[],
 ): WorkflowCallArgValue {
   const definition = params?.[paramRef.$param];
   if (!definition) {
-    throw new Error(`Step "${stepName}" references undeclared param "${paramRef.$param}" in ${fieldName}`);
+    throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" references undeclared param "${paramRef.$param}" in ${fieldName}`), errorPath);
   }
   if (!expectedTypes.includes(definition.type)) {
     const expectedTypeLabel = expectedTypes.join(' or ');
-    throw new Error(`Step "${stepName}" expects ${fieldName} to use ${expectedTypeLabel} param "${paramRef.$param}"`);
+    throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" expects ${fieldName} to use ${expectedTypeLabel} param "${paramRef.$param}"`), errorPath);
   }
   if (definition.facet_kind !== expectedKind) {
-    throw new Error(`Step "${stepName}" expects ${fieldName} to use ${expectedKind} param "${paramRef.$param}"`);
+    throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" expects ${fieldName} to use ${expectedKind} param "${paramRef.$param}"`), errorPath);
   }
   const value = resolvedArgs[paramRef.$param];
   if (value === undefined) {
-    throw new Error(`Step "${stepName}" requires workflow_call arg "${paramRef.$param}" for ${fieldName}`);
+    throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" requires workflow_call arg "${paramRef.$param}" for ${fieldName}`), errorPath);
   }
   return value;
 }
@@ -205,17 +207,18 @@ function resolveExpandedWorkflowCallArgValue(
   paramRef: WorkflowParamReference,
   params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
   resolvedArgs: Record<string, WorkflowCallArgValue>,
+  errorPath: readonly PropertyKey[],
 ): WorkflowCallArgValue {
   const definition = params?.[paramRef.$param];
   if (!definition) {
-    throw new Error(`Step "${stepName}" references undeclared param "${paramRef.$param}" in args.${argName}`);
+    throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" references undeclared param "${paramRef.$param}" in args.${argName}`), errorPath);
   }
   if (definition.type !== 'facet_ref' && definition.type !== 'facet_ref[]') {
-    throw new Error(`Step "${stepName}" expects args.${argName} to use facet_ref or facet_ref[] param "${paramRef.$param}"`);
+    throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" expects args.${argName} to use facet_ref or facet_ref[] param "${paramRef.$param}"`), errorPath);
   }
   const value = resolvedArgs[paramRef.$param];
   if (value === undefined) {
-    throw new Error(`Step "${stepName}" requires workflow_call arg "${paramRef.$param}" for args.${argName}`);
+    throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" requires workflow_call arg "${paramRef.$param}" for args.${argName}`), errorPath);
   }
   return value;
 }
@@ -224,6 +227,7 @@ function expandWorkflowCallArgs(
   step: RawWorkflowStep,
   params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
   resolvedArgs: Record<string, WorkflowCallArgValue>,
+  stepPath: readonly PropertyKey[],
 ): RawWorkflowStep['args'] {
   if (!step.args) {
     return undefined;
@@ -232,7 +236,7 @@ function expandWorkflowCallArgs(
   const expandedArgs: Record<string, WorkflowCallArgValue> = {};
   for (const [argName, value] of Object.entries(step.args)) {
     expandedArgs[argName] = isWorkflowParamReference(value)
-      ? resolveExpandedWorkflowCallArgValue(step.name, argName, value, params, resolvedArgs)
+      ? resolveExpandedWorkflowCallArgValue(step.name, argName, value, params, resolvedArgs, [...stepPath, 'args', argName])
       : value;
   }
   return expandedArgs;
@@ -242,6 +246,7 @@ function expandStepFields(
   step: RawWorkflowStep,
   params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
   resolvedArgs: Record<string, WorkflowCallArgValue>,
+  stepPath: readonly PropertyKey[],
 ): RawWorkflowStep {
   const expandedStep: RawWorkflowStep = structuredClone(step);
 
@@ -254,6 +259,7 @@ function expandStepFields(
       'policy',
       params,
       resolvedArgs,
+      [...stepPath, 'policy'],
     ) as RawWorkflowStep['policy'];
   }
 
@@ -266,6 +272,7 @@ function expandStepFields(
       'knowledge',
       params,
       resolvedArgs,
+      [...stepPath, 'knowledge'],
     ) as RawWorkflowStep['knowledge'];
   }
 
@@ -278,11 +285,12 @@ function expandStepFields(
       'instruction',
       params,
       resolvedArgs,
+      [...stepPath, 'instruction'],
     ) as RawWorkflowStep['instruction'];
   }
 
   if (expandedStep.output_contracts?.report) {
-    expandedStep.output_contracts.report = expandedStep.output_contracts.report.map((report) => {
+    expandedStep.output_contracts.report = expandedStep.output_contracts.report.map((report, index) => {
       if (!isWorkflowParamReference(report.format)) {
         return report;
       }
@@ -296,16 +304,17 @@ function expandStepFields(
           'report_format',
           params,
           resolvedArgs,
+          [...stepPath, 'output_contracts', 'report', index, 'format'],
         ) as string,
       };
     });
   }
 
-  expandedStep.args = expandWorkflowCallArgs(step, params, resolvedArgs);
+  expandedStep.args = expandWorkflowCallArgs(step, params, resolvedArgs, stepPath);
 
   if (expandedStep.parallel) {
-    expandedStep.parallel = expandedStep.parallel.map((substep) =>
-      expandStepFields(substep as RawWorkflowStep, params, resolvedArgs),
+    expandedStep.parallel = expandedStep.parallel.map((substep, index) =>
+      expandStepFields(substep as RawWorkflowStep, params, resolvedArgs, [...stepPath, 'parallel', index]),
     ) as RawWorkflowStep['parallel'];
   }
 
@@ -334,6 +343,6 @@ export function expandCallableSubworkflowRaw(
     options.argPolicy,
   );
   const expanded: RawWorkflowConfig = structuredClone(raw);
-  expanded.steps = expanded.steps.map((step) => expandStepFields(step, params, resolvedArgs));
+  expanded.steps = expanded.steps.map((step, index) => expandStepFields(step, params, resolvedArgs, ['steps', index]));
   return WorkflowConfigRawSchema.parse(expanded);
 }
