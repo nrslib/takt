@@ -127,7 +127,10 @@ function queueAgentResponse(response: AgentResponse): void {
   });
 }
 
-function makeParallelDeps(cwd: string): ParallelRunnerDeps {
+function makeParallelDeps(
+  cwd: string,
+  overrides: Partial<ParallelRunnerDeps> = {},
+): ParallelRunnerDeps {
   return {
     optionsBuilder: {
       buildAgentOptions: vi.fn().mockReturnValue({
@@ -151,12 +154,70 @@ function makeParallelDeps(cwd: string): ParallelRunnerDeps {
     getCwd: () => cwd,
     getReportDir: () => '.takt/runs/test-run/reports',
     getWorkflowName: () => 'test-workflow',
+    getTask: () => 'task',
     getInteractive: () => false,
     observabilityEnabled: false,
+    refreshFindingsState: vi.fn(),
+    emitEvent: vi.fn(),
+    claimStepOccurrence: vi.fn().mockReturnValue(1),
+    updateMaxSteps: vi.fn(),
+    setActiveResumePoint: vi.fn(),
+    getRunId: () => 'test-run',
+    getFindingCallNamespace: () => '',
     structuredCaller: {
       evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
     },
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
+    ...overrides,
+  };
+}
+
+function makeNormalDeps(
+  cwd: string,
+  runPaths: RunPaths,
+  overrides: Partial<StepExecutorDeps> = {},
+): StepExecutorDeps {
+  return {
+    optionsBuilder: {
+      buildAgentOptions: vi.fn().mockReturnValue({
+        cwd,
+        projectCwd: cwd,
+        resolvedProvider: 'opencode',
+        resolvedModel: 'opencode/big-pickle',
+        sessionId: 'session-1',
+      }),
+      buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
+      resolveStepProviderModel: vi.fn().mockReturnValue({
+        provider: 'opencode',
+        model: 'opencode/big-pickle',
+      }),
+    } as unknown as StepExecutorDeps['optionsBuilder'],
+    getCwd: () => cwd,
+    getProjectCwd: () => cwd,
+    getReportDir: () => '.takt/runs/test-run/reports',
+    getRunPaths: () => runPaths,
+    getLanguage: () => undefined,
+    getInteractive: () => false,
+    getWorkflowSteps: () => [{ name: 'review' }],
+    getWorkflowName: () => 'test-workflow',
+    getTask: () => 'task',
+    getWorkflowDescription: () => undefined,
+    getRetryNote: () => undefined,
+    structuredCaller: {
+      evaluateCondition: vi.fn(),
+      judgeStatus: vi.fn(),
+      decomposeTask: vi.fn(),
+      requestMoreParts: vi.fn(),
+    },
+    structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+    refreshFindingsState: vi.fn(),
+    emitEvent: vi.fn(),
+    recordSynthesizedAgentUsage: vi.fn(),
+    getRunId: () => 'test-run',
+    getFindingCallNamespace: () => '',
+    executionProvider: 'opencode',
+    executionModel: 'opencode/big-pickle',
+    ...overrides,
   };
 }
 
@@ -627,6 +688,35 @@ describe('session compaction Phase 1 wiring', () => {
     }));
   });
 
+  it('Given parallel compaction starts fresh When empty continuation hits a provider error Then it stops without another fresh retry', async () => {
+    const subStep = makeCompactStep({ name: 'api-review' });
+    const parentStep = makeStep({ name: 'reviewers', instruction: 'Run reviewers', parallel: [subStep] });
+    compactSessionBeforePhase1Mock.mockResolvedValueOnce('fresh');
+    queueAgentResponse(makeDoneResponse({ content: '', sessionId: 'session-fresh' }));
+    queueAgentResponse({
+      persona: 'reviewer',
+      status: 'error',
+      content: 'provider failed',
+      error: 'provider failed',
+      timestamp: new Date(),
+      sessionId: 'session-fresh',
+    });
+    const state = makeState();
+
+    const result = await new ParallelRunner(
+      makeParallelDeps(cwd),
+    ).runParallelStep(parentStep, state, 'task', 5, vi.fn());
+
+    expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(executeAgent).mock.calls.map(([, , options]) => options.sessionId))
+      .toEqual([undefined, 'session-fresh']);
+    expect(state.stepOutputs.get('api-review')).toMatchObject({
+      status: 'error',
+      error: 'provider failed',
+    });
+    expect(result.response.status).toBe('error');
+  });
+
   it('Given reused-session Phase 1 returns a provider error When a parallel sub-step runs Then the existing one-time fresh recovery still executes', async () => {
     const subStep = makeCompactStep({ name: 'api-review' });
     const parentStep = makeStep({ name: 'reviewers', instruction: 'Run reviewers', parallel: [subStep] });
@@ -645,5 +735,199 @@ describe('session compaction Phase 1 wiring', () => {
 
     expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(2);
     expect(vi.mocked(executeAgent).mock.calls.map(([, , options]) => options.sessionId)).toEqual(['session-1', undefined]);
+  });
+
+  it('Given normal Phase 1 stays empty When recovery runs Then it continues once and restarts fresh with truthful phase records', async () => {
+    const step = makeCompactStep();
+    const state = makeState();
+    const sessionKey = '["reviewer","opencode","opencode/big-pickle"]';
+    state.personaSessions.set(sessionKey, 'session-1');
+    const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
+      if (sessionId === undefined) state.personaSessions.delete(key);
+      else state.personaSessions.set(key, sessionId);
+    });
+    const onPhaseStart = vi.fn();
+    const onPhaseComplete = vi.fn();
+    const recordSynthesizedAgentUsage = vi.fn();
+    queueAgentResponse(makeDoneResponse({ content: '  ', sessionId: 'session-1' }));
+    queueAgentResponse(makeDoneResponse({ content: '', sessionId: 'session-1' }));
+    queueAgentResponse(makeDoneResponse({ content: 'approved fresh', sessionId: 'session-fresh' }));
+
+    const result = await new StepExecutor(makeNormalDeps(cwd, runPaths, {
+      onPhaseStart,
+      onPhaseComplete,
+      recordSynthesizedAgentUsage,
+    })).runNormalStep(step, state, 'task', 5, updatePersonaSession);
+
+    const calls = vi.mocked(executeAgent).mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(calls.map(([, , options]) => options.sessionId)).toEqual([
+      'session-1',
+      'session-1',
+      undefined,
+    ]);
+    expect(calls[1]![1]).toContain('Continue the review or work');
+    expect(calls[2]![1]).toBe(calls[0]![1]);
+    expect(onPhaseStart.mock.calls.map((call) => call[5])).toEqual([
+      'review:1:1:1',
+      'review:1:1:2',
+      'review:1:1:3',
+    ]);
+    expect(onPhaseComplete.mock.calls.map((call) => call[6])).toEqual([
+      'review:1:1:1',
+      'review:1:1:2',
+      'review:1:1:3',
+    ]);
+    expect(recordSynthesizedAgentUsage).toHaveBeenCalledTimes(2);
+    expect(updatePersonaSession).toHaveBeenCalledWith(sessionKey, undefined);
+    expect(state.personaSessions.get(sessionKey)).toBe('session-fresh');
+    expect(result.response.content).toBe('approved fresh');
+  });
+
+  it('Given parallel Phase 1 stays empty When recovery runs Then it uses the same continuation and fresh-session contract', async () => {
+    const subStep = makeCompactStep({ name: 'api-review' });
+    const parentStep = makeStep({
+      name: 'reviewers',
+      instruction: 'Run reviewers',
+      parallel: [subStep],
+    });
+    const state = makeState();
+    const sessionKey = '["reviewer","opencode","opencode/big-pickle"]';
+    state.personaSessions.set(sessionKey, 'session-1');
+    const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
+      if (sessionId === undefined) state.personaSessions.delete(key);
+      else state.personaSessions.set(key, sessionId);
+    });
+    const onPhaseStart = vi.fn();
+    const onPhaseComplete = vi.fn();
+    const delegatedUsage = vi.fn();
+    queueAgentResponse(makeDoneResponse({ content: '', sessionId: 'session-1' }));
+    queueAgentResponse(makeDoneResponse({ content: ' \n', sessionId: 'session-1' }));
+    queueAgentResponse(makeDoneResponse({ content: 'approved fresh', sessionId: 'session-fresh' }));
+
+    const result = await new ParallelRunner(makeParallelDeps(cwd, {
+      onPhaseStart,
+      onPhaseComplete,
+      engineOptions: {
+        projectCwd: cwd,
+        onDelegatedAgentUsage: delegatedUsage,
+      },
+    })).runParallelStep(parentStep, state, 'task', 5, updatePersonaSession);
+
+    const calls = vi.mocked(executeAgent).mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(calls.map(([, , options]) => options.sessionId)).toEqual([
+      'session-1',
+      'session-1',
+      undefined,
+    ]);
+    expect(calls[1]![1]).toContain('Continue the review or work');
+    expect(calls[2]![1]).toBe(calls[0]![1]);
+    expect(onPhaseStart.mock.calls.map((call) => call[5])).toEqual([
+      'api-review:1:1:1',
+      'api-review:1:1:2',
+      'api-review:1:1:3',
+    ]);
+    expect(onPhaseComplete.mock.calls.map((call) => call[6])).toEqual([
+      'api-review:1:1:1',
+      'api-review:1:1:2',
+      'api-review:1:1:3',
+    ]);
+    expect(delegatedUsage).toHaveBeenCalledTimes(3);
+    expect(state.personaSessions.get(sessionKey)).toBe('session-fresh');
+    expect(state.stepOutputs.get('api-review')?.content).toBe('approved fresh');
+    expect(result.response.status).toBe('done');
+  });
+
+  it('Given provider recovery consumes one attempt When the next outputs are empty Then parallel Phase 1 stops at three executions', async () => {
+    const subStep = makeCompactStep({ name: 'api-review' });
+    const parentStep = makeStep({
+      name: 'reviewers',
+      instruction: 'Run reviewers',
+      parallel: [subStep],
+    });
+    const state = makeState();
+    const sessionKey = '["reviewer","opencode","opencode/big-pickle"]';
+    state.personaSessions.set(sessionKey, 'session-1');
+    const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
+      if (sessionId === undefined) state.personaSessions.delete(key);
+      else state.personaSessions.set(key, sessionId);
+    });
+    const onPhaseStart = vi.fn();
+    const onPhaseComplete = vi.fn();
+    queueAgentResponse({
+      persona: 'reviewer',
+      status: 'error',
+      content: 'provider failed',
+      error: 'provider failed',
+      timestamp: new Date(),
+      sessionId: 'session-1',
+    });
+    queueAgentResponse(makeDoneResponse({ content: '', sessionId: 'session-provider-fresh' }));
+    queueAgentResponse(makeDoneResponse({ content: ' ', sessionId: 'session-provider-fresh' }));
+
+    const result = await new ParallelRunner(makeParallelDeps(cwd, {
+      onPhaseStart,
+      onPhaseComplete,
+    })).runParallelStep(parentStep, state, 'task', 5, updatePersonaSession);
+
+    const calls = vi.mocked(executeAgent).mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(calls.map(([, , options]) => options.sessionId)).toEqual([
+      'session-1',
+      undefined,
+      'session-provider-fresh',
+    ]);
+    expect(calls[1]![1]).toBe(calls[0]![1]);
+    expect(calls[2]![1]).toContain('Continue the review or work');
+    expect(onPhaseStart.mock.calls.map((call) => call[5])).toEqual([
+      'api-review:1:1:1',
+      'api-review:1:1:2',
+      'api-review:1:1:3',
+    ]);
+    expect(onPhaseComplete.mock.calls.map((call) => [call[4], call[6]])).toEqual([
+      ['error', 'api-review:1:1:1'],
+      ['done', 'api-review:1:1:2'],
+      ['error', 'api-review:1:1:3'],
+    ]);
+    expect(state.stepOutputs.get('api-review')).toMatchObject({
+      status: 'error',
+      error: 'Phase 1 returned empty output',
+    });
+    expect(state.personaSessions.has(sessionKey)).toBe(false);
+    expect(result.response.status).toBe('error');
+  });
+
+  it('Given all normal empty recoveries fail When Phase 1 stops Then it discards the final fresh session', async () => {
+    const step = makeCompactStep();
+    const state = makeState();
+    const sessionKey = '["reviewer","opencode","opencode/big-pickle"]';
+    state.personaSessions.set(sessionKey, 'session-1');
+    const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
+      if (sessionId === undefined) state.personaSessions.delete(key);
+      else state.personaSessions.set(key, sessionId);
+    });
+    queueAgentResponse(makeDoneResponse({ content: '', sessionId: 'session-1' }));
+    queueAgentResponse(makeDoneResponse({ content: ' ', sessionId: 'session-1' }));
+    queueAgentResponse(makeDoneResponse({ content: '\n', sessionId: 'session-final-empty' }));
+    const onPhaseComplete = vi.fn();
+
+    const result = await new StepExecutor(
+      makeNormalDeps(cwd, runPaths, { onPhaseComplete }),
+    ).runNormalStep(step, state, 'task', 5, updatePersonaSession);
+
+    expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(3);
+    expect(result.response).toMatchObject({
+      status: 'error',
+      error: 'Phase 1 returned empty output',
+    });
+    expect(result.response.sessionId).toBeUndefined();
+    expect(state.personaSessions.has(sessionKey)).toBe(false);
+    expect(updatePersonaSession.mock.calls.at(-1)).toEqual([sessionKey, undefined]);
+    expect(onPhaseComplete.mock.calls.map((call) => [call[4], call[6]])).toEqual([
+      ['done', 'review:1:1:1'],
+      ['done', 'review:1:1:2'],
+      ['error', 'review:1:1:3'],
+    ]);
   });
 });

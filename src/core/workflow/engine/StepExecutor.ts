@@ -89,6 +89,13 @@ import {
   correctStructuredOutputOnce,
   type StructuredOutputNormalizationResult,
 } from './structured-output-correction.js';
+import {
+  completeObservedPhase1Attempt,
+  executeObservedPhase1Attempt,
+  PHASE1_EMPTY_OUTPUT_ERROR,
+  runPhase1WithEmptyRecovery,
+} from './phase1-empty-recovery.js';
+import type { RunAgentOptions } from '../../../agents/types.js';
 
 const log = createLogger('step-executor');
 
@@ -966,7 +973,7 @@ export class StepExecutor {
       }
     }
     const findingContractContext = preparedExecution?.findingContractContext;
-    const executableStep = preparedExecution?.executableStep ?? step;
+    const executableStep = preparedExecution?.executableStep ?? step as AgentWorkflowStep;
     // 直前ステップ（通常は coder の fix）の応答。異議申告の裁定材料として
     // manager に渡すため、Phase 1 実行で lastOutput が上書きされる前に捕捉する
     // （ParallelRunner の priorStepResponseText 捕捉と同じタイミング）。
@@ -997,14 +1004,6 @@ export class StepExecutor {
     });
 
     // Phase 1: main execution (Write excluded if step has report)
-    let didEmitPhaseStart = false;
-    let resolvedPromptParts: PhasePromptParts | undefined;
-    const phaseExecutionId = buildPhaseExecutionId({
-      step: step.name,
-      iteration: state.iteration,
-      phase: 1,
-      sequence: 1,
-    });
     const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(executableStep, runtime);
     const compactionOutcome = await compactSessionBeforePhase1(executableStep, baseAgentOptions);
     if (compactionOutcome === 'fresh') {
@@ -1015,62 +1014,89 @@ export class StepExecutor {
         updatePersonaSession,
       );
     }
-    const agentOptions = {
+    const agentOptions: RunAgentOptions = {
       ...baseAgentOptions,
       ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
-      onPromptResolved: (promptParts: PhasePromptParts) => {
-        resolvedPromptParts = promptParts;
-        this.deps.onPhaseStart?.(step, 1, 'execute', phase1Instruction, promptParts, phaseExecutionId, state.iteration);
-        didEmitPhaseStart = true;
-      },
     };
-    let response = await runWithPhaseSpan({
-      enabled: this.deps.observabilityEnabled?.() === true,
-      runId: this.deps.getObservabilityRunId?.(),
-      workflowName: this.deps.getWorkflowName(),
-      step: executableStep,
-      iteration: state.iteration,
-      phase: 1,
-      phaseName: 'execute',
-      instruction: phase1Instruction,
-      phaseExecutionId,
-      workflowStack: this.deps.getCurrentWorkflowStack?.(),
-      sanitizeText: this.deps.sanitizeObservabilityText,
-      providerInfo,
-      getPromptParts: () => resolvedPromptParts,
-    }, () => executeAgent(executableStep.persona, phase1Instruction, agentOptions), (result) => ({
-      status: result.status,
-      content: result.content,
-      error: result.error,
-      providerUsage: result.providerUsage,
-    }));
     const intakeNormalizeActive = findingContractIntakeStep !== undefined
       && this.deps.intakeNormalize !== undefined;
+    const promptResolvedAttempts = new Set<number>();
+    const phase1Result = await runPhase1WithEmptyRecovery({
+      instruction: phase1Instruction,
+      initialSessionId: agentOptions.sessionId,
+      retryProviderErrorFresh: false,
+      execute: async (attempt) => {
+        const result = await executeObservedPhase1Attempt({
+          enabled: this.deps.observabilityEnabled?.() === true,
+          runId: this.deps.getObservabilityRunId?.(),
+          workflowName: this.deps.getWorkflowName(),
+          eventStep: step,
+          spanStep: executableStep,
+          iteration: state.iteration,
+          attempt,
+          workflowStack: this.deps.getCurrentWorkflowStack?.(),
+          sanitizeText: this.deps.sanitizeObservabilityText,
+          providerInfo,
+          execute: (attemptInstruction, sessionId, onPromptResolved) => executeAgent(
+            executableStep.persona,
+            attemptInstruction,
+            {
+              ...agentOptions,
+              sessionId,
+              onPromptResolved,
+            },
+          ),
+          onPhaseStart: this.deps.onPhaseStart,
+        });
+        if (result.promptResolved) {
+          promptResolvedAttempts.add(attempt.sequence);
+        }
+        return result.response;
+      },
+      discardSession: (sessionId) => {
+        invalidatePersonaSessionIfExpected(
+          state,
+          sessionKey,
+          sessionId,
+          updatePersonaSession,
+        );
+      },
+      recordSupersededAttempt: (supersededResponse, attempt) => {
+        if (promptResolvedAttempts.has(attempt.sequence)) {
+          completeObservedPhase1Attempt({
+            eventStep: step,
+            iteration: state.iteration,
+            attempt,
+            response: supersededResponse,
+            onPhaseComplete: this.deps.onPhaseComplete,
+          });
+        }
+        this.deps.recordSynthesizedAgentUsage(
+          step.name,
+          providerInfo,
+          supersededResponse.status === 'done',
+          supersededResponse.providerUsage,
+        );
+      },
+    });
+    let response = phase1Result.response;
+    if (!promptResolvedAttempts.has(phase1Result.finalAttempt.sequence)) {
+      throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
+    }
+    if (response.error === PHASE1_EMPTY_OUTPUT_ERROR) {
+      log.info('Phase 1 returned empty output, treating as error', { step: step.name });
+    }
     if (intakeNormalizeActive) {
-      if (!didEmitPhaseStart) {
-        throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
-      }
       if (response.sessionId !== undefined) {
         updatePersonaSession(sessionKey, response.sessionId);
       }
-      this.deps.onPhaseComplete?.(
-        step,
-        1,
-        'execute',
-        response.content,
-        response.status,
-        response.error,
-        phaseExecutionId,
-        state.iteration,
-      );
-      if (
-        response.status === 'done'
-        && response.structuredOutput === undefined
-        && response.content.trim().length === 0
-      ) {
-        log.info('Phase 1 returned empty output, treating as error', { step: step.name });
-        response = { ...response, status: 'error', error: 'Phase 1 returned empty output' };
-      }
+      completeObservedPhase1Attempt({
+        eventStep: step,
+        iteration: state.iteration,
+        attempt: phase1Result.finalAttempt,
+        response,
+        onPhaseComplete: this.deps.onPhaseComplete,
+      });
     }
     let normalizedPhase1 = intakeNormalizeActive && response.status === 'done'
       ? await this.normalizeFindingIntakeReport(
@@ -1125,24 +1151,16 @@ export class StepExecutor {
     response = normalizedPhase1.response;
     let reviewerRawResourceEnvelope = normalizedPhase1.reviewerRawResourceEnvelope;
     if (!intakeNormalizeActive) {
-      if (!didEmitPhaseStart) {
-        throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
-      }
       if (response.sessionId !== undefined) {
         updatePersonaSession(sessionKey, response.sessionId);
       }
-      this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error, phaseExecutionId, state.iteration);
-    }
-
-    // Empty output with done status is treated as an error to prevent
-    // downstream phases from running with no content.
-    if (
-      response.status === 'done'
-      && response.structuredOutput === undefined
-      && response.content.trim().length === 0
-    ) {
-      log.info('Phase 1 returned empty output, treating as error', { step: step.name });
-      response = { ...response, status: 'error', error: 'Phase 1 returned empty output' };
+      completeObservedPhase1Attempt({
+        eventStep: step,
+        iteration: state.iteration,
+        attempt: phase1Result.finalAttempt,
+        response,
+        onPhaseComplete: this.deps.onPhaseComplete,
+      });
     }
 
     // Provider failures should abort immediately.

@@ -28,11 +28,9 @@ import type { WorkflowEngineOptions, PhaseName, PhasePromptParts, JudgeStageEntr
 import type { RuntimeStepResolution } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
-import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { createRoutingScope, resolveAutoRoutingBatch } from '../auto-routing/resolver.js';
 import { buildRoutingFindings, buildRoutingWorkSnapshot } from '../auto-routing/snapshot.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
-import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import type { FindingContractConfig } from '../../models/types.js';
 import type { FindingLedgerStore } from '../findings/store.js';
@@ -52,6 +50,12 @@ import { formatWorkflowRuleCondition } from '../../models/workflow-rule-conditio
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import { buildScopedStepIterationIdentity } from '../step-iteration-identity.js';
 import { correctStructuredOutputOnce } from './structured-output-correction.js';
+import {
+  completeObservedPhase1Attempt,
+  executeObservedPhase1Attempt,
+  PHASE1_EMPTY_OUTPUT_ERROR,
+  runPhase1WithEmptyRecovery,
+} from './phase1-empty-recovery.js';
 
 const log = createLogger('parallel-runner');
 
@@ -380,18 +384,8 @@ export class ParallelRunner {
             updatePersonaSession,
           );
         }
-        let didEmitPhaseStart = false;
-        let resolvedPromptParts: PhasePromptParts | undefined;
-        const phaseExecutionId = buildPhaseExecutionId({
-          step: subStep.name,
-          iteration: parentIteration,
-          phase: 1,
-          sequence: 1,
-        });
-        let phase1CompletionExecutionId = phaseExecutionId;
-
         // Override onStream with parallel logger's prefixed handler (immutable)
-        const agentOptions = parallelLogger
+        const agentOptions: RunAgentOptions = parallelLogger
           ? {
               ...baseOptions,
               ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
@@ -401,122 +395,84 @@ export class ParallelRunner {
               ...baseOptions,
               ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
             };
-        agentOptions.onPromptResolved = (promptParts: PhasePromptParts) => {
-          resolvedPromptParts = promptParts;
-          this.deps.onPhaseStart?.(subStep, 1, 'execute', phase1Instruction, promptParts, phaseExecutionId, parentIteration);
-          didEmitPhaseStart = true;
-        };
         let subRelationClarification: ReviewerRelationClarification | undefined;
         let reviewerRawResourceEnvelope: ReviewerRawResourceEnvelope | undefined;
-        let subResponse = await runWithPhaseSpan({
-          enabled: this.deps.observabilityEnabled,
-          runId: this.deps.observabilityRunId,
-          workflowName: this.deps.getWorkflowName(),
-          step: executableSubStep,
-          iteration: parentIteration,
-          phase: 1,
-          phaseName: 'execute',
+        const promptResolvedAttempts = new Set<number>();
+        const phase1Result = await runPhase1WithEmptyRecovery({
           instruction: phase1Instruction,
-          phaseExecutionId,
-          workflowStack: this.deps.getCurrentWorkflowStack?.(),
-          sanitizeText: this.deps.sanitizeObservabilityText,
-          providerInfo: subPm,
-          getPromptParts: () => resolvedPromptParts,
-        }, () => this.executeSubStepAgent(executableSubStep, subPm, phase1Instruction, agentOptions), (result) => ({
-          status: result.status,
-          content: result.content,
-          error: result.error,
-          providerUsage: result.providerUsage,
-        }));
-        if (
-          compactionOutcome !== 'fresh'
-          && subResponse.status === 'error'
-          && subResponse.errorKind !== 'rate_limit'
-        ) {
-          // 並列レビューの1席のプロバイダ障害で走行全体を落とさない。
-          // 空転はセッション文脈起因のことが多いため（長文脈での生成品質
-          // 崩壊を実測）、再試行は resume を切った新しいセッションで行う。
-          // rate limit は再試行で叩かず既存の rate_limited 経路に委ねる。
-          log.warn('Parallel sub-step provider error; retrying once with a fresh session', {
-            step: subStep.name,
-            error: subResponse.error,
-          });
-          const retryPhaseExecutionId = buildPhaseExecutionId({
-            step: subStep.name,
-            iteration: parentIteration,
-            phase: 1,
-            sequence: 2,
-          });
-          // 再試行は専用IDで phase:start を発火する（初回IDの二重発火はしない）。
-          // onPromptResolved を再試行自身のものに差し替えることで、初回試行が
-          // プロンプト解決前に死んだ場合でも、再試行の成功が phase:start を
-          // 発火させ、後段の Missing prompt parts 検査を正しく満たす。
-          const retryOptions = {
-            ...agentOptions,
-            sessionId: undefined,
-            onPromptResolved: (promptParts: PhasePromptParts) => {
-              resolvedPromptParts = promptParts;
-              this.deps.onPhaseStart?.(subStep, 1, 'execute', phase1Instruction, promptParts, retryPhaseExecutionId, parentIteration);
-              phase1CompletionExecutionId = retryPhaseExecutionId;
-              didEmitPhaseStart = true;
-            },
-          };
-          subResponse = await runWithPhaseSpan({
-            enabled: this.deps.observabilityEnabled,
-            runId: this.deps.observabilityRunId,
-            workflowName: this.deps.getWorkflowName(),
-            step: executableSubStep,
-            iteration: parentIteration,
-            phase: 1,
-            phaseName: 'execute',
-            instruction: phase1Instruction,
-            phaseExecutionId: retryPhaseExecutionId,
-            workflowStack: this.deps.getCurrentWorkflowStack?.(),
-            sanitizeText: this.deps.sanitizeObservabilityText,
-            providerInfo: subPm,
-          }, () => this.executeSubStepAgent(executableSubStep, subPm, phase1Instruction, retryOptions), (result) => ({
-            status: result.status,
-            content: result.content,
-            error: result.error,
-            providerUsage: result.providerUsage,
-          }));
-          if (subResponse.sessionId === undefined) {
-            // 再試行がセッションIDを返さなかった場合、劣化していた旧セッションを
-            // resume 対象に残さない（残すと次の実行で文脈崩壊が再発する）
-            invalidateExpectedPersonaSession(
+          initialSessionId: agentOptions.sessionId,
+          retryProviderErrorFresh: compactionOutcome !== 'fresh',
+          execute: async (attempt) => {
+            const result = await executeObservedPhase1Attempt({
+              enabled: this.deps.observabilityEnabled,
+              runId: this.deps.observabilityRunId,
+              workflowName: this.deps.getWorkflowName(),
+              eventStep: subStep,
+              spanStep: executableSubStep,
+              iteration: parentIteration,
+              attempt,
+              workflowStack: this.deps.getCurrentWorkflowStack?.(),
+              sanitizeText: this.deps.sanitizeObservabilityText,
+              providerInfo: subPm,
+              execute: (attemptInstruction, sessionId, onPromptResolved) => (
+                this.executeSubStepAgent(
+                  executableSubStep,
+                  subPm,
+                  attemptInstruction,
+                  {
+                    ...agentOptions,
+                    sessionId,
+                    onPromptResolved,
+                  },
+                )
+              ),
+              onPhaseStart: this.deps.onPhaseStart,
+            });
+            if (result.promptResolved) {
+              promptResolvedAttempts.add(attempt.sequence);
+            }
+            return result.response;
+          },
+          discardSession: (sessionId) => {
+            invalidatePersonaSessionIfExpected(
               state,
               subSessionKey,
-              subResponse,
-              baseOptions.sessionId,
+              sessionId,
               updatePersonaSession,
             );
-          }
+          },
+          recordSupersededAttempt: (supersededResponse, attempt) => {
+            if (promptResolvedAttempts.has(attempt.sequence)) {
+              completeObservedPhase1Attempt({
+                eventStep: subStep,
+                iteration: parentIteration,
+                attempt,
+                response: supersededResponse,
+                onPhaseComplete: this.deps.onPhaseComplete,
+              });
+            }
+          },
+        });
+        let subResponse = phase1Result.response;
+        if (!promptResolvedAttempts.has(phase1Result.finalAttempt.sequence)) {
+          throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
+        }
+        if (subResponse.error === PHASE1_EMPTY_OUTPUT_ERROR) {
+          log.info('Phase 1 returned empty output for parallel sub-step, treating as error', {
+            step: subStep.name,
+          });
         }
         if (intakeNormalizeActive) {
-          if (!didEmitPhaseStart) {
-            throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
-          }
           if (subResponse.sessionId !== undefined) {
             updatePersonaSession(subSessionKey, subResponse.sessionId);
           }
-          this.deps.onPhaseComplete?.(
-            subStep,
-            1,
-            'execute',
-            subResponse.content,
-            subResponse.status,
-            subResponse.error,
-            phase1CompletionExecutionId,
-            parentIteration,
-          );
-          if (
-            subResponse.status === 'done'
-            && subResponse.structuredOutput === undefined
-            && subResponse.content.trim().length === 0
-          ) {
-            log.info('Phase 1 returned empty output for parallel sub-step, treating as error', { step: subStep.name });
-            subResponse = { ...subResponse, status: 'error', error: 'Phase 1 returned empty output' };
-          }
+          completeObservedPhase1Attempt({
+            eventStep: subStep,
+            iteration: parentIteration,
+            attempt: phase1Result.finalAttempt,
+            response: subResponse,
+            onPhaseComplete: this.deps.onPhaseComplete,
+          });
         }
         if (findingContractContext !== undefined) {
           let normalized = intakeNormalizeActive && subResponse.status === 'done'
@@ -597,21 +553,16 @@ export class ParallelRunner {
           }
         }
         if (!intakeNormalizeActive) {
-          if (!didEmitPhaseStart) {
-            throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
-          }
           if (subResponse.sessionId !== undefined) {
             updatePersonaSession(subSessionKey, subResponse.sessionId);
           }
-          this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phase1CompletionExecutionId, parentIteration);
-        }
-        if (
-          subResponse.status === 'done'
-          && subResponse.structuredOutput === undefined
-          && subResponse.content.trim().length === 0
-        ) {
-          log.info('Phase 1 returned empty output for parallel sub-step, treating as error', { step: subStep.name });
-          subResponse = { ...subResponse, status: 'error', error: 'Phase 1 returned empty output' };
+          completeObservedPhase1Attempt({
+            eventStep: subStep,
+            iteration: parentIteration,
+            attempt: phase1Result.finalAttempt,
+            response: subResponse,
+            onPhaseComplete: this.deps.onPhaseComplete,
+          });
         }
         if (subResponse.status === 'error' || subResponse.status === 'blocked' || subResponse.status === 'rate_limited') {
           state.stepOutputs.set(subStep.name, subResponse);

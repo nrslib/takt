@@ -901,17 +901,29 @@ describe('WorkflowEngine structured caller defaults', () => {
       })],
     };
 
-    const result = await new WorkflowEngine(config, cwd, 'task', {
+    const phaseCompletions: Array<{ step: string; status: string; error: string | undefined }> = [];
+    const engine = new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-    }).run();
+    });
+    engine.on('phase:complete', (step, phase, phaseName, _content, status, error) => {
+      if (step.name === 'review' && phase === 1 && phaseName === 'execute') {
+        phaseCompletions.push({ step: step.name, status, error });
+      }
+    });
+    const result = await engine.run();
 
     const output = result.stepOutputs.get('review');
     expect(reviewerCalls).toBe(2);
     expect(output?.status).toBe('error');
     expect(output?.content).toBe('Original review report body.');
     expect(output?.error).toContain('structured output remained invalid after one correction');
+    expect(phaseCompletions).toEqual([{
+      step: 'review',
+      status: 'error',
+      error: expect.stringContaining('structured output remained invalid after one correction'),
+    }]);
   });
 
   it.each([

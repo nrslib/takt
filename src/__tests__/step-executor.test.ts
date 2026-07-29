@@ -336,6 +336,9 @@ describe('StepExecutor', () => {
       expect.any(String),
       'reviewer-session',
     );
+    expect(updatePersonaSession.mock.invocationCallOrder[0]).toBeLessThan(
+      normalizeFindingIntake.mock.invocationCallOrder[0]!,
+    );
     expect(onPhaseComplete.mock.calls.map(([phaseStep]) => phaseStep.name))
       .toEqual(['review', 'review:intake-normalize']);
     expect(onPhaseStart.mock.calls.map(([phaseStep]) => phaseStep.name))

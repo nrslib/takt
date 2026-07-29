@@ -360,13 +360,20 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     });
     const { runner, deps } = makeRunner({ findingContractContext: freeformContext });
     const normalizeFindingIntakeReport = vi.fn(
-      async (_step: WorkflowStep, response: AgentResponse) => ({
-        response: {
-          ...response,
-          structuredOutput: { rawFindings: [] },
-        },
-      }),
+      async (_step: WorkflowStep, response: AgentResponse) => {
+        expect(updatePersonaSession).toHaveBeenCalledWith(
+          expect.any(String),
+          response.sessionId,
+        );
+        return {
+          response: {
+            ...response,
+            structuredOutput: { rawFindings: [] },
+          },
+        };
+      },
     );
+    const updatePersonaSession = vi.fn();
     Object.assign(deps.stepExecutor, {
       isFindingIntakeNormalizeActive: () => true,
       normalizeFindingIntakeReport,
@@ -376,13 +383,15 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     queueAgentResponse(makeAgentResponse({
       persona: 'ai-antipattern-review',
       content: '## Finding A\nIssue: A',
+      sessionId: 'session-a',
     }));
     queueAgentResponse(makeAgentResponse({
       persona: 'security-review',
       content: '## Finding B\nIssue: B',
+      sessionId: 'session-b',
     }));
 
-    await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
+    await runner.runParallelStep(step, state, 'test task', 5, updatePersonaSession);
 
     expect(deps.optionsBuilder.buildFindingContractInstructionContext)
       .toHaveBeenCalledWith(step, 'freeform');
