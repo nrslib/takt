@@ -55,9 +55,8 @@ FAILにし、逆順outputをorder不一致でFAILにし、scorer自身の例外�
 `a3b25caddd72cbb6e1a1545781359eff6fb5c02a5511605c52c11f7dd0c65d2d`で、
 当時のproduction prompt定数と一致していた。ledger lifecycle confirmationを抽出する
 現行promptのSHA-256は
-`0513c7536b96235e151c9d4478d568a54a58b877aeba0c915bbadae8df18b983`であり、
-この版の外部model測定はまだ行っていない。以下の数値とartifactは旧hashの履歴で、
-現行promptの結果として扱わない。
+`0513c7536b96235e151c9d4478d568a54a58b877aeba0c915bbadae8df18b983`である。
+以下の数値とartifactは旧hashの履歴で、現行promptの結果として扱わない。
 
 provider capacity errorはmodel outputが生成されていないため、model出力のFAILへ
 数えない。provider attemptの未完了として別記し、fresh retryは別result setへ保存した。
@@ -81,10 +80,35 @@ candidate exactは0でstrict FAILになった。`repository_query` requestは保
 - `eval/.work/finding-report-normalizer/results/final-summary-luna-retry1-20260729/summary.json`
 - `eval/.work/finding-report-normalizer/results/final-broad-luna-terra-20260729/summary.json`
 
+## 現行promptの実測
+
+現行promptをTerraで測定し、summary-only 3反復とbroad-target 7 reportの
+合計10/10がstrict PASSした。全callでschema、claim recall、source binding、
+candidate exact、non-fabrication、ambiguity preservation、finding order、
+cross-report isolation、tool use 0の合格条件を満たした。
+
+| case | Terra |
+|---|---:|
+| summary-only、3反復 | 3/3 PASS |
+| broad-target、7 report | 7/7 PASS |
+| 現行prompt合計 | 10/10 PASS |
+
+broad-target report 7は、保存済みmodel outputがfinding blockを正確に抽出していたが、
+goldのend marker欠落により後続の`APPROVE`文まで期待excerptへ含めていた。
+fixtureを修正し、元model outputを再採点した結果を現行値に用いる。
+
+現行promptの結果artifact:
+
+- `eval/.work/finding-report-normalizer/results/current-summary-terra-r3-20260729/summary.json`
+- `eval/.work/finding-report-normalizer/results/current-broad-terra-20260729-host/summary.rescored.json`
+
+最初のsandbox内実行で発生した`Operation not permitted`はmodel/provider応答へ到達する
+前の実行環境失敗であり、model性能の集計には含めない。
+
 ### 未測定範囲と外部送信境界
 
-現行promptは全providerで未測定である。Gemma4のschema不適合を含む旧artifactは、
-現行promptの集計には加えない。
+現行promptの外部model測定はTerraのみである。Luna、Gemma4、Claude各modelの
+旧artifactは、現行promptの集計には加えない。
 
 `pr-attachments-six-reviews`の6件は、localでprompt生成、schema検証、gold自己採点まで
 完了した。ただしlocal review materialの外部model送信は承認されなかったため、
@@ -131,12 +155,10 @@ report 3件も空のまま保持した。Haikuはturn capで一部未完了だ�
 
 ## 判断
 
-- 現行の合成fixtureに対するproduction normalizer第一候補はTerra。完了した
-  model output 9/9がstrict PASS。
-- Lunaは第二候補。summary-onlyの完了outputはfresh retryを含め3/3 PASSだが、
-  broad-targetはtyped evidence requestの欠落により5/6。
-- Lunaのcapacity error 1件はprovider未完了であり、model出力FAILには数えない。
-- Gemma4はschema不適合を記録しているため候補外。
+- 現行の合成fixtureに対するproduction normalizer第一候補はTerra。現行promptの
+  model output 10/10がstrict PASS。
+- Luna、Gemma4、Claude各modelは現行promptで未測定のため、現行結果による順位付けは
+  しない。
 - local review materialを用いた実report評価は未承認・未実行。
-- production/configにはopt-inの`intake_normalize`として統合済みである。現行promptの
-  外部model測定は未実施であり、旧promptの結果を現行統合の実測値として扱わない。
+- production/configにはopt-inの`intake_normalize`として統合済みである。Terraの
+  現行prompt実測を第一候補判断の根拠とし、旧promptの結果は補足履歴に留める。

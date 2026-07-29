@@ -183,6 +183,7 @@
       "candidates": [
         {
           "rawExcerptAnchor": "### Finding: Cleanup leak is fixed",
+          "rawExcerptEndMarker": "The remaining code looks correct.",
           "candidate": {
             "rawFindingId": null,
             "relation": "resolution_confirmation",
