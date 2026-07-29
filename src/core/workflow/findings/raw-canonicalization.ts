@@ -560,6 +560,23 @@ function projectReviewerRawItem(
     for (const key of Object.keys(descriptors)) {
       const descriptor = descriptors[key]!;
       const value = descriptor.value;
+      if (
+        value === null
+        && [
+          'targetFindingId',
+          'familyTag',
+          'severity',
+          'suggestion',
+          'relation',
+          'title',
+          'description',
+          'target',
+          'rawFindingId',
+        ].includes(key)
+      ) {
+        record[key] = null;
+        continue;
+      }
       if (key === 'relation') {
         const relation = pickRelation(value);
         if (relation !== undefined) {
@@ -587,23 +604,6 @@ function projectReviewerRawItem(
         if (target !== undefined) {
           record.target = target;
         }
-        continue;
-      }
-      if (
-        value === null
-        && [
-          'targetFindingId',
-          'familyTag',
-          'severity',
-          'suggestion',
-          'relation',
-          'title',
-          'description',
-          'target',
-          'rawFindingId',
-        ].includes(key)
-      ) {
-        record[key] = null;
         continue;
       }
       if (

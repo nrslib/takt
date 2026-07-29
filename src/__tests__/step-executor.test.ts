@@ -177,6 +177,21 @@ describe('StepExecutor', () => {
 
   it('active normal reviewerをfree-formで実行し、reviewer phase確定後に独立normalizer phaseを取り込む', async () => {
     const reviewerTimestamp = new Date('2026-07-29T01:00:00.000Z');
+    const normalizedRawFinding = {
+      rawExcerpt: 'A concrete defect.',
+      candidate: {
+        rawFindingId: null,
+        relation: null,
+        targetFindingId: null,
+        familyTag: null,
+        severity: null,
+        title: null,
+        description: 'A concrete defect.',
+        suggestion: null,
+        target: { kind: 'code', paths: ['src/example.ts'] },
+        evidenceRequests: [],
+      },
+    };
     const reviewerResponse: AgentResponse = {
       persona: 'reviewer',
       status: 'done',
@@ -200,8 +215,8 @@ describe('StepExecutor', () => {
       return {
         persona: 'default',
         status: 'done' as const,
-        content: '{"rawFindings":[]}',
-        structuredOutput: { rawFindings: [] },
+        content: JSON.stringify({ rawFindings: [normalizedRawFinding] }),
+        structuredOutput: { rawFindings: [normalizedRawFinding] },
         sessionId: 'discard-normalizer-session',
         timestamp: new Date('2026-07-29T01:00:01.000Z'),
       };
@@ -330,7 +345,7 @@ describe('StepExecutor', () => {
       content: reviewerResponse.content,
       sessionId: reviewerResponse.sessionId,
       timestamp: reviewerTimestamp,
-      structuredOutput: { rawFindings: [] },
+      structuredOutput: { rawFindings: [normalizedRawFinding] },
     });
     expect(updatePersonaSession).toHaveBeenCalledWith(
       expect.any(String),
@@ -350,6 +365,13 @@ describe('StepExecutor', () => {
       undefined,
     );
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(ingestFindingContractResults).mock.calls[0]?.[0]
+        .subResults[0]?.reviewerRawResourceEnvelope,
+    ).toMatchObject({
+      itemCount: 1,
+      itemSourceBytes: [expect.any(Number)],
+    });
   });
 
   it('normalizerがprompt callback前にfail-fastしても合成phaseのstart/error/usageを記録する', async () => {

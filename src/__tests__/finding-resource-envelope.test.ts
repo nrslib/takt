@@ -52,6 +52,99 @@ const ledger: FindingLedger = {
 };
 
 describe('reviewer raw resource envelope', () => {
+  it('preserves nullable candidate fields through projection before intake', () => {
+    const nullableRaw = reviewerRawExtractionFixture({
+      rawFindingId: null,
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: 'Description',
+      suggestion: null,
+      relation: null,
+      targetFindingId: null,
+      target: { kind: 'code', paths: ['src/a.ts'] },
+      evidence: [],
+      rawExcerpt: 'Description',
+    });
+    const projected = projectReviewerRawStructuredOutputWithEnvelope({
+      rawFindings: [nullableRaw],
+    });
+
+    expect(projected.structuredOutput.rawFindings).toEqual([nullableRaw]);
+
+    const intake = createReviewerRawFindingCandidates(
+      projected.structuredOutput.rawFindings as unknown[],
+      context,
+      projected.resourceEnvelope,
+    );
+    expect(intake.rejections).toEqual([]);
+    expect(intake.candidates).toHaveLength(1);
+    expect(intake.candidates[0]).toMatchObject({
+      rawExcerpt: 'Description',
+      relation: 'new',
+      target: { kind: 'code', paths: ['src/a.ts'] },
+    });
+  });
+
+  it('preserves a nullable target in the projected contract', () => {
+    const raw = reviewerRawExtractionFixture({
+      rawFindingId: 'raw-null-target',
+      familyTag: 'design',
+      severity: 'medium',
+      title: 'Broad design concern',
+      description: 'Description',
+      suggestion: null,
+      relation: null,
+      targetFindingId: null,
+      evidence: [],
+      rawExcerpt: 'Description',
+    });
+    const nullableTarget = {
+      ...raw,
+      candidate: {
+        ...raw.candidate,
+        target: null,
+      },
+    };
+    const projected = projectReviewerRawStructuredOutputWithEnvelope({
+      rawFindings: [nullableTarget],
+    });
+
+    expect(projected.structuredOutput.rawFindings).toEqual([nullableTarget]);
+  });
+
+  it('rejects an invalid nullable-field enum during projection', () => {
+    const raw = reviewerRawExtractionFixture({
+      rawFindingId: 'raw-invalid-relation',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Issue',
+      description: 'Description',
+      suggestion: null,
+      relation: 'new',
+      targetFindingId: null,
+      target: { kind: 'code', paths: ['src/a.ts'] },
+      evidence: [],
+      rawExcerpt: 'Description',
+    });
+    const invalidRelation = {
+      ...raw,
+      candidate: {
+        ...raw.candidate,
+        relation: 'invalid',
+      },
+    };
+
+    const projected = projectReviewerRawStructuredOutputWithEnvelope({
+      rawFindings: [invalidRelation],
+    });
+
+    expect(projected.structuredOutput.rawFindings).toEqual([{
+      rawExcerpt: 'Description',
+      candidate: null,
+    }]);
+  });
+
   it('measures each untrusted item once before projection and preserves sourceBytes', () => {
     const input = { rawFindings: [raw] };
     const projected = projectReviewerRawStructuredOutputWithEnvelope(input);
