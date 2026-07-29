@@ -8,7 +8,7 @@ import type { FindingContractConfig } from './types.js';
 export interface LoopMonitorProvisionalSummary {
   id: string;
   kind: FindingProvisionalKind;
-  title: string;
+  title: string | null;
   stalledRounds: number;
   /** manager の dismissDecisions で裁定可能か（isDismissCandidate 参照）。 */
   dismissable: boolean;
@@ -75,7 +75,7 @@ export function renderLoopMonitorFindingsSummary(
     const settlement = provisional.dismissable
       ? 'settlement: later clean evidence OR manager dismissDecisions'
       : 'settlement: later clean evidence only';
-    return `- ${provisional.id} [${provisional.kind}] ${provisional.title} — stalled for ${provisional.stalledRounds} manager round(s); ${settlement}`;
+    return `- ${provisional.id} [${provisional.kind}] title=${JSON.stringify(provisional.title)} — stalled for ${provisional.stalledRounds} manager round(s); ${settlement}`;
   });
 
   return [

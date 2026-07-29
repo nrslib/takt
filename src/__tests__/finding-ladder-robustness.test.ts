@@ -2137,7 +2137,7 @@ describe('解釈梯子の追加必須テスト', () => {
     expect(provisional?.provisional).toBeDefined();
   });
 
-  it('正規化監査: 矛盾 relation の raw を intake すると、wire は new + targetFindingId なしに正規化されつつ、監査メタデータから元の主張が復元できる', async () => {
+  it('正規化監査: 矛盾 relation の raw を intake すると、wire は unknown のまま保存され、監査メタデータから元の主張が復元できる', async () => {
     const harness = makeHarness(makeLedger());
     // 解釈フェーズは provisional 提案で流す（この試験の主眼は監査メタデータ）。
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
@@ -2163,13 +2163,12 @@ describe('解釈梯子の追加必須テスト', () => {
     });
     expect(result.status).toBe('updated');
 
-    // wire（台帳の rawFindings）は正規化後の整合ペアだけを持つ:
-    // relation は new、targetFindingId は除外されている。identity 構成
-    // フィールド（title/description/location）は元のまま（注記で汚さない）。
+    // relation は捏造せず unknown(null) として保存する。主張された target は
+    // 監査・後続 ambiguity 解決のため保持する。
     const saved = harness.currentLedger();
     const wire = saved.rawFindings.find((raw) => raw.rawFindingId.endsWith(':x-1'));
-    expect(wire?.relation).toBe('new');
-    expect(wire?.targetFindingId).toBeNull();
+    expect(wire?.relation).toBeNull();
+    expect(wire?.targetFindingId).toBe('F-0001');
     expect(wire?.description).toBe('Claims to be new but names an existing target.');
 
     // 監査メタデータ（検証レポートの rawNormalizations）から元の主張が復元できる。
@@ -2178,10 +2177,10 @@ describe('解釈梯子の追加必須テスト', () => {
     expect(record).toBeDefined();
     expect(record?.claimedRelation).toBe('new');
     expect(record?.claimedTargetFindingId).toBe('F-0001');
-    expect(record?.normalizedRelation).toBe('new');
-    expect(record?.wireTargetFindingId).toBeUndefined();
+    expect(record?.normalizedRelation).toBeNull();
+    expect(record?.wireTargetFindingId).toBe('F-0001');
     expect(record?.ambiguityCodes).toContain('relation-target-mismatch');
-    expect(record?.normalizations).toContain('target-dropped-from-wire');
+    expect(record?.normalizations).toContain('relation-normalized');
   });
 
   it('正規化監査の write-ahead: intake 後の処理（updateLedger）が例外を投げても、元の主張はディスクの検証レポートから復元できる', async () => {
@@ -2294,6 +2293,8 @@ describe('解釈梯子の追加必須テスト', () => {
           rawFindingId: string;
           claimedRelation?: string;
           claimedTargetFindingId?: string;
+          normalizedRelation?: string | null;
+          wireTargetFindingId?: string;
           ambiguityCodes: string[];
           normalizations: string[];
         }>;
@@ -2302,8 +2303,11 @@ describe('解釈梯子の追加必須テスト', () => {
       const record = report.rawNormalizations?.find((entry) => entry.rawFindingId.endsWith(':x-1'));
       expect(record?.claimedRelation).toBe('new');
       expect(record?.claimedTargetFindingId).toBe('F-0001');
+      expect(record?.normalizedRelation).toBeNull();
+      expect(record?.wireTargetFindingId).toBe('F-0001');
       expect(record?.ambiguityCodes).toContain('relation-target-mismatch');
-      expect(record?.normalizations).toContain('target-dropped-from-wire');
+      expect(record?.normalizations).toContain('relation-normalized');
+      expect(record?.normalizations).not.toContain('target-dropped-from-wire');
     } finally {
       rmSync(projectCwd, { recursive: true, force: true });
       rmSync(reportDir, { recursive: true, force: true });

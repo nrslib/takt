@@ -425,6 +425,19 @@ function assertEngineProofOperation(input: {
       }
       return;
     }
+    case 'finding_provisional_product_transition':
+      if (
+        input.operation !== subject.operation
+        || (
+          input.operation !== 'promote_provisional'
+          && input.operation !== 'reopen_finding'
+        )
+        || subject.findingId !== input.target.entityId
+        || input.targets.length !== 1
+      ) {
+        reject();
+      }
+      return;
     default:
       reject();
   }

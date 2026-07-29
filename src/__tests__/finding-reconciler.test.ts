@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { parseFindingManagerOutput } from '../core/workflow/findings/schemas.js';
 import {
+  applyProvisionalFindingSpecsToLedger,
   reconcileFindingLedger as reconcileFindingLedgerStrict,
   reconcileManagerActionRecovery,
 } from '../core/workflow/findings/reconciler.js';
+import { provisionalSpecForRaw } from '../core/workflow/findings/manager-provisional.js';
+import { FindingLedgerEntrySchema } from '../core/models/finding-schemas.js';
+import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import {
   canonicalizeReviewerRawFinding,
@@ -38,6 +42,7 @@ import {
 } from './helpers/finding-lifecycle-fixture.js';
 import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
 import type { FindingManagerRawDecision } from '../core/models/finding-types.js';
+import { captureFindingPreconditions } from '../core/workflow/findings/finding-preconditions.js';
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   const {
@@ -83,6 +88,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
       const description = finding.description ?? finding.title;
       return {
         ...finding,
+        ...(finding.provisional === undefined ? { description } : {}),
         target,
         targetIdentityHash: computeTargetIdentityHash(target),
         claimIdentityHash: computeClaimIdentityHash({
@@ -444,6 +450,194 @@ describe('dispute/waiver transitions', () => {
 });
 
 describe('reconcileFindingLedger', () => {
+  it('keeps missing normalized claim fields nullable in a gate-blocking provisional', () => {
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: 'raw-nullable-claim',
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: 'The reviewer reported a blocking issue without a contract severity.',
+      suggestion: null,
+      relation: 'new',
+      targetFindingId: null,
+      target: { kind: 'code', paths: ['src/a.ts'] },
+      evidenceRequests: [],
+      rawExcerpt: 'The reviewer reported a blocking issue without a contract severity.',
+    });
+    const baseLedger = makeLedger();
+    const intake = createReviewerRawFindingCandidates([extraction], {
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      runId: 'run-nullable-claim',
+      reviewerStepName: 'ai-antipattern-review',
+      reviewerPersonaKey: 'ai-antipattern-reviewer',
+      reviewReport: extraction.rawExcerpt,
+      issueEvidenceRequests: () => ({
+        evidence: [],
+        engineProofRecords: [],
+        coverageGaps: [],
+      }),
+    });
+    expect(intake.rejections).toEqual([]);
+    const canonical = canonicalizeReviewerRawFinding(intake.candidates[0]!, {
+      ledger: baseLedger,
+    }).canonical;
+    const wire = toLedgerRawFinding(canonical);
+    const provisional = provisionalSpecForRaw({
+      wire,
+      canonical,
+      reason: 'The normalized claim is incomplete and requires later evidence.',
+    });
+
+    expect(provisional).toMatchObject({
+      severity: null,
+      title: null,
+    });
+
+    const ledger = reconcileFindingLedgerStrict({
+      previousLedger: baseLedger,
+      rawFindings: [wire],
+      managerOutput: makeManagerOutput(),
+      provisionalFindings: [provisional],
+      rawFindingDispositions: [],
+      rawProvenanceByRawFindingId: new Map([[
+        wire.rawFindingId,
+        {
+          reviewerStableKey: canonical.reviewerStableKey,
+          lineageKey: canonical.lineageKey,
+          claimIdentityHash: canonical.claimIdentityHash,
+          canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(canonical),
+          canonicalProvenance: canonical.provenance,
+        },
+      ]]),
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
+      context: makeContext(),
+    });
+    const landed = ledger.findings[0]!;
+
+    expect(FindingLedgerEntrySchema.parse(landed)).toEqual(landed);
+    expect(landed).toMatchObject({
+      severity: null,
+      title: null,
+      provisional: {
+        kind: 'raw-meaning-ambiguous',
+        gateEffect: 'block',
+      },
+    });
+    expect(buildFindingsRuleContext(ledger, process.cwd())).toMatchObject({
+      open: {
+        count: 1,
+        bySeverity: { critical: 0, high: 0, medium: 0, low: 0 },
+        items: [{ id: landed.id, severity: null, title: null }],
+      },
+      provisional: { count: 1 },
+    });
+    expect(() => FindingLedgerEntrySchema.parse({
+      ...landed,
+      provisional: undefined,
+    })).toThrow(/require severity|require title/);
+  });
+
+  it('fills a target-null provisional identity atomically and rejects partial identity', () => {
+    const observation = {
+      runId: 'run-1',
+      stepName: 'reviewers',
+      timestamp: '2026-07-24T00:00:00.000Z',
+    };
+    const target = { kind: 'code' as const, paths: ['src/atomic.ts'] };
+    const claim = {
+      severity: 'high' as const,
+      title: 'Atomic provisional identity',
+      description: 'All identity fields must land in one update.',
+    };
+    const targetIdentityHash = computeTargetIdentityHash(target);
+    const claimIdentityHash = computeClaimIdentityHash({
+      target,
+      familyTag: 'bug',
+      severity: claim.severity,
+      title: claim.title,
+      description: claim.description,
+      suggestion: null,
+    });
+    const semanticClaimIdentityHash = computeSemanticClaimIdentityHash({
+      target,
+      title: claim.title,
+      description: claim.description,
+    });
+    const baseLedger = makeLedger({ nextId: 2 });
+    baseLedger.findings = [{
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'new',
+      target: null,
+      targetIdentityHash: null,
+      claimIdentityHash: null,
+      semanticClaimIdentityHash: null,
+      severity: null,
+      title: null,
+      evidenceIds: [],
+      reviewers: ['reviewer'],
+      rawFindingIds: [],
+      firstSeen: observation,
+      lastSeen: observation,
+      revision: 1,
+      provisional: {
+        kind: 'raw-meaning-ambiguous',
+        stableKey: 'stable-atomic',
+        lineageKey: 'lineage-atomic',
+        sourceRawFindingIds: [],
+        reason: 'The target was not available in the first observation.',
+        firstObservedAt: observation,
+        lastObservedAt: observation,
+        interpretationEpochs: 0,
+        gateEffect: 'block',
+        firstObservedRound: 1,
+      },
+    }];
+    const fullSpec = {
+      kind: 'raw-meaning-ambiguous' as const,
+      stableKey: 'stable-atomic',
+      lineageKey: 'lineage-atomic',
+      sourceRawFindingIds: ['raw-atomic'],
+      reason: 'A later observation supplied the complete target and claim.',
+      ...claim,
+      reviewers: ['reviewer'],
+      target,
+      targetIdentityHash,
+      claimIdentityHash,
+      semanticClaimIdentityHash,
+    };
+
+    const {
+      semanticClaimIdentityHash: _semanticClaimIdentityHash,
+      ...partialSpec
+    } = fullSpec;
+    expect(() => applyProvisionalFindingSpecsToLedger(
+      baseLedger,
+      [partialSpec],
+      makeContext(),
+    )).toThrow(/supplied atomically/u);
+
+    const updated = applyProvisionalFindingSpecsToLedger(
+      baseLedger,
+      [fullSpec],
+      makeContext(),
+    ).findings[0]!;
+
+    expect(updated).toMatchObject({
+      target,
+      targetIdentityHash,
+      claimIdentityHash,
+      semanticClaimIdentityHash,
+      severity: claim.severity,
+      title: claim.title,
+      description: claim.description,
+      revision: 2,
+    });
+  });
+
   it('fails fast when canonical plan inputs are absent at the reconciler boundary', () => {
     const incompletePlan = {
       previousLedger: makeLedger(),
@@ -2115,6 +2309,215 @@ describe('reconcileFindingLedger', () => {
         rawFindingIds: ['raw-old', 'raw-reopened'],
       }),
     );
+  });
+
+  it('materializes a dismissed provisional from a complete reopened claim', () => {
+    const source = makeRawFinding({
+      rawFindingId: 'raw-dismissed-source',
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: null,
+      suggestion: null,
+    });
+    const previousLedger = makeLedger({
+      nextId: 2,
+      rawFindings: [source],
+      findings: [{
+        id: 'F-0001',
+        status: 'dismissed',
+        lifecycle: 'dismissed',
+        revision: 1,
+        severity: null,
+        title: null,
+        reviewers: ['coding-reviewer'],
+        rawFindingIds: [source.rawFindingId],
+        firstSeen: {
+          runId: 'run-1',
+          stepName: 'peer-review',
+          timestamp: '2026-06-13T00:00:00.000Z',
+        },
+        lastSeen: {
+          runId: 'run-1',
+          stepName: 'peer-review',
+          timestamp: '2026-06-13T00:00:00.000Z',
+        },
+        dismissal: {
+          basis: 'unverifiable_claim',
+          reason: 'The original observation was incomplete.',
+          decidedAt: {
+            runId: 'run-1',
+            stepName: 'peer-review',
+            timestamp: '2026-06-13T00:30:00.000Z',
+          },
+        },
+        provisional: {
+          kind: 'raw-meaning-ambiguous',
+          stableKey: 'stable-dismissed',
+          lineageKey: 'lineage-dismissed',
+          sourceRawFindingIds: [source.rawFindingId],
+          reason: 'The original claim was incomplete.',
+          firstObservedAt: {
+            runId: 'run-1',
+            stepName: 'peer-review',
+            timestamp: '2026-06-13T00:00:00.000Z',
+          },
+          lastObservedAt: {
+            runId: 'run-1',
+            stepName: 'peer-review',
+            timestamp: '2026-06-13T00:00:00.000Z',
+          },
+          interpretationEpochs: 0,
+          gateEffect: 'block',
+          firstObservedRound: 1,
+        },
+      }],
+    });
+    const reopenedRaw = makeRawFinding({
+      rawFindingId: 'raw-complete-reopen',
+      relation: 'reopened',
+      targetFindingId: 'F-0001',
+      targetPrecondition: captureFindingPreconditions(previousLedger)
+        .get('F-0001')!.precondition,
+      target: previousLedger.findings[0]!.target!,
+      severity: 'medium',
+      title: 'Complete reopened claim',
+      description: 'The later observation establishes a complete product finding.',
+      suggestion: 'Apply the concrete correction.',
+    });
+
+    const result = reconcileFindingLedger({
+      previousLedger,
+      rawFindings: [reopenedRaw],
+      managerOutput: makeManagerOutput({
+        reopenedFindings: [{
+          findingId: 'F-0001',
+          rawFindingIds: [reopenedRaw.rawFindingId],
+          evidence: 'A later complete observation substantiated the claim.',
+        }],
+      }),
+      context: makeContext(),
+    });
+
+    expect(result.findings[0]).toMatchObject({
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'reopened',
+      severity: 'medium',
+      title: 'Complete reopened claim',
+      description: 'The later observation establishes a complete product finding.',
+      suggestion: 'Apply the concrete correction.',
+      targetIdentityHash: reopenedRaw.targetIdentityHash,
+      claimIdentityHash: reopenedRaw.claimIdentityHash,
+      semanticClaimIdentityHash: reopenedRaw.semanticClaimIdentityHash,
+      revision: 2,
+    });
+    expect(result.findings[0]?.provisional).toBeUndefined();
+
+    const staleReopen = {
+      ...reopenedRaw,
+      rawFindingId: 'raw-stale-complete-reopen',
+      targetPrecondition: {
+        ...reopenedRaw.targetPrecondition!,
+        targetRevision: reopenedRaw.targetPrecondition!.targetRevision + 1,
+      },
+    };
+    expect(() => reconcileFindingLedger({
+      previousLedger,
+      rawFindings: [staleReopen],
+      managerOutput: makeManagerOutput({
+        reopenedFindings: [{
+          findingId: 'F-0001',
+          rawFindingIds: [staleReopen.rawFindingId],
+          evidence: 'A stale observation must not reopen the provisional.',
+        }],
+      }),
+      context: makeContext(),
+    })).toThrow(/ineligible reopen source/u);
+  });
+
+  it('keeps a dismissed provisional when the reopened claim remains incomplete', () => {
+    const source = makeRawFinding({ rawFindingId: 'raw-dismissed-incomplete-source' });
+    const previousLedger = makeLedger({
+      nextId: 2,
+      rawFindings: [source],
+      findings: [{
+        id: 'F-0001',
+        status: 'dismissed',
+        lifecycle: 'dismissed',
+        revision: 1,
+        severity: null,
+        title: null,
+        reviewers: ['coding-reviewer'],
+        rawFindingIds: [source.rawFindingId],
+        firstSeen: {
+          runId: 'run-1',
+          stepName: 'peer-review',
+          timestamp: '2026-06-13T00:00:00.000Z',
+        },
+        lastSeen: {
+          runId: 'run-1',
+          stepName: 'peer-review',
+          timestamp: '2026-06-13T00:00:00.000Z',
+        },
+        provisional: {
+          kind: 'raw-meaning-ambiguous',
+          stableKey: 'stable-dismissed-incomplete',
+          lineageKey: 'lineage-dismissed-incomplete',
+          sourceRawFindingIds: [source.rawFindingId],
+          reason: 'The claim is incomplete.',
+          firstObservedAt: {
+            runId: 'run-1',
+            stepName: 'peer-review',
+            timestamp: '2026-06-13T00:00:00.000Z',
+          },
+          lastObservedAt: {
+            runId: 'run-1',
+            stepName: 'peer-review',
+            timestamp: '2026-06-13T00:00:00.000Z',
+          },
+          interpretationEpochs: 0,
+          gateEffect: 'block',
+          firstObservedRound: 1,
+        },
+      }],
+    });
+    const reopenedRaw = makeRawFinding({
+      rawFindingId: 'raw-incomplete-reopen',
+      relation: 'reopened',
+      targetFindingId: 'F-0001',
+      targetPrecondition: captureFindingPreconditions(previousLedger)
+        .get('F-0001')!.precondition,
+      target: previousLedger.findings[0]!.target!,
+      familyTag: null,
+      severity: null,
+      title: null,
+    });
+
+    const result = reconcileFindingLedger({
+      previousLedger,
+      rawFindings: [reopenedRaw],
+      managerOutput: makeManagerOutput({
+        reopenedFindings: [{
+          findingId: 'F-0001',
+          rawFindingIds: [reopenedRaw.rawFindingId],
+          evidence: 'The later observation is still incomplete.',
+        }],
+      }),
+      context: makeContext(),
+    });
+
+    expect(result.findings[0]).toMatchObject({
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'reopened',
+      severity: null,
+      title: null,
+      provisional: {
+        gateEffect: 'block',
+      },
+      revision: 2,
+    });
   });
 
   it('should reject reopening a finding that is already open', () => {

@@ -55,9 +55,10 @@ export function computeDismissCandidates(
     if (!isDismissCandidate(ledger, finding, roundsCompleted)) {
       continue;
     }
+    const title = finding.title ?? '(claim title unavailable)';
     candidates.set(
       finding.id,
-      `[${finding.provisional!.kind}] ${finding.title} — ${finding.provisional!.reason}`,
+      `[${finding.provisional!.kind}] ${title} — ${finding.provisional!.reason}`,
     );
   }
   return candidates;

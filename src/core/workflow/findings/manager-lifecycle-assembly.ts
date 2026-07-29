@@ -12,7 +12,180 @@ import {
   type ManagerActionRecoveryLifecyclePlan,
 } from './manager-action-recovery.js';
 import type { FindingLedger, FindingObservation } from './types.js';
-import { managerDuplicateLifecycleCommandKey } from './manager-lifecycle-authority.js';
+import {
+  managerDuplicateLifecycleCommandKey,
+  managerProvisionalTransitionLifecycleCommandKey,
+} from './manager-lifecycle-authority.js';
+
+function flattenedProofIds(
+  maps: readonly ReadonlyMap<string, readonly string[]>[],
+): string[] {
+  return [...new Set(maps.flatMap((map) => [...map.values()].flat()))].sort();
+}
+
+function mergeProofIdsByFinding(
+  maps: readonly ReadonlyMap<string, readonly string[]>[],
+): ReadonlyMap<string, readonly string[]> {
+  const merged = new Map<string, string[]>();
+  for (const map of maps) {
+    for (const [findingId, proofIds] of map) {
+      merged.set(
+        findingId,
+        [...new Set([...(merged.get(findingId) ?? []), ...proofIds])].sort(),
+      );
+    }
+  }
+  return merged;
+}
+
+function transitionProofIdsByFinding(
+  commands: readonly FindingLifecycleCommand[],
+  proofIdsByCommandKey: ReadonlyMap<string, readonly string[]>,
+): ReadonlyMap<string, readonly string[]> {
+  const result = new Map<string, readonly string[]>();
+  for (const command of commands) {
+    if (
+      command.operation !== 'promote_provisional'
+      && command.operation !== 'reopen_finding'
+    ) {
+      continue;
+    }
+    const proofIds = proofIdsByCommandKey.get(
+      managerProvisionalTransitionLifecycleCommandKey(command),
+    );
+    if (proofIds === undefined) {
+      continue;
+    }
+    const finding = command.changes.findings[0]!;
+    result.set(
+      finding.id,
+      [...new Set([...(result.get(finding.id) ?? []), ...proofIds])].sort(),
+    );
+  }
+  return result;
+}
+
+function duplicateProofIdsByFinding(
+  proofIdsByCommandKey: ReadonlyMap<
+    string,
+    ReadonlyMap<string, readonly string[]>
+  >,
+): ReadonlyMap<string, readonly string[]> {
+  return mergeProofIdsByFinding([...proofIdsByCommandKey.values()]);
+}
+
+function withLifecycleProofProjection(input: {
+  projection: FindingLedger;
+  proofed: FindingLedger;
+  attachedProofIdsByFinding: ReadonlyMap<string, readonly string[]>;
+  availableProofIds: readonly string[];
+}): FindingLedger {
+  const availableProofIds = new Set(input.availableProofIds);
+  return {
+    ...input.projection,
+    evidenceRecords: [
+      ...new Map([
+        ...input.projection.evidenceRecords,
+        ...input.proofed.evidenceRecords.filter(
+          (record) => availableProofIds.has(record.evidenceId),
+        ),
+      ].map((record) => [record.evidenceId, record])).values(),
+    ],
+    findings: input.projection.findings.map((finding) => ({
+      ...finding,
+      evidenceIds: [
+        ...new Set([
+          ...finding.evidenceIds,
+          ...(input.attachedProofIdsByFinding.get(finding.id) ?? []),
+        ]),
+      ].sort(),
+    })),
+  };
+}
+
+function attachProvisionalTransitionProofs(
+  commands: readonly FindingLifecycleCommand[],
+  proofIdsByCommandKey: ReadonlyMap<string, readonly string[]>,
+): FindingLifecycleCommand[] {
+  return commands.map((command) => {
+    if (
+      command.operation !== 'promote_provisional'
+      && command.operation !== 'reopen_finding'
+    ) {
+      return command;
+    }
+    const proofIds = proofIdsByCommandKey.get(
+      managerProvisionalTransitionLifecycleCommandKey(command),
+    ) ?? [];
+    if (proofIds.length === 0) {
+      return command;
+    }
+    const findings = command.changes.findings.map((finding) => ({
+      ...finding,
+      evidenceIds: [...new Set([...finding.evidenceIds, ...proofIds])].sort(),
+    }));
+    const evidenceSourcesByTarget = new Map(command.evidenceSourcesByTarget);
+    for (const finding of findings) {
+      const key = `finding\0${finding.id}`;
+      const existing = evidenceSourcesByTarget.get(key) ?? {
+        sourceRawFindingIds: [],
+        authorityEvidenceIds: [],
+      };
+      evidenceSourcesByTarget.set(key, {
+        sourceRawFindingIds: existing.sourceRawFindingIds,
+        authorityEvidenceIds: [
+          ...new Set([...existing.authorityEvidenceIds, ...proofIds]),
+        ].sort(),
+      });
+    }
+    return {
+      ...command,
+      changes: { ...command.changes, findings },
+      evidenceSourcesByTarget,
+    };
+  });
+}
+
+function attachRawRecoveryProvisionalIsolationProofs(
+  commands: readonly FindingLifecycleCommand[],
+  proofIdsByFinding: ReadonlyMap<string, readonly string[]>,
+): FindingLifecycleCommand[] {
+  return commands.map((command) => {
+    if (command.operation !== 'update_provisional') {
+      return command;
+    }
+    const findings = command.changes.findings.map((finding) => {
+      const proofIds = proofIdsByFinding.get(finding.id) ?? [];
+      return {
+        ...finding,
+        evidenceIds: [...new Set([...finding.evidenceIds, ...proofIds])].sort(),
+      };
+    });
+    const evidenceSourcesByTarget = new Map(command.evidenceSourcesByTarget);
+    for (const finding of findings) {
+      const proofIds = proofIdsByFinding.get(finding.id) ?? [];
+      if (proofIds.length === 0) {
+        continue;
+      }
+      const key = `finding\0${finding.id}`;
+      const existing = evidenceSourcesByTarget.get(key) ?? {
+        sourceRawFindingIds: [],
+        authorityEvidenceIds: [],
+      };
+      evidenceSourcesByTarget.set(key, {
+        sourceRawFindingIds: existing.sourceRawFindingIds,
+        authorityEvidenceIds: [
+          ...new Set([...existing.authorityEvidenceIds, ...proofIds]),
+        ].sort(),
+      });
+    }
+    return {
+      ...command,
+      changes: { ...command.changes, findings },
+      evidenceSourcesByTarget,
+    };
+  });
+}
 
 /**
  * Translates manager decisions into lifecycle transaction groups. Independent
@@ -30,10 +203,24 @@ export function assembleAndApplyManagerLifecycleTransactions(input: {
   proposed: FindingLedger;
   managerOutput: ManagerDecisionStageResult['managerOutput'];
   provisionalProofIdsByFinding: ReadonlyMap<string, readonly string[]>;
+  rawRecoveryProvisionalProofIdsByFinding: ReadonlyMap<string, readonly string[]>;
   invalidationProofIdsByFinding: ReadonlyMap<string, readonly string[]>;
   duplicateProofIdsByCommandKey: ReadonlyMap<
     string,
     ReadonlyMap<string, readonly string[]>
+  >;
+  managerDecisionProvisionalTransitionProofIdsByCommandKey: ReadonlyMap<
+    string,
+    readonly string[]
+  >;
+  provisionalTransitionProofIdsByCommandKey: ReadonlyMap<string, readonly string[]>;
+  rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey: ReadonlyMap<
+    string,
+    readonly string[]
+  >;
+  rawRecoveryProvisionalTransitionProofIdsByCommandKey: ReadonlyMap<
+    string,
+    readonly string[]
   >;
   invalidationReasonsByFinding: ReadonlyMap<string, string>;
   resolutionRenotifications: readonly ResolutionRenotificationTransition[];
@@ -41,17 +228,66 @@ export function assembleAndApplyManagerLifecycleTransactions(input: {
   actionRecoveryPlan: ManagerActionRecoveryLifecyclePlan | null;
   occurredAt: FindingObservation;
 }): FindingLedger {
-  const rawRecoveryManagerDecisionLedger = input.rawRecoveryManagerDecisionProposed === undefined
+  const rawRecoveryManagerTransitionProofIds = flattenedProofIds([
+    input.rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey,
+  ]);
+  const rawRecoveryIsolationProofIds = flattenedProofIds([
+    input.rawRecoveryProvisionalProofIdsByFinding,
+  ]);
+  const rawRecoverySettlementProofIds = flattenedProofIds([
+    input.rawRecoveryProvisionalTransitionProofIdsByCommandKey,
+  ]);
+  const rawRecoveryManagerProofIdsByFinding = mergeProofIdsByFinding([
+    input.rawRecoveryProvisionalProofIdsByFinding,
+    transitionProofIdsByFinding(
+      input.rawRecoveryManagerDecisionCommands ?? [],
+      input.rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey,
+    ),
+  ]);
+  const rawRecoveryProofIdsByFinding = mergeProofIdsByFinding([
+    rawRecoveryManagerProofIdsByFinding,
+    transitionProofIdsByFinding(
+      input.rawRecoverySettlementCommands ?? [],
+      input.rawRecoveryProvisionalTransitionProofIdsByCommandKey,
+    ),
+  ]);
+  const rawRecoveryProofIds = [
+    ...new Set([
+      ...rawRecoveryIsolationProofIds,
+      ...rawRecoveryManagerTransitionProofIds,
+      ...rawRecoverySettlementProofIds,
+    ]),
+  ].sort();
+  const rawRecoveryManagerDecisionProposed =
+    input.rawRecoveryManagerDecisionProposed === undefined
+      ? undefined
+      : withLifecycleProofProjection({
+          projection: input.rawRecoveryManagerDecisionProposed,
+          proofed: input.proposed,
+          attachedProofIdsByFinding: rawRecoveryManagerProofIdsByFinding,
+          availableProofIds: rawRecoveryProofIds,
+        });
+  const rawRecoveryManagerDecisionLedger = rawRecoveryManagerDecisionProposed === undefined
     ? input.current
     : applyManagerDecisionLifecycleCommands({
         current: input.current,
-        proposed: input.rawRecoveryManagerDecisionProposed,
-        commands: input.rawRecoveryManagerDecisionCommands ?? [],
+        proposed: rawRecoveryManagerDecisionProposed,
+        commands: attachProvisionalTransitionProofs(
+          attachRawRecoveryProvisionalIsolationProofs(
+            input.rawRecoveryManagerDecisionCommands ?? [],
+            input.rawRecoveryProvisionalProofIdsByFinding ?? new Map(),
+          ),
+          input.rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey
+            ?? new Map(),
+        ),
         occurredAt: input.occurredAt,
       });
   const appliedRawRecoveryLedger = applyFindingLifecycleCommands({
     ledger: rawRecoveryManagerDecisionLedger,
-    commands: input.rawRecoverySettlementCommands ?? [],
+    commands: attachProvisionalTransitionProofs(
+      input.rawRecoverySettlementCommands ?? [],
+      input.rawRecoveryProvisionalTransitionProofIdsByCommandKey ?? new Map(),
+    ),
     occurredAt: input.occurredAt,
   });
   const rawRecoveryLedger = input.rawRecoveryProposed === undefined
@@ -59,7 +295,12 @@ export function assembleAndApplyManagerLifecycleTransactions(input: {
     : mergeFindingLifecycleCommandState(
         appliedRawRecoveryLedger,
         {
-          ...input.rawRecoveryProposed,
+          ...withLifecycleProofProjection({
+            projection: input.rawRecoveryProposed,
+            proofed: input.proposed,
+            attachedProofIdsByFinding: rawRecoveryProofIdsByFinding,
+            availableProofIds: rawRecoveryProofIds,
+          }),
           evidenceBindings: appliedRawRecoveryLedger.evidenceBindings,
           lifecycleReservations: appliedRawRecoveryLedger.lifecycleReservations,
           lifecycleEvents: appliedRawRecoveryLedger.lifecycleEvents,
@@ -83,6 +324,14 @@ export function assembleAndApplyManagerLifecycleTransactions(input: {
       }
       if (command.operation === 'supersede_findings') {
         return duplicateProofIdsByTarget?.get(findingId) ?? [];
+      }
+      if (
+        command.operation === 'promote_provisional'
+        || command.operation === 'reopen_finding'
+      ) {
+        return input.managerDecisionProvisionalTransitionProofIdsByCommandKey?.get(
+          managerProvisionalTransitionLifecycleCommandKey(command),
+        ) ?? [];
       }
       return [];
     };
@@ -112,9 +361,16 @@ export function assembleAndApplyManagerLifecycleTransactions(input: {
       if (proofIds.length === 0) {
         continue;
       }
-      evidenceSourcesByTarget.set(`finding\0${finding.id}`, {
+      const key = `finding\0${finding.id}`;
+      const existing = evidenceSourcesByTarget.get(key) ?? {
         sourceRawFindingIds: [],
-        authorityEvidenceIds: [...proofIds],
+        authorityEvidenceIds: [],
+      };
+      evidenceSourcesByTarget.set(key, {
+        sourceRawFindingIds: existing.sourceRawFindingIds,
+        authorityEvidenceIds: [
+          ...new Set([...existing.authorityEvidenceIds, ...proofIds]),
+        ].sort(),
       });
     }
     const verifiedDuplicate = duplicateProofIdsByTarget !== undefined;
@@ -125,10 +381,38 @@ export function assembleAndApplyManagerLifecycleTransactions(input: {
       authority: verifiedDuplicate ? { kind: 'verified_evidence' as const } : command.authority,
     };
   });
+  const managerDecisionProofIdsByFinding = mergeProofIdsByFinding([
+    rawRecoveryProofIdsByFinding,
+    input.provisionalProofIdsByFinding,
+    input.invalidationProofIdsByFinding,
+    duplicateProofIdsByFinding(input.duplicateProofIdsByCommandKey),
+    transitionProofIdsByFinding(
+      input.managerDecisionCommands,
+      input.managerDecisionProvisionalTransitionProofIdsByCommandKey,
+    ),
+  ]);
+  const managerDecisionProposed = withLifecycleProofProjection({
+    projection: {
+      ...input.managerDecisionProposed,
+      findings: input.managerDecisionProposed.findings.map((finding) => (
+        input.invalidationReasonsByFinding.has(finding.id)
+          ? {
+              ...finding,
+              invalidatedEvidence: input.invalidationReasonsByFinding.get(finding.id)!,
+            }
+          : finding
+      )),
+    },
+    proofed: input.proposed,
+    attachedProofIdsByFinding: managerDecisionProofIdsByFinding,
+    availableProofIds: input.proposed.evidenceRecords.flatMap((record) => (
+      record.kind === 'engine_proof' ? [record.evidenceId] : []
+    )),
+  });
   const managerDecisionLedger = applyManagerDecisionLifecycleCommands({
     current: rawRecoveryLedger,
     proposed: {
-      ...input.managerDecisionProposed,
+      ...managerDecisionProposed,
       evidenceBindings: rawRecoveryLedger.evidenceBindings,
       lifecycleReservations: rawRecoveryLedger.lifecycleReservations,
       lifecycleEvents: rawRecoveryLedger.lifecycleEvents,
@@ -145,7 +429,10 @@ export function assembleAndApplyManagerLifecycleTransactions(input: {
   });
   const settled = applyFindingLifecycleCommands({
     ledger: renotified,
-    commands: input.settlementCommands,
+    commands: attachProvisionalTransitionProofs(
+      input.settlementCommands,
+      input.provisionalTransitionProofIdsByCommandKey ?? new Map(),
+    ),
     occurredAt: input.occurredAt,
   });
   const actionRecovered = applyManagerActionRecoveryLifecycleCommands({

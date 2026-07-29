@@ -392,8 +392,18 @@ function commandChanges(
   return {
     findings: command.changes.findings.map((finding) => {
       const head = captureFindingLifecycleHead(ledger, 'finding', finding.id);
+      const current = ledger.findings.find((candidate) => candidate.id === finding.id);
       return FindingLedgerEntrySchema.parse(JSON.parse(JSON.stringify({
         ...finding,
+        // A later command in the same lifecycle transaction must retain
+        // evidence consumed by an earlier command. Assemble that monotonic
+        // projection here, where both the current head and next command are
+        // authoritative, instead of making each producer predict intermediate
+        // proof ids.
+        evidenceIds: [...new Set([
+          ...(current?.evidenceIds ?? []),
+          ...finding.evidenceIds,
+        ])].sort(compareBinaryStrings),
         revision: head === undefined ? 1 : head.revision + 1,
       })));
     }),

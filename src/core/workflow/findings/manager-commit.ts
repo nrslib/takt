@@ -83,7 +83,16 @@ export async function commitFindingManagerRound(params: {
       }
       const proofed = issueManagerLifecycleAuthority({
         current: commitMutation.result.rawRecoveryLedger,
+        rawRecoveryCurrent: freshLedger,
+        rawRecoveryManagerDecisionProposed:
+          commitMutation.result.rawRecoveryManagerDecisionLedger,
+        rawRecoveryManagerDecisionCommands:
+          commitMutation.result.rawRecoveryManagerDecisionCommands,
+        rawRecoverySettlementCommands:
+          commitMutation.result.rawRecoverySettlementCommands,
+        managerDecisionProposed: commitMutation.result.managerDecisionLedger,
         managerDecisionCommands: commitMutation.result.managerDecisionCommands,
+        settlementCommands: commitMutation.result.settlementCommands,
         proposed: commitMutation.ledger,
         managerOutput: {
           ...commitMutation.result.lifecycleManagerOutput,
@@ -109,30 +118,7 @@ export async function commitFindingManagerRound(params: {
           commitMutation.result.rawRecoverySettlementCommands,
         rawRecoveryProposed: commitMutation.result.rawRecoveryLedger,
         managerDecisionCommands: commitMutation.result.managerDecisionCommands,
-        managerDecisionProposed: {
-          ...proofed.ledger,
-          findings: commitMutation.result.managerDecisionLedger.findings.map((finding) => {
-            const proofedFinding = proofed.ledger.findings.find(
-              (candidate) => candidate.id === finding.id,
-            );
-            if (proofedFinding === undefined) {
-              return finding;
-            }
-            const proofEvidenceIds = proofedFinding.evidenceIds.filter((evidenceId) => (
-              proofed.ledger.evidenceRecords.some((record) => (
-                record.evidenceId === evidenceId && record.kind === 'engine_proof'
-              ))
-            ));
-            return {
-              ...finding,
-              evidenceIds: [...new Set([...finding.evidenceIds, ...proofEvidenceIds])].sort(),
-              ...(proofedFinding.invalidatedEvidence === undefined
-                ? {}
-                : { invalidatedEvidence: proofedFinding.invalidatedEvidence }),
-            };
-          }),
-          conflicts: commitMutation.result.managerDecisionLedger.conflicts,
-        },
+        managerDecisionProposed: commitMutation.result.managerDecisionLedger,
         proposed: proofed.ledger,
         occurredAt: params.observation,
         managerOutput: commitMutation.result.lifecycleManagerOutput,
@@ -140,8 +126,18 @@ export async function commitFindingManagerRound(params: {
         settlementCommands: commitMutation.result.settlementCommands,
         actionRecoveryPlan: commitMutation.result.actionRecoveryPlan,
         provisionalProofIdsByFinding: proofed.provisionalProofIdsByFinding,
+        rawRecoveryProvisionalProofIdsByFinding:
+          proofed.rawRecoveryProvisionalProofIdsByFinding,
         invalidationProofIdsByFinding: proofed.invalidationProofIdsByFinding,
         duplicateProofIdsByCommandKey: proofed.duplicateProofIdsByCommandKey,
+        managerDecisionProvisionalTransitionProofIdsByCommandKey:
+          proofed.managerDecisionProvisionalTransitionProofIdsByCommandKey,
+        provisionalTransitionProofIdsByCommandKey:
+          proofed.provisionalTransitionProofIdsByCommandKey,
+        rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey:
+          proofed.rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey,
+        rawRecoveryProvisionalTransitionProofIdsByCommandKey:
+          proofed.rawRecoveryProvisionalTransitionProofIdsByCommandKey,
         invalidationReasonsByFinding: proofed.invalidationReasonsByFinding,
       });
       const withRejectedObservations = applyRejectedObservationAttachments(

@@ -68,6 +68,16 @@ import {
 } from './helpers/run-storage.js';
 import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
 import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
+import {
+  captureFindingMutationPrecondition,
+} from '../core/workflow/findings/finding-preconditions.js';
+import {
+  createFindingLedgerEntry,
+  createProductFindingEntry,
+} from '../core/workflow/findings/finding-entry.js';
+import {
+  issueProvisionalProductTransitionAuthorityProof,
+} from '../core/workflow/findings/provisional-product-transition-proof.js';
 
 const OBSERVATION: FindingObservation = {
   runId: 'run-1',
@@ -135,6 +145,55 @@ function evidenceSource(input: {
   };
   return {
     claimIdentityHash,
+    record,
+    raw: {
+      ...raw,
+      evidence: [{
+        kind: 'file_quote',
+        path: record.path,
+        startLine: record.startLine,
+        endLine: record.endLine,
+        verbatimExcerpt: record.verbatimExcerpt,
+        snapshotId: record.snapshotId,
+      }],
+    },
+  };
+}
+
+function incompleteEvidenceSource(input: {
+  rawFindingId: string;
+  targetPath: string;
+}): EvidenceSource {
+  const raw = canonicalRawFindingFixture({
+    rawFindingId: input.rawFindingId,
+    stepName: OBSERVATION.stepName,
+    reviewer: 'reviewer',
+    familyTag: null,
+    severity: null,
+    title: null,
+    description: null,
+    suggestion: null,
+    relation: 'new',
+    targetFindingId: null,
+    target: { kind: 'code', paths: [input.targetPath] },
+    evidence: [],
+  });
+  const recordPayload = {
+    kind: 'file_quote' as const,
+    path: input.targetPath,
+    startLine: 1,
+    endLine: 1,
+    verbatimExcerpt: 'The initial observation is incomplete.',
+    snapshotId: sha256(`snapshot:${input.rawFindingId}`),
+    claimIdentityHash: raw.claimIdentityHash,
+    fileHash: sha256(`file:${input.rawFindingId}`),
+  };
+  const record: FindingEvidenceRecord = {
+    evidenceId: computeFileQuoteEvidenceRecordId(recordPayload),
+    ...recordPayload,
+  };
+  return {
+    claimIdentityHash: raw.claimIdentityHash,
     record,
     raw: {
       ...raw,
@@ -231,6 +290,93 @@ function reservation(input: {
   };
 }
 
+function oneTargetReservation(input: {
+  operation: FindingLifecycleOperation;
+  target: FindingLifecycleMutationTarget;
+  sources: EvidenceSource[];
+  authorityEvidenceRecords?: Extract<
+    FindingEvidenceRecord,
+    { kind: 'engine_proof' }
+  >[];
+}): VerifiedLifecycleReservation {
+  const evidenceBindings = [
+    ...input.sources.map((source) => (
+      createFindingEvidenceBinding({
+        evidenceId: source.record.evidenceId,
+        claimIdentityHash: source.claimIdentityHash,
+        sourceRawFindingId: source.raw.rawFindingId,
+        sourceRawIntegrityDigest: computeRawFindingIntegrityDigest(source.raw),
+        operation: input.operation,
+        target: input.target,
+      })
+    )),
+    ...(input.authorityEvidenceRecords ?? []).map((record) => (
+      createFindingEvidenceBinding({
+        evidenceId: record.evidenceId,
+        claimIdentityHash: record.claimIdentityHash,
+        sourceRawFindingId: null,
+        sourceRawIntegrityDigest: null,
+        operation: input.operation,
+        target: input.target,
+      })
+    )),
+  ].sort((left, right) => left.bindingId.localeCompare(right.bindingId));
+  return {
+    reservation: createFindingLifecycleReservation({
+      operation: input.operation,
+      targets: [input.target],
+      evidenceBindingIds: evidenceBindings.map((binding) => binding.bindingId),
+      authority: { kind: 'verified_evidence' },
+      context: { kind: 'transaction' },
+      reservedAt: OBSERVATION,
+    }),
+    evidenceBindings,
+  };
+}
+
+function proofedProvisionalTransition(input: {
+  ledger: FindingLedger;
+  operation: 'promote_provisional' | 'reopen_finding';
+  target: FindingLifecycleMutationTarget;
+  sources: EvidenceSource[];
+  product: FindingLedgerEntry;
+}): {
+  ledger: FindingLedger;
+  reservation: VerifiedLifecycleReservation;
+  product: FindingLedgerEntry;
+} {
+  const product = createProductFindingEntry(input.product);
+  const proof = issueProvisionalProductTransitionAuthorityProof({
+    observationLedger: input.ledger,
+    intermediateLedger: input.ledger,
+    operation: input.operation,
+    findingId: product.id,
+    transitionRawFindings: input.sources.map((source) => source.raw),
+    product,
+    workflowName: input.ledger.workflowName,
+    runId: OBSERVATION.runId,
+    scopeIdentity: 'formal-provisional-transition-test',
+    reviewScopeSnapshotId: sha256('formal-provisional-transition-snapshot'),
+    observation: OBSERVATION,
+  });
+  return {
+    ledger: {
+      ...input.ledger,
+      evidenceRecords: [...input.ledger.evidenceRecords, proof],
+    },
+    reservation: oneTargetReservation({
+      operation: input.operation,
+      target: input.target,
+      sources: input.sources,
+      authorityEvidenceRecords: [proof],
+    }),
+    product: {
+      ...product,
+      evidenceIds: [...new Set([...product.evidenceIds, proof.evidenceId])].sort(),
+    },
+  };
+}
+
 function mutation(input: {
   reservation: VerifiedLifecycleReservation;
   findings: FindingLedgerEntry[];
@@ -251,6 +397,171 @@ function latestHead(ledger: FindingLedger, entityId: string): FindingLifecycleEn
     throw new Error(`Missing lifecycle head for "${entityId}"`);
   }
   return transition.after;
+}
+
+function promotionBoundaryFixture(input: {
+  initialSource?: EvidenceSource;
+  transitionPath?: string;
+  stalePrecondition?: boolean;
+  inconsistentTransitionClaim?: boolean;
+  productSource?: EvidenceSource;
+} = {}): {
+  ledger: FindingLedger;
+  reservation: VerifiedLifecycleReservation;
+  product: FindingLedgerEntry;
+  transitionSource: EvidenceSource;
+} {
+  const initialSource = input.initialSource ?? incompleteEvidenceSource({
+    rawFindingId: 'raw-formal-provisional',
+    targetPath: 'src/formal-provisional.ts',
+  });
+  const createTarget = {
+    entityKind: 'finding' as const,
+    entityId: 'F-0001',
+    expectedHead: null,
+  };
+  const createReservation = reservation({
+    operation: 'create_finding',
+    targets: [createTarget],
+    sources: [initialSource],
+  });
+  const {
+    description: _description,
+    ...nullableBase
+  } = finding({
+    id: createTarget.entityId,
+    source: initialSource,
+    revision: 1,
+  });
+  const provisional: FindingLedgerEntry = {
+    ...nullableBase,
+    severity: null,
+    title: null,
+    provisional: {
+      kind: 'raw-adjudication-unresolved',
+      stableKey: sha256('formal-promotion-stable'),
+      lineageKey: sha256('formal-promotion-lineage'),
+      sourceRawFindingIds: [initialSource.raw.rawFindingId],
+      reason: 'The initial claim is incomplete.',
+      firstObservedAt: { ...OBSERVATION },
+      lastObservedAt: { ...OBSERVATION },
+      interpretationEpochs: 0,
+      gateEffect: 'block',
+      firstObservedRound: 1,
+    },
+  };
+  const provisionalLedger = applyVerifiedLifecycleMutation(
+    reserveVerifiedLifecycleMutation(
+      emptyLedger([initialSource]),
+      createReservation,
+    ),
+    mutation({
+      reservation: createReservation,
+      findings: [provisional],
+    }),
+  );
+  const transitionDraft = evidenceSource({
+    rawFindingId: 'raw-formal-promotion',
+    targetFindingId: provisional.id,
+    title: 'Complete formal claim',
+    description: 'The transition raw supplies the complete product claim.',
+    relation: 'persists',
+    targetPath: input.transitionPath ?? 'src/formal-provisional.ts',
+  });
+  const transitionSource: EvidenceSource = {
+    ...transitionDraft,
+    raw: {
+      ...transitionDraft.raw,
+      targetPrecondition: {
+        ...captureFindingMutationPrecondition(provisionalLedger, provisional.id)!,
+        targetRevision: provisional.revision + (input.stalePrecondition === true ? 1 : 0),
+      },
+    },
+  };
+  const inconsistentDraft = input.inconsistentTransitionClaim === true
+    ? evidenceSource({
+        rawFindingId: 'raw-formal-promotion-inconsistent',
+        targetFindingId: provisional.id,
+        title: 'Different formal claim',
+        description: 'This transition raw describes a different product claim.',
+        relation: 'persists',
+        targetPath: input.transitionPath ?? 'src/formal-provisional.ts',
+      })
+    : undefined;
+  const inconsistentSource: EvidenceSource | undefined = inconsistentDraft === undefined
+    ? undefined
+    : {
+        ...inconsistentDraft,
+        raw: {
+          ...inconsistentDraft.raw,
+          targetPrecondition: transitionSource.raw.targetPrecondition!,
+        },
+      };
+  const sources = [
+    transitionSource,
+    ...(inconsistentSource === undefined ? [] : [inconsistentSource]),
+  ];
+  const ledger = {
+    ...provisionalLedger,
+    evidenceRecords: [
+      ...provisionalLedger.evidenceRecords,
+      ...sources.map((source) => source.record),
+    ],
+    rawFindings: [
+      ...provisionalLedger.rawFindings,
+      ...sources.map((source) => source.raw),
+    ],
+  };
+  const target = {
+    entityKind: 'finding' as const,
+    entityId: provisional.id,
+    expectedHead: latestHead(provisionalLedger, provisional.id),
+  };
+  const productSource = input.productSource ?? transitionSource;
+  const product: FindingLedgerEntry = {
+    ...finding({
+      id: provisional.id,
+      source: productSource,
+      revision: provisional.revision + 1,
+      lifecycle: 'persists',
+      evidenceIds: [
+        initialSource.record.evidenceId,
+        ...sources.map((source) => source.record.evidenceId),
+      ].sort(),
+    }),
+    rawFindingIds: [
+      initialSource.raw.rawFindingId,
+      ...sources.map((source) => source.raw.rawFindingId),
+    ].sort(),
+  };
+  const proofed = proofedProvisionalTransition({
+    ledger,
+    operation: 'promote_provisional',
+    target,
+    sources,
+    product,
+  });
+  return {
+    ...proofed,
+    transitionSource,
+  };
+}
+
+function emptyManagerOutput(): FindingManagerOutput {
+  return {
+    anchorAdjudications: [],
+    matches: [],
+    newFindings: [],
+    resolvedFindings: [],
+    reopenedFindings: [],
+    conflicts: [],
+    resolvedConflicts: [],
+    waivedFindings: [],
+    disputeNotes: [],
+    invalidatedFindings: [],
+    duplicateFindings: [],
+    dismissedFindings: [],
+  };
 }
 
 function adjudicationLedger(): FindingLedger {
@@ -464,8 +775,13 @@ function applySemanticManagerPlan(input: {
     proposed: input.plan.ledger,
     managerOutput: input.managerOutput,
     provisionalProofIdsByFinding: new Map(),
+    rawRecoveryProvisionalProofIdsByFinding: new Map(),
     invalidationProofIdsByFinding: new Map(),
     duplicateProofIdsByCommandKey: new Map(),
+    managerDecisionProvisionalTransitionProofIdsByCommandKey: new Map(),
+    provisionalTransitionProofIdsByCommandKey: new Map(),
+    rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey: new Map(),
+    rawRecoveryProvisionalTransitionProofIdsByCommandKey: new Map(),
     invalidationReasonsByFinding: new Map(),
     resolutionRenotifications: [],
     settlementCommands: [],
@@ -481,8 +797,14 @@ function applyProofedSemanticManagerPlan(input: {
 }): FindingLedger {
   const proofed = issueManagerLifecycleAuthority({
     current: input.current,
+    rawRecoveryCurrent: input.current,
+    rawRecoveryManagerDecisionProposed: input.current,
+    rawRecoveryManagerDecisionCommands: [],
+    rawRecoverySettlementCommands: [],
+    managerDecisionProposed: input.plan.ledger,
     proposed: input.plan.ledger,
     managerDecisionCommands: input.plan.lifecycleCommands,
+    settlementCommands: [],
     managerOutput: input.managerOutput,
     cwd: process.cwd(),
     workflowName: input.current.workflowName,
@@ -516,8 +838,18 @@ function applyProofedSemanticManagerPlan(input: {
     proposed: proofed.ledger,
     managerOutput: input.managerOutput,
     provisionalProofIdsByFinding: proofed.provisionalProofIdsByFinding,
+    rawRecoveryProvisionalProofIdsByFinding:
+      proofed.rawRecoveryProvisionalProofIdsByFinding,
     invalidationProofIdsByFinding: proofed.invalidationProofIdsByFinding,
     duplicateProofIdsByCommandKey: proofed.duplicateProofIdsByCommandKey,
+    managerDecisionProvisionalTransitionProofIdsByCommandKey:
+      proofed.managerDecisionProvisionalTransitionProofIdsByCommandKey,
+    provisionalTransitionProofIdsByCommandKey:
+      proofed.provisionalTransitionProofIdsByCommandKey,
+    rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey:
+      proofed.rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey,
+    rawRecoveryProvisionalTransitionProofIdsByCommandKey:
+      proofed.rawRecoveryProvisionalTransitionProofIdsByCommandKey,
     invalidationReasonsByFinding: proofed.invalidationReasonsByFinding,
     resolutionRenotifications: [],
     settlementCommands: [],
@@ -527,6 +859,45 @@ function applyProofedSemanticManagerPlan(input: {
 }
 
 describe('verified finding lifecycle mutation', () => {
+  it('omits explicit undefined optional finding fields from the persisted projection', () => {
+    const source = evidenceSource({
+      rawFindingId: 'raw-canonical-provisional',
+      targetFindingId: null,
+      title: 'Canonical provisional',
+      description: 'The persisted projection must be JSON-roundtrippable.',
+      targetPath: 'src/canonical-provisional.ts',
+    });
+    const canonical = createFindingLedgerEntry({
+      ...finding({
+        id: 'F-0001',
+        source,
+        revision: 1,
+      }),
+      suggestion: undefined,
+      provisional: {
+        kind: 'raw-adjudication-unresolved',
+        stableKey: sha256('canonical-provisional-stable'),
+        lineageKey: sha256('canonical-provisional-lineage'),
+        sourceRawFindingIds: [source.raw.rawFindingId],
+        reason: 'Awaiting a clean targeted re-observation.',
+        firstObservedAt: { ...OBSERVATION },
+        lastObservedAt: { ...OBSERVATION },
+        interpretationEpochs: 0,
+        gateEffect: 'block',
+        firstObservedRound: 1,
+        actionRecovery: undefined,
+        actionRecoveryAttempts: undefined,
+        recoveryReviewerStableKey: undefined,
+      },
+    });
+
+    expect(Object.hasOwn(canonical, 'suggestion')).toBe(false);
+    expect(Object.hasOwn(canonical.provisional!, 'actionRecovery')).toBe(false);
+    expect(Object.hasOwn(canonical.provisional!, 'actionRecoveryAttempts')).toBe(false);
+    expect(Object.hasOwn(canonical.provisional!, 'recoveryReviewerStableKey')).toBe(false);
+    expect(JSON.parse(JSON.stringify(canonical))).toEqual(canonical);
+  });
+
   it('authorizes provisional promotion only from clean persists evidence bound to the provisional target', () => {
     const provisionalSource = evidenceSource({
       rawFindingId: 'raw-provisional-source',
@@ -644,6 +1015,604 @@ describe('verified finding lifecycle mutation', () => {
       }],
       sources: [valid],
     }))).toThrow(/stale full head/);
+  });
+
+  it('commits a complete product claim when promoting a nullable provisional', () => {
+    const provisionalSource = incompleteEvidenceSource({
+      rawFindingId: 'raw-nullable-provisional',
+      targetPath: 'src/nullable-provisional.ts',
+    });
+    const createTarget = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: null,
+    };
+    const createReservation = reservation({
+      operation: 'create_finding',
+      targets: [createTarget],
+      sources: [provisionalSource],
+    });
+    const {
+      description: _description,
+      ...nullableBase
+    } = finding({
+      id: createTarget.entityId,
+      source: provisionalSource,
+      revision: 1,
+    });
+    const provisionalFinding: FindingLedgerEntry = {
+      ...nullableBase,
+      severity: null,
+      title: null,
+      provisional: {
+        kind: 'raw-adjudication-unresolved',
+        stableKey: sha256('nullable-promotion-stable'),
+        lineageKey: sha256('nullable-promotion-lineage'),
+        sourceRawFindingIds: [provisionalSource.raw.rawFindingId],
+        reason: 'The initial claim is incomplete.',
+        firstObservedAt: { ...OBSERVATION },
+        lastObservedAt: { ...OBSERVATION },
+        interpretationEpochs: 0,
+        gateEffect: 'block',
+        firstObservedRound: 1,
+      },
+    };
+    const provisionalLedger = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(
+        emptyLedger([provisionalSource]),
+        createReservation,
+      ),
+      mutation({
+        reservation: createReservation,
+        findings: [provisionalFinding],
+      }),
+    );
+    const promotedSourceDraft = evidenceSource({
+      rawFindingId: 'raw-nullable-promotion',
+      targetFindingId: createTarget.entityId,
+      title: 'Complete promoted claim',
+      description: 'The later observation supplies the complete product claim.',
+      relation: 'persists',
+      targetPath: 'src/nullable-provisional.ts',
+    });
+    const promotedSource: EvidenceSource = {
+      ...promotedSourceDraft,
+      raw: {
+        ...promotedSourceDraft.raw,
+        targetPrecondition: captureFindingMutationPrecondition(
+          provisionalLedger,
+          createTarget.entityId,
+        )!,
+      },
+    };
+    const withPromotionEvidence: FindingLedger = {
+      ...provisionalLedger,
+      evidenceRecords: [
+        ...provisionalLedger.evidenceRecords,
+        promotedSource.record,
+      ],
+      rawFindings: [
+        ...provisionalLedger.rawFindings,
+        promotedSource.raw,
+      ],
+    };
+    const promotionTarget = {
+      entityKind: 'finding' as const,
+      entityId: createTarget.entityId,
+      expectedHead: latestHead(provisionalLedger, createTarget.entityId),
+    };
+    const productFinding: FindingLedgerEntry = {
+      ...finding({
+        id: createTarget.entityId,
+        source: promotedSource,
+        revision: 2,
+        lifecycle: 'persists',
+        evidenceIds: [
+          provisionalSource.record.evidenceId,
+          promotedSource.record.evidenceId,
+        ].sort(),
+      }),
+      rawFindingIds: [
+        provisionalSource.raw.rawFindingId,
+        promotedSource.raw.rawFindingId,
+      ].sort(),
+    };
+    const proofedPromotion = proofedProvisionalTransition({
+      ledger: withPromotionEvidence,
+      operation: 'promote_provisional',
+      target: promotionTarget,
+      sources: [promotedSource],
+      product: productFinding,
+    });
+    const committed = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(
+        proofedPromotion.ledger,
+        proofedPromotion.reservation,
+      ),
+      mutation({
+        reservation: proofedPromotion.reservation,
+        findings: [proofedPromotion.product],
+      }),
+    );
+
+    expect(committed.findings[0]).toMatchObject({
+      severity: 'high',
+      title: 'Complete promoted claim',
+      description: 'The later observation supplies the complete product claim.',
+      targetIdentityHash: promotedSource.raw.targetIdentityHash,
+      claimIdentityHash: promotedSource.raw.claimIdentityHash,
+      semanticClaimIdentityHash: promotedSource.raw.semanticClaimIdentityHash,
+      revision: 2,
+    });
+    expect(committed.findings[0]?.provisional).toBeUndefined();
+    expect(committed.lifecycleEvents.at(-1)?.operation).toBe('promote_provisional');
+  });
+
+  it.each([
+    {
+      name: 'stale target precondition',
+      fixture: () => promotionBoundaryFixture({ stalePrecondition: true }),
+      error: /ineligible observed provisional transition source/,
+    },
+    {
+      name: 'different target identity',
+      fixture: () => promotionBoundaryFixture({
+        transitionPath: 'src/different-target.ts',
+      }),
+      error: /ineligible observed provisional transition source/,
+    },
+    {
+      name: 'inconsistent transition claim',
+      fixture: () => promotionBoundaryFixture({
+        inconsistentTransitionClaim: true,
+      }),
+      error: /inconsistent-transition-claim/,
+    },
+    {
+      name: 'existing source claim conflict',
+      fixture: () => promotionBoundaryFixture({
+        initialSource: evidenceSource({
+          rawFindingId: 'raw-formal-existing-claim',
+          targetFindingId: null,
+          title: 'Stored source claim',
+          description: 'The stored source describes a different claim.',
+          targetPath: 'src/formal-provisional.ts',
+        }),
+      }),
+      error: /existing-source-claim-conflict/,
+    },
+    {
+      name: 'product claim different from materialized evidence',
+      fixture: () => promotionBoundaryFixture({
+        productSource: evidenceSource({
+          rawFindingId: 'raw-formal-product-rewrite',
+          targetFindingId: 'F-0001',
+          title: 'Rewritten product claim',
+          description: 'The product projection does not match its transition raw.',
+          relation: 'persists',
+          targetPath: 'src/formal-provisional.ts',
+        }),
+      }),
+      error: /product claim does not match materialized evidence/,
+    },
+  ])('rejects provisional promotion with $name', ({ fixture, error }) => {
+    expect(fixture).toThrow(error);
+  });
+
+  it('rejects reuse of a provisional transition proof for another product claim', () => {
+    const fixture = promotionBoundaryFixture();
+    const reserved = reserveVerifiedLifecycleMutation(
+      fixture.ledger,
+      fixture.reservation,
+    );
+
+    expect(() => applyVerifiedLifecycleMutation(
+      reserved,
+      mutation({
+        reservation: fixture.reservation,
+        findings: [{
+          ...fixture.product,
+          title: 'A different product claim',
+        }],
+      }),
+    )).toThrow(/proof does not match the product claim/);
+  });
+
+  it('rejects a product projection that drops the transition raw lineage', () => {
+    const fixture = promotionBoundaryFixture();
+    const reserved = reserveVerifiedLifecycleMutation(
+      fixture.ledger,
+      fixture.reservation,
+    );
+
+    expect(() => applyVerifiedLifecycleMutation(
+      reserved,
+      mutation({
+        reservation: fixture.reservation,
+        findings: [{
+          ...fixture.product,
+          rawFindingIds: fixture.ledger.findings[0]!.rawFindingIds,
+        }],
+      }),
+    )).toThrow(/proof does not match the product raw lineage/);
+  });
+
+  it('materializes a dismissed provisional at the formal reopen boundary', () => {
+    const fixture = promotionBoundaryFixture();
+    const openProvisional = fixture.ledger.findings[0]!;
+    const {
+      revision: _openRevision,
+      ...dismissedChange
+    } = {
+      ...openProvisional,
+      status: 'dismissed' as const,
+      lifecycle: 'dismissed' as const,
+      revision: openProvisional.revision + 1,
+      dismissal: {
+        basis: 'unverifiable_claim' as const,
+        reason: 'The incomplete claim was dismissed.',
+        decidedAt: { ...OBSERVATION },
+      },
+    };
+    const dismissed = applyFindingLifecycleCommands({
+      ledger: fixture.ledger,
+      commands: [{
+        operation: 'dismiss_finding',
+        changes: {
+          findings: [dismissedChange],
+          conflicts: [],
+        },
+        authority: {
+          kind: 'engine_policy',
+          decisionKind: 'dismiss',
+          decisionDigest: sha256('formal-reopen-dismiss'),
+        },
+        evidenceSourcesByTarget: new Map(),
+      }],
+      occurredAt: OBSERVATION,
+    });
+    const dismissedFinding = dismissed.findings[0]!;
+    const reopenedDraft = evidenceSource({
+      rawFindingId: 'raw-formal-reopen',
+      targetFindingId: dismissedFinding.id,
+      title: 'Complete reopened claim',
+      description: 'The reopened observation supplies a complete product claim.',
+      relation: 'reopened',
+      targetPath: 'src/formal-provisional.ts',
+    });
+    const reopenedSource: EvidenceSource = {
+      ...reopenedDraft,
+      raw: {
+        ...reopenedDraft.raw,
+        targetPrecondition: captureFindingMutationPrecondition(
+          dismissed,
+          dismissedFinding.id,
+        )!,
+      },
+    };
+    const withReopenEvidence: FindingLedger = {
+      ...dismissed,
+      evidenceRecords: [...dismissed.evidenceRecords, reopenedSource.record],
+      rawFindings: [...dismissed.rawFindings, reopenedSource.raw],
+    };
+    const reopenTarget = {
+      entityKind: 'finding' as const,
+      entityId: dismissedFinding.id,
+      expectedHead: latestHead(dismissed, dismissedFinding.id),
+    };
+    const reopenedProduct: FindingLedgerEntry = {
+      ...finding({
+        id: dismissedFinding.id,
+        source: reopenedSource,
+        revision: dismissedFinding.revision + 1,
+        lifecycle: 'reopened',
+        evidenceIds: [
+          ...dismissedFinding.evidenceIds,
+          reopenedSource.record.evidenceId,
+        ].sort(),
+      }),
+      rawFindingIds: [
+        ...dismissedFinding.rawFindingIds,
+        reopenedSource.raw.rawFindingId,
+      ].sort(),
+      reopenedEvidence: 'The complete claim was observed again.',
+    };
+    const proofedReopen = proofedProvisionalTransition({
+      ledger: withReopenEvidence,
+      operation: 'reopen_finding',
+      target: reopenTarget,
+      sources: [reopenedSource],
+      product: reopenedProduct,
+    });
+    const committed = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(
+        proofedReopen.ledger,
+        proofedReopen.reservation,
+      ),
+      mutation({
+        reservation: proofedReopen.reservation,
+        findings: [proofedReopen.product],
+      }),
+    );
+
+    expect(committed.findings[0]).toMatchObject({
+      status: 'open',
+      lifecycle: 'reopened',
+      title: 'Complete reopened claim',
+    });
+    expect(committed.findings[0]?.provisional).toBeUndefined();
+  });
+
+  it('rejects identity rewrites when reopening an ordinary product finding', () => {
+    const source = evidenceSource({
+      rawFindingId: 'raw-ordinary-product',
+      targetFindingId: null,
+      title: 'Ordinary product claim',
+      description: 'The original product claim is complete.',
+      targetPath: 'src/ordinary-product.ts',
+    });
+    const createTarget = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: null,
+    };
+    const createReservation = reservation({
+      operation: 'create_finding',
+      targets: [createTarget],
+      sources: [source],
+    });
+    const open = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(emptyLedger([source]), createReservation),
+      mutation({
+        reservation: createReservation,
+        findings: [finding({
+          id: createTarget.entityId,
+          source,
+          revision: 1,
+        })],
+      }),
+    );
+    const current = open.findings[0]!;
+    const {
+      revision: _revision,
+      ...waivedProjection
+    } = {
+      ...current,
+      status: 'waived' as const,
+      lifecycle: 'waived' as const,
+      revision: 2,
+      waivers: [{
+        reason: 'Prepare an ordinary reopen boundary.',
+        evidence: 'Policy fixture.',
+        decidedAt: { ...OBSERVATION },
+      }],
+    };
+    const waived = applyFindingLifecycleCommands({
+      ledger: open,
+      commands: [{
+        operation: 'waive_finding',
+        changes: {
+          findings: [waivedProjection],
+          conflicts: [],
+        },
+        authority: {
+          kind: 'engine_policy',
+          decisionKind: 'waive',
+          decisionDigest: sha256('ordinary-product-waive'),
+        },
+        evidenceSourcesByTarget: new Map(),
+      }],
+      occurredAt: OBSERVATION,
+    });
+    const rewriteSourceDraft = evidenceSource({
+      rawFindingId: 'raw-ordinary-product-reopen',
+      targetFindingId: current.id,
+      title: 'Rewritten ordinary product claim',
+      description: 'A reopen must not replace the product identity.',
+      relation: 'reopened',
+      targetPath: 'src/ordinary-product-rewrite.ts',
+    });
+    const waivedFinding = waived.findings[0]!;
+    const rewriteSource: EvidenceSource = {
+      ...rewriteSourceDraft,
+      raw: {
+        ...rewriteSourceDraft.raw,
+        targetPrecondition: captureFindingMutationPrecondition(
+          waived,
+          waivedFinding.id,
+        )!,
+      },
+    };
+    const withReopenEvidence: FindingLedger = {
+      ...waived,
+      evidenceRecords: [...waived.evidenceRecords, rewriteSource.record],
+      rawFindings: [...waived.rawFindings, rewriteSource.raw],
+    };
+    const reopenTarget = {
+      entityKind: 'finding' as const,
+      entityId: waivedFinding.id,
+      expectedHead: latestHead(waived, waivedFinding.id),
+    };
+    const reopenReservation = reservation({
+      operation: 'reopen_finding',
+      targets: [reopenTarget],
+      sources: [rewriteSource],
+    });
+    const rewritten: FindingLedgerEntry = {
+      ...waivedFinding,
+      status: 'open',
+      lifecycle: 'reopened',
+      revision: waivedFinding.revision + 1,
+      target: rewriteSource.raw.target,
+      targetIdentityHash: rewriteSource.raw.targetIdentityHash,
+      claimIdentityHash: rewriteSource.raw.claimIdentityHash,
+      semanticClaimIdentityHash: rewriteSource.raw.semanticClaimIdentityHash,
+      severity: rewriteSource.raw.severity!,
+      title: rewriteSource.raw.title!,
+      description: rewriteSource.raw.description!,
+      evidenceIds: [
+        ...waivedFinding.evidenceIds,
+        rewriteSource.record.evidenceId,
+      ].sort(),
+      rawFindingIds: [
+        ...waivedFinding.rawFindingIds,
+        rewriteSource.raw.rawFindingId,
+      ].sort(),
+      reopenedEvidence: 'The finding was observed again.',
+    };
+    const reserved = reserveVerifiedLifecycleMutation(
+      withReopenEvidence,
+      reopenReservation,
+    );
+
+    expect(() => applyVerifiedLifecycleMutation(
+      reserved,
+      mutation({
+        reservation: reopenReservation,
+        findings: [rewritten],
+      }),
+    )).toThrow(/rewrote immutable claim fields/);
+  });
+
+  it('retains manager proof evidence across update_provisional and promotion in one transaction', () => {
+    // The transition raw is captured against the observed head. The proof also
+    // binds the intermediate head produced by update_provisional.
+    const fixture = promotionBoundaryFixture();
+    const fixtureProofIds = new Set(fixture.ledger.evidenceRecords.flatMap((record) => (
+      record.kind === 'engine_proof'
+      && record.subject.kind === 'finding_provisional_product_transition'
+        ? [record.evidenceId]
+        : []
+    )));
+    const baseLedger: FindingLedger = {
+      ...fixture.ledger,
+      evidenceRecords: fixture.ledger.evidenceRecords.filter(
+        (record) => !fixtureProofIds.has(record.evidenceId),
+      ),
+      findings: fixture.ledger.findings.map((finding) => ({
+        ...finding,
+        evidenceIds: finding.evidenceIds.filter(
+          (evidenceId) => !fixtureProofIds.has(evidenceId),
+        ),
+      })),
+    };
+    const before = baseLedger.findings[0]!;
+    const intermediate: FindingLedgerEntry = {
+      ...before,
+      revision: before.revision + 1,
+    };
+    const finalProduct: FindingLedgerEntry = {
+      ...fixture.product,
+      evidenceIds: fixture.product.evidenceIds.filter(
+        (evidenceId) => !fixtureProofIds.has(evidenceId),
+      ),
+      revision: intermediate.revision + 1,
+    };
+    const {
+      revision: _intermediateRevision,
+      ...intermediateChange
+    } = intermediate;
+    const {
+      revision: _productRevision,
+      ...productChange
+    } = finalProduct;
+    const managerDecisionCommands = [{
+      operation: 'update_provisional' as const,
+      changes: {
+        findings: [intermediateChange],
+        conflicts: [],
+      },
+      authority: { kind: 'verified_evidence' as const },
+      evidenceSourcesByTarget: new Map(),
+    }];
+    const managerDecisionProposed: FindingLedger = {
+      ...baseLedger,
+      findings: [intermediate],
+    };
+    const finalProposed: FindingLedger = {
+      ...baseLedger,
+      findings: [finalProduct],
+    };
+    const settlementCommands = [{
+      operation: 'promote_provisional' as const,
+      changes: {
+        findings: [productChange],
+        conflicts: [],
+      },
+      authority: { kind: 'verified_evidence' as const },
+      evidenceSourcesByTarget: new Map([[
+        `finding\0${before.id}`,
+        {
+          sourceRawFindingIds: [fixture.transitionSource.raw.rawFindingId],
+          authorityEvidenceIds: [],
+        },
+      ]]),
+    }];
+    const managerOutput = emptyManagerOutput();
+    const proofed = issueManagerLifecycleAuthority({
+      current: baseLedger,
+      rawRecoveryCurrent: baseLedger,
+      rawRecoveryManagerDecisionProposed: baseLedger,
+      rawRecoveryManagerDecisionCommands: [],
+      rawRecoverySettlementCommands: [],
+      managerDecisionProposed,
+      proposed: finalProposed,
+      managerDecisionCommands,
+      settlementCommands,
+      managerOutput,
+      cwd: process.cwd(),
+      workflowName: baseLedger.workflowName,
+      runId: OBSERVATION.runId,
+      scopeIdentity: 'same-transaction-promotion-proof',
+      reviewScopeSnapshotId: sha256('same-transaction-promotion-snapshot'),
+      observation: OBSERVATION,
+    });
+    const proofIds = proofed.provisionalProofIdsByFinding.get(before.id) ?? [];
+    const proofedManagerDecisionProposed: FindingLedger = {
+      ...managerDecisionProposed,
+      evidenceRecords: proofed.ledger.evidenceRecords,
+      findings: [{
+        ...intermediate,
+        evidenceIds: [...new Set([
+          ...intermediate.evidenceIds,
+          ...proofIds,
+        ])].sort(),
+      }],
+    };
+    const committed = assembleAndApplyManagerLifecycleTransactions({
+      current: baseLedger,
+      managerDecisionProposed: proofedManagerDecisionProposed,
+      managerDecisionCommands,
+      proposed: proofed.ledger,
+      managerOutput,
+      provisionalProofIdsByFinding: proofed.provisionalProofIdsByFinding,
+      rawRecoveryProvisionalProofIdsByFinding:
+        proofed.rawRecoveryProvisionalProofIdsByFinding,
+      invalidationProofIdsByFinding: proofed.invalidationProofIdsByFinding,
+      duplicateProofIdsByCommandKey: proofed.duplicateProofIdsByCommandKey,
+      managerDecisionProvisionalTransitionProofIdsByCommandKey:
+        proofed.managerDecisionProvisionalTransitionProofIdsByCommandKey,
+      provisionalTransitionProofIdsByCommandKey:
+        proofed.provisionalTransitionProofIdsByCommandKey,
+      rawRecoveryProvisionalTransitionProofIdsByCommandKey:
+        proofed.rawRecoveryProvisionalTransitionProofIdsByCommandKey,
+      rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey:
+        proofed.rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey,
+      invalidationReasonsByFinding: proofed.invalidationReasonsByFinding,
+      resolutionRenotifications: [],
+      settlementCommands,
+      actionRecoveryPlan: null,
+      occurredAt: OBSERVATION,
+    });
+
+    expect(proofIds).toHaveLength(1);
+    expect(proofed.provisionalTransitionProofIdsByCommandKey.size).toBe(1);
+    expect(committed.findings[0]?.provisional).toBeUndefined();
+    expect(committed.findings[0]?.evidenceIds).toEqual(
+      expect.arrayContaining(proofIds),
+    );
+    expect(committed.lifecycleEvents.slice(-2).map((event) => event.operation))
+      .toEqual(['update_provisional', 'promote_provisional']);
   });
 
   it('rejects lifecycle transaction projection deletion and orphan lifecycle heads', () => {
@@ -2163,6 +3132,169 @@ describe('verified finding lifecycle mutation', () => {
     expect(authority(resumedLedger!)).toEqual(authority(sqliteStore.loadLedger()));
     expect(resumedLedger?.pendingManagerCommit?.completed.lifecycleEvents)
       .toEqual(sqliteStore.loadLedger().pendingManagerCommit?.completed.lifecycleEvents);
+  });
+
+  it('resumes a nullable provisional from SQLite', async () => {
+    const sqlite = createRealRunStorage({ findingContractEnabled: true });
+    sqlite.clock.set(Date.parse(OBSERVATION.timestamp));
+    const owner = sqlite.root.claimLease({
+      ownerKey: 'nullable-provisional-resume',
+      leaseDurationMs: 10_000,
+    });
+    const runtime = sqlite.root.runtime({ lease: owner });
+    const execution = runtime.execution.startStep({
+      stepKey: 'nullable-provisional-resume',
+      expectedScopeRevision: 0,
+    });
+    const store = runtime.findingManager({
+      workflowName: 'default',
+      producer: execution.handle,
+    });
+    const source = evidenceSource({
+      rawFindingId: 'raw-sqlite-nullable',
+      targetFindingId: null,
+      title: 'Incomplete SQLite claim',
+      description: 'The stored provisional remains incomplete.',
+    });
+    const target = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: null,
+    };
+    const createReservation = reservation({
+      operation: 'create_finding',
+      targets: [target],
+      sources: [source],
+    });
+    const provisional: FindingLedgerEntry = {
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'new',
+      target: source.raw.target,
+      targetIdentityHash: source.raw.targetIdentityHash,
+      claimIdentityHash: source.raw.claimIdentityHash,
+      semanticClaimIdentityHash: source.raw.semanticClaimIdentityHash,
+      severity: null,
+      title: null,
+      evidenceIds: [source.record.evidenceId],
+      reviewers: ['reviewer'],
+      rawFindingIds: [source.raw.rawFindingId],
+      firstSeen: { ...OBSERVATION },
+      lastSeen: { ...OBSERVATION },
+      revision: 1,
+      provisional: {
+        kind: 'raw-meaning-ambiguous',
+        stableKey: sha256('sqlite-nullable-stable'),
+        lineageKey: sha256('sqlite-nullable-lineage'),
+        sourceRawFindingIds: [source.raw.rawFindingId],
+        reason: 'The persisted claim is intentionally incomplete.',
+        firstObservedAt: { ...OBSERVATION },
+        lastObservedAt: { ...OBSERVATION },
+        interpretationEpochs: 0,
+        gateEffect: 'block',
+        firstObservedRound: 1,
+      },
+    };
+    const authorized = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(
+        emptyLedger([source]),
+        createReservation,
+      ),
+      mutation({
+        reservation: createReservation,
+        findings: [provisional],
+      }),
+    );
+    await store.updateLedger(() => ({
+      ledger: {
+        ...authorized,
+        nextId: 2,
+      },
+      result: undefined,
+    }));
+
+    const roundMarker = 'sqlite-nullable-resume-round';
+    await store.commitManagerLedger((current) => ({
+      ledger: {
+        ...current,
+        stopBudget: {
+          roundMarkers: [roundMarker],
+          firstRoundAt: current.updatedAt,
+          exhausted: false,
+        },
+      },
+      publication: {
+        roundMarker,
+        report: {
+          version: 1,
+          runId: store.runId,
+          stepName: 'findings-manager',
+          retryCount: 0,
+          ledgerUpdated: true,
+          finalErrors: [],
+          attempts: [],
+        },
+      },
+      result: undefined,
+    }));
+    const resumed = resumeRealRunStorage(sqlite.root, {
+      slug: 'nullable-provisional-resume',
+      findingContractEnabled: true,
+    });
+    const resumedFinding = resumed.root.readResumeSnapshot()
+      .findingLedger?.ledger.findings[0];
+
+    expect(resumedFinding).toMatchObject({
+      id: provisional.id,
+      target: provisional.target,
+      targetIdentityHash: provisional.targetIdentityHash,
+      claimIdentityHash: provisional.claimIdentityHash,
+      semanticClaimIdentityHash: provisional.semanticClaimIdentityHash,
+      severity: null,
+      title: null,
+      provisional: {
+        stableKey: provisional.provisional!.stableKey,
+        gateEffect: 'block',
+      },
+    });
+  });
+
+  it('resumes a durable provisional product transition proof from SQLite', async () => {
+    const fixture = promotionBoundaryFixture();
+    const proof = fixture.ledger.evidenceRecords.find((record) => (
+      record.kind === 'engine_proof'
+      && record.subject.kind === 'finding_provisional_product_transition'
+    ));
+    expect(proof).toBeDefined();
+    const sqlite = createRealRunStorage({ findingContractEnabled: true });
+    sqlite.clock.set(Date.parse(OBSERVATION.timestamp));
+    const owner = sqlite.root.claimLease({
+      ownerKey: 'provisional-transition-proof-resume',
+      leaseDurationMs: 10_000,
+    });
+    const runtime = sqlite.root.runtime({ lease: owner });
+    const execution = runtime.execution.startStep({
+      stepKey: 'provisional-transition-proof-resume',
+      expectedScopeRevision: 0,
+    });
+    const store = runtime.findingManager({
+      workflowName: 'default',
+      producer: execution.handle,
+    });
+    await store.updateLedger(() => ({
+      ledger: fixture.ledger,
+      result: undefined,
+    }));
+
+    const resumed = resumeRealRunStorage(sqlite.root, {
+      slug: 'provisional-transition-proof-resume',
+      findingContractEnabled: true,
+    });
+    const resumedProof = resumed.root.readResumeSnapshot()
+      .findingLedger?.ledger.evidenceRecords.find(
+        (record) => record.evidenceId === proof?.evidenceId,
+      );
+    expect(resumedProof).toEqual(proof);
   });
 
   it('rejects a raw recovery result that borrows an unrelated lifecycle event', () => {

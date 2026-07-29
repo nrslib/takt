@@ -184,6 +184,52 @@ describe('finding schemas', () => {
     expect(parseFindingLedger(ledger)).toEqual(ledger);
   });
 
+  it('parses a persisted nullable provisional from a pending resume snapshot', () => {
+    const provisional = {
+      ...pendingFinding('F-0001'),
+      target: null,
+      targetIdentityHash: null,
+      claimIdentityHash: null,
+      semanticClaimIdentityHash: null,
+      severity: null,
+      title: null,
+      provisional: {
+        kind: 'raw-meaning-ambiguous' as const,
+        stableKey: 'stable-resume-nullable',
+        lineageKey: 'lineage-resume-nullable',
+        sourceRawFindingIds: ['raw-1'],
+        reason: 'The persisted observation does not yet contain a complete claim.',
+        firstObservedAt: {
+          runId: 'run-source',
+          stepName: 'reviewers',
+          timestamp: '2026-07-24T00:00:00.000Z',
+        },
+        lastObservedAt: {
+          runId: 'run-source',
+          stepName: 'reviewers',
+          timestamp: '2026-07-24T00:00:00.000Z',
+        },
+        interpretationEpochs: 0,
+        gateEffect: 'block' as const,
+        firstObservedRound: 1,
+      },
+    };
+    const resumed = parseFindingLedger(pendingLedgerWithCompleted({
+      nextId: 2,
+      findings: [provisional],
+    }));
+
+    expect(resumed.pendingManagerCommit?.completed.findings[0]).toEqual(provisional);
+  });
+
+  it('rejects nullable claim fields on a product finding', () => {
+    expect(() => FindingLedgerEntrySchema.parse({
+      ...pendingFinding('F-0001'),
+      severity: null,
+      title: null,
+    })).toThrow(/require severity|require title/u);
+  });
+
   it('rejects a non-provisional finding whose semantic claim identity is null', () => {
     expect(() => FindingLedgerEntrySchema.parse({
       ...pendingFinding('F-0001'),
@@ -221,6 +267,7 @@ describe('finding schemas', () => {
       lifecycle: 'new',
       severity: 'high',
       title: 'Canonical',
+      description: 'Canonical finding description.',
       target: canonicalTarget,
       targetIdentityHash: computeTargetIdentityHash(canonicalTarget),
       claimIdentityHash: computeClaimIdentityHash({
@@ -228,13 +275,13 @@ describe('finding schemas', () => {
         familyTag: 'fixture',
         severity: 'high',
         title: 'Canonical',
-        description: null,
+        description: 'Canonical finding description.',
         suggestion: null,
       }),
       semanticClaimIdentityHash: computeSemanticClaimIdentityHash({
         target: canonicalTarget,
         title: 'Canonical',
-        description: null,
+        description: 'Canonical finding description.',
       }),
       reviewers: ['reviewer-a'],
       rawFindingIds: [],
@@ -252,7 +299,7 @@ describe('finding schemas', () => {
       semanticClaimIdentityHash: computeSemanticClaimIdentityHash({
         target: canonicalTarget,
         title: 'Duplicate',
-        description: null,
+        description: 'Canonical finding description.',
       }),
       evidenceIds: [evidenceRecord.evidenceId],
       supersededByFindingId: 'F-0001',

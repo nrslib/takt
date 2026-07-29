@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { canonicalJson } from '../shared/utils/canonical-json.js';
 import {
+  candidateFromStoredRawFinding,
+  canonicalizeReviewerRawFinding,
   createReviewerRawFindingCandidates,
   projectReviewerRawStructuredOutputWithEnvelope,
+  toLedgerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
+import { RawFindingSchema } from '../core/models/finding-schemas.js';
 import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.js';
 import { RAW_FINDING_LIMITS } from '../core/workflow/findings/raw-finding-limits.js';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
@@ -81,9 +85,57 @@ describe('reviewer raw resource envelope', () => {
     expect(intake.candidates).toHaveLength(1);
     expect(intake.candidates[0]).toMatchObject({
       rawExcerpt: 'Description',
-      relation: 'new',
       target: { kind: 'code', paths: ['src/a.ts'] },
     });
+    expect(intake.candidates[0]!.relation).toBeUndefined();
+  });
+
+  it('round-trips an unknown relation as durable null without inventing new', () => {
+    const nullableRaw = reviewerRawExtractionFixture({
+      rawFindingId: 'raw-unknown-relation',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Unknown relation',
+      description: 'The reviewer did not establish a lifecycle relation.',
+      suggestion: null,
+      relation: null,
+      targetFindingId: null,
+      target: { kind: 'code', paths: ['src/a.ts'] },
+      evidence: [],
+      rawExcerpt: 'The reviewer did not establish a lifecycle relation.',
+    });
+    const projected = projectReviewerRawStructuredOutputWithEnvelope({
+      rawFindings: [nullableRaw],
+    });
+    const intake = createReviewerRawFindingCandidates(
+      projected.structuredOutput.rawFindings as unknown[],
+      {
+        ...context,
+        reviewReport: nullableRaw.rawExcerpt,
+      },
+      projected.resourceEnvelope,
+    );
+    const firstCanonical = canonicalizeReviewerRawFinding(
+      intake.candidates[0]!,
+      { ledger },
+    ).canonical;
+    const persisted = RawFindingSchema.parse(
+      toLedgerRawFinding(firstCanonical),
+    );
+    const rehydrated = candidateFromStoredRawFinding(
+      persisted,
+      firstCanonical.reviewerStableKey,
+    );
+    const secondCanonical = canonicalizeReviewerRawFinding(
+      rehydrated,
+      { ledger },
+    ).canonical;
+
+    expect(firstCanonical.relation).toBeNull();
+    expect(persisted.relation).toBeNull();
+    expect(rehydrated.relation).toBeUndefined();
+    expect(secondCanonical.relation).toBeNull();
+    expect(toLedgerRawFinding(secondCanonical).relation).toBeNull();
   });
 
   it('preserves a nullable target in the projected contract', () => {
@@ -143,6 +195,44 @@ describe('reviewer raw resource envelope', () => {
       rawExcerpt: 'Description',
       candidate: null,
     }]);
+  });
+
+  it('distinguishes explicit null severity from missing and invalid severity', () => {
+    const base = reviewerRawExtractionFixture({
+      rawFindingId: 'raw-severity-boundary',
+      familyTag: 'bug',
+      severity: null,
+      title: 'Issue',
+      description: 'Description',
+      suggestion: null,
+      relation: 'new',
+      targetFindingId: null,
+      target: { kind: 'code', paths: ['src/a.ts'] },
+      evidence: [],
+      rawExcerpt: 'Description',
+    });
+    const { severity: _severity, ...withoutSeverity } = base.candidate!;
+    const projected = projectReviewerRawStructuredOutputWithEnvelope({
+      rawFindings: [
+        base,
+        { ...base, candidate: withoutSeverity },
+        { ...base, candidate: { ...base.candidate, severity: 'Blocking' } },
+      ],
+    });
+
+    expect(projected.structuredOutput.rawFindings).toEqual([
+      base,
+      { rawExcerpt: 'Description', candidate: null },
+      { rawExcerpt: 'Description', candidate: null },
+    ]);
+    const intake = createReviewerRawFindingCandidates(
+      projected.structuredOutput.rawFindings as unknown[],
+      context,
+      projected.resourceEnvelope,
+    );
+    expect(intake.candidates).toHaveLength(1);
+    expect(intake.candidates.every((candidate) => candidate.severity === undefined)).toBe(true);
+    expect(intake.rejections).toHaveLength(2);
   });
 
   it('measures each untrusted item once before projection and preserves sourceBytes', () => {

@@ -23,11 +23,16 @@ import {
   computeAnchorRelevanceDecisionDigest,
 } from '../../models/finding-anchor-relevance.js';
 import { isProvisionalPromotionSource } from './provisional-promotion-eligibility.js';
+import {
+  isProvisionalFindingEntry,
+  materializeProvisionalFinding,
+} from './finding-entry.js';
 
 export interface ProvisionalSettlement {
   output: FindingManagerOutput;
   /** clean new 証拠で confirmed へ昇格させる provisional finding id。 */
   promotedFindingIds: Set<string>;
+  promotionSourceRawFindingIds: Map<string, string[]>;
   /** clean な決定的 same により解消する provisional finding id → 対応 target。 */
   resolvedByMapping: Map<string, string>;
   resolvedByEvidence: Map<string, string>;
@@ -79,6 +84,7 @@ export function settleProvisionalsWithCleanEvidence(input: {
     return {
       output: input.output,
       promotedFindingIds: new Set(),
+      promotionSourceRawFindingIds: new Map(),
       resolvedByMapping: new Map(),
       resolvedByEvidence: new Map(),
       settledReplayRawIds: new Set(),
@@ -229,9 +235,41 @@ export function settleProvisionalsWithCleanEvidence(input: {
     }
   }
 
+  const promotionSourceRawFindingIds = new Map<string, string[]>();
+  promotedFindingIds = new Set([...promotedFindingIds].filter((findingId) => {
+    const provisional = provisionalById.get(findingId);
+    if (provisional === undefined || !isProvisionalFindingEntry(provisional)) {
+      return false;
+    }
+    const sourceRawFindings = [...input.cleanRawIds]
+      .map((rawFindingId) => input.wireById.get(rawFindingId))
+      .filter((wire): wire is RawFinding => (
+        wire !== undefined
+        && isProvisionalPromotionSource({
+          ledger: input.freshLedger,
+          provisional,
+          wire,
+        })
+      ));
+    const materialization = materializeProvisionalFinding({
+      ledger: input.freshLedger,
+      finding: provisional,
+      transitionRawFindings: sourceRawFindings,
+    });
+    if (materialization.outcome !== 'materialized') {
+      return false;
+    }
+    promotionSourceRawFindingIds.set(
+      findingId,
+      materialization.transitionRawFindingIds,
+    );
+    return true;
+  }));
+
   return {
     output: { ...replay.output, newFindings, matches },
     promotedFindingIds,
+    promotionSourceRawFindingIds,
     resolvedByMapping,
     resolvedByEvidence,
     settledReplayRawIds: replay.settledReplayRawIds,
@@ -324,11 +362,29 @@ export function applyProvisionalSettlement(
   return {
     ...ledger,
     findings: ledger.findings.map((finding) => {
-      if (settlement.promotedFindingIds.has(finding.id) && finding.provisional !== undefined) {
-        const promoted = { ...finding };
-        delete promoted.provisional;
-        promoted.revision = finding.revision + 1;
-        return promoted;
+      if (settlement.promotedFindingIds.has(finding.id) && isProvisionalFindingEntry(finding)) {
+        const sourceRawFindingIds = requiredPromotionSourceRawFindingIds(
+          settlement,
+          finding.id,
+        );
+        const materialized = materializeProvisionalFinding({
+          ledger,
+          finding,
+          transitionRawFindings: requireRawFindingsById(
+            ledger,
+            sourceRawFindingIds,
+            `Provisional promotion for "${finding.id}"`,
+          ),
+        });
+        if (materialized.outcome !== 'materialized') {
+          throw new Error(
+            `Provisional settlement for "${finding.id}" became invalid: ${materialized.reason}`,
+          );
+        }
+        return {
+          ...materialized.finding,
+          revision: finding.revision + 1,
+        };
       }
       const mappedTarget = settlement.resolvedByMapping.get(finding.id);
       if (mappedTarget !== undefined && finding.status === 'open' && finding.provisional !== undefined) {
@@ -355,6 +411,36 @@ export function applyProvisionalSettlement(
       return finding;
     }),
   };
+}
+
+function requiredPromotionSourceRawFindingIds(
+  settlement: ProvisionalSettlement,
+  findingId: string,
+): string[] {
+  const sourceRawFindingIds = settlement.promotionSourceRawFindingIds.get(findingId);
+  if (sourceRawFindingIds === undefined || sourceRawFindingIds.length === 0) {
+    throw new Error(
+      `Provisional promotion for "${findingId}" has no materialization source`,
+    );
+  }
+  return [...sourceRawFindingIds];
+}
+
+function requireRawFindingsById(
+  ledger: FindingLedger,
+  rawFindingIds: readonly string[],
+  context: string,
+): RawFinding[] {
+  const rawById = new Map(
+    ledger.rawFindings.map((rawFinding) => [rawFinding.rawFindingId, rawFinding]),
+  );
+  return rawFindingIds.map((rawFindingId) => {
+    const rawFinding = rawById.get(rawFindingId);
+    if (rawFinding === undefined) {
+      throw new Error(`${context} references missing raw finding "${rawFindingId}"`);
+    }
+    return rawFinding;
+  });
 }
 
 function findingWithoutRevision(
@@ -401,10 +487,11 @@ export function buildProvisionalSettlementLifecycleCommands(input: {
     if (sourceRawFindingIds.length === 0) {
       throw new Error(`Provisional settlement for "${findingId}" has no clean evidence source`);
     }
-    const sourceIds = new Set(sourceRawFindingIds);
-    const sourceRawFindings = input.after.rawFindings.filter((rawFinding) => (
-      sourceIds.has(rawFinding.rawFindingId)
-    ));
+    const sourceRawFindings = requireRawFindingsById(
+      input.after,
+      sourceRawFindingIds,
+      `Provisional settlement for "${findingId}"`,
+    );
     const absenceRaws = absenceRawFindings(sourceRawFindings);
     const authority: FindingLifecycleCommand['authority'] =
       absenceRaws.length === 0
@@ -442,7 +529,7 @@ export function buildProvisionalSettlementLifecycleCommands(input: {
     append(
       'promote_provisional',
       findingId,
-      settlementRawFindingIds(input.settlement, findingId),
+      requiredPromotionSourceRawFindingIds(input.settlement, findingId),
     );
   }
   for (const [findingId, targetFindingId] of input.settlement.resolvedByMapping) {

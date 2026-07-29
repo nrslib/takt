@@ -442,6 +442,37 @@ const LifecycleAuthoritySubjectSchema = z.discriminatedUnion('kind', [
     findingIds: BinarySortedUniqueStringSetSchema,
     semanticClaimIdentityHashes: BinarySortedUniqueSha256SetSchema,
   }).strict(),
+  z.object({
+    kind: z.literal('finding_provisional_product_transition'),
+    operation: z.enum(['promote_provisional', 'reopen_finding']),
+    findingId: nonEmptyString,
+    provisionalStableKey: nonEmptyString,
+    provisionalLineageKey: Sha256Schema,
+    targetIdentityHash: Sha256Schema,
+    sourceRawFindings: z.array(z.object({
+      rawFindingId: nonEmptyString,
+      integrityDigest: Sha256Schema,
+    }).strict()).min(1).superRefine((values, ctx) => {
+      const rawFindingIds = values.map((value) => value.rawFindingId);
+      const canonical = [...new Set(rawFindingIds)].sort(compareBinaryStrings);
+      if (
+        canonical.length !== rawFindingIds.length
+        || canonical.some((rawFindingId, index) => rawFindingId !== rawFindingIds[index])
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Expected binary-sorted unique provisional transition raw findings',
+        });
+      }
+    }),
+    expectedProductRawFindingIds: BinarySortedUniqueStringSetSchema.min(1),
+    transitionPreconditionDigest: Sha256Schema,
+    expectedIntermediateHead: z.object({
+      revision: z.number().int().positive(),
+      projectionDigest: Sha256Schema,
+    }).strict(),
+    materializedProductClaimDigest: Sha256Schema,
+  }).strict(),
 ]);
 
 const EngineProofRecordBaseSchema = z.object({
@@ -586,8 +617,8 @@ export const FindingLedgerEntrySchema = z.object({
   targetIdentityHash: Sha256Schema.nullable(),
   claimIdentityHash: Sha256Schema.nullable(),
   semanticClaimIdentityHash: Sha256Schema.nullable(),
-  severity: FindingSeveritySchema,
-  title: nonEmptyString,
+  severity: FindingSeveritySchema.nullable(),
+  title: nonEmptyString.nullable(),
   evidenceIds: BinarySortedUniqueStringSetSchema,
   description: nonEmptyString.optional(),
   suggestion: nonEmptyString.optional(),
@@ -648,6 +679,27 @@ export const FindingLedgerEntrySchema = z.object({
     });
     return;
   }
+  if (finding.provisional === undefined && finding.severity === null) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['severity'],
+      message: 'non-provisional findings require severity',
+    });
+  }
+  if (finding.provisional === undefined && finding.title === null) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['title'],
+      message: 'non-provisional findings require title',
+    });
+  }
+  if (finding.provisional === undefined && finding.description === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['description'],
+      message: 'non-provisional findings require description',
+    });
+  }
   if (
     finding.target !== null
     && finding.targetIdentityHash !== computeTargetIdentityHash(finding.target)
@@ -661,7 +713,7 @@ export const FindingLedgerEntrySchema = z.object({
 });
 
 interface RawFindingRelationFields {
-  relation: RawFindingRelation;
+  relation: RawFindingRelation | null;
   targetFindingId?: string | null;
   targetPrecondition?: FindingMutationPrecondition;
 }
@@ -676,6 +728,16 @@ function validateRawFindingRelation<T extends RawFindingRelationFields>(
   requireEnginePrecondition: boolean,
 ): void {
   const relation = value.relation;
+  if (relation === null) {
+    if (value.targetPrecondition !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'raw findings with unknown relation must not set targetPrecondition',
+        path: ['targetPrecondition'],
+      });
+    }
+    return;
+  }
   if (relation === 'new' && value.targetFindingId !== undefined && value.targetFindingId !== null) {
     ctx.addIssue({ code: 'custom', message: '"new" raw findings must not set targetFindingId', path: ['targetFindingId'] });
   }
@@ -718,7 +780,7 @@ const RawFindingFieldsSchema = z.object({
   semanticClaimIdentityHash: Sha256Schema,
   candidateIdentityHash: Sha256Schema,
   sourceBinding: CandidateSourceBindingSchema,
-  relation: z.enum(RAW_FINDING_RELATIONS),
+  relation: z.enum(RAW_FINDING_RELATIONS).nullable(),
   targetFindingId: nonEmptyString.nullable(),
   targetPrecondition: FindingMutationPreconditionSchema.optional(),
   evidence: RawFindingEvidenceSetSchema,
@@ -1003,7 +1065,7 @@ const RawNormalizationAuditRecordSchema = z.object({
   reviewer: nonEmptyString,
   claimedRelation: z.string().optional(),
   claimedTargetFindingId: z.string().optional(),
-  normalizedRelation: nonEmptyString,
+  normalizedRelation: z.enum(RAW_FINDING_RELATIONS).nullable(),
   wireTargetFindingId: z.string().optional(),
   ambiguityCodes: z.array(nonEmptyString),
   normalizations: z.array(z.enum([

@@ -465,6 +465,7 @@ export interface ProjectedReviewerRawItem {
   readonly record: Record<string, unknown>;
   readonly sourceBytes: number;
   readonly evidenceShapeValid: boolean;
+  readonly candidateShapeValid: boolean;
 }
 
 export interface ReviewerRawResourceEnvelope {
@@ -483,6 +484,7 @@ function rejectedReviewerRawItem(sourceBytes: number): ProjectedReviewerRawItem 
     record: {},
     sourceBytes,
     evidenceShapeValid: false,
+    candidateShapeValid: false,
   };
 }
 
@@ -528,6 +530,7 @@ function projectReviewerRawItem(
         record,
         sourceBytes,
         evidenceShapeValid: false,
+        candidateShapeValid: false,
       };
     }
     if (
@@ -557,6 +560,7 @@ function projectReviewerRawItem(
       }
     }
     let evidenceShapeValid = false;
+    let candidateShapeValid = true;
     for (const key of Object.keys(descriptors)) {
       const descriptor = descriptors[key]!;
       const value = descriptor.value;
@@ -581,6 +585,8 @@ function projectReviewerRawItem(
         const relation = pickRelation(value);
         if (relation !== undefined) {
           record[key] = relation;
+        } else {
+          candidateShapeValid = false;
         }
         continue;
       }
@@ -588,6 +594,8 @@ function projectReviewerRawItem(
         const severity = pickSeverity(value);
         if (severity !== undefined) {
           record[key] = severity;
+        } else {
+          candidateShapeValid = false;
         }
         continue;
       }
@@ -596,6 +604,8 @@ function projectReviewerRawItem(
         if (evidenceRequests !== undefined) {
           record.evidenceRequests = evidenceRequests;
           evidenceShapeValid = true;
+        } else {
+          candidateShapeValid = false;
         }
         continue;
       }
@@ -603,6 +613,8 @@ function projectReviewerRawItem(
         const target = projectFindingTarget(value);
         if (target !== undefined) {
           record.target = target;
+        } else {
+          candidateShapeValid = false;
         }
         continue;
       }
@@ -611,12 +623,15 @@ function projectReviewerRawItem(
         && (value.length > 0 || REVIEWER_RAW_EMPTY_STRING_KEYS.has(key))
       ) {
         record[key] = value;
+      } else {
+        candidateShapeValid = false;
       }
     }
     return {
       record,
       sourceBytes,
       evidenceShapeValid,
+      candidateShapeValid,
     };
   } catch {
     return rejectedReviewerRawItem(sourceBytes);
@@ -752,7 +767,8 @@ export function projectReviewerRawStructuredOutputWithEnvelope(
           if (typeof rawExcerpt !== 'string') {
             return {};
           }
-          const candidateIsComplete = projected.evidenceShapeValid
+          const candidateIsComplete = projected.candidateShapeValid
+            && projected.evidenceShapeValid
             && requiredCandidateKeys.every((key) => Object.hasOwn(candidate, key));
           return {
             rawExcerpt,
@@ -1036,7 +1052,9 @@ export function createReviewerRawFindingCandidates(
       ...(pickString(record.title) !== undefined ? { title: pickString(record.title)! } : {}),
       ...(pickString(record.description) !== undefined ? { description: pickString(record.description)! } : {}),
       ...(pickString(record.suggestion) !== undefined ? { suggestion: pickString(record.suggestion)! } : {}),
-      relation: pickRelation(record.relation) ?? 'new',
+      ...(pickRelation(record.relation) !== undefined
+        ? { relation: pickRelation(record.relation)! }
+        : {}),
       ...(pickString(record.targetFindingId) !== undefined ? { targetFindingId: pickString(record.targetFindingId)! } : {}),
       evidence,
       sourceBytes: projectedItems[index]!.sourceBytes,
@@ -1059,7 +1077,8 @@ export function candidateFromStoredRawFinding(
   reviewerStableKey: string,
 ): ReviewerRawFindingCandidate {
   if (
-    raw.relation !== 'new'
+    raw.relation !== null
+    && raw.relation !== 'new'
     && (
       raw.targetFindingId === null
       || raw.targetPrecondition === undefined
@@ -1085,7 +1104,7 @@ export function candidateFromStoredRawFinding(
     ...(raw.title !== null ? { title: raw.title } : {}),
     ...(raw.description !== null ? { description: raw.description } : {}),
     ...(raw.suggestion !== null ? { suggestion: raw.suggestion } : {}),
-    relation: raw.relation,
+    ...(raw.relation !== null ? { relation: raw.relation } : {}),
     ...(raw.targetFindingId !== null ? { targetFindingId: raw.targetFindingId } : {}),
     // すでに組み立て済みのネスト形（wire と同じ形）なのでそのまま引き継ぐ。
     evidence: [...raw.evidence],
@@ -1152,7 +1171,7 @@ function buildSafeEvidenceExcerpt(candidate: ReviewerRawFindingCandidate): strin
 
 /** ambiguity 検出に必要な raw のフィールド（candidate / 未検証 reviewer 出力の両方が満たせる形）。 */
 export interface RawAmbiguityFields {
-  relation?: RawFindingRelation;
+  relation?: RawFindingRelation | null;
   targetFindingId?: string;
   title?: string;
   description?: string;
@@ -1185,7 +1204,7 @@ export function detectRawFindingAmbiguities(
 
   // relation は contract の正本。欠損は ambiguity。
   const claimedRelation = fields.relation;
-  if (claimedRelation === undefined) {
+  if (claimedRelation === undefined || claimedRelation === null) {
     codes.push('missing-required-field');
   }
   if (fields.title === undefined || fields.description === undefined
@@ -1197,7 +1216,8 @@ export function detectRawFindingAmbiguities(
   if (claimedRelation === 'new' && fields.targetFindingId !== undefined) {
     codes.push('relation-target-mismatch');
   }
-  if (claimedRelation !== undefined && claimedRelation !== 'new' && fields.targetFindingId === undefined) {
+  if (claimedRelation !== undefined && claimedRelation !== null
+    && claimedRelation !== 'new' && fields.targetFindingId === undefined) {
     codes.push('relation-target-mismatch');
   }
 
@@ -1286,17 +1306,22 @@ export function canonicalizeReviewerRawFinding(
     || context.preserveAmbiguityOrigin === true;
   const allCodes = [...new Set([...priorCodes, ...codes])];
 
-  // ambiguous で
-  // relation の主張が成立しない場合は最も権限の弱い 'new' に正規化する（権限は
-  // capabilities が全遮断しているため、この正規化がゲートを開けることはない）。
   const relationClaimHolds = claimedRelation !== undefined
     && !(claimedRelation === 'new' && candidate.targetFindingId !== undefined)
     && !(claimedRelation !== 'new' && candidate.targetFindingId === undefined);
-  const relation: RawFindingRelation = relationClaimHolds ? claimedRelation : 'new';
-  const targetPrecondition = relation === 'new' || candidate.targetFindingId === undefined
+  const claimedTargetPrecondition = claimedRelation === undefined
+    || claimedRelation === 'new'
+    || candidate.targetFindingId === undefined
     ? undefined
     : storedTargetPrecondition
       ?? captureFindingMutationPrecondition(context.ledger, candidate.targetFindingId);
+  const relation: RawFindingRelation | null = relationClaimHolds
+    && (claimedRelation === 'new' || claimedTargetPrecondition !== undefined)
+    ? claimedRelation
+    : null;
+  const targetPrecondition = relation === null || relation === 'new'
+    ? undefined
+    : claimedTargetPrecondition;
   if (
     storedTargetPrecondition !== undefined
     && candidate.targetFindingId !== undefined
@@ -1361,11 +1386,13 @@ export function canonicalizeReviewerRawFinding(
   // correction で relation が整った raw は形式上 coherent だが ambiguityOrigin は
   // true のままで、downstream の権限判定は provenance を見る。
   if (codes.length === 0
+    && relation !== null
     && candidate.title !== undefined && candidate.description !== undefined
     && candidate.severity !== undefined && candidate.familyTag !== undefined) {
     const canonical = registerCoherentCanonical({
       ...base,
       coherence: 'coherent',
+      relation,
       familyTag: candidate.familyTag,
       severity: candidate.severity,
       title: candidate.title,
@@ -1400,23 +1427,17 @@ export function canonicalizeReviewerRawFinding(
 /**
  * canonical を ledger の RawFinding wire 形へ落とす。ambiguous で必須文字列が
  * 欠損フィールドは null のまま監査保存し、意味値を補完しない。
- * relation は canonical の値をそのまま使う。
- * relation='new' に正規化された ambiguous の元 targetFindingId 主張は
- * description に追記して監査可能性を保つ（wire schema は new+target を禁止する）。
+ * relation は canonical の値を unknown を含めてそのまま保存する。
  */
 export function toLedgerRawFinding(canonical: CanonicalRawFinding): RawFinding {
   assertCanonicalRawFinding(canonical, 'toLedgerRawFinding');
-  // description は本文のまま保つ（注記を混ぜない）。ambiguity code や正規化で
-  // 落ちた targetFindingId 主張の監査情報は canonical.provenance / 検証レポート /
-  // provisional.reason 側にあり、description を汚すと provisional entry と後続の
+  // description は本文のまま保つ（注記を混ぜない）。ambiguity code や relation
+  // の unknown 化は canonical.provenance / 検証レポート / provisional.reason
+  // 側にあり、description を汚すと provisional entry と後続の
   // clean raw の claimIdentityHash 照合が壊れ、確定・
   // 解消（evidence CAS requirement の決定的照合）が永久に成立しなくなる。
   const title = canonical.title ?? null;
   const description = canonical.description ?? null;
-  const ledgerRelation = canonical.relation !== 'new'
-    && canonical.targetPrecondition === undefined
-    ? 'new'
-    : canonical.relation;
   return {
     rawFindingId: canonical.rawFindingId,
     stepName: canonical.stepName,
@@ -1432,8 +1453,8 @@ export function toLedgerRawFinding(canonical: CanonicalRawFinding): RawFinding {
     semanticClaimIdentityHash: canonical.semanticClaimIdentityHash,
     candidateIdentityHash: canonical.candidateIdentityHash,
     sourceBinding: { ...canonical.sourceBinding },
-    relation: ledgerRelation,
-    targetFindingId: ledgerRelation !== 'new' && canonical.targetFindingId !== undefined
+    relation: canonical.relation,
+    targetFindingId: canonical.relation !== 'new' && canonical.targetFindingId !== undefined
       ? canonical.targetFindingId
       : null,
     ...(canonical.targetPrecondition !== undefined

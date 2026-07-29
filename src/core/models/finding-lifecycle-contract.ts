@@ -67,6 +67,8 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
     findingDelta: [
       'status', 'lifecycle', 'revision', 'rawFindingIds', 'reviewers',
       'evidenceIds', 'lastSeen', 'description', 'suggestion',
+      'target', 'targetIdentityHash', 'claimIdentityHash',
+      'semanticClaimIdentityHash', 'severity', 'title', 'provisional',
       'resolvedAt', 'resolvedEvidence', 'reopenedEvidence',
       'invalidatedAt', 'invalidatedEvidence', 'dismissal',
     ],
@@ -119,6 +121,8 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
     authorities: ['verified_evidence'],
     findingDelta: [
       'revision', 'lifecycle', 'severity', 'title', 'description', 'suggestion',
+      'target', 'targetIdentityHash', 'claimIdentityHash',
+      'semanticClaimIdentityHash',
       'evidenceIds', 'rawFindingIds', 'reviewers', 'lastSeen', 'provisional',
     ],
     conflictDelta: [],
@@ -129,6 +133,8 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
     authorities: ['verified_evidence', 'engine_policy:anchor_relevance'],
     findingDelta: [
       'revision', 'status', 'lifecycle', 'severity', 'title', 'description',
+      'target', 'targetIdentityHash', 'claimIdentityHash',
+      'semanticClaimIdentityHash',
       'suggestion', 'evidenceIds', 'rawFindingIds', 'reviewers', 'lastSeen',
       'provisional',
     ],

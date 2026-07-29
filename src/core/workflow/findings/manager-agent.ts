@@ -31,6 +31,7 @@ import {
   compareCanonicalJsonValues,
 } from '../../../shared/utils/canonical-json.js';
 import { computeFindingLifecycleProjectionDigest } from '../../models/finding-lifecycle-identity.js';
+import { selectActionableFindingEntries } from './context.js';
 
 export { RAW_FINDINGS_SCHEMA_REF };
 export { FINDING_MANAGER_SCHEMA_REF } from './manager-step.js';
@@ -360,9 +361,7 @@ function collectFullDetailFindingIds(ledger: FindingLedger, residualRawFindings:
       ids.add(findingId);
     }
   }
-  const openFindings = ledger.findings.filter((finding) => (
-    finding.status === 'open' && finding.provisional === undefined
-  ));
+  const openFindings = selectActionableFindingEntries(ledger);
   for (const raw of residualRawFindings) {
     if (raw.title === null || raw.description === null) {
       throw new Error(`Residual raw finding "${raw.rawFindingId}" has an incomplete claim payload`);

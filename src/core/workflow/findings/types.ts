@@ -61,6 +61,8 @@ export type {
   FindingLedger,
   FindingLedgerConflict,
   FindingLedgerEntry,
+  ProductFindingEntry,
+  ProvisionalFindingEntry,
   FindingLedgerFixpointSnapshot,
   FindingLedgerFixpointState,
   FindingLedgerReviewIntegrityState,

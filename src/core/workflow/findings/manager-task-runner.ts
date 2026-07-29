@@ -335,7 +335,8 @@ function findingCandidateIdsForRawTask(
       && rawSemanticHashes.has(finding.semanticClaimIdentityHash);
     const pathMatch = findingFileQuoteLocations(previousLedger, finding)
       .some((location) => rawPaths.has(location.path));
-    const titleMatch = rawTitles.has(normalizeFindingText(finding.title).toLowerCase());
+    const titleMatch = finding.title !== null
+      && rawTitles.has(normalizeFindingText(finding.title).toLowerCase());
     const findingSymbols = new Set([
       ...extractSymbols(finding.title),
       ...extractSymbols(finding.description),

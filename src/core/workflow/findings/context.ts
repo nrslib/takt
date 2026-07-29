@@ -2,9 +2,11 @@ import {
   FINDING_SEVERITIES,
   type FindingLedger,
   type FindingLedgerEntry,
+  type ProductFindingEntry,
   type FindingSeverity,
   type FindingsRuleContext,
 } from './types.js';
+import { isProductFindingEntry } from './finding-entry.js';
 import { isLedgerConflictUnadjudicated } from './adjudication-evidence.js';
 import { computeReviewScopeSnapshotId } from './snapshot.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
@@ -56,10 +58,18 @@ function deriveFindingFamilyTags(
   };
 }
 
-export function selectActionableFindingEntries(ledger: FindingLedger): FindingLedgerEntry[] {
-  return ledger.findings.filter((finding) => (
+export function selectActionableFindingEntries(
+  ledger: FindingLedger,
+): ProductFindingEntry[] {
+  const findings = ledger.findings.filter((finding) => (
     finding.status === 'open' && finding.provisional === undefined
   ));
+  for (const finding of findings) {
+    if (!isProductFindingEntry(finding)) {
+      throw new Error(`Actionable finding "${finding.id}" has an incomplete claim payload`);
+    }
+  }
+  return findings.filter(isProductFindingEntry);
 }
 
 function buildActionableFindingLedgerInstructionSummary(
@@ -253,7 +263,9 @@ export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): Fi
     FINDING_SEVERITIES.map((severity) => [severity, 0]),
   ) as Record<FindingSeverity, number>;
   for (const finding of openItems) {
-    bySeverity[finding.severity] += 1;
+    if (finding.severity !== null) {
+      bySeverity[finding.severity] += 1;
+    }
   }
 
   return {

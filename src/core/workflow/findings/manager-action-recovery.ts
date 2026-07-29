@@ -280,6 +280,7 @@ export function planManagerActionRecovery(input: {
   const settled = applyProvisionalSettlement(applied, {
     output: plan.output,
     promotedFindingIds: new Set(),
+    promotionSourceRawFindingIds: new Map(),
     resolvedByMapping: plan.settlements,
     resolvedByEvidence: new Map(),
     settledReplayRawIds: new Set(),

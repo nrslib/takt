@@ -21,7 +21,15 @@ import type {
   FindingLifecycleOperation,
   FindingLifecycleReservation,
   FindingObservation,
+  RawFinding,
 } from './types.js';
+import {
+  createProductFindingEntry,
+  isProvisionalFindingEntry,
+} from './finding-entry.js';
+import {
+  verifyProvisionalProductTransitionAuthorityProof,
+} from './provisional-product-transition-proof.js';
 
 export interface VerifiedLifecycleReservation {
   reservation: FindingLifecycleReservation;
@@ -44,6 +52,13 @@ function targetKey(target: {
 
 function sameValue(left: unknown, right: unknown): boolean {
   return canonicalJson(left) === canonicalJson(right);
+}
+
+function sameOptionalValue(left: unknown, right: unknown): boolean {
+  if (left === undefined || right === undefined) {
+    return left === right;
+  }
+  return sameValue(left, right);
 }
 
 function mergeEvidenceBindings(
@@ -561,6 +576,157 @@ function assertOperationProjectionDelta(input: {
   }
 }
 
+function transitionRawFindings(input: {
+  ledger: FindingLedger;
+  reservation: FindingLifecycleReservation;
+  target: FindingLifecycleReservation['targets'][number];
+}): RawFinding[] {
+  const bindingIds = new Set(input.reservation.evidenceBindingIds);
+  const rawById = new Map(
+    input.ledger.rawFindings.map((rawFinding) => [rawFinding.rawFindingId, rawFinding]),
+  );
+  const transitionRawIds = new Set<string>();
+  for (const binding of input.ledger.evidenceBindings) {
+    if (
+      bindingIds.has(binding.bindingId)
+      && sameValue(binding.target, input.target)
+      && binding.sourceRawFindingId !== null
+    ) {
+      transitionRawIds.add(binding.sourceRawFindingId);
+    }
+  }
+  return [...transitionRawIds]
+    .sort(compareBinaryStrings)
+    .map((rawFindingId) => {
+      const rawFinding = rawById.get(rawFindingId);
+      if (rawFinding === undefined) {
+        throw new Error(
+          `Lifecycle transition references missing raw finding "${rawFindingId}"`,
+        );
+      }
+      return rawFinding;
+    });
+}
+
+function assertFormalProductTransition(input: {
+  ledger: FindingLedger;
+  reservation: FindingLifecycleReservation;
+  changes: ReadonlyMap<string, FindingLedgerEntry | FindingLedgerConflict>;
+}): void {
+  if (
+    input.reservation.operation !== 'promote_provisional'
+    && input.reservation.operation !== 'reopen_finding'
+  ) {
+    return;
+  }
+  const target = input.reservation.targets[0]!;
+  const before = currentEntity(
+    input.ledger,
+    target.entityKind,
+    target.entityId,
+  );
+  const after = input.changes.get(targetKey(target));
+  if (
+    before === undefined
+    || after === undefined
+    || !('lifecycle' in before)
+    || !('lifecycle' in after)
+  ) {
+    throw new Error(
+      `Lifecycle operation "${input.reservation.operation}" requires an existing finding target`,
+    );
+  }
+
+  if (!isProvisionalFindingEntry(before)) {
+    if (input.reservation.operation !== 'reopen_finding') {
+      throw new Error(
+        `Lifecycle operation "promote_provisional" requires a provisional finding`,
+      );
+    }
+    if (
+      before.status !== 'resolved'
+      && before.status !== 'waived'
+      && before.status !== 'dismissed'
+    ) {
+      throw new Error(
+        `Ordinary product reopen for "${before.id}" requires a closed finding`,
+      );
+    }
+    const immutableProductFields = [
+      'target',
+      'targetIdentityHash',
+      'claimIdentityHash',
+      'semanticClaimIdentityHash',
+      'severity',
+      'title',
+      'provisional',
+    ] as const;
+    const rewritten = immutableProductFields.filter(
+      (field) => !sameOptionalValue(before[field], after[field]),
+    );
+    if (rewritten.length > 0) {
+      throw new Error(
+        `Ordinary product reopen for "${before.id}" rewrote immutable claim fields: ${rewritten.join(', ')}`,
+      );
+    }
+    return;
+  }
+
+  const removesProvisional = after.provisional === undefined;
+  if (
+    input.reservation.operation === 'reopen_finding'
+    && !removesProvisional
+  ) {
+    return;
+  }
+  if (!removesProvisional) {
+    throw new Error(
+      `Lifecycle operation "promote_provisional" did not remove provisional metadata`,
+    );
+  }
+
+  const transitionRaws = transitionRawFindings({
+    ledger: input.ledger,
+    reservation: input.reservation,
+    target,
+  });
+  if (transitionRaws.length === 0) {
+    throw new Error(
+      `Lifecycle operation "${input.reservation.operation}" has no provisional transition source`,
+    );
+  }
+  const product = createProductFindingEntry(after);
+  const bindingIds = new Set(input.reservation.evidenceBindingIds);
+  const transitionProofs = input.ledger.evidenceBindings.flatMap((binding) => {
+    if (
+      !bindingIds.has(binding.bindingId)
+      || !sameValue(binding.target, target)
+    ) {
+      return [];
+    }
+    const record = input.ledger.evidenceRecords.find(
+      (candidate) => candidate.evidenceId === binding.evidenceId,
+    );
+    return record?.kind === 'engine_proof'
+      && record.subject.kind === 'finding_provisional_product_transition'
+      ? [record]
+      : [];
+  });
+  if (transitionProofs.length !== 1) {
+    throw new Error(
+      `Lifecycle operation "${input.reservation.operation}" requires exactly one provisional transition proof`,
+    );
+  }
+  verifyProvisionalProductTransitionAuthorityProof({
+    ledger: input.ledger,
+    operation: input.reservation.operation,
+    findingId: before.id,
+    transitionRawFindings: transitionRaws,
+    after: product,
+    proof: transitionProofs[0]!,
+  });
+}
+
 function assertManagerProofConditions(input: {
   ledger: FindingLedger;
   reservation: FindingLifecycleReservation;
@@ -591,6 +757,7 @@ function assertManagerProofConditions(input: {
         || subject.findingId !== after.id
         || subject.provisionalKind !== after.provisional.kind
         || subject.stableKey !== after.provisional.stableKey
+        || record.claimIdentityHash !== after.claimIdentityHash
       ) {
         throw new Error(`Lifecycle manager proof "${record.proofId}" does not match the provisional projection delta`);
       }
@@ -740,6 +907,7 @@ export function applyVerifiedLifecycleMutation(
     ledger,
     changes,
   });
+  assertFormalProductTransition({ ledger, reservation, changes });
   assertManagerProofConditions({ ledger, reservation, changes });
   assertSpecialAuthorityDelta({ ledger, reservation, changes });
   const transitions = casPremiseTargets.flatMap((target) => {

@@ -390,8 +390,8 @@ export interface FindingLedgerEntry {
   targetIdentityHash: string | null;
   claimIdentityHash: string | null;
   semanticClaimIdentityHash: string | null;
-  severity: FindingSeverity;
-  title: string;
+  severity: FindingSeverity | null;
+  title: string | null;
   /** この finding を裏づける検証済み証拠。実体は ledger.evidenceRecords に追記される。 */
   evidenceIds: string[];
   description?: string;
@@ -416,7 +416,6 @@ export interface FindingLedgerEntry {
   dismissal?: FindingDismissalRecord;
   /** 楽観的前提条件（CAS）の版数。エントリを変更するたびに +1。 */
   revision: number;
-  /** 意味を確定できなかった観測の gate-blocking メタデータ。 */
   provisional?: FindingProvisionalMetadata;
   /**
    * 証跡不成立で証拠としては不採用になった再観測の履歴。
@@ -431,6 +430,21 @@ export interface FindingLedgerEntry {
     observedAt: FindingObservation;
   }>;
 }
+
+export type ProductFindingEntry = FindingLedgerEntry & {
+  target: FindingTarget;
+  targetIdentityHash: string;
+  claimIdentityHash: string;
+  semanticClaimIdentityHash: string;
+  severity: FindingSeverity;
+  title: string;
+  description: string;
+  provisional?: undefined;
+};
+
+export type ProvisionalFindingEntry = FindingLedgerEntry & {
+  provisional: FindingProvisionalMetadata;
+};
 
 export type FindingRecord = FindingLedgerEntry;
 
@@ -757,7 +771,7 @@ interface CanonicalRawFindingBase {
   readonly evidenceCoverageGaps: readonly string[];
   readonly evidenceSetHash: string;
 
-  readonly relation: RawFindingRelation;
+  readonly relation: RawFindingRelation | null;
   readonly reviewer: string;
   readonly stepName: string;
   readonly targetPrecondition?: FindingMutationPrecondition;
@@ -772,6 +786,7 @@ interface CanonicalRawFindingBase {
 
 export interface CoherentCanonicalRawFinding extends CanonicalRawFindingBase {
   readonly coherence: 'coherent';
+  readonly relation: RawFindingRelation;
   readonly familyTag: string;
   readonly severity: FindingSeverity;
   readonly title: string;
@@ -1020,7 +1035,7 @@ export interface RawNormalizationAuditRecord {
   reviewer: string;
   claimedRelation?: string;
   claimedTargetFindingId?: string;
-  normalizedRelation: string;
+  normalizedRelation: RawFindingRelation | null;
   wireTargetFindingId?: string;
   ambiguityCodes: string[];
   normalizations: Array<
@@ -1263,6 +1278,25 @@ export type EngineProofSubject =
       kind: 'finding_claim_sets_equal';
       findingIds: string[];
       semanticClaimIdentityHashes: string[];
+    }
+  | {
+      kind: 'finding_provisional_product_transition';
+      operation: 'promote_provisional' | 'reopen_finding';
+      findingId: string;
+      provisionalStableKey: string;
+      provisionalLineageKey: string;
+      targetIdentityHash: string;
+      sourceRawFindings: Array<{
+        rawFindingId: string;
+        integrityDigest: string;
+      }>;
+      expectedProductRawFindingIds: string[];
+      transitionPreconditionDigest: string;
+      expectedIntermediateHead: {
+        revision: number;
+        projectionDigest: string;
+      };
+      materializedProductClaimDigest: string;
     };
 
 interface EngineProofRecordBase {
@@ -1330,7 +1364,7 @@ export interface RawFinding {
   /** review report 本文へ束縛された候補の出典。 */
   sourceBinding: CandidateSourceBinding;
   /** This raw finding's relationship to the ledger. */
-  relation: RawFindingRelation;
+  relation: RawFindingRelation | null;
   /** Ledger finding id this entry references (required for persists/reopened/resolution_confirmation; forbidden for new). */
   targetFindingId: string | null;
   /** Engine-issued snapshot of the referenced target. Reviewer input cannot set this field. */
@@ -1645,8 +1679,8 @@ export interface FindingsRuleContext {
     bySeverity: Record<FindingSeverity, number>;
     items: Array<{
       id: string;
-      severity: FindingSeverity;
-      title: string;
+      severity: FindingSeverity | null;
+      title: string | null;
       locations: string[];
       description: string | undefined;
       suggestion: string | undefined;

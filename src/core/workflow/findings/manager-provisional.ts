@@ -27,9 +27,6 @@ export function provisionalSpecForRawKind(
   input: RawProvisionalSpecInput,
   kind: FindingProvisionalKind,
 ): ProvisionalFindingSpec {
-  if (input.wire.severity === null) {
-    throw new Error(`Raw finding "${input.wire.rawFindingId}" has no severity`);
-  }
   return {
     kind,
     stableKey: computeProvisionalStableKey({
@@ -40,7 +37,7 @@ export function provisionalSpecForRawKind(
     lineageKey: input.canonical.lineageKey,
     sourceRawFindingIds: [input.wire.rawFindingId],
     reason: input.reason,
-    title: input.wire.title ?? `Unparsed reviewer finding ${input.wire.rawFindingId}`,
+    title: input.wire.title,
     severity: input.wire.severity,
     ...(input.wire.description !== null ? { description: input.wire.description } : {}),
     ...(input.wire.suggestion !== null ? { suggestion: input.wire.suggestion } : {}),

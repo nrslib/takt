@@ -53,6 +53,15 @@ import type {
   FindingLifecycleCommand,
   LifecycleEvidenceSource,
 } from './lifecycle-transaction.js';
+import {
+  createFindingLedgerEntry,
+  createProductFindingEntry,
+  createProvisionalFindingEntry,
+  isProvisionalFindingEntry,
+  materializeProvisionalFinding,
+  mergeProvisionalClaimProjection,
+} from './finding-entry.js';
+import { isProvisionalReopenSource } from './provisional-promotion-eligibility.js';
 
 /**
  * provisional finding の upsert 指示。stableKey が同じ
@@ -65,9 +74,9 @@ export interface ProvisionalFindingSpec {
   lineageKey: string;
   sourceRawFindingIds: string[];
   reason: string;
-  title: string;
+  title: string | null;
   /** raw 由来なら元 severity、system overflow / budget failure は 'high'。 */
-  severity: FindingSeverity;
+  severity: FindingSeverity | null;
   description?: string;
   suggestion?: string;
   reviewers: string[];
@@ -296,7 +305,7 @@ function buildNewFinding(input: {
   id: string;
   rawFindingIds: string[];
   title: string;
-  severity: FindingRecord['severity'];
+  severity: FindingSeverity;
   rawFindings: RawFinding[];
   firstSeenStepName: string;
   context: FindingReconcileContext;
@@ -307,7 +316,7 @@ function buildNewFinding(input: {
     stepName: input.firstSeenStepName,
     timestamp: input.context.timestamp,
   };
-  return {
+  return createProductFindingEntry({
     id: input.id,
     status: 'open',
     lifecycle: 'new',
@@ -323,7 +332,7 @@ function buildNewFinding(input: {
     firstSeen: observation,
     lastSeen: observationFromContext(input.context),
     revision: 1,
-  };
+  });
 }
 
 function observationFromContext(context: FindingReconcileContext): FindingObservation {
@@ -973,10 +982,29 @@ function reconcileFindingLedgerWithValidator(
       rawFindings: reopenedRawFindings,
       observation: observationFromContext(input.context),
     });
-    const reopenedFinding = withoutResolutionFields(finding);
-    if (finding.status === 'dismissed') {
-      delete reopenedFinding.provisional;
+    let reopenedBase: FindingRecord = finding;
+    if (finding.status === 'dismissed' && isProvisionalFindingEntry(finding)) {
+      for (const rawFinding of reopenedRawFindings) {
+        if (!isProvisionalReopenSource({
+          ledger: input.previousLedger,
+          provisional: finding,
+          wire: rawFinding,
+        })) {
+          throw new Error(
+            `Dismissed provisional finding "${finding.id}" has an ineligible reopen source "${rawFinding.rawFindingId}"`,
+          );
+        }
+      }
+      const materialized = materializeProvisionalFinding({
+        ledger: input.previousLedger,
+        finding,
+        transitionRawFindings: reopenedRawFindings,
+      });
+      if (materialized.outcome === 'materialized') {
+        reopenedBase = materialized.finding;
+      }
     }
+    const reopenedFinding = withoutResolutionFields(reopenedBase);
     const updated: FindingRecord = {
       ...reopenedFinding,
       status: 'open',
@@ -1261,6 +1289,7 @@ function reconcileFindingLedgerWithValidator(
     nextId,
     updatedAt: input.context.timestamp,
     findings: [...updatedById.values(), ...newFindings, ...provisionalNewFindings]
+      .map((finding) => createFindingLedgerEntry(finding))
       .sort((left, right) => compareBinaryStrings(left.id, right.id)),
     evidenceRecords: mergeEvidenceRecords(
       input.previousLedger.evidenceRecords,
@@ -1344,7 +1373,6 @@ function applyProvisionalFindingSpecs(input: {
       openProvisionalByStableKey.set(finding.provisional.stableKey, finding.id);
     }
   }
-  const created: FindingRecord[] = [];
   const createdByStableKey = new Map<string, FindingRecord>();
 
   const orderedSpecs = [...input.specs].sort((left, right) => (
@@ -1355,24 +1383,23 @@ function applyProvisionalFindingSpecs(input: {
     const existingId = openProvisionalByStableKey.get(spec.stableKey);
     if (existingId !== undefined) {
       const existing = input.updatedById.get(existingId)!;
-      if (
-        spec.targetIdentityHash !== undefined
-        && existing.targetIdentityHash !== null
-        && existing.targetIdentityHash !== spec.targetIdentityHash
-      ) {
-        throw new Error(
-          `Provisional spec "${spec.stableKey}" target identity does not match existing finding "${existing.id}"`,
-        );
+      if (!isProvisionalFindingEntry(existing)) {
+        throw new Error(`Finding "${existing.id}" is not provisional`);
       }
-      input.updatedById.set(existingId, {
-        ...existing,
-        ...(existing.target === null && spec.target !== undefined
-          ? {
-              target: spec.target,
-              targetIdentityHash: spec.targetIdentityHash!,
-              claimIdentityHash: spec.claimIdentityHash!,
-            }
-          : {}),
+      const claim = mergeProvisionalClaimProjection(existing, {
+        severity: spec.severity,
+        title: spec.title,
+        ...(spec.description !== undefined ? { description: spec.description } : {}),
+        ...(spec.suggestion !== undefined ? { suggestion: spec.suggestion } : {}),
+        ...(spec.target !== undefined ? {
+          target: spec.target,
+          targetIdentityHash: spec.targetIdentityHash,
+          claimIdentityHash: spec.claimIdentityHash,
+          semanticClaimIdentityHash: spec.semanticClaimIdentityHash,
+        } : {}),
+      });
+      input.updatedById.set(existingId, createProvisionalFindingEntry({
+        ...claim,
         lifecycle: 'persists',
         rawFindingIds: mergeBinarySortedUniqueStrings(existing.rawFindingIds, spec.sourceRawFindingIds),
         reviewers: Array.from(new Set([...existing.reviewers, ...spec.reviewers])),
@@ -1392,28 +1419,46 @@ function applyProvisionalFindingSpecs(input: {
             : {}),
           ...(spec.actionRecovery !== undefined ? { actionRecovery: spec.actionRecovery } : {}),
         },
-      });
+      }));
       continue;
     }
     // 同一ラウンド内で同じ stableKey の spec が複数来た場合も ID を増やさない。
     const createdExisting = createdByStableKey.get(spec.stableKey);
     if (createdExisting !== undefined) {
-      createdExisting.rawFindingIds = mergeBinarySortedUniqueStrings(
-        createdExisting.rawFindingIds,
-        spec.sourceRawFindingIds,
-      );
-      createdExisting.reviewers = Array.from(new Set([...createdExisting.reviewers, ...spec.reviewers]));
-      createdExisting.provisional = {
-        ...createdExisting.provisional!,
-        sourceRawFindingIds: mergeBinarySortedUniqueStrings(
-          createdExisting.provisional!.sourceRawFindingIds,
+      if (!isProvisionalFindingEntry(createdExisting)) {
+        throw new Error(`Finding "${createdExisting.id}" is not provisional`);
+      }
+      const claim = mergeProvisionalClaimProjection(createdExisting, {
+        severity: spec.severity,
+        title: spec.title,
+        ...(spec.description !== undefined ? { description: spec.description } : {}),
+        ...(spec.suggestion !== undefined ? { suggestion: spec.suggestion } : {}),
+        ...(spec.target !== undefined ? {
+          target: spec.target,
+          targetIdentityHash: spec.targetIdentityHash,
+          claimIdentityHash: spec.claimIdentityHash,
+          semanticClaimIdentityHash: spec.semanticClaimIdentityHash,
+        } : {}),
+      });
+      createdByStableKey.set(spec.stableKey, createProvisionalFindingEntry({
+        ...claim,
+        rawFindingIds: mergeBinarySortedUniqueStrings(
+          createdExisting.rawFindingIds,
           spec.sourceRawFindingIds,
         ),
-        interpretationEpochs: countInterpretationEpochs(input.ledger, spec.lineageKey),
-      };
+        reviewers: Array.from(new Set([...createdExisting.reviewers, ...spec.reviewers])),
+        provisional: {
+          ...createdExisting.provisional,
+          sourceRawFindingIds: mergeBinarySortedUniqueStrings(
+            createdExisting.provisional.sourceRawFindingIds,
+            spec.sourceRawFindingIds,
+          ),
+          interpretationEpochs: countInterpretationEpochs(input.ledger, spec.lineageKey),
+        },
+      }));
       continue;
     }
-    const entry: FindingRecord = {
+    const entry = createProvisionalFindingEntry({
       id: input.allocateId(),
       status: 'open',
       lifecycle: 'new',
@@ -1449,10 +1494,9 @@ function applyProvisionalFindingSpecs(input: {
         // 現在ラウンド序数 = 記録済みラウンド数 + 1。
         firstObservedRound: stopBudgetRoundsCompleted(input.ledger) + 1,
       },
-    };
+    });
     createdByStableKey.set(spec.stableKey, entry);
-    created.push(entry);
   }
-  return created;
+  return [...createdByStableKey.values()];
 }
 import { createHash } from 'node:crypto';

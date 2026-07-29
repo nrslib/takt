@@ -1377,7 +1377,20 @@ describe('provisional recovery', () => {
 
   it('promotes a replay origin only from clean targeted persists with a fresh precondition', () => {
     const process = provisional('F-0001', 'raw-adjudication-unresolved');
-    const freshLedger = ledger([process], [raw('source-1')]);
+    process.severity = null;
+    process.title = null;
+    delete process.description;
+    const source = canonicalRawFindingFixture({
+      ...raw('source-1'),
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: null,
+      suggestion: null,
+      target: process.target!,
+    });
+    const freshLedger = ledger([process], [source]);
+    delete freshLedger.findings[0]!.description;
     const targetPrecondition = captureFindingPreconditions(freshLedger)
       .get(process.id)!.precondition;
     const replay = canonicalRawFindingFixture({
@@ -1386,8 +1399,8 @@ describe('provisional recovery', () => {
       reviewer: 'reviewer-a',
       familyTag: 'bug',
       severity: 'high',
-      title: process.title,
-      description: process.description!,
+      title: 'Confirmed state transition defect',
+      description: 'The clean replay establishes the complete product claim.',
       suggestion: null,
       relation: 'persists',
       targetFindingId: process.id,
@@ -1422,7 +1435,132 @@ describe('provisional recovery', () => {
       expect.objectContaining({ findingId: process.id, rawFindingIds: [replay.rawFindingId] }),
     ]);
     expect(settlement.promotedFindingIds).toEqual(new Set([process.id]));
+    expect(settlement.promotionSourceRawFindingIds).toEqual(new Map([
+      [process.id, [replay.rawFindingId]],
+    ]));
     expect(settlement.settledReplayRawIds).toEqual(new Set([replay.rawFindingId]));
+
+    const applied = applyProvisionalSettlement({
+      ...freshLedger,
+      rawFindings: [...freshLedger.rawFindings, replay],
+    }, settlement, observation.timestamp);
+    expect(applied.findings[0]).toMatchObject({
+      id: process.id,
+      severity: 'high',
+      title: 'Confirmed state transition defect',
+      description: 'The clean replay establishes the complete product claim.',
+      targetIdentityHash: replay.targetIdentityHash,
+      claimIdentityHash: replay.claimIdentityHash,
+      semanticClaimIdentityHash: replay.semanticClaimIdentityHash,
+      revision: 2,
+    });
+    expect(applied.findings[0]?.provisional).toBeUndefined();
+  });
+
+  it('keeps a provisional when multiple clean promotion sources disagree on the claim identity', () => {
+    const process = provisional('F-0001', 'raw-adjudication-unresolved');
+    process.severity = null;
+    process.title = null;
+    delete process.description;
+    const freshLedger = ledger([process], [raw('source-1')]);
+    const targetPrecondition = captureFindingPreconditions(freshLedger)
+      .get(process.id)!.precondition;
+    const first = canonicalRawFindingFixture({
+      rawFindingId: 'replay-first-claim',
+      stepName: 'reviewer-a',
+      reviewer: 'reviewer-a',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'First complete claim',
+      description: 'The first clean replay describes one product defect.',
+      suggestion: null,
+      relation: 'persists',
+      targetFindingId: process.id,
+      targetPrecondition,
+      target: process.target!,
+      evidence: [],
+    });
+    const second = canonicalRawFindingFixture({
+      rawFindingId: 'replay-second-claim',
+      stepName: 'reviewer-b',
+      reviewer: 'reviewer-b',
+      familyTag: 'bug',
+      severity: 'medium',
+      title: 'Second complete claim',
+      description: 'The second clean replay describes a different product defect.',
+      suggestion: null,
+      relation: 'persists',
+      targetFindingId: process.id,
+      targetPrecondition,
+      target: process.target!,
+      evidence: [],
+    });
+
+    const settlement = settleProvisionalsWithCleanEvidence({
+      output: emptyOutput(),
+      cleanRawIds: new Set([first.rawFindingId, second.rawFindingId]),
+      wireById: new Map([
+        [first.rawFindingId, first],
+        [second.rawFindingId, second],
+      ]),
+      freshLedger,
+      explicitResolvedByMapping: new Map(),
+      explicitPromotedFindingIds: new Set([process.id]),
+      healthyReviewerStableKeys: new Set(),
+      replayOrigins: new Map(),
+    });
+
+    expect(settlement.promotedFindingIds).toEqual(new Set());
+    expect(settlement.promotionSourceRawFindingIds).toEqual(new Map());
+    const applied = applyProvisionalSettlement({
+      ...freshLedger,
+      rawFindings: [...freshLedger.rawFindings, first, second],
+    }, settlement, observation.timestamp);
+    expect(applied.findings[0]).toMatchObject({
+      id: process.id,
+      severity: null,
+      title: null,
+      provisional: {
+        gateEffect: 'block',
+      },
+      revision: 1,
+    });
+  });
+
+  it('keeps a provisional when its only clean promotion source has an incomplete claim', () => {
+    const process = provisional('F-0001', 'raw-adjudication-unresolved');
+    process.severity = null;
+    process.title = null;
+    const freshLedger = ledger([process], [raw('source-1')]);
+    const incomplete = canonicalRawFindingFixture({
+      rawFindingId: 'replay-incomplete-claim',
+      stepName: 'reviewer-a',
+      reviewer: 'reviewer-a',
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: 'The replay still lacks the fields required for a product claim.',
+      suggestion: null,
+      relation: 'persists',
+      targetFindingId: process.id,
+      targetPrecondition: captureFindingPreconditions(freshLedger)
+        .get(process.id)!.precondition,
+      target: process.target!,
+      evidence: [],
+    });
+    const settlement = settleProvisionalsWithCleanEvidence({
+      output: emptyOutput(),
+      cleanRawIds: new Set([incomplete.rawFindingId]),
+      wireById: new Map([[incomplete.rawFindingId, incomplete]]),
+      freshLedger,
+      explicitResolvedByMapping: new Map(),
+      explicitPromotedFindingIds: new Set([process.id]),
+      healthyReviewerStableKeys: new Set(),
+      replayOrigins: new Map(),
+    });
+
+    expect(settlement.promotedFindingIds).toEqual(new Set());
+    expect(settlement.promotionSourceRawFindingIds).toEqual(new Map());
   });
 
   it('commits a targeted persists replay promotion through the lifecycle transaction', () => {
@@ -1530,8 +1668,17 @@ describe('provisional recovery', () => {
     }, previousLedger);
     const proofed = issueManagerLifecycleAuthority({
       current: mutation.result.rawRecoveryLedger,
+      rawRecoveryCurrent: previousLedger,
+      rawRecoveryManagerDecisionProposed:
+        mutation.result.rawRecoveryManagerDecisionLedger,
+      rawRecoveryManagerDecisionCommands:
+        mutation.result.rawRecoveryManagerDecisionCommands,
+      rawRecoverySettlementCommands:
+        mutation.result.rawRecoverySettlementCommands,
+      managerDecisionProposed: mutation.result.managerDecisionLedger,
       proposed: mutation.ledger,
       managerDecisionCommands: mutation.result.managerDecisionCommands,
+      settlementCommands: mutation.result.settlementCommands,
       managerOutput: {
         ...mutation.result.lifecycleManagerOutput,
         invalidatedFindings: [
@@ -1561,8 +1708,18 @@ describe('provisional recovery', () => {
       proposed: proofed.ledger,
       managerOutput: mutation.result.lifecycleManagerOutput,
       provisionalProofIdsByFinding: proofed.provisionalProofIdsByFinding,
+      rawRecoveryProvisionalProofIdsByFinding:
+        proofed.rawRecoveryProvisionalProofIdsByFinding,
       invalidationProofIdsByFinding: proofed.invalidationProofIdsByFinding,
       duplicateProofIdsByCommandKey: proofed.duplicateProofIdsByCommandKey,
+      managerDecisionProvisionalTransitionProofIdsByCommandKey:
+        proofed.managerDecisionProvisionalTransitionProofIdsByCommandKey,
+      provisionalTransitionProofIdsByCommandKey:
+        proofed.provisionalTransitionProofIdsByCommandKey,
+      rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey:
+        proofed.rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey,
+      rawRecoveryProvisionalTransitionProofIdsByCommandKey:
+        proofed.rawRecoveryProvisionalTransitionProofIdsByCommandKey,
       invalidationReasonsByFinding: proofed.invalidationReasonsByFinding,
       resolutionRenotifications: mutation.result.resolutionRenotifications,
       settlementCommands: mutation.result.settlementCommands,
@@ -3486,8 +3643,14 @@ describe('provisional recovery', () => {
     });
     const proofed = issueManagerLifecycleAuthority({
       current,
+      rawRecoveryCurrent: current,
+      rawRecoveryManagerDecisionProposed: current,
+      rawRecoveryManagerDecisionCommands: [],
+      rawRecoverySettlementCommands: [],
+      managerDecisionProposed: plan.ledger,
       proposed: plan.ledger,
       managerDecisionCommands: [],
+      settlementCommands: [],
       managerOutput: plan.output,
       cwd: process.cwd(),
       workflowName: current.workflowName,
@@ -3587,7 +3750,7 @@ describe('provisional recovery', () => {
       reason: 'No verifiable evidence was available.',
       decidedAt: observation,
     };
-    const previousLedger = ledger([dismissed]);
+    const previousLedger = ledger([dismissed], [raw('source-1')]);
     const reopenedRaw = stampTargetPrecondition({
       ...raw('reopen-1'),
       relation: 'reopened',
