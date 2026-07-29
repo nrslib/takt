@@ -41,7 +41,10 @@ import { getWorkflowStepKind } from '../step-kind.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
 import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../auto-routing/resolver.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
-import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
+import type {
+  FindingContractInstructionContext,
+  FindingContractReviewerMode,
+} from '../instruction/instruction-context.js';
 
 type ResolvedRunAgentOptions = RunAgentOptions & {
   resolvedProviderOptions?: StepProviderOptions;
@@ -80,7 +83,7 @@ export class OptionsBuilder {
     private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
     private readonly getFindingContractInstructionContext?: (
       step: WorkflowStep,
-      includeRawFindingsSchema: boolean,
+      reviewerMode: FindingContractReviewerMode | undefined,
     ) => FindingContractInstructionContext | undefined,
   ) {}
 
@@ -359,9 +362,9 @@ export class OptionsBuilder {
 
   buildFindingContractInstructionContext(
     step: WorkflowStep,
-    includeRawFindingsSchema: boolean,
+    reviewerMode: FindingContractReviewerMode | undefined,
   ): FindingContractInstructionContext | undefined {
-    return this.getFindingContractInstructionContext?.(step, includeRawFindingsSchema);
+    return this.getFindingContractInstructionContext?.(step, reviewerMode);
   }
 
   private resolveSupportedMaxTurns(
@@ -575,7 +578,10 @@ export class OptionsBuilder {
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
       buildFindingContractInstructionContext: (step, includeRawFindingsSchema) =>
-        this.buildFindingContractInstructionContext(step, includeRawFindingsSchema),
+        this.buildFindingContractInstructionContext(
+          step,
+          includeRawFindingsSchema ? 'structured' : undefined,
+        ),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       resolveSessionKey: (step) => {
         const providerInfo = this.resolveStepProviderModel(step, runtime);

@@ -83,7 +83,7 @@ function toNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-function extractProviderUsageFromTurnCompleted(event: CodexEvent): ProviderUsageSnapshot {
+export function extractProviderUsageFromTurnCompleted(event: CodexEvent): ProviderUsageSnapshot {
   const usageRaw = event.usage;
   if (!usageRaw || typeof usageRaw !== 'object') {
     return {

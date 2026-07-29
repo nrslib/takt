@@ -24,7 +24,7 @@ providerのtool capabilityは同一ではない。Claude/OpenCodeには`allowedT
 - 1 reportを1回の隔離model callで処理し、report間の混在を防ぐ
 
 promptの正本は
-`eval/cases/finding-normalizer/extraction-prompt.md`、case一覧と外部送信区分は
+`src/shared/prompts/finding-intake-extraction.ts`、case一覧と外部送信区分は
 `eval/cases/finding-normalizer/extraction-catalog.json`に置く。生成済みpromptを
 正本にはしない。
 
@@ -49,12 +49,15 @@ PASSすることを確認する。`--self-test`はschema-invalidな7種類のout
 FAILにし、逆順outputをorder不一致でFAILにし、scorer自身の例外を
 `errorKind: "scoring_error"`として保存できることを確認する。
 
-## 現行promptの実測
+## 旧promptの実測
 
 測定したprompt templateのSHA-256は
 `a3b25caddd72cbb6e1a1545781359eff6fb5c02a5511605c52c11f7dd0c65d2d`で、
-現行の`extraction-prompt.md`と一致する。scorerはprompt artifact一致、finding順序、
-malformed耐性を含む現行版を使った。
+当時のproduction prompt定数と一致していた。ledger lifecycle confirmationを抽出する
+現行promptのSHA-256は
+`0513c7536b96235e151c9d4478d568a54a58b877aeba0c915bbadae8df18b983`であり、
+この版の外部model測定はまだ行っていない。以下の数値とartifactは旧hashの履歴で、
+現行promptの結果として扱わない。
 
 provider capacity errorはmodel outputが生成されていないため、model出力のFAILへ
 数えない。provider attemptの未完了として別記し、fresh retryは別result setへ保存した。
@@ -72,7 +75,7 @@ non-fabrication、ambiguity、finding order、tool use 0をすべて満たした
 candidate exactは0でstrict FAILになった。`repository_query` requestは保持しており、
 失敗原因はtyped evidence requestの部分欠落に限定される。
 
-現行promptの結果artifact:
+旧promptの結果artifact:
 
 - `eval/.work/finding-report-normalizer/results/final-summary-luna-terra-r3-20260729/summary.json`
 - `eval/.work/finding-report-normalizer/results/final-summary-luna-retry1-20260729/summary.json`
@@ -80,8 +83,8 @@ candidate exactは0でstrict FAILになった。`repository_query` requestは保
 
 ### 未測定範囲と外部送信境界
 
-HaikuとSonnetは現行promptでは未測定である。Gemma4は別測定でschema不適合だったため
-候補外とするが、そのartifactを現行promptのLuna/Terra集計には加えない。
+現行promptは全providerで未測定である。Gemma4のschema不適合を含む旧artifactは、
+現行promptの集計には加えない。
 
 `pr-attachments-six-reviews`の6件は、localでprompt生成、schema検証、gold自己採点まで
 完了した。ただしlocal review materialの外部model送信は承認されなかったため、
@@ -135,5 +138,5 @@ report 3件も空のまま保持した。Haikuはturn capで一部未完了だ�
 - Lunaのcapacity error 1件はprovider未完了であり、model出力FAILには数えない。
 - Gemma4はschema不適合を記録しているため候補外。
 - local review materialを用いた実report評価は未承認・未実行。
-- production/configへの統合は行わない。採用判断には、承認済みの代表report、
-  複数反復、別fixtureで同じstrict条件を満たす追加測定が必要。
+- production/configにはopt-inの`intake_normalize`として統合済みである。現行promptの
+  外部model測定は未実施であり、旧promptの結果を現行統合の実測値として扱わない。

@@ -34,14 +34,17 @@ vi.mock('../infra/claude/client.js', () => ({
 const {
   mockCallCodex,
   mockCallCodexCustom,
+  mockCallCodexIsolatedStructured,
 } = vi.hoisted(() => ({
   mockCallCodex: vi.fn(),
   mockCallCodexCustom: vi.fn(),
+  mockCallCodexIsolatedStructured: vi.fn(),
 }));
 
 vi.mock('../infra/codex/index.js', () => ({
   callCodex: mockCallCodex,
   callCodexCustom: mockCallCodexCustom,
+  callCodexIsolatedStructured: mockCallCodexIsolatedStructured,
 }));
 
 // ===== OpenCode =====
@@ -255,6 +258,47 @@ describe('CodexProvider — structured output', () => {
     expect(opts).toHaveProperty('outputSchema', SCHEMA);
     expect(opts).toHaveProperty('codexPathOverride', '/opt/codex/bin/codex');
     expect(result.structuredOutput).toEqual({ step: 2 });
+  });
+
+  it('profile未指定時は既存のCodex SDK経路を維持する', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder', { step: 2 }));
+
+    const agent = new CodexProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      outputSchema: SCHEMA,
+    });
+
+    expect(mockCallCodex).toHaveBeenCalledOnce();
+    expect(mockCallCodexIsolatedStructured).not.toHaveBeenCalled();
+  });
+
+  it('isolated-structured profileだけをhardened direct CLI経路へ渡す', async () => {
+    mockCallCodexIsolatedStructured.mockResolvedValue(
+      doneResponse('normalizer', { rawFindings: [] }),
+    );
+
+    const agent = new CodexProvider().setup({
+      name: 'normalizer',
+      systemPrompt: 'system',
+    });
+    await agent.call('report', {
+      cwd: '/tmp/isolated',
+      executionProfile: 'isolated-structured',
+      outputSchema: SCHEMA,
+    });
+
+    expect(mockCallCodexIsolatedStructured).toHaveBeenCalledWith(
+      'normalizer',
+      'system\n\nreport',
+      expect.objectContaining({
+        cwd: '/tmp/isolated',
+        outputSchema: SCHEMA,
+        codexPathOverride: '/opt/codex/bin/codex',
+      }),
+    );
+    expect(mockCallCodex).not.toHaveBeenCalled();
+    expect(mockCallCodexCustom).not.toHaveBeenCalled();
   });
 
   it('provider_options.codex.reasoningEffort を callCodex に渡す', async () => {

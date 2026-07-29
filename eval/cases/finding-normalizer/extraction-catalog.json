@@ -19,7 +19,7 @@
       "source": "broad-target-review-reports.md",
       "gold": "broad-target-review-reports.gold.json",
       "externalExecution": "synthetic",
-      "purpose": "Line-independent code, structure, absence, and deliberately ambiguous claims."
+      "purpose": "Line-independent code, structure, absence, explicit ledger persistence and resolution confirmation, and deliberately ambiguous claims."
     }
   ]
 }

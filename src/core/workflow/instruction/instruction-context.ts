@@ -15,6 +15,19 @@ import type {
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import type { PullRequestContext } from '../pr-context.js';
 
+export type FindingContractReviewerMode = 'structured' | 'freeform';
+
+export type FindingContractReviewerContext =
+  | {
+      mode: 'structured';
+      rawFindingsStructuredOutput: WorkflowStructuredOutput;
+      reviewScopeSnapshotId: string;
+    }
+  | {
+      mode: 'freeform';
+      reviewScopeSnapshotId: string;
+    };
+
 export interface FindingContractInstructionContext {
   ledgerSummary: string;
   reportLedgerSummary: string;
@@ -27,14 +40,7 @@ export interface FindingContractInstructionContext {
    * このレビューラウンドで生成した raw findings の provider-facing 契約。
    * プロンプト表示と実行ステップの structuredOutput に同じオブジェクトを渡す。
    */
-  rawFindingsStructuredOutput?: WorkflowStructuredOutput;
-  /**
-   * review-integrity protocol: engine が evidence request を発行・検証するときに
-   * 使用する review scope snapshot id（snapshot.ts の
-   * computeReviewScopeSnapshotId）。reviewer step（includeRawFindingsSchema が
-   * true）のときだけ設定され、reviewer の出力には含めない。
-   */
-  reviewScopeSnapshotId?: string;
+  reviewer?: FindingContractReviewerContext;
 }
 
 export type FindingContractInstructionPolicy =

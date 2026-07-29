@@ -123,6 +123,15 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #     provider: claude
 #     model: opus
 
+# Optional Finding Contract intake normalizer
+# intake_normalize:
+#   provider: codex
+#   model: gpt-5.6-terra
+#   targets: [takt-default-high] # Exact canonical workflow names; omit for all Finding Contract workflows
+#   provider_options:
+#     codex:
+#       reasoning_effort: high
+
 # Workflow security policies (all default to deny)
 # These settings control what untrusted workflow YAMLs are allowed to do.
 # workflow_mcp_servers:                  # MCP server transport policy
@@ -188,6 +197,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 | `persona_providers` | object | - | Deprecated legacy per-display-name provider/model/provider_options overrides. Prefer `provider_routing` for new settings |
 | `provider_options` | object | - | Global provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
+| `intake_normalize` | object | - | Optional strict isolated structured normalizer for free-form Finding Contract reviewer reports; requires `provider` and `model` |
 | `anthropic_api_key` | string | - | Anthropic API key for Claude |
 | `openai_api_key` | string | - | OpenAI API key for Codex |
 | `opencode_api_key` | string | - | OpenCode API key |
@@ -260,6 +270,11 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #     default_permission_mode: full
 #     step_permission_overrides:
 #       ai_review: readonly
+
+# intake_normalize:
+#   provider: codex
+#   model: gpt-5.6-terra
+#   targets: [takt-default-high]
 ```
 
 ### Project Config Field Reference
@@ -279,6 +294,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 | `assistant.init_files` | string[] | - | Project-only interactive assistant initial context files. Paths must be relative to the project root; absolute paths, paths resolving outside the project root, and sensitive file patterns such as `.env*`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, and `.git/**` are rejected. Missing paths, directories, and unreadable files fail with a clear error. At most 16 files are allowed; each file is limited to 256 KiB and the combined content is limited to 1 MiB. When unset or empty, TAKT does not auto-discover `CLAUDE.md`, `AGENT.md`, `AGENTS.md`, `TAKT.md`, or other files. This is separate from `takt_providers.assistant`, which only controls the assistant provider/model. |
 | `provider_options` | object | - | Provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
+| `intake_normalize` | object | global setting | Strict isolated structured normalizer override for free-form Finding Contract reviewer reports |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global) |
 | `takt_providers` | object | - | TAKT internal provider overrides. Project `takt_providers.assistant` overrides the global assistant provider/model and is used for assistant conversations (interactive planning, instruct on existing tasks, and retry dialogue) and Report phase fallback after an OpenCode report retry fails. If project and global assistant are both unset, Report phase fallback is disabled and top-level `provider` / `model` are not used as an implicit fallback. |
 | `workflow_mcp_servers` | object | - | MCP server transport policy (overrides global) |
@@ -289,6 +305,16 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 | `observability` | object | - | Project-level OpenTelemetry opt-in override. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` writes phase-level usage events to `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl`. With `enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT also sends spans and metrics through OTLP using standard `OTEL_EXPORTER_OTLP_*` environment variables; TAKT does not add an OTLP config key. |
 
 Project config values override global config when both are set.
+
+`intake_normalize` is opt-in and runs only for workflows with an active
+Finding Contract. `targets`, when present, matches exact canonical workflow
+names. The project block atomically replaces the global block; its fields are
+not merged with global `targets` or `provider_options`. The normalizer receives
+one reviewer report in a fresh empty temporary directory, without the task,
+ledger, repository working directory, other reports, tools, MCP servers, or a
+resumable session. The temporary directory is removed after every outcome.
+Codex is the supported production provider for this strict execution profile;
+providers that cannot enforce it fail before execution.
 
 With `backend: sqlite`, TAKT uses only `.takt/runs/<run>/run.sqlite` as the
 Finding Contract authority; it does not dual-write or fall back to the file

@@ -178,6 +178,38 @@
           }
         }
       ]
+    },
+    "7": {
+      "candidates": [
+        {
+          "rawExcerptAnchor": "### Finding: Cleanup leak is fixed",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": "resolution_confirmation",
+            "targetFindingId": "F-0042",
+            "familyTag": null,
+            "severity": "high",
+            "title": "Cleanup leak is fixed",
+            "description": "The cleanup promise is now awaited before returning.",
+            "suggestion": null,
+            "target": {
+              "kind": "code",
+              "paths": [
+                "src/worker/cleanup.ts"
+              ]
+            },
+            "evidenceRequests": [
+              {
+                "kind": "file_quote",
+                "path": "src/worker/cleanup.ts",
+                "startLine": 41,
+                "endLine": 42,
+                "verbatimExcerpt": "await cleanup();\nreturn result;"
+              }
+            ]
+          }
+        }
+      ]
     }
   }
 }

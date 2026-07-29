@@ -26,7 +26,7 @@ export type { RunAgentOptions, StreamCallback } from './types.js';
 
 const log = createLogger('runner');
 type ResolvedProviderOptionsHandoff = {
-  resolvedProviderOptions?: ProviderCallOptions['providerOptions'];
+  resolvedProviderOptions?: ProviderCallOptions['providerOptions'] | null;
 };
 
 type RunnerHandoffOptions = RunAgentOptions & ResolvedProviderOptionsHandoff;
@@ -89,7 +89,7 @@ export class AgentRunner {
     personaProviders: ReturnType<typeof AgentRunner.resolvePersonaProviders>,
   ): ProviderCallOptions['providerOptions'] {
     if (options.resolvedProviderOptions !== undefined) {
-      return options.resolvedProviderOptions;
+      return options.resolvedProviderOptions ?? undefined;
     }
 
     const personaProviderOptions = resolvePersonaProviderOptions(
@@ -128,6 +128,7 @@ export class AgentRunner {
 
     return {
       cwd: options.cwd,
+      executionProfile: options.executionProfile,
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
       allowedTools: options.allowedTools,
@@ -173,6 +174,14 @@ export class AgentRunner {
     const resolved = AgentRunner.resolveProviderAndModel(options.cwd, agentConfig.name, options);
     const providerType = resolved.provider;
     const provider = getProvider(providerType);
+    if (
+      options.executionProfile === 'isolated-structured'
+      && provider.supportsIsolatedStructuredExecution !== true
+    ) {
+      throw new Error(
+        `Provider "${providerType}" does not support strict isolated structured execution`,
+      );
+    }
     const resolvedSystemPrompt = loadAgentPrompt(agentConfig, options.cwd);
     const customOptions: RunnerHandoffOptions = {
       ...options,
@@ -232,6 +241,14 @@ export class AgentRunner {
     const resolved = AgentRunner.resolveProviderAndModel(options.cwd, personaName, options);
     const providerType = resolved.provider;
     const provider = getProvider(providerType);
+    if (
+      options.executionProfile === 'isolated-structured'
+      && provider.supportsIsolatedStructuredExecution !== true
+    ) {
+      throw new Error(
+        `Provider "${providerType}" does not support strict isolated structured execution`,
+      );
+    }
     const resolvedProviderOptions = AgentRunner.resolveProviderOptions(
       options.cwd,
       personaName,

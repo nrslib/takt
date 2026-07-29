@@ -43,7 +43,13 @@ function makeContext(options: {
       // 参照）。片方だけの fixture は finding-contract-instruction.ts の
       // fail-loud ガードに引っかかるため、実際の生成規則に合わせて両方立てる。
       ...(options.rawFindingsStructuredOutput !== undefined
-        ? { rawFindingsStructuredOutput: options.rawFindingsStructuredOutput, reviewScopeSnapshotId: 'test-snapshot-id' }
+        ? {
+            reviewer: {
+              mode: 'structured',
+              rawFindingsStructuredOutput: options.rawFindingsStructuredOutput,
+              reviewScopeSnapshotId: 'test-snapshot-id',
+            },
+          }
         : {}),
     },
   } as unknown as InstructionContext;

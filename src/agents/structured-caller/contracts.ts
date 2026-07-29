@@ -8,8 +8,14 @@ import type {
   MorePartsResponse,
   TeamLeaderPartFeedbackResult,
 } from '../decompose-task-usecase.js';
+import type { NormalizeFindingIntakeOptions } from '../finding-intake-normalizer-usecase.js';
 
 export interface StructuredCaller {
+  normalizeFindingIntake(
+    report: string,
+    options: NormalizeFindingIntakeOptions,
+  ): Promise<AgentResponse>;
+
   judgeStatus(
     structuredInstruction: string,
     tagInstruction: string,

@@ -18,7 +18,7 @@ call a model.
 |---|---:|---|
 | `pr-attachments-six-reviews` | 6 | Real multilingual reviews, APPROVE/empty reports, multiple claims, code paths, and missing-test structure |
 | `summary-only-review-report` | 1 | A finding stated only under a summary heading |
-| `broad-target-review-reports` | 6 | Line-independent code, structure, absence, file quote, explicit ledger fields, and ambiguous provisional input |
+| `broad-target-review-reports` | 7 | Line-independent code, structure, absence, file quote, explicit ledger persistence/resolution fields, ordinary approval exclusion, and ambiguous provisional input |
 
 Scoring axes:
 
@@ -81,7 +81,11 @@ The measurement state is recorded in
 `eval/baselines/finding-report-normalizer-2026-07-29.md`.
 
 - The current prompt SHA-256 is
-  `a3b25caddd72cbb6e1a1545781359eff6fb5c02a5511605c52c11f7dd0c65d2d`.
+  `0513c7536b96235e151c9d4478d568a54a58b877aeba0c915bbadae8df18b983`.
+- This prompt revision has not yet been measured against external models.
+- The following Luna/Terra results belong to the previous prompt hash
+  `a3b25caddd72cbb6e1a1545781359eff6fb5c02a5511605c52c11f7dd0c65d2d`;
+  they are retained as tuning history, not current-prompt results.
 - Terra passed 3/3 summary-only repetitions and all 6/6 broad-target reports.
 - Luna passed both completed outputs in the initial summary-only run; one
   additional attempt ended with provider capacity before model output. Its
@@ -93,11 +97,11 @@ The measurement state is recorded in
 - Terra is the first candidate for this fixture. Luna is the second candidate
   because of the typed evidence-request omission. Gemma4 remains outside the
   candidate set because its recorded extraction output was schema-invalid; it
-  is not included in the current-prompt pass counts.
+  is not included in any current-prompt result.
 - The six local review reports were rendered and gold-scored locally, but were
   not sent to an external provider because approval was not granted.
 
-Current-prompt result artifacts:
+Previous-prompt result artifacts:
 
 - `eval/.work/finding-report-normalizer/results/final-summary-luna-terra-r3-20260729/summary.json`
 - `eval/.work/finding-report-normalizer/results/final-summary-luna-retry1-20260729/summary.json`
@@ -106,5 +110,5 @@ Current-prompt result artifacts:
 Historical results under `eval/.work/finding-normalizer-intake/` use an older
 free-form contract with generated summaries and classifications. They are not
 scores for this catalog and must not be combined with the current result.
-Artifacts generated from earlier revisions of `extraction-prompt.md` are also
+Artifacts generated from earlier revisions of the extraction prompt are also
 tuning history only.

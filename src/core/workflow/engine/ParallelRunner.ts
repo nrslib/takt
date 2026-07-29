@@ -237,10 +237,14 @@ export class ParallelRunner {
     // findingContract 未設定のワークフローが大半のため、クロージャ呼び出し自体を
     // 避ける早期リターンは維持する（OptionsBuilder 側でも undefined を返すが、
     // 呼び出しコストを避けたい）。
+    const intakeNormalizeActive = this.deps.stepExecutor.isFindingIntakeNormalizeActive?.() === true;
+    const reviewerMode = intakeNormalizeActive ? 'freeform' : 'structured';
     const findingContractContext = this.deps.findingContract
-      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(step, true)
+      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(step, reviewerMode)
       : undefined;
-    const rawFindingsStructuredOutput = findingContractContext?.rawFindingsStructuredOutput;
+    const rawFindingsStructuredOutput = findingContractContext?.reviewer?.mode === 'structured'
+      ? findingContractContext.reviewer.rawFindingsStructuredOutput
+      : undefined;
     const agentSubSteps = subSteps.filter(isAgentParallelSubStep);
     const routingLedger = this.deps.engineOptions.autoRouting && agentSubSteps.length > 0
       ? this.deps.findingLedgerStore?.loadLedger()
@@ -322,7 +326,7 @@ export class ParallelRunner {
             throw new Error(`Unsupported parallel sub-step kind for "${subStep.name}"`);
           }
 
-          const executableSubStep = findingContractContext
+          const executableSubStep = findingContractContext?.reviewer?.mode === 'structured'
             ? withFindingContractStructuredOutput(subStep, findingContractContext)
             : subStep;
           const subRuntime = routedProviderInfoByStep.has(subStep.name)
@@ -488,40 +492,74 @@ export class ParallelRunner {
             );
           }
         }
-        if (findingContractContext !== undefined) {
-          let normalized = this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
-            executableSubStep,
-            subResponse,
-            subRuntime,
+        if (intakeNormalizeActive) {
+          if (!didEmitPhaseStart) {
+            throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
+          }
+          if (subResponse.sessionId !== undefined) {
+            updatePersonaSession(subSessionKey, subResponse.sessionId);
+          }
+          this.deps.onPhaseComplete?.(
+            subStep,
+            1,
+            'execute',
+            subResponse.content,
+            subResponse.status,
+            subResponse.error,
+            phase1CompletionExecutionId,
+            parentIteration,
           );
+          if (
+            subResponse.status === 'done'
+            && subResponse.structuredOutput === undefined
+            && subResponse.content.trim().length === 0
+          ) {
+            log.info('Phase 1 returned empty output for parallel sub-step, treating as error', { step: subStep.name });
+            subResponse = { ...subResponse, status: 'error', error: 'Phase 1 returned empty output' };
+          }
+        }
+        if (findingContractContext !== undefined) {
+          let normalized = intakeNormalizeActive && subResponse.status === 'done'
+            ? await this.deps.stepExecutor.normalizeFindingIntakeReport(
+                subStep,
+                subResponse,
+                parentIteration,
+              )
+            : this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
+                executableSubStep,
+                subResponse,
+                subRuntime,
+              );
           if (normalized.invalidKind === 'model_output') {
             log.info('Structured output invalid for parallel sub-step, requesting one correction', {
               step: subStep.name,
               detail: normalized.invalidDetail,
             });
           }
-          normalized = await correctStructuredOutputOnce({
-            stepName: subStep.name,
-            initial: normalized,
-            executeCorrection: (correctionInstruction, sessionId) => this.executeSubStepAgent(
-              executableSubStep,
-              subPm,
-              correctionInstruction,
-              {
-                ...agentOptions,
-                permissionMode: 'readonly',
-                allowedTools: [],
-                onPromptResolved: undefined,
-                onStream: undefined,
-                sessionId,
-              },
-            ),
-            normalize: (candidate) => this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
-              executableSubStep,
-              candidate,
-              subRuntime,
-            ),
-          });
+          if (!intakeNormalizeActive) {
+            normalized = await correctStructuredOutputOnce({
+              stepName: subStep.name,
+              initial: normalized,
+              executeCorrection: (correctionInstruction, sessionId) => this.executeSubStepAgent(
+                executableSubStep,
+                subPm,
+                correctionInstruction,
+                {
+                  ...agentOptions,
+                  permissionMode: 'readonly',
+                  allowedTools: [],
+                  onPromptResolved: undefined,
+                  onStream: undefined,
+                  sessionId,
+                },
+              ),
+              normalize: (candidate) => this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
+                executableSubStep,
+                candidate,
+                subRuntime,
+              ),
+            });
+          }
           if (normalized.invalidDetail !== undefined) {
             const provider = this.deps.optionsBuilder.resolveStepProviderModel(executableSubStep, subRuntime).provider;
             throw new Error(
@@ -535,7 +573,11 @@ export class ParallelRunner {
           // 直らなかった raw は drop せず ambiguous のまま manager 解釈 /
           // provisional へ進む。clarification は engine 発行の taint 根拠として
           // manager-runner の canonicalization に渡す。
-          if (subResponse.status === 'done' && this.deps.findingLedgerStore) {
+          if (
+            !intakeNormalizeActive
+            && subResponse.status === 'done'
+            && this.deps.findingLedgerStore
+          ) {
             const clarified = await clarifyAmbiguousRawRelationsOnce({
               stepName: subStep.name,
               persona: executableSubStep.persona,
@@ -554,13 +596,15 @@ export class ParallelRunner {
             subRelationClarification = clarified.clarification;
           }
         }
-        if (!didEmitPhaseStart) {
-          throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
+        if (!intakeNormalizeActive) {
+          if (!didEmitPhaseStart) {
+            throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
+          }
+          if (subResponse.sessionId !== undefined) {
+            updatePersonaSession(subSessionKey, subResponse.sessionId);
+          }
+          this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phase1CompletionExecutionId, parentIteration);
         }
-        if (subResponse.sessionId !== undefined) {
-          updatePersonaSession(subSessionKey, subResponse.sessionId);
-        }
-        this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phase1CompletionExecutionId, parentIteration);
         if (
           subResponse.status === 'done'
           && subResponse.structuredOutput === undefined

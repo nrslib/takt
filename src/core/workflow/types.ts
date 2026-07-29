@@ -16,6 +16,7 @@ import type {
 } from '../models/types.js';
 import type {
   AutoRoutingConfig,
+  FindingIntakeNormalizeConfig,
   AutoRoutingStrategy,
   PersonaProviderEntry,
   ProviderRoutingConfig,
@@ -417,6 +418,8 @@ export interface WorkflowEngineOptions {
   providerOptions?: StepProviderOptions;
   /** Resolved automatic provider/model routing configuration */
   autoRouting?: AutoRoutingConfig;
+  /** Opt-in reviewer report extraction for effective Finding Contract workflows. */
+  intakeNormalize?: FindingIntakeNormalizeConfig;
   /** Run-scoped strategy override for automatic provider/model routing. */
   autoStrategyOverride?: AutoRoutingStrategy;
   onEffectiveAutoRoutingReached?: () => void;

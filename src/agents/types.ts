@@ -11,6 +11,7 @@ import type {
   ProviderPermissionProfiles,
 } from '../core/models/index.js';
 import type { ProviderType } from '../shared/types/provider.js';
+import type { ProviderExecutionProfile } from '../infra/providers/types.js';
 
 export type { StreamCallback };
 
@@ -30,6 +31,7 @@ export interface WorkflowMeta {
 /** Common options for running agents */
 export interface RunAgentOptions {
   cwd: string;
+  executionProfile?: ProviderExecutionProfile;
   projectCwd?: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
@@ -48,6 +50,8 @@ export interface RunAgentOptions {
     providerProfiles?: ProviderPermissionProfiles;
   };
   providerOptions?: StepProviderOptions;
+  /** Fully resolved provider options; bypasses project/global/persona option inheritance. */
+  resolvedProviderOptions?: StepProviderOptions | null;
   onStream?: StreamCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;

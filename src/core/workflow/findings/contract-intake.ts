@@ -13,7 +13,6 @@ import type {
   FindingContractConfig,
   WorkflowConfig,
   WorkflowStep,
-  WorkflowStructuredOutput,
 } from '../../models/types.js';
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
@@ -128,12 +127,12 @@ export async function ingestFindingContractResults(
 function assertReviewerStructuredOutputContext(
   context: FindingContractInstructionContext | undefined,
 ): asserts context is FindingContractInstructionContext & {
-  rawFindingsStructuredOutput: WorkflowStructuredOutput;
-  reviewScopeSnapshotId: string;
+  reviewer: Extract<NonNullable<FindingContractInstructionContext['reviewer']>, { mode: 'structured' }>;
 } {
-  const structuredOutput = context?.rawFindingsStructuredOutput;
-  const reviewScopeSnapshotId = context?.reviewScopeSnapshotId;
-  if (!structuredOutput || !reviewScopeSnapshotId) {
+  if (
+    context?.reviewer?.mode !== 'structured'
+    || context.reviewer.reviewScopeSnapshotId.length === 0
+  ) {
     throw new Error('Finding contract reviewer context requires raw findings structured output and reviewScopeSnapshotId');
   }
 }
@@ -149,7 +148,7 @@ export function withFindingContractStructuredOutput(
   context: FindingContractInstructionContext | undefined,
 ): AgentWorkflowStep {
   assertReviewerStructuredOutputContext(context);
-  const structuredOutput = context.rawFindingsStructuredOutput;
+  const structuredOutput = context.reviewer.rawFindingsStructuredOutput;
   if (step.structuredOutput) {
     throw new Error(`Step "${step.name}" cannot combine finding_contract raw findings with structured_output`);
   }

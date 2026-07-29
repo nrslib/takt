@@ -19,6 +19,7 @@ import type {
   WorkflowConfig,
   WorkflowResumePointEntry,
 } from '../../models/types.js';
+import type { FindingIntakeNormalizeConfig } from '../../models/config-types.js';
 import type {
   PhaseName,
   PhasePromptParts,
@@ -54,6 +55,7 @@ import { providerSupportsStructuredOutput } from '../../../infra/providers/provi
 import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { buildStructuredJsonSchemaInstruction } from '../../../shared/prompts/index.js';
+import { buildFindingIntakeExtractionPrompt } from '../../../shared/prompts/finding-intake-extraction.js';
 import type {
   StructuredOutputFailureReason,
   StructuredOutputNormalizerRegistry,
@@ -66,6 +68,7 @@ import type {
 import { compactSessionBeforePhase1 } from './session-compaction.js';
 import type { FindingLedgerStore } from '../findings/store.js';
 import type { FindingManagerRunResult } from '../findings/manager-runner.js';
+import { createRawFindingsStructuredOutput } from '../findings/manager-runner.js';
 import {
   ingestFindingContractResults,
   resolveFindingContractIntakeStep,
@@ -109,6 +112,8 @@ export interface StepExecutorDeps {
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly structuredCaller: StructuredCaller;
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
+  readonly intakeNormalize?: FindingIntakeNormalizeConfig;
+  readonly abortSignal?: AbortSignal;
   /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
   readonly findingContract?: FindingContractConfig;
   /** findings-manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
@@ -204,7 +209,7 @@ export class StepExecutor {
     }
     return this.deps.optionsBuilder.buildFindingContractInstructionContext?.(
       step,
-      false,
+      undefined,
     );
   }
 
@@ -370,10 +375,14 @@ export class StepExecutor {
     runtime?: RuntimeStepResolution,
   ): PreparedNormalStepExecution {
     const findingContractIntakeStep = this.resolveFindingContractIntakeStep(step);
+    const reviewerMode = this.deps.intakeNormalize === undefined ? 'structured' : 'freeform';
     const findingContractContext = findingContractIntakeStep
-      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(findingContractIntakeStep, true)
+      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(
+          findingContractIntakeStep,
+          reviewerMode,
+        )
       : this.buildFindingContractInstructionContext(step, undefined);
-    const executableStep = findingContractIntakeStep
+    const executableStep = findingContractIntakeStep && reviewerMode === 'structured'
       ? withFindingContractStructuredOutput(
           findingContractIntakeStep,
           findingContractContext,
@@ -414,6 +423,161 @@ export class StepExecutor {
       success,
       usage,
     );
+  }
+
+  isFindingIntakeNormalizeActive(): boolean {
+    return this.deps.intakeNormalize !== undefined;
+  }
+
+  async normalizeFindingIntakeReport(
+    step: AgentWorkflowStep,
+    reviewerResponse: AgentResponse,
+    iteration: number,
+  ): Promise<StructuredOutputNormalizationResult> {
+    const config = this.deps.intakeNormalize;
+    if (config === undefined) {
+      throw new Error('Finding intake normalizer is not configured');
+    }
+
+    const normalizerStep: AgentWorkflowStep = {
+      name: `${step.name}:intake-normalize`,
+      personaDisplayName: 'Finding intake normalizer',
+      instruction: 'Normalize one reviewer report for Finding Contract intake.',
+      edit: false,
+      engineSynthesized: true,
+    };
+    const providerInfo = {
+      provider: config.provider,
+      model: config.model,
+      providerOptions: config.providerOptions,
+    };
+    const instruction = buildFindingIntakeExtractionPrompt(reviewerResponse.content);
+    const phaseExecutionId = buildPhaseExecutionId({
+      step: normalizerStep.name,
+      iteration,
+      phase: 1,
+      sequence: 1,
+    });
+    let resolvedPromptParts: PhasePromptParts | undefined;
+    let phaseStarted = false;
+    let phaseCompleted = false;
+    let normalizationSucceeded = false;
+    let normalizerResponse: AgentResponse | undefined;
+    let normalized: StructuredOutputNormalizationResult | undefined;
+    try {
+      resolvedPromptParts = {
+        systemPrompt: '',
+        userInstruction: instruction,
+      };
+      this.deps.onPhaseStart?.(
+        normalizerStep,
+        1,
+        'execute',
+        instruction,
+        resolvedPromptParts,
+        phaseExecutionId,
+        iteration,
+      );
+      phaseStarted = true;
+      normalizerResponse = await runWithPhaseSpan({
+        enabled: this.deps.observabilityEnabled?.() === true,
+        runId: this.deps.getObservabilityRunId?.(),
+        workflowName: this.deps.getWorkflowName(),
+        step: normalizerStep,
+        iteration,
+        phase: 1,
+        phaseName: 'execute',
+        instruction,
+        phaseExecutionId,
+        workflowStack: this.deps.getCurrentWorkflowStack?.(),
+        sanitizeText: this.deps.sanitizeObservabilityText,
+        providerInfo,
+        getPromptParts: () => resolvedPromptParts,
+      }, () => this.deps.structuredCaller.normalizeFindingIntake(
+        reviewerResponse.content,
+        {
+          provider: config.provider,
+          model: config.model,
+          providerOptions: config.providerOptions,
+          language: this.deps.getLanguage(),
+          abortSignal: this.deps.abortSignal,
+          onPromptResolved: (promptParts) => {
+            resolvedPromptParts = promptParts;
+          },
+        },
+      ), (result) => ({
+        status: result.status,
+        content: result.content,
+        error: result.error,
+        providerUsage: result.providerUsage,
+      }));
+      if (normalizerResponse.status !== 'done') {
+        throw new Error(
+          `Finding intake normalizer failed for step "${step.name}": ${
+            normalizerResponse.error ?? normalizerResponse.content
+          }`,
+        );
+      }
+      if (normalizerResponse.structuredOutput === undefined) {
+        throw new Error(`Finding intake normalizer returned no structured output for step "${step.name}"`);
+      }
+
+      normalized = this.normalizeStructuredOutputWithDiagnostics(
+        {
+          ...step,
+          structuredOutput: createRawFindingsStructuredOutput(),
+        },
+        {
+          ...reviewerResponse,
+          structuredOutput: normalizerResponse.structuredOutput,
+        },
+        { providerInfo },
+      );
+      if (normalized.invalidDetail !== undefined) {
+        throw new Error(
+          `Finding intake normalizer returned invalid structured output for step "${step.name}": ${
+            normalized.invalidDetail
+          }`,
+        );
+      }
+      this.deps.onPhaseComplete?.(
+        normalizerStep,
+        1,
+        'execute',
+        normalizerResponse.content,
+        normalizerResponse.status,
+        normalizerResponse.error,
+        phaseExecutionId,
+        iteration,
+      );
+      phaseCompleted = true;
+      normalizationSucceeded = true;
+    } catch (error) {
+      if (phaseStarted && !phaseCompleted) {
+        this.deps.onPhaseComplete?.(
+          normalizerStep,
+          1,
+          'execute',
+          normalizerResponse?.content ?? '',
+          'error',
+          getErrorMessage(error),
+          phaseExecutionId,
+          iteration,
+        );
+      }
+      throw error;
+    } finally {
+      this.deps.recordSynthesizedAgentUsage(
+        normalizerStep.name,
+        providerInfo,
+        normalizationSucceeded,
+        normalizerResponse?.providerUsage,
+      );
+    }
+    if (normalized === undefined) {
+      throw new Error(`Finding intake normalizer produced no normalization result for step "${step.name}"`);
+    }
+    return normalized;
   }
 
   normalizeStructuredOutput(
@@ -786,12 +950,19 @@ export class StepExecutor {
       if (preparedExecution.findingContractContext === undefined) {
         throw new Error(`Prepared reviewer step "${step.name}" is missing finding contract context`);
       }
-      const structuredOutput = preparedExecution.findingContractContext.rawFindingsStructuredOutput;
-      if (structuredOutput === undefined) {
-        throw new Error(`Prepared reviewer step "${step.name}" is missing raw findings structured output`);
+      const reviewer = preparedExecution.findingContractContext.reviewer;
+      if (reviewer === undefined) {
+        throw new Error(`Prepared reviewer step "${step.name}" is missing reviewer context`);
       }
-      if (preparedExecution.executableStep.structuredOutput !== structuredOutput) {
-        throw new Error(`Prepared reviewer step "${step.name}" has mismatched structured output`);
+      if (reviewer.mode === 'structured') {
+        if (
+          preparedExecution.executableStep.structuredOutput
+          !== reviewer.rawFindingsStructuredOutput
+        ) {
+          throw new Error(`Prepared reviewer step "${step.name}" has mismatched structured output`);
+        }
+      } else if (preparedExecution.executableStep.structuredOutput !== undefined) {
+        throw new Error(`Prepared free-form reviewer step "${step.name}" must not require structured output`);
       }
     }
     const findingContractContext = preparedExecution?.findingContractContext;
@@ -873,18 +1044,56 @@ export class StepExecutor {
       error: result.error,
       providerUsage: result.providerUsage,
     }));
-    let normalizedPhase1 = this.normalizeStructuredOutputWithDiagnostics(
-      executableStep,
-      response,
-      runtime,
-    );
-    if (findingContractIntakeStep !== undefined && normalizedPhase1.invalidKind === 'model_output') {
+    const intakeNormalizeActive = findingContractIntakeStep !== undefined
+      && this.deps.intakeNormalize !== undefined;
+    if (intakeNormalizeActive) {
+      if (!didEmitPhaseStart) {
+        throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
+      }
+      if (response.sessionId !== undefined) {
+        updatePersonaSession(sessionKey, response.sessionId);
+      }
+      this.deps.onPhaseComplete?.(
+        step,
+        1,
+        'execute',
+        response.content,
+        response.status,
+        response.error,
+        phaseExecutionId,
+        state.iteration,
+      );
+      if (
+        response.status === 'done'
+        && response.structuredOutput === undefined
+        && response.content.trim().length === 0
+      ) {
+        log.info('Phase 1 returned empty output, treating as error', { step: step.name });
+        response = { ...response, status: 'error', error: 'Phase 1 returned empty output' };
+      }
+    }
+    let normalizedPhase1 = intakeNormalizeActive && response.status === 'done'
+      ? await this.normalizeFindingIntakeReport(
+          findingContractIntakeStep,
+          response,
+          state.iteration,
+        )
+      : this.normalizeStructuredOutputWithDiagnostics(
+          executableStep,
+          response,
+          runtime,
+        );
+    if (
+      !intakeNormalizeActive
+      && findingContractIntakeStep !== undefined
+      && normalizedPhase1.invalidKind === 'model_output'
+    ) {
       log.info('Structured output invalid for step, requesting one correction', {
         step: step.name,
         detail: normalizedPhase1.invalidDetail,
       });
     }
-    if (findingContractIntakeStep !== undefined) {
+    if (findingContractIntakeStep !== undefined && !intakeNormalizeActive) {
       normalizedPhase1 = await correctStructuredOutputOnce({
         stepName: executableStep.name,
         initial: normalizedPhase1,
@@ -915,13 +1124,15 @@ export class StepExecutor {
     }
     response = normalizedPhase1.response;
     let reviewerRawResourceEnvelope = normalizedPhase1.reviewerRawResourceEnvelope;
-    if (!didEmitPhaseStart) {
-      throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
+    if (!intakeNormalizeActive) {
+      if (!didEmitPhaseStart) {
+        throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
+      }
+      if (response.sessionId !== undefined) {
+        updatePersonaSession(sessionKey, response.sessionId);
+      }
+      this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error, phaseExecutionId, state.iteration);
     }
-    if (response.sessionId !== undefined) {
-      updatePersonaSession(sessionKey, response.sessionId);
-    }
-    this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error, phaseExecutionId, state.iteration);
 
     // Empty output with done status is treated as an error to prevent
     // downstream phases from running with no content.
@@ -955,7 +1166,13 @@ export class StepExecutor {
     // 同名処理と同じ一般経路）。clarification は engine 発行の taint 根拠として
     // 取り込み（manager-runner の canonicalization）へ渡す。
     let relationClarification: ReviewerRelationClarification | undefined;
-    if (findingContractIntakeStep && findingContractContext && this.deps.findingLedgerStore && response.status === 'done') {
+    if (
+      !intakeNormalizeActive
+      && findingContractIntakeStep
+      && findingContractContext
+      && this.deps.findingLedgerStore
+      && response.status === 'done'
+    ) {
       const clarified = await clarifyAmbiguousRawRelationsOnce({
         stepName: step.name,
         persona: executableStep.persona,

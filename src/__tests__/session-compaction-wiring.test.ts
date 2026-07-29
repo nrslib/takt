@@ -312,8 +312,11 @@ describe('session compaction Phase 1 wiring', () => {
           hasOpenFindings: false,
           hasWaivedFindings: false,
           hasDismissedFindings: false,
-          rawFindingsStructuredOutput: createRawFindingsStructuredOutput(reviewScopeSnapshotId),
-          reviewScopeSnapshotId,
+          reviewer: {
+            mode: 'structured',
+            rawFindingsStructuredOutput: createRawFindingsStructuredOutput(reviewScopeSnapshotId),
+            reviewScopeSnapshotId,
+          },
         }),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
       } as unknown as StepExecutorDeps['optionsBuilder'],

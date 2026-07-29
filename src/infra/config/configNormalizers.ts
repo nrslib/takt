@@ -12,6 +12,7 @@ import type { ProviderPermissionProfiles } from '../../core/models/provider-prof
 import type {
   AssistantConfig,
   AutoRoutingConfig,
+  FindingIntakeNormalizeConfig,
   WorkflowOverrides,
   PersonaProviderEntry,
   PipelineConfig,
@@ -27,6 +28,13 @@ import {
   type ConfigProviderReference,
 } from './providerReference.js';
 import { normalizeProviderOptions, type NormalizeProviderOptionsOptions } from './providerOptions.js';
+
+type RawFindingIntakeNormalizeConfig = {
+  provider: ConfigProviderReference<FindingIntakeNormalizeConfig['provider']>;
+  model?: string;
+  targets?: string[];
+  provider_options?: Record<string, unknown>;
+};
 
 type RawProviderRoutingEntry = string | {
   type?: string;
@@ -104,6 +112,69 @@ function assertNormalizedProviderOptions(
   throw new Error(
     `Configuration error: ${path}.provider_options must include at least one provider-specific option`,
   );
+}
+
+export function normalizeFindingIntakeNormalize(
+  raw: RawFindingIntakeNormalizeConfig | undefined,
+  options: NormalizeProviderOptionsOptions = {},
+): FindingIntakeNormalizeConfig | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  const normalizedReference = normalizeConfigProviderReferenceDetailed(
+    raw.provider,
+    raw.model,
+    raw.provider_options,
+    {
+      ...options,
+      pathPrefix: 'intake_normalize.provider_options',
+    },
+  );
+  if (raw.provider_options !== undefined) {
+    assertNormalizedProviderOptions('intake_normalize', normalizedReference.providerOptions);
+  }
+  if (normalizedReference.provider === undefined) {
+    throw new Error("Configuration error: intake_normalize.provider is required");
+  }
+  if (normalizedReference.model === undefined || normalizedReference.model.trim() === '') {
+    throw new Error("Configuration error: intake_normalize.model is required");
+  }
+
+  return {
+    provider: normalizedReference.provider,
+    model: normalizedReference.model,
+    ...(raw.targets !== undefined ? { targets: [...raw.targets] } : {}),
+    ...(normalizedReference.providerOptions !== undefined
+      ? { providerOptions: normalizedReference.providerOptions }
+      : {}),
+  };
+}
+
+export function denormalizeFindingIntakeNormalize(
+  config: FindingIntakeNormalizeConfig | undefined,
+): Record<string, unknown> | undefined {
+  if (config === undefined) {
+    return undefined;
+  }
+  if (config.provider === undefined) {
+    throw new Error("Configuration error: intake_normalize.provider is required");
+  }
+  if (config.model === undefined || config.model.trim() === '') {
+    throw new Error("Configuration error: intake_normalize.model is required");
+  }
+
+  const providerOptions = denormalizeProviderOptions(config.providerOptions);
+  if (config.providerOptions !== undefined) {
+    assertNormalizedProviderOptions('intake_normalize', providerOptions);
+  }
+
+  return {
+    provider: config.provider,
+    model: config.model,
+    ...(config.targets !== undefined ? { targets: [...config.targets] } : {}),
+    ...(providerOptions !== undefined ? { provider_options: providerOptions } : {}),
+  };
 }
 
 export function normalizeRuntime(

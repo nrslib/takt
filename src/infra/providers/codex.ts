@@ -2,7 +2,12 @@
  * Codex provider implementation
  */
 
-import { callCodex, callCodexCustom, type CodexCallOptions } from '../codex/index.js';
+import {
+  callCodex,
+  callCodexCustom,
+  callCodexIsolatedStructured,
+  type CodexCallOptions,
+} from '../codex/index.js';
 import { resolveOpenaiApiKey, resolveCodexCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
@@ -34,6 +39,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
 export class CodexProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsNativeImageInput = true;
+  readonly supportsIsolatedStructuredExecution = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
@@ -45,18 +51,26 @@ export class CodexProvider implements Provider {
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;
+    const call = async (
+      prompt: string,
+      options: ProviderCallOptions,
+    ): Promise<AgentResponse> => {
+      const codexOptions = toCodexOptions(options);
+      if (options.executionProfile === 'isolated-structured') {
+        return callCodexIsolatedStructured(
+          name,
+          systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt,
+          codexOptions,
+        );
+      }
+      return systemPrompt
+        ? callCodexCustom(name, prompt, systemPrompt, codexOptions)
+        : callCodex(name, prompt, codexOptions);
+    };
     if (systemPrompt) {
-      return {
-        call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
-          return callCodexCustom(name, prompt, systemPrompt, toCodexOptions(options));
-        },
-      };
+      return { call };
     }
 
-    return {
-      call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
-        return callCodex(name, prompt, toCodexOptions(options));
-      },
-    };
+    return { call };
   }
 }

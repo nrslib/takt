@@ -72,6 +72,17 @@ export const ProviderRoutingSchema = z.object({
   steps: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
 }).strict().optional();
 
+export const FindingIntakeNormalizeConfigSchema = z.object({
+  provider: ProviderReferenceSchema,
+  model: z.string().trim().min(1).optional(),
+  targets: z.array(z.string().trim().min(1)).min(1)
+    .refine((targets) => new Set(targets).size === targets.length, {
+      message: 'intake_normalize.targets must not contain duplicates',
+    })
+    .optional(),
+  provider_options: StepProviderOptionsSchema,
+}).strict();
+
 /** Workflow category config schema (recursive) */
 export type WorkflowCategoryConfigNode = {
   workflows?: string[];
@@ -110,6 +121,7 @@ const ProjectConfigObjectBaseSchema = z.object({
   assistant: AssistantConfigSchema.optional(),
   persona_providers: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
   provider_routing: ProviderRoutingSchema,
+  intake_normalize: FindingIntakeNormalizeConfigSchema.optional(),
   branch_name_strategy: z.enum(['romaji', 'ai']).optional(),
   minimal_output: z.boolean().optional(),
   provider_options: StepProviderOptionsSchema,

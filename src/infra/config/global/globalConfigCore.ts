@@ -18,6 +18,7 @@ import {
   normalizeRateLimitFallback,
   normalizeAutoRoutingConfig,
   normalizeTelemetryConfig,
+  normalizeFindingIntakeNormalize,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -129,6 +130,14 @@ export class GlobalConfigManager {
       provider: normalizedProvider.provider,
       model: normalizedProvider.model,
       autoRouting: normalizeAutoRoutingConfig(parsed.auto_routing),
+      intakeNormalize: normalizeFindingIntakeNormalize(
+        parsed.intake_normalize as {
+          provider: ConfigProviderReference<ProviderType>;
+          model?: string;
+          targets?: string[];
+          provider_options?: Record<string, unknown>;
+        } | undefined,
+      ),
       logging: parsed.logging ? {
         level: parsed.logging.level,
         trace: parsed.logging.trace,

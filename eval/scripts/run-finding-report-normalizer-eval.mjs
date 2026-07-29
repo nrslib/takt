@@ -17,6 +17,10 @@ import Ajv from 'ajv';
 import {
   createRawFindingsOutputJsonSchema,
 } from '../../dist/core/models/finding-schemas.js';
+import {
+  buildFindingIntakeExtractionPrompt,
+  FINDING_INTAKE_EXTRACTION_PROMPT_TEMPLATE,
+} from '../../dist/shared/prompts/finding-intake-extraction.js';
 import { callClaudeCustom } from '../../dist/infra/claude/client.js';
 import {
   callOpenCodeCustom,
@@ -26,7 +30,6 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const evalDir = resolve(scriptDir, '..');
 const caseDir = join(evalDir, 'cases', 'finding-normalizer');
-const promptPath = join(caseDir, 'extraction-prompt.md');
 const catalogPath = join(caseDir, 'extraction-catalog.json');
 const scorerFixturePath = join(caseDir, 'scorer-adversarial.json');
 const workDir = join(evalDir, '.work', 'finding-report-normalizer');
@@ -272,16 +275,10 @@ const invocations = selectedCases.flatMap((testCase) => {
   return reports.map((report) => ({ testCase, report }));
 });
 
-const promptTemplate = readFileSync(promptPath, 'utf8');
-if (
-  !promptTemplate.includes('{{REPORT}}')
-  || promptTemplate.indexOf('{{REPORT}}') !== promptTemplate.lastIndexOf('{{REPORT}}')
-) {
-  throw new Error('Normalizer prompt must contain exactly one {{REPORT}} token');
-}
+const promptTemplate = FINDING_INTAKE_EXTRACTION_PROMPT_TEMPLATE;
 
 function buildPrompt(report) {
-  return promptTemplate.replace('{{REPORT}}', report.content);
+  return buildFindingIntakeExtractionPrompt(report.content);
 }
 
 function createTimeoutError(wallClockTimeoutMs) {
@@ -1157,7 +1154,7 @@ const summary = {
       toolUseAccounting: 'explicit empty allowedTools boundary',
     },
   },
-  promptSource: 'eval/cases/finding-normalizer/extraction-prompt.md',
+  promptSource: 'src/shared/prompts/finding-intake-extraction.ts',
   promptTemplateSha256: sha256(promptTemplate),
   promptArtifactPassCondition: (
     'stored invocation prompt SHA-256 matches the current rendered prompt'

@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { CapabilityAwareStructuredCaller } from '../../../agents/structured-caller.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
-import type { ResolvedObservabilityConfig } from '../../../core/models/config-types.js';
+import type {
+  FindingIntakeNormalizeConfig,
+  ResolvedObservabilityConfig,
+} from '../../../core/models/config-types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
 import { OperationRecoveryError } from '../../../core/workflow/operations/operation-recovery-error.js';
@@ -91,6 +94,7 @@ export interface WorkflowExecutionBootstrap {
   configuredModel: string | undefined;
   configuredModelSource: ProviderResolutionSource;
   effectiveWorkflowConfig: WorkflowConfig;
+  intakeNormalize?: FindingIntakeNormalizeConfig;
   autoStrategyOverride: WorkflowExecutionOptions['autoStrategy'];
   onEffectiveAutoRoutingReached: () => void;
   warnIfAutoStrategyUnused: () => void;
@@ -259,6 +263,7 @@ export async function createWorkflowExecutionBootstrap(
     'telemetry',
     'observability',
     'autoRouting',
+    'intakeNormalize',
   ]);
   const traceReportMode = globalConfig.logging?.trace === true ? 'full' : 'redacted';
   const allowSensitiveData = traceReportMode === 'full';
@@ -459,6 +464,7 @@ export async function createWorkflowExecutionBootstrap(
     configuredModel,
     configuredModelSource,
     effectiveWorkflowConfig,
+    intakeNormalize: globalConfig.intakeNormalize,
     autoStrategyOverride,
     onEffectiveAutoRoutingReached,
     warnIfAutoStrategyUnused,

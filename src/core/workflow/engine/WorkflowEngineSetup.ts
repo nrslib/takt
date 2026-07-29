@@ -38,7 +38,11 @@ import {
 } from '../findings/context.js';
 import { renderLoopMonitorFindingsSummary } from '../findings/loop-monitor-summary.js';
 import { computeReviewScopeSnapshotId } from '../findings/snapshot.js';
-import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
+import type {
+  FindingContractInstructionContext,
+  FindingContractReviewerMode,
+} from '../instruction/instruction-context.js';
+import { resolveFindingIntakeNormalizeConfig } from '../findings/intake-normalize-policy.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 
 const log = createLogger('workflow-engine');
@@ -163,7 +167,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   );
   const buildFindingContractInstructionContext = (
     _step: WorkflowStep,
-    includeRawFindingsSchema: boolean,
+    reviewerMode: FindingContractReviewerMode | undefined,
   ): FindingContractInstructionContext | undefined => {
     if (!params.findingContract) {
       return undefined;
@@ -173,16 +177,16 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     }
 
     const ledger = params.findingLedgerStore.loadLedger();
-    let reviewerContext: Pick<
-      FindingContractInstructionContext,
-      'rawFindingsStructuredOutput' | 'reviewScopeSnapshotId'
-    > | undefined;
-    if (includeRawFindingsSchema) {
+    let reviewer: FindingContractInstructionContext['reviewer'];
+    if (reviewerMode !== undefined) {
       const reviewScopeSnapshotId = computeReviewScopeSnapshotId(params.getCwd());
-      reviewerContext = {
-        rawFindingsStructuredOutput: createRawFindingsStructuredOutput(),
-        reviewScopeSnapshotId,
-      };
+      reviewer = reviewerMode === 'structured'
+        ? {
+            mode: 'structured',
+            rawFindingsStructuredOutput: createRawFindingsStructuredOutput(),
+            reviewScopeSnapshotId,
+          }
+        : { mode: 'freeform', reviewScopeSnapshotId };
     }
     return {
       ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
@@ -190,7 +194,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       hasOpenFindings: ledgerHasOpenFindings(ledger),
       hasWaivedFindings: ledgerHasWaivedFindings(ledger),
       hasDismissedFindings: ledgerHasDismissedFindings(ledger),
-      ...reviewerContext,
+      ...(reviewer !== undefined ? { reviewer } : {}),
     };
   };
 
@@ -228,6 +232,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getCurrentWorkflowStack: params.getCurrentWorkflowStack,
     structuredCaller: params.structuredCaller,
     structuredOutputNormalizers: params.options.structuredOutputNormalizers,
+    intakeNormalize: resolveFindingIntakeNormalizeConfig(
+      params.options.intakeNormalize,
+      params.config.name,
+      params.findingContract,
+    ),
+    abortSignal: params.options.abortSignal,
     findingContract: params.findingContract,
     workflowProvider: params.config.provider,
     workflowModel: params.config.model,

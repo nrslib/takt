@@ -12,6 +12,7 @@ import type { Provider, ProviderType } from './types.js';
 export type {
   AgentSetup,
   ProviderCallOptions,
+  ProviderExecutionProfile,
   ProviderCompactSessionOptions,
   ProviderAgent,
   Provider,

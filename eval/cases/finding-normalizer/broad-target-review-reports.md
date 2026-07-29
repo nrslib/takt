@@ -63,3 +63,22 @@ return result;
 - **Severity:** `high`
 - **Location:** `src/worker/cleanup.ts`
 - **Issue:** The previously reported cleanup leak remains in the worker.
+
+---
+
+### Candidate report 7
+
+### Finding: Cleanup leak is fixed
+- **Relation:** `resolution_confirmation`
+- **Target Finding ID:** `F-0042`
+- **Severity:** `high`
+- **Location:** `src/worker/cleanup.ts:41-42`
+- **Issue:** The cleanup promise is now awaited before returning.
+- **Exact source quote:**
+```ts
+await cleanup();
+return result;
+```
+- **Evidence needed:** file quote
+
+The remaining code looks correct. **APPROVE**

@@ -22,8 +22,13 @@ export interface FindingContractInstructionInput {
 
 export function buildFindingContractInstruction(input: FindingContractInstructionInput): string {
   const { contract, language, renderFencedJsonBlock } = input;
-  const rawFindingsStructuredOutput = contract.rawFindingsStructuredOutput;
-  const isReviewer = rawFindingsStructuredOutput !== undefined;
+  const reviewer = contract.reviewer;
+  const isReviewer = reviewer !== undefined;
+  const structuredReviewer = reviewer?.mode === 'structured';
+  const freeformReviewer = reviewer?.mode === 'freeform';
+  const rawFindingsStructuredOutput = structuredReviewer
+    ? reviewer.rawFindingsStructuredOutput
+    : undefined;
 
   // review-integrity protocol: rawFindingsStructuredOutput と reviewScopeSnapshotId は同じ
   // includeRawFindingsSchema 条件下で必ずセットで生成される（WorkflowEngineSetup.ts
@@ -38,7 +43,13 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
   // おり、ここも唯一の発見場所として throw で止める。呼び出し側は
   // optionsBuilder.buildFindingContractInstructionContext(step, true) 経由で
   // context を組み立てる限りこの分岐に到達しない。
-  if (isReviewer && !contract.reviewScopeSnapshotId) {
+  if (
+    isReviewer
+    && (
+      typeof reviewer.reviewScopeSnapshotId !== 'string'
+      || reviewer.reviewScopeSnapshotId.length === 0
+    )
+  ) {
     throw new Error(
       'Finding contract reviewer instruction is missing reviewScopeSnapshotId even though '
       + 'rawFindingsStructuredOutput is present. This is a wiring bug in the caller that built the '
@@ -52,6 +63,8 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
   const rendered = loadTemplate('parts/finding_contract_instruction', language, {
     ledgerSummary: renderFencedJsonBlock(contract.ledgerSummary),
     isReviewer,
+    structuredReviewer,
+    freeformReviewer,
     reviewerHasOpenFindings: isReviewer && contract.hasOpenFindings,
     reviewerHasWaivedFindings: isReviewer && contract.hasWaivedFindings,
     reviewerHasDismissedFindings: isReviewer && contract.hasDismissedFindings,
@@ -61,7 +74,7 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
     // review-integrity protocol: reviewer step のときだけ設定される（instruction-context.ts
     // 参照）。空文字は「該当なし」— テンプレート側は isReviewer と一緒にしか
     // 出さない。
-    reviewScopeSnapshotId: contract.reviewScopeSnapshotId ?? '',
+    reviewScopeSnapshotId: reviewer?.reviewScopeSnapshotId ?? '',
     // 異議申告のガイドは open な指摘が存在するときだけ注入する。台帳が空の
     // 段階（初回 implement 等）では無意味であり、無関係なプロトコル文が
     // 弱いモデルのツール呼び出しを不安定化させることを実走で確認済み。

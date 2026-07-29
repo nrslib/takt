@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
-import type { WorkflowState } from '../core/models/types.js';
+import type { AgentResponse, WorkflowState } from '../core/models/types.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import {
   makeStep,
@@ -175,6 +175,243 @@ describe('StepExecutor', () => {
     );
   });
 
+  it('active normal reviewerをfree-formで実行し、reviewer phase確定後に独立normalizer phaseを取り込む', async () => {
+    const reviewerTimestamp = new Date('2026-07-29T01:00:00.000Z');
+    const reviewerResponse: AgentResponse = {
+      persona: 'reviewer',
+      status: 'done',
+      content: '## Finding\n- **Issue:** A concrete defect.',
+      sessionId: 'reviewer-session',
+      timestamp: reviewerTimestamp,
+    };
+    vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: 'reviewer system',
+        userInstruction: prompt,
+      });
+      return reviewerResponse;
+    });
+
+    const normalizeFindingIntake = vi.fn(async (_report, options) => {
+      options.onPromptResolved?.({
+        systemPrompt: 'normalizer system',
+        userInstruction: 'normalizer prompt',
+      });
+      return {
+        persona: 'default',
+        status: 'done' as const,
+        content: '{"rawFindings":[]}',
+        structuredOutput: { rawFindings: [] },
+        sessionId: 'discard-normalizer-session',
+        timestamp: new Date('2026-07-29T01:00:01.000Z'),
+      };
+    });
+    const onPhaseStart = vi.fn();
+    const onPhaseComplete = vi.fn();
+    const updatePersonaSession = vi.fn();
+    const recordSynthesizedAgentUsage = vi.fn();
+    const step = makeStep({
+      name: 'review',
+      persona: 'reviewer',
+      instruction: 'Review.',
+      outputContracts: [
+        { name: 'review.md', format: 'review', formatRef: 'review-finding-contract' },
+      ],
+    });
+    const findingContractContext = {
+      ledgerSummary: '{"findings":[]}',
+      reportLedgerSummary: '{"ids":[]}',
+      hasOpenFindings: false,
+      hasWaivedFindings: false,
+      hasDismissedFindings: false,
+      reviewer: {
+        mode: 'freeform' as const,
+        reviewScopeSnapshotId: 'snapshot-1',
+      },
+    };
+    const deps: StepExecutorDeps = {
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({}),
+        buildPhaseRunnerContext: vi.fn().mockReturnValue({
+          cwd,
+          reportDir: runPaths.reportsRel,
+          language: 'en',
+          lastResponse: reviewerResponse.content,
+          getSessionId: () => undefined,
+          resolveSessionKey: () => 'reviewer:mock',
+          buildResumeOptions: () => ({}),
+          buildNewSessionReportOptions: () => ({}),
+          buildFallbackReportOptions: () => undefined,
+          resolveReportFallbackProviderModel: () => undefined,
+          updatePersonaSession: vi.fn(),
+          resolveStepProviderModel: () => ({ provider: 'mock', model: 'reviewer-model' }),
+        }),
+        resolveStepProviderModel: vi.fn().mockReturnValue({
+          provider: 'claude',
+          model: 'sonnet',
+        }),
+        buildFindingContractInstructionContext: vi.fn().mockReturnValue(findingContractContext),
+      } as unknown as StepExecutorDeps['optionsBuilder'],
+      getCwd: () => cwd,
+      getProjectCwd: () => cwd,
+      getReportDir: () => '.takt/reports',
+      getRunPaths: () => runPaths,
+      getLanguage: () => 'en',
+      getInteractive: () => false,
+      getWorkflowSteps: () => [{ name: 'review' }],
+      getWorkflowName: () => 'test-workflow',
+      getTask: () => 'test task',
+      getCurrentWorkflowStack: () => [
+        makeWorkflowResumePointEntry({ step: 'review' }),
+      ],
+      getWorkflowDescription: () => undefined,
+      getRetryNote: () => undefined,
+      structuredCaller: {
+        normalizeFindingIntake,
+        evaluateCondition: vi.fn(),
+        judgeStatus: vi.fn(),
+        decomposeTask: vi.fn(),
+        requestMoreParts: vi.fn(),
+      } as unknown as StepExecutorDeps['structuredCaller'],
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+      intakeNormalize: {
+        provider: 'mock',
+        model: 'normalizer-model',
+      },
+      findingContract: {
+        ledgerPath: '.takt/findings/ledger.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'Reconcile.',
+          outputContract: 'Return JSON.',
+        },
+      },
+      findingLedgerStore: {} as StepExecutorDeps['findingLedgerStore'],
+      refreshFindingsState: vi.fn(),
+      emitEvent: vi.fn(),
+      recordSynthesizedAgentUsage,
+      getRunId: () => 'test-run',
+      getFindingCallNamespace: () => '',
+      onPhaseStart,
+      onPhaseComplete,
+    };
+    const executor = new StepExecutor(deps);
+    const state = makeState();
+    const prepared = executor.prepareNormalStepExecution(
+      step,
+      state,
+      'test task',
+      5,
+      1,
+    );
+
+    expect(prepared.executableStep.structuredOutput).toBeUndefined();
+    const result = await executor.runNormalStep(
+      step,
+      state,
+      'test task',
+      5,
+      updatePersonaSession,
+      undefined,
+      undefined,
+      prepared,
+    );
+
+    expect(normalizeFindingIntake).toHaveBeenCalledOnce();
+    expect(normalizeFindingIntake).toHaveBeenCalledWith(
+      reviewerResponse.content,
+      expect.objectContaining({
+        provider: 'mock',
+        model: 'normalizer-model',
+      }),
+    );
+    expect(result.response).toMatchObject({
+      content: reviewerResponse.content,
+      sessionId: reviewerResponse.sessionId,
+      timestamp: reviewerTimestamp,
+      structuredOutput: { rawFindings: [] },
+    });
+    expect(updatePersonaSession).toHaveBeenCalledWith(
+      expect.any(String),
+      'reviewer-session',
+    );
+    expect(onPhaseComplete.mock.calls.map(([phaseStep]) => phaseStep.name))
+      .toEqual(['review', 'review:intake-normalize']);
+    expect(onPhaseStart.mock.calls.map(([phaseStep]) => phaseStep.name))
+      .toEqual(['review', 'review:intake-normalize']);
+    expect(recordSynthesizedAgentUsage).toHaveBeenCalledWith(
+      'review:intake-normalize',
+      expect.objectContaining({ provider: 'mock', model: 'normalizer-model' }),
+      true,
+      undefined,
+    );
+    expect(ingestFindingContractResults).toHaveBeenCalledOnce();
+  });
+
+  it('normalizerがprompt callback前にfail-fastしても合成phaseのstart/error/usageを記録する', async () => {
+    const onPhaseStart = vi.fn();
+    const onPhaseComplete = vi.fn();
+    const recordSynthesizedAgentUsage = vi.fn();
+    const executor = new StepExecutor({
+      structuredCaller: {
+        normalizeFindingIntake: vi.fn(async () => {
+          throw new Error('normalizer failed');
+        }),
+      },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+      intakeNormalize: { provider: 'mock', model: 'normalizer-model' },
+      getLanguage: () => 'en',
+      getWorkflowName: () => 'test-workflow',
+      observabilityEnabled: () => false,
+      recordSynthesizedAgentUsage,
+      onPhaseStart,
+      onPhaseComplete,
+    } as unknown as StepExecutorDeps);
+    const step = makeStep({
+      name: 'review',
+      persona: 'reviewer',
+      instruction: 'Review.',
+    });
+
+    await expect(executor.normalizeFindingIntakeReport(step, {
+      persona: 'reviewer',
+      status: 'done',
+      content: 'Review report.',
+      timestamp: new Date('2026-07-29T00:00:00.000Z'),
+    }, 3)).rejects.toThrow('normalizer failed');
+
+    expect(onPhaseStart).toHaveBeenCalledOnce();
+    expect(onPhaseStart).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'review:intake-normalize' }),
+      1,
+      'execute',
+      expect.stringContaining('Review report.'),
+      expect.objectContaining({
+        systemPrompt: '',
+        userInstruction: expect.stringContaining('Review report.'),
+      }),
+      'review:intake-normalize:3:1:1',
+      3,
+    );
+    expect(onPhaseComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'review:intake-normalize' }),
+      1,
+      'execute',
+      '',
+      'error',
+      'normalizer failed',
+      'review:intake-normalize:3:1:1',
+      3,
+    );
+    expect(recordSynthesizedAgentUsage).toHaveBeenCalledWith(
+      'review:intake-normalize',
+      expect.objectContaining({ provider: 'mock', model: 'normalizer-model' }),
+      false,
+      undefined,
+    );
+  });
+
   it('単独 reviewer は snapshot A/B 不一致を拒否し、non-open confirmation の意味を変えず audit-only で取り込む', async () => {
     mkdirSync(join(cwd, 'src'), { recursive: true });
     writeFileSync(join(cwd, 'src/fixed.ts'), 'const fixed = true;\n');
@@ -209,8 +446,11 @@ describe('StepExecutor', () => {
       hasOpenFindings: false,
       hasWaivedFindings: false,
       hasDismissedFindings: false,
-      rawFindingsStructuredOutput: structuredOutput,
-      reviewScopeSnapshotId: evidence.snapshotId,
+      reviewer: {
+        mode: 'structured',
+        rawFindingsStructuredOutput: structuredOutput,
+        reviewScopeSnapshotId: evidence.snapshotId,
+      },
     };
     let agentCallCount = 0;
     vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
@@ -346,7 +586,10 @@ describe('StepExecutor', () => {
 
     buildFindingContractInstructionContext.mockReturnValueOnce({
       ...findingContractContext,
-      reviewScopeSnapshotId: 'prompt-snapshot-B',
+      reviewer: {
+        ...findingContractContext.reviewer!,
+        reviewScopeSnapshotId: 'prompt-snapshot-B',
+      },
     });
     const mismatchedPreparedExecution = executor.prepareNormalStepExecution(
       step,
@@ -355,7 +598,7 @@ describe('StepExecutor', () => {
       5,
       1,
     );
-    expect(mismatchedPreparedExecution.findingContractContext?.reviewScopeSnapshotId)
+    expect(mismatchedPreparedExecution.findingContractContext?.reviewer?.reviewScopeSnapshotId)
       .toBe('prompt-snapshot-B');
 
     await expect(executor.runNormalStep(
@@ -389,10 +632,10 @@ describe('StepExecutor', () => {
       preparedExecutionWithoutFindingContractContext,
     )).rejects.toThrow(`Prepared reviewer step "${step.name}" is missing finding contract context`);
 
-    const {
-      rawFindingsStructuredOutput: _rawFindingsStructuredOutput,
-      ...findingContractContextWithoutStructuredOutput
-    } = findingContractContext;
+    const findingContractContextWithoutStructuredOutput = {
+      ...findingContractContext,
+      reviewer: undefined,
+    };
     await expect(executor.runNormalStep(
       step,
       state,
@@ -405,7 +648,7 @@ describe('StepExecutor', () => {
         ...preparedExecution,
         findingContractContext: findingContractContextWithoutStructuredOutput,
       },
-    )).rejects.toThrow(`Prepared reviewer step "${step.name}" is missing raw findings structured output`);
+    )).rejects.toThrow(`Prepared reviewer step "${step.name}" is missing reviewer context`);
 
     await expect(executor.runNormalStep(
       step,
@@ -439,7 +682,7 @@ describe('StepExecutor', () => {
       preparedExecution,
     );
 
-    expect(buildFindingContractInstructionContext).toHaveBeenCalledWith(step, true);
+    expect(buildFindingContractInstructionContext).toHaveBeenCalledWith(step, 'structured');
     expect(buildAgentOptions).toHaveBeenCalledWith(expect.objectContaining({
       structuredOutput,
     }), undefined);
