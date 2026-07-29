@@ -1,12 +1,14 @@
-import type { FindingLedger, FindingManagerOutput } from './types.js';
+import type { FindingLedger, FindingManagerOutput, RawFinding } from './types.js';
 import {
   compareRawAdjudicationCandidates,
   type RawAdjudicationCandidate,
 } from './raw-adjudication-priority.js';
+import { isProvisionalPromotionSource } from './provisional-promotion-eligibility.js';
 
 export interface ProvisionalReplayOrigin {
   provisionalFindingId: string;
   expectedProvisionalRevision: number;
+  expectedTargetIdentityHash: string | null;
 }
 
 function mergeMatch(
@@ -33,6 +35,8 @@ export function applyReplayOriginSettlement(input: {
   output: FindingManagerOutput;
   origins: ReadonlyMap<string, ProvisionalReplayOrigin>;
   freshLedger: FindingLedger;
+  cleanRawIds: ReadonlySet<string>;
+  wireById: ReadonlyMap<string, RawFinding>;
 }): {
   output: FindingManagerOutput;
   promotedFindingIds: Set<string>;
@@ -46,22 +50,31 @@ export function applyReplayOriginSettlement(input: {
       ))
       .map((finding) => [finding.id, finding]),
   );
-  const eligibleOrigins = new Map([...input.origins].filter(([, origin]) => {
+  const eligibleOrigins = new Map([...input.origins].filter(([rawFindingId, origin]) => {
     const process = eligibleProcessesById.get(origin.provisionalFindingId);
+    const wire = input.wireById.get(rawFindingId);
     return process !== undefined
-      && process.revision === origin.expectedProvisionalRevision;
+      && process.revision === origin.expectedProvisionalRevision
+      && process.targetIdentityHash === origin.expectedTargetIdentityHash
+      && input.cleanRawIds.has(rawFindingId)
+      && wire !== undefined
+      && isProvisionalPromotionSource({
+        ledger: input.freshLedger,
+        provisional: process,
+        wire,
+      });
   }));
   let matches = input.output.matches.map((match) => ({ ...match, rawFindingIds: [...match.rawFindingIds] }));
   let promotedFindingIds = new Set<string>();
   let resolvedByMapping = new Map<string, string>();
   let settledReplayRawIds = new Set<string>();
-  const newFindings = input.output.newFindings.filter((group) => {
+  const newFindings = input.output.newFindings.flatMap((group) => {
     const replayOrigins = group.rawFindingIds.flatMap((rawFindingId) => {
       const origin = eligibleOrigins.get(rawFindingId);
       return origin === undefined ? [] : [[rawFindingId, origin] as const];
     });
     if (replayOrigins.length === 0) {
-      return true;
+      return [group];
     }
     const processIds = new Set(replayOrigins.map(([, origin]) => origin.provisionalFindingId));
     const canonicalProcess = [...processIds]
@@ -72,7 +85,15 @@ export function applyReplayOriginSettlement(input: {
       canonicalProcess.id,
       replayOrigins.map(([rawFindingId]) => rawFindingId),
     );
-    return false;
+    const promotedRawFindingIds = new Set(
+      replayOrigins.map(([rawFindingId]) => rawFindingId),
+    );
+    const retainedRawFindingIds = group.rawFindingIds.filter(
+      (rawFindingId) => !promotedRawFindingIds.has(rawFindingId),
+    );
+    return retainedRawFindingIds.length === 0
+      ? []
+      : [{ ...group, rawFindingIds: retainedRawFindingIds }];
   });
   for (const match of matches) {
     for (const rawFindingId of match.rawFindingIds) {

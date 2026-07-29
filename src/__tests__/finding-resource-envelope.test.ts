@@ -8,8 +8,9 @@ import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.
 import { RAW_FINDING_LIMITS } from '../core/workflow/findings/raw-finding-limits.js';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
+import { reviewerRawExtractionFixture } from './helpers/finding-lifecycle-fixture.js';
 
-const raw = {
+const raw = reviewerRawExtractionFixture({
   rawFindingId: 'raw-1',
   familyTag: 'bug',
   severity: 'high',
@@ -18,8 +19,10 @@ const raw = {
   suggestion: null,
   relation: 'new',
   targetFindingId: null,
+  target: { kind: 'code', paths: ['src/a.ts'] },
   evidence: [],
-};
+  rawExcerpt: 'Description',
+});
 
 const context = {
   workflowName: 'peer-review',
@@ -29,6 +32,12 @@ const context = {
   runId: 'run-1',
   reviewerStepName: 'reviewer',
   reviewerPersonaKey: 'reviewer',
+  reviewReport: raw.rawExcerpt,
+  issueEvidenceRequests: () => ({
+    evidence: [],
+    engineProofRecords: [],
+    coverageGaps: [],
+  }),
 };
 
 const ledger: FindingLedger = {
@@ -58,7 +67,7 @@ describe('reviewer raw resource envelope', () => {
       context,
       projected.resourceEnvelope,
     );
-    expect(candidates[0]?.sourceBytes).toBe(expectedItemBytes);
+    expect(candidates.candidates[0]?.sourceBytes).toBe(expectedItemBytes);
   });
 
   it('charges an unknown data property to the original reviewer byte budget', () => {
@@ -98,10 +107,20 @@ describe('reviewer raw resource envelope', () => {
       parentStepName: 'reviewers',
       stepIteration: 1,
       runId: 'run-1',
+      workflowTask: 'Review the project.',
+      cwd: process.cwd(),
+      scopeIdentity: '/test/finding-resource-envelope/ledger.json',
+      issuedAt: '2026-07-28T00:00:00.000Z',
+      reviewScopeSnapshot: {
+        reviewScopeSnapshotId: 'a'.repeat(64),
+        trackedDiff: undefined,
+        untrackedEvidence: [],
+        queryInventory: [],
+      },
     });
 
-    expect(intake.overflowSpecs).toHaveLength(1);
-    expect(intake.items).toHaveLength(1);
+    expect(intake.intakeProvisionalSpecs).toHaveLength(1);
+    expect(intake.items).toHaveLength(0);
     expect(intake.overflowReports[0]?.reason).toContain('per-reviewer limit');
   });
 });

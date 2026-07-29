@@ -41,6 +41,7 @@ export {
   parseFindingLedger,
   parseFindingManagerDecisions,
   parseFindingManagerOutput,
+  parseFindingManagerValidationReport,
   parseRawFindings,
   parseReviewerRawFindings,
   toAmbiguousInterpretation,

@@ -6,6 +6,11 @@ import type {
   FindingManagerOutput,
   RawFinding,
 } from '../core/workflow/findings/types.js';
+import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
+import {
+  canonicalRawFindingFixture,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   return {
@@ -34,7 +39,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
 }
 
 function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
-  return {
+  return canonicalRawFindingFixture({
     rawFindingId: 'raw-current',
     stepName: 'architecture-review',
     reviewer: 'architecture-review',
@@ -43,12 +48,16 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
     title: 'Current issue',
     description: 'The issue is present in the current review.',
     relation: 'new',
+    targetFindingId: null,
+    suggestion: null,
+    evidence: [],
     ...overrides,
-  };
+  });
 }
 
 function makeManagerOutput(overrides: Partial<FindingManagerOutput> = {}): FindingManagerOutput {
-  return {
+  const output: FindingManagerOutput = {
+    anchorAdjudications: [],
     matches: [],
     newFindings: [],
     resolvedFindings: [],
@@ -61,6 +70,79 @@ function makeManagerOutput(overrides: Partial<FindingManagerOutput> = {}): Findi
     duplicateFindings: [],
     dismissedFindings: [],
     ...overrides,
+  };
+  const decisionsByRawFindingId = new Map<string, Parameters<typeof createAnchorAdjudication>[0]>();
+  const register = (
+    rawFindingId: string,
+    decision: Parameters<typeof createAnchorAdjudication>[0],
+  ): void => {
+    if (!decisionsByRawFindingId.has(rawFindingId)) {
+      decisionsByRawFindingId.set(rawFindingId, decision);
+    }
+  };
+  for (const match of output.matches) {
+    for (const rawFindingId of match.rawFindingIds) {
+      register(rawFindingId, {
+        rawFindingId,
+        decision: 'same',
+        findingId: match.findingId,
+        anchorRelevance: 'not_applicable',
+        evidence: match.evidence ?? '',
+      });
+    }
+  }
+  for (const finding of output.newFindings) {
+    for (const rawFindingId of finding.rawFindingIds) {
+      register(rawFindingId, {
+        rawFindingId,
+        decision: 'new',
+        anchorRelevance: 'not_applicable',
+        evidence: finding.title,
+      });
+    }
+  }
+  for (const finding of output.resolvedFindings) {
+    for (const rawFindingId of finding.rawFindingIds) {
+      register(rawFindingId, {
+        rawFindingId,
+        decision: 'resolved',
+        findingId: finding.findingId,
+        anchorRelevance: 'not_applicable',
+        evidence: finding.evidence,
+      });
+    }
+  }
+  for (const finding of output.reopenedFindings) {
+    for (const rawFindingId of finding.rawFindingIds) {
+      register(rawFindingId, {
+        rawFindingId,
+        decision: 'reopened',
+        findingId: finding.findingId,
+        anchorRelevance: 'not_applicable',
+        evidence: finding.evidence,
+      });
+    }
+  }
+  for (const conflict of output.conflicts) {
+    const findingId = conflict.findingIds[0];
+    if (findingId === undefined) {
+      continue;
+    }
+    for (const rawFindingId of conflict.rawFindingIds) {
+      register(rawFindingId, {
+        rawFindingId,
+        decision: 'conflict',
+        findingId,
+        anchorRelevance: 'not_applicable',
+        evidence: conflict.description,
+      });
+    }
+  }
+  return {
+    ...output,
+    anchorAdjudications: [...decisionsByRawFindingId.values()].map(
+      createAnchorAdjudication,
+    ),
   };
 }
 
@@ -645,7 +727,10 @@ describe('validateFindingManagerOutput', () => {
 
     expect(result).toEqual({
       ok: false,
-      errors: ['Unknown raw finding id "raw-missing" in newFindings[0]'],
+      errors: [
+        'Anchor adjudication references unknown raw finding "raw-missing"',
+        'Unknown raw finding id "raw-missing" in newFindings[0]',
+      ],
     });
   });
 
@@ -890,7 +975,7 @@ describe('finding raw schemas', () => {
 
   it('should accept an explicit null targetFindingId for a new finding', () => {
     const parsed = parseReviewerRawFindings([
-      {
+      reviewerRawExtractionFixture({
         rawFindingId: 'raw-1',
         familyTag: 'bug',
         severity: 'low',
@@ -900,10 +985,10 @@ describe('finding raw schemas', () => {
         relation: 'new',
         targetFindingId: null,
         evidence: [],
-      },
+      }),
     ]);
 
-    expect(parsed[0]?.relation).toBe('new');
-    expect(parsed[0]?.targetFindingId).toBeNull();
+    expect(parsed[0]?.candidate.relation).toBe('new');
+    expect(parsed[0]?.candidate.targetFindingId).toBeNull();
   });
 });

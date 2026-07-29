@@ -33,7 +33,8 @@ vi.mock('../infra/providers/index.js', () => ({
   })),
 }));
 
-vi.mock('../core/workflow/findings/snapshot.js', () => ({
+vi.mock('../core/workflow/findings/snapshot.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../core/workflow/findings/snapshot.js')>(),
   computeReviewScopeSnapshotId: vi.fn(() => '1'.repeat(64)),
 }));
 
@@ -58,6 +59,8 @@ import type { WorkflowConfig } from '../core/models/index.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import { resolveFindingLedgerRoot } from '../core/workflow/findings/store.js';
+import { reviewerRawExtractionFixture } from './helpers/finding-lifecycle-fixture.js';
+import { initializeGitFixture } from './helpers/git-fixture.js';
 
 function createTestTmpDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'takt-review-integrity-'));
@@ -68,13 +71,14 @@ function createTestTmpDir(): string {
   mkdirSync(join(dir, '.takt', 'runs', 'test-report-dir', 'logs'), { recursive: true });
   mkdirSync(join(dir, 'src'), { recursive: true });
   writeFileSync(join(dir, 'src', 'a.ts'), Array.from({ length: 20 }, (_, i) => `// line ${i + 1}`).join('\n') + '\n');
+  initializeGitFixture(dir, ['src/a.ts']);
   return dir;
 }
 
 // A hallucinated finding: a fresh claim citing a file that does not exist, with no
 // verifiable evidence → the engine isolates it as a reviewer anomaly (never a
 // product finding). The reviewer re-emits the same raw every round.
-const HALLUCINATED_RAW = {
+const HALLUCINATED_RAW = reviewerRawExtractionFixture({
   rawFindingId: 'h-1',
   familyTag: 'security',
   severity: 'high',
@@ -91,7 +95,8 @@ const HALLUCINATED_RAW = {
     verbatimExcerpt: 'hallucinated source line',
     snapshotId: '1'.repeat(64),
   }],
-};
+  rawExcerpt: 'Review report body.',
+});
 
 function mockReviewerEmitsHallucination(): void {
   vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {

@@ -29,8 +29,13 @@ import type {
 } from '../core/workflow/findings/types.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
-import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.js';
+import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
 
 function makeFinding(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
@@ -88,7 +93,7 @@ function makeRaw(overrides: Partial<RawFinding> = {}): RawFinding {
   const match = /^(.*):(\d+)$/u.exec(location);
   const path = match?.[1] ?? location;
   const line = Number(match?.[2] ?? 1);
-  return {
+  return canonicalRawFindingFixture({
     rawFindingId: 'raw-1',
     stepName: 'arch-review',
     reviewer: 'arch-review',
@@ -99,6 +104,7 @@ function makeRaw(overrides: Partial<RawFinding> = {}): RawFinding {
     suggestion: null,
     relation: 'new',
     targetFindingId: null,
+    target: { kind: 'code', paths: [path] },
     evidence: [{
       kind: 'file_quote',
       path,
@@ -108,7 +114,53 @@ function makeRaw(overrides: Partial<RawFinding> = {}): RawFinding {
       snapshotId: '1'.repeat(64),
     }],
     ...currentOverrides,
-  };
+  });
+}
+
+function reviewerExtraction(
+  raw: Record<string, unknown>,
+  index: number,
+): ReturnType<typeof reviewerRawExtractionFixture> {
+  const finding = raw as Partial<RawFinding>;
+  return reviewerRawExtractionFixture({
+    rawFindingId: typeof finding.rawFindingId === 'string' ? finding.rawFindingId : null,
+    familyTag: typeof finding.familyTag === 'string' ? finding.familyTag : null,
+    severity: finding.severity ?? null,
+    title: typeof finding.title === 'string' ? finding.title : null,
+    description: typeof finding.description === 'string' ? finding.description : null,
+    suggestion: typeof finding.suggestion === 'string' ? finding.suggestion : null,
+    relation: finding.relation ?? 'new',
+    targetFindingId: typeof finding.targetFindingId === 'string'
+      ? finding.targetFindingId
+      : null,
+    target: finding.target,
+    evidence: finding.evidence,
+    rawExcerpt: `[item ${index}] ${finding.description ?? finding.title ?? 'observation'}`,
+  });
+}
+
+function reviewerCandidates(
+  items: readonly unknown[],
+  context: Record<string, unknown>,
+) {
+  const extractions = items.map((item, index) => (
+    reviewerExtraction(item as Record<string, unknown>, index)
+  ));
+  return createReviewerRawFindingCandidates(extractions, {
+    ...context,
+    reviewReport: extractions.map((item) => item.rawExcerpt).join('\n'),
+    issueEvidenceRequests: ({ requests }: {
+      requests: Array<Record<string, unknown>>;
+    }) => ({
+      evidence: requests.flatMap((request) => (
+        request.kind === 'file_quote'
+          ? [{ ...request, snapshotId: '1'.repeat(64) }]
+          : []
+      )),
+      engineProofRecords: [],
+      coverageGaps: [],
+    }),
+  } as never).candidates;
 }
 
 function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): FindingManagerDecisions {
@@ -337,6 +389,13 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
       freshLedger,
       rawFindings: [ladderRaw],
       managerOutput: outputWith({
+        anchorAdjudications: [createAnchorAdjudication({
+          rawFindingId: 'raw-ladder',
+          decision: 'conflict',
+          findingId: 'F-0001',
+          anchorRelevance: 'not_applicable',
+          evidence: 'Ladder evidence disagrees again.',
+        })],
         // manager は canonical conflict を resolve したが、ladder マージが同じ署名の
         // conflict（F-0001）を後着させた
         resolvedConflicts: [{ conflictId, evidence: 'adjudicated' }],
@@ -400,8 +459,8 @@ describe('assembleManagerOutput → 保存正規化 → reconciler（ラウン�
       residualRawFindings: persistsRaws,
       decisions: makeDecisions({
         rawDecisions: [
-          { rawFindingId: 'raw-6', decision: 'same', findingId: 'F-0006', evidence: '同一問題' },
-          { rawFindingId: 'raw-8', decision: 'same', findingId: 'F-0008', evidence: '同一問題' },
+          { rawFindingId: 'raw-6', decision: 'same', findingId: 'F-0006', anchorRelevance: 'not_applicable', evidence: '同一問題' },
+          { rawFindingId: 'raw-8', decision: 'same', findingId: 'F-0008', anchorRelevance: 'not_applicable', evidence: '同一問題' },
         ],
         duplicateDecisions: [
           { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006', 'F-0008'], evidence: '同一問題の言い換え' },
@@ -467,8 +526,8 @@ describe('assembleManagerOutput → 保存正規化 → reconciler（ラウン�
       residualRawFindings: persistsRaws,
       decisions: makeDecisions({
         rawDecisions: [
-          { rawFindingId: 'raw-6', decision: 'conflict', findingId: 'F-0006', evidence: '解消済みとの主張と矛盾' },
-          { rawFindingId: 'raw-8', decision: 'same', findingId: 'F-0008', evidence: '同一問題' },
+          { rawFindingId: 'raw-6', decision: 'conflict', findingId: 'F-0006', anchorRelevance: 'not_applicable', evidence: '解消済みとの主張と矛盾' },
+          { rawFindingId: 'raw-8', decision: 'same', findingId: 'F-0008', anchorRelevance: 'not_applicable', evidence: '同一問題' },
         ],
         duplicateDecisions: [
           { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006', 'F-0008'], evidence: '同一問題の言い換え' },
@@ -495,7 +554,7 @@ describe('invalidate と同ラウンド証拠の衝突', () => {
       previousLedger: ledger,
       residualRawFindings: [raw],
       decisions: makeDecisions({
-        rawDecisions: [{ rawFindingId: 'raw-1', decision: 'same', findingId: 'F-0001', evidence: '再観測' }],
+        rawDecisions: [{ rawFindingId: 'raw-1', decision: 'same', findingId: 'F-0001', anchorRelevance: 'not_applicable', evidence: '再観測' }],
         invalidateDecisions: [{ findingId: 'F-0001', evidence: 'location が現行コードに無い' }],
       }),
       checkMissingDecisions: true,
@@ -538,7 +597,7 @@ describe('carried conflict の部分重複', () => {
       previousLedger: ledger,
       residualRawFindings: [raw],
       decisions: makeDecisions({
-        rawDecisions: [{ rawFindingId: 'raw-1', decision: 'conflict', findingId: 'F-0001', evidence: '矛盾' }],
+        rawDecisions: [{ rawFindingId: 'raw-1', decision: 'conflict', findingId: 'F-0001', anchorRelevance: 'not_applicable', evidence: '矛盾' }],
       }),
       checkMissingDecisions: true,
       carriedFindingOnlyConflicts: [{
@@ -567,7 +626,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
   } as never;
 
   it('同一 reviewer 内の重複 ID を決定的にサフィックスして一意化する', () => {
-    const candidates = createReviewerRawFindingCandidates([
+    const candidates = reviewerCandidates([
       { rawFindingId: 'x', title: 'a', severity: 'low', description: 'a' },
       { rawFindingId: 'x', title: 'b', severity: 'low', description: 'b' },
       { rawFindingId: 'x-dup2', title: 'c', severity: 'low', description: 'c' },
@@ -598,7 +657,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
       relation: 'new',
     };
     const project = (items: readonly unknown[]) => {
-      const candidates = createReviewerRawFindingCandidates(items, context);
+      const candidates = reviewerCandidates(items, context);
       const rawFindings = candidates
         .map((candidate) => canonicalizeReviewerRawFinding(candidate, {
           ledger: makeLedger([]),
@@ -631,7 +690,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
       severity: 'low',
       description: 'same',
     };
-    const candidates = createReviewerRawFindingCandidates([
+    const candidates = reviewerCandidates([
       { ...item },
       { ...item },
     ], context);
@@ -644,7 +703,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
     // 明示 ID の改名は clarification の priorAmbiguityCodesByRawId 相関を壊し、
     // 訂正済み raw の taint（ambiguityOrigin）が外れて clean 権限を得てしまう。
     // ずれるのは常に内部採番の側でなければならない。
-    const candidates = createReviewerRawFindingCandidates([
+    const candidates = reviewerCandidates([
       { title: 'a', severity: 'low', description: 'a' },
       { rawFindingId: 'item-1', title: 'b', severity: 'low', description: 'b' },
     ], context);
@@ -656,7 +715,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
   });
 
   it('ID 未指定の項目は従来どおり reviewerRawFindingId を持たない', () => {
-    const candidates = createReviewerRawFindingCandidates([
+    const candidates = reviewerCandidates([
       { title: 'a', severity: 'low', description: 'a' },
       { title: 'b', severity: 'low', description: 'b' },
     ], context);
@@ -710,7 +769,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
       title: sharedValue,
       description: sharedValue,
     };
-    const validItem = {
+    const validItem = reviewerExtraction({
       rawFindingId: 'valid',
       relation: 'new',
       familyTag: 'bug',
@@ -725,7 +784,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
         verbatimExcerpt: 'valid evidence',
         snapshotId: '1'.repeat(64),
       }],
-    };
+    }, 99);
 
     const intake = intakeReviewerOutputs({
       subResults: [{
@@ -735,7 +794,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
         } as never,
         response: {
           status: 'done',
-          content: '',
+          content: String(validItem.rawExcerpt),
           structuredOutput: {
             rawFindings: [
               getterItem,
@@ -762,11 +821,11 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
     expect(getterReads).toBe(0);
     expect(toJsonCalls).toBe(0);
     expect(proxyReads).toBe(0);
-    expect(intake.items).toHaveLength(1);
-    expect(intake.overflowRawFindingIds).toEqual(new Set([
-      intake.items[0]!.wire.rawFindingId,
-    ]));
-    expect(intake.overflowSpecs).toHaveLength(1);
+    expect(intake.items).toHaveLength(0);
+    expect(intake.overflowRawFindingIds).toEqual(new Set());
+    expect(intake.intakeProvisionalSpecs).toEqual([
+      expect.objectContaining({ kind: 'reviewer-output-overflow' }),
+    ]);
     expect(intake.overflowReports).toEqual([{
       reviewer: 'arch-review',
       reason: expect.stringContaining('exceed'),
@@ -788,8 +847,13 @@ describe('detectClarifiableRawMismatches の重複 ID 除外', () => {
       description: 'まだ残っている',
     };
 
-    const unique = detectClarifiableRawMismatches([item], ledger);
-    const duplicated = detectClarifiableRawMismatches([item, { ...item, description: '別内容' }], ledger);
+    const unique = detectClarifiableRawMismatches([
+      reviewerExtraction(item, 0),
+    ], ledger);
+    const duplicated = detectClarifiableRawMismatches([
+      reviewerExtraction(item, 0),
+      reviewerExtraction({ ...item, description: '別内容' }, 1),
+    ], ledger);
 
     expect(unique.length).toBeGreaterThan(0);
     expect(duplicated).toEqual([]);

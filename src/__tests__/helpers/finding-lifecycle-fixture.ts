@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import { computeClaimIdentityHash } from '../../core/models/finding-claim-identity.js';
+import {
+  computeCandidateIdentityHash,
+  computeClaimIdentityHash,
+  computeSemanticClaimIdentityHash,
+  computeTargetIdentityHash,
+} from '../../core/models/finding-claim-identity.js';
 import {
   computeFileQuoteEvidenceRecordId,
   createEngineProofRecord,
@@ -10,6 +15,9 @@ import {
   createFindingLifecycleReservation,
 } from '../../core/models/finding-lifecycle-identity.js';
 import type {
+  CandidateSourceBinding,
+  FindingEvidenceRequest,
+  FindingTarget,
   FindingLedger,
   FindingLedgerConflict,
   FindingLedgerEntry,
@@ -17,6 +25,7 @@ import type {
   FindingLifecycleOperation,
   FindingObservation,
   RawFinding,
+  RawFindingEvidence,
 } from '../../core/workflow/findings/types.js';
 import {
   applyVerifiedLifecycleMutation,
@@ -31,6 +40,122 @@ function sha256(value: string): string {
 
 function cloneFixture<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+export function canonicalRawFindingFixture(
+  input: Omit<
+    RawFinding,
+    | 'target'
+    | 'targetIdentityHash'
+    | 'claimIdentityHash'
+    | 'semanticClaimIdentityHash'
+    | 'candidateIdentityHash'
+    | 'sourceBinding'
+  > & {
+    target?: FindingTarget;
+    sourceBinding?: CandidateSourceBinding;
+  },
+): RawFinding {
+  const evidence = input.evidence ?? [];
+  const familyTag = input.familyTag ?? null;
+  const severity = input.severity ?? null;
+  const title = input.title ?? null;
+  const description = input.description ?? null;
+  const suggestion = input.suggestion ?? null;
+  const quotePath = evidence.find(
+    (evidence) => evidence.kind === 'file_quote',
+  )?.path;
+  const target = input.target ?? {
+    kind: 'code',
+    paths: [quotePath ?? `fixtures/${input.rawFindingId}.ts`],
+  };
+  const sourceText = description ?? title ?? input.rawFindingId;
+  const sourceBinding = input.sourceBinding ?? {
+    reportDigest: sha256(`fixture-report:${input.rawFindingId}:${sourceText}`),
+    startByte: 0,
+    endByte: Buffer.byteLength(sourceText),
+    excerptDigest: sha256(sourceText),
+  };
+  const claimIdentityHash = computeClaimIdentityHash({
+    target,
+    familyTag,
+    severity,
+    title,
+    description,
+    suggestion,
+  });
+  const semanticClaimIdentityHash = computeSemanticClaimIdentityHash({
+    target,
+    title,
+    description,
+  });
+  return {
+    ...input,
+    familyTag,
+    severity,
+    title,
+    description,
+    suggestion,
+    evidence,
+    target,
+    targetIdentityHash: computeTargetIdentityHash(target),
+    claimIdentityHash,
+    semanticClaimIdentityHash,
+    candidateIdentityHash: computeCandidateIdentityHash({
+      claimIdentityHash,
+      sourceBinding,
+    }),
+    sourceBinding,
+  };
+}
+
+export function reviewerRawExtractionFixture(input: {
+  rawFindingId: string | null;
+  familyTag: string | null;
+  severity: RawFinding['severity'];
+  title: string | null;
+  description: string | null;
+  suggestion: string | null;
+  relation: RawFinding['relation'] | null;
+  targetFindingId: string | null;
+  target?: FindingTarget;
+  evidence?: RawFindingEvidence[];
+  evidenceRequests?: FindingEvidenceRequest[];
+  rawExcerpt?: string;
+}) {
+  const quoteRequests = (input.evidence ?? []).flatMap((evidence) => {
+    if (evidence.kind !== 'file_quote') {
+      return [];
+    }
+    const { snapshotId: _snapshotId, ...request } = evidence;
+    return [request];
+  });
+  const target = input.target ?? {
+    kind: 'code' as const,
+    paths: [...new Set(quoteRequests.map((request) => request.path))].sort(),
+  };
+  if (target.kind === 'code' && target.paths.length === 0) {
+    target.paths.push(`fixtures/${input.rawFindingId ?? 'anonymous'}.ts`);
+  }
+  return {
+    rawExcerpt: input.rawExcerpt
+      ?? input.description
+      ?? input.title
+      ?? input.rawFindingId
+      ?? 'Unstructured reviewer observation',
+    candidate: {
+      rawFindingId: input.rawFindingId,
+      familyTag: input.familyTag,
+      severity: input.severity,
+      title: input.title,
+      description: input.description,
+      suggestion: input.suggestion === '' ? null : input.suggestion,
+      relation: input.relation,
+      targetFindingId: input.targetFindingId,
+      target,
+      evidenceRequests: input.evidenceRequests ?? quoteRequests,
+    },
+  };
 }
 
 function fixtureObservation(
@@ -132,6 +257,11 @@ function applyFixtureRevision(input: {
     ))
     .flatMap((candidate) => candidate?.evidence ?? [])
     .find((evidence) => evidence.kind === 'file_quote');
+  const retainedSourceRaw = finding?.rawFindingIds
+    .map((rawFindingId) => input.ledger.rawFindings.find(
+      (candidate) => candidate.rawFindingId === rawFindingId,
+    ))
+    .find((candidate) => candidate !== undefined);
   const retainedEvidenceQuote = finding?.evidenceIds
     .map((evidenceId) => input.ledger.evidenceRecords.find(
       (candidate) => candidate.evidenceId === evidenceId,
@@ -146,13 +276,44 @@ function applyFixtureRevision(input: {
   const quoteEndLine = retainedEvidenceQuote?.endLine
     ?? retainedQuote?.endLine
     ?? quoteStartLine;
+  const rawTarget = finding?.target
+    ?? input.ledger.findings.find((candidate) => candidate.id === rawTargetFindingId)?.target
+    ?? {
+      kind: 'code' as const,
+      paths: [quotePath],
+    };
+  const rawClaimIdentityHash = computeClaimIdentityHash({
+    target: rawTarget,
+    familyTag: retainedSourceRaw?.familyTag ?? 'fixture',
+    severity: input.entityKind === 'finding'
+      ? (input.entity as FindingLedgerEntry).severity
+      : 'high',
+    title: input.entityKind === 'finding'
+      ? (input.entity as FindingLedgerEntry).title
+      : `Conflict ${input.entity.id}`,
+    description: input.entityKind === 'finding'
+      ? findingDescription
+      : input.entity.description ?? input.entity.id,
+    suggestion: retainedSourceRaw?.suggestion ?? finding?.suggestion ?? null,
+  });
+  const reportExcerpt = input.entityKind === 'finding'
+    ? findingDescription
+    : input.entity.description ?? input.entity.id;
+  const sourceBinding = {
+    reportDigest: sha256(
+      `fixture-report:${input.entityKind}:${input.entity.id}:${input.entity.revision}`,
+    ),
+    startByte: 0,
+    endByte: Buffer.byteLength(reportExcerpt),
+    excerptDigest: sha256(reportExcerpt),
+  };
   const raw: RawFinding | undefined = authority.kind === 'verified_evidence'
     && !usesManagerProof
     ? {
         rawFindingId: `fixture-raw:${input.entityKind}:${input.entity.id}:${input.entity.revision}:${input.ledger.rawFindings.length}`,
         stepName: observation.stepName,
         reviewer: 'fixture-reviewer',
-        familyTag: 'fixture',
+        familyTag: retainedSourceRaw?.familyTag ?? 'fixture',
         severity: input.entityKind === 'finding'
           ? (input.entity as FindingLedgerEntry).severity
           : 'high',
@@ -162,7 +323,24 @@ function applyFixtureRevision(input: {
         description: input.entityKind === 'finding'
           ? findingDescription
           : input.entity.description ?? input.entity.id,
-        suggestion: null,
+        suggestion: retainedSourceRaw?.suggestion ?? finding?.suggestion ?? null,
+        target: rawTarget,
+        targetIdentityHash: computeTargetIdentityHash(rawTarget),
+        claimIdentityHash: rawClaimIdentityHash,
+        semanticClaimIdentityHash: computeSemanticClaimIdentityHash({
+          target: rawTarget,
+          title: input.entityKind === 'finding'
+            ? (input.entity as FindingLedgerEntry).title
+            : `Conflict ${input.entity.id}`,
+          description: input.entityKind === 'finding'
+            ? findingDescription
+            : input.entity.description ?? input.entity.id,
+        }),
+        candidateIdentityHash: computeCandidateIdentityHash({
+          claimIdentityHash: rawClaimIdentityHash,
+          sourceBinding,
+        }),
+        sourceBinding,
         relation,
         targetFindingId: rawTargetFindingId,
         ...(rawTargetFindingId === null
@@ -188,19 +366,18 @@ function applyFixtureRevision(input: {
       }
     : undefined;
   const claimIdentityHash = raw !== undefined
-    ? computeClaimIdentityHash(raw)
+    ? raw.claimIdentityHash
     : input.entityKind === 'finding'
-    ? computeClaimIdentityHash({
-        targetFindingId: expectedHead === null ? null : input.entity.id,
-        title: finding!.title,
-        description: findingDescription,
-      })
-    : sha256(`fixture-conflict:${input.entity.id}:${input.entity.revision}`);
+      ? finding!.provisional !== undefined && finding!.claimIdentityHash === null
+        ? null
+        : finding!.claimIdentityHash ?? rawClaimIdentityHash
+      : sha256(`fixture-conflict:${input.entity.id}:${input.entity.revision}`);
   const invalidationEvidence = finding?.invalidatedEvidence
     ?? 'Fixture location is invalid.';
   const evidenceRecord = usesManagerProof
-    ? createEngineProofRecord({
+      ? createEngineProofRecord({
         kind: 'engine_proof',
+        purpose: 'lifecycle_authority',
         verifierId: 'takt.finding-lifecycle-policy',
         verifierVersion: '1',
         workflowName: input.ledger.workflowName,
@@ -213,17 +390,15 @@ function applyFixtureRevision(input: {
         targetFindingId: expectedHead === null ? null : input.entity.id,
         subject: operation === 'invalidate_finding'
           ? {
-              kind: 'finding_location_set_invalid',
+              kind: 'finding_target_invalid',
               findingId: input.entity.id,
               reason: invalidationEvidence,
             }
           : {
-              kind: 'named_structural_check',
-              checkId: 'finding-provisional-isolation',
-              parameters: {
-                provisionalKind: finding!.provisional!.kind,
-                stableKey: finding!.provisional!.stableKey,
-              },
+              kind: 'finding_provisional_isolation',
+              findingId: input.entity.id,
+              provisionalKind: finding!.provisional!.kind,
+              stableKey: finding!.provisional!.stableKey,
             },
         dependencyDigests: [],
         resultDigest: sha256(
@@ -240,7 +415,7 @@ function applyFixtureRevision(input: {
           }
           const payload = {
             ...quote,
-            claimIdentityHash,
+            claimIdentityHash: raw.claimIdentityHash,
             fileHash: sha256(`fixture-file:${input.entity.id}:${input.entity.revision}`),
           };
           return {
@@ -422,7 +597,110 @@ function applyFixtureSupersession(input: {
 }
 
 export function authorizeFindingLedgerFixture(input: FindingLedger): FindingLedger {
-  const desired = cloneFixture(input);
+  const cloned = cloneFixture(input);
+  const desired: FindingLedger = {
+    ...cloned,
+    findings: cloned.findings ?? [],
+    evidenceRecords: cloned.evidenceRecords ?? [],
+    rawFindings: cloned.rawFindings ?? [],
+    conflicts: cloned.conflicts ?? [],
+    interpretations: cloned.interpretations ?? [],
+    evidenceBindings: cloned.evidenceBindings ?? [],
+    lifecycleReservations: cloned.lifecycleReservations ?? [],
+    lifecycleEvents: cloned.lifecycleEvents ?? [],
+    rawRecoveryAttempts: cloned.rawRecoveryAttempts ?? [],
+    rawRecoveryResults: cloned.rawRecoveryResults ?? [],
+  };
+  desired.rawFindings = desired.rawFindings.map((rawFinding) => {
+    if (
+      rawFinding.target !== undefined
+      && rawFinding.targetIdentityHash !== undefined
+      && rawFinding.claimIdentityHash !== undefined
+      && rawFinding.semanticClaimIdentityHash !== undefined
+      && rawFinding.candidateIdentityHash !== undefined
+      && rawFinding.sourceBinding !== undefined
+    ) {
+      return rawFinding;
+    }
+    const {
+      target,
+      targetIdentityHash: _targetIdentityHash,
+      claimIdentityHash: _claimIdentityHash,
+      semanticClaimIdentityHash: _semanticClaimIdentityHash,
+      candidateIdentityHash: _candidateIdentityHash,
+      sourceBinding,
+      ...legacy
+    } = rawFinding;
+    return canonicalRawFindingFixture({
+      ...legacy,
+      target,
+      sourceBinding,
+    });
+  });
+  const rawById = new Map(
+    desired.rawFindings.map((rawFinding) => [rawFinding.rawFindingId, rawFinding]),
+  );
+  desired.findings = desired.findings.map((finding) => {
+    const sourceRaw = (finding.rawFindingIds ?? [])
+      .map((rawFindingId) => rawById.get(rawFindingId))
+      .find((rawFinding) => rawFinding !== undefined);
+    const normalizedBase = {
+      ...finding,
+      evidenceIds: finding.evidenceIds ?? [],
+      reviewers: finding.reviewers ?? (
+        sourceRaw === undefined ? [] : [sourceRaw.reviewer]
+      ),
+      rawFindingIds: finding.rawFindingIds ?? [],
+    };
+    if (finding.provisional !== undefined) {
+      if (sourceRaw !== undefined) {
+        return {
+          ...normalizedBase,
+          target: sourceRaw.target,
+          targetIdentityHash: sourceRaw.targetIdentityHash,
+          claimIdentityHash: sourceRaw.claimIdentityHash,
+          semanticClaimIdentityHash: sourceRaw.semanticClaimIdentityHash,
+        };
+      }
+      if (
+        finding.target !== undefined
+        && finding.targetIdentityHash !== undefined
+        && finding.claimIdentityHash !== undefined
+        && finding.semanticClaimIdentityHash !== undefined
+      ) {
+        return finding;
+      }
+      return {
+        ...normalizedBase,
+        target: null,
+        targetIdentityHash: null,
+        claimIdentityHash: null,
+        semanticClaimIdentityHash: null,
+      };
+    }
+    const target = sourceRaw?.target ?? finding.target ?? {
+      kind: 'code' as const,
+      paths: [`fixtures/${finding.id}.ts`],
+    };
+    return {
+      ...normalizedBase,
+      target,
+      targetIdentityHash: computeTargetIdentityHash(target),
+      claimIdentityHash: computeClaimIdentityHash({
+        target,
+        familyTag: sourceRaw?.familyTag ?? 'fixture',
+        severity: finding.severity,
+        title: finding.title,
+        description: finding.description ?? finding.title,
+        suggestion: sourceRaw?.suggestion ?? finding.suggestion ?? null,
+      }),
+      semanticClaimIdentityHash: computeSemanticClaimIdentityHash({
+        target,
+        title: finding.title,
+        description: finding.description ?? finding.title,
+      }),
+    };
+  });
   const interpretations = [...desired.interpretations];
   for (const finding of desired.findings) {
     const provisional = finding.provisional;

@@ -193,9 +193,11 @@ export async function runAmbiguousLadder(input: {
             lineageKey: target.canonical.lineageKey,
             sourceRawFindingIds: [target.wire.rawFindingId],
             reason: 'Manager interpretation budget was exhausted before this lineage could be interpreted',
-            title: `Pending interpretation: ${target.wire.title}`,
+            title: `Pending interpretation for ${target.wire.rawFindingId}`,
             severity: 'high' as const,
-            description: target.wire.description,
+            ...(target.wire.description !== null
+              ? { description: target.wire.description }
+              : {}),
             reviewers: [target.wire.reviewer],
             recoveryReviewerStableKey: target.canonical.reviewerStableKey,
           })),

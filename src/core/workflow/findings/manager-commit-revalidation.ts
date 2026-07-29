@@ -22,6 +22,9 @@ import {
   type ResolutionRenotificationTransition,
 } from './resolution-renotification.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+import { canonicalJson } from '../../../shared/utils/canonical-json.js';
+import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
+import { computeConflictEvidenceHash } from './adjudication-evidence.js';
 
 export interface RevalidatedManagerPlan {
   output: FindingManagerOutput;
@@ -37,13 +40,53 @@ export function revalidateManagerPlan(input: {
   cleanWireById: ReadonlyMap<string, RawFinding>;
   cleanCanonicalById: ManagerDecisionStageResult['cleanCanonicalById'];
   capturedPreconditions: Map<string, CapturedFindingPrecondition>;
+  capturedConflictHeads?: ManagerDecisionStageResult['conflictTargetHeads'];
+  reviewScopeSnapshotId: string;
   runInput: RunFindingManagerForStepInput;
 }): RevalidatedManagerPlan {
-  const { decisions, carriedFindingOnlyConflicts } = flattenManagerOutputToDecisions(input.managerOutput);
+  const { decisions, carriedFindingOnlyConflicts } = flattenManagerOutputToDecisions(
+    input.managerOutput,
+  );
+  const staleConflictRejections: string[] = [];
+  const conflictDecisions = decisions.conflictDecisions.filter((decision) => {
+    if (
+      decision.decision !== 'resolve'
+      || !input.capturedConflictHeads?.has(decision.conflictId)
+    ) {
+      return true;
+    }
+    const captured = input.capturedConflictHeads.get(decision.conflictId)!;
+    const freshLifecycleHead = captureFindingLifecycleHead(
+      input.freshLedger,
+      'conflict',
+      decision.conflictId,
+    ) ?? null;
+    const freshConflict = input.freshLedger.conflicts.find(
+      (conflict) => conflict.id === decision.conflictId,
+    );
+    const freshEvidenceSetHash = freshConflict === undefined
+      ? null
+      : computeConflictEvidenceHash(
+          freshConflict,
+          input.freshLedger,
+          input.reviewScopeSnapshotId,
+        );
+    if (
+      captured.reviewScopeSnapshotId === input.reviewScopeSnapshotId
+      && canonicalJson(captured.lifecycleHead) === canonicalJson(freshLifecycleHead)
+      && captured.evidenceSetHash === freshEvidenceSetHash
+    ) {
+      return true;
+    }
+    staleConflictRejections.push(
+      `conflictDecisions: conflict "${decision.conflictId}" (resolve) rejected at commit: captured lifecycle head no longer matches the fresh ledger`,
+    );
+    return false;
+  });
   const freshAssembly = assembleManagerOutput({
     previousLedger: input.freshLedger,
     residualRawFindings: input.cleanWire,
-    decisions,
+    decisions: { ...decisions, conflictDecisions },
     carriedFindingOnlyConflicts,
     priorStepResponseText: input.runInput.priorStepResponseText,
     invalidLocationCandidateFindingIds: new Set(
@@ -109,6 +152,7 @@ export function revalidateManagerPlan(input: {
         )),
       }),
       ...preconditions.staleDetails,
+      ...staleConflictRejections,
     ],
     resolutionRenotifications: mergeResolutionRenotificationTransitions([
       ...rejectedRenotifications,
@@ -225,6 +269,10 @@ export function mergeOutputs(base: FindingManagerOutput, extra: FindingManagerOu
   }, base.matches.map((match) => ({ ...match, rawFindingIds: [...match.rawFindingIds] })));
   return {
     ...base,
+    anchorAdjudications: [
+      ...base.anchorAdjudications,
+      ...extra.anchorAdjudications,
+    ],
     matches,
     newFindings: [...base.newFindings, ...extra.newFindings],
     conflicts: [...base.conflicts, ...extra.conflicts],
@@ -489,15 +537,22 @@ function applyPreconditionChecks(input: {
     })
   ));
 
+  const output = {
+    ...input.output,
+    resolvedFindings,
+    reopenedFindings,
+    invalidatedFindings,
+    waivedFindings,
+    duplicateFindings,
+    dismissedFindings,
+  };
+  const landedRawFindingIds = collectLandedRawIds(output);
   return {
     output: {
-      ...input.output,
-      resolvedFindings,
-      reopenedFindings,
-      invalidatedFindings,
-      waivedFindings,
-      duplicateFindings,
-      dismissedFindings,
+      ...output,
+      anchorAdjudications: output.anchorAdjudications.filter((adjudication) => (
+        landedRawFindingIds.has(adjudication.rawFindingId)
+      )),
     },
     provisionalSpecs,
     staleDetails,

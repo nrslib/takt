@@ -36,7 +36,7 @@ import {
   computeProvisionalStableKey,
   computeRawEvidenceHash,
   computeReviewerStableKey,
-  createReviewerRawFindingCandidates,
+  createReviewerRawFindingCandidates as createReviewerRawFindingCandidateBatch,
   toLedgerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
 import { AmbiguousInterpretationsOutputJsonSchema } from '../core/workflow/findings/schemas.js';
@@ -48,6 +48,8 @@ import { addRoundMarker, computeRoundMarker } from '../core/workflow/findings/ro
 import { captureFindingPreconditions } from '../core/workflow/findings/finding-preconditions.js';
 import { collectInterpretationRecoveryPlan } from '../core/workflow/findings/interpretation-recovery.js';
 import { processInterpretationLiveClaims } from '../core/workflow/findings/interpretation-live-claims.js';
+import { settleProvisionalsWithCleanEvidence } from '../core/workflow/findings/manager-provisional-settlement.js';
+import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
 import { createFindingAdjudicationReservation } from './helpers/finding-adjudication-reservation.js';
 import {
   verifiedSourceQuoteFields,
@@ -57,7 +59,12 @@ import {
   observeFindingLedgerMutations,
   RevisionedFindingLedgerTestRepository,
 } from './helpers/finding-manager-publication.js';
-import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
+import { findingManagerTaskResponse } from './helpers/finding-manager-task-response.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -118,7 +125,7 @@ function makeFinding(
 }
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
-  return {
+  const ledger: FindingLedger = {
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
@@ -129,7 +136,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     lifecycleEvents: [],
     rawRecoveryAttempts: [],
     rawRecoveryResults: [],
-    rawFindings: [{
+    rawFindings: [canonicalRawFindingFixture({
       rawFindingId: 'raw-existing',
       stepName: 'reviewers',
       reviewer: 'arch-review',
@@ -140,16 +147,72 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
       suggestion: null,
       relation: 'new',
       targetFindingId: null,
+      target: { kind: 'code', paths: ['src/a.ts'] },
       evidence: reviewerEvidence('src/a.ts', 1),
-    }],
+    })],
     conflicts: [],
     interpretations: [],
     ...overrides,
   };
+  return authorizeFindingLedgerFixture({
+    ...ledger,
+    rawFindings: ledger.rawFindings.map((rawFinding) => (
+      canonicalRawFindingFixture(rawFinding)
+    )),
+  });
 }
 
 function reviewerEvidence(path: string, line: number) {
   return [verifiedSourceQuoteFields(FIXTURE_CWD, path, line)];
+}
+
+function reviewerExtraction(raw: Record<string, unknown>): Record<string, unknown> {
+  if ('rawExcerpt' in raw && 'candidate' in raw) {
+    return raw;
+  }
+  const finding = raw as Partial<RawFinding>;
+  const localId = typeof finding.rawFindingId === 'string' ? finding.rawFindingId : null;
+  const description = typeof finding.description === 'string' ? finding.description : null;
+  return reviewerRawExtractionFixture({
+    rawFindingId: localId,
+    familyTag: typeof finding.familyTag === 'string' ? finding.familyTag : null,
+    severity: finding.severity ?? null,
+    title: typeof finding.title === 'string' ? finding.title : null,
+    description,
+    suggestion: typeof finding.suggestion === 'string' ? finding.suggestion : null,
+    relation: finding.relation ?? null,
+    targetFindingId: typeof finding.targetFindingId === 'string' && finding.targetFindingId !== ''
+      ? finding.targetFindingId
+      : null,
+    target: finding.target,
+    evidence: finding.evidence,
+    rawExcerpt: `[${localId ?? 'anonymous'}] ${description ?? finding.title ?? 'Observation'}`,
+  });
+}
+
+function reviewerExtractions(
+  raws: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  return raws.map(reviewerExtraction);
+}
+
+function createReviewerRawFindingCandidates(
+  raws: Array<Record<string, unknown>>,
+  context: Omit<
+    Parameters<typeof createReviewerRawFindingCandidateBatch>[1],
+    'reviewReport' | 'issueEvidenceRequests'
+  >,
+) {
+  const extractions = reviewerExtractions(raws);
+  return createReviewerRawFindingCandidateBatch(extractions, {
+    ...context,
+    reviewReport: extractions.map((item) => String(item.rawExcerpt ?? '')).join('\n'),
+    issueEvidenceRequests: () => ({
+      evidence: [],
+      engineProofRecords: [],
+      coverageGaps: [],
+    }),
+  }).candidates;
 }
 
 interface Harness {
@@ -235,6 +298,7 @@ function makeHarness(
       if (input.interceptFresh !== undefined) {
         ledgerRepository.commitBeforeNextExclusiveMutation(input.interceptFresh);
       }
+      const extractions = reviewerExtractions(input.reviewerRawFindings);
       return runFindingManagerForStep({
         contract: contract as never,
         ledgerStore,
@@ -248,9 +312,11 @@ function makeHarness(
             subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
             response: {
               status: 'done',
-              content: '',
+              content: extractions
+                .map((item) => String(item.rawExcerpt ?? ''))
+                .join('\n'),
               structuredOutput: {
-                rawFindings: input.reviewerRawFindings,
+                rawFindings: extractions,
               },
             } as unknown as AgentResponse,
           },
@@ -430,7 +496,7 @@ describe('ケース2: candidate/canonical 型混同（factory を通らない ob
 
   it('保存済み raw も同じ factory（candidateFromStoredRawFinding → canonicalize）を通る', () => {
     const sourceLedger = makeLedger();
-    const storedRaw: RawFinding = {
+    const storedRaw: RawFinding = canonicalRawFindingFixture({
       rawFindingId: 'raw-stored',
       stepName: 'reviewers',
       reviewer: 'arch-review',
@@ -441,10 +507,11 @@ describe('ケース2: candidate/canonical 型混同（factory を通らない ob
       suggestion: null,
       relation: 'resolution_confirmation',
       targetFindingId: 'F-0001',
+      target: { kind: 'code', paths: ['src/a.ts'] },
       evidence: [],
       targetPrecondition: captureFindingPreconditions(sourceLedger)
         .get('F-0001')!.precondition,
-    };
+    });
     const candidate = candidateFromStoredRawFinding(storedRaw, REVIEWER_STABLE_KEY);
     expect(candidate.relation).toBe('resolution_confirmation');
     const { canonical } = canonicalizeReviewerRawFinding(candidate, { ledger: sourceLedger });
@@ -525,6 +592,12 @@ describe('ケース3: stale confirmation（prompt 後の persists 保存と競�
     // 同じ競合を provisional finding へ二重着地させない。
     const provisional = saved.findings.find((finding) => finding.provisional?.kind === 'stale-precondition');
     expect(provisional).toBeUndefined();
+    const staleReport = harness.savedReports.at(-1);
+    const staleAttempt = staleReport?.attempts.at(-1);
+    expect(staleAttempt).toBeUndefined();
+    expect(staleAttempt?.managerOutput.anchorAdjudications.some(
+      (adjudication) => adjudication.rawFindingId.endsWith(':c-1'),
+    ) ?? false).toBe(false);
   });
 });
 
@@ -774,10 +847,7 @@ describe('ケース5 の出口: 解釈枯渇後の dismiss 裁定', () => {
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       if (!(instruction as string).includes('## Ambiguous raw finding interpretation')) {
         // 解釈枯渇後の decisions 相談: 提示された候補を dismiss する。
-        return {
-          status: 'done',
-          content: '',
-          structuredOutput: {
+        return findingManagerTaskResponse(instruction as string, {
             rawDecisions: [],
             disputeDecisions: [],
             conflictDecisions: [],
@@ -786,8 +856,7 @@ describe('ケース5 の出口: 解釈枯渇後の dismiss 裁定', () => {
             dismissDecisions: dismissTargetId !== undefined
               ? [{ findingId: dismissTargetId, basis: 'unverifiable_claim', reason: '解釈2 epoch と再観測でも確定できない主張' }]
               : [],
-          },
-        } as unknown as AgentResponse;
+        });
       }
       const rawId = extractResidualRawIdFromInterpretationInstruction(instruction as string, 'p-1');
       return interpretationResponse([
@@ -1032,15 +1101,12 @@ describe('ケース7: resource exhaustion（435 raw・巨大 description・step 
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const ids = currentManagerRawFindingIds(instruction as string)
         .filter((rawFindingId) => /:ok-\d+$/.test(rawFindingId));
-      return {
-        persona: 'findings-manager',
-        status: 'done',
-        content: '',
-        structuredOutput: {
+      return findingManagerTaskResponse(instruction as string, {
           rawDecisions: [...new Set(ids)].map((rawFindingId) => ({
             rawFindingId,
             decision: 'new',
             findingId: '',
+            anchorRelevance: 'not_applicable',
             evidence: 'fresh',
           })),
           disputeDecisions: [],
@@ -1048,14 +1114,14 @@ describe('ケース7: resource exhaustion（435 raw・巨大 description・step 
           invalidateDecisions: [],
           duplicateDecisions: [],
           dismissDecisions: [],
-        },
-        timestamp: new Date(),
-      } as unknown as AgentResponse;
+      });
     });
 
     const okRaws = makeManyRaws(3, 'ok').map((raw, index) => (
       { ...raw, title: `Legit finding ${index + 1}`, description: `Legit ${index + 1}`, evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 5)] }
     ));
+    const okExtractions = reviewerExtractions(okRaws);
+    const floodExtractions = reviewerExtractions(makeManyRaws(130, 'flood'));
     const result = await runFindingManagerForStep({
       contract: {
         ledgerPath: '.takt/findings/ledger.json',
@@ -1074,14 +1140,22 @@ describe('ケース7: resource exhaustion（435 raw・巨大 description・step 
       subResults: [
         {
           subStep: { kind: 'agent', name: 'good-review', persona: 'good', edit: false } as WorkflowStep,
-          response: { status: 'done', content: '', structuredOutput: { rawFindings: okRaws } } as unknown as AgentResponse,
+          response: {
+            status: 'done',
+            content: okExtractions.map((item) => String(item.rawExcerpt ?? '')).join('\n'),
+            structuredOutput: { rawFindings: okExtractions },
+          } as unknown as AgentResponse,
         },
         {
           subStep: { kind: 'agent', name: 'flood-review', persona: 'flood', edit: false } as WorkflowStep,
           // 単体では 64 件以下 × 3 リクエスト分…ではなく、単体上限は超えないが
           // 合算で 128 を超える 60 件 ×…を単純化して 130 件にする（per-reviewer
           // 64 上限も超えるため、この reviewer は確実に overflow）。
-          response: { status: 'done', content: '', structuredOutput: { rawFindings: makeManyRaws(130, 'flood') } } as unknown as AgentResponse,
+          response: {
+            status: 'done',
+            content: floodExtractions.map((item) => String(item.rawExcerpt ?? '')).join('\n'),
+            structuredOutput: { rawFindings: floodExtractions },
+          } as unknown as AgentResponse,
         },
       ],
       workflowName: 'peer-review',
@@ -1117,7 +1191,14 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
     evidence: AMBIGUOUS_EVIDENCE,
   };
   const LINEAGE_KEY = computeLineageKey({
-    claimIdentityHash: computeClaimIdentityHash(AMBIGUOUS_FIELDS),
+    claimIdentityHash: computeClaimIdentityHash({
+      target: { kind: 'code', paths: ['src/a.ts'] },
+      familyTag: AMBIGUOUS_FIELDS.familyTag,
+      severity: AMBIGUOUS_FIELDS.severity,
+      title: AMBIGUOUS_FIELDS.title,
+      description: AMBIGUOUS_FIELDS.description,
+      suggestion: null,
+    }),
     targetFindingId: 'F-0001',
   });
   const EVIDENCE_HASH = computeRawEvidenceHash(AMBIGUOUS_FIELDS);
@@ -1266,33 +1347,34 @@ const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_K
 
   it('ledger_applied 済みの解釈は no-op になり、finding ID の二重割当・rawFindingIds の二重追加が起きない', async () => {
     const baseLedger = resolvedTargetLedger();
+    const appliedRaw = canonicalRawFindingFixture({
+      rawFindingId: 'crashed-run:reviewers:1:arch-review:p-1',
+      stepName: 'reviewers',
+      reviewer: 'arch-review',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Existing issue still present',
+      description: 'Claims the resolved issue persists with different content.',
+      suggestion: null,
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+      targetPrecondition: captureFindingPreconditions(baseLedger)
+        .get('F-0001')!.precondition,
+      target: { kind: 'code', paths: ['src/a.ts'] },
+      evidence: reviewerEvidence('src/a.ts', 20),
+    });
     const applied = makeFinding({ revision: 1,
       id: 'F-0002',
       title: 'Existing issue still present',
       description: 'Claims the resolved issue persists with different content.',
       rawFindingIds: ['crashed-run:reviewers:1:arch-review:p-1'],
     });
-    const harness = makeHarness({
-      ...baseLedger,
+    const harness = makeHarness(makeLedger({
       nextId: 3,
       findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' }), applied],
       rawFindings: [
         ...baseLedger.rawFindings,
-        {
-          rawFindingId: 'crashed-run:reviewers:1:arch-review:p-1',
-          stepName: 'reviewers',
-          reviewer: 'arch-review',
-          familyTag: 'bug',
-          severity: 'high',
-          title: 'Existing issue still present',
-          description: 'Claims the resolved issue persists with different content.',
-          suggestion: null,
-          relation: 'persists',
-          targetFindingId: 'F-0001',
-          targetPrecondition: captureFindingPreconditions(baseLedger)
-            .get('F-0001')!.precondition,
-          evidence: reviewerEvidence('src/a.ts', 20),
-        },
+        appliedRaw,
       ],
       interpretations: [{
         interpretationKey: INTERPRETATION_KEY,
@@ -1314,7 +1396,7 @@ const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_K
         applicationResult: 'created',
         promptPreconditions: [],
       }],
-    });
+    }));
 
     const result = await harness.run({ reviewerRawFindings: [AMBIGUOUS_PERSISTS_RAW] });
     expect(result.status).toBe('updated');
@@ -1329,6 +1411,23 @@ const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_K
   });
 
   it('applied（provisional_created）後の同一 raw 再来は次 attempt を実行し、既存 provisional を更新する', async () => {
+    const baseLedger = resolvedTargetLedger();
+    const sourceRaw = canonicalRawFindingFixture({
+      rawFindingId: 'crashed-run:reviewers:1:arch-review:p-1',
+      stepName: 'reviewers',
+      reviewer: 'arch-review',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Existing issue still present',
+      description: 'Claims the resolved issue persists with different content.',
+      suggestion: null,
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+      targetPrecondition: captureFindingPreconditions(baseLedger)
+        .get('F-0001')!.precondition,
+      target: { kind: 'code', paths: ['src/a.ts'] },
+      evidence: reviewerEvidence('src/a.ts', 20),
+    });
     const provisionalStableKey = computeProvisionalStableKey({
       reviewerStableKey: REVIEWER_STABLE_KEY,
       lineageKey: LINEAGE_KEY,
@@ -1356,6 +1455,7 @@ const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_K
     const harness = makeHarness(resolvedTargetLedger({
       nextId: 3,
       findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' }), existingProvisional],
+      rawFindings: [...baseLedger.rawFindings, sourceRaw],
       interpretations: [{
         interpretationKey: INTERPRETATION_KEY,
         baseInterpretationKey: BASE_INTERPRETATION_KEY,
@@ -1403,7 +1503,7 @@ const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_K
 
   it('reviewer の再報告がない recovery item も provisional 適用後に attempt 1 から 2 へ進む', async () => {
     const sourceRawId = 'crashed-run:reviewers:1:arch-review:p-1';
-    const sourceRaw: RawFinding = {
+    const sourceRaw = canonicalRawFindingFixture({
       rawFindingId: sourceRawId,
       stepName: 'reviewers',
       reviewer: 'arch-review',
@@ -1416,8 +1516,9 @@ const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_K
       targetFindingId: AMBIGUOUS_PERSISTS_RAW.targetFindingId,
       targetPrecondition: captureFindingPreconditions(resolvedTargetLedger())
         .get('F-0001')!.precondition,
+      target: { kind: 'code', paths: ['src/a.ts'] },
       evidence: AMBIGUOUS_PERSISTS_RAW.evidence,
-    };
+    });
     const recovery = makeFinding({ revision: 1,
       id: 'F-0002',
       title: `Pending interpretation: ${AMBIGUOUS_PERSISTS_RAW.title}`,
@@ -1712,7 +1813,7 @@ describe('解釈梯子の追加必須テスト', () => {
     expect(saved.findings.find((finding) => finding.provisional !== undefined)?.status).toBe('open');
   });
 
-  it('clean な後続 raw だけが provisional を確定できる（clean new で confirmed へ昇格、新規 ID は増えない）', async () => {
+  it('clean な後続 raw だけが provisional を確定できる（fresh precondition 付き same で confirmed へ昇格、新規 ID は増えない）', async () => {
     // round 1: ambiguous raw が provisional として着地する。
     const harness = makeHarness(makeLedger({ findings: [], rawFindings: [], nextId: 1 }));
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
@@ -1738,9 +1839,79 @@ describe('解釈梯子の追加必須テスト', () => {
     const afterRound1 = harness.currentLedger();
     const provisionalId = afterRound1.findings.find((finding) => finding.provisional !== undefined)?.id;
     expect(provisionalId).toBeDefined();
+    const provisional = afterRound1.findings.find((finding) => finding.id === provisionalId)!;
+    const targetPrecondition = captureFindingPreconditions(afterRound1)
+      .get(provisionalId!)!.precondition;
+    const settlementRaw = (
+      rawFindingId: string,
+      overrides: Partial<Pick<RawFinding, 'relation' | 'targetFindingId' | 'targetPrecondition'>> = {},
+    ): RawFinding => {
+      const effectiveTargetPrecondition = 'targetPrecondition' in overrides
+        ? overrides.targetPrecondition
+        : targetPrecondition;
+      return canonicalRawFindingFixture({
+        rawFindingId,
+        stepName: 'reviewers',
+        reviewer: 'arch-review',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Suspicious behaviour in parser',
+        description: 'Something is off.',
+        suggestion: null,
+        target: provisional.target!,
+        relation: overrides.relation ?? 'persists',
+        targetFindingId: 'targetFindingId' in overrides
+          ? overrides.targetFindingId!
+          : provisionalId!,
+        ...(effectiveTargetPrecondition !== undefined
+          ? { targetPrecondition: effectiveTargetPrecondition }
+          : {}),
+        evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/b.ts', 9)],
+      });
+    };
+    const promotionResult = (raw: RawFinding) => {
+      const output = createEmptyManagerOutput();
+      output.matches = [{
+        findingId: provisionalId!,
+        rawFindingIds: [raw.rawFindingId],
+      }];
+      return settleProvisionalsWithCleanEvidence({
+        output,
+        cleanRawIds: new Set([raw.rawFindingId]),
+        wireById: new Map([[raw.rawFindingId, raw]]),
+        freshLedger: afterRound1,
+        explicitResolvedByMapping: new Map(),
+        explicitPromotedFindingIds: new Set(),
+        healthyReviewerStableKeys: new Set(),
+        replayOrigins: new Map(),
+      });
+    };
+    expect(promotionResult(settlementRaw('promotion-valid')).promotedFindingIds)
+      .toEqual(new Set([provisionalId]));
+    expect(promotionResult(settlementRaw('promotion-relation-new', {
+      relation: 'new',
+      targetFindingId: null,
+      targetPrecondition: undefined,
+    })).promotedFindingIds).toEqual(new Set());
+    expect(promotionResult(settlementRaw('promotion-wrong-target', {
+      targetFindingId: 'F-9999',
+    })).promotedFindingIds).toEqual(new Set());
+    expect(promotionResult(settlementRaw('promotion-stale-revision', {
+      targetPrecondition: {
+        ...targetPrecondition,
+        targetRevision: targetPrecondition.targetRevision + 1,
+      },
+    })).promotedFindingIds).toEqual(new Set());
+    expect(promotionResult(settlementRaw('promotion-stale-status', {
+      targetPrecondition: {
+        ...targetPrecondition,
+        targetStatus: 'resolved',
+      },
+    })).promotedFindingIds).toEqual(new Set());
 
-    // round 2: 同じ claim identity の clean new が届く → 新規 finding を作らず
-    // provisional を confirmed へ昇格（metadata が外れる）。
+    // round 2: 同じ claim identity で provisional 自身を明示する clean persists
+    // が届く。intake が fresh revision precondition を捕捉するため、新規 finding
+    // を作らず provisional を confirmed へ昇格できる。
     executeAgentMock.mockReset();
     await harness.run({
       runId: 'run-3',
@@ -1751,8 +1922,8 @@ describe('解釈梯子の追加必須テスト', () => {
         title: 'Suspicious behaviour in parser',
         description: 'Something is off.',
         suggestion: '',
-        relation: 'new',
-        targetFindingId: null,
+        relation: 'persists',
+        targetFindingId: provisionalId,
         evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/b.ts', 9)],
       }],
     });
@@ -1798,20 +1969,20 @@ describe('解釈梯子の追加必須テスト', () => {
     executeAgentMock.mockReset();
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const ids = [...(instruction as string).matchAll(/"rawFindingId":\s*"([^"]+:other-1)"/g)].map((match) => match[1]!);
-      return {
-        persona: 'findings-manager',
-        status: 'done',
-        content: '',
-        structuredOutput: {
-          rawDecisions: [...new Set(ids)].map((rawFindingId) => ({ rawFindingId, decision: 'new', findingId: '', evidence: 'fresh' })),
+      return findingManagerTaskResponse(instruction as string, {
+          rawDecisions: [...new Set(ids)].map((rawFindingId) => ({
+            rawFindingId,
+            decision: 'new',
+            findingId: '',
+            anchorRelevance: 'not_applicable',
+            evidence: 'fresh',
+          })),
           disputeDecisions: [],
           conflictDecisions: [],
           invalidateDecisions: [],
           duplicateDecisions: [],
           dismissDecisions: [],
-        },
-        timestamp: new Date(),
-      } as unknown as AgentResponse;
+      });
     });
     await harness.run({
       runId: 'run-3',
@@ -1867,10 +2038,17 @@ describe('解釈梯子の追加必須テスト', () => {
     const provisionalId = harness.currentLedger().findings.find((finding) => finding.provisional !== undefined)?.id;
     expect(provisionalId).toBeDefined();
 
-    // round 2: 完全に同一内容の clean raw → 機械分類の
-    // exact-duplicate match が provisional 自身に付く → 昇格。
+    // round 2: 完全に同一内容で provisional 自身を明示する clean raw。
+    // fresh revision precondition 付きの機械 same が provisional 自身に付く → 昇格。
     executeAgentMock.mockReset();
-    await harness.run({ runId: 'run-3', reviewerRawFindings: [observation] });
+    await harness.run({
+      runId: 'run-3',
+      reviewerRawFindings: [{
+        ...observation,
+        relation: 'persists',
+        targetFindingId: provisionalId,
+      }],
+    });
     // 完全一致は機械処理されるため manager は呼ばれない。
     expect(executeAgentMock).not.toHaveBeenCalled();
 
@@ -1919,7 +2097,13 @@ describe('解釈梯子の追加必須テスト', () => {
         content: '',
         structuredOutput: {
           rawDecisions: [...new Set(ids)].map((rawFindingId) => (
-            { rawFindingId, decision: 'same', findingId: 'F-0001', evidence: 'Semantically the same underlying bug.' }
+            {
+              rawFindingId,
+              decision: 'same',
+              findingId: 'F-0001',
+              anchorRelevance: 'same',
+              evidence: 'Semantically the same underlying bug.',
+            }
           )),
           disputeDecisions: [],
           conflictDecisions: [],
@@ -2053,6 +2237,18 @@ describe('解釈梯子の追加必須テスト', () => {
           Promise.reject(new Error('simulated crash after intake'))
         ),
       };
+      const contradictoryExtraction = reviewerExtraction({
+        // 矛盾主張: relation new + targetFindingId（正規化対象）。
+        rawFindingId: 'x-1',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Contradictory claim',
+        description: 'Claims to be new but names an existing target.',
+        suggestion: '',
+        relation: 'new',
+        targetFindingId: 'F-0001',
+        evidence: [verifiedSourceQuoteFields(projectCwd, 'src/b.ts', 5)],
+      });
 
       await expect(runFindingManagerForStep({
         contract: {
@@ -2077,20 +2273,9 @@ describe('解釈梯子の追加必須テスト', () => {
           subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
           response: {
             status: 'done',
-            content: '',
+            content: String(contradictoryExtraction.rawExcerpt ?? ''),
             structuredOutput: {
-              rawFindings: [{
-                // 矛盾主張: relation new + targetFindingId（正規化対象）。
-                rawFindingId: 'x-1',
-                familyTag: 'bug',
-                severity: 'high',
-                title: 'Contradictory claim',
-                description: 'Claims to be new but names an existing target.',
-                suggestion: '',
-                relation: 'new',
-                targetFindingId: 'F-0001',
-                evidence: [verifiedSourceQuoteFields(projectCwd, 'src/b.ts', 5)],
-              }],
+              rawFindings: [contradictoryExtraction],
             },
           } as unknown as AgentResponse,
         }],
@@ -2362,44 +2547,47 @@ describe('解釈梯子の追加必須テスト', () => {
         ]);
       });
 
-      const runCall = (callNamespace: string, title: string) => runFindingManagerForStep({
-        contract: {
-          ledgerPath: '.takt/findings/peer-review.json',
-          rawFindingsPath: '.takt/findings/raw',
-          manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'JSON.' },
-        } as never,
-        ledgerStore: store,
-        optionsBuilder: {
-          buildAgentOptions: () => ({}),
-          resolveStepProviderModel: () => ({ provider: 'codex', model: 'gpt-test' }),
-        } as never,
-        stepExecutor: {
-          buildPhase1Instruction: (instruction: string) => instruction,
-          recordSynthesizedAgentUsage: () => {},
-          normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
-        } as never,
-        cwd: projectCwd,
-        parentStep: { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep,
-        stepIteration: 1,
-        subResults: [{
-          subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-          response: {
-            status: 'done',
-            content: '',
-            structuredOutput: {
-              rawFindings: [{
-                ...AMBIGUOUS_PERSISTS_RAW,
-                title,
-                evidence: [verifiedSourceQuoteFields(projectCwd, 'src/a.ts', 20)],
-              }],
-            },
-          } as unknown as AgentResponse,
-        }],
-        workflowName: 'peer-review',
-        runId: 'shared-run',
-        callNamespace,
-        timestamp: '2026-06-14T00:00:00.000Z',
-      });
+      const runCall = (callNamespace: string, title: string) => {
+        const extraction = reviewerExtraction({
+          ...AMBIGUOUS_PERSISTS_RAW,
+          title,
+          evidence: [verifiedSourceQuoteFields(projectCwd, 'src/a.ts', 20)],
+        });
+        return runFindingManagerForStep({
+          contract: {
+            ledgerPath: '.takt/findings/peer-review.json',
+            rawFindingsPath: '.takt/findings/raw',
+            manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'JSON.' },
+          } as never,
+          ledgerStore: store,
+          optionsBuilder: {
+            buildAgentOptions: () => ({}),
+            resolveStepProviderModel: () => ({ provider: 'codex', model: 'gpt-test' }),
+          } as never,
+          stepExecutor: {
+            buildPhase1Instruction: (instruction: string) => instruction,
+            recordSynthesizedAgentUsage: () => {},
+            normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
+          } as never,
+          cwd: projectCwd,
+          parentStep: { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep,
+          stepIteration: 1,
+          subResults: [{
+            subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
+            response: {
+              status: 'done',
+              content: String(extraction.rawExcerpt ?? ''),
+              structuredOutput: {
+                rawFindings: [extraction],
+              },
+            } as unknown as AgentResponse,
+          }],
+          workflowName: 'peer-review',
+          runId: 'shared-run',
+          callNamespace,
+          timestamp: '2026-06-14T00:00:00.000Z',
+        });
+      };
 
       const [resultA, resultB] = await Promise.all([
         runCall('child-a', 'Ambiguous claim from child A'),

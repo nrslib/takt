@@ -29,7 +29,7 @@ export function foldRawFindingEvidence(
   const ordered = [...rawFindings].sort(compareRawFinding);
   const primary = selectPrimaryRawFinding(ordered);
   return {
-    description: primary.description,
+    ...(primary.description !== null ? { description: primary.description } : {}),
     ...(primary.suggestion !== null ? { suggestion: primary.suggestion } : {}),
     reviewers: mergeIds([], ordered.map((raw) => raw.reviewer)),
   };

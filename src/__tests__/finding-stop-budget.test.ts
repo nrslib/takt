@@ -35,6 +35,12 @@ import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+  emptyFindingAuthorityProjection,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -308,7 +314,12 @@ function makeRoundHarness(
   currentLedger: () => FindingLedger;
   run: (reviewerRawFindings: Array<Record<string, unknown>>, timestamp: string) => ReturnType<typeof runFindingManagerForStep>;
 } {
-  const ledgerRepository = new RevisionedFindingLedgerTestRepository(initialLedger);
+  const ledgerRepository = new RevisionedFindingLedgerTestRepository(
+    initialLedger.findings.length > 0
+      && (initialLedger.lifecycleEvents?.length ?? 0) === 0
+      ? authorizeFindingLedgerFixture(initialLedger)
+      : initialLedger,
+  );
   const publicationReportDir = makePublicationDir('takt-stop-budget-publication-');
   const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
@@ -341,6 +352,7 @@ function makeRoundHarness(
   const stepExecutor = {
     buildPhase1Instruction: (instruction: string) => instruction,
     normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
+    recordSynthesizedAgentUsage: () => {},
   };
   const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
   const contract = {
@@ -362,7 +374,9 @@ function makeRoundHarness(
         subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
         response: {
           status: 'done',
-          content: '',
+          content: reviewerRawFindings
+            .map((item) => String(item.rawExcerpt ?? ''))
+            .join('\n'),
           structuredOutput: { rawFindings: reviewerRawFindings },
         } as unknown as AgentResponse,
       }];
@@ -376,6 +390,7 @@ function makeRoundHarness(
         stepIteration: round,
         subResults,
         workflowName: 'peer-review',
+        workflowTask: 'Review the implementation.',
         runId: `${runIdPrefix}-${round}`,
         callNamespace: '',
         timestamp,
@@ -392,7 +407,7 @@ function makeRoundHarness(
 // 引数は実ファイルパスの代わりに識別用の distinguishing marker として使う
 // （呼び出し側のシグネチャ・churn/repeat のセマンティクスは変えない）。
 function hallucinatedRaw(rawFindingId: string, title: string, path: string): Record<string, unknown> {
-  return {
+  return reviewerRawExtractionFixture({
     rawFindingId,
     familyTag: 'bug',
     severity: 'high',
@@ -401,7 +416,9 @@ function hallucinatedRaw(rawFindingId: string, title: string, path: string): Rec
     suggestion: '',
     relation: 'persists',
     targetFindingId: `F-fake-${path}`,
-  };
+    target: { kind: 'code', paths: [path] },
+    evidenceRequests: [],
+  });
 }
 
 /** ambiguous ladder の interpretation 呼び出しへの汎用応答（'provisional' 提案）。instruction から正規化済み rawFindingId を動的に抽出する。 */
@@ -427,7 +444,8 @@ function interpretationRunAgentResponse(instruction: string): AgentResponse {
 function emptyLedger(): FindingLedger {
   return {
     workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-    findings: [], rawFindings: [], conflicts: [], interpretations: [],
+    findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
+    ...emptyFindingAuthorityProjection(),
   };
 }
 
@@ -464,23 +482,42 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
     await harness.run([hallucinatedRaw('r1', 'Same bug', 'src/does-not-exist.ts')], '2026-07-01T00:00:00.000Z');
     await harness.run([hallucinatedRaw('r2', 'Same bug', 'src/does-not-exist.ts')], '2026-07-01T00:01:00.000Z');
     await harness.run([hallucinatedRaw('r3', 'Same bug', 'src/does-not-exist.ts')], '2026-07-01T00:02:00.000Z');
+    await harness.run([hallucinatedRaw('r4', 'Same bug', 'src/does-not-exist.ts')], '2026-07-01T00:03:00.000Z');
 
     const context = buildFindingsRuleContext(harness.currentLedger());
     expect(context.provisional.fixpoint).toBe(true);
     expect(context.rounds.budgetExhausted).toBe(false);
-    expect(stopBudgetRoundsCompleted(harness.currentLedger())).toBe(3);
+    expect(stopBudgetRoundsCompleted(harness.currentLedger())).toBe(4);
   });
 
   it('progress (a substantive finding resolving) does not reset the round budget — it accumulates monotonically alongside the churn', async () => {
+    const seedRaw = canonicalRawFindingFixture({
+      rawFindingId: 'raw-seed',
+      stepName: 'reviewers',
+      reviewer: 'arch-review',
+      familyTag: 'bug',
+      severity: 'medium',
+      title: 'Real, fixable issue',
+      description: 'A genuine issue that the fixer can and will resolve.',
+      suggestion: null,
+      relation: 'new',
+      targetFindingId: null,
+      target: { kind: 'code', paths: ['src/real.ts'] },
+      evidence: [],
+    });
     const seeded: FindingLedger = {
       workflowName: 'peer-review', nextId: 2, updatedAt: '2026-07-01T00:00:00.000Z',
       findings: [{
         id: 'F-0001',
         status: 'open',
         lifecycle: 'new',
+        target: seedRaw.target,
+        targetIdentityHash: seedRaw.targetIdentityHash,
+        claimIdentityHash: seedRaw.claimIdentityHash,
+        semanticClaimIdentityHash: seedRaw.semanticClaimIdentityHash,
         severity: 'medium',
         title: 'Real, fixable issue',
-        location: 'src/real.ts:10',
+        evidenceIds: [],
         description: 'A genuine issue that the fixer can and will resolve.',
         reviewers: ['arch-review'],
         rawFindingIds: ['raw-seed'],
@@ -488,37 +525,30 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
         lastSeen: { runId: 'run-0', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
         revision: 1,
       }],
-      rawFindings: [{
-        rawFindingId: 'raw-seed',
-        stepName: 'reviewers',
-        reviewer: 'arch-review',
-        familyTag: 'bug',
-        severity: 'medium',
-        title: 'Real, fixable issue',
-        location: 'src/real.ts:10',
-        description: 'A genuine issue that the fixer can and will resolve.',
-        relation: 'new',
-      }],
+      evidenceRecords: [],
+      rawFindings: [seedRaw],
       conflicts: [],
       interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     };
     const harness = makeRoundHarness(seeded, { maxRounds: 3 });
 
     // Round 1: churn hallucination + real progress (F-0001 confirmed resolved).
     await harness.run([
       hallucinatedRaw('r1', 'Bug in file A', 'src/does-not-exist-a.ts'),
-      {
+      reviewerRawExtractionFixture({
         rawFindingId: 'confirm-1',
         familyTag: 'bug',
         severity: 'medium',
         title: 'Real, fixable issue',
         description: 'Verified: the fix removes the issue.',
+        suggestion: null,
         relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
         // confirmation は検証済み file_quote 証跡が
         // 無いと resolve できない。
         evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/real.ts', 10)],
-      },
+      }),
     ], '2026-07-01T00:00:00.000Z');
     expect(harness.currentLedger().findings.find((f) => f.id === 'F-0001')?.status).toBe('resolved');
     expect(stopBudgetRoundsCompleted(harness.currentLedger())).toBe(1);

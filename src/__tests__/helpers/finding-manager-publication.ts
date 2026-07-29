@@ -57,14 +57,19 @@ export class RevisionedFindingLedgerTestRepository {
     | undefined;
 
   constructor(initialLedger: FindingLedger) {
-    const authorized = authorizeFindingLedgerFixture({
+    const completeProjection = {
       ...initialLedger,
       evidenceBindings: initialLedger.evidenceBindings ?? [],
       lifecycleReservations: initialLedger.lifecycleReservations ?? [],
       lifecycleEvents: initialLedger.lifecycleEvents ?? [],
       rawRecoveryAttempts: initialLedger.rawRecoveryAttempts ?? [],
       rawRecoveryResults: initialLedger.rawRecoveryResults ?? [],
-    });
+    };
+    const authorized = completeProjection.lifecycleEvents.length > 0
+      || (completeProjection.findings.length === 0
+        && completeProjection.conflicts.length === 0)
+      ? completeProjection
+      : authorizeFindingLedgerFixture(completeProjection);
     this.ledger = structuredClone(
       normalizeFindingLedger(authorized, initialLedger.workflowName),
     );

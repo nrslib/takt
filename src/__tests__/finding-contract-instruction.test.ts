@@ -128,7 +128,7 @@ describe('buildFindingContractInstruction', () => {
       expect(ja).toContain('relation を "reopened"');
     });
 
-    it('requires current exact single-range evidence for resolution confirmations in both languages', () => {
+    it('requires current exact evidence requests without reviewer-issued proof fields in both languages', () => {
       const contract = {
         rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT,
         reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
@@ -137,12 +137,14 @@ describe('buildFindingContractInstruction', () => {
       const en = build({ contract });
       const ja = build({ contract, language: 'ja' });
 
-      expect(en).toContain('exactly one contiguous location');
+      expect(en).toContain('at least one `file_quote` with one contiguous path/startLine/endLine range');
       expect(en).toContain('exactly matches the complete current text');
-      expect(en).toContain(REVIEWER_SNAPSHOT_ID);
-      expect(ja).toContain('単一連続範囲');
-      expect(ja).toContain('現在の全文と完全一致');
-      expect(ja).toContain(REVIEWER_SNAPSHOT_ID);
+      expect(en).toContain('Do not output snapshotId');
+      expect(en).not.toContain(REVIEWER_SNAPSHOT_ID);
+      expect(ja).toContain('単一の path/startLine/endLine 連続範囲');
+      expect(ja).toContain('現在の全文に完全一致');
+      expect(ja).toContain('snapshotId・runId・proofId');
+      expect(ja).not.toContain(REVIEWER_SNAPSHOT_ID);
     });
   });
 

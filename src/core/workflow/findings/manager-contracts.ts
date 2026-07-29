@@ -20,6 +20,7 @@ import type {
   FindingLedger,
   FindingLifecycleEntityHead,
   FindingManagerOutput,
+  FindingManagerTaskAudit,
   RawFinding,
   RawFindingDispositionOutcome,
 } from './types.js';
@@ -43,6 +44,7 @@ export interface RunFindingManagerForStepInput {
   stepIteration: number;
   subResults: FindingManagerSubStepResult[];
   workflowName: string;
+  workflowTask: string;
   runId: string;
   callNamespace: string;
   timestamp: string;
@@ -122,6 +124,7 @@ export interface LadderResult {
 
 export interface ManagerDecisionStageResult {
   managerOutput: FindingManagerOutput;
+  conflictTargetHeads: Map<string, CapturedManagerConflictHead>;
   invalidAttempts: FindingManagerValidationAttemptReport[];
   cleanProvisionalSpecs: ProvisionalFindingSpec[];
   unsupportedRawFindingReports: UnsupportedRawFindingReport[];
@@ -129,6 +132,13 @@ export interface ManagerDecisionStageResult {
   cleanCanonicalById: Map<string, CanonicalRawFinding>;
   ladder: LadderResult;
   rawRecovery: RawAdjudicationRecoveryResult;
+  taskAudits: FindingManagerTaskAudit[];
+}
+
+export interface CapturedManagerConflictHead {
+  lifecycleHead: FindingLifecycleEntityHead | null;
+  evidenceSetHash: string;
+  reviewScopeSnapshotId: string;
 }
 
 export interface RawAdjudicationReplayOrigin {
@@ -137,6 +147,7 @@ export interface RawAdjudicationReplayOrigin {
   sourceRawFindingId: string;
   expectedHead: FindingLifecycleEntityHead;
   expectedProvisionalRevision: number;
+  expectedTargetIdentityHash: string | null;
   attempt: number;
   recoveryOrigin: ProvisionalRecoveryOrigin;
 }

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { ProvisionalFindingSpec } from './reconciler.js';
 import type {
   CanonicalRawFinding,
@@ -10,7 +11,7 @@ import {
   computeProvisionalStableKey,
   computeReviewerStableKey,
 } from './raw-canonicalization.js';
-import { computeClaimIdentityHash } from './evidence-domain.js';
+import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 
 interface RawProvisionalSpecInput {
   wire: RawFinding;
@@ -39,12 +40,16 @@ export function provisionalSpecForRawKind(
     lineageKey: input.canonical.lineageKey,
     sourceRawFindingIds: [input.wire.rawFindingId],
     reason: input.reason,
-    title: input.wire.title,
+    title: input.wire.title ?? `Unparsed reviewer finding ${input.wire.rawFindingId}`,
     severity: input.wire.severity,
-    description: input.wire.description,
+    ...(input.wire.description !== null ? { description: input.wire.description } : {}),
     ...(input.wire.suggestion !== null ? { suggestion: input.wire.suggestion } : {}),
     reviewers: [input.wire.reviewer],
     recoveryReviewerStableKey: input.canonical.reviewerStableKey,
+    target: input.wire.target,
+    targetIdentityHash: input.wire.targetIdentityHash,
+    claimIdentityHash: input.wire.claimIdentityHash,
+    semanticClaimIdentityHash: input.wire.semanticClaimIdentityHash,
   };
 }
 
@@ -65,11 +70,11 @@ export function stalePreconditionSpec(input: {
     reviewerPersonaKey: 'findings-manager',
   });
   const lineageKey = computeLineageKey({
-    claimIdentityHash: computeClaimIdentityHash({
+    claimIdentityHash: createHash('sha256').update(canonicalJson({
+      domain: 'finding-stale-precondition-event',
       targetFindingId: input.targetFindingId,
-      title: input.targetTitle,
-      description: input.reason,
-    }),
+      reason: input.reason,
+    })).digest('hex'),
     targetFindingId: input.targetFindingId,
   });
   return {

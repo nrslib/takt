@@ -31,6 +31,10 @@ function snapshotFinding(finding: FindingLedgerEntry): AdjudicationFindingEviden
     id: finding.id,
     status: finding.status,
     lifecycle: finding.lifecycle,
+    target: finding.target,
+    targetIdentityHash: finding.targetIdentityHash,
+    claimIdentityHash: finding.claimIdentityHash,
+    semanticClaimIdentityHash: finding.semanticClaimIdentityHash,
     severity: finding.severity,
     title: finding.title,
     evidenceIds: [...finding.evidenceIds],
@@ -54,9 +58,6 @@ function snapshotFinding(finding: FindingLedgerEntry): AdjudicationFindingEviden
       : {}),
     ...(finding.dismissal !== undefined ? { dismissal: finding.dismissal } : {}),
     ...(finding.provisional !== undefined ? { provisional: finding.provisional } : {}),
-    ...(finding.rejectedObservations !== undefined
-      ? { rejectedObservations: finding.rejectedObservations }
-      : {}),
   });
 }
 
@@ -70,6 +71,12 @@ function snapshotRawFinding(rawFinding: RawFinding): RawFinding {
     title: rawFinding.title,
     description: rawFinding.description,
     suggestion: rawFinding.suggestion,
+    target: rawFinding.target,
+    targetIdentityHash: rawFinding.targetIdentityHash,
+    claimIdentityHash: rawFinding.claimIdentityHash,
+    semanticClaimIdentityHash: rawFinding.semanticClaimIdentityHash,
+    candidateIdentityHash: rawFinding.candidateIdentityHash,
+    sourceBinding: rawFinding.sourceBinding,
     relation: rawFinding.relation,
     targetFindingId: rawFinding.targetFindingId,
     ...(rawFinding.targetPrecondition !== undefined

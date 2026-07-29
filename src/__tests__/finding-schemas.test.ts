@@ -8,6 +8,7 @@ import {
 import {
   FindingLifecycleSchema,
   FindingLifecycleReservationSchema,
+  FindingLedgerEntrySchema,
   FindingObservationSchema,
   FindingManagerDecisionsJsonSchema,
   FindingManagerOutputJsonSchema,
@@ -26,14 +27,24 @@ import { compareRfc3339Timestamps } from '../core/models/rfc3339.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import { RAW_FINDING_FIELD_LIMITS } from '../core/models/finding-contract-limits.js';
 import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
+import {
+  computeClaimIdentityHash,
+  computeSemanticClaimIdentityHash,
+  computeTargetIdentityHash,
+} from '../core/models/finding-claim-identity.js';
 import { deduplicateRawEvidence } from '../core/workflow/findings/evidence-domain.js';
 import { createFindingLifecycleReservation } from '../core/models/finding-lifecycle-identity.js';
-import { emptyFindingAuthorityProjection } from './helpers/finding-lifecycle-fixture.js';
+import {
+  canonicalRawFindingFixture,
+  emptyFindingAuthorityProjection,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 
 const TEST_INTEGRITY_DIGEST = 'a'.repeat(64);
 import { FINDING_CONFLICT_ADJUDICATION_SCHEMA_REF } from '../core/workflow/findings/adjudication-step.js';
 import { RAW_FINDINGS_SCHEMA_REF } from '../core/workflow/findings/manager-agent.js';
 import {
+  FINDING_MANAGER_CONTROL_SCHEMA_REF,
   FINDING_INTERPRETATION_SCHEMA_REF,
   FINDING_MANAGER_SCHEMA_REF,
 } from '../core/workflow/findings/manager-step.js';
@@ -96,6 +107,10 @@ function pendingLedgerWithCompleted(
 }
 
 function pendingFinding(id: string) {
+  const target = {
+    kind: 'code' as const,
+    paths: [`fixtures/${id}.ts`],
+  };
   return {
     id,
     status: 'open',
@@ -103,6 +118,21 @@ function pendingFinding(id: string) {
     revision: 1,
     severity: 'high',
     title: 'Pending finding',
+    target,
+    targetIdentityHash: computeTargetIdentityHash(target),
+    claimIdentityHash: computeClaimIdentityHash({
+      target,
+      familyTag: 'fixture',
+      severity: 'high',
+      title: 'Pending finding',
+      description: null,
+      suggestion: null,
+    }),
+    semanticClaimIdentityHash: computeSemanticClaimIdentityHash({
+      target,
+      title: 'Pending finding',
+      description: null,
+    }),
     reviewers: ['reviewer'],
     rawFindingIds: ['raw-1'],
     evidenceIds: [],
@@ -126,12 +156,14 @@ describe('finding schemas', () => {
       RAW_FINDINGS_SCHEMA_REF,
       FINDING_INTERPRETATION_SCHEMA_REF,
       FINDING_MANAGER_SCHEMA_REF,
+      FINDING_MANAGER_CONTROL_SCHEMA_REF,
       RAW_ADJUDICATION_SCHEMA_REF,
     ]).toEqual([
       'takt.findings.adjudication',
       'takt.findings.raw',
       'takt.findings.interpretation',
-      'takt.findings.manager',
+      'takt.findings.manager.raw-task',
+      'takt.findings.manager.control-task',
       'takt.findings.raw-adjudication',
     ]);
   });
@@ -150,6 +182,13 @@ describe('finding schemas', () => {
     };
 
     expect(parseFindingLedger(ledger)).toEqual(ledger);
+  });
+
+  it('rejects a non-provisional finding whose semantic claim identity is null', () => {
+    expect(() => FindingLedgerEntrySchema.parse({
+      ...pendingFinding('F-0001'),
+      semanticClaimIdentityHash: null,
+    })).toThrow(/all null or all present/u);
   });
 
   it('requires superseded evidence to be projected onto the canonical finding', () => {
@@ -172,12 +211,31 @@ describe('finding schemas', () => {
       stepName: 'reviewers',
       timestamp: '2026-07-24T00:00:00.000Z',
     };
+    const canonicalTarget = {
+      kind: 'code' as const,
+      paths: ['src/duplicate.ts'],
+    };
     const canonical = {
       id: 'F-0001',
       status: 'open',
       lifecycle: 'new',
       severity: 'high',
       title: 'Canonical',
+      target: canonicalTarget,
+      targetIdentityHash: computeTargetIdentityHash(canonicalTarget),
+      claimIdentityHash: computeClaimIdentityHash({
+        target: canonicalTarget,
+        familyTag: 'fixture',
+        severity: 'high',
+        title: 'Canonical',
+        description: null,
+        suggestion: null,
+      }),
+      semanticClaimIdentityHash: computeSemanticClaimIdentityHash({
+        target: canonicalTarget,
+        title: 'Canonical',
+        description: null,
+      }),
       reviewers: ['reviewer-a'],
       rawFindingIds: [],
       evidenceIds: [],
@@ -191,6 +249,11 @@ describe('finding schemas', () => {
       status: 'superseded',
       lifecycle: 'superseded',
       title: 'Duplicate',
+      semanticClaimIdentityHash: computeSemanticClaimIdentityHash({
+        target: canonicalTarget,
+        title: 'Duplicate',
+        description: null,
+      }),
       evidenceIds: [evidenceRecord.evidenceId],
       supersededByFindingId: 'F-0001',
     };
@@ -694,6 +757,7 @@ describe('finding schemas', () => {
       rawDecisions: [{
         rawFindingId: 'raw-1',
         decision: 'new',
+        anchorRelevance: 'not_applicable',
         findingId: '',
         evidence: 'No related open finding.',
       }],
@@ -716,62 +780,20 @@ describe('finding schemas', () => {
     );
   });
 
-  it('binds only file_quote evidence to the current review snapshot in the provider schema', () => {
-    const firstSnapshotId = '1'.repeat(64);
-    const secondSnapshotId = '2'.repeat(64);
-    const firstRound = createRawFindingsOutputJsonSchema(firstSnapshotId);
-    const secondRound = createRawFindingsOutputJsonSchema(secondSnapshotId);
-    type ProviderEvidenceBranch = {
-      properties: {
-        kind: { enum: string[] };
-        snapshotId?: { enum: string[] };
-      };
-    };
-    const branchesOf = (schema: unknown) =>
-      (schema as {
-        properties: {
-          rawFindings: {
-            items: {
-              properties: {
-                evidence: { items: { anyOf: ProviderEvidenceBranch[] } };
-              };
-            };
-          };
-        };
-      }).properties.rawFindings.items.properties.evidence.items.anyOf;
-    const fileQuoteOf = (schema: unknown) => branchesOf(schema).find(
-      (branch) => branch.properties.kind.enum.includes('file_quote'),
-    );
-    const engineProofOf = (schema: unknown) => branchesOf(schema).find(
-      (branch) => branch.properties.kind.enum.includes('engine_proof'),
-    );
-
-    expect(fileQuoteOf(firstRound)).toMatchObject({
-      properties: { snapshotId: { enum: [firstSnapshotId] } },
-    });
-    expect(fileQuoteOf(secondRound)).toMatchObject({
-      properties: { snapshotId: { enum: [secondSnapshotId] } },
-    });
-    expect(fileQuoteOf(firstRound)).not.toMatchObject({
-      properties: { snapshotId: { enum: [secondSnapshotId] } },
-    });
-    expect(engineProofOf(firstRound)).toEqual(engineProofOf(secondRound));
-
-    const staticFileQuote = RawFindingsOutputValidationJsonSchema
-      .properties.rawFindings.items.properties.evidence.items.oneOf.find(
-        (branch) => branch.properties.kind.const === 'file_quote',
-      );
-    expect(staticFileQuote).toMatchObject({
-      properties: { snapshotId: { pattern: '^[a-f0-9]{64}$' } },
-    });
-    expect(staticFileQuote).not.toMatchObject({
-      properties: { snapshotId: { const: expect.anything() } },
-    });
+  it('keeps engine-issued snapshot, proof, and run identities out of the provider schema', () => {
+    const serialized = JSON.stringify(createRawFindingsOutputJsonSchema());
+    expect(serialized).toContain('"rawExcerpt"');
+    expect(serialized).toContain('"evidenceRequests"');
+    expect(serialized).not.toContain('"snapshotId"');
+    expect(serialized).not.toContain('"proofId"');
+    expect(serialized).not.toContain('"runId"');
   });
 
-  it('describes the complete resolution confirmation evidence contract in the provider schema', () => {
-    const properties = RawFindingsOutputJsonSchema.properties.rawFindings.items.properties;
-    const providerEvidence = properties.evidence.items as unknown as {
+  it('describes reviewer evidence requests without engine-issued verification results', () => {
+    const candidate = RawFindingsOutputJsonSchema.properties.rawFindings.items
+      .properties.candidate.anyOf[1];
+    const properties = candidate.properties;
+    const providerEvidence = properties.evidenceRequests.items as unknown as {
       anyOf: Array<{
         required: string[];
         properties: Record<string, { enum?: string[] }>;
@@ -781,16 +803,14 @@ describe('finding schemas', () => {
       (branch) => branch.properties.kind?.enum?.includes('file_quote') === true,
     );
 
-    expect(properties.relation.description).toContain('resolution_confirmation');
-    expect(properties.relation.description).toContain('mechanically verifiable evidence');
-    expect(properties.evidence.maxItems).toBe(16);
+    expect(properties.relation.enum).toContain('resolution_confirmation');
+    expect(properties.evidenceRequests.maxItems).toBe(16);
     expect(fileQuote?.required).toEqual([
       'kind',
       'path',
       'startLine',
       'endLine',
       'verbatimExcerpt',
-      'snapshotId',
     ]);
     expect(fileQuote).toMatchObject({
       properties: {
@@ -805,6 +825,8 @@ describe('finding schemas', () => {
         kind: { enum: ['engine_proof'] },
       },
     });
+    expect(fileQuote?.properties).not.toHaveProperty('snapshotId');
+    expect(engineProof?.properties).not.toHaveProperty('proofId');
   });
 
   it('uses only the native structured output keyword subset recursively', () => {
@@ -834,34 +856,52 @@ describe('finding schemas', () => {
       }
     };
 
-    visit(createRawFindingsOutputJsonSchema('a'.repeat(64)));
+    visit(createRawFindingsOutputJsonSchema());
   });
 
-  it('uses the same SHA-256 length contract in runtime and provider schemas', () => {
-    const base = {
+  it('rejects engine-issued identity fields in reviewer evidence requests', () => {
+    const base = reviewerRawExtractionFixture({
       rawFindingId: 'raw-1',
-      relation: 'new' as const,
+      relation: 'new',
       targetFindingId: null,
       familyTag: 'bug',
-      severity: 'low' as const,
+      severity: 'low',
       title: 'title',
       description: 'description',
       suggestion: null,
-    };
-    expect(() => ReviewerRawFindingSchema.parse({
-      ...base,
-      evidence: [{ kind: 'engine_proof', proofId: 'a'.repeat(65) }],
-    })).toThrow();
-    expect(() => ReviewerRawFindingSchema.parse({
-      ...base,
-      evidence: [{
+      target: { kind: 'code', paths: ['src/a.ts'] },
+      evidenceRequests: [{
         kind: 'file_quote',
         path: 'src/a.ts',
         startLine: 1,
         endLine: 1,
         verbatimExcerpt: 'evidence',
-        snapshotId: 'a'.repeat(65),
       }],
+    });
+    expect(() => ReviewerRawFindingSchema.parse({
+      ...base,
+      candidate: {
+        ...base.candidate,
+        evidenceRequests: [{
+          kind: 'engine_proof',
+          subject: { kind: 'repository_query' },
+          proofId: 'a'.repeat(64),
+        }],
+      },
+    })).toThrow();
+    expect(() => ReviewerRawFindingSchema.parse({
+      ...base,
+      candidate: {
+        ...base.candidate,
+        evidenceRequests: [{
+          kind: 'file_quote',
+          path: 'src/a.ts',
+          startLine: 1,
+          endLine: 1,
+          verbatimExcerpt: 'evidence',
+          snapshotId: 'a'.repeat(64),
+        }],
+      },
     })).toThrow();
     expect(RAW_FINDING_FIELD_LIMITS.maxSnapshotIdChars).toBe(64);
     expect(RAW_FINDING_FIELD_LIMITS.maxProofIdChars).toBe(64);
@@ -883,20 +923,23 @@ describe('finding schemas', () => {
       evidence,
     };
     const namespacedId = 'namespace:'.repeat(20);
-
-    expect(() => ReviewerRawFindingSchema.parse({
+    const reviewer = reviewerRawExtractionFixture({
       ...fields,
       rawFindingId: namespacedId,
-    })).toThrow();
-    expect(RawFindingSchema.parse({
+      target: { kind: 'code', paths: ['src/namespaced.ts'] },
+      evidenceRequests: [],
+    });
+
+    expect(() => ReviewerRawFindingSchema.parse(reviewer)).toThrow();
+    expect(RawFindingSchema.parse(canonicalRawFindingFixture({
       ...fields,
       rawFindingId: namespacedId,
       stepName: 'reviewers',
       reviewer: 'reviewer-a',
-    }).rawFindingId).toBe(namespacedId);
+    })).rawFindingId).toBe(namespacedId);
   });
 
-  it('accepts multi-evidence normalized by the canonical evidence ordering helper', () => {
+  it('accepts persisted multi-evidence normalized by the canonical evidence ordering helper', () => {
     const snapshotId = 'a'.repeat(64);
     const byEarlierCanonicalField = {
       kind: 'file_quote' as const,
@@ -923,8 +966,10 @@ describe('finding schemas', () => {
       byEarlierCanonicalField,
       byLaterCanonicalField,
     ]);
-    expect(ReviewerRawFindingSchema.parse({
+    expect(RawFindingSchema.parse(canonicalRawFindingFixture({
       rawFindingId: 'raw-multi-evidence',
+      stepName: 'review',
+      reviewer: 'reviewer',
       relation: 'new',
       targetFindingId: null,
       familyTag: 'bug',
@@ -933,7 +978,7 @@ describe('finding schemas', () => {
       description: 'Canonical JSON ordering differs from insertion-order JSON.',
       suggestion: null,
       evidence,
-    }).evidence).toEqual(evidence);
+    })).evidence).toEqual(evidence);
   });
 
   it('uses finding type constants for schema enum values', () => {
@@ -941,7 +986,8 @@ describe('finding schemas', () => {
     expect(FindingStatusSchema.options).toEqual(FINDING_STATUSES);
     expect(FindingLifecycleSchema.options).toEqual(FINDING_LIFECYCLES);
     expect(FindingManagerOutputJsonSchema.properties.newFindings.items.properties.severity.enum).toBe(FINDING_SEVERITIES);
-    expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.properties.severity.enum)
+    expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.properties
+      .candidate.anyOf[1].properties.severity.enum)
       .toEqual([...FINDING_SEVERITIES, null]);
 
     const conflictStatus = {
@@ -965,7 +1011,7 @@ describe('finding schemas', () => {
       verbatimExcerpt: 'const finding = true;',
       snapshotId: 'a'.repeat(64),
     }] as const;
-    const reviewerRawFinding = {
+    const reviewerRawFinding = reviewerRawExtractionFixture({
       rawFindingId: 'raw-1',
       familyTag: 'missing-edge-case',
       severity: 'high',
@@ -975,36 +1021,40 @@ describe('finding schemas', () => {
       relation: 'new',
       targetFindingId: null,
       evidence,
-    };
-    const persistedRawFinding = {
-      ...reviewerRawFinding,
+    });
+    const {
+      evidenceRequests: _evidenceRequests,
+      ...persistedCandidate
+    } = reviewerRawFinding.candidate!;
+    const persistedRawFinding = canonicalRawFindingFixture({
+      ...persistedCandidate,
       stepName: 'ai-antipattern-review',
       reviewer: 'ai-antipattern-reviewer',
-    };
+      evidence,
+    });
 
-    expect(ReviewerRawFindingSchema.parse(reviewerRawFinding).familyTag).toBe('missing-edge-case');
+    expect(ReviewerRawFindingSchema.parse(reviewerRawFinding).candidate?.familyTag)
+      .toBe('missing-edge-case');
     expect(RawFindingSchema.parse(persistedRawFinding).familyTag).toBe('missing-edge-case');
     expect(() => ReviewerRawFindingSchema.parse({
-      rawFindingId: 'raw-1',
-      severity: 'high',
-      title: 'Structured output omits the family tag',
-      description: 'The findings manager cannot reconcile findings without familyTag.',
-      suggestion: 'Keep reviewer raw finding fields complete for reconciliation.',
-      relation: 'new',
-      targetFindingId: null,
-      evidence,
+      ...reviewerRawFinding,
+      candidate: {
+        ...reviewerRawFinding.candidate,
+        familyTag: undefined,
+      },
     })).toThrow();
-    expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.required).toContain('familyTag');
-    expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.required).toContain('evidence');
-    expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.required).toContain('suggestion');
-    expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.properties.familyTag).toEqual({
+    const candidateSchema = RawFindingsOutputJsonSchema.properties.rawFindings.items
+      .properties.candidate.anyOf[1];
+    expect(candidateSchema.required).toContain('familyTag');
+    expect(candidateSchema.required).toContain('evidenceRequests');
+    expect(candidateSchema.required).toContain('suggestion');
+    expect(candidateSchema.properties.familyTag).toEqual({
       type: ['string', 'null'],
-      description: 'Structured form of the Observed Findings family_tag value. A classification/search hint only — it is not used to determine whether two findings are the same issue.',
     });
   });
 
   it('keeps target mutation authority engine-issued and persisted only', () => {
-    const reviewerTarget = {
+    const reviewerTarget = reviewerRawExtractionFixture({
       rawFindingId: 'raw-target',
       familyTag: 'state',
       severity: 'high',
@@ -1013,6 +1063,7 @@ describe('finding schemas', () => {
       suggestion: 'Repair the transition.',
       relation: 'persists',
       targetFindingId: 'F-0001',
+      target: { kind: 'code', paths: ['src/state.ts'] },
       evidence: [{
         kind: 'file_quote',
         path: 'src/state.ts',
@@ -1021,12 +1072,29 @@ describe('finding schemas', () => {
         verbatimExcerpt: 'const state = invalid;',
         snapshotId: 'b'.repeat(64),
       }],
-    };
+    });
     const targetPrecondition = {
       targetFindingId: 'F-0001',
       targetRevision: 4,
       targetStatus: 'open',
       targetEvidenceHash: 'a'.repeat(64),
+    };
+    const {
+      evidenceRequests: _evidenceRequests,
+      ...persistedTargetCandidate
+    } = reviewerTarget.candidate!;
+    const persistedTarget = {
+      ...persistedTargetCandidate,
+      evidence: [{
+        kind: 'file_quote' as const,
+        path: 'src/state.ts',
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: 'const state = invalid;',
+        snapshotId: 'b'.repeat(64),
+      }],
+      stepName: 'review',
+      reviewer: 'reviewer',
     };
 
     expect(ReviewerRawFindingSchema.parse(reviewerTarget)).not.toHaveProperty('targetPrecondition');
@@ -1035,22 +1103,19 @@ describe('finding schemas', () => {
       targetPrecondition,
     })).toThrow();
     expect(() => RawFindingSchema.parse({
-      ...reviewerTarget,
-      stepName: 'review',
-      reviewer: 'reviewer',
+      ...canonicalRawFindingFixture(persistedTarget),
     })).toThrow();
-    expect(RawFindingSchema.parse({
-      ...reviewerTarget,
-      stepName: 'review',
-      reviewer: 'reviewer',
+    expect(RawFindingSchema.parse(canonicalRawFindingFixture({
+      ...persistedTarget,
       targetPrecondition,
-    }).targetPrecondition).toEqual(targetPrecondition);
+    })).targetPrecondition).toEqual(targetPrecondition);
   });
 
   // 決定スキーマ（FindingManagerDuplicateDecisionSchema）と対称に、出力側の
   // duplicateFindings も duplicate を1件も持たないエントリを拒否する。
   it('rejects a duplicateFindings entry with an empty duplicateFindingIds array', () => {
     const base = {
+      anchorAdjudications: [],
       matches: [],
       newFindings: [],
       resolvedFindings: [],
@@ -1078,6 +1143,7 @@ describe('finding schemas', () => {
 
   it('requires every FindingManagerOutput array explicitly', () => {
     const output = {
+      anchorAdjudications: [],
       matches: [],
       newFindings: [],
       resolvedFindings: [],

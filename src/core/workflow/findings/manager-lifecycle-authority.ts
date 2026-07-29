@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { computeClaimIdentityHash } from '../../models/finding-claim-identity.js';
 import { createEngineProofRecord } from '../../models/finding-evidence-record.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
@@ -7,7 +6,11 @@ import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
 import { FindingLedgerEntrySchema } from '../../models/finding-schemas.js';
 import type { ManagerDecisionStageResult } from './manager-contracts.js';
 import { computeInvalidLocationCandidates } from './manager-utils.js';
-import type { FindingLedger, FindingObservation } from './types.js';
+import type {
+  FindingLedger,
+  FindingObservation,
+  LifecycleAuthoritySubject,
+} from './types.js';
 import type { FindingLifecycleCommand } from './lifecycle-transaction.js';
 
 function sha256(value: unknown): string {
@@ -37,17 +40,14 @@ function findingClaimIdentitySet(
   }
   const rawClaims = finding.rawFindingIds.flatMap((rawFindingId) => {
     const raw = ledger.rawFindings.find((candidate) => candidate.rawFindingId === rawFindingId);
-    return raw === undefined ? [] : [computeClaimIdentityHash(raw)];
+    return raw === undefined ? [] : [raw.semanticClaimIdentityHash];
   });
-  return [...new Set(
-    rawClaims.length > 0
-      ? rawClaims
-      : [computeClaimIdentityHash({
-          targetFindingId: finding.id,
-          title: finding.title,
-          description: finding.description ?? '',
-        })],
-  )].sort(compareBinaryStrings);
+  const claims = rawClaims.length > 0
+    ? rawClaims
+    : finding.semanticClaimIdentityHash === null
+      ? []
+      : [finding.semanticClaimIdentityHash];
+  return [...new Set(claims)].sort(compareBinaryStrings);
 }
 
 /**
@@ -86,7 +86,7 @@ export function issueManagerLifecycleAuthority(input: {
   >();
   const addProof = (
     findingId: string,
-    subject: Parameters<typeof createEngineProofRecord>[0]['subject'],
+    subject: LifecycleAuthoritySubject,
     result: unknown,
   ): string => {
     const currentFinding = input.current.findings.find(
@@ -101,17 +101,14 @@ export function issueManagerLifecycleAuthority(input: {
     const targetFindingId = currentFinding === undefined ? null : findingId;
     const proof = createEngineProofRecord({
       kind: 'engine_proof',
+      purpose: 'lifecycle_authority',
       verifierId: 'takt.finding-lifecycle-policy',
       verifierVersion: '1',
       workflowName: input.workflowName,
       runId: input.runId,
       scopeIdentity: input.scopeIdentity,
       snapshotId: input.reviewScopeSnapshotId,
-      claimIdentityHash: computeClaimIdentityHash({
-        targetFindingId,
-        title: finding.title,
-        description: finding.description ?? '',
-      }),
+      claimIdentityHash: finding.claimIdentityHash,
       targetFindingId,
       subject,
       dependencyDigests: [
@@ -152,12 +149,10 @@ export function issueManagerLifecycleAuthority(input: {
     const proofId = addProof(
       finding.id,
       {
-        kind: 'named_structural_check',
-        checkId: 'finding-provisional-isolation',
-        parameters: {
-          provisionalKind: finding.provisional.kind,
-          stableKey: finding.provisional.stableKey,
-        },
+        kind: 'finding_provisional_isolation',
+        findingId: finding.id,
+        provisionalKind: finding.provisional.kind,
+        stableKey: finding.provisional.stableKey,
       },
       {
         findingId: finding.id,
@@ -185,7 +180,7 @@ export function issueManagerLifecycleAuthority(input: {
     const proofId = addProof(
       invalidated.findingId,
       {
-        kind: 'finding_location_set_invalid',
+        kind: 'finding_target_invalid',
         findingId: invalidated.findingId,
         reason,
       },
@@ -230,9 +225,9 @@ export function issueManagerLifecycleAuthority(input: {
         {
           kind: 'finding_claim_sets_equal',
           findingIds,
-          claimIdentityHashes: claimSets[0]!,
+          semanticClaimIdentityHashes: claimSets[0]!,
         },
-        { findingIds, claimIdentityHashes: claimSets[0] },
+        { findingIds, semanticClaimIdentityHashes: claimSets[0] },
       );
       proofIdsByTarget.set(
         findingId,

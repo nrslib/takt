@@ -143,6 +143,8 @@ export function findRawFieldLimitViolation(fields: {
   description?: string;
   suggestion?: string;
   evidence?: readonly unknown[];
+  rawExcerpt?: string;
+  evidenceRequests?: readonly unknown[];
 }): string | undefined {
   const checks: Array<[string, string | undefined, number]> = [
     ['rawFindingId', fields.rawFindingId, RAW_FINDING_LIMITS.maxRawFindingIdChars],
@@ -150,13 +152,16 @@ export function findRawFieldLimitViolation(fields: {
     ['title', fields.title, RAW_FINDING_LIMITS.maxTitleChars],
     ['description', fields.description, RAW_FINDING_LIMITS.maxDescriptionChars],
     ['suggestion', fields.suggestion, RAW_FINDING_LIMITS.maxSuggestionChars],
+    ['rawExcerpt', fields.rawExcerpt, RAW_FINDING_LIMITS.maxDescriptionChars],
   ];
   for (const [name, value, limit] of checks) {
     if (value !== undefined && value.length > limit) {
       return `${name} is ${value.length} characters, exceeding the limit of ${limit}`;
     }
   }
-  for (const [index, evidence] of (fields.evidence ?? []).entries()) {
+  for (const [index, evidence] of (
+    fields.evidenceRequests ?? fields.evidence ?? []
+  ).entries()) {
     if (evidence === null || typeof evidence !== 'object' || Array.isArray(evidence)) {
       continue;
     }
@@ -165,11 +170,8 @@ export function findRawFieldLimitViolation(fields: {
       ? [
           [`evidence[${index}].path`, record.path, RAW_FINDING_LIMITS.maxEvidencePathChars],
           [`evidence[${index}].verbatimExcerpt`, record.verbatimExcerpt, RAW_FINDING_LIMITS.maxVerbatimExcerptChars],
-          [`evidence[${index}].snapshotId`, record.snapshotId, RAW_FINDING_LIMITS.maxSnapshotIdChars],
         ]
-      : record.kind === 'engine_proof'
-        ? [[`evidence[${index}].proofId`, record.proofId, RAW_FINDING_LIMITS.maxProofIdChars]]
-        : [];
+      : [];
     for (const [name, value, limit] of evidenceChecks) {
       if (typeof value === 'string' && value.length > limit) {
         return `${name} is ${value.length} characters, exceeding the limit of ${limit}`;

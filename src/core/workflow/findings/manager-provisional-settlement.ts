@@ -1,4 +1,4 @@
-import { computeLineageKey, computeOverflowStableKey } from './raw-canonicalization.js';
+import { computeOverflowStableKey } from './raw-canonicalization.js';
 import {
   applyReplayOriginSettlement,
   type ProvisionalReplayOrigin,
@@ -10,7 +10,6 @@ import type {
   FindingObservation,
   RawFinding,
 } from './types.js';
-import { computeClaimIdentityHash } from './evidence-domain.js';
 import { computeRawFindingIntegrityDigest } from '../../models/finding-raw-integrity.js';
 import type { FindingRejectedObservationCode } from '../../models/finding-types.js';
 import {
@@ -18,6 +17,12 @@ import {
   type FindingLifecycleCommand,
 } from './lifecycle-transaction.js';
 import { FindingLedgerEntrySchema } from '../../models/finding-schemas.js';
+import {
+  absenceRawFindings,
+  authorityAnchorAdjudications,
+  computeAnchorRelevanceDecisionDigest,
+} from '../../models/finding-anchor-relevance.js';
+import { isProvisionalPromotionSource } from './provisional-promotion-eligibility.js';
 
 export interface ProvisionalSettlement {
   output: FindingManagerOutput;
@@ -30,28 +35,24 @@ export interface ProvisionalSettlement {
 }
 
 /**
- * provisional settlement も claimIdentityHash を唯一の同一性正本にする。
+ * claim identity は重複検索にだけ使う。provisional 昇格の正本は
+ * findingId + revision precondition + targetIdentityHash。
  */
 export function fullIdentityKeyOf(
-  title: string | undefined,
-  description: string | undefined,
-): string {
-  return computeClaimIdentityHash({
-    targetFindingId: null,
-    title: title ?? '',
-    description: description ?? '',
-  });
+  value: Pick<RawFinding | FindingLedgerEntry, 'claimIdentityHash'>,
+): string | undefined {
+  return value.claimIdentityHash ?? undefined;
 }
 
 /**
  * clean な後続 raw だけが provisional を確定・解消できる。
  *
  * 確定・解消の根拠は次のどちらかに限る:
- * (a) claimIdentityHash の一致 — SameProof と同格
- * (b) 保存済み lineageKey との一致（claim 形の再計算）
- * どちらも「対応が一意」の場合のみ採用する。複数候補・非一意は確定しない
- * （保守側 — provisional は開いたままで gate は閉じ続ける）。manager の意味判断
- * による match は決定的根拠にならない。
+ * 昇格は findingId + 保存時 revision precondition + targetIdentityHash の一致を
+ * 必須とする。claimIdentityHash / lineageKey の一致だけでは provisional を
+ * product finding に昇格できない。証拠 matrix はこの関数へ渡る前の admission
+ * で検証済みであり、保存時 lifecycle transaction が同じ evidence binding と
+ * finding head を再検証する。
  *
  * 適用:
  * - clean new group が (a)/(b) で open provisional と一意対応 → 新規 finding を
@@ -87,60 +88,44 @@ export function settleProvisionalsWithCleanEvidence(input: {
     output: input.output,
     origins: input.replayOrigins,
     freshLedger: input.freshLedger,
+    cleanRawIds: input.cleanRawIds,
+    wireById: input.wireById,
   });
   const provisionalById = new Map(openProvisionals.map((finding) => [finding.id, finding]));
 
-  // 一意な identity / lineage だけを索引に載せる（重複 identity は候補から除外）。
+  // 一意な identity / lineage は「既存 product finding への決定的 mapping」
+  // にだけ使う。provisional 昇格には使わない。
   let identityCounts = new Map<string, number>();
   for (const finding of openProvisionals) {
-    const key = fullIdentityKeyOf(finding.title, finding.description);
+    const key = fullIdentityKeyOf(finding);
+    if (key === undefined) {
+      continue;
+    }
     identityCounts = new Map([...identityCounts, [key, (identityCounts.get(key) ?? 0) + 1]]);
   }
   let byUniqueIdentity = new Map<string, FindingLedgerEntry>();
   for (const finding of openProvisionals) {
-    const key = fullIdentityKeyOf(finding.title, finding.description);
+    const key = fullIdentityKeyOf(finding);
+    if (key === undefined) {
+      continue;
+    }
     if (identityCounts.get(key) === 1) {
       byUniqueIdentity = new Map([...byUniqueIdentity, [key, finding]]);
     }
   }
-  let lineageCounts = new Map<string, number>();
-  for (const finding of openProvisionals) {
-    const key = finding.provisional!.lineageKey;
-    lineageCounts = new Map([...lineageCounts, [key, (lineageCounts.get(key) ?? 0) + 1]]);
-  }
-  let byUniqueLineage = new Map<string, FindingLedgerEntry>();
-  for (const finding of openProvisionals) {
-    const key = finding.provisional!.lineageKey;
-    if (lineageCounts.get(key) === 1) {
-      byUniqueLineage = new Map([...byUniqueLineage, [key, finding]]);
-    }
-  }
-
-  const findProvisionalForCleanRaw = (wire: RawFinding): FindingLedgerEntry | undefined => {
-    const claimIdentityHash = fullIdentityKeyOf(wire.title, wire.description);
-    const byIdentity = byUniqueIdentity.get(claimIdentityHash);
-    if (byIdentity !== undefined) {
-      return byIdentity;
-    }
-    const claimLineage = computeLineageKey({
-      claimIdentityHash,
-    });
-    return byUniqueLineage.get(claimLineage);
-  };
-
   const freshRawsById = new Map(input.freshLedger.rawFindings.map((raw) => [raw.rawFindingId, raw]));
   const targetHasExactIdentity = (targetId: string, identity: string): boolean => {
     const target = input.freshLedger.findings.find((finding) => finding.id === targetId);
     if (target === undefined) {
       return false;
     }
-    if (fullIdentityKeyOf(target.title, target.description) === identity) {
+    if (fullIdentityKeyOf(target) === identity) {
       return true;
     }
     return target.rawFindingIds.some((rawFindingId) => {
       const raw = freshRawsById.get(rawFindingId);
       return raw !== undefined
-        && fullIdentityKeyOf(raw.title, raw.description) === identity;
+        && fullIdentityKeyOf(raw) === identity;
     });
   };
 
@@ -171,71 +156,51 @@ export function settleProvisionalsWithCleanEvidence(input: {
       ]);
     }
   }
-  let matches = replay.output.matches.map((match) => ({ ...match, rawFindingIds: [...match.rawFindingIds] }));
+  const matches = replay.output.matches.map((match) => ({ ...match, rawFindingIds: [...match.rawFindingIds] }));
 
-  let groupCandidates = new Map<string, { provisional: FindingLedgerEntry; groups: Array<FindingManagerOutput['newFindings'][number]> }>();
-  let unmatchedGroups: FindingManagerOutput['newFindings'] = [];
-  for (const group of replay.output.newFindings) {
-    const cleanRawId = group.rawFindingIds.find((rawFindingId) => input.cleanRawIds.has(rawFindingId));
-    const wire = cleanRawId !== undefined ? input.wireById.get(cleanRawId) : undefined;
-    const provisional = wire !== undefined ? findProvisionalForCleanRaw(wire) : undefined;
-    if (provisional === undefined) {
-      unmatchedGroups = [...unmatchedGroups, group];
-      continue;
-    }
-    const entry = groupCandidates.get(provisional.id) ?? { provisional, groups: [] };
-    groupCandidates = new Map([...groupCandidates, [
-      provisional.id,
-      { ...entry, groups: [...entry.groups, group] },
-    ]]);
-  }
-  let newFindings: FindingManagerOutput['newFindings'] = [...unmatchedGroups];
-  for (const { provisional, groups } of groupCandidates.values()) {
-    if (groups.length !== 1) {
-      // 非一意対応: 確定しない（group は通常の new として立ち、provisional は
-      // 開いたまま — 誤確定よりも二重 blocker を選ぶ保守側）。
-      newFindings = [...newFindings, ...groups];
-      continue;
-    }
-    const group = groups[0]!;
-    promotedFindingIds = new Set([...promotedFindingIds, provisional.id]);
-    const existing = matches.find((match) => match.findingId === provisional.id);
-    if (existing !== undefined) {
-      matches = matches.map((match) => (
-        match.findingId === provisional.id
-          ? { ...match, rawFindingIds: [...new Set([...match.rawFindingIds, ...group.rawFindingIds])] }
-          : match
-      ));
-    } else {
-      matches = [...matches, {
-        findingId: provisional.id,
-        rawFindingIds: [...group.rawFindingIds],
-        evidence: 'Clean review evidence deterministically confirmed the provisional observation as a real finding',
-      }];
-    }
-  }
+  // relation=new の group には既存 provisional の findingId/revision
+  // precondition が無い。identity/lineage が一致しても昇格へ転用しない。
+  const newFindings: FindingManagerOutput['newFindings'] = [
+    ...replay.output.newFindings,
+  ];
 
   for (const match of matches) {
     const provisional = provisionalById.get(match.findingId);
     if (provisional === undefined || promotedFindingIds.has(provisional.id)) {
       continue;
     }
-    const provisionalIdentity = fullIdentityKeyOf(
-      provisional.title,
-      provisional.description,
-    );
     const hasExactCleanRaw = match.rawFindingIds.some((rawFindingId) => {
       if (!input.cleanRawIds.has(rawFindingId)) {
         return false;
       }
       const wire = input.wireById.get(rawFindingId);
-      return wire !== undefined
-        && fullIdentityKeyOf(wire.title, wire.description) === provisionalIdentity;
+      return wire !== undefined && isProvisionalPromotionSource({
+        ledger: input.freshLedger,
+        provisional,
+        wire,
+      });
     });
     if (hasExactCleanRaw) {
       promotedFindingIds = new Set([...promotedFindingIds, provisional.id]);
     }
   }
+
+  // replay / ladder / conflict のどの producer が候補を出しても、最終的な
+  // promotion authority は同じ clean targeted persists predicate で決める。
+  promotedFindingIds = new Set([...promotedFindingIds].filter((findingId) => {
+    const provisional = provisionalById.get(findingId);
+    if (provisional === undefined) {
+      return false;
+    }
+    return [...input.cleanRawIds].some((rawFindingId) => {
+      const wire = input.wireById.get(rawFindingId);
+      return wire !== undefined && isProvisionalPromotionSource({
+        ledger: input.freshLedger,
+        provisional,
+        wire,
+      });
+    });
+  }));
 
   // manager の意味判断だけでは別の provisional を解消できない。
   for (const match of matches) {
@@ -250,7 +215,10 @@ export function settleProvisionalsWithCleanEvidence(input: {
       if (wire === undefined) {
         continue;
       }
-      const identity = fullIdentityKeyOf(wire.title, wire.description);
+      const identity = fullIdentityKeyOf(wire);
+      if (identity === undefined) {
+        continue;
+      }
       const provisional = byUniqueIdentity.get(identity);
       if (provisional === undefined || provisional.id === match.findingId || promotedFindingIds.has(provisional.id)) {
         continue;
@@ -433,13 +401,37 @@ export function buildProvisionalSettlementLifecycleCommands(input: {
     if (sourceRawFindingIds.length === 0) {
       throw new Error(`Provisional settlement for "${findingId}" has no clean evidence source`);
     }
+    const sourceIds = new Set(sourceRawFindingIds);
+    const sourceRawFindings = input.after.rawFindings.filter((rawFinding) => (
+      sourceIds.has(rawFinding.rawFindingId)
+    ));
+    const absenceRaws = absenceRawFindings(sourceRawFindings);
+    const authority: FindingLifecycleCommand['authority'] =
+      absenceRaws.length === 0
+        ? { kind: 'verified_evidence' }
+        : (() => {
+            const anchorAdjudications = authorityAnchorAdjudications({
+              rawFindingIds: absenceRaws.map((rawFinding) => rawFinding.rawFindingId),
+              adjudications: input.settlement.output.anchorAdjudications,
+            });
+            return {
+            kind: 'engine_policy',
+            decisionKind: 'anchor_relevance',
+            anchorAdjudications,
+            decisionDigest: computeAnchorRelevanceDecisionDigest({
+              operation,
+              rawFindings: absenceRaws,
+              adjudications: anchorAdjudications,
+            }),
+            };
+          })();
     commands.push({
       operation,
       changes: {
         findings: [findingWithoutRevision(finding)],
         conflicts: [],
       },
-      authority: { kind: 'verified_evidence' },
+      authority,
       evidenceSourcesByTarget: new Map([[
         `finding\0${findingId}`,
         { sourceRawFindingIds, authorityEvidenceIds: [] },

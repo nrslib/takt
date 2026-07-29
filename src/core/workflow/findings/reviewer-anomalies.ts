@@ -58,7 +58,7 @@ export function createReviewerAnomalySpec(input: {
     lineageKey: input.canonical.lineageKey,
     sourceRawFindingIds: [input.wire.rawFindingId],
     reviewers: [input.wire.reviewer],
-    title: input.wire.title,
+    title: input.wire.title ?? `Reviewer evidence anomaly ${input.wire.rawFindingId}`,
     ...(fileQuote?.kind === 'file_quote'
       ? {
         claimedLocation: fileQuote.path,

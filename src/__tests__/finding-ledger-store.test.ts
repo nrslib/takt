@@ -79,7 +79,6 @@ import type {
   RawFinding,
 } from '../core/workflow/findings/types.js';
 import { parseFindingLedger } from '../core/models/finding-schemas.js';
-import { computeClaimIdentityHash } from '../core/models/finding-claim-identity.js';
 import {
   computeFileQuoteEvidenceRecordId,
   createEngineProofRecord,
@@ -111,6 +110,7 @@ import {
 import * as privateFile from '../shared/utils/private-file.js';
 import {
   authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
   emptyFindingAuthorityProjection,
 } from './helpers/finding-lifecycle-fixture.js';
 
@@ -166,7 +166,7 @@ function applyFixtureFindingMutation(
     throw new Error(`Missing fixture lifecycle head for "${finding.id}"`);
   }
   const raw: RawFinding | undefined = operation === 'resolve_finding'
-    ? {
+    ? canonicalRawFindingFixture({
         rawFindingId: `fixture-resolution:${finding.id}:${finding.revision}`,
         stepName: finding.lastSeen.stepName,
         reviewer: 'fixture-reviewer',
@@ -186,18 +186,15 @@ function applyFixtureFindingMutation(
           verbatimExcerpt: finding.description ?? finding.title,
           snapshotId: sha256(`fixture-resolution-snapshot:${finding.id}:${finding.revision}`),
         }],
-      }
+      })
     : undefined;
   const claimIdentityHash = raw === undefined
-    ? computeClaimIdentityHash({
-        targetFindingId: finding.id,
-        title: finding.title,
-        description: finding.description ?? '',
-      })
-    : computeClaimIdentityHash(raw);
+    ? finding.claimIdentityHash!
+    : raw.claimIdentityHash;
   const evidenceRecord = raw === undefined
-    ? createEngineProofRecord({
+      ? createEngineProofRecord({
         kind: 'engine_proof',
+        purpose: 'lifecycle_authority',
         verifierId: 'takt.finding-lifecycle-policy',
         verifierVersion: '1',
         workflowName: ledger.workflowName,
@@ -207,12 +204,10 @@ function applyFixtureFindingMutation(
         claimIdentityHash,
         targetFindingId: finding.id,
         subject: {
-          kind: 'named_structural_check',
-          checkId: 'finding-provisional-isolation',
-          parameters: {
-            provisionalKind: finding.provisional!.kind,
-            stableKey: finding.provisional!.stableKey,
-          },
+          kind: 'finding_provisional_isolation',
+          findingId: finding.id,
+          provisionalKind: finding.provisional!.kind,
+          stableKey: finding.provisional!.stableKey,
         },
         dependencyDigests: [expectedHead.projectionDigest],
         resultDigest: sha256(`fixture-result:${operation}:${finding.id}:${finding.revision}`),
@@ -286,7 +281,7 @@ function applyFixtureConflictCreation(
   conflict: FindingLedger['conflicts'][number],
 ): FindingLedger {
   const rawTargetFindingId = conflict.findingIds[0]!;
-  const raw: RawFinding = {
+  const raw: RawFinding = canonicalRawFindingFixture({
     rawFindingId: `fixture-conflict:${conflict.id}`,
     stepName: conflict.lastSeen.stepName,
     reviewer: 'fixture-reviewer',
@@ -306,8 +301,8 @@ function applyFixtureConflictCreation(
       verbatimExcerpt: conflict.description,
       snapshotId: sha256(`fixture-conflict-snapshot:${conflict.id}`),
     }],
-  };
-  const claimIdentityHash = computeClaimIdentityHash(raw);
+  });
+  const claimIdentityHash = raw.claimIdentityHash;
   const quote = raw.evidence[0]!;
   if (quote.kind !== 'file_quote') {
     throw new Error('Expected fixture conflict quote');
@@ -783,7 +778,7 @@ describe('FindingLedgerStore', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeRunReportDir(projectCwd);
     const store = createStore({ projectCwd, reportDir });
-    const rawFinding = {
+    const rawFinding = canonicalRawFindingFixture({
       rawFindingId: 'raw-secret',
       stepName: 'security-review',
       reviewer: 'security-reviewer',
@@ -795,7 +790,7 @@ describe('FindingLedgerStore', () => {
       relation: 'new' as const,
       targetFindingId: null,
       evidence: [],
-    };
+    });
 
     await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
     const rawFindingsPath = join(
@@ -976,7 +971,7 @@ describe('FindingLedgerStore', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeRunReportDir(projectCwd);
     const store = createStore({ projectCwd, reportDir });
-    const rawFinding = {
+    const rawFinding = canonicalRawFindingFixture({
       rawFindingId: 'raw-1',
       stepName: 'coding-review',
       reviewer: 'coding-reviewer',
@@ -988,7 +983,7 @@ describe('FindingLedgerStore', () => {
       relation: 'new' as const,
       targetFindingId: null,
       evidence: [],
-    };
+    });
 
     const firstPath = join(
       projectCwd,
@@ -1033,7 +1028,7 @@ describe('FindingLedgerStore', () => {
     const store = createStore({ projectCwd, reportDir });
 
     expect(() => store.saveRawFindings(store.runId, 'reviewers', [
-      {
+      canonicalRawFindingFixture({
         rawFindingId: 'raw-1',
         stepName: 'security-review',
         reviewer: 'security-reviewer',
@@ -1045,7 +1040,7 @@ describe('FindingLedgerStore', () => {
         relation: 'new',
         targetFindingId: null,
         evidence: [],
-      },
+      }),
     ])).toThrow('Finding ledger path escapes base directory');
     expect(existsSync(join(outsideDir, `${store.runId}.reviewers.json`))).toBe(false);
   });
@@ -1462,7 +1457,7 @@ describe('FindingLedgerStore', () => {
         timestamp: '2026-06-14T00:00:00.000Z',
       },
     };
-    const pendingRaw: RawFinding = {
+    const pendingRaw: RawFinding = canonicalRawFindingFixture({
       rawFindingId: 'raw-pending',
       stepName: 'reviewers',
       reviewer: 'reviewer',
@@ -1474,7 +1469,7 @@ describe('FindingLedgerStore', () => {
       relation: 'new',
       targetFindingId: null,
       evidence: [],
-    };
+    });
     const resolvedFinding = {
       ...previousLedger.findings[0]!,
       status: 'resolved' as const,
@@ -1659,7 +1654,7 @@ describe('FindingLedgerStore', () => {
     const reportDir = join(projectCwd, '.takt', 'runs', runId, 'reports');
     mkdirSync(reportDir, { recursive: true });
     const store = createStore({ projectCwd, reportDir });
-    const rawE1: RawFinding = {
+    const rawE1: RawFinding = canonicalRawFindingFixture({
       rawFindingId: 'raw-pending-integrity',
       stepName: 'reviewers',
       reviewer: 'reviewer',
@@ -1671,7 +1666,7 @@ describe('FindingLedgerStore', () => {
       relation: 'new',
       targetFindingId: null,
       evidence: [{ kind: 'engine_proof', proofId: '1'.repeat(64) }],
-    };
+    });
     await store.updateLedger((current) => ({
       ledger: { ...current, rawFindings: [rawE1] },
       result: undefined,

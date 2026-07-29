@@ -1,7 +1,7 @@
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import { createEmptyManagerOutput } from './manager-output.js';
+import { createAnchorAdjudication } from '../../models/finding-anchor-relevance.js';
 import type { FindingLedger, FindingManagerOutput, RawFinding } from './types.js';
-import { computeClaimIdentityHash } from './evidence-domain.js';
 
 /**
  * raw findings のうち、構造化フィールドの等価比較だけで分類が確定するものを
@@ -38,9 +38,9 @@ export function effectiveRawFindingRelation(raw: Pick<RawFinding, 'relation'>): 
 
 /** Evidence location と suggestion を混ぜない claim identity が唯一の重複キー。 */
 function exactDuplicateKey(
-  raw: Pick<RawFinding, 'title' | 'description' | 'targetFindingId'>,
+  raw: Pick<RawFinding, 'semanticClaimIdentityHash'>,
 ): string {
-  return computeClaimIdentityHash(raw);
+  return raw.semanticClaimIdentityHash;
 }
 
 /** Indexes every raw finding attached to an open ledger finding by its exact-duplicate key, for case-1 matching. */
@@ -77,6 +77,7 @@ export function classifyRawFindingsMechanically(input: {
 }): MechanicalClassificationResult {
   const output = createEmptyManagerOutput();
   const residualRawFindings: RawFinding[] = [];
+  const anchorAdjudications: FindingManagerOutput['anchorAdjudications'] = [];
   const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
   const exactDuplicateIndex = buildExactDuplicateIndex(
     input.previousLedger,
@@ -96,17 +97,31 @@ export function classifyRawFindingsMechanically(input: {
   };
 
   for (const raw of input.rawFindings) {
+    // absence は query がゼロ件/不存在であることに加えて、元の task/public
+    // declaration が当該義務を本当に支えるかを manager が明示裁定する必要がある。
+    // semanticClaimIdentityHash の完全一致だけで manager を迂回してはならない。
+    if (raw.target.kind === 'absence') {
+      residualRawFindings.push(raw);
+      continue;
+    }
     const relation = effectiveRawFindingRelation(raw);
 
     // ケース3: resolution_confirmation は現行どおり。
     if (relation === 'resolution_confirmation') {
       const target = raw.targetFindingId === null ? undefined : findingsById.get(raw.targetFindingId);
-      if (target !== undefined && target.status === 'open') {
+      if (target !== undefined && target.status === 'open' && raw.description !== null) {
         const entry = resolvedByFindingId.get(target.id)
           ?? { findingId: target.id, rawFindingIds: [], evidence: raw.description };
         entry.rawFindingIds.push(raw.rawFindingId);
         resolvedByFindingId.set(target.id, entry);
         trackRaw(target.id, raw);
+        anchorAdjudications.push(createAnchorAdjudication({
+          rawFindingId: raw.rawFindingId,
+          decision: 'resolved',
+          findingId: target.id,
+          anchorRelevance: 'not_applicable',
+          evidence: raw.description,
+        }));
         continue;
       }
       // 対象不明・既に解消済みへの確認は判断（reopen / conflict / no-op）が絡むため LLM へ。
@@ -123,6 +138,13 @@ export function classifyRawFindingsMechanically(input: {
           entry.rawFindingIds.push(raw.rawFindingId);
           matchesByFindingId.set(target.id, entry);
           trackRaw(target.id, raw);
+          anchorAdjudications.push(createAnchorAdjudication({
+            rawFindingId: raw.rawFindingId,
+            decision: 'same',
+            findingId: target.id,
+            anchorRelevance: 'not_applicable',
+            evidence: raw.description ?? '',
+          }));
           continue;
         }
         // reopened はコード側で lifecycle 遷移まで確定させると、他の同ラウンド
@@ -142,6 +164,13 @@ export function classifyRawFindingsMechanically(input: {
       entry.rawFindingIds.push(raw.rawFindingId);
       matchesByFindingId.set(exactMatchFindingId, entry);
       trackRaw(exactMatchFindingId, raw);
+      anchorAdjudications.push(createAnchorAdjudication({
+        rawFindingId: raw.rawFindingId,
+        decision: 'same',
+        findingId: exactMatchFindingId,
+        anchorRelevance: 'not_applicable',
+        evidence: raw.description ?? '',
+      }));
       continue;
     }
 
@@ -161,6 +190,13 @@ export function classifyRawFindingsMechanically(input: {
 
   output.resolvedFindings = [...resolvedByFindingId.values()];
   output.matches = [...matchesByFindingId.values()];
+  const landedRawFindingIds = new Set([
+    ...output.resolvedFindings.flatMap((resolved) => resolved.rawFindingIds),
+    ...output.matches.flatMap((match) => match.rawFindingIds),
+  ]);
+  output.anchorAdjudications = anchorAdjudications.filter((adjudication) => (
+    landedRawFindingIds.has(adjudication.rawFindingId)
+  ));
   return { output, residualRawFindings };
 }
 
@@ -185,6 +221,26 @@ function mergeByFindingId<T extends { findingId: string; rawFindingIds: string[]
   return [...merged.values()];
 }
 
+function mergeAnchorAdjudications(
+  base: readonly FindingManagerOutput['anchorAdjudications'][number][],
+  extra: readonly FindingManagerOutput['anchorAdjudications'][number][],
+): FindingManagerOutput['anchorAdjudications'] {
+  const merged = new Map<string, FindingManagerOutput['anchorAdjudications'][number]>();
+  for (const adjudication of [...base, ...extra]) {
+    const existing = merged.get(adjudication.rawFindingId);
+    if (existing !== undefined) {
+      if (existing.managerOutputBinding !== adjudication.managerOutputBinding) {
+        throw new Error(
+          `Conflicting anchor adjudications for raw finding "${adjudication.rawFindingId}"`,
+        );
+      }
+      continue;
+    }
+    merged.set(adjudication.rawFindingId, adjudication);
+  }
+  return [...merged.values()];
+}
+
 /** 機械分類の結果と LLM manager の結果を統合する。findingId 重複は rawFindingIds を合併する。 */
 /**
  * 機械分類の結果と LLM 判断の組み立て結果を1つの出力へ束ねる。
@@ -199,6 +255,10 @@ export function mergeFindingManagerOutputs(
   extra: FindingManagerOutput,
 ): FindingManagerOutput {
   return canonicalizeFindingManagerOutput({
+    anchorAdjudications: mergeAnchorAdjudications(
+      base.anchorAdjudications,
+      extra.anchorAdjudications,
+    ),
     matches: mergeByFindingId(base.matches, extra.matches),
     newFindings: [...base.newFindings, ...extra.newFindings],
     resolvedFindings: mergeByFindingId(base.resolvedFindings, extra.resolvedFindings),

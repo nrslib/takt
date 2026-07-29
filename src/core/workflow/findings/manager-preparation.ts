@@ -13,6 +13,7 @@ import {
   type InterpretationRecoveryFailure,
 } from './interpretation-recovery.js';
 import type { RunFindingManagerForStepInput } from './manager-contracts.js';
+import type { ReviewScopeProofSnapshot } from './snapshot.js';
 
 export interface PreparedFindingManagerRound {
   previousLedger: FindingLedger;
@@ -29,6 +30,7 @@ export interface PreparedFindingManagerRound {
 export function prepareFindingManagerRound(
   input: RunFindingManagerForStepInput,
   stopBudgetRoundMarker: string,
+  reviewScopeSnapshot: ReviewScopeProofSnapshot,
 ): PreparedFindingManagerRound {
   const previousLedger = input.ledgerStore.loadLedger();
   input.ledgerStore.saveLedgerSnapshot();
@@ -47,6 +49,11 @@ export function prepareFindingManagerRound(
     parentStepName: input.parentStep.name,
     stepIteration: input.stepIteration,
     runId: input.runId,
+    workflowTask: input.workflowTask,
+    cwd: input.cwd,
+    scopeIdentity: input.ledgerStore.ledgerIdentity,
+    issuedAt: input.timestamp,
+    reviewScopeSnapshot,
   });
   const roundsCompleted = stopBudgetRoundsCompleted(previousLedger);
   const currentItems = attachInterpretationRecoveryOrigins({

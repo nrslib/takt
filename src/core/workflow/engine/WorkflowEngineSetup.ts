@@ -180,7 +180,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     if (includeRawFindingsSchema) {
       const reviewScopeSnapshotId = computeReviewScopeSnapshotId(params.getCwd());
       reviewerContext = {
-        rawFindingsStructuredOutput: createRawFindingsStructuredOutput(reviewScopeSnapshotId),
+        rawFindingsStructuredOutput: createRawFindingsStructuredOutput(),
         reviewScopeSnapshotId,
       };
     }
@@ -218,6 +218,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getInteractive: () => params.options.interactive === true,
     getWorkflowSteps: () => params.config.steps.map((step) => ({ name: step.name, description: step.description })),
     getWorkflowName: () => params.config.name,
+    getTask: () => params.task,
     getWorkflowDescription: () => params.config.description,
     getRetryNote: () => params.options.retryNote,
     getPrContext: () => params.options.prContext,
@@ -271,6 +272,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getCwd: params.getCwd,
     getReportDir: params.getReportDir,
     getWorkflowName: () => params.config.name,
+    getTask: () => params.task,
     getInteractive: () => params.options.interactive === true,
     observabilityEnabled: params.options.observability?.enabled === true,
     observabilityRunId: params.options.observabilityRunId,

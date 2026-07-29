@@ -9,7 +9,10 @@ import type {
   ReviewerAnomalyEntry,
 } from '../core/workflow/findings/types.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
-import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 
 function provisionalEntry(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
@@ -271,7 +274,7 @@ describe('provisional firstObservedRound persistence', () => {
       normalizedPathKey: '',
     });
     const lineageKey = computeLineageKey({ reviewer: 'coding-review', normalizedPathKey: '' });
-    const rawFinding = {
+    const rawFinding = canonicalRawFindingFixture({
       rawFindingId: 'raw-9',
       stepName: 'reviewers',
       reviewer: 'coding-review',
@@ -282,8 +285,9 @@ describe('provisional firstObservedRound persistence', () => {
       suggestion: null,
       relation: 'new' as const,
       targetFindingId: null,
+      target: { kind: 'code', paths: ['src/evidence-free-demand.ts'] },
       evidence: [],
-    };
+    });
     const next = reconcileFindingLedger({
       previousLedger: makeLedger([], ['r1', 'r2', 'r3']),
       rawFindings: [rawFinding],

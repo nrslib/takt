@@ -4,7 +4,10 @@ import type {
   FindingLedgerEntry,
   RawFinding,
 } from '../core/workflow/findings/types.js';
-import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import {
   candidateFromStoredRawFinding,
   canonicalRawIntegrityDigestOf,
@@ -78,7 +81,7 @@ function rawWithEvidence(
   targetPrecondition: NonNullable<RawFinding['targetPrecondition']>,
   explanation: string,
 ): RawFinding {
-  return {
+  return canonicalRawFindingFixture({
     rawFindingId: 'raw-integrity',
     stepName: 'reviewers',
     reviewer: 'reviewer',
@@ -89,12 +92,13 @@ function rawWithEvidence(
     suggestion: null,
     relation: 'persists',
     targetFindingId: 'F-0001',
+    target: { kind: 'code', paths: ['fixtures/F-0001.ts'] },
     targetPrecondition,
     evidence: [{
       kind: 'engine_proof',
       proofId: (explanation.endsWith('E1') ? '1' : '2').repeat(64),
     }],
-  };
+  });
 }
 
 function inMemoryStore(initial: FindingLedger): {

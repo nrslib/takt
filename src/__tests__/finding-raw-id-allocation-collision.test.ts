@@ -15,8 +15,10 @@ import {
 } from '../core/workflow/findings/raw-canonicalization.js';
 import type {
   FindingLedger,
+  RawFinding,
   RawAmbiguityCode,
 } from '../core/workflow/findings/types.js';
+import { reviewerRawExtractionFixture } from './helpers/finding-lifecycle-fixture.js';
 
 const context = {
   workflowName: 'peer-review',
@@ -39,8 +41,51 @@ const ledger: FindingLedger = {
   evidenceRecords: [],
 };
 
+function reviewerExtraction(
+  raw: Record<string, unknown>,
+  index: number,
+): ReturnType<typeof reviewerRawExtractionFixture> {
+  const finding = raw as Partial<RawFinding>;
+  return reviewerRawExtractionFixture({
+    rawFindingId: typeof finding.rawFindingId === 'string' ? finding.rawFindingId : null,
+    familyTag: typeof finding.familyTag === 'string' ? finding.familyTag : null,
+    severity: finding.severity ?? null,
+    title: typeof finding.title === 'string' ? finding.title : null,
+    description: typeof finding.description === 'string' ? finding.description : null,
+    suggestion: typeof finding.suggestion === 'string' ? finding.suggestion : null,
+    relation: finding.relation ?? 'new',
+    targetFindingId: typeof finding.targetFindingId === 'string'
+      ? finding.targetFindingId
+      : null,
+    target: finding.target,
+    evidence: finding.evidence,
+    rawExcerpt: `[item ${index}] ${finding.description ?? finding.title ?? 'observation'}`,
+  });
+}
+
+function reviewerCandidates(items: readonly unknown[]) {
+  const extractions = items.map((item, index) => (
+    reviewerExtraction(item as Record<string, unknown>, index)
+  ));
+  return createReviewerRawFindingCandidates(extractions, {
+    ...context,
+    reviewReport: extractions.map((item) => item.rawExcerpt).join('\n'),
+    issueEvidenceRequests: ({ requests }: {
+      requests: Array<Record<string, unknown>>;
+    }) => ({
+      evidence: requests.flatMap((request) => (
+        request.kind === 'file_quote'
+          ? [{ ...request, snapshotId: '1'.repeat(64) }]
+          : []
+      )),
+      engineProofRecords: [],
+      coverageGaps: [],
+    }),
+  } as never).candidates;
+}
+
 function project(items: readonly unknown[]) {
-  const candidates = createReviewerRawFindingCandidates(items, context);
+  const candidates = reviewerCandidates(items);
   const priorCodesByRawId: Record<string, RawAmbiguityCode[]> = {
     'z-clarification': ['relation-target-mismatch'],
   };
@@ -154,7 +199,7 @@ describe('duplicate rawFindingId allocation under hash collision', () => {
   });
 
   it('uses input index only when normalized contents are identical', () => {
-    const candidates = createReviewerRawFindingCandidates([
+    const candidates = reviewerCandidates([
       { ...first },
       { ...first },
     ], context);
@@ -177,7 +222,7 @@ describe('duplicate rawFindingId allocation under hash collision', () => {
 
   it('uniquifies completely identical missing-ID candidates with the final input-position tie break', () => {
     const identicalWithoutId = { ...first, rawFindingId: undefined };
-    const candidates = createReviewerRawFindingCandidates([
+    const candidates = reviewerCandidates([
       { ...identicalWithoutId },
       { ...identicalWithoutId },
     ], context);
@@ -188,7 +233,7 @@ describe('duplicate rawFindingId allocation under hash collision', () => {
   });
 
   it('preserves an existing explicit suffixed ID while allocating duplicates', () => {
-    const candidates = createReviewerRawFindingCandidates([
+    const candidates = reviewerCandidates([
       first,
       {
         ...second,

@@ -144,11 +144,9 @@ Return exactly one JSON object matching the supplied RawFindingsOutputJsonSchema
 Return no prose, Markdown fence, or keys outside that schema.
 
 The input below is self-contained:
-- Engine-bound fields are authoritative and must be copied exactly.
-- Verified current-code evidence was already checked by the engine. Copy its
-  location, verbatimExcerpt, and snapshotId exactly.
-- Review finding fields were explicitly supplied by the reviewer. Copy
-  familyTag, severity, title, description, and suggestion exactly.
+- rawExcerpt and every nullable candidate field are explicitly supplied.
+- Copy the typed target and evidenceRequests exactly. They are requests only;
+  never add proofId, snapshotId, runId, offsets, digests, or query results.
 - Treat the supplied JSON fragments as JSON values: decode each JSON escape
   sequence exactly once, then serialize the decoded value exactly once in the
   output JSON. For example, an input JSON string containing "\\n" represents
@@ -424,7 +422,7 @@ function scoreResult(result, validate, expectedOutput, report) {
     const expectedFinding = expectedRawFindings[index];
     const actualFinding = actualRawFindings[index];
     for (const field of requiredFields) {
-      if (actualFinding?.[field] === expectedFinding[field]) {
+      if (isDeepStrictEqual(actualFinding?.[field], expectedFinding[field])) {
         exactFieldCount += 1;
       }
     }
@@ -544,9 +542,7 @@ if (renderOnly) {
     if (!expected) {
       throw new Error(`Gold is missing candidate report ${report.number}`);
     }
-    const outputSchema = createRawFindingsOutputJsonSchema(
-      expected.reviewScopeSnapshotId,
-    );
+    const outputSchema = createRawFindingsOutputJsonSchema();
     const validate = new Ajv({
       allErrors: true,
       strict: false,
@@ -580,12 +576,10 @@ try {
     for (let repetition = 1; repetition <= repeat; repetition += 1) {
       for (const report of selectedReports) {
         const expected = gold.reports[String(report.number)];
-        if (!expected?.output || !expected.reviewScopeSnapshotId) {
+        if (!expected?.output) {
           throw new Error(`Gold is incomplete for candidate report ${report.number}`);
         }
-        const outputSchema = createRawFindingsOutputJsonSchema(
-          expected.reviewScopeSnapshotId,
-        );
+        const outputSchema = createRawFindingsOutputJsonSchema();
         const validate = new Ajv({
           allErrors: true,
           strict: false,

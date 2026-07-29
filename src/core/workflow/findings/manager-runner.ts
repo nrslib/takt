@@ -11,7 +11,7 @@ import type {
 import { runManagerDecisionStage } from './manager-decision.js';
 import { prepareFindingManagerRound } from './manager-preparation.js';
 import { retainInterpretationRecoveryForLadder } from './interpretation-recovery.js';
-import { computeReviewScopeSnapshotId } from './snapshot.js';
+import { captureReviewScopeProofSnapshot } from './snapshot.js';
 import { computeRoundMarker } from './round-marker.js';
 import { runManagerRoundExclusive } from './manager-round-lock.js';
 
@@ -55,8 +55,13 @@ export async function runFindingManagerForStep(
       };
     }
 
-    const reviewScopeSnapshotId = computeReviewScopeSnapshotId(input.cwd);
-    const prepared = prepareFindingManagerRound(input, stopBudgetRoundMarker);
+    const reviewScopeSnapshot = captureReviewScopeProofSnapshot(input.cwd);
+    const reviewScopeSnapshotId = reviewScopeSnapshot.reviewScopeSnapshotId;
+    const prepared = prepareFindingManagerRound(
+      input,
+      stopBudgetRoundMarker,
+      reviewScopeSnapshot,
+    );
     const admission = retainInterpretationRecoveryForLadder(evaluateRawAdmission({
       cwd: input.cwd,
       reviewScopeSnapshotId,
@@ -64,6 +69,8 @@ export async function runFindingManagerForStep(
       scopeIdentity: input.ledgerStore.ledgerIdentity,
       previousLedger: prepared.previousLedger,
       intake: prepared.intake,
+      reviewScopeSnapshot,
+      workflowTask: input.workflowTask,
     }), prepared.intake);
     const managerDecision = await runManagerDecisionStage({
       input,
@@ -72,6 +79,7 @@ export async function runFindingManagerForStep(
       managerStep: prepared.managerStep,
       observation: prepared.observation,
       reviewScopeSnapshotId,
+      reviewScopeSnapshot,
       stopBudgetRoundMarker,
     });
     const committed = await commitFindingManagerRound({
@@ -86,6 +94,7 @@ export async function runFindingManagerForStep(
       stopBudgetRoundMarker,
       reviewIntegrityLimits: prepared.reviewIntegrityLimits,
       reviewScopeSnapshotId,
+      reviewScopeSnapshot,
     });
 
     if (!committed.applied) {

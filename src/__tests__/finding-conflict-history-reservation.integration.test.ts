@@ -75,6 +75,7 @@ function makeLedger(cwd: string): FindingLedger {
     startLine: 1,
     title: 'Conflicting review conclusion',
     description: 'The review evidence conflicts.',
+    familyTag: 'bug',
     targetFindingId: 'F-0001',
   });
   const rawFinding: RawFinding = {

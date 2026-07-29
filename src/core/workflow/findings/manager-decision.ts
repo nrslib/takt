@@ -1,7 +1,6 @@
 import type { AgentWorkflowStep } from '../../models/types.js';
 import type {
   FindingLedger,
-  FindingManagerDecisions,
   FindingObservation,
 } from './types.js';
 import { classifyRawFindingsMechanically } from './mechanical-classification.js';
@@ -15,14 +14,12 @@ import type {
   FindingManagerValidationAttemptReport,
 } from './store.js';
 import type { ManagerDecisionStageResult, RunFindingManagerForStepInput } from './manager-contracts.js';
-import { buildManagerInstruction, parseManagerDecisions, runManagerAttempt } from './manager-agent.js';
 import { runAmbiguousLadder } from './manager-interpretation.js';
-import { createLogger } from '../../../shared/utils/index.js';
 import { assembleCleanManagerDecision } from './manager-clean-decision.js';
 import { runRawAdjudicationRecovery } from './raw-adjudication-recovery.js';
 import { releaseRawAdjudicationReservations } from './raw-adjudication-reservation.js';
-
-const log = createLogger('finding-manager-decision');
+import type { ReviewScopeProofSnapshot } from './snapshot.js';
+import { runMainManagerTasks } from './manager-task-runner.js';
 
 export {
   FINDING_MANAGER_SCHEMA_REF,
@@ -37,6 +34,7 @@ export async function runManagerDecisionStage(params: {
   managerStep: AgentWorkflowStep;
   observation: FindingObservation;
   reviewScopeSnapshotId: string;
+  reviewScopeSnapshot: ReviewScopeProofSnapshot;
   stopBudgetRoundMarker: string;
 }): Promise<ManagerDecisionStageResult> {
   const {
@@ -46,6 +44,7 @@ export async function runManagerDecisionStage(params: {
     managerStep,
     observation,
     reviewScopeSnapshotId,
+    reviewScopeSnapshot,
     stopBudgetRoundMarker,
   } = params;
   const {
@@ -59,6 +58,7 @@ export async function runManagerDecisionStage(params: {
     managerStep,
     observation,
     reviewScopeSnapshotId,
+    reviewScopeSnapshot,
   });
   try {
     const invalidLocationCandidates = computeInvalidLocationCandidates(input.cwd, previousLedger);
@@ -78,46 +78,38 @@ export async function runManagerDecisionStage(params: {
       || dismissCandidateFindingIds.size > 0;
 
     let initialInvalidAttempts: FindingManagerValidationAttemptReport[] = [];
-    let decisions: FindingManagerDecisions | undefined;
+    let taskExecution: Awaited<ReturnType<typeof runMainManagerTasks>> | undefined;
     if (needsAgent) {
-      const instruction = buildManagerInstruction({
+      taskExecution = await runMainManagerTasks({
         contract: input.contract,
         previousLedger,
+        reviewScopeSnapshotId,
         residualRawFindings: mechanical.residualRawFindings,
         mechanicallyClassifiedCount: cleanWire.length - mechanical.residualRawFindings.length,
         priorStepResponseText: input.priorStepResponseText,
         invalidLocationCandidates,
         dismissCandidates,
+        evidenceRecordsByRawFindingId: admission.verifiedEvidenceRecordsByRawFindingId,
+        managerStep,
+        runInput: input,
       });
-      try {
-        const response = await runManagerAttempt({
-          managerStep,
-          instruction,
-          optionsBuilder: input.optionsBuilder,
-          stepExecutor: input.stepExecutor,
-        });
-        decisions = parseManagerDecisions(response);
-      } catch (error) {
-        // manager の壊れた応答で run を殺さない。残余 raw は
-        // 全て provisional へ着地し、機械分類の確定分だけを適用する。
-        const message = error instanceof Error ? error.message : String(error);
-        log.warn('Finding manager decisions call failed; landing residual raws as provisional', { error: message });
-        decisions = { rawDecisions: [], disputeDecisions: [], conflictDecisions: [], invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [] };
-        initialInvalidAttempts = [
-          { attempt: 1, managerOutput: { error: message }, validationErrors: [message] },
-        ];
-      }
+      initialInvalidAttempts = taskExecution.invalidAttemptMessages.map((message, index) => ({
+        attempt: index + 1,
+        managerOutput: { error: message },
+        validationErrors: [message],
+      }));
     }
 
     const cleanDecision = assembleCleanManagerDecision({
       previousLedger,
       admission,
       mechanical,
-      decisions,
+      decisions: taskExecution?.decisions,
       initialInvalidAttempts,
       invalidLocationCandidateFindingIds,
       dismissCandidateFindingIds,
       priorStepResponseText: input.priorStepResponseText,
+      rawFailureById: taskExecution?.rawFailures,
     });
     const {
       managerOutput,
@@ -161,6 +153,7 @@ export async function runManagerDecisionStage(params: {
 
     return {
       managerOutput,
+      conflictTargetHeads: taskExecution?.conflictTargetHeads ?? new Map(),
       invalidAttempts,
       cleanProvisionalSpecs,
       unsupportedRawFindingReports,
@@ -168,6 +161,7 @@ export async function runManagerDecisionStage(params: {
       cleanCanonicalById,
       ladder,
       rawRecovery,
+      taskAudits: taskExecution?.taskAudits ?? [],
     };
   } catch (error) {
     releaseRawAdjudicationReservations(input.ledgerStore, rawRecovery.reservationTokens);

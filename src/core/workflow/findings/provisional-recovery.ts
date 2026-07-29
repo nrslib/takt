@@ -105,6 +105,8 @@ export function classifyProvisionalRecovery(
       return recoveryAttemptsExhausted(attemptCount) ? 'terminal-adjudication' : 'raw-adjudication';
     case 'manager-output-discarded':
       return recoveryAttemptsExhausted(attemptCount) ? 'process-failure' : 'raw-adjudication';
+    case 'manager-input-overflow':
+      return recoveryAttemptsExhausted(attemptCount) ? 'process-failure' : 'raw-adjudication';
     case 'manager-budget-exhausted':
     case 'interpretation-interrupted':
       return provisional.interpretationEpochs >= MANAGER_INTERPRETATION_LIMITS.maxInterpretationEpochsPerLineage

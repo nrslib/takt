@@ -3,7 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { computeClaimIdentityHash } from '../core/models/finding-claim-identity.js';
+import {
+  computeClaimIdentityHash,
+  computeSemanticClaimIdentityHash,
+} from '../core/models/finding-claim-identity.js';
 import {
   computeFileQuoteEvidenceRecordId,
   createEngineProofRecord,
@@ -63,6 +66,8 @@ import {
   createRealRunStorage,
   resumeRealRunStorage,
 } from './helpers/run-storage.js';
+import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
+import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
 
 const OBSERVATION: FindingObservation = {
   runId: 'run-1',
@@ -96,11 +101,27 @@ function evidenceSource(input: {
   title: string;
   description: string;
   relation?: RawFinding['relation'];
+  targetPath?: string;
 }): EvidenceSource {
-  const claimIdentityHash = computeClaimIdentityHash(input);
+  const path = input.targetPath ?? `src/${input.rawFindingId}.ts`;
+  const raw = canonicalRawFindingFixture({
+    rawFindingId: input.rawFindingId,
+    stepName: OBSERVATION.stepName,
+    reviewer: 'reviewer',
+    familyTag: 'bug',
+    severity: 'high',
+    title: input.title,
+    description: input.description,
+    suggestion: null,
+    relation: input.relation ?? (input.targetFindingId === null ? 'new' : 'persists'),
+    targetFindingId: input.targetFindingId,
+    target: { kind: 'code', paths: [path] },
+    evidence: [],
+  });
+  const claimIdentityHash = raw.claimIdentityHash;
   const recordPayload = {
     kind: 'file_quote' as const,
-    path: `src/${input.rawFindingId}.ts`,
+    path,
     startLine: 1,
     endLine: 1,
     verbatimExcerpt: input.description,
@@ -116,16 +137,7 @@ function evidenceSource(input: {
     claimIdentityHash,
     record,
     raw: {
-      rawFindingId: input.rawFindingId,
-      stepName: OBSERVATION.stepName,
-      reviewer: 'reviewer',
-      familyTag: 'bug',
-      severity: 'high',
-      title: input.title,
-      description: input.description,
-      suggestion: null,
-      relation: input.relation ?? (input.targetFindingId === null ? 'new' : 'persists'),
-      targetFindingId: input.targetFindingId,
+      ...raw,
       evidence: [{
         kind: 'file_quote',
         path: record.path,
@@ -169,6 +181,10 @@ function finding(input: {
     status: input.status ?? 'open',
     lifecycle: input.lifecycle ?? 'new',
     revision: input.revision,
+    target: input.source.raw.target,
+    targetIdentityHash: input.source.raw.targetIdentityHash,
+    claimIdentityHash: input.source.raw.claimIdentityHash,
+    semanticClaimIdentityHash: input.source.raw.semanticClaimIdentityHash,
     severity: 'high',
     title: input.source.raw.title,
     description: input.source.raw.description,
@@ -319,6 +335,7 @@ function semanticDuplicateLedger(count: number): FindingLedger {
     targetFindingId: null,
     title: 'Same duplicate claim',
     description: 'Every candidate has the same claim identity.',
+    targetPath: 'src/shared-semantic-duplicate.ts',
   }));
   return applyFindingLifecycleCommands({
     ledger: emptyLedger(sources),
@@ -351,10 +368,59 @@ function semanticManagerPlan(input: {
   sources: readonly EvidenceSource[];
   managerOutput: FindingManagerOutput;
 }) {
+  const sourceById = new Map(input.sources.map((source) => [
+    source.raw.rawFindingId,
+    source.raw,
+  ]));
+  const landed = [
+    ...input.managerOutput.matches.flatMap((entry) => entry.rawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      decision: 'same' as const,
+      findingId: entry.findingId,
+      evidence: entry.evidence ?? 'Matched by the fixture manager.',
+    }))),
+    ...input.managerOutput.newFindings.flatMap((entry) => entry.rawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      decision: 'new' as const,
+      evidence: 'Created by the fixture manager.',
+    }))),
+    ...input.managerOutput.resolvedFindings.flatMap((entry) => entry.rawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      decision: 'resolved' as const,
+      findingId: entry.findingId,
+      evidence: entry.evidence,
+    }))),
+    ...input.managerOutput.reopenedFindings.flatMap((entry) => entry.rawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      decision: 'reopened' as const,
+      findingId: entry.findingId,
+      evidence: entry.evidence,
+    }))),
+    ...input.managerOutput.conflicts.flatMap((entry) => entry.rawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      decision: 'conflict' as const,
+      findingId: entry.findingIds[0],
+      evidence: entry.description,
+    }))),
+  ];
+  const managerOutput: FindingManagerOutput = {
+    ...input.managerOutput,
+    anchorAdjudications: landed.map((decision) => {
+      const rawFinding = sourceById.get(decision.rawFindingId);
+      if (rawFinding === undefined || rawFinding.target.kind === 'absence') {
+        throw new Error(`Fixture manager cannot synthesize a non-absence anchor for "${decision.rawFindingId}"`);
+      }
+      return createAnchorAdjudication({
+        ...decision,
+        anchorRelevance: 'not_applicable',
+      });
+    }),
+  };
+  input.managerOutput.anchorAdjudications = managerOutput.anchorAdjudications;
   return reconcileFindingLedgerPlan({
     previousLedger: input.current,
     rawFindings: input.sources.map((source) => source.raw),
-    managerOutput: input.managerOutput,
+    managerOutput,
     provisionalFindings: [],
     rawFindingDispositions: [],
     verifiedEvidenceRecordsByRawFindingId: new Map(input.sources.map((source) => [
@@ -461,6 +527,125 @@ function applyProofedSemanticManagerPlan(input: {
 }
 
 describe('verified finding lifecycle mutation', () => {
+  it('authorizes provisional promotion only from clean persists evidence bound to the provisional target', () => {
+    const provisionalSource = evidenceSource({
+      rawFindingId: 'raw-provisional-source',
+      targetFindingId: null,
+      title: 'Provisional claim',
+      description: 'The claim awaits a clean targeted re-observation.',
+      targetPath: 'src/provisional.ts',
+    });
+    const createTarget = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: null,
+    };
+    const createReservation = reservation({
+      operation: 'create_finding',
+      targets: [createTarget],
+      sources: [provisionalSource],
+    });
+    const provisional = applyVerifiedLifecycleMutation(
+      reserveVerifiedLifecycleMutation(emptyLedger([provisionalSource]), createReservation),
+      mutation({
+        reservation: createReservation,
+        findings: [{
+          ...finding({
+            id: createTarget.entityId,
+            source: provisionalSource,
+            revision: 1,
+          }),
+          provisional: {
+            kind: 'raw-adjudication-unresolved',
+            stableKey: sha256('promotion-stable-key'),
+            lineageKey: sha256('promotion-lineage-key'),
+            sourceRawFindingIds: [provisionalSource.raw.rawFindingId],
+            reason: 'Awaiting a clean targeted re-observation.',
+            firstObservedAt: { ...OBSERVATION },
+            lastObservedAt: { ...OBSERVATION },
+            interpretationEpochs: 0,
+            gateEffect: 'block',
+            firstObservedRound: 1,
+            recoveryReviewerStableKey: 'reviewer',
+          },
+        }],
+      }),
+    );
+    const promotionTarget = {
+      entityKind: 'finding' as const,
+      entityId: 'F-0001',
+      expectedHead: latestHead(provisional, 'F-0001'),
+    };
+    const source = (
+      rawFindingId: string,
+      relation: RawFinding['relation'],
+      targetFindingId: string | null,
+    ) => evidenceSource({
+      rawFindingId,
+      targetFindingId,
+      title: 'Provisional claim',
+      description: 'The claim awaits a clean targeted re-observation.',
+      relation,
+      targetPath: 'src/provisional.ts',
+    });
+    const valid = source('raw-promotion-valid', 'persists', 'F-0001');
+    const relationNew = source('raw-promotion-new', 'new', null);
+    const wrongTarget = source('raw-promotion-wrong-target', 'persists', 'F-0002');
+    const withEvidence: FindingLedger = {
+      ...provisional,
+      evidenceRecords: [
+        ...provisional.evidenceRecords,
+        valid.record,
+        relationNew.record,
+        wrongTarget.record,
+      ],
+      rawFindings: [
+        ...provisional.rawFindings,
+        valid.raw,
+        relationNew.raw,
+        wrongTarget.raw,
+      ],
+    };
+
+    expect(() => reserveVerifiedLifecycleMutation(withEvidence, reservation({
+      operation: 'promote_provisional',
+      targets: [promotionTarget],
+      sources: [valid],
+    }))).not.toThrow();
+    expect(() => reserveVerifiedLifecycleMutation(withEvidence, reservation({
+      operation: 'promote_provisional',
+      targets: [promotionTarget],
+      sources: [relationNew],
+    }))).toThrow(/relation "new".*"promote_provisional"/);
+    expect(() => reserveVerifiedLifecycleMutation(withEvidence, reservation({
+      operation: 'promote_provisional',
+      targets: [promotionTarget],
+      sources: [wrongTarget],
+    }))).toThrow(/relation "persists".*"promote_provisional"/);
+    expect(() => reserveVerifiedLifecycleMutation(withEvidence, reservation({
+      operation: 'promote_provisional',
+      targets: [{
+        ...promotionTarget,
+        expectedHead: {
+          ...promotionTarget.expectedHead!,
+          revision: promotionTarget.expectedHead!.revision + 1,
+        },
+      }],
+      sources: [valid],
+    }))).toThrow(/stale full head/);
+    expect(() => reserveVerifiedLifecycleMutation(withEvidence, reservation({
+      operation: 'promote_provisional',
+      targets: [{
+        ...promotionTarget,
+        expectedHead: {
+          ...promotionTarget.expectedHead!,
+          projectionDigest: sha256('resolved-status-projection'),
+        },
+      }],
+      sources: [valid],
+    }))).toThrow(/stale full head/);
+  });
+
   it('rejects lifecycle transaction projection deletion and orphan lifecycle heads', () => {
     const source = evidenceSource({
       rawFindingId: 'raw-delete-rejection',
@@ -634,10 +819,17 @@ describe('verified finding lifecycle mutation', () => {
   });
 
   it('rejects a generic structural proof reused for an unrelated lifecycle operation', () => {
+    const unrelatedTarget = {
+      kind: 'code' as const,
+      paths: ['src/unrelated-create.ts'],
+    };
     const claimIdentityHash = computeClaimIdentityHash({
-      targetFindingId: null,
+      target: unrelatedTarget,
+      familyTag: 'bug',
+      severity: 'high',
       title: 'Unrelated create',
       description: 'A provisional isolation proof cannot authorize creation.',
+      suggestion: null,
     });
     const proof = createEngineProofRecord({
       kind: 'engine_proof',
@@ -647,15 +839,14 @@ describe('verified finding lifecycle mutation', () => {
       runId: OBSERVATION.runId,
       scopeIdentity: 'lifecycle-test-scope',
       snapshotId: sha256('generic-proof-snapshot'),
+      purpose: 'lifecycle_authority',
       claimIdentityHash,
       targetFindingId: null,
       subject: {
-        kind: 'named_structural_check',
-        checkId: 'finding-provisional-isolation',
-        parameters: {
-          provisionalKind: 'interpretation-interrupted',
-          stableKey: 'unrelated',
-        },
+        kind: 'finding_provisional_isolation',
+        findingId: 'F-unrelated',
+        provisionalKind: 'interpretation-interrupted',
+        stableKey: 'unrelated',
       },
       dependencyDigests: [sha256('generic-proof-dependency')],
       resultDigest: sha256('generic-proof-result'),
@@ -973,6 +1164,7 @@ describe('verified finding lifecycle mutation', () => {
       relation: 'persists',
     });
     const managerOutput: FindingManagerOutput = {
+      anchorAdjudications: [],
       matches: [],
       newFindings: [],
       resolvedFindings: [],
@@ -1233,6 +1425,7 @@ describe('verified finding lifecycle mutation', () => {
         title: 'Same duplicate claim',
         description: 'Every candidate has the same claim identity.',
         relation: 'persists',
+        targetPath: 'src/shared-semantic-duplicate.ts',
       });
       const managerOutput: FindingManagerOutput = {
         matches: includeMatch
@@ -1563,6 +1756,19 @@ describe('verified finding lifecycle mutation', () => {
           revision: 1,
         }),
         title: 'Unrelated claim',
+        claimIdentityHash: computeClaimIdentityHash({
+          target: source.raw.target,
+          familyTag: source.raw.familyTag,
+          severity: source.raw.severity,
+          title: 'Unrelated claim',
+          description: source.raw.description,
+          suggestion: source.raw.suggestion,
+        }),
+        semanticClaimIdentityHash: computeSemanticClaimIdentityHash({
+          target: source.raw.target,
+          title: 'Unrelated claim',
+          description: source.raw.description,
+        }),
       }],
     }))).toThrow(/does not match the created finding claim/);
   });

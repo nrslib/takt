@@ -4,6 +4,9 @@ import type { CompleteResumeSnapshot } from '../infra/run-storage/resume-snapsho
 import { canonicalJson, sha256 } from '../infra/run-storage/canonical-json.js';
 import { createEngineProofRecord } from '../core/models/finding-evidence-record.js';
 import {
+  canonicalRawFindingFixture,
+} from './helpers/finding-lifecycle-fixture.js';
+import {
   cleanupRealRunStorages,
   createRealRunStorage,
 } from './helpers/run-storage.js';
@@ -175,7 +178,7 @@ describe('run storage resume import validation', () => {
       workflowName: 'default',
       producer: execution.handle,
     });
-    const originalRaw = {
+    const originalRaw = canonicalRawFindingFixture({
       rawFindingId: 'raw-history-1',
       stepName: 'review',
       reviewer: 'reviewer',
@@ -187,7 +190,7 @@ describe('run storage resume import validation', () => {
       relation: 'new' as const,
       targetFindingId: null,
       evidence: [],
-    };
+    });
     await store.updateLedger((ledger) => ({
       ledger: {
         ...ledger,
@@ -216,10 +219,10 @@ describe('run storage resume import validation', () => {
     )!.current_revision as number;
 
     for (const variant of ['removed', 'replaced'] as const) {
-      const replacementRaw = {
+      const replacementRaw = canonicalRawFindingFixture({
         ...originalRaw,
         description: 'Forged replacement observation.',
-      };
+      });
       const rawFindings = variant === 'removed' ? [] : [replacementRaw];
       const forgedLedger = {
         ...source.findingLedger.ledger,
@@ -292,27 +295,7 @@ describe('run storage resume import validation', () => {
       workflowName: 'default',
       producer: execution.handle,
     });
-    const claimIdentityHash = sha256('pending-finalization-claim');
-    const evidenceRecord = createEngineProofRecord({
-      kind: 'engine_proof',
-      verifierId: 'takt.pending-transition-test',
-      verifierVersion: '1',
-      workflowName: 'default',
-      runId: store.runId,
-      scopeIdentity: store.ledgerIdentity,
-      snapshotId: sha256('pending-finalization-snapshot'),
-      claimIdentityHash,
-      targetFindingId: null,
-      subject: {
-        kind: 'named_structural_check',
-        checkId: 'pending-finalization',
-        parameters: {},
-      },
-      dependencyDigests: [],
-      resultDigest: sha256('pending-finalization-result'),
-      issuedAt: '2026-07-28T00:00:00.000Z',
-    });
-    const rawFinding = {
+    const rawFindingBase = canonicalRawFindingFixture({
       rawFindingId: 'raw-pending-finalization',
       stepName: 'review',
       reviewer: 'reviewer',
@@ -323,6 +306,37 @@ describe('run storage resume import validation', () => {
       suggestion: null,
       relation: 'new' as const,
       targetFindingId: null,
+      target: {
+        kind: 'structure',
+        scope: { kind: 'review_scope', roots: ['src'] },
+        manifestTargets: ['src/pending-finalization.ts'],
+      },
+      evidence: [],
+    });
+    const claimIdentityHash = rawFindingBase.claimIdentityHash;
+    const evidenceRecord = createEngineProofRecord({
+      kind: 'engine_proof',
+      purpose: 'claim_evidence',
+      verifierId: 'takt.pending-transition-test',
+      verifierVersion: '1',
+      workflowName: 'default',
+      runId: store.runId,
+      scopeIdentity: store.ledgerIdentity,
+      snapshotId: sha256('pending-finalization-snapshot'),
+      claimIdentityHash,
+      targetFindingId: null,
+      subject: {
+        kind: 'repository_manifest',
+        scope: { kind: 'review_scope', roots: ['src'] },
+        manifestTargets: ['src/pending-finalization.ts'],
+        observedTargets: ['src/pending-finalization.ts'],
+      },
+      dependencyDigests: [],
+      resultDigest: sha256('pending-finalization-result'),
+      issuedAt: '2026-07-28T00:00:00.000Z',
+    });
+    const rawFinding = {
+      ...rawFindingBase,
       evidence: [{ kind: 'engine_proof' as const, proofId: evidenceRecord.proofId }],
     };
     const roundMarker = 'pending-finalization-round';

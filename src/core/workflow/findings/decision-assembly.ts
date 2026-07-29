@@ -27,7 +27,10 @@ import { FILE_LINE_EVIDENCE_PATTERN } from './evidence.js';
 import { effectiveRawFindingRelation, mergeFindingManagerOutputs } from './mechanical-classification.js';
 import { collectRegeneratedConflictIds, formatConflictId } from '../../models/finding-conflict-identity.js';
 import { collectActiveConflictFindingIds, rejectConflictTouchedDuplicates } from './manager-plan-normalization.js';
-import { computeClaimIdentityHash } from './evidence-domain.js';
+import {
+  computeManagerOutputBinding,
+  createAnchorAdjudication,
+} from '../../models/finding-anchor-relevance.js';
 
 /**
  * findings-manager が最終結果（8配列以上）を自力で組み立てると、台帳の不変条件
@@ -230,25 +233,14 @@ function appendGroupedConflict(
 }
 
 /**
- * 機械的に畳んでよい「疑いようのない重複」の識別キーは claimIdentityHash。
+ * 機械的に畳んでよい「疑いようのない重複」の識別キーは semanticClaimIdentityHash。
  * evidence location・familyTag・suggestion は同一性の根拠にしない。
  *
  * 同ラウンド内 new+new のグルーピングと、保存直前の再照合で既存 open finding
  * へ付け替えるリダイレクトの両方が同じ正本を使う。
  */
-function findingIdentityKey(
-  title: string,
-  description: string | undefined,
-): string {
-  return computeClaimIdentityHash({
-    targetFindingId: null,
-    title,
-    description: description ?? '',
-  });
-}
-
 function newFindingGroupKey(raw: RawFinding): string {
-  return findingIdentityKey(raw.title, raw.description);
+  return raw.semanticClaimIdentityHash;
 }
 
 /** FINDING_SEVERITIES は重い順。畳んだ finding は最も重い severity を採る。 */
@@ -262,7 +254,7 @@ function severityRank(severity: FindingSeverity): number {
  * "new" と判断しても、他の子が直前に立てた finding をこの索引で検出し、
  * "same" として畳み込む（重複作成の防止。boundary requirementの再現ケース: 並列子2つが
  * 同じ問題を new と判断し、F-0001 と F-0002 が重複作成された）。キーは
- * findingIdentityKey（claimIdentityHash）を使用する。
+ * findingIdentityKey（semanticClaimIdentityHash）を使用する。
  */
 function buildOpenFindingKeyIndex(previousLedger: FindingLedger): Map<string, string> {
   const index = new Map<string, string>();
@@ -270,7 +262,10 @@ function buildOpenFindingKeyIndex(previousLedger: FindingLedger): Map<string, st
     if (finding.status !== 'open') {
       continue;
     }
-    const key = findingIdentityKey(finding.title, finding.description);
+    const key = finding.semanticClaimIdentityHash;
+    if (key === null) {
+      continue;
+    }
     if (!index.has(key)) {
       index.set(key, finding.id);
     }
@@ -292,6 +287,7 @@ function assembleRawDecisions(input: {
   conflicts: FindingManagerConflict[];
   unsupported: UnsupportedRawDecision[];
   rejected: RejectedRawDecision[];
+  accepted: FindingManagerDecisions['rawDecisions'];
 } {
   const rawById = new Map(input.residualRawFindings.map((raw) => [raw.rawFindingId, raw]));
   const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
@@ -305,6 +301,7 @@ function assembleRawDecisions(input: {
   const newFindingsByKey = new Map<string, FindingManagerNewFinding>();
   const unsupported: UnsupportedRawDecision[] = [];
   const rejected: RejectedRawDecision[] = [];
+  const accepted: FindingManagerDecisions['rawDecisions'] = [];
   const seenRawFindingIds = new Set<string>();
 
   const reject = (decision: FindingManagerDecisions['rawDecisions'][number], reason: string): void => {
@@ -321,6 +318,26 @@ function assembleRawDecisions(input: {
     const raw = rawById.get(decision.rawFindingId);
     if (raw === undefined) {
       reject(decision, `Unknown raw finding id "${decision.rawFindingId}"`);
+      continue;
+    }
+    if (
+      raw.target.kind === 'absence'
+      && decision.anchorRelevance !== 'relevant'
+    ) {
+      reject(
+        decision,
+        `Absence raw finding "${raw.rawFindingId}" requires an explicit relevant anchor adjudication; quote existence alone is not relevance`,
+      );
+      continue;
+    }
+    if (
+      raw.target.kind !== 'absence'
+      && decision.anchorRelevance !== 'not_applicable'
+    ) {
+      reject(
+        decision,
+        `Raw finding "${raw.rawFindingId}" has target kind "${raw.target.kind}" and must use anchorRelevance "not_applicable"`,
+      );
       continue;
     }
 
@@ -360,20 +377,21 @@ function assembleRawDecisions(input: {
         continue;
       }
       // 台帳の再照合（保存直前の再読込等）では、LLM が判断した時点では存在
-      // しなかった open finding が既に同じ claimIdentityHash を持つ
+      // しなかった open finding が既に同じ semanticClaimIdentityHash を持つ
       // 一致）で立っていることがある（並列子が同一の raw を先に "new" と判断
       // したケース）。LLM は他の子の直前の判断を知り得ないため、"new" ではなく
       // "same" として扱い、重複作成を避ける。キーは同ラウンド new+new の
       // グルーピングと同一の findingIdentityKey —
       // manager の明示的な new 判断を覆す禁止マージだった。
       const groupKey = newFindingGroupKey(raw);
-      if (raw.severity === null) {
-        reject(decision, `Cannot create a finding from raw finding "${raw.rawFindingId}" without severity`);
+      if (raw.severity === null || raw.title === null || raw.description === null) {
+        reject(decision, `Cannot create a finding from raw finding "${raw.rawFindingId}" with an incomplete claim payload`);
         continue;
       }
       const existingOpenFindingId = openFindingKeyIndex.get(groupKey);
       if (existingOpenFindingId !== undefined) {
         appendGroupedFindingDecision(matchesByFindingId, existingOpenFindingId, raw.rawFindingId, decision.evidence);
+        accepted.push(decision);
         continue;
       }
 
@@ -390,6 +408,7 @@ function assembleRawDecisions(input: {
         if (severityRank(raw.severity) > severityRank(existing.severity)) {
           existing.severity = raw.severity;
         }
+        accepted.push(decision);
         continue;
       }
       const created: FindingManagerNewFinding = {
@@ -399,6 +418,7 @@ function assembleRawDecisions(input: {
       };
       newFindingsByKey.set(groupKey, created);
       newFindings.push(created);
+      accepted.push(decision);
       continue;
     }
 
@@ -435,15 +455,19 @@ function assembleRawDecisions(input: {
     switch (decision.decision) {
       case 'same':
         appendGroupedFindingDecision(matchesByFindingId, findingId, raw.rawFindingId, decision.evidence);
+        accepted.push(decision);
         break;
       case 'resolved':
         appendGroupedFindingDecision(resolvedByFindingId, findingId, raw.rawFindingId, decision.evidence);
+        accepted.push(decision);
         break;
       case 'reopened':
         appendGroupedFindingDecision(reopenedByFindingId, findingId, raw.rawFindingId, decision.evidence);
+        accepted.push(decision);
         break;
       case 'conflict':
         appendGroupedConflict(conflictsByFindingId, findingId, raw.rawFindingId, decision.evidence);
+        accepted.push(decision);
         break;
     }
   }
@@ -479,6 +503,7 @@ function assembleRawDecisions(input: {
     conflicts: [...conflictsByFindingId.values()],
     unsupported,
     rejected,
+    accepted,
   };
 }
 
@@ -1004,6 +1029,7 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
   });
 
   const rawOutput: FindingManagerOutput = {
+    anchorAdjudications: rawResult.accepted.map(createAnchorAdjudication),
     matches: rawResult.matches,
     newFindings: rawResult.newFindings,
     resolvedFindings: rawResult.resolvedFindings,
@@ -1176,30 +1202,59 @@ export interface FlattenedManagerDecisions {
  * 持ち越す。機械分類は conflicts / waivedFindings / disputeNotes を生成しない
  * ため、そのぶんは空扱いで問題ない。
  */
-export function flattenManagerOutputToDecisions(output: FindingManagerOutput): FlattenedManagerDecisions {
-  const rawDecisions: FindingManagerDecisions['rawDecisions'] = [];
-  for (const match of output.matches) {
-    for (const rawFindingId of match.rawFindingIds) {
-      rawDecisions.push({ rawFindingId, decision: 'same', findingId: match.findingId, evidence: match.evidence ?? '' });
+export function flattenManagerOutputToDecisions(
+  output: FindingManagerOutput,
+): FlattenedManagerDecisions {
+  const landedRawFindingIds = new Set([
+    ...output.matches.flatMap((match) => match.rawFindingIds),
+    ...output.newFindings.flatMap((finding) => finding.rawFindingIds),
+    ...output.resolvedFindings.flatMap((finding) => finding.rawFindingIds),
+    ...output.reopenedFindings.flatMap((finding) => finding.rawFindingIds),
+    ...output.conflicts.flatMap((conflict) => conflict.rawFindingIds),
+  ]);
+  const adjudicationsByRawFindingId = new Map(
+    output.anchorAdjudications.map((adjudication) => [
+      adjudication.rawFindingId,
+      adjudication,
+    ]),
+  );
+  if (adjudicationsByRawFindingId.size !== output.anchorAdjudications.length) {
+    throw new Error('Finding manager output contains duplicate anchor adjudications');
+  }
+  for (const rawFindingId of landedRawFindingIds) {
+    if (!adjudicationsByRawFindingId.has(rawFindingId)) {
+      throw new Error(`Finding manager output is missing anchor adjudication for raw finding "${rawFindingId}"`);
     }
   }
-  for (const newFinding of output.newFindings) {
-    // 'new' の title/severity は raw finding 自身から決まる
-    // （assembleRawDecisions 参照）ため、evidence はここでは使われない。
-    for (const rawFindingId of newFinding.rawFindingIds) {
-      rawDecisions.push({ rawFindingId, decision: 'new', evidence: '' });
+  for (const adjudication of output.anchorAdjudications) {
+    if (!landedRawFindingIds.has(adjudication.rawFindingId)) {
+      throw new Error(
+        `Anchor adjudication references non-landed raw finding "${adjudication.rawFindingId}"`,
+      );
+    }
+    const binding = computeManagerOutputBinding({
+      rawFindingId: adjudication.rawFindingId,
+      decision: adjudication.rawDecision,
+      findingId: adjudication.findingId ?? undefined,
+      anchorRelevance: adjudication.decision,
+    });
+    if (binding !== adjudication.managerOutputBinding) {
+      throw new Error(
+        `Anchor adjudication for raw finding "${adjudication.rawFindingId}" has a mismatched manager output binding`,
+      );
     }
   }
-  for (const resolved of output.resolvedFindings) {
-    for (const rawFindingId of resolved.rawFindingIds) {
-      rawDecisions.push({ rawFindingId, decision: 'resolved', findingId: resolved.findingId, evidence: resolved.evidence });
-    }
-  }
-  for (const reopened of output.reopenedFindings) {
-    for (const rawFindingId of reopened.rawFindingIds) {
-      rawDecisions.push({ rawFindingId, decision: 'reopened', findingId: reopened.findingId, evidence: reopened.evidence });
-    }
-  }
+  const rawDecisions: FindingManagerDecisions['rawDecisions'] =
+    output.anchorAdjudications.map((adjudication) => ({
+      rawFindingId: adjudication.rawFindingId,
+      decision: adjudication.rawDecision,
+      anchorRelevance: adjudication.decision,
+      ...(adjudication.findingId === null
+        ? {}
+        : { findingId: adjudication.findingId }),
+      evidence: adjudication.rationale,
+    }));
+
   const carriedFindingOnlyConflicts: FindingManagerConflict[] = [];
   for (const conflict of output.conflicts) {
     // raw の裏付けが無い conflict は raw decision へ開けない。捨てると保存直前の
@@ -1208,13 +1263,6 @@ export function flattenManagerOutputToDecisions(output: FindingManagerOutput): F
     if (conflict.rawFindingIds.length === 0) {
       carriedFindingOnlyConflicts.push(conflict);
       continue;
-    }
-    const findingId = conflict.findingIds[0];
-    if (findingId === undefined) {
-      continue;
-    }
-    for (const rawFindingId of conflict.rawFindingIds) {
-      rawDecisions.push({ rawFindingId, decision: 'conflict', findingId, evidence: conflict.description });
     }
   }
 

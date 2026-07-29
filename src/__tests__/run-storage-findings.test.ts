@@ -4,6 +4,7 @@ import {
   createRealRunStorage,
   resumeRealRunStorage,
 } from './helpers/run-storage.js';
+import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
 
 afterEach(cleanupRealRunStorages);
 
@@ -27,7 +28,7 @@ describe('Finding authority boundary', () => {
     await store.updateLedger((ledger) => ({
       ledger: {
         ...ledger,
-        rawFindings: [{
+        rawFindings: [canonicalRawFindingFixture({
           rawFindingId: 'raw-1',
           stepName: 'review',
           reviewer: 'reviewer',
@@ -39,7 +40,7 @@ describe('Finding authority boundary', () => {
           relation: 'new',
           targetFindingId: null,
           evidence: [],
-        }],
+        })],
       },
       result: undefined,
     }));

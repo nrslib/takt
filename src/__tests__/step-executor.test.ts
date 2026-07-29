@@ -181,24 +181,26 @@ describe('StepExecutor', () => {
     initializeGitFixture(cwd, ['src/fixed.ts']);
     const evidence = verifiedSourceQuoteFields(cwd, 'src/fixed.ts', 1);
     const structuredOutput = createRawFindingsStructuredOutput(evidence.snapshotId);
-    const fileQuoteEvidence = {
-      kind: 'file_quote' as const,
-      path: 'src/fixed.ts',
-      startLine: 1,
-      endLine: 1,
-      verbatimExcerpt: evidence.verbatimExcerpt,
-      snapshotId: evidence.snapshotId,
-    };
     const reviewerRawFindings = [{
-      rawFindingId: 'confirmation-resolved',
-      familyTag: 'bug',
-      severity: 'high',
-      title: 'Confirmed fixed',
-      description: 'The previously reported issue remains fixed.',
-      suggestion: null,
-      relation: 'resolution_confirmation',
-      targetFindingId: 'F-0001',
-      evidence: [fileQuoteEvidence],
+      rawExcerpt: 'Confirmed fixed.',
+      candidate: {
+        rawFindingId: 'confirmation-resolved',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Confirmed fixed',
+        description: 'The previously reported issue remains fixed.',
+        suggestion: null,
+        relation: 'resolution_confirmation',
+        targetFindingId: 'F-0001',
+        target: { kind: 'code', paths: ['src/fixed.ts'] },
+        evidenceRequests: [{
+          kind: 'file_quote',
+          path: 'src/fixed.ts',
+          startLine: 1,
+          endLine: 1,
+          verbatimExcerpt: evidence.verbatimExcerpt,
+        }],
+      },
     }];
     expect(structuredOutput.validationSchema).toBe(RawFindingsOutputValidationJsonSchema);
     const findingContractContext = {
@@ -315,6 +317,7 @@ describe('StepExecutor', () => {
       getInteractive: () => false,
       getWorkflowSteps: () => [{ name: 'review' }],
       getWorkflowName: () => 'test-workflow',
+      getTask: () => 'review task',
       getCurrentWorkflowStack: () => [
         makeWorkflowResumePointEntry({ step: 'review' }),
       ],
@@ -345,13 +348,15 @@ describe('StepExecutor', () => {
       ...findingContractContext,
       reviewScopeSnapshotId: 'prompt-snapshot-B',
     });
-    expect(() => executor.prepareNormalStepExecution(
+    const mismatchedPreparedExecution = executor.prepareNormalStepExecution(
       step,
       state,
       'review task',
       5,
       1,
-    )).toThrow(/file_quote evidence snapshotId const.*reviewScopeSnapshotId/);
+    );
+    expect(mismatchedPreparedExecution.findingContractContext?.reviewScopeSnapshotId)
+      .toBe('prompt-snapshot-B');
 
     await expect(executor.runNormalStep(
       step,
@@ -438,7 +443,7 @@ describe('StepExecutor', () => {
     expect(buildAgentOptions).toHaveBeenCalledWith(expect.objectContaining({
       structuredOutput,
     }), undefined);
-    expect(result.instruction).toContain(evidence.snapshotId);
+    expect(result.instruction).not.toContain(evidence.snapshotId);
     expect(result.instruction).toContain(JSON.stringify(structuredOutput.schema, null, 2));
     expect(agentCallCount).toBe(2);
     expect(vi.mocked(executeAgent).mock.calls.some(

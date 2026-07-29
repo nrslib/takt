@@ -19,7 +19,10 @@ import type {
   RawFinding,
 } from '../core/workflow/findings/types.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
-import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
 
 const DEFAULT_CONFLICT_ID = formatConflictId({
@@ -27,14 +30,25 @@ const DEFAULT_CONFLICT_ID = formatConflictId({
   rawFindingIds: ['raw-existing'],
 });
 
-function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
-  const { location = 'src/a.ts:10', ...currentOverrides } = overrides as Partial<RawFinding> & {
-    location?: string;
-  };
+type RawFindingFixtureOverrides = Partial<Omit<
+  RawFinding,
+  | 'target'
+  | 'targetIdentityHash'
+  | 'claimIdentityHash'
+  | 'candidateIdentityHash'
+  | 'sourceBinding'
+>> & {
+  location?: string;
+  target?: RawFinding['target'];
+  sourceBinding?: RawFinding['sourceBinding'];
+};
+
+function makeRawFinding(overrides: RawFindingFixtureOverrides = {}): RawFinding {
+  const { location = 'src/a.ts:10', ...currentOverrides } = overrides;
   const match = /^(.*):(\d+)$/u.exec(location);
   const path = match?.[1] ?? location;
   const line = Number(match?.[2] ?? 1);
-  return {
+  return canonicalRawFindingFixture({
     rawFindingId: 'raw-current',
     stepName: 'architecture-review',
     reviewer: 'architecture-review',
@@ -54,7 +68,7 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
       snapshotId: '1'.repeat(64),
     }],
     ...currentOverrides,
-  };
+  });
 }
 
 function makeFinding(
@@ -140,13 +154,16 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
 
 function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): FindingManagerDecisions {
   return {
-    rawDecisions: [],
     disputeDecisions: [],
     conflictDecisions: [],
     invalidateDecisions: [],
     duplicateDecisions: [],
     dismissDecisions: [],
     ...overrides,
+    rawDecisions: (overrides.rawDecisions ?? []).map((decision) => ({
+      anchorRelevance: 'not_applicable',
+      ...decision,
+    })),
   };
 }
 
@@ -814,17 +831,15 @@ describe('assembleManagerOutput combined decision kinds', () => {
   });
 });
 
-// identity は evidence location や familyTag ではなく、
-// 正規化 title + description + targetFindingId で決まる。
+// 意味上の同一性は target + title + description で決まる。
 describe('assembleManagerOutput new-finding grouping', () => {
-  it('Given two reviewers reporting the same title and path (different familyTags) When assembled Then they collapse into one new finding', () => {
+  it('Given the same target, title, and description with different family and severity When assembled Then semantic identity merges them', () => {
     const first = makeRawFinding({
       rawFindingId: 'raw-1', reviewer: 'architecture-review',
       familyTag: 'resource-leak', location: 'src/a.ts:10', severity: 'medium', title: 'Handle is never closed',
     });
     const second = makeRawFinding({
       rawFindingId: 'raw-2', reviewer: 'robustness-review',
-      // familyTag は違うが path + タイトルが一致するので機械的に畳む。
       familyTag: 'type-mismatch', location: 'src/a.ts:11', severity: 'high', title: 'Handle is never closed',
     });
 
@@ -841,12 +856,11 @@ describe('assembleManagerOutput new-finding grouping', () => {
 
     expect(result.rejectedRawDecisions).toEqual([]);
     expect(result.output.newFindings).toEqual([
-      // 重い方の severity を採る。title は最初に観測したものを保つ。
       { rawFindingIds: ['raw-1', 'raw-2'], title: 'Handle is never closed', severity: 'high' },
     ]);
   });
 
-  it('Given the same claim at different evidence paths When assembled Then they collapse by claim identity', () => {
+  it('Given the same text at different code targets When assembled Then target identity keeps them separate', () => {
     const first = makeRawFinding({ rawFindingId: 'raw-1', location: 'src/a.ts:10', title: 'Leak' });
     const second = makeRawFinding({ rawFindingId: 'raw-2', location: 'src/b.ts:20', title: 'Leak' });
 
@@ -862,7 +876,8 @@ describe('assembleManagerOutput new-finding grouping', () => {
     });
 
     expect(result.output.newFindings).toEqual([
-      { rawFindingIds: ['raw-1', 'raw-2'], title: 'Leak', severity: 'high' },
+      { rawFindingIds: ['raw-1'], title: 'Leak', severity: 'high' },
+      { rawFindingIds: ['raw-2'], title: 'Leak', severity: 'high' },
     ]);
   });
 
@@ -1005,14 +1020,12 @@ describe('assembleManagerOutput new-finding grouping', () => {
 });
 
 describe('assembleManagerOutput "new" decisions reconciled against the ledger', () => {
-  it('Given an existing open finding in the ledger with identical path, title and description When a raw is decided "new" Then it is redirected to a match instead of creating a duplicate finding', () => {
+  it('Given an existing open finding with the same semantic claim but a different family When a raw is decided "new" Then it redirects to the existing finding', () => {
     // codex の再現ケース: 保存直前の再照合では previousLedger が最新台帳になる。
     // LLM が "new" と判断した時点では存在しなかった open finding (F-0001) が、
     // 別の並列子によって「同一の raw」から直前に立てられているケース。これを
     // 弾かないと F-0001 と F-0002 が重複作成される。リダイレクトの鍵は
-    // path+title+description の完全一致（B3: path+title だけのリダイレクトは
-    // manager の new 判断を意味判断なしで覆す禁止マージ）。familyTag はあえて
-    // 違えて、識別に使われないことも併せて確認する。
+    // familyTag は意味上の重複判定に含めない。
     const raw = makeRawFinding({
       rawFindingId: 'raw-late',
       familyTag: 'security',
@@ -1032,9 +1045,11 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
 
     expect(result.rejectedRawDecisions).toEqual([]);
     expect(result.output.newFindings).toEqual([]);
-    expect(result.output.matches).toEqual([
-      { findingId: 'F-0001', rawFindingIds: ['raw-late'], evidence: 'Reported independently by another reviewer.' },
-    ]);
+    expect(result.output.matches).toEqual([{
+      findingId: 'F-0001',
+      rawFindingIds: ['raw-late'],
+      evidence: 'Reported independently by another reviewer.',
+    }]);
   });
 
   it('Given an existing open finding at a different path When a raw is decided "new" Then it still creates a new finding', () => {

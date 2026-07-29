@@ -37,7 +37,12 @@ import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
 import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
-import { authorizeFindingLedgerFixture, emptyFindingAuthorityProjection } from './helpers/finding-lifecycle-fixture.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+  emptyFindingAuthorityProjection,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -195,6 +200,24 @@ const V3R4_AI_ANTIPATTERN_REVIEW_2ND_RAW_FINDINGS: Array<Record<string, unknown>
   },
 ];
 
+function reviewerExtraction(raw: Record<string, unknown>): Record<string, unknown> {
+  const finding = raw as Partial<import('../core/workflow/findings/types.js').RawFinding>;
+  const localId = typeof finding.rawFindingId === 'string' ? finding.rawFindingId : null;
+  const description = typeof finding.description === 'string' ? finding.description : null;
+  return reviewerRawExtractionFixture({
+    rawFindingId: localId,
+    familyTag: typeof finding.familyTag === 'string' ? finding.familyTag : null,
+    severity: finding.severity ?? null,
+    title: typeof finding.title === 'string' ? finding.title : null,
+    description,
+    suggestion: typeof finding.suggestion === 'string' ? finding.suggestion : null,
+    relation: finding.relation ?? null,
+    targetFindingId: finding.targetFindingId ?? null,
+    evidence: finding.evidence,
+    rawExcerpt: `[${localId ?? 'anonymous'}] ${description ?? finding.title ?? 'Observation'}`,
+  });
+}
+
 function makeHarness(initialLedger: FindingLedger): {
   currentLedger: () => FindingLedger;
   run: () => ReturnType<typeof runFindingManagerForStep>;
@@ -243,12 +266,16 @@ function makeHarness(initialLedger: FindingLedger): {
   return {
     currentLedger: () => ledgerRepository.loadLedger(),
     run: () => {
+      const extractions = V3R4_AI_ANTIPATTERN_REVIEW_2ND_RAW_FINDINGS
+        .map(reviewerExtraction);
       const subResults: FindingManagerSubStepResult[] = [{
         subStep: { kind: 'agent', name: 'ai-antipattern-review', persona: 'ai-antipattern-reviewer', edit: false } as WorkflowStep,
         response: {
           status: 'done',
-          content: '',
-          structuredOutput: { rawFindings: V3R4_AI_ANTIPATTERN_REVIEW_2ND_RAW_FINDINGS },
+          content: extractions.map((item) => String(item.rawExcerpt ?? '')).join('\n'),
+          structuredOutput: {
+            rawFindings: extractions,
+          },
         } as unknown as AgentResponse,
       }];
       return runFindingManagerForStep({
@@ -342,7 +369,7 @@ describe('codex 対策#4 red/green fixture: 実測の gemma 架空指摘7件（a
       workflowName: 'peer-review', nextId: 2, updatedAt: '2026-07-12T00:00:00.000Z',
       findings: [seedFinding],
       evidenceRecords: [evidenceRecord],
-      rawFindings: [{
+      rawFindings: [canonicalRawFindingFixture({
         rawFindingId: 'raw-seed',
         stepName: 'reviewers',
         reviewer: 'arch-review',
@@ -353,8 +380,9 @@ describe('codex 対策#4 red/green fixture: 実測の gemma 架空指摘7件（a
         suggestion: null,
         relation: 'new',
         targetFindingId: null,
+        target: { kind: 'code', paths: ['src/shared/constants.ts'] },
         evidence: [unverifiedFileQuote('src/shared/constants.ts', 5, '// unrelated line 5')],
-      }],
+      })],
       conflicts: [],
       interpretations: [],
     });

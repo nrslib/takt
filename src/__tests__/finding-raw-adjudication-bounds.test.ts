@@ -41,6 +41,7 @@ import {
 } from '../core/workflow/findings/raw-finding-limits.js';
 import { classifyProvisionalRecovery } from '../core/workflow/findings/provisional-recovery.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
+import { buildManagerInputLedger } from '../core/workflow/findings/manager-agent.js';
 import { StepExecutor } from '../core/workflow/engine/StepExecutor.js';
 import { RawAdjudicationDecisionsJsonSchema } from '../core/workflow/findings/raw-adjudication-step.js';
 import {
@@ -57,11 +58,24 @@ import {
   captureFindingLifecycleHead,
   reserveVerifiedLifecycleMutation,
 } from '../core/workflow/findings/lifecycle-mutation.js';
+import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
+import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
-vi.mock('../core/workflow/findings/snapshot.js', () => ({
-  computeReviewScopeSnapshotId: () => '1'.repeat(64),
-}));
+vi.mock('../core/workflow/findings/snapshot.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/findings/snapshot.js')>();
+  const reviewScopeSnapshotId = '1'.repeat(64);
+  return {
+    ...actual,
+    computeReviewScopeSnapshotId: () => reviewScopeSnapshotId,
+    captureReviewScopeProofSnapshot: () => ({
+      reviewScopeSnapshotId,
+      trackedDiff: undefined,
+      untrackedEvidence: [],
+      queryInventory: [],
+    }),
+  };
+});
 vi.mock('../core/workflow/findings/manager-output-validation.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../core/workflow/findings/manager-output-validation.js')>();
   return { ...actual, validateFindingManagerOutput: vi.fn(actual.validateFindingManagerOutput) };
@@ -97,6 +111,12 @@ const observation = {
 const quote = {
   verbatimExcerpt: '{',
   snapshotId: '1'.repeat(64),
+};
+const reviewScopeSnapshot = {
+  reviewScopeSnapshotId: quote.snapshotId,
+  trackedDiff: undefined,
+  untrackedEvidence: [],
+  queryInventory: [],
 };
 
 function sha256(value: string): string {
@@ -156,7 +176,7 @@ function sourceRaw(
         verbatimExcerpt: quote.verbatimExcerpt,
         snapshotId: quote.snapshotId,
       }];
-  return {
+  return canonicalRawFindingFixture({
     rawFindingId: `source-${index}`,
     stepName: 'reviewer-a',
     reviewer: 'reviewer-a',
@@ -167,8 +187,12 @@ function sourceRaw(
     suggestion: `Fix issue ${index}.`,
     relation: 'new',
     targetFindingId: null,
+    target: {
+      kind: 'code',
+      paths: [evidenceExcerptChars > 0 ? 'package-lock.json' : 'package.json'],
+    },
     evidence,
-  };
+  });
 }
 
 function provisionalFinding(input: {
@@ -185,6 +209,10 @@ function provisionalFinding(input: {
     id: findingId(input.index),
     status: 'open',
     lifecycle: 'new',
+    target: input.source.target,
+    targetIdentityHash: input.source.targetIdentityHash,
+    claimIdentityHash: input.source.claimIdentityHash,
+    semanticClaimIdentityHash: input.source.semanticClaimIdentityHash,
     severity: 'high',
     title: input.source.title,
     evidenceIds: [],
@@ -220,33 +248,69 @@ function authorizeInitialEntity(
   }
   const isProvisional = entityKind === 'finding'
     && (entity as FindingLedgerEntry).provisional !== undefined;
+  const normalizedEntity = entityKind === 'finding'
+    ? (() => {
+        const finding = entity as FindingLedgerEntry;
+        if (
+          isProvisional
+          &&
+          finding.target !== undefined
+          && finding.targetIdentityHash !== undefined
+          && finding.claimIdentityHash !== undefined
+        ) {
+          return finding;
+        }
+        const identitySource = canonicalRawFindingFixture({
+          rawFindingId: `fixture-identity:${finding.id}`,
+          stepName: observation.stepName,
+          reviewer: 'fixture-reviewer',
+          familyTag: 'fixture',
+          severity: finding.severity,
+          title: finding.title,
+          description: finding.description ?? finding.title,
+          suggestion: null,
+          relation: 'new',
+          targetFindingId: null,
+          target: {
+            kind: 'code',
+            paths: [`fixtures/${finding.id}.ts`],
+          },
+          evidence: [],
+        });
+        return {
+          ...finding,
+          target: identitySource.target,
+          targetIdentityHash: identitySource.targetIdentityHash,
+          claimIdentityHash: identitySource.claimIdentityHash,
+        };
+      })()
+    : entity;
   const operation = entityKind === 'conflict'
     ? 'create_conflict'
     : isProvisional
       ? 'update_provisional'
       : 'create_finding';
-  const initialClaimIdentityHash = entityKind === 'finding'
-    ? computeClaimIdentityHash({
-        targetFindingId: null,
-        title: entity.title,
-        description: entity.description ?? '',
-      })
-    : sha256(`fixture-conflict:${entity.id}`);
   const rawSource: RawFinding | undefined = isProvisional
     ? undefined
-    : {
+    : canonicalRawFindingFixture({
         rawFindingId: `fixture-raw:${entityKind}:${entity.id}`,
         stepName: observation.stepName,
         reviewer: 'fixture-reviewer',
         familyTag: 'fixture',
         severity: 'high',
-        title: entityKind === 'finding' ? entity.title : `Conflict ${entity.id}`,
-        description: entity.description ?? `Conflict ${entity.id}`,
+        title: entityKind === 'finding' ? normalizedEntity.title : `Conflict ${entity.id}`,
+        description: normalizedEntity.description ?? `Conflict ${entity.id}`,
         suggestion: null,
         relation: entityKind === 'finding' ? 'new' : 'persists',
         targetFindingId: entityKind === 'finding'
           ? null
           : (entity as FindingLedgerConflict).findingIds[0] ?? 'F-0001',
+        target: entityKind === 'finding'
+          ? (normalizedEntity as FindingLedgerEntry).target!
+          : {
+              kind: 'code',
+              paths: [`fixtures/${entity.id}.ts`],
+            },
         evidence: [{
           kind: 'file_quote',
           path: `fixtures/${entity.id}.ts`,
@@ -255,10 +319,10 @@ function authorizeInitialEntity(
           verbatimExcerpt: entity.description ?? entity.id,
           snapshotId: sha256(`fixture-snapshot:${entityKind}:${entity.id}`),
         }],
-      };
+      });
   const claimIdentityHash = rawSource === undefined
-    ? initialClaimIdentityHash
-    : computeClaimIdentityHash(rawSource);
+    ? (normalizedEntity as FindingLedgerEntry).claimIdentityHash!
+    : rawSource.claimIdentityHash;
   const evidenceRecord = rawSource === undefined
     ? createEngineProofRecord({
         kind: 'engine_proof',
@@ -268,15 +332,14 @@ function authorizeInitialEntity(
         runId: observation.runId,
         scopeIdentity: 'raw-adjudication-bounds',
         snapshotId: sha256(`fixture-snapshot:${entityKind}:${entity.id}`),
+        purpose: 'lifecycle_authority',
         claimIdentityHash,
         targetFindingId: null,
         subject: {
-          kind: 'named_structural_check',
-          checkId: 'finding-provisional-isolation',
-          parameters: {
-            provisionalKind: (entity as FindingLedgerEntry).provisional!.kind,
-            stableKey: (entity as FindingLedgerEntry).provisional!.stableKey,
-          },
+          kind: 'finding_provisional_isolation',
+          findingId: entity.id,
+          provisionalKind: (normalizedEntity as FindingLedgerEntry).provisional!.kind,
+          stableKey: (normalizedEntity as FindingLedgerEntry).provisional!.stableKey,
         },
         dependencyDigests: [],
         resultDigest: sha256(`fixture-result:${entityKind}:${entity.id}`),
@@ -332,9 +395,9 @@ function authorizeInitialEntity(
   });
   const authorizedEntity = entityKind === 'finding'
     ? {
-        ...(entity as FindingLedgerEntry),
+        ...(normalizedEntity as FindingLedgerEntry),
         evidenceIds: [
-          ...(entity as FindingLedgerEntry).evidenceIds,
+          ...(normalizedEntity as FindingLedgerEntry).evidenceIds,
           evidenceRecord.evidenceId,
         ],
       }
@@ -373,7 +436,10 @@ function authorizeInitialLedgerFixture(input: FindingLedger): FindingLedger {
       delete genesis.resolvedEvidence;
       ledger = authorizeInitialEntity(ledger, genesis, 'finding');
       const expectedHead = captureFindingLifecycleHead(ledger, 'finding', finding.id)!;
-      const raw: RawFinding = {
+      const currentFinding = ledger.findings.find(
+        (candidate) => candidate.id === finding.id,
+      )!;
+      const raw: RawFinding = canonicalRawFindingFixture({
         rawFindingId: `fixture-resolution:${finding.id}`,
         stepName: observation.stepName,
         reviewer: 'fixture-reviewer',
@@ -385,6 +451,7 @@ function authorizeInitialLedgerFixture(input: FindingLedger): FindingLedger {
         relation: 'resolution_confirmation',
         targetFindingId: finding.id,
         targetPrecondition: captureFindingPreconditions(ledger).get(finding.id)!.precondition,
+        target: currentFinding.target!,
         evidence: [{
           kind: 'file_quote',
           path: `fixtures/${finding.id}-resolution.ts`,
@@ -393,8 +460,8 @@ function authorizeInitialLedgerFixture(input: FindingLedger): FindingLedger {
           verbatimExcerpt: finding.description ?? finding.title,
           snapshotId: sha256(`fixture-resolution-snapshot:${finding.id}`),
         }],
-      };
-      const claimIdentityHash = computeClaimIdentityHash(raw);
+      });
+      const claimIdentityHash = raw.claimIdentityHash;
       const quote = raw.evidence[0]!;
       if (quote.kind !== 'file_quote') {
         throw new Error('Expected fixture resolution quote');
@@ -441,6 +508,9 @@ function authorizeInitialLedgerFixture(input: FindingLedger): FindingLedger {
         mutationId: reservation.mutationId,
         findings: [{
           ...cloneFixture(finding),
+          target: currentFinding.target,
+          targetIdentityHash: currentFinding.targetIdentityHash,
+          claimIdentityHash: currentFinding.claimIdentityHash,
           revision: 2,
           resolvedAt: finding.resolvedAt ?? observation.timestamp,
           resolvedEvidence: finding.resolvedEvidence ?? 'Fixture resolution evidence.',
@@ -677,6 +747,7 @@ function makeHarness(
   const store: FindingManagerStore = {
     ledgerIdentity: '/test/finding-raw-adjudication-bounds/ledger.json',
     workflowName: initialLedger.workflowName,
+    workflowTask: 'Review the supplied implementation.',
     loadLedger: () => ledgerRepository.loadLedger(),
     updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
     saveLedgerSnapshot: () => {},
@@ -751,6 +822,7 @@ function makeHarness(
       managerStep,
       observation,
       reviewScopeSnapshotId: quote.snapshotId,
+      reviewScopeSnapshot,
     }),
   };
 }
@@ -773,6 +845,7 @@ function managerResponse(instruction: string, evidence = 'Independent issue.'): 
         rawFindingId: raw.rawFindingId,
         decision: 'new',
         findingId: '',
+        anchorRelevance: 'not_applicable',
         evidence,
       })),
       disputeDecisions: [],
@@ -792,6 +865,7 @@ function applyRecovery(harness: RecoveryHarness, recovery: Awaited<ReturnType<Re
     runInput: harness.runInput,
     observation,
     reviewScopeSnapshotId: quote.snapshotId,
+    reviewScopeSnapshot,
   });
   return completeRawRecoveryAttempts(
     before,
@@ -816,6 +890,237 @@ beforeEach(() => {
 });
 
 describe('bounded raw adjudication recovery', () => {
+  it('keeps identity, source binding, proof details, and revision in compact manager views', () => {
+    const ledger = authorizeInitialLedgerFixture(makeBacklog({
+      count: 1,
+      firstObservedRound: 1,
+    }));
+    const view = buildManagerInputLedger(ledger, new Set()) as {
+      findings: Array<Record<string, unknown>>;
+    };
+
+    expect(view.findings[0]).toMatchObject({
+      id: 'F-0001',
+      revision: 1,
+      target: ledger.findings[0]!.target,
+      targetIdentityHash: ledger.findings[0]!.targetIdentityHash,
+      claimIdentityHash: ledger.findings[0]!.claimIdentityHash,
+      semanticClaimIdentityHash: ledger.findings[0]!.semanticClaimIdentityHash,
+      projectionDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      sourceBindings: {
+        items: [expect.objectContaining({
+          rawFindingId: 'source-1',
+          candidateIdentityHash: ledger.rawFindings[0]!.candidateIdentityHash,
+          sourceBinding: ledger.rawFindings[0]!.sourceBinding,
+        })],
+        totalCount: 1,
+        fullSetDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        truncated: false,
+      },
+      evidenceSummaries: {
+        items: [expect.objectContaining({
+          kind: 'engine_proof',
+          purpose: 'lifecycle_authority',
+        })],
+        totalCount: 1,
+        fullSetDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        truncated: false,
+      },
+    });
+    expect(view.findings[0]).not.toHaveProperty('description');
+    expect(view.findings[0]).not.toHaveProperty('rawFindings');
+  });
+
+  it('keeps 200 compact findings bounded when stored quote length increases', () => {
+    const makeLedgerWithQuoteRecords = (verbatimExcerptChars: number): FindingLedger => {
+      const ledger = makeBacklog({
+        count: 200,
+        firstObservedRound: 1,
+      });
+      const evidenceRecords = ledger.rawFindings.map((rawFinding, index) => {
+        const payload = {
+          kind: 'file_quote' as const,
+          path: `src/compact-${index}.ts`,
+          startLine: 1,
+          endLine: 1,
+          verbatimExcerpt: 'q'.repeat(verbatimExcerptChars),
+          snapshotId: quote.snapshotId,
+          claimIdentityHash: rawFinding.claimIdentityHash,
+          fileHash: sha256(`compact-file-${index}`),
+        };
+        return {
+          evidenceId: computeFileQuoteEvidenceRecordId(payload),
+          ...payload,
+        };
+      });
+      return {
+        ...ledger,
+        evidenceRecords,
+        findings: ledger.findings.map((finding, index) => ({
+          ...finding,
+          evidenceIds: [evidenceRecords[index]!.evidenceId],
+        })),
+      };
+    };
+
+    const shortView = JSON.stringify(buildManagerInputLedger(
+      makeLedgerWithQuoteRecords(32),
+      new Set(),
+    ));
+    const longView = JSON.stringify(buildManagerInputLedger(
+      makeLedgerWithQuoteRecords(RAW_FINDING_LIMITS.maxVerbatimExcerptChars),
+      new Set(),
+    ));
+
+    expect(longView.length).toBe(shortView.length);
+    expect(longView).not.toContain('q'.repeat(256));
+    expect(longView.length).toBeLessThan(600_000);
+  });
+
+  it('bounds every historical collection for one compact finding with 1000 raw and evidence records', () => {
+    const backlog = makeBacklog({
+      count: 1000,
+      firstObservedRound: 1,
+    });
+    const evidenceRecords = backlog.rawFindings.map((rawFinding, index) => {
+      const payload = {
+        kind: 'file_quote' as const,
+        path: `src/history/${String(index).padStart(4, '0')}.ts`,
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: `historical quote ${index}`,
+        snapshotId: quote.snapshotId,
+        claimIdentityHash: rawFinding.claimIdentityHash,
+        fileHash: sha256(`historical-file-${index}`),
+      };
+      return {
+        evidenceId: computeFileQuoteEvidenceRecordId(payload),
+        ...payload,
+      };
+    });
+    const evidenceIds = evidenceRecords.map((record) => record.evidenceId).sort();
+    const aggregateFinding = {
+      ...backlog.findings[0]!,
+      rawFindingIds: backlog.rawFindings.map((rawFinding) => rawFinding.rawFindingId),
+      evidenceIds,
+    };
+    const aggregateLedger = {
+      ...backlog,
+      findings: [aggregateFinding],
+      evidenceRecords,
+    };
+    const compactView = buildManagerInputLedger(aggregateLedger, new Set()) as {
+      findings: Array<{
+        sourceBindings: {
+          items: Array<{ rawFindingId: string }>;
+          totalCount: number;
+          fullSetDigest: string;
+          truncated: boolean;
+        };
+        evidenceSummaries: {
+          items: Array<{ evidenceId: string }>;
+          totalCount: number;
+          fullSetDigest: string;
+          truncated: boolean;
+        };
+        locations: {
+          items: string[];
+          totalCount: number;
+          fullSetDigest: string;
+          truncated: boolean;
+        };
+      }>;
+    };
+    const compactFinding = compactView.findings[0]!;
+
+    expect(compactFinding.sourceBindings).toMatchObject({
+      totalCount: 1000,
+      fullSetDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      truncated: true,
+    });
+    expect(compactFinding.sourceBindings.items).toHaveLength(16);
+    expect(compactFinding.evidenceSummaries).toMatchObject({
+      totalCount: 1000,
+      fullSetDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      truncated: true,
+    });
+    expect(compactFinding.evidenceSummaries.items).toHaveLength(16);
+    expect(compactFinding.locations).toMatchObject({
+      totalCount: 1000,
+      fullSetDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      truncated: true,
+    });
+    expect(compactFinding.locations.items).toHaveLength(16);
+    expect(JSON.stringify(compactView).length).toBeLessThan(50_000);
+    expect(buildManagerInputLedger(aggregateLedger, new Set())).toEqual(compactView);
+    const reorderedView = buildManagerInputLedger({
+      ...aggregateLedger,
+      findings: [{
+        ...aggregateFinding,
+        rawFindingIds: [...aggregateFinding.rawFindingIds].reverse(),
+        evidenceIds: [...aggregateFinding.evidenceIds].reverse(),
+      }],
+    }, new Set()) as typeof compactView;
+    expect(reorderedView.findings[0]?.sourceBindings).toEqual(compactFinding.sourceBindings);
+    expect(reorderedView.findings[0]?.evidenceSummaries).toEqual(compactFinding.evidenceSummaries);
+    expect(reorderedView.findings[0]?.locations).toEqual(compactFinding.locations);
+
+    const fullDetailView = buildManagerInputLedger(
+      aggregateLedger,
+      new Set([aggregateFinding.id]),
+    ) as {
+      findings: Array<{
+        rawFindings: unknown[];
+        evidenceDetails: unknown[];
+        locations: string[];
+      }>;
+    };
+    expect(fullDetailView.findings[0]?.rawFindings).toHaveLength(1000);
+    expect(fullDetailView.findings[0]?.evidenceDetails).toHaveLength(1000);
+    expect(fullDetailView.findings[0]?.locations).toHaveLength(1000);
+  });
+
+  it('expands quote text only for findings selected into the current batch', () => {
+    const ledger = makeBacklog({
+      count: 2,
+      firstObservedRound: 1,
+    });
+    const evidenceRecords = ledger.rawFindings.map((rawFinding, index) => {
+      const payload = {
+        kind: 'file_quote' as const,
+        path: `src/batch-${index}.ts`,
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: `batch-sensitive-quote-${index}`,
+        snapshotId: quote.snapshotId,
+        claimIdentityHash: rawFinding.claimIdentityHash,
+        fileHash: sha256(`batch-file-${index}`),
+      };
+      return {
+        evidenceId: computeFileQuoteEvidenceRecordId(payload),
+        ...payload,
+      };
+    });
+    const view = buildManagerInputLedger({
+      ...ledger,
+      evidenceRecords,
+      findings: ledger.findings.map((finding, index) => ({
+        ...finding,
+        evidenceIds: [evidenceRecords[index]!.evidenceId],
+      })),
+    }, new Set([ledger.findings[0]!.id])) as {
+      findings: Array<Record<string, unknown>>;
+    };
+
+    expect(view.findings[0]).toHaveProperty(
+      'evidenceDetails.0.verbatimExcerpt',
+      'batch-sensitive-quote-0',
+    );
+    expect(view.findings[1]).not.toHaveProperty('evidenceDetails');
+    expect(view.findings[1]).toHaveProperty('evidenceSummaries.items.0.path', 'src/batch-1.ts');
+    expect(JSON.stringify(view.findings[1])).not.toContain('batch-sensitive-quote-1');
+  });
+
   it('checks every nested evidence item instead of only the first quote', () => {
     const violation = findRawFieldLimitViolation({
       title: 'bounded claim',
@@ -838,13 +1143,13 @@ describe('bounded raw adjudication recovery', () => {
     expect(violation).toContain('evidence[1].verbatimExcerpt');
   });
 
-  it('bounds engine proof content addresses in nested evidence', () => {
+  it('does not apply prompt content limits to issuer-created engine proof references', () => {
     expect(findRawFieldLimitViolation({
       evidence: [{
         kind: 'engine_proof',
         proofId: 'a'.repeat(RAW_FINDING_LIMITS.maxProofIdChars + 1),
       }],
-    })).toContain('evidence[0].proofId');
+    })).toBeUndefined();
     expect(findRawFieldLimitViolation({
       evidence: [{
         kind: 'engine_proof',
@@ -870,6 +1175,7 @@ describe('bounded raw adjudication recovery', () => {
           rawFindingId: `replay-${index.toString(16).padStart(64, '0')}`,
           decision: 'unsupported',
           findingId: 'F-9999',
+          anchorRelevance: 'not_applicable',
           evidence: '\u0000'.repeat(rawProperties.evidence.maxLength),
         }),
       ),
@@ -892,6 +1198,18 @@ describe('bounded raw adjudication recovery', () => {
     expect(estimateTokens(JSON.stringify(worstCaseOutput))).toBeLessThanOrEqual(
       RAW_ADJUDICATION_RECOVERY_LIMITS.maxOutputTokensPerCall,
     );
+  });
+
+  it('keeps the replay rationale limit independent from reviewer finding payload limits', () => {
+    const replayEvidenceLimit = RawAdjudicationDecisionsJsonSchema
+      .properties.rawDecisions.items.properties.evidence.maxLength;
+
+    expect(replayEvidenceLimit).toBe(52);
+    expect(RAW_FINDING_LIMITS.maxDescriptionChars).toBeGreaterThan(replayEvidenceLimit);
+    expect(findRawFieldLimitViolation({
+      description: 'x'.repeat(replayEvidenceLimit + 1),
+      evidence: [],
+    })).toBeUndefined();
   });
 
   it('claims only the target limit and leaves overflow candidates unchanged', async () => {
@@ -953,6 +1271,7 @@ describe('bounded raw adjudication recovery', () => {
       runInput: harness.runInput,
       observation,
       reviewScopeSnapshotId: quote.snapshotId,
+      reviewScopeSnapshot,
     }).rawFindingDispositions).toEqual([
       expect.objectContaining({ outcome: 'audit_only' }),
     ]);
@@ -979,6 +1298,7 @@ describe('bounded raw adjudication recovery', () => {
       runInput: harness.runInput,
       observation,
       reviewScopeSnapshotId: quote.snapshotId,
+      reviewScopeSnapshot,
     });
     const duplicateCommit = duplicateResult.ledger;
 
@@ -1004,6 +1324,7 @@ describe('bounded raw adjudication recovery', () => {
       runInput: harness.runInput,
       observation,
       reviewScopeSnapshotId: quote.snapshotId,
+      reviewScopeSnapshot,
     });
     const firstCommit = completeRawRecoveryAttempts(
       harness.current(),
@@ -1066,7 +1387,7 @@ describe('bounded raw adjudication recovery', () => {
     );
   });
 
-  it('releases queue entries stopped by call or step budgets without consuming attempts', async () => {
+  it('processes the target limit within call and step budgets without stray pending attempts', async () => {
     const backlog = makeBacklog({ count: 64, descriptionChars: 600, firstObservedRound: 1 });
     const harness = makeHarness({
       ...backlog,
@@ -1085,11 +1406,11 @@ describe('bounded raw adjudication recovery', () => {
     );
     expect(instructions.reduce((total, instruction) => total + estimateTokens(instruction), 0))
       .toBeLessThanOrEqual(RAW_ADJUDICATION_RECOVERY_LIMITS.maxInputTokensPerStep);
-    expect(recovery.origins.size).toBeLessThan(64);
+    expect(recovery.origins.size).toBe(64);
     expect(pendingRawRecoveryAttempts(committed)).toHaveLength(64 - recovery.origins.size);
     expect(completedAttempts).toHaveLength(recovery.origins.size);
     expect(committed.findings.filter((finding) => finding.provisional !== undefined)).toHaveLength(
-      64 - recovery.origins.size,
+      64,
     );
   });
 
@@ -1108,6 +1429,7 @@ describe('bounded raw adjudication recovery', () => {
       runInput: harness.runInput,
       observation,
       reviewScopeSnapshotId: quote.snapshotId,
+      reviewScopeSnapshot,
     }).rawFindingDispositions).toHaveLength(16);
     expect(committed.rawRecoveryResults).toHaveLength(16);
     expect(pendingRawRecoveryAttempts(committed)).toHaveLength(4);
@@ -1152,7 +1474,8 @@ describe('bounded raw adjudication recovery', () => {
     const residualOrigin = committed.findings.find((finding) => finding.id === findingId(2));
 
     expect(recovery.output.matches.some((match) => match.findingId === target.id)).toBe(true);
-    expect(mechanicalOrigin?.status).toBe('resolved');
+    expect(mechanicalOrigin?.status).toBe('open');
+    expect(mechanicalOrigin?.provisional).toBeDefined();
     expect(rawRecoveryResultsFor(committed, mechanicalOrigin!.id)).toEqual([
       expect.objectContaining({ outcome: 'failed', mutationIds: [] }),
     ]);
@@ -1203,6 +1526,7 @@ describe('bounded raw adjudication recovery', () => {
             rawFindingId: replayRaw!.rawFindingId,
             decision: 'unsupported',
             findingId: '',
+            anchorRelevance: 'not_applicable',
             evidence,
           }],
           disputeDecisions: [],
@@ -1222,6 +1546,7 @@ describe('bounded raw adjudication recovery', () => {
       runInput: harness.runInput,
       observation,
       reviewScopeSnapshotId: quote.snapshotId,
+      reviewScopeSnapshot,
     });
 
     expect(recovery.failures.get(replayRawFindingId!)).toEqual({
@@ -1305,6 +1630,7 @@ describe('bounded raw adjudication recovery', () => {
     });
     classifyRawFindingsMechanicallyMock.mockImplementationOnce((input) => ({
       output: {
+        anchorAdjudications: [],
         matches: [],
         newFindings: [],
         resolvedFindings: [],
@@ -1347,12 +1673,22 @@ describe('bounded raw adjudication recovery', () => {
   it('normalizes same-identity new decisions once across the batch boundary', async () => {
     const backlog = makeBacklog({ count: 17, firstObservedRound: 1 });
     const firstDuplicateSource = backlog.rawFindings[15]!;
-    const secondDuplicateSource: RawFinding = {
-      ...backlog.rawFindings[16]!,
+    const {
+      targetIdentityHash: _targetIdentityHash,
+      claimIdentityHash: _claimIdentityHash,
+      candidateIdentityHash: _candidateIdentityHash,
+      target,
+      sourceBinding,
+      ...secondDuplicateBase
+    } = backlog.rawFindings[16]!;
+    const secondDuplicateSource = canonicalRawFindingFixture({
+      ...secondDuplicateBase,
+      target,
+      sourceBinding,
       title: firstDuplicateSource.title,
       description: firstDuplicateSource.description,
       suggestion: firstDuplicateSource.suggestion,
-    };
+    });
     const harness = makeHarness({
       ...backlog,
       rawFindings: [...backlog.rawFindings.slice(0, 16), secondDuplicateSource],
@@ -1379,27 +1715,27 @@ describe('bounded raw adjudication recovery', () => {
       .filter(([, origin]) => origin.provisionalFindingId === findingId(16)
         || origin.provisionalFindingId === findingId(17))
       .map(([rawFindingId]) => rawFindingId));
-    const grouped = recovery.output.newFindings.find((finding) => (
+    const grouped = recovery.output.matches.find((finding) => (
       finding.rawFindingIds.filter((rawFindingId) => duplicateReplayIds.has(rawFindingId)).length === 2
     ));
     const committed = applyRecovery(harness, recovery);
 
     expect(executeAgentMock).toHaveBeenCalledTimes(2);
     expect(grouped?.rawFindingIds).toEqual(expect.arrayContaining([...duplicateReplayIds]));
-    const newerOrigin = committed.findings.find((finding) => finding.id === findingId(16));
-    const canonicalOrigin = committed.findings.find((finding) => finding.id === findingId(17));
+    const canonicalOrigin = committed.findings.find((finding) => finding.id === findingId(16));
+    const settledOrigin = committed.findings.find((finding) => finding.id === findingId(17));
     const normalFindingsForIdentity = committed.findings.filter((finding) => (
       finding.provisional === undefined
       && finding.rawFindingIds.some((rawFindingId) => duplicateReplayIds.has(rawFindingId))
     ));
 
-    expect(normalFindingsForIdentity).toEqual([canonicalOrigin]);
+    expect(normalFindingsForIdentity).toEqual([]);
     expect(canonicalOrigin?.status).toBe('open');
     expect(canonicalOrigin?.rawFindingIds).toEqual(expect.arrayContaining([...duplicateReplayIds]));
-    expect(canonicalOrigin?.provisional).toBeUndefined();
-    expect(newerOrigin?.status).toBe('resolved');
-    expect(newerOrigin?.resolvedEvidence).toContain(canonicalOrigin!.id);
-    expect(rawRecoveryResultsFor(committed, newerOrigin!.id)).toEqual([
+    expect(canonicalOrigin?.provisional).toBeDefined();
+    expect(settledOrigin?.status).toBe('open');
+    expect(settledOrigin?.provisional).toBeDefined();
+    expect(rawRecoveryResultsFor(committed, settledOrigin!.id)).toEqual([
       expect.objectContaining({ outcome: 'failed', mutationIds: [] }),
     ]);
   });
@@ -1589,7 +1925,44 @@ describe('bounded raw adjudication recovery', () => {
         }),
       }] as const;
     }));
+    const anchorAdjudications = [
+      ...pairRawIds(0).map((rawFindingId) => createAnchorAdjudication({
+        rawFindingId,
+        decision: 'new',
+        anchorRelevance: 'not_applicable',
+        evidence: actionSources[0]!.title!,
+      })),
+      ...pairRawIds(1).map((rawFindingId) => createAnchorAdjudication({
+        rawFindingId,
+        decision: 'same',
+        findingId: targets[0]!.id,
+        anchorRelevance: 'not_applicable',
+        evidence: 'The issue persists.',
+      })),
+      ...pairRawIds(2).map((rawFindingId) => createAnchorAdjudication({
+        rawFindingId,
+        decision: 'resolved',
+        findingId: targets[1]!.id,
+        anchorRelevance: 'not_applicable',
+        evidence: 'The issue is fixed.',
+      })),
+      ...pairRawIds(3).map((rawFindingId) => createAnchorAdjudication({
+        rawFindingId,
+        decision: 'reopened',
+        findingId: targets[3]!.id,
+        anchorRelevance: 'not_applicable',
+        evidence: 'The issue recurred.',
+      })),
+      ...pairRawIds(4).map((rawFindingId) => createAnchorAdjudication({
+        rawFindingId,
+        decision: 'conflict',
+        findingId: targets[2]!.id,
+        anchorRelevance: 'not_applicable',
+        evidence: 'The evidence conflicts with the existing finding.',
+      })),
+    ];
     const output = {
+      anchorAdjudications,
       matches: [{
         findingId: targets[0]!.id,
         rawFindingIds: pairRawIds(1),
@@ -1629,7 +2002,7 @@ describe('bounded raw adjudication recovery', () => {
         intake: {
           items: replayItems,
           overflowRawFindingIds: new Set(),
-          overflowSpecs: [],
+          intakeProvisionalSpecs: [],
           overflowReports: [],
           clarifications: [],
           rawNormalizations: [],
@@ -1648,6 +2021,7 @@ describe('bounded raw adjudication recovery', () => {
       runInput: harness.runInput,
       observation,
       reviewScopeSnapshotId: quote.snapshotId,
+      reviewScopeSnapshot,
     });
 
     expect(committed.ledger.conflicts).toEqual([]);

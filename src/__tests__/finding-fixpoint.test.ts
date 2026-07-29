@@ -13,7 +13,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
-import type { FindingLedger, FindingLedgerEntry } from '../core/workflow/findings/types.js';
+import type { FindingLedger, FindingLedgerEntry, RawFinding } from '../core/workflow/findings/types.js';
 import {
   attachFixpointState as attachFixpointStateWithCwd,
   computeFixpointSnapshot as computeFixpointSnapshotWithCwd,
@@ -27,7 +27,9 @@ import {
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
 import {
   authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
   emptyFindingAuthorityProjection,
+  reviewerRawExtractionFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 import { createRawRecoveryAttempt } from '../core/models/finding-raw-recovery.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
@@ -85,6 +87,10 @@ function provisionalFinding(
     id: 'F-0001',
     status: 'open',
     lifecycle: 'new',
+    target: null,
+    targetIdentityHash: null,
+    claimIdentityHash: null,
+    semanticClaimIdentityHash: null,
     severity: 'high',
     title: 'Hallucinated issue',
     evidenceIds: [],
@@ -110,7 +116,7 @@ function provisionalFinding(
 function substantiveFinding(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
 ): FindingLedgerEntry {
-  return {
+  const finding = {
     id: 'F-0002',
     status: 'open',
     lifecycle: 'new',
@@ -122,6 +128,27 @@ function substantiveFinding(
     firstSeen: observation(),
     lastSeen: observation(),
     ...overrides,
+  };
+  const raw = canonicalRawFindingFixture({
+    rawFindingId: finding.rawFindingIds[0] ?? `raw-${finding.id}`,
+    stepName: 'reviewers',
+    reviewer: finding.reviewers[0] ?? 'arch-review',
+    familyTag: 'bug',
+    severity: finding.severity,
+    title: finding.title,
+    description: finding.description ?? finding.title,
+    suggestion: finding.suggestion ?? null,
+    relation: 'new',
+    targetFindingId: null,
+    evidence: [],
+    target: finding.target,
+  });
+  return {
+    ...finding,
+    target: raw.target,
+    targetIdentityHash: raw.targetIdentityHash,
+    claimIdentityHash: raw.claimIdentityHash,
+    semanticClaimIdentityHash: raw.semanticClaimIdentityHash,
   };
 }
 
@@ -138,6 +165,36 @@ function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     ...emptyFindingAuthorityProjection(),
     ...overrides,
   };
+}
+
+function fixpointRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
+  const base = canonicalRawFindingFixture({
+    rawFindingId: 'raw-c1',
+    stepName: 'reviewers',
+    reviewer: 'arch-review',
+    familyTag: 'bug',
+    severity: 'high',
+    title: 'Conflicting claim',
+    description: 'One reviewer says X, another says Y.',
+    suggestion: null,
+    relation: 'new',
+    targetFindingId: null,
+    evidence: [],
+  });
+  const {
+    targetIdentityHash: _targetIdentityHash,
+    claimIdentityHash: _claimIdentityHash,
+    semanticClaimIdentityHash: _semanticClaimIdentityHash,
+    candidateIdentityHash: _candidateIdentityHash,
+    target,
+    sourceBinding,
+    ...input
+  } = { ...base, ...overrides };
+  return canonicalRawFindingFixture({
+    ...input,
+    target,
+    sourceBinding,
+  });
 }
 
 describe('computeFixpointSnapshot', () => {
@@ -175,31 +232,11 @@ describe('computeFixpointSnapshot', () => {
 
   it('includes only active AND unadjudicated conflicts in unadjudicatedConflictEntries', () => {
     const withRaws = ledger({
-      rawFindings: [{
-        rawFindingId: 'raw-c1',
-        stepName: 'reviewers',
-        reviewer: 'arch-review',
-        familyTag: 'bug',
-        severity: 'high',
-        title: 'Conflicting claim',
-        description: 'One reviewer says X, another says Y.',
-        suggestion: null,
-        relation: 'new',
-        targetFindingId: null,
-        evidence: [],
-      }, {
+      rawFindings: [fixpointRawFinding(), fixpointRawFinding({
         rawFindingId: 'raw-c2',
-        stepName: 'reviewers',
-        reviewer: 'arch-review',
-        familyTag: 'bug',
-        severity: 'high',
         title: 'Resolved conflicting claim',
         description: 'A separate conflict was already resolved.',
-        suggestion: null,
-        relation: 'new',
-        targetFindingId: null,
-        evidence: [],
-      }],
+      })],
       conflicts: [
         {
           id: 'C-2BF240CC0BEC',
@@ -236,19 +273,7 @@ describe('computeFixpointSnapshot', () => {
       initializeGitFixture(scopeCwd, ['src/a.ts']);
       const withConflict = ledger({
         findings: [substantiveFinding({ revision: 1, id: 'F-0002' })],
-        rawFindings: [{
-          rawFindingId: 'raw-c1',
-          stepName: 'reviewers',
-          reviewer: 'arch-review',
-          familyTag: 'bug',
-          severity: 'high',
-          title: 'Conflicting claim',
-          description: 'One reviewer says X, another says Y.',
-          suggestion: null,
-          relation: 'new',
-          targetFindingId: null,
-          evidence: [],
-        }],
+        rawFindings: [fixpointRawFinding()],
         conflicts: [{
           id: 'C-2BF240CC0BEC',
           status: 'active',
@@ -454,7 +479,9 @@ function makeRoundHarness(
         subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
         response: {
           status: 'done',
-          content: '',
+          content: reviewerRawFindings
+            .map((item) => String(item.rawExcerpt ?? ''))
+            .join('\n'),
           structuredOutput: { rawFindings: reviewerRawFindings },
         } as unknown as AgentResponse,
       }];
@@ -477,7 +504,7 @@ function makeRoundHarness(
 }
 
 function hallucinatedRaw(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
+  const candidate = {
     rawFindingId: 'hallucinated-1',
     familyTag: 'bug',
     severity: 'high',
@@ -486,16 +513,20 @@ function hallucinatedRaw(overrides: Record<string, unknown> = {}): Record<string
     suggestion: 'Add a null check.',
     relation: 'new',
     targetFindingId: null,
-    evidence: [{
+    target: { kind: 'code', paths: ['src/does-not-exist.ts'] },
+    evidenceRequests: [{
       kind: 'file_quote',
       path: 'src/does-not-exist.ts',
       startLine: 5,
       endLine: 5,
       verbatimExcerpt: 'missing fixture line',
-      snapshotId: verifiedSourceQuoteFields(FIXTURE_CWD, 'src/real.ts', 1).snapshotId,
     }],
     ...overrides,
   };
+  return reviewerRawExtractionFixture({
+    ...candidate,
+    rawExcerpt: candidate.description as string,
+  } as Parameters<typeof reviewerRawExtractionFixture>[0]);
 }
 
 /** Recovery が substantive outcome を返せない状況を再現する応答。 */
@@ -514,7 +545,7 @@ function unresolvedRecoveryResponse(rawFindingId: string): AgentResponse {
 }
 
 function unverifiedClaimRaw(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
+  const candidate = {
     rawFindingId: 'ambiguous-1',
     familyTag: 'bug',
     severity: 'high',
@@ -523,9 +554,14 @@ function unverifiedClaimRaw(overrides: Record<string, unknown> = {}): Record<str
     suggestion: '',
     relation: 'new',
     targetFindingId: null,
-    evidence: [],
+    target: { kind: 'code', paths: ['src/real.ts'] },
+    evidenceRequests: [],
     ...overrides,
   };
+  return reviewerRawExtractionFixture({
+    ...candidate,
+    rawExcerpt: candidate.description as string,
+  } as Parameters<typeof reviewerRawExtractionFixture>[0]);
 }
 
 describe('runFindingManagerForStep: failed file_quote evidence is isolated from product findings', () => {
@@ -544,7 +580,6 @@ describe('runFindingManagerForStep: failed file_quote evidence is isolated from 
     expect(context.provisional.count).toBe(0);
     expect(context.open.count).toBe(0);
     expect(context.reviewerAnomalies.count).toBe(1);
-    expect(result.ledger.reviewerAnomalies).toHaveLength(1);
     expect(result.ledger.reviewerAnomalies?.[0]?.kind).toBe('quote-mismatch');
   });
 });
@@ -639,6 +674,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
         suggestion: null,
         relation: 'new',
         targetFindingId: null,
+        target: { kind: 'code', paths: ['src/real.ts'] },
         evidence: [],
       }],
       conflicts: [],
@@ -662,18 +698,19 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     // represent real progress, so this round cannot be a fixpoint.
     await harness.run([
       unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r2' }),
-      {
+      reviewerRawExtractionFixture({
         rawFindingId: 'confirm-1',
         familyTag: 'bug',
         severity: 'medium',
         title: 'Real, fixable issue',
         description: 'Verified: the fix removes the issue.',
+        suggestion: null,
         relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
         // confirmation は検証済み file_quote 証跡が
         // 無いと resolve できない（機械照合を通らず finding を閉じさせない）。
         evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/real.ts', 10)],
-      },
+      }),
     ]);
     const afterRound2 = harness.currentLedger();
     expect(afterRound2.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('resolved');

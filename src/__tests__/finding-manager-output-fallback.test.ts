@@ -8,6 +8,7 @@ import type {
   RawFinding,
 } from '../core/workflow/findings/types.js';
 import type { RawAdmissionEvaluation } from '../core/workflow/findings/manager-admission.js';
+import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
 
 // 正規化（manager-plan-normalization）で既知の排他違反は assembly 段で解消される
 // ため、最終検証の失敗は「未知の違反経路」でしか起きない。ここでは検証を部分
@@ -54,7 +55,7 @@ function makeLedger(findings: FindingLedgerEntry[]): FindingLedger {
   };
 }
 
-const CONFIRMATION_RAW: RawFinding = {
+const CONFIRMATION_RAW: RawFinding = canonicalRawFindingFixture({
   rawFindingId: 'raw-confirm',
   stepName: 'arch-review',
   reviewer: 'arch-review',
@@ -65,10 +66,11 @@ const CONFIRMATION_RAW: RawFinding = {
   suggestion: null,
   relation: 'resolution_confirmation',
   targetFindingId: 'F-0001',
+  target: { kind: 'code', paths: ['src/a.ts'] },
   evidence: [],
-};
+});
 
-const ISSUE_RAW: RawFinding = {
+const ISSUE_RAW: RawFinding = canonicalRawFindingFixture({
   rawFindingId: 'raw-issue',
   stepName: 'arch-review',
   reviewer: 'arch-review',
@@ -79,8 +81,9 @@ const ISSUE_RAW: RawFinding = {
   suggestion: '直す。',
   relation: 'new',
   targetFindingId: null,
+  target: { kind: 'code', paths: ['src/b.ts'] },
   evidence: [],
-};
+});
 
 function makeAdmission(cleanWire: RawFinding[]): RawAdmissionEvaluation {
   return {
@@ -136,6 +139,7 @@ function makeActiveConflictDuplicateScenario() {
   return {
     previousLedger,
     output: {
+      anchorAdjudications: [],
       matches: [],
       newFindings: [],
       resolvedFindings: [],
@@ -226,7 +230,12 @@ describe('assembleCleanManagerDecision の mechanical フォールバック', ()
       admission: makeAdmission(cleanWire),
       mechanical,
       decisions: makeDecisions({
-        rawDecisions: [{ rawFindingId: 'raw-issue', decision: 'new', evidence: '' }],
+        rawDecisions: [{
+          rawFindingId: 'raw-issue',
+          decision: 'new',
+          evidence: '',
+          anchorRelevance: 'not_applicable',
+        }],
       }),
       initialInvalidAttempts: [],
       invalidLocationCandidateFindingIds: new Set(),

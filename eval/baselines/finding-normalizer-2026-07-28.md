@@ -2,20 +2,20 @@
 
 ## 現行: Finding Contract JSON直接組立（実測済み）
 
-主スイートは既存`RawFindingsOutputJsonSchema`をモデル出力schemaとして直接使う。
-中間`claimSections`、`verdictExcerpt`、独自分類、JSON外説明は一切出力させない。
+主スイートは`RawFindingsOutputJsonSchema`をモデル出力schemaとして直接使う。
+出力は`rawExcerpt`とnullable `candidate`だけで、proof・snapshot・query結果は
+normalizerに出力させない。
 
 fixtureは今回の測定対象をJSON組立能力に限定するため、次をすべて明示する。
 
-- engine-bound: `rawFindingId/relation/targetFindingId/snapshotId`
-- engine検証済みcode evidence:
-  `location/evidenceKind/verbatimExcerpt`
-- reviewer supplied:
-  `familyTag/severity/title/description/suggestion`
+- report binding: `rawExcerpt`
+- reviewer supplied candidate:
+  `rawFindingId/relation/targetFindingId/familyTag/severity/title/description/suggestion`
+- typed request: `target/evidenceRequests`
 
-モデルは値をコピーして12必須fieldを組み立てるだけで、推論、分類、要約、既定値補完を
+モデルは値をコピーして2必須fieldのwrapperとcandidateを組み立てるだけで、推論、分類、要約、既定値補完を
 行わない。schema適合、全field完全一致、extra key 0、完了状態、時間を測る。
-欠落情報、provisional、locationless、multi-evidenceの設計評価は別caseとし、
+欠落情報、provisional、coverage gap、multi-evidenceの設計評価は別caseとし、
 この比較へ混ぜない。
 
 対象はSol、Luna、Terra、Opus、Haiku、Sonnet、Gemma4の7モデル。
@@ -38,7 +38,7 @@ Gemma4は構造を守れるが、multiline逐語コピーが不安定で、こ�
 しない。
 
 この結果はfree-form reviewからの意味抽出・分類能力を測っていない。また、
-欠落情報、provisional、locationless、複数evidenceを扱う新しいFinding Contract
+欠落情報、provisional、coverage gap、複数evidenceを扱う新しいFinding Contract
 設計の妥当性も測っていない。
 
 結果artifact:

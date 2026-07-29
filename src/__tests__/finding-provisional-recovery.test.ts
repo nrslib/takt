@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { FindingLedger, FindingLedgerEntry, FindingManagerOutput, RawFinding } from '../core/workflow/findings/types.js';
-import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import {
   applyRejectedObservationAttachments,
   applyProvisionalSettlement,
@@ -34,6 +37,7 @@ import {
   planManagerActionRecovery,
 } from '../core/workflow/findings/manager-action-recovery.js';
 import { issueManagerLifecycleAuthority } from '../core/workflow/findings/manager-lifecycle-authority.js';
+import { assembleAndApplyManagerLifecycleTransactions } from '../core/workflow/findings/manager-lifecycle-assembly.js';
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import { applyRawAdjudicationRecovery } from '../core/workflow/findings/raw-adjudication-commit.js';
 import {
@@ -79,7 +83,9 @@ import {
   deduplicateRawEvidence,
 } from '../core/workflow/findings/evidence-domain.js';
 import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
-import { issuePathAbsentEngineProof } from '../core/workflow/findings/path-absent-engine-proof.js';
+import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
+import { computeConflictEvidenceHash } from '../core/workflow/findings/adjudication-evidence.js';
+import * as reviewScopeSnapshot from '../core/workflow/findings/snapshot.js';
 
 const observation = {
   runId: 'run-1',
@@ -103,6 +109,7 @@ function completedWalFields(rawFindingId: string) {
 
 function emptyOutput(): FindingManagerOutput {
   return {
+    anchorAdjudications: [],
     matches: [],
     newFindings: [],
     resolvedFindings: [],
@@ -117,8 +124,20 @@ function emptyOutput(): FindingManagerOutput {
   };
 }
 
-function raw(rawFindingId: string): RawFinding {
+function emptyReviewScopeSnapshot(reviewScopeSnapshotId: string) {
   return {
+    reviewScopeSnapshotId,
+    trackedDiff: undefined,
+    untrackedEvidence: [],
+    queryInventory: [],
+  };
+}
+
+function raw(
+  rawFindingId: string,
+  targetPath = 'fixtures/state-transition.ts',
+): RawFinding {
+  return canonicalRawFindingFixture({
     rawFindingId,
     stepName: 'reviewer-a',
     reviewer: 'reviewer-a',
@@ -129,18 +148,28 @@ function raw(rawFindingId: string): RawFinding {
     suggestion: null,
     relation: 'new',
     targetFindingId: null,
+    target: {
+      kind: 'code',
+      paths: [targetPath],
+    },
     evidence: [],
-  };
+  });
 }
 
 function provisional(
   id: string,
   kind: NonNullable<FindingLedgerEntry['provisional']>['kind'],
+  targetPath?: string,
 ): FindingLedgerEntry {
+  const source = raw('source-1', targetPath);
   return {
     id,
     status: 'open',
     lifecycle: 'new',
+    target: source.target,
+    targetIdentityHash: source.targetIdentityHash,
+    claimIdentityHash: source.claimIdentityHash,
+    semanticClaimIdentityHash: source.semanticClaimIdentityHash,
     severity: 'high',
     title: 'Incorrect state transition',
     evidenceIds: [],
@@ -245,6 +274,7 @@ function rawRecoveryOrigin(
     sourceRawFindingId,
     expectedHead,
     expectedProvisionalRevision: expectedHead.revision,
+    expectedTargetIdentityHash: finding.targetIdentityHash,
     attempt,
     recoveryOrigin: snapshotProvisionalRecoveryOrigin(finding),
   };
@@ -280,6 +310,7 @@ function emptyCommitPlanInput(
       stepIteration: 1,
       subResults: [],
       workflowName: previousLedger.workflowName,
+      workflowTask: 'Review the supplied implementation.',
       runId: observation.runId,
       callNamespace: '',
       timestamp: observation.timestamp,
@@ -288,7 +319,7 @@ function emptyCommitPlanInput(
     intake: {
       items: [],
       overflowRawFindingIds: new Set(),
-      overflowSpecs: [],
+      intakeProvisionalSpecs: [],
       overflowReports: [],
       clarifications: [],
       rawNormalizations: [],
@@ -298,6 +329,7 @@ function emptyCommitPlanInput(
     admission: {
       admissionRejections: [],
       admissionAnomalySpecs: [],
+      admissionProvisionalSpecs: [],
       admissionRejectedItems: [],
       pendingRejectedObservations: [],
       cleanAdmitted: [],
@@ -334,7 +366,7 @@ function emptyCommitPlanInput(
         intake: {
           items: [],
           overflowRawFindingIds: new Set(),
-          overflowSpecs: [],
+          intakeProvisionalSpecs: [],
           overflowReports: [],
           clarifications: [],
           rawNormalizations: [],
@@ -356,6 +388,12 @@ function emptyCommitPlanInput(
     stopBudgetRoundMarker: 'round-empty',
     reviewIntegrityLimits: resolveReviewIntegrityLimits(undefined),
     reviewScopeSnapshotId: 'snapshot-empty',
+    reviewScopeSnapshot: {
+      reviewScopeSnapshotId: 'snapshot-empty',
+      trackedDiff: undefined,
+      untrackedEvidence: [],
+      queryInventory: [],
+    },
     ...overrides,
   };
 }
@@ -408,6 +446,22 @@ function mixedManagerOutput(
 }
 
 describe('provisional recovery', () => {
+  it('does not recapture the review scope when there is no conflict resolve candidate', () => {
+    const capture = vi.spyOn(
+      reviewScopeSnapshot,
+      'captureReviewScopeSnapshot',
+    );
+    const previousLedger = ledger([]);
+
+    buildFindingManagerCommitMutation(
+      emptyCommitPlanInput({ previousLedger }),
+      previousLedger,
+    );
+
+    expect(capture).not.toHaveBeenCalled();
+    capture.mockRestore();
+  });
+
   it('preserves unsupported, stale, and audit-only replay outcomes in the final manager report', () => {
     const rawFindingDispositions = [
       { rawFindingId: 'replay-unsupported', outcome: 'unsupported' as const, reason: 'Unsupported.' },
@@ -439,6 +493,7 @@ describe('provisional recovery', () => {
       },
       rawFindingDispositions,
       interpretationRecoverySettlements: [],
+      managerTaskAudits: [],
     });
 
     expect(report).toEqual(expect.objectContaining({
@@ -893,8 +948,8 @@ describe('provisional recovery', () => {
       'src/core/workflow/findings/interpretation-recovery.ts',
       1,
     );
-    const first = provisional('F-0001', 'interpretation-interrupted');
-    const second = provisional('F-0002', 'interpretation-interrupted');
+    const first = provisional('F-0001', 'interpretation-interrupted', quote.path);
+    const second = provisional('F-0002', 'interpretation-interrupted', quote.path);
     first.provisional = {
       ...first.provisional!,
       interpretationEpochs: 1,
@@ -905,37 +960,23 @@ describe('provisional recovery', () => {
     };
 
     const sourceWithoutEvidence = stampTargetPrecondition({
-      ...raw('source-1'),
+      ...raw('source-1', quote.path),
       relation: 'persists' as const,
       targetFindingId: first.id,
     }, ledger([first, second]));
-    const proof = issuePathAbsentEngineProof({
-      subject: { kind: 'path_absent', path: 'generated/missing.ts' },
-      context: {
-        cwd,
-        workflowName: 'peer-review',
-        runId: observation.runId,
-        scopeIdentity: 'test-ledger',
-        snapshotId: quote.snapshotId,
-        claimIdentityHash: computeClaimIdentityHash(sourceWithoutEvidence),
-        targetFindingId: first.id,
-      },
-      issuedAt: observation.timestamp,
-    });
     const sharedSource: RawFinding = {
       ...sourceWithoutEvidence,
-      evidence: deduplicateRawEvidence([
-        quote,
-        { kind: 'engine_proof', proofId: proof.proofId },
-      ]),
+      evidence: deduplicateRawEvidence([quote]),
     };
     alignRecoveryLineageWithStoredRaw(first, sharedSource);
     alignRecoveryLineageWithStoredRaw(second, sharedSource);
-    const authorizedPreviousLedger = ledger([first, second], [sharedSource]);
-    const previousLedger = {
-      ...authorizedPreviousLedger,
-      evidenceRecords: [...authorizedPreviousLedger.evidenceRecords, proof],
-    };
+    const lineageAlignedLedger = ledger([first, second], [sharedSource]);
+    const refreshedSharedSource = stampTargetPrecondition(
+      sharedSource,
+      lineageAlignedLedger,
+    );
+    const authorizedPreviousLedger = ledger([first, second], [refreshedSharedSource]);
+    const previousLedger = authorizedPreviousLedger;
     const plan = collectInterpretationRecoveryPlan({
       ledger: previousLedger,
       currentItems: [],
@@ -978,12 +1019,9 @@ describe('provisional recovery', () => {
       previousLedger,
       new Set(),
     );
-    expect(commitPlan.output.matches).toEqual([expect.objectContaining({
-      findingId: 'F-0001',
-      rawFindingIds: ['source-1'],
-    })]);
-    expect(commitPlan.recoveryPromotions).toEqual(new Set(['F-0001']));
-    expect(commitPlan.recoverySettlements).toEqual(new Map([['F-0002', 'F-0001']]));
+    expect(commitPlan.output.matches).toEqual([]);
+    expect(commitPlan.recoveryPromotions).toEqual(new Set());
+    expect(commitPlan.recoverySettlements).toEqual(new Map());
 
     const baseCommitInput = emptyCommitPlanInput({
       previousLedger,
@@ -992,6 +1030,7 @@ describe('provisional recovery', () => {
         items: plan.items,
       },
       reviewScopeSnapshotId: quote.snapshotId,
+      reviewScopeSnapshot: emptyReviewScopeSnapshot(quote.snapshotId),
     });
     const mutation = buildFindingManagerCommitMutation({
       ...baseCommitInput,
@@ -1013,23 +1052,31 @@ describe('provisional recovery', () => {
       {
         id: 'F-0001',
         status: 'open',
-        provisional: undefined,
+        provisional: 'interpretation-interrupted',
         resolvedEvidence: undefined,
       },
       {
         id: 'F-0002',
-        status: 'resolved',
+        status: 'open',
         provisional: 'interpretation-interrupted',
-        resolvedEvidence: 'Deterministically settled through F-0001',
+        resolvedEvidence: undefined,
+      },
+      {
+        id: 'F-0020',
+        status: 'open',
+        provisional: undefined,
+        resolvedEvidence: undefined,
       },
     ]);
-    const promoted = mutation.ledger.findings.find((finding) => finding.id === 'F-0001');
-    expect(promoted?.evidenceIds).toHaveLength(3);
+    const retained = mutation.ledger.findings.find((finding) => finding.id === 'F-0001');
+    expect(retained?.provisional).toBeDefined();
     expect(mutation.ledger.evidenceRecords.map((record) => record.evidenceId).sort())
       .toEqual([...new Set(
         mutation.ledger.findings.flatMap((finding) => finding.evidenceIds),
       )].sort());
-    expect(promoted?.evidenceIds).toContain(proof.evidenceId);
+    expect(mutation.ledger.evidenceRecords).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'file_quote', path: quote.path }),
+    ]));
   });
 
   it('adjudicates a shared raw once while settling a provenance failure and a valid origin independently', () => {
@@ -1100,12 +1147,12 @@ describe('provisional recovery', () => {
       }),
       expect.objectContaining({
         provisionalFindingId: validOrigin.id,
-        outcome: 'settled',
+        outcome: 'retained',
       }),
     ]);
   });
 
-  it('partitions stale and fresh origins under one raw without discarding the fresh settlement', () => {
+  it('partitions stale and fresh origins under one raw without promoting a relation=new recovery', () => {
     const staleOriginFinding = provisional('F-0001', 'interpretation-interrupted');
     const freshOriginFinding = provisional('F-0002', 'interpretation-interrupted');
     staleOriginFinding.provisional = {
@@ -1164,7 +1211,7 @@ describe('provisional recovery', () => {
       (rawFinding) => rawFinding.rawFindingId === sharedSource.rawFindingId,
     )).toHaveLength(1);
     expect(mutation.ledger.findings.find((finding) => finding.id === freshOriginFinding.id)?.provisional)
-      .toBeUndefined();
+      .toBeDefined();
     expect(mutation.ledger.findings.find((finding) => finding.id === staleOriginFinding.id)?.provisional)
       .toBeDefined();
     expect(mutation.result.interpretationRecoverySettlements).toEqual([
@@ -1174,7 +1221,7 @@ describe('provisional recovery', () => {
       }),
       expect.objectContaining({
         provisionalFindingId: freshOriginFinding.id,
-        outcome: 'settled',
+        outcome: 'retained',
       }),
     ]);
   });
@@ -1295,7 +1342,7 @@ describe('provisional recovery', () => {
     ]);
   });
 
-  it('promotes the replay origin instead of creating a second finding', () => {
+  it('keeps a relation=new replay as a new decision without promoting its provisional origin', () => {
     const process = provisional('F-0001', 'raw-adjudication-unresolved');
     const replay = raw('replay-1');
     const settlement = settleProvisionalsWithCleanEvidence({
@@ -1307,7 +1354,7 @@ describe('provisional recovery', () => {
           severity: replay.severity,
         }],
       },
-      cleanRawIds: new Set(),
+      cleanRawIds: new Set([replay.rawFindingId]),
       wireById: new Map([[replay.rawFindingId, replay]]),
       freshLedger: ledger([process], [raw('source-1')]),
       explicitResolvedByMapping: new Map(),
@@ -1316,6 +1363,57 @@ describe('provisional recovery', () => {
       replayOrigins: new Map([[replay.rawFindingId, {
         provisionalFindingId: process.id,
         expectedProvisionalRevision: 1,
+        expectedTargetIdentityHash: process.targetIdentityHash,
+      }]]),
+    });
+
+    expect(settlement.output.newFindings).toEqual([
+      expect.objectContaining({ rawFindingIds: [replay.rawFindingId] }),
+    ]);
+    expect(settlement.output.matches).toEqual([]);
+    expect(settlement.promotedFindingIds).toEqual(new Set());
+    expect(settlement.settledReplayRawIds).toEqual(new Set());
+  });
+
+  it('promotes a replay origin only from clean targeted persists with a fresh precondition', () => {
+    const process = provisional('F-0001', 'raw-adjudication-unresolved');
+    const freshLedger = ledger([process], [raw('source-1')]);
+    const targetPrecondition = captureFindingPreconditions(freshLedger)
+      .get(process.id)!.precondition;
+    const replay = canonicalRawFindingFixture({
+      rawFindingId: 'replay-targeted',
+      stepName: 'reviewer-a',
+      reviewer: 'reviewer-a',
+      familyTag: 'bug',
+      severity: 'high',
+      title: process.title,
+      description: process.description!,
+      suggestion: null,
+      relation: 'persists',
+      targetFindingId: process.id,
+      targetPrecondition,
+      target: process.target!,
+      evidence: [],
+    });
+    const settlement = settleProvisionalsWithCleanEvidence({
+      output: {
+        ...emptyOutput(),
+        newFindings: [{
+          rawFindingIds: [replay.rawFindingId],
+          title: replay.title,
+          severity: replay.severity,
+        }],
+      },
+      cleanRawIds: new Set([replay.rawFindingId]),
+      wireById: new Map([[replay.rawFindingId, replay]]),
+      freshLedger,
+      explicitResolvedByMapping: new Map(),
+      explicitPromotedFindingIds: new Set(),
+      healthyReviewerStableKeys: new Set(),
+      replayOrigins: new Map([[replay.rawFindingId, {
+        provisionalFindingId: process.id,
+        expectedProvisionalRevision: process.revision,
+        expectedTargetIdentityHash: process.targetIdentityHash,
       }]]),
     });
 
@@ -1325,6 +1423,295 @@ describe('provisional recovery', () => {
     ]);
     expect(settlement.promotedFindingIds).toEqual(new Set([process.id]));
     expect(settlement.settledReplayRawIds).toEqual(new Set([replay.rawFindingId]));
+  });
+
+  it('commits a targeted persists replay promotion through the lifecycle transaction', () => {
+    const cwd = process.cwd();
+    const quote = verifiedSourceQuoteFields(
+      cwd,
+      'src/core/workflow/findings/manager-replay-settlement.ts',
+      1,
+    );
+    const processFinding = provisional(
+      'F-0001',
+      'raw-adjudication-unresolved',
+      quote.path,
+    );
+    const source = raw('source-1', quote.path);
+    const initialLedger = ledger([processFinding], [source]);
+    const replayDraft = canonicalRawFindingFixture({
+      rawFindingId: 'replay-targeted-commit',
+      stepName: 'reviewer-a',
+      reviewer: 'reviewer-a',
+      familyTag: 'bug',
+      severity: 'high',
+      title: processFinding.title,
+      description: processFinding.description!,
+      suggestion: null,
+      relation: 'persists',
+      targetFindingId: processFinding.id,
+      targetPrecondition: captureFindingPreconditions(initialLedger)
+        .get(processFinding.id)!.precondition,
+      target: processFinding.target!,
+      evidence: [quote],
+    });
+    alignRecoveryLineageWithStoredRaw(processFinding, replayDraft);
+    const previousLedger = ledger([processFinding], [source]);
+    const replay = {
+      ...replayDraft,
+      targetPrecondition: captureFindingPreconditions(previousLedger)
+        .get(processFinding.id)!.precondition,
+    };
+    const canonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(replay, 'reviewer-stable-a'),
+      { ledger: previousLedger },
+    ).canonical;
+    const wire = toLedgerRawFinding(canonical);
+    const origin = rawRecoveryOrigin(
+      previousLedger,
+      processFinding,
+      source.rawFindingId,
+    );
+    const rawRecovery = {
+      intake: {
+        items: [{
+          canonical,
+          wire,
+          recoveryOrigins: [origin.recoveryOrigin],
+          interpretationRecoveryAttempt: true as const,
+        }],
+        overflowRawFindingIds: new Set<string>(),
+        intakeProvisionalSpecs: [],
+        overflowReports: [],
+        clarifications: [],
+        rawNormalizations: [],
+        healthyReviewerStableKeys: new Set<string>(),
+      },
+      output: {
+        ...emptyOutput(),
+        anchorAdjudications: [createAnchorAdjudication({
+          rawFindingId: wire.rawFindingId,
+          decision: 'same',
+          findingId: processFinding.id,
+          anchorRelevance: 'not_applicable',
+          evidence: 'The replay carries direct source evidence for the persisted target.',
+        })],
+        matches: [{
+          findingId: processFinding.id,
+          rawFindingIds: [wire.rawFindingId],
+          evidence: 'The clean replay confirms that the provisional finding persists.',
+        }],
+      },
+      origins: new Map([[wire.rawFindingId, origin]]),
+      failures: new Map(),
+      capturedPreconditions: captureFindingPreconditions(previousLedger),
+      invalidAttempts: [],
+      unsupportedRawFindingReports: [],
+      cleanWireById: new Map([[wire.rawFindingId, wire]]),
+      cleanCanonicalById: new Map([[canonical.rawFindingId, canonical]]),
+      reservationTokens: new Set<string>(),
+    };
+    const base = emptyCommitPlanInput({
+      previousLedger,
+      managerDecision: {
+        ...emptyCommitPlanInput().managerDecision,
+        rawRecovery,
+      },
+      reviewScopeSnapshotId: quote.snapshotId,
+      reviewScopeSnapshot: emptyReviewScopeSnapshot(quote.snapshotId),
+      stopBudgetRoundMarker: 'round-targeted-replay-commit',
+    });
+    const mutation = buildFindingManagerCommitMutation({
+      ...base,
+      input: {
+        ...base.input,
+        cwd,
+      },
+    }, previousLedger);
+    const proofed = issueManagerLifecycleAuthority({
+      current: mutation.result.rawRecoveryLedger,
+      proposed: mutation.ledger,
+      managerDecisionCommands: mutation.result.managerDecisionCommands,
+      managerOutput: {
+        ...mutation.result.lifecycleManagerOutput,
+        invalidatedFindings: [
+          ...mutation.result.lifecycleManagerOutput.invalidatedFindings,
+          ...(mutation.result.actionRecoveryPlan?.output.invalidatedFindings ?? []),
+        ],
+      },
+      cwd,
+      workflowName: previousLedger.workflowName,
+      runId: observation.runId,
+      scopeIdentity: 'targeted-replay-commit-test',
+      reviewScopeSnapshotId: quote.snapshotId,
+      observation,
+    });
+    const committed = assembleAndApplyManagerLifecycleTransactions({
+      current: previousLedger,
+      rawRecoveryManagerDecisionProposed: mutation.result.rawRecoveryManagerDecisionLedger,
+      rawRecoveryManagerDecisionCommands: mutation.result.rawRecoveryManagerDecisionCommands,
+      rawRecoveryProposed: mutation.result.rawRecoveryLedger,
+      rawRecoverySettlementCommands: mutation.result.rawRecoverySettlementCommands,
+      managerDecisionProposed: {
+        ...proofed.ledger,
+        findings: mutation.result.managerDecisionLedger.findings,
+        conflicts: mutation.result.managerDecisionLedger.conflicts,
+      },
+      managerDecisionCommands: mutation.result.managerDecisionCommands,
+      proposed: proofed.ledger,
+      managerOutput: mutation.result.lifecycleManagerOutput,
+      provisionalProofIdsByFinding: proofed.provisionalProofIdsByFinding,
+      invalidationProofIdsByFinding: proofed.invalidationProofIdsByFinding,
+      duplicateProofIdsByCommandKey: proofed.duplicateProofIdsByCommandKey,
+      invalidationReasonsByFinding: proofed.invalidationReasonsByFinding,
+      resolutionRenotifications: mutation.result.resolutionRenotifications,
+      settlementCommands: mutation.result.settlementCommands,
+      actionRecoveryPlan: mutation.result.actionRecoveryPlan,
+      occurredAt: observation,
+    });
+
+    expect(mutation.result.applied).toBe(true);
+    expect(committed.findings).toContainEqual(expect.objectContaining({
+      id: processFinding.id,
+      status: 'open',
+    }));
+    expect(committed.findings.find((finding) => finding.id === processFinding.id)?.provisional)
+      .toBeUndefined();
+    expect(committed.rawFindings.map(({ rawFindingId }) => rawFindingId))
+      .toContain(wire.rawFindingId);
+    expect(committed.lifecycleEvents).toContainEqual(expect.objectContaining({
+      operation: 'promote_provisional',
+    }));
+  });
+
+  it('commits downstream action recovery while dropping the stale conflict resolve', () => {
+    const targetSource = {
+      ...raw('target-source', '/outside-workflow.ts'),
+      evidence: [{
+        kind: 'file_quote' as const,
+        path: '/outside-workflow.ts',
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: 'outside workflow',
+        snapshotId: 'scope-action-recovery',
+      }],
+    };
+    const evidencePayload = {
+      kind: 'file_quote' as const,
+      path: '/outside-workflow.ts',
+      startLine: 1,
+      endLine: 1,
+      verbatimExcerpt: 'outside workflow',
+      snapshotId: 'scope-action-recovery',
+      claimIdentityHash: targetSource.claimIdentityHash,
+      fileHash: 'b'.repeat(64),
+    };
+    const evidenceRecord = {
+      evidenceId: computeFileQuoteEvidenceRecordId(evidencePayload),
+      ...evidencePayload,
+    };
+    const target: FindingLedgerEntry = {
+      ...provisional('F-0001', 'raw-adjudication-unresolved', targetSource.target.paths[0]),
+      provisional: undefined,
+      rawFindingIds: [targetSource.rawFindingId],
+      evidenceIds: [evidenceRecord.evidenceId],
+    };
+    const observedTargetLedger = {
+      ...ledger([target], [targetSource]),
+      evidenceRecords: [evidenceRecord],
+    };
+    const targetPrecondition = captureFindingPreconditions(observedTargetLedger)
+      .get(target.id)!.precondition;
+    const processFinding = provisional('F-0002', 'stale-precondition');
+    processFinding.rawFindingIds = [];
+    processFinding.provisional = {
+      ...processFinding.provisional!,
+      sourceRawFindingIds: [],
+      actionRecovery: {
+        action: 'invalidate',
+        findingId: target.id,
+        evidence: 'The location is outside the workflow root.',
+        targetPreconditions: [targetPrecondition],
+      },
+    };
+    const baseLedger = {
+      ...ledger([target, processFinding], [targetSource]),
+      evidenceRecords: [evidenceRecord],
+      stopBudget: {
+        roundMarkers: ['prior-round'],
+        firstRoundAt: observation.timestamp,
+        exhausted: false,
+      },
+    };
+    const conflict = {
+      id: 'C-FA2947446963',
+      status: 'active' as const,
+      findingIds: [target.id],
+      rawFindingIds: [targetSource.rawFindingId],
+      description: 'The target finding remains disputed.',
+      firstSeen: observation,
+      lastSeen: observation,
+      revision: 1,
+    };
+    const previousLedger = authorizeFindingLedgerFixture({
+      ...baseLedger,
+      conflicts: [conflict],
+    });
+    const reviewScopeSnapshotId = reviewScopeSnapshot.captureReviewScopeSnapshot(
+      process.cwd(),
+    ).reviewScopeSnapshotId;
+    const base = emptyCommitPlanInput({
+      previousLedger,
+      reviewScopeSnapshotId,
+      reviewScopeSnapshot: emptyReviewScopeSnapshot(reviewScopeSnapshotId),
+    });
+    const capturedConflictHead = {
+      lifecycleHead:
+        captureFindingLifecycleHead(previousLedger, 'conflict', conflict.id) ?? null,
+      evidenceSetHash: computeConflictEvidenceHash(
+        previousLedger.conflicts[0]!,
+        previousLedger,
+        reviewScopeSnapshotId,
+      ),
+      reviewScopeSnapshotId,
+    };
+    const params: FindingManagerCommitPlanInput = {
+      ...base,
+      managerDecision: {
+        ...base.managerDecision,
+        managerOutput: {
+          ...emptyOutput(),
+          resolvedConflicts: [{
+            conflictId: conflict.id,
+            evidence: 'Resolve using prompt-time dependencies.',
+          }],
+        },
+        conflictTargetHeads: new Map([[conflict.id, capturedConflictHead]]),
+        taskAudits: [],
+      },
+    };
+
+    const mutation = buildFindingManagerCommitMutation(params, previousLedger);
+
+    expect(mutation.result.staleRejections).toContain(
+      'conflictDecisions: conflict "C-FA2947446963" (resolve) rejected at commit: the same plan changes its adjudication evidence dependencies',
+    );
+    expect(mutation.result.lifecycleManagerOutput.resolvedConflicts).toEqual([]);
+    expect(mutation.result.managerDecisionCommands).not.toContainEqual(
+      expect.objectContaining({ operation: 'resolve_conflict' }),
+    );
+    expect(mutation.result.actionRecoveryPlan?.output.invalidatedFindings)
+      .toEqual([expect.objectContaining({
+        action: 'invalidate',
+        findingId: target.id,
+      })]);
+    expect(mutation.result.actionRecoveryPlan?.appliedLedger.findings.find(
+      (finding) => finding.id === target.id,
+    )).toMatchObject({ status: 'invalidated' });
+    expect(mutation.ledger.findings.find((finding) => finding.id === target.id))
+      .toMatchObject({ status: 'invalidated' });
+    expect(mutation.ledger.conflicts.find((candidate) => candidate.id === conflict.id))
+      .toMatchObject({ status: 'active' });
   });
 
   it('makes failed replay recovery terminal after the bounded attempts are exhausted', () => {
@@ -1356,7 +1743,7 @@ describe('provisional recovery', () => {
         intake: {
           items: [{ canonical, wire }],
           overflowRawFindingIds: new Set(),
-          overflowSpecs: [],
+          intakeProvisionalSpecs: [],
           overflowReports: [],
           clarifications: [],
           rawNormalizations: [],
@@ -1380,12 +1767,14 @@ describe('provisional recovery', () => {
         cwd: process.cwd(),
         ledgerStore: { runId: observation.runId, ledgerIdentity: 'test-ledger' },
         workflowName: current.workflowName,
+        workflowTask: 'Review the supplied implementation.',
         parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
         runId: observation.runId,
         timestamp: observation.timestamp,
       } as RunFindingManagerForStepInput,
       observation,
       reviewScopeSnapshotId: 'snapshot',
+      reviewScopeSnapshot: emptyReviewScopeSnapshot('snapshot'),
     });
 
     expect(recovered.rawFindingDispositions).toEqual([{
@@ -1414,7 +1803,7 @@ describe('provisional recovery', () => {
         intake: {
           items: [{ canonical, wire }],
           overflowRawFindingIds: new Set(),
-          overflowSpecs: [],
+          intakeProvisionalSpecs: [],
           overflowReports: [],
           clarifications: [],
           rawNormalizations: [],
@@ -1438,12 +1827,14 @@ describe('provisional recovery', () => {
         cwd: process.cwd(),
         ledgerStore: { runId: observation.runId, ledgerIdentity: 'test-ledger' },
         workflowName: current.workflowName,
+        workflowTask: 'Review the supplied implementation.',
         parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
         runId: observation.runId,
         timestamp: observation.timestamp,
       } as RunFindingManagerForStepInput,
       observation,
       reviewScopeSnapshotId: 'snapshot',
+      reviewScopeSnapshot: emptyReviewScopeSnapshot('snapshot'),
     });
 
     expect(recovered.ledger).toEqual(current);
@@ -1480,7 +1871,7 @@ describe('provisional recovery', () => {
         intake: {
           items: [{ canonical, wire }],
           overflowRawFindingIds: new Set(),
-          overflowSpecs: [],
+          intakeProvisionalSpecs: [],
           overflowReports: [],
           clarifications: [],
           rawNormalizations: [],
@@ -1512,12 +1903,14 @@ describe('provisional recovery', () => {
         cwd: process.cwd(),
         ledgerStore: { runId: observation.runId, ledgerIdentity: 'test-ledger' },
         workflowName: current.workflowName,
+        workflowTask: 'Review the supplied implementation.',
         parentStep: { kind: 'agent', name: observation.stepName, persona: 'reviewer', edit: false },
         runId: observation.runId,
         timestamp: observation.timestamp,
       } as RunFindingManagerForStepInput,
       observation,
       reviewScopeSnapshotId: 'snapshot',
+      reviewScopeSnapshot: emptyReviewScopeSnapshot('snapshot'),
     });
 
     expect(recovered.rawFindingDispositions).toEqual([{
@@ -2026,7 +2419,7 @@ describe('provisional recovery', () => {
         interpretationRecoveryAttempt: true as const,
       }],
       overflowRawFindingIds: new Set<string>(),
-      overflowSpecs: [],
+      intakeProvisionalSpecs: [],
       overflowReports: [],
       clarifications: [],
       rawNormalizations: [],
@@ -2035,6 +2428,7 @@ describe('provisional recovery', () => {
     const emptyAdmission = {
       admissionRejections: [],
       admissionAnomalySpecs: [],
+      admissionProvisionalSpecs: [],
       admissionRejectedItems: [],
       pendingRejectedObservations: [],
       cleanAdmitted: [],
@@ -2044,6 +2438,7 @@ describe('provisional recovery', () => {
       verifiedEvidenceCandidates: [],
       provisionalOnlyLadderRawIds: new Set<string>(),
       cleanWire: [],
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
     };
     const input = {
       contract: {},
@@ -2055,6 +2450,7 @@ describe('provisional recovery', () => {
       stepIteration: 1,
       subResults: [],
       workflowName: previousLedger.workflowName,
+      workflowTask: 'Review the supplied implementation.',
       runId: observation.runId,
       callNamespace: '',
       timestamp: observation.timestamp,
@@ -2100,7 +2496,7 @@ describe('provisional recovery', () => {
           intake: {
             items: [],
             overflowRawFindingIds: new Set(),
-            overflowSpecs: [],
+            intakeProvisionalSpecs: [],
             overflowReports: [],
             clarifications: [],
             rawNormalizations: [],
@@ -2122,6 +2518,7 @@ describe('provisional recovery', () => {
       stopBudgetRoundMarker: 'round-1',
       reviewIntegrityLimits: resolveReviewIntegrityLimits(undefined),
       reviewScopeSnapshotId: 'snapshot-1',
+      reviewScopeSnapshot: emptyReviewScopeSnapshot('snapshot-1'),
     }, freshLedger);
 
     expect(mutation.ledger.findings).toEqual(freshLedger.findings);
@@ -2135,10 +2532,14 @@ describe('provisional recovery', () => {
       1,
     );
     const cleanSource: RawFinding = {
-      ...raw('current-clean'),
+      ...raw('current-clean', quote.path),
       evidence: [quote],
     };
-    const processFinding = provisional('F-0001', 'manager-budget-exhausted');
+    const processFinding = provisional(
+      'F-0001',
+      'manager-budget-exhausted',
+      quote.path,
+    );
     const previousLedger = ledger([processFinding], [raw('source-1')]);
     const canonical = canonicalizeReviewerRawFinding(
       candidateFromStoredRawFinding(cleanSource, 'reviewer-stable-a'),
@@ -2162,7 +2563,7 @@ describe('provisional recovery', () => {
         interpretationRecoveryAttempt: true as const,
       }],
       overflowRawFindingIds: new Set<string>(),
-      overflowSpecs: [],
+      intakeProvisionalSpecs: [],
       overflowReports: [],
       clarifications: [],
       rawNormalizations: [],
@@ -2178,6 +2579,7 @@ describe('provisional recovery', () => {
       stepIteration: 1,
       subResults: [],
       workflowName: previousLedger.workflowName,
+      workflowTask: 'Review the supplied implementation.',
       runId: observation.runId,
       callNamespace: '',
       timestamp: observation.timestamp,
@@ -2191,6 +2593,7 @@ describe('provisional recovery', () => {
       admission: {
         admissionRejections: [],
         admissionAnomalySpecs: [],
+        admissionProvisionalSpecs: [],
         admissionRejectedItems: [],
         pendingRejectedObservations: [],
         cleanAdmitted: [{
@@ -2239,7 +2642,7 @@ describe('provisional recovery', () => {
           intake: {
             items: [],
             overflowRawFindingIds: new Set(),
-            overflowSpecs: [],
+            intakeProvisionalSpecs: [],
             overflowReports: [],
             clarifications: [],
             rawNormalizations: [],
@@ -2261,6 +2664,7 @@ describe('provisional recovery', () => {
       stopBudgetRoundMarker: 'round-clean',
       reviewIntegrityLimits: resolveReviewIntegrityLimits(undefined),
       reviewScopeSnapshotId: quote.snapshotId,
+      reviewScopeSnapshot: emptyReviewScopeSnapshot(quote.snapshotId),
     }, freshLedger);
 
     expect(mutation.ledger.findings).toEqual(freshLedger.findings);
@@ -2281,15 +2685,19 @@ describe('provisional recovery', () => {
       1,
     );
     const staleSource: RawFinding = {
-      ...raw(`stale-${kind}`),
+      ...raw(`stale-${kind}`, quote.path),
       evidence: [quote],
     };
     const freshSource: RawFinding = {
-      ...raw(`fresh-${kind}`),
+      ...raw(`fresh-${kind}`, quote.path),
       title: `Fresh ${kind} claim`,
       evidence: [quote],
     };
-    const processFinding = provisional('F-0001', 'manager-budget-exhausted');
+    const processFinding = provisional(
+      'F-0001',
+      'manager-budget-exhausted',
+      quote.path,
+    );
     const previousLedger = ledger([processFinding], [raw('source-1')]);
     const staleCanonical = canonicalizeReviewerRawFinding(
       candidateFromStoredRawFinding(staleSource, 'reviewer-stable-a'),
@@ -2322,7 +2730,7 @@ describe('provisional recovery', () => {
       intake: {
         items: [staleItem, freshItem],
         overflowRawFindingIds: new Set(),
-        overflowSpecs: [],
+        intakeProvisionalSpecs: [],
         overflowReports: [],
         clarifications: [],
         rawNormalizations: [],
@@ -2346,6 +2754,7 @@ describe('provisional recovery', () => {
         ]),
       },
       reviewScopeSnapshotId: quote.snapshotId,
+      reviewScopeSnapshot: emptyReviewScopeSnapshot(quote.snapshotId),
       stopBudgetRoundMarker: `round-mixed-${kind}`,
     });
 
@@ -2436,6 +2845,7 @@ describe('provisional recovery', () => {
       stepIteration: 1,
       subResults: [],
       workflowName: previousLedger.workflowName,
+      workflowTask: 'Review the supplied implementation.',
       runId: observation.runId,
       callNamespace: '',
       timestamp: observation.timestamp,
@@ -2452,7 +2862,7 @@ describe('provisional recovery', () => {
           interpretationRecoveryAttempt: true,
         }],
         overflowRawFindingIds: new Set(),
-        overflowSpecs: [],
+        intakeProvisionalSpecs: [],
         overflowReports: [],
         clarifications: [],
         rawNormalizations: [],
@@ -2462,6 +2872,7 @@ describe('provisional recovery', () => {
       admission: {
         admissionRejections: [],
         admissionAnomalySpecs: [],
+        admissionProvisionalSpecs: [],
         admissionRejectedItems: [],
         pendingRejectedObservations: [],
         cleanAdmitted: [],
@@ -2481,6 +2892,7 @@ describe('provisional recovery', () => {
         verifiedEvidenceCandidates: [],
         provisionalOnlyLadderRawIds: new Set([wire.rawFindingId]),
         cleanWire: [],
+        verifiedEvidenceRecordsByRawFindingId: new Map(),
       },
       managerDecision: {
         managerOutput: emptyOutput(),
@@ -2510,7 +2922,7 @@ describe('provisional recovery', () => {
           intake: {
             items: [],
             overflowRawFindingIds: new Set(),
-            overflowSpecs: [],
+            intakeProvisionalSpecs: [],
             overflowReports: [],
             clarifications: [],
             rawNormalizations: [],
@@ -2532,6 +2944,7 @@ describe('provisional recovery', () => {
       stopBudgetRoundMarker: 'round-provisional',
       reviewIntegrityLimits: resolveReviewIntegrityLimits(undefined),
       reviewScopeSnapshotId: 'snapshot-provisional',
+      reviewScopeSnapshot: emptyReviewScopeSnapshot('snapshot-provisional'),
     }, freshLedger);
 
     expect(mutation.ledger.rawFindings).toEqual(freshLedger.rawFindings);
@@ -2647,7 +3060,7 @@ describe('provisional recovery', () => {
       intake: {
         items: [{ canonical: candidate, wire, recoveryOrigins: [validOrigin] }],
         overflowRawFindingIds: new Set(),
-        overflowSpecs: [],
+        intakeProvisionalSpecs: [],
         overflowReports: [],
         clarifications: [],
         rawNormalizations: [],
@@ -2782,6 +3195,7 @@ describe('provisional recovery', () => {
         recoveryOrigin: {
           provisionalFindingId: processFinding.id,
           expectedProvisionalRevision: 1,
+          expectedTargetIdentityHash: processFinding.targetIdentityHash,
           expectedProvisionalStableKey: processFinding.provisional!.stableKey,
           expectedProvisionalLineageKey: processFinding.provisional!.lineageKey,
           expectedRecoveryReviewerStableKey: 'reviewer-stable-a',
@@ -2856,6 +3270,7 @@ describe('provisional recovery', () => {
     expect(attached[0]?.recoveryOrigins).toEqual([{
       provisionalFindingId: processFinding.id,
       expectedProvisionalRevision: 1,
+      expectedTargetIdentityHash: processFinding.targetIdentityHash,
       expectedProvisionalStableKey: processFinding.provisional!.stableKey,
       expectedProvisionalLineageKey: processFinding.provisional!.lineageKey,
       expectedRecoveryReviewerStableKey: 'reviewer-stable-a',
@@ -3187,6 +3602,13 @@ describe('provisional recovery', () => {
       rawFindings: [reopenedRaw],
       managerOutput: {
         ...emptyOutput(),
+        anchorAdjudications: [createAnchorAdjudication({
+          rawFindingId: reopenedRaw.rawFindingId,
+          decision: 'reopened',
+          findingId: dismissed.id,
+          anchorRelevance: 'not_applicable',
+          evidence: 'A later reviewer supplied current evidence.',
+        })],
         reopenedFindings: [{
           findingId: dismissed.id,
           rawFindingIds: [reopenedRaw.rawFindingId],

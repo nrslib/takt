@@ -47,10 +47,12 @@ export function computeFileQuoteEvidenceRecordId(
   });
 }
 
-export type EngineProofRecordPayload = Omit<
-  EngineProofRecord,
-  'evidenceId' | 'proofId'
->;
+export type EngineProofRecordPayload =
+  EngineProofRecord extends infer Record
+    ? Record extends EngineProofRecord
+      ? Omit<Record, 'evidenceId' | 'proofId'>
+      : never
+    : never;
 
 /**
  * Engine proof の proofId と evidenceId は同じ content address を表す。
@@ -100,7 +102,7 @@ export function computeFindingEvidenceRecordId(
       fileHash: record.fileHash,
     });
   }
-  return computeEngineProofRecordId({
+  const common = {
     kind: record.kind,
     verifierId: record.verifierId,
     verifierVersion: record.verifierVersion,
@@ -108,13 +110,24 @@ export function computeFindingEvidenceRecordId(
     runId: record.runId,
     scopeIdentity: record.scopeIdentity,
     snapshotId: record.snapshotId,
-    claimIdentityHash: record.claimIdentityHash,
     targetFindingId: record.targetFindingId,
-    subject: record.subject,
     dependencyDigests: record.dependencyDigests,
     resultDigest: record.resultDigest,
     issuedAt: record.issuedAt,
-  });
+  } as const;
+  return record.purpose === 'claim_evidence'
+    ? computeEngineProofRecordId({
+        ...common,
+        purpose: record.purpose,
+        claimIdentityHash: record.claimIdentityHash,
+        subject: record.subject,
+      })
+    : computeEngineProofRecordId({
+        ...common,
+        purpose: record.purpose,
+        claimIdentityHash: record.claimIdentityHash,
+        subject: record.subject,
+      });
 }
 
 export function findingEvidenceRecordIdentityViolation(

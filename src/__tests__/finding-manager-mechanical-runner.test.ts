@@ -3,7 +3,12 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
-import type { FindingLedger, FindingLedgerStore, RawFinding } from '../core/workflow/findings/types.js';
+import type {
+  FindingLedger,
+  FindingLedgerStore,
+  FindingManagerDecisions,
+  RawFinding,
+} from '../core/workflow/findings/types.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
 import { createFindingLedgerStore, type FindingManagerValidationReport } from '../core/workflow/findings/store.js';
 import { createFindingAdjudicationReservation } from './helpers/finding-adjudication-reservation.js';
@@ -16,6 +21,16 @@ import {
   observeFindingLedgerMutations,
   RevisionedFindingLedgerTestRepository,
 } from './helpers/finding-manager-publication.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+  emptyFindingAuthorityProjection,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
+import {
+  findingManagerTaskManifest,
+  findingManagerTaskResponse,
+} from './helpers/finding-manager-task-response.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -23,6 +38,12 @@ vi.mock('../agents/agent-usecases.js', () => ({
 
 const { executeAgent } = await import('../agents/agent-usecases.js');
 const executeAgentMock = vi.mocked(executeAgent);
+
+function mockManagerTaskDecisions(decisions: FindingManagerDecisions): void {
+  executeAgentMock.mockImplementation(async (_persona, instruction) => (
+    findingManagerTaskResponse(instruction as string, decisions)
+  ));
+}
 
 // raw admission validation（manager-runner.ts の cwd 引数）が実 fs を見るため、
 // このテストファイルが使う location（src/a.ts:10/11, src/b.ts:5/20, src/c.ts:1,
@@ -47,12 +68,12 @@ afterAll(() => {
 });
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
-  return {
+  return authorizeFindingLedgerFixture({
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
     rawFindings: [
-      {
+      canonicalRawFindingFixture({
         rawFindingId: 'raw-existing',
         stepName: 'arch-review',
         reviewer: 'arch-review',
@@ -63,8 +84,9 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
         suggestion: null,
         relation: 'new',
         targetFindingId: null,
-        evidence: [],
-      },
+        target: { kind: 'code', paths: ['src/a.ts'] },
+        evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 10)],
+      }),
     ],
     evidenceRecords: [],
     conflicts: [],
@@ -86,7 +108,31 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
       },
     ],
     ...overrides,
-  };
+  });
+}
+
+function reviewerExtraction(raw: Record<string, unknown>): Record<string, unknown> {
+  if ('rawExcerpt' in raw && 'candidate' in raw) {
+    return raw;
+  }
+  const finding = raw as Partial<RawFinding>;
+  const localId = typeof finding.rawFindingId === 'string' ? finding.rawFindingId : null;
+  const description = typeof finding.description === 'string' ? finding.description : null;
+  return reviewerRawExtractionFixture({
+    rawFindingId: localId,
+    familyTag: typeof finding.familyTag === 'string' ? finding.familyTag : null,
+    severity: finding.severity ?? null,
+    title: typeof finding.title === 'string' ? finding.title : null,
+    description,
+    suggestion: typeof finding.suggestion === 'string' ? finding.suggestion : null,
+    relation: finding.relation ?? null,
+    targetFindingId: typeof finding.targetFindingId === 'string' && finding.targetFindingId !== ''
+      ? finding.targetFindingId
+      : null,
+    target: finding.target,
+    evidence: finding.evidence,
+    rawExcerpt: `[${localId ?? 'anonymous'}] ${description ?? finding.title ?? 'Observation'}`,
+  });
 }
 
 interface Harness {
@@ -160,7 +206,9 @@ function makeHarness(initialLedger: FindingLedger): Harness {
     savedValidationReports,
     ledgerStore,
     currentLedger: () => ledgerRepository.loadLedger(),
-    run: (input) => runFindingManagerForStep({
+    run: (input) => {
+      const extractions = input.reviewerRawFindings.map(reviewerExtraction);
+      return runFindingManagerForStep({
       // テスト対象が使うメソッドだけを実装した最小 double。
       contract: contract as never,
       ledgerStore,
@@ -174,8 +222,10 @@ function makeHarness(initialLedger: FindingLedger): Harness {
           subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
           response: {
             status: 'done',
-            content: '',
-            structuredOutput: { rawFindings: input.reviewerRawFindings },
+            content: extractions.map((item) => String(item.rawExcerpt ?? '')).join('\n'),
+            structuredOutput: {
+              rawFindings: extractions,
+            },
           } as unknown as AgentResponse,
         },
       ],
@@ -185,7 +235,8 @@ function makeHarness(initialLedger: FindingLedger): Harness {
       callNamespace: '',
       timestamp: '2026-06-14T00:00:00.000Z',
       priorStepResponseText: input.priorStepResponseText,
-    }),
+      });
+    },
   };
 }
 
@@ -232,6 +283,7 @@ function runFindingManagerWithStore(input: {
   stepIteration: number;
   reviewerRawFindings: Array<Record<string, unknown>>;
 }) {
+  const extractions = input.reviewerRawFindings.map(reviewerExtraction);
   return runFindingManagerForStep({
     contract: {
       ledgerPath: '.takt/findings/peer-review.json',
@@ -259,8 +311,10 @@ function runFindingManagerWithStore(input: {
       subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
       response: {
         status: 'done',
-        content: '',
-        structuredOutput: { rawFindings: input.reviewerRawFindings },
+        content: extractions.map((item) => String(item.rawExcerpt ?? '')).join('\n'),
+        structuredOutput: {
+          rawFindings: extractions,
+        },
       } as unknown as AgentResponse,
     }],
     workflowName: 'peer-review',
@@ -330,6 +384,7 @@ describe('runFindingManagerForStep mechanical path', () => {
         rawDecisions: [{
           rawFindingId: 'run-2:reviewers:2:arch-review:i-1',
           decision: 'new',
+          anchorRelevance: 'not_applicable',
           evidence: 'No related open finding.',
         }],
         disputeDecisions: [],
@@ -349,7 +404,10 @@ describe('runFindingManagerForStep mechanical path', () => {
     const invalidQuoteRaw = {
       ...ANOTHER_UNMATCHED_ISSUE_RAW,
       rawFindingId: 'quote-mismatch',
-      verbatimExcerpt: 'not the current source line',
+      evidence: [{
+        ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/c.ts', 1),
+        verbatimExcerpt: 'not the current source line',
+      }],
     };
     const input = {
       reviewerRawFindings: [UNMATCHED_ISSUE_RAW, invalidQuoteRaw],
@@ -407,6 +465,7 @@ describe('runFindingManagerForStep mechanical path', () => {
         rawFindings: [],
         conflicts: [],
         interpretations: [],
+        ...emptyFindingAuthorityProjection(),
       },
       result: undefined,
     }));
@@ -425,6 +484,7 @@ describe('runFindingManagerForStep mechanical path', () => {
           rawDecisions: [{
             rawFindingId: 'shared-run:reviewers:1:arch-review:i-1',
             decision: 'new',
+            anchorRelevance: 'not_applicable',
             evidence: 'No related open finding.',
           }],
           disputeDecisions: [],
@@ -450,7 +510,14 @@ describe('runFindingManagerForStep mechanical path', () => {
       const results = await Promise.all([run(storeA), run(storeB)]);
 
       expect(results.map((result) => result.status).sort()).toEqual(['unchanged', 'updated']);
-      expect(executeAgentMock).toHaveBeenCalledTimes(1);
+      const taskManifests = executeAgentMock.mock.calls.map(([, instruction]) => (
+        findingManagerTaskManifest(instruction as string)
+      ));
+      expect(taskManifests.filter((manifest) => manifest.rawFindings !== undefined))
+        .toHaveLength(1);
+      expect(taskManifests.filter((manifest) => manifest.candidateIntents !== undefined))
+        .toHaveLength(0);
+      expect(executeAgentMock).toHaveBeenCalledTimes(taskManifests.length);
       expect(copySpies.reduce((count, spy) => count + spy.mock.calls.length, 0)).toBe(1);
       expect(rawSpies.reduce((count, spy) => count + spy.mock.calls.length, 0)).toBe(1);
       expect(reportSpies.reduce((count, spy) => count + spy.mock.calls.length, 0)).toBe(0);
@@ -495,6 +562,7 @@ describe('runFindingManagerForStep mechanical path', () => {
         rawFindings: [],
         conflicts: [],
         interpretations: [],
+        ...emptyFindingAuthorityProjection(),
       },
       result: undefined,
     }));
@@ -510,26 +578,25 @@ describe('runFindingManagerForStep mechanical path', () => {
       {
         ...ANOTHER_UNMATCHED_ISSUE_RAW,
         rawFindingId: 'quote-mismatch',
-        evidence: [verifiedSourceQuoteFields(projectCwd, 'src/c.ts', 1)],
-        verbatimExcerpt: 'not the current source line',
+        evidence: [{
+          ...verifiedSourceQuoteFields(projectCwd, 'src/c.ts', 1),
+          verbatimExcerpt: 'not the current source line',
+        }],
       },
     ];
-    executeAgentMock.mockResolvedValue({
-      status: 'done',
-      content: '',
-      structuredOutput: {
-        rawDecisions: [{
+    mockManagerTaskDecisions({
+      rawDecisions: [{
           rawFindingId: 'pending-run:reviewers:1:arch-review:i-1',
           decision: 'new',
+          anchorRelevance: 'not_applicable',
           evidence: 'No related open finding.',
-        }],
-        disputeDecisions: [],
-        conflictDecisions: [],
-        invalidateDecisions: [],
-        duplicateDecisions: [],
-        dismissDecisions: [],
-      },
-    } as unknown as AgentResponse);
+      }],
+      disputeDecisions: [],
+      conflictDecisions: [],
+      invalidateDecisions: [],
+      duplicateDecisions: [],
+      dismissDecisions: [],
+    });
 
     try {
       await expect(runFindingManagerWithStore({
@@ -580,7 +647,14 @@ describe('runFindingManagerForStep mechanical path', () => {
       expect(storeB.loadLedger().findings.find(
         (finding) => finding.title === UNMATCHED_ISSUE_RAW.title,
       )?.status).toBe('resolved');
-      expect(executeAgentMock).toHaveBeenCalledTimes(1);
+      const resumedTaskManifests = executeAgentMock.mock.calls.map(([, instruction]) => (
+        findingManagerTaskManifest(instruction as string)
+      ));
+      expect(resumedTaskManifests.filter((manifest) => manifest.rawFindings !== undefined))
+        .toHaveLength(1);
+      expect(resumedTaskManifests.filter((manifest) => manifest.candidateIntents !== undefined))
+        .toHaveLength(0);
+      expect(executeAgentMock).toHaveBeenCalledTimes(resumedTaskManifests.length);
       expect(copySpyB).toHaveBeenCalledTimes(1);
       expect(rawSpyB).toHaveBeenCalledTimes(1);
       expect(reportSpyA).toHaveBeenCalledTimes(1);
@@ -606,7 +680,7 @@ describe('runFindingManagerForStep mechanical path', () => {
       content: '',
       structuredOutput: {
         rawDecisions: [
-          { rawFindingId: 'run-2:reviewers:2:arch-review:i-1', decision: 'new', evidence: 'No related open finding.' },
+          { rawFindingId: 'run-2:reviewers:2:arch-review:i-1', decision: 'new', anchorRelevance: 'not_applicable', evidence: 'No related open finding.' },
         ],
         disputeDecisions: [],
         conflictDecisions: [],
@@ -671,21 +745,17 @@ describe('runFindingManagerForStep rejected decisions land as provisional withou
   it('Given one rejected decision among several When run Then the manager is NOT re-asked; the accepted decision applies and the rejected raw lands as a gate-blocking provisional', async () => {
     // semantic retry は 0 回。i-1 は妥当な "new"（採用）、i-2 は存在しない
     // finding への "same"（不採用 → provisional 着地。new への強制も drop もしない）。
-    executeAgentMock.mockResolvedValueOnce({
-      status: 'done',
-      content: '',
-      structuredOutput: {
-        rawDecisions: [
-          { rawFindingId: 'run-2:reviewers:2:arch-review:i-1', decision: 'new', evidence: 'No related open finding.' },
-          { rawFindingId: 'run-2:reviewers:2:arch-review:i-2', decision: 'same', findingId: 'F-9999', evidence: 'x' },
-        ],
-        disputeDecisions: [],
-        conflictDecisions: [],
-        invalidateDecisions: [],
-        duplicateDecisions: [],
-        dismissDecisions: [],
-      },
-    } as unknown as AgentResponse);
+    mockManagerTaskDecisions({
+      rawDecisions: [
+        { rawFindingId: 'run-2:reviewers:2:arch-review:i-1', decision: 'new', anchorRelevance: 'not_applicable', evidence: 'No related open finding.' },
+        { rawFindingId: 'run-2:reviewers:2:arch-review:i-2', decision: 'same', findingId: 'F-9999', anchorRelevance: 'not_applicable', evidence: 'x' },
+      ],
+      disputeDecisions: [],
+      conflictDecisions: [],
+      invalidateDecisions: [],
+      duplicateDecisions: [],
+      dismissDecisions: [],
+    });
 
     const harness = makeHarness(makeLedger());
     const result = await harness.run({ reviewerRawFindings: [UNMATCHED_ISSUE_RAW, ANOTHER_UNMATCHED_ISSUE_RAW] });
@@ -742,7 +812,7 @@ describe('runFindingManagerForStep rejected decisions land as provisional withou
       content: '',
       structuredOutput: {
         rawDecisions: [
-          { rawFindingId: 'run-2:reviewers:2:arch-review:i-1', decision: 'same', findingId: 'F-9999', evidence: 'x' },
+          { rawFindingId: 'run-2:reviewers:2:arch-review:i-1', decision: 'same', findingId: 'F-9999', anchorRelevance: 'not_applicable', evidence: 'x' },
         ],
         disputeDecisions: [],
         conflictDecisions: [],
@@ -814,11 +884,13 @@ describe('runFindingManagerForStep rejected decisions land as provisional withou
           {
             rawFindingId: 'run-2:reviewers:2:arch-review:c-1',
             decision: 'new',
+            anchorRelevance: 'not_applicable',
             evidence: 'Incorrectly attempted to create from a confirmation.',
           },
           {
             rawFindingId: 'run-2:reviewers:2:arch-review:i-1',
             decision: 'new',
+            anchorRelevance: 'not_applicable',
             evidence: 'No related open finding.',
           },
         ],
@@ -853,6 +925,134 @@ describe('runFindingManagerForStep rejected decisions land as provisional withou
 });
 
 describe('runFindingManagerForStep conflict handling', () => {
+  it('drops a conflict resolve when the filesystem review scope changes after the prompt', async () => {
+    const decisions: FindingManagerDecisions = {
+      rawDecisions: [],
+      disputeDecisions: [],
+      conflictDecisions: [{
+        conflictId: 'C-FA2947446963',
+        decision: 'resolve',
+        evidence: 'Resolve using the prompt-time review scope.',
+      }],
+      invalidateDecisions: [],
+      duplicateDecisions: [],
+      dismissDecisions: [],
+    };
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      const response = findingManagerTaskResponse(instruction as string, decisions);
+      const manifest = findingManagerTaskManifest(instruction as string);
+      if (manifest.candidateIntents?.some((intent) => intent.kind === 'conflict')) {
+        writeFileSync(
+          join(FIXTURE_CWD, 'src/a.ts'),
+          `${Array.from(
+            { length: 20 },
+            (_, index) => index === 9 ? '// changed after prompt' : `// line ${index + 1}`,
+          ).join('\n')}\n`,
+        );
+      }
+      return response;
+    });
+    const initial = makeLedger({
+      conflicts: [{
+        id: 'C-FA2947446963',
+        status: 'active',
+        findingIds: ['F-0001'],
+        rawFindingIds: ['raw-existing'],
+        description: 'Reviewers disagree about F-0001.',
+        firstSeen: {
+          runId: 'run-1',
+          stepName: 'reviewers',
+          timestamp: '2026-06-13T00:00:00.000Z',
+        },
+        lastSeen: {
+          runId: 'run-1',
+          stepName: 'reviewers',
+          timestamp: '2026-06-13T00:00:00.000Z',
+        },
+        revision: 1,
+      }],
+    });
+    const harness = makeHarness(initial);
+
+    try {
+      const result = await harness.run({ reviewerRawFindings: [] });
+
+      expect(result.status).toBe('updated');
+      expect(harness.currentLedger().conflicts[0]).toMatchObject({ status: 'active' });
+      expect(harness.savedValidationReports.at(-1)?.attempts.at(-1)?.validationErrors)
+        .toContain(
+          'conflictDecisions: conflict "C-FA2947446963" (resolve) rejected at commit: captured lifecycle head no longer matches the fresh ledger',
+        );
+    } finally {
+      writeFixtureFile('src/a.ts', 20);
+    }
+  });
+
+  it('commits a same-plan finding observation while dropping the now-stale conflict resolve', async () => {
+    mockManagerTaskDecisions({
+      rawDecisions: [],
+      disputeDecisions: [],
+      conflictDecisions: [{
+        conflictId: 'C-FA2947446963',
+        decision: 'resolve',
+        evidence: 'Resolve using the prompt-time conflict evidence.',
+      }],
+      invalidateDecisions: [],
+      duplicateDecisions: [],
+      dismissDecisions: [],
+    });
+    const initial = makeLedger({
+      conflicts: [{
+        id: 'C-FA2947446963',
+        status: 'active',
+        findingIds: ['F-0001'],
+        rawFindingIds: ['raw-existing'],
+        description: 'Reviewers disagree about F-0001.',
+        firstSeen: {
+          runId: 'run-1',
+          stepName: 'reviewers',
+          timestamp: '2026-06-13T00:00:00.000Z',
+        },
+        lastSeen: {
+          runId: 'run-1',
+          stepName: 'reviewers',
+          timestamp: '2026-06-13T00:00:00.000Z',
+        },
+        revision: 1,
+      }],
+    });
+    const harness = makeHarness(initial);
+
+    const result = await harness.run({
+      reviewerRawFindings: [{
+        rawFindingId: 'persist-1',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Existing issue',
+        description: 'Existing issue body.',
+        suggestion: null,
+        relation: 'persists',
+        targetFindingId: 'F-0001',
+        target: { kind: 'code', paths: ['src/a.ts'] },
+        evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 10)],
+      }],
+    });
+
+    expect(result.status).toBe('updated');
+    const committed = harness.currentLedger();
+    expect(committed.findings[0]?.revision).toBeGreaterThan(
+      initial.findings[0]!.revision,
+    );
+    expect(committed.findings[0]?.rawFindingIds)
+      .toContain('run-2:reviewers:2:arch-review:persist-1');
+    expect(committed.conflicts.find((conflict) => conflict.id === 'C-FA2947446963'))
+      .toMatchObject({ status: 'active' });
+    expect(harness.savedValidationReports.at(-1)?.attempts.at(-1)?.validationErrors)
+      .toContain(
+        'conflictDecisions: conflict "C-FA2947446963" (resolve) rejected at commit: the same plan changes its adjudication evidence dependencies',
+      );
+  });
+
   it('Given an active conflict in the ledger When all raws are mechanical Then the agent is still called', async () => {
     executeAgentMock.mockResolvedValue({
       status: 'done',
@@ -877,6 +1077,7 @@ describe('runFindingManagerForStep conflict handling', () => {
           description: 'Reviewers disagree about F-0001.',
           firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
           lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+          revision: 1,
         },
       ],
     });
@@ -887,21 +1088,17 @@ describe('runFindingManagerForStep conflict handling', () => {
     expect(result.status).toBe('updated');
   });
 
-  it('Given an active conflict referencing a resolved finding When the agent is called Then that finding keeps full detail in the instruction', async () => {
-    executeAgentMock.mockResolvedValue({
-      status: 'done',
-      content: '',
-      structuredOutput: {
-        rawDecisions: [
-          { rawFindingId: 'run-2:reviewers:2:arch-review:i-1', decision: 'new', evidence: 'No related open finding.' },
-        ],
-        disputeDecisions: [],
-        conflictDecisions: [{ conflictId: 'C-FA2947446963', decision: 'keep', evidence: 'Still unresolved.' }],
-        invalidateDecisions: [],
-        duplicateDecisions: [],
-        dismissDecisions: [],
-      },
-    } as unknown as AgentResponse);
+  it('Given an active conflict referencing a resolved finding When the agent is called Then the compact view expands only that decision-critical finding', async () => {
+    mockManagerTaskDecisions({
+      rawDecisions: [
+        { rawFindingId: 'run-2:reviewers:2:arch-review:i-1', decision: 'new', anchorRelevance: 'not_applicable', evidence: 'No related open finding.' },
+      ],
+      disputeDecisions: [],
+      conflictDecisions: [{ conflictId: 'C-FA2947446963', decision: 'keep', evidence: 'Still unresolved.' }],
+      invalidateDecisions: [],
+      duplicateDecisions: [],
+      dismissDecisions: [],
+    });
 
     const ledger = makeLedger({
       findings: [
@@ -929,14 +1126,23 @@ describe('runFindingManagerForStep conflict handling', () => {
           description: 'Reviewers disagree about F-0001.',
           firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
           lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+          revision: 1,
         },
       ],
     });
     const harness = makeHarness(ledger);
     await harness.run({ reviewerRawFindings: [UNMATCHED_ISSUE_RAW] });
 
-    const instruction = executeAgentMock.mock.calls[0]?.[1] as string;
-    expect(instruction).toContain('Original detailed description of the conflicted finding.');
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+    const instruction = executeAgentMock.mock.calls.find(
+      (call) => (call[1] as string).includes('"kind": "conflict"'),
+    )?.[1] as string;
+    expect(instruction).toContain('"id": "F-0001"');
+    expect(instruction).toContain('"title": "Existing issue"');
+    expect(instruction).toContain('"path": "src/a.ts"');
+    expect(instruction).toContain('"conflicts"');
+    expect(instruction).not.toContain('Original detailed description of the conflicted finding.');
+    expect(Buffer.byteLength(instruction)).toBeLessThanOrEqual(24_000);
   });
 });
 
@@ -952,7 +1158,7 @@ describe('runFindingManagerForStep workflow_call sub-steps', () => {
       content: '',
       structuredOutput: {
         rawDecisions: [
-          { rawFindingId: 'run-3:reviewers:2:arch-review:i-1', decision: 'new', evidence: 'No related open finding.' },
+          { rawFindingId: 'run-3:reviewers:2:arch-review:i-1', decision: 'new', anchorRelevance: 'not_applicable', evidence: 'No related open finding.' },
         ],
         disputeDecisions: [],
         conflictDecisions: [],
@@ -1015,6 +1221,7 @@ describe('runFindingManagerForStep workflow_call sub-steps', () => {
       personaDisplayName: 'child-delegate',
       instruction: '',
     } as WorkflowStep;
+    const agentExtraction = reviewerExtraction(UNMATCHED_ISSUE_RAW);
 
     const result = await runFindingManagerForStep({
       contract: contract as never,
@@ -1029,8 +1236,8 @@ describe('runFindingManagerForStep workflow_call sub-steps', () => {
           subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
           response: {
             status: 'done',
-            content: '',
-            structuredOutput: { rawFindings: [UNMATCHED_ISSUE_RAW] },
+            content: String(agentExtraction.rawExcerpt ?? ''),
+            structuredOutput: { rawFindings: [agentExtraction] },
           } as unknown as AgentResponse,
         },
         {
@@ -1108,6 +1315,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         rawFindings: [],
         conflicts: [],
         interpretations: [],
+        ...emptyFindingAuthorityProjection(),
       },
       result: undefined,
     }));
@@ -1129,7 +1337,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         status: 'done',
         content: '',
         structuredOutput: {
-          rawDecisions: [{ rawFindingId, decision: 'new', evidence: 'No related open finding.' }],
+          rawDecisions: [{ rawFindingId, decision: 'new', anchorRelevance: 'not_applicable', evidence: 'No related open finding.' }],
           disputeDecisions: [],
           conflictDecisions: [],
           invalidateDecisions: [],
@@ -1159,7 +1367,9 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
       },
     };
 
-    const runCall = (store: FindingLedgerStore, callNamespace: string, raw: Record<string, unknown>) => runFindingManagerForStep({
+    const runCall = (store: FindingLedgerStore, callNamespace: string, raw: Record<string, unknown>) => {
+      const extraction = reviewerExtraction(raw);
+      return runFindingManagerForStep({
       contract: contract as never,
       ledgerStore: store,
       optionsBuilder: optionsBuilder as never,
@@ -1172,8 +1382,8 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
           subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
           response: {
             status: 'done',
-            content: '',
-            structuredOutput: { rawFindings: [raw] },
+            content: String(extraction.rawExcerpt ?? ''),
+            structuredOutput: { rawFindings: [extraction] },
           } as unknown as AgentResponse,
         },
       ],
@@ -1181,7 +1391,8 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
       runId: SHARED_RUN_ID,
       callNamespace,
       timestamp: '2026-06-14T00:00:00.000Z',
-    });
+      });
+    };
 
     const [resultA, resultB] = await Promise.all([
       runCall(storeA, 'child-a', {
@@ -1254,6 +1465,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         rawFindings: [],
         conflicts: [],
         interpretations: [],
+        ...emptyFindingAuthorityProjection(),
       },
       result: undefined,
     }));
@@ -1269,7 +1481,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         status: 'done',
         content: '',
         structuredOutput: {
-          rawDecisions: [{ rawFindingId, decision: 'new', evidence: 'No related open finding.' }],
+          rawDecisions: [{ rawFindingId, decision: 'new', anchorRelevance: 'not_applicable', evidence: 'No related open finding.' }],
           disputeDecisions: [],
           conflictDecisions: [],
           invalidateDecisions: [],
@@ -1299,7 +1511,9 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
       },
     };
 
-    const runCall = (callNamespace: string, raw: Record<string, unknown>) => runFindingManagerForStep({
+    const runCall = (callNamespace: string, raw: Record<string, unknown>) => {
+      const extraction = reviewerExtraction(raw);
+      return runFindingManagerForStep({
       contract: contract as never,
       ledgerStore: store,
       optionsBuilder: optionsBuilder as never,
@@ -1312,8 +1526,8 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
           subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
           response: {
             status: 'done',
-            content: '',
-            structuredOutput: { rawFindings: [raw] },
+            content: String(extraction.rawExcerpt ?? ''),
+            structuredOutput: { rawFindings: [extraction] },
           } as unknown as AgentResponse,
         },
       ],
@@ -1321,7 +1535,8 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
       runId: SHARED_RUN_ID,
       callNamespace,
       timestamp: '2026-06-14T00:00:00.000Z',
-    });
+      });
+    };
 
     const [resultA, resultB] = await Promise.all([
       runCall('child-a', {
@@ -1380,31 +1595,27 @@ describe('runFindingManagerForStep stale rejection isolation', () => {
     // codex 指摘: assembleManagerOutput() は保存直前に最新台帳へ再照合するが、
     // そこで不採用になった raw が別の確定アクションへ流れると、項目単位の
     // 不採用が実質不成立になるケースを再現する。
-    executeAgentMock.mockResolvedValue({
-      status: 'done',
-      content: '',
-      structuredOutput: {
-        rawDecisions: [
-          {
-            rawFindingId: 'run-2:reviewers:2:arch-review:i-1',
-            decision: 'same',
-            findingId: 'F-0001',
-            evidence: 'Same root cause as F-0001, restated at a nearby line.',
-          },
-        ],
-        disputeDecisions: [],
-        conflictDecisions: [],
-        invalidateDecisions: [],
-        duplicateDecisions: [],
-        dismissDecisions: [],
-      },
-    } as unknown as AgentResponse);
+    mockManagerTaskDecisions({
+      rawDecisions: [
+        {
+          rawFindingId: 'run-2:reviewers:2:arch-review:i-1',
+          decision: 'same',
+          findingId: 'F-0001',
+          anchorRelevance: 'not_applicable',
+          evidence: 'Same root cause as F-0001, restated at a nearby line.',
+        },
+      ],
+      disputeDecisions: [],
+      conflictDecisions: [],
+      invalidateDecisions: [],
+      duplicateDecisions: [],
+      dismissDecisions: [],
+    });
 
     const initialLedger = makeLedger(); // F-0001 は open, location src/a.ts:10
     // 保存直前の再読込で見える「最新台帳」では、別の並列子が既に F-0001 を
     // 解消済みにしている想定。
-    const staleFreshLedger: FindingLedger = {
-      ...initialLedger,
+    const staleFreshLedger = makeLedger({
       findings: [
         {
           ...initialLedger.findings[0]!,
@@ -1414,7 +1625,7 @@ describe('runFindingManagerForStep stale rejection isolation', () => {
           resolvedEvidence: 'Resolved by a concurrent child.',
         },
       ],
-    };
+    });
 
     const savedLedgers: FindingLedger[] = [];
     const savedValidationReports: FindingManagerValidationReport[] = [];
@@ -1477,6 +1688,7 @@ describe('runFindingManagerForStep stale rejection isolation', () => {
       relation: 'new',
       evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 11)],
     };
+    const extraction = reviewerExtraction(rawFinding);
 
     const result = await runFindingManagerForStep({
       contract: contract as never,
@@ -1491,8 +1703,8 @@ describe('runFindingManagerForStep stale rejection isolation', () => {
           subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
           response: {
             status: 'done',
-            content: '',
-            structuredOutput: { rawFindings: [rawFinding] },
+            content: String(extraction.rawExcerpt ?? ''),
+            structuredOutput: { rawFindings: [extraction] },
           } as unknown as AgentResponse,
         },
       ],

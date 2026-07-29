@@ -35,6 +35,10 @@ export function assembleCleanManagerDecision(input: {
   invalidLocationCandidateFindingIds: ReadonlySet<string>;
   dismissCandidateFindingIds: ReadonlySet<string>;
   priorStepResponseText: string | undefined;
+  rawFailureById?: ReadonlyMap<string, {
+    kind: FindingProvisionalKind;
+    reason: string;
+  }>;
 }): CleanManagerDecisionResult {
   const cleanWireById = new Map(input.admission.cleanWire.map((wire) => [wire.rawFindingId, wire]));
   const cleanCanonicalById = new Map(input.admission.cleanAdmitted.map(
@@ -75,10 +79,12 @@ export function assembleCleanManagerDecision(input: {
         continue;
       }
       if (!landedRawIds.has(rejected.rawFindingId)) {
+        const taskFailure = input.rawFailureById?.get(rejected.rawFindingId);
         landRawAsProvisional(
           rejected.rawFindingId,
-          `Manager decision (${rejected.decision}) was rejected: ${rejected.reason}`,
-          'raw-adjudication-unresolved',
+          taskFailure?.reason
+            ?? `Manager decision (${rejected.decision}) was rejected: ${rejected.reason}`,
+          taskFailure?.kind ?? 'raw-adjudication-unresolved',
         );
       }
     }

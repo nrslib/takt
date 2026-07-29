@@ -161,6 +161,7 @@ function seedLedger(cwd: string, ledgerPath: string): void {
     startLine: 5,
     title: 'Disputed issue',
     description: 'The bug is present.',
+    familyTag: 'bug',
     targetFindingId: 'F-0001',
   });
   const ledger = authorizeFindingLedgerFixture({

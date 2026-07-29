@@ -2,13 +2,10 @@
  * codex 対策#4 の配線バグ回帰テスト（manager 検証側）。
  *
  * finding-review-scope-snapshot-wiring.test.ts は ParallelRunner が正しい
- * reviewScopeSnapshotId を reviewer instruction へ配ることを固定する。
- * ここではその値が実際に admission の結果を左右することを確認する —
- * 正しい snapshotId を echo した file_quote finding は product finding へ
- * 昇格し、配線バグ時に reviewer が実際に受け取っていた値（空文字 / 古い値）を
- * echo した同じ引用は reviewer anomaly に隔離される。quote 自体（path/行範囲/
- * verbatimExcerpt）は常に正しい実在の引用のまま固定し、snapshotId だけを
- * 変えることで、この1変数だけが admission を分けることを示す。
+ * reviewer が返すのは file_quote request だけであり、snapshotId はエンジンが
+ * 現在の review scope へ束縛して発行する。ここでは正確な request が product
+ * finding へ昇格し、不一致 quote request が anomaly へ隔離されることを実際の
+ * manager-runner 経路で固定する。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -41,7 +38,10 @@ import { verifyFileQuoteEvidence } from '../core/workflow/findings/admission-val
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
-import { emptyFindingAuthorityProjection } from './helpers/finding-lifecycle-fixture.js';
+import {
+  emptyFindingAuthorityProjection,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
@@ -57,7 +57,7 @@ const FINDING_CONTRACT: FindingContractConfig = {
   },
 };
 
-describe('reviewScopeSnapshotId correctness determines admission outcome (manager-runner.ts)', () => {
+describe('engine-issued review scope evidence determines admission outcome (manager-runner.ts)', () => {
   let cwd: string;
   let reportDir: string;
 
@@ -118,13 +118,27 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
   }
 
   /**
-   * quote 自体（path/行範囲/verbatimExcerpt）は常に正しい実在の引用にする。
-   * 変えるのは snapshotId だけ — これは「ParallelRunner が reviewer instruction
-   * へ何を渡したか」に対応する変数であり、この関数の1変数だけが admission の
-   * 結果を分けることを示す。
+   * reviewer は quote request だけを返し、snapshotId は返さない。
    */
-  async function runManagerWithSnapshotId(store: FindingLedgerStore, snapshotId: string) {
+  async function runManagerWithQuoteRequest(
+    store: FindingLedgerStore,
+    verbatimExcerpt?: string,
+  ) {
     const quote = verifiedSourceQuoteFields(cwd, 'src/example.ts', 3);
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: 'finding-1',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Suspicious pattern in example.ts',
+      description: 'A real observation quoting an existing line verbatim.',
+      suggestion: 'Fix it.',
+      relation: 'new',
+      targetFindingId: null,
+      evidence: [{
+        ...quote,
+        verbatimExcerpt: verbatimExcerpt ?? quote.verbatimExcerpt,
+      }],
+    });
     const optionsBuilder = {
       buildAgentOptions: () => ({}),
       resolveStepProviderModel: () => ({ provider: 'claude', model: 'claude-sonnet' }),
@@ -147,71 +161,49 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
         subStep: { kind: 'agent', name: 'ai-antipattern-review', persona: 'ai-antipattern-reviewer', edit: false } as WorkflowStep,
         response: {
           status: 'done',
-          content: '',
+          content: extraction.rawExcerpt,
           structuredOutput: {
-            rawFindings: [{
-              rawFindingId: 'finding-1',
-              familyTag: 'bug',
-              severity: 'high',
-              title: 'Suspicious pattern in example.ts',
-              description: 'A real observation quoting an existing line verbatim.',
-              suggestion: 'Fix it.',
-              relation: 'new',
-              targetFindingId: null,
-              evidence: [{ ...quote, snapshotId }],
-            }],
+            rawFindings: [extraction],
           },
         } as unknown as AgentResponse,
       }],
       workflowName: 'peer-review',
+      workflowTask: 'Review the implementation.',
       runId: 'test-run',
       callNamespace: '',
       timestamp: '2026-07-13T00:00:00.000Z',
     });
   }
 
-  it('admits a file_quote finding as a real product finding when the reviewer echoes the correct reviewScopeSnapshotId', async () => {
+  it('admits an exact file_quote request and binds the engine-issued snapshotId', async () => {
     const { store, current } = makeLedgerStore();
-    const correctSnapshotId = computeReviewScopeSnapshotId(cwd);
 
-    const result = await runManagerWithSnapshotId(store, correctSnapshotId);
+    const result = await runManagerWithQuoteRequest(store);
 
     expect(result.status).toBe('updated');
     const ledger = current();
     expect(ledger.findings).toHaveLength(1);
     expect(ledger.findings[0]?.title).toBe('Suspicious pattern in example.ts');
     expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
+    const quote = ledger.rawFindings[0]?.evidence[0];
+    expect(quote?.kind).toBe('file_quote');
+    if (quote?.kind !== 'file_quote') {
+      throw new Error('Expected engine-issued file quote');
+    }
+    expect(quote.snapshotId).toBe(computeReviewScopeSnapshotId(cwd));
   });
 
-  it('rejects the identical quote into a reviewer anomaly when reviewScopeSnapshotId is empty — the exact wire shape the pre-fix ParallelRunner bug produced', async () => {
+  it('isolates a mismatched quote request as a reviewer anomaly', async () => {
     const { store, current } = makeLedgerStore();
 
-    // pre-fix ParallelRunner built the finding-contract instruction context
-    // inline without reviewScopeSnapshotId. finding-contract-instruction.ts's
-    // `contract.reviewScopeSnapshotId ?? ''` then rendered an empty token into
-    // the reviewer-facing instruction, so a compliant reviewer echoed back ''.
-    const result = await runManagerWithSnapshotId(store, '');
-
-    expect(result.status).toBe('updated');
-    const ledger = current();
-    // 引用そのものは完全に正確でも、snapshotId が不正なら product finding へ昇格しない。
-    expect(ledger.findings).toHaveLength(0);
-    const anomalies = ledger.reviewerAnomalies ?? [];
-    expect(anomalies).toHaveLength(1);
-    expect(anomalies[0]?.kind).toBe('protocol-anomaly');
-  });
-
-  it('isolates the identical quote as a stale-snapshot reviewer anomaly when reviewScopeSnapshotId is non-empty but stale', async () => {
-    const { store, current } = makeLedgerStore();
-
-    const result = await runManagerWithSnapshotId(store, '2'.repeat(64));
+    const result = await runManagerWithQuoteRequest(store, '// stale line 3');
 
     expect(result.status).toBe('updated');
     const ledger = current();
     expect(ledger.findings).toHaveLength(0);
     const anomalies = ledger.reviewerAnomalies ?? [];
     expect(anomalies).toHaveLength(1);
-    expect(anomalies[0]?.kind).toBe('stale-snapshot');
+    expect(anomalies[0]?.kind).toBe('quote-mismatch');
   });
 
   it('rejects admission when the source file is replaced after inspection and leaves the substitute unchanged', () => {

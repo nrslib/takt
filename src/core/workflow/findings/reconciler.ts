@@ -37,6 +37,11 @@ import {
   type OpenConflictOutcomeAuthority,
 } from './raw-capabilities.js';
 import {
+  absenceRawFindings,
+  authorityAnchorAdjudications,
+  computeAnchorRelevanceDecisionDigest,
+} from '../../models/finding-anchor-relevance.js';
+import {
   assertRawFindingsAppendOnly,
   computeCanonicalRawIntegrityDigest,
 } from './finding-integrity.js';
@@ -66,6 +71,11 @@ export interface ProvisionalFindingSpec {
   description?: string;
   suggestion?: string;
   reviewers: string[];
+  /** raw 由来 provisional の対象。値を持っても product lifecycle authority ではない。 */
+  target?: RawFinding['target'];
+  targetIdentityHash?: string;
+  claimIdentityHash?: string;
+  semanticClaimIdentityHash?: string;
   recoveryReviewerStableKey?: string;
   actionRecovery?: FindingProvisionalMetadata['actionRecovery'];
 }
@@ -301,6 +311,10 @@ function buildNewFinding(input: {
     id: input.id,
     status: 'open',
     lifecycle: 'new',
+    target: structuredClone(input.rawFindings[0]!.target),
+    targetIdentityHash: input.rawFindings[0]!.targetIdentityHash,
+    claimIdentityHash: input.rawFindings[0]!.claimIdentityHash,
+    semanticClaimIdentityHash: input.rawFindings[0]!.semanticClaimIdentityHash,
     severity: input.severity,
     title: input.title,
     evidenceIds: input.evidenceIds,
@@ -325,6 +339,10 @@ function withoutResolutionFields(finding: FindingRecord): Omit<FindingRecord, 'r
     id: finding.id,
     status: finding.status,
     lifecycle: finding.lifecycle,
+    target: finding.target,
+    targetIdentityHash: finding.targetIdentityHash,
+    claimIdentityHash: finding.claimIdentityHash,
+    semanticClaimIdentityHash: finding.semanticClaimIdentityHash,
     severity: finding.severity,
     title: finding.title,
     evidenceIds: finding.evidenceIds,
@@ -368,6 +386,7 @@ function reconcileLedgerConflicts(input: {
   rawFindingIds: Set<string>;
   usedRawFindingIds: Set<string>;
   context: FindingReconcileContext;
+  rawFindings: readonly RawFinding[];
 }): {
   conflicts: FindingLedgerConflict[];
   lifecycleCommands: FindingLifecycleCommand[];
@@ -464,7 +483,12 @@ function reconcileLedgerConflicts(input: {
     appendCommand(
       existing === undefined ? 'create_conflict' : 'observe_conflict',
       updated,
-      { kind: 'verified_evidence' },
+      rawFindingLifecycleAuthority({
+        operation: existing === undefined ? 'create_conflict' : 'observe_conflict',
+        rawFindingIds: conflict.rawFindingIds,
+        rawFindings: input.rawFindings,
+        adjudications: input.managerOutput.anchorAdjudications,
+      }),
       conflict.rawFindingIds,
     );
   }
@@ -476,6 +500,36 @@ function reconcileLedgerConflicts(input: {
 }
 
 type ManagerOutputValidator = typeof validateFindingManagerOutput;
+
+function rawFindingLifecycleAuthority(input: {
+  operation: FindingLifecycleCommand['operation'];
+  rawFindingIds: readonly string[];
+  rawFindings: readonly RawFinding[];
+  adjudications: readonly FindingManagerOutput['anchorAdjudications'][number][];
+}): FindingLifecycleCommand['authority'] {
+  const ids = new Set(input.rawFindingIds);
+  const sourceRawFindings = input.rawFindings.filter((rawFinding) => (
+    ids.has(rawFinding.rawFindingId)
+  ));
+  const absenceRaws = absenceRawFindings(sourceRawFindings);
+  if (absenceRaws.length === 0) {
+    return { kind: 'verified_evidence' };
+  }
+  const anchorAdjudications = authorityAnchorAdjudications({
+    rawFindingIds: absenceRaws.map((rawFinding) => rawFinding.rawFindingId),
+    adjudications: input.adjudications,
+  });
+  return {
+    kind: 'engine_policy',
+    decisionKind: 'anchor_relevance',
+    anchorAdjudications,
+    decisionDigest: computeAnchorRelevanceDecisionDigest({
+      operation: input.operation,
+      rawFindings: absenceRaws,
+      adjudications: anchorAdjudications,
+    }),
+  };
+}
 
 export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): FindingLedger {
   return reconcileFindingLedgerPlan(input).ledger;
@@ -843,7 +897,12 @@ function reconcileFindingLedgerWithValidator(
     findingCommand(
       'persist_finding',
       [updated],
-      { kind: 'verified_evidence' },
+      rawFindingLifecycleAuthority({
+        operation: 'persist_finding',
+        rawFindingIds: match.rawFindingIds,
+        rawFindings: input.rawFindings,
+        adjudications: input.managerOutput.anchorAdjudications,
+      }),
       verifiedFindingSources([match.findingId], match.rawFindingIds),
     );
   }
@@ -890,7 +949,12 @@ function reconcileFindingLedgerWithValidator(
     findingCommand(
       'resolve_finding',
       [updated],
-      { kind: 'verified_evidence' },
+      rawFindingLifecycleAuthority({
+        operation: 'resolve_finding',
+        rawFindingIds: resolved.rawFindingIds,
+        rawFindings: input.rawFindings,
+        adjudications: input.managerOutput.anchorAdjudications,
+      }),
       verifiedFindingSources([resolved.findingId], resolved.rawFindingIds),
     );
   }
@@ -932,7 +996,12 @@ function reconcileFindingLedgerWithValidator(
     findingCommand(
       'reopen_finding',
       [updated],
-      { kind: 'verified_evidence' },
+      rawFindingLifecycleAuthority({
+        operation: 'reopen_finding',
+        rawFindingIds: reopened.rawFindingIds,
+        rawFindings: input.rawFindings,
+        adjudications: input.managerOutput.anchorAdjudications,
+      }),
       verifiedFindingSources([reopened.findingId], reopened.rawFindingIds),
     );
   }
@@ -1129,7 +1198,12 @@ function reconcileFindingLedgerWithValidator(
     findingCommand(
       'create_finding',
       [created],
-      { kind: 'verified_evidence' },
+      rawFindingLifecycleAuthority({
+        operation: 'create_finding',
+        rawFindingIds: newFinding.rawFindingIds,
+        rawFindings: input.rawFindings,
+        adjudications: input.managerOutput.anchorAdjudications,
+      }),
       verifiedFindingSources([created.id], newFinding.rawFindingIds),
     );
     return created;
@@ -1142,6 +1216,7 @@ function reconcileFindingLedgerWithValidator(
     rawFindingIds,
     usedRawFindingIds,
     context: input.context,
+    rawFindings: input.rawFindings,
   });
   lifecycleCommands.push(...conflictPlan.lifecycleCommands);
   const conflicts = conflictPlan.conflicts;
@@ -1280,8 +1355,24 @@ function applyProvisionalFindingSpecs(input: {
     const existingId = openProvisionalByStableKey.get(spec.stableKey);
     if (existingId !== undefined) {
       const existing = input.updatedById.get(existingId)!;
+      if (
+        spec.targetIdentityHash !== undefined
+        && existing.targetIdentityHash !== null
+        && existing.targetIdentityHash !== spec.targetIdentityHash
+      ) {
+        throw new Error(
+          `Provisional spec "${spec.stableKey}" target identity does not match existing finding "${existing.id}"`,
+        );
+      }
       input.updatedById.set(existingId, {
         ...existing,
+        ...(existing.target === null && spec.target !== undefined
+          ? {
+              target: spec.target,
+              targetIdentityHash: spec.targetIdentityHash!,
+              claimIdentityHash: spec.claimIdentityHash!,
+            }
+          : {}),
         lifecycle: 'persists',
         rawFindingIds: mergeBinarySortedUniqueStrings(existing.rawFindingIds, spec.sourceRawFindingIds),
         reviewers: Array.from(new Set([...existing.reviewers, ...spec.reviewers])),
@@ -1326,6 +1417,10 @@ function applyProvisionalFindingSpecs(input: {
       id: input.allocateId(),
       status: 'open',
       lifecycle: 'new',
+      target: spec.target ?? null,
+      targetIdentityHash: spec.targetIdentityHash ?? null,
+      claimIdentityHash: spec.claimIdentityHash ?? null,
+      semanticClaimIdentityHash: spec.semanticClaimIdentityHash ?? null,
       severity: spec.severity,
       title: spec.title,
       evidenceIds: [],

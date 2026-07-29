@@ -1,10 +1,11 @@
+import { createHash } from 'node:crypto';
 import type { AgentResponse, WorkflowStep } from '../../models/types.js';
 import type { ReviewerRelationClarification } from './relation-coherence.js';
 import {
   canonicalizeReviewerRawFinding,
   computeOverflowStableKey,
+  computeProvisionalStableKey,
   computeReviewerStableKey,
-  createOverflowRawCandidate,
   createReviewerRawFindingCandidates,
   extractLenientRawFields,
   projectReviewerRawStructuredOutputWithEnvelope,
@@ -22,6 +23,8 @@ import type { FindingLedger } from './types.js';
 import type { ReviewerIntakeResult } from './manager-admission.js';
 import { isWorkflowCallStep } from '../step-kind.js';
 import { createLogger } from '../../../shared/utils/index.js';
+import { issueFindingEvidenceRequests } from './evidence-request-issuer.js';
+import type { ReviewScopeProofSnapshot } from './snapshot.js';
 
 const log = createLogger('finding-manager-intake');
 
@@ -40,11 +43,16 @@ export function intakeReviewerOutputs(input: {
   parentStepName: string;
   stepIteration: number;
   runId: string;
+  workflowTask: string;
+  cwd: string;
+  scopeIdentity: string;
+  issuedAt: string;
+  reviewScopeSnapshot: ReviewScopeProofSnapshot;
 }): ReviewerIntakeResult {
   const result: ReviewerIntakeResult = {
     items: [],
     overflowRawFindingIds: new Set(),
-    overflowSpecs: [],
+    intakeProvisionalSpecs: [],
     overflowReports: [],
     clarifications: [],
     rawNormalizations: [],
@@ -93,6 +101,15 @@ export function intakeReviewerOutputs(input: {
       runId: input.runId,
       reviewerStepName: subResult.subStep.name,
       reviewerPersonaKey: (subResult.subStep as { persona?: string }).persona ?? subResult.subStep.name,
+      reviewReport: subResult.response.content,
+      issueEvidenceRequests: (request) => issueFindingEvidenceRequests({
+        snapshot: input.reviewScopeSnapshot,
+        workflowName: input.workflowName,
+        runId: input.runId,
+        scopeIdentity: input.scopeIdentity,
+        workflowTask: input.workflowTask,
+        issuedAt: input.issuedAt,
+      }, request),
     };
     if (subResult.relationClarification !== undefined) {
       result.clarifications.push({
@@ -121,27 +138,26 @@ export function intakeReviewerOutputs(input: {
 
     if (overflowReason !== undefined) {
       // 部分採用しない: この reviewer の全 raw を単一 overflow provisional に置換。
-      const candidate = createOverflowRawCandidate({
-        context,
-        reason: `Reviewer "${subResult.subStep.name}" output exceeded Finding Contract limits: ${overflowReason}`,
+      const reviewerStableKey = computeReviewerStableKey({
+        workflowName: input.workflowName,
+        callNamespace: input.callNamespace,
+        parentStepName: input.parentStepName,
+        reviewerPersonaKey: context.reviewerPersonaKey,
       });
-      const canonicalized = canonicalizeReviewerRawFinding(candidate, { ledger: input.previousLedger });
-      const canonical = canonicalized.canonical;
-      const wire = toLedgerRawFinding(canonical);
-      result.items.push({ canonical, wire });
-      result.overflowRawFindingIds.add(canonical.rawFindingId);
+      const stableKey = computeOverflowStableKey(reviewerStableKey);
+      const description = `Reviewer "${subResult.subStep.name}" output exceeded Finding Contract limits: ${overflowReason}`;
       result.overflowReports.push({ reviewer: subResult.subStep.name, reason: overflowReason });
-      result.overflowSpecs.push({
+      result.intakeProvisionalSpecs.push({
         kind: 'reviewer-output-overflow',
-        stableKey: computeOverflowStableKey(canonical.reviewerStableKey),
-        lineageKey: canonical.lineageKey,
-        sourceRawFindingIds: [canonical.rawFindingId],
-        reason: wire.description,
+        stableKey,
+        lineageKey: stableKey,
+        sourceRawFindingIds: [],
+        reason: description,
         title: 'Reviewer output exceeded Finding Contract limits',
         severity: 'high',
-        description: wire.description,
+        description,
         reviewers: [subResult.subStep.name],
-        recoveryReviewerStableKey: canonical.reviewerStableKey,
+        recoveryReviewerStableKey: reviewerStableKey,
       });
       log.warn('Reviewer output exceeded Finding Contract limits; replaced with a single overflow provisional', {
         reviewer: subResult.subStep.name,
@@ -158,7 +174,32 @@ export function intakeReviewerOutputs(input: {
       parentStepName: input.parentStepName,
       reviewerPersonaKey: context.reviewerPersonaKey,
     }));
-    const candidates = createReviewerRawFindingCandidates(items, context, resourceEnvelope);
+    const candidateBatch = createReviewerRawFindingCandidates(items, context, resourceEnvelope);
+    for (const rejection of candidateBatch.rejections) {
+      const lineageKey = createHash('sha256').update(JSON.stringify({
+        domain: 'finding-normalizer-extraction-rejection',
+        intakeId: rejection.intakeId,
+        reviewerStableKey: rejection.reviewerStableKey,
+        reason: rejection.reason,
+      })).digest('hex');
+      result.intakeProvisionalSpecs.push({
+        kind: 'raw-adjudication-unresolved',
+        stableKey: computeProvisionalStableKey({
+          reviewerStableKey: rejection.reviewerStableKey,
+          lineageKey,
+          provisionalKind: 'raw-adjudication-unresolved',
+        }),
+        lineageKey,
+        sourceRawFindingIds: [],
+        reason: rejection.reason,
+        title: `Unbound reviewer extraction ${rejection.intakeId}`,
+        severity: 'high',
+        description: rejection.reason,
+        reviewers: [rejection.reviewer],
+        recoveryReviewerStableKey: rejection.reviewerStableKey,
+      });
+    }
+    const candidates = candidateBatch.candidates;
     const clarification = subResult.relationClarification;
     for (const candidate of candidates) {
       const priorCodes = clarification !== undefined

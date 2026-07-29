@@ -1,6 +1,5 @@
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
-import { computeClaimIdentityHash } from '../../models/finding-claim-identity.js';
 import {
   computeFindingLifecycleProjectionDigest,
   computeFindingLifecycleResultDigest,
@@ -586,16 +585,17 @@ function assertManagerProofConditions(input: {
       throw new Error(`Lifecycle manager proof "${record.proofId}" has no changed finding target`);
     }
     const subject = record.subject;
-    if (subject.kind === 'named_structural_check') {
+    if (subject.kind === 'finding_provisional_isolation') {
       if (
         after.provisional === undefined
-        || subject.parameters.provisionalKind !== after.provisional.kind
-        || subject.parameters.stableKey !== after.provisional.stableKey
+        || subject.findingId !== after.id
+        || subject.provisionalKind !== after.provisional.kind
+        || subject.stableKey !== after.provisional.stableKey
       ) {
         throw new Error(`Lifecycle manager proof "${record.proofId}" does not match the provisional projection delta`);
       }
     } else if (
-      subject.kind === 'finding_location_set_invalid'
+      subject.kind === 'finding_target_invalid'
       && subject.reason !== after.invalidatedEvidence
     ) {
       throw new Error(`Lifecycle manager proof "${record.proofId}" does not match the invalidation projection delta`);
@@ -626,33 +626,31 @@ function assertCreateClaimBindings(input: {
       continue;
     }
     const after = input.changes.get(targetKey(binding.target)) as FindingLedgerEntry;
+    if (
+      after.provisional !== undefined
+      && after.claimIdentityHash === null
+      && binding.claimIdentityHash === null
+    ) {
+      continue;
+    }
     const sourceRaw = binding.sourceRawFindingId === null
       ? undefined
       : input.rawFindings.find(
           (raw) => raw.rawFindingId === binding.sourceRawFindingId,
         );
-    const normalizedSourceMatches = (
-      sourceRaw !== undefined
-      && after.description !== undefined
-      && computeClaimIdentityHash({
-        targetFindingId: null,
-        title: sourceRaw.title,
-        description: sourceRaw.description,
-      }) === computeClaimIdentityHash({
-        targetFindingId: null,
-        title: after.title,
-        description: after.description,
-      })
-    );
+    const sourceMatchesCreatedFinding = sourceRaw !== undefined
+      && (
+        sourceRaw.claimIdentityHash === after.claimIdentityHash
+        || (
+          after.semanticClaimIdentityHash !== null
+          && sourceRaw.semanticClaimIdentityHash === after.semanticClaimIdentityHash
+        )
+      );
     if (
-      after.description === undefined
+      after.claimIdentityHash === null
       || (
-        computeClaimIdentityHash({
-          targetFindingId: null,
-          title: after.title,
-          description: after.description,
-        }) !== binding.claimIdentityHash
-        && !normalizedSourceMatches
+        after.claimIdentityHash !== binding.claimIdentityHash
+        && !sourceMatchesCreatedFinding
       )
     ) {
       throw new Error(`Evidence binding "${binding.bindingId}" does not match the created finding claim`);

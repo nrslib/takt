@@ -19,7 +19,10 @@ import type { FindingManagerDecisions } from '../core/models/finding-types.js';
 import { reconcileCommitPlan } from '../core/workflow/findings/manager-commit-finalization.js';
 import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
-import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
 import { createRawRecoveryAttempt } from '../core/models/finding-raw-recovery.js';
 import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
@@ -27,6 +30,7 @@ import {
   createFindingManagerPublicationDouble,
   RevisionedFindingLedgerTestRepository,
 } from './helpers/finding-manager-publication.js';
+import { findingManagerTaskResponse } from './helpers/finding-manager-task-response.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -308,7 +312,7 @@ describe('reconcileFindingLedger dismissedFindings', () => {
   it('dismiss と同一ラウンドの監査観測を別の実変更として revision に反映する', () => {
     const current = provisionalEntry({ revision: 3 });
     const currentLedger = makeLedger([current]);
-    const rawFinding: RawFinding = {
+    const rawFinding: RawFinding = canonicalRawFindingFixture({
       rawFindingId: 'raw-same-claim',
       stepName: 'reviewers',
       reviewer: 'coding-review',
@@ -320,7 +324,7 @@ describe('reconcileFindingLedger dismissedFindings', () => {
       relation: 'new',
       targetFindingId: null,
       evidence: [],
-    };
+    });
 
     const result = reconcileCommitPlan({
       runInput: {
@@ -458,10 +462,8 @@ describe('runFindingManagerForStep dismiss round trip', () => {
       saveManagerValidationReport: (report) => { savedValidationReports.push(report); },
       ...publicationDouble,
     };
-    executeAgentMock.mockResolvedValue({
-      status: 'done',
-      content: '',
-      structuredOutput: {
+    executeAgentMock.mockImplementation(async (_persona, instruction) => (
+      findingManagerTaskResponse(instruction as string, {
         rawDecisions: [],
         disputeDecisions: [],
         conflictDecisions: [],
@@ -472,8 +474,8 @@ describe('runFindingManagerForStep dismiss round trip', () => {
           basis: 'out_of_scope',
           reason: '品質ゲート証跡の評価は final gate の職掌',
         }],
-      },
-    } as unknown as AgentResponse);
+      })
+    ));
 
     try {
       const result = await runFindingManagerForStep({

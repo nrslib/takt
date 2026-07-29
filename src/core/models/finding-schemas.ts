@@ -5,6 +5,12 @@ import { normalizeRfc3339Timestamp } from './rfc3339.js';
 import { collectFindingLedgerProjectionInvariantViolations } from './finding-ledger-invariants.js';
 import { RAW_FINDING_FIELD_LIMITS } from './finding-contract-limits.js';
 import {
+  computeCandidateIdentityHash,
+  computeClaimIdentityHash,
+  computeSemanticClaimIdentityHash,
+  computeTargetIdentityHash,
+} from './finding-claim-identity.js';
+import {
   canonicalRawFindingEvidenceIdentity,
   findingEvidenceRecordIdentityViolation,
   SHA256_HEX_PATTERN,
@@ -14,6 +20,7 @@ import type {
   FindingLedger,
   FindingManagerDecisions,
   FindingManagerOutput,
+  FindingManagerValidationReport,
   FindingMutationPrecondition,
   RawFinding,
   RawFindingRelation,
@@ -155,11 +162,17 @@ export const FindingLifecycleMutationTargetSchema = z.object({
 export const FindingEvidenceBindingSchema = z.object({
   bindingId: Sha256Schema,
   evidenceId: Sha256Schema,
-  claimIdentityHash: Sha256Schema,
+  claimIdentityHash: Sha256Schema.nullable(),
   sourceRawFindingId: nonEmptyString.nullable(),
   sourceRawIntegrityDigest: Sha256Schema.nullable(),
   operation: z.enum(FINDING_LIFECYCLE_OPERATIONS),
   target: FindingLifecycleMutationTargetSchema,
+}).strict();
+
+const FindingAnchorAuthorityAdjudicationSchema = z.object({
+  rawFindingId: nonEmptyString,
+  decision: z.literal('relevant'),
+  managerOutputBinding: Sha256Schema,
 }).strict();
 
 export const FindingLifecycleReservationContextSchema = z.discriminatedUnion('kind', [
@@ -172,7 +185,7 @@ export const FindingLifecycleReservationContextSchema = z.discriminatedUnion('ki
   }).strict(),
 ]);
 
-export const FindingLifecycleAuthoritySchema = z.discriminatedUnion('kind', [
+export const FindingLifecycleAuthoritySchema = z.union([
   z.object({
     kind: z.literal('verified_evidence'),
   }).strict(),
@@ -186,6 +199,26 @@ export const FindingLifecycleAuthoritySchema = z.discriminatedUnion('kind', [
       'semantic_duplicate',
     ]),
     decisionDigest: Sha256Schema,
+  }).strict(),
+  z.object({
+    kind: z.literal('engine_policy'),
+    decisionKind: z.literal('anchor_relevance'),
+    decisionDigest: Sha256Schema,
+    anchorAdjudications: z.array(FindingAnchorAuthorityAdjudicationSchema)
+      .min(1)
+      .superRefine((adjudications, ctx) => {
+        const rawFindingIds = adjudications.map((adjudication) => adjudication.rawFindingId);
+        const canonical = [...new Set(rawFindingIds)].sort(compareBinaryStrings);
+        if (
+          canonical.length !== rawFindingIds.length
+          || canonical.some((rawFindingId, index) => rawFindingId !== rawFindingIds[index])
+        ) {
+          ctx.addIssue({
+            code: 'custom',
+            message: 'Expected binary-sorted unique anchor adjudications',
+          });
+        }
+      }),
   }).strict(),
   z.object({
     kind: z.literal('conflict_adjudication'),
@@ -295,6 +328,52 @@ export const RawFindingEvidenceSchema = z.discriminatedUnion('kind', [
   EngineProofEvidenceSchema,
 ]);
 
+export const FindingTargetSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('code'),
+    paths: BinarySortedUniqueStringSetSchema.min(1),
+  }).strict(),
+  z.object({
+    kind: z.literal('structure'),
+    scope: z.object({
+      kind: z.literal('review_scope'),
+      roots: BinarySortedUniqueStringSetSchema.min(1),
+    }).strict(),
+    manifestTargets: BinarySortedUniqueStringSetSchema.min(1),
+  }).strict(),
+  z.object({
+    kind: z.literal('absence'),
+    predicate: z.discriminatedUnion('kind', [
+      z.object({
+        kind: z.literal('path_state'),
+        path: nonEmptyString,
+        expected: z.literal('absent'),
+      }).strict(),
+      z.object({
+        kind: z.literal('exact_literal_search'),
+        roots: BinarySortedUniqueStringSetSchema.min(1),
+        literal: nonEmptyString,
+        textDomain: z.literal('utf8'),
+      }).strict(),
+    ]),
+  }).strict(),
+]);
+
+export const CandidateSourceBindingSchema = z.object({
+  reportDigest: Sha256Schema,
+  startByte: z.number().int().nonnegative(),
+  endByte: z.number().int().positive(),
+  excerptDigest: Sha256Schema,
+}).strict().superRefine((binding, ctx) => {
+  if (binding.endByte <= binding.startByte) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['endByte'],
+      message: 'endByte must be greater than startByte',
+    });
+  }
+});
+
 const RawFindingEvidenceSetSchema = z.array(RawFindingEvidenceSchema).max(16)
   .superRefine((evidence, ctx) => {
     const identities = evidence.map(canonicalRawFindingEvidenceIdentity);
@@ -310,54 +389,97 @@ const RawFindingEvidenceSetSchema = z.array(RawFindingEvidenceSchema).max(16)
     }
   });
 
-export const FindingEvidenceRecordSchema = z.discriminatedUnion('kind', [
+const ClaimEvidenceSubjectSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('repository_manifest'),
+    scope: z.object({
+      kind: z.literal('review_scope'),
+      roots: BinarySortedUniqueStringSetSchema.min(1),
+    }).strict(),
+    manifestTargets: BinarySortedUniqueStringSetSchema.min(1),
+    observedTargets: BinarySortedUniqueStringSetSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('repository_query'),
+    predicate: z.discriminatedUnion('kind', [
+      z.object({
+        kind: z.literal('path_state'),
+        path: nonEmptyString,
+        expected: z.literal('absent'),
+      }).strict(),
+      z.object({
+        kind: z.literal('exact_literal_search'),
+        roots: BinarySortedUniqueStringSetSchema.min(1),
+        literal: nonEmptyString,
+        textDomain: z.literal('utf8'),
+      }).strict(),
+    ]),
+    result: z.enum(['absent', 'zero_matches']),
+    coverage: z.literal('complete'),
+  }).strict(),
+  z.object({
+    kind: z.literal('authoritative_quote'),
+    source: z.enum(['task', 'public_declaration']),
+    declarationId: nonEmptyString,
+    verbatimExcerpt: nonEmptyString,
+  }).strict(),
+]);
+
+const LifecycleAuthoritySubjectSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('finding_provisional_isolation'),
+    findingId: nonEmptyString,
+    provisionalKind: z.enum(FINDING_PROVISIONAL_KINDS),
+    stableKey: nonEmptyString,
+  }).strict(),
+  z.object({
+    kind: z.literal('finding_target_invalid'),
+    findingId: nonEmptyString,
+    reason: nonEmptyString,
+  }).strict(),
+  z.object({
+    kind: z.literal('finding_claim_sets_equal'),
+    findingIds: BinarySortedUniqueStringSetSchema,
+    semanticClaimIdentityHashes: BinarySortedUniqueSha256SetSchema,
+  }).strict(),
+]);
+
+const EngineProofRecordBaseSchema = z.object({
+  evidenceId: Sha256Schema,
+  proofId: Sha256Schema,
+  kind: z.literal('engine_proof'),
+  verifierId: nonEmptyString,
+  verifierVersion: nonEmptyString,
+  workflowName: nonEmptyString,
+  runId: nonEmptyString,
+  scopeIdentity: nonEmptyString,
+  snapshotId: Sha256Schema,
+  targetFindingId: nonEmptyString.nullable(),
+  dependencyDigests: BinarySortedUniqueSha256SetSchema,
+  resultDigest: Sha256Schema,
+  issuedAt: Rfc3339TimestampSchema,
+});
+
+const EngineProofRecordSchema = z.discriminatedUnion('purpose', [
+  EngineProofRecordBaseSchema.extend({
+    purpose: z.literal('claim_evidence'),
+    claimIdentityHash: Sha256Schema,
+    subject: ClaimEvidenceSubjectSchema,
+  }).strict(),
+  EngineProofRecordBaseSchema.extend({
+    purpose: z.literal('lifecycle_authority'),
+    claimIdentityHash: Sha256Schema.nullable(),
+    subject: LifecycleAuthoritySubjectSchema,
+  }).strict(),
+]);
+
+export const FindingEvidenceRecordSchema = z.union([
   FileQuoteEvidenceSchema.extend({
     evidenceId: Sha256Schema,
     claimIdentityHash: Sha256Schema,
     fileHash: Sha256Schema,
   }).strict(),
-  z.object({
-    evidenceId: Sha256Schema,
-    proofId: Sha256Schema,
-    kind: z.literal('engine_proof'),
-    verifierId: nonEmptyString,
-    verifierVersion: nonEmptyString,
-    workflowName: nonEmptyString,
-    runId: nonEmptyString,
-    scopeIdentity: nonEmptyString,
-    snapshotId: Sha256Schema,
-    claimIdentityHash: Sha256Schema,
-    targetFindingId: nonEmptyString.nullable(),
-    subject: z.discriminatedUnion('kind', [
-      z.object({
-        kind: z.literal('path_absent'),
-        path: nonEmptyString,
-      }).strict(),
-      z.object({
-        kind: z.literal('named_structural_check'),
-        checkId: nonEmptyString,
-        parameters: z.record(z.string(), z.string()),
-      }).strict(),
-      z.object({
-        kind: z.literal('execution_result'),
-        executionId: nonEmptyString,
-        expectedOutcome: z.enum(['passed', 'failed']),
-      }).strict(),
-      z.object({
-        kind: z.literal('finding_location_set_invalid'),
-        findingId: nonEmptyString,
-        reason: nonEmptyString,
-      }).strict(),
-      z.object({
-        kind: z.literal('finding_claim_sets_equal'),
-        findingIds: BinarySortedUniqueStringSetSchema,
-        claimIdentityHashes: BinarySortedUniqueSha256SetSchema,
-      }).strict(),
-    ]),
-    dependencyDigests: BinarySortedUniqueSha256SetSchema,
-    resultDigest: Sha256Schema,
-    issuedAt: Rfc3339TimestampSchema,
-  }).strict(),
+  EngineProofRecordSchema,
 ]).superRefine((record, ctx) => {
   const violation = findingEvidenceRecordIdentityViolation(record);
   if (violation !== undefined) {
@@ -460,6 +582,10 @@ export const FindingLedgerEntrySchema = z.object({
   id: nonEmptyString,
   status: FindingStatusSchema,
   lifecycle: FindingLifecycleSchema,
+  target: FindingTargetSchema.nullable(),
+  targetIdentityHash: Sha256Schema.nullable(),
+  claimIdentityHash: Sha256Schema.nullable(),
+  semanticClaimIdentityHash: Sha256Schema.nullable(),
   severity: FindingSeveritySchema,
   title: nonEmptyString,
   evidenceIds: BinarySortedUniqueStringSetSchema,
@@ -497,7 +623,42 @@ export const FindingLedgerEntrySchema = z.object({
     reason: nonEmptyString,
     observedAt: FindingObservationSchema,
   }).strict()).optional(),
-}).strict();
+}).strict().superRefine((finding, ctx) => {
+  const identityFields = [
+    finding.target,
+    finding.targetIdentityHash,
+    finding.claimIdentityHash,
+    finding.semanticClaimIdentityHash,
+  ];
+  const allNull = identityFields.every((value) => value === null);
+  const allPresent = identityFields.every((value) => value !== null);
+  if (!allNull && !allPresent) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['target'],
+      message: 'target, targetIdentityHash, claimIdentityHash, and semanticClaimIdentityHash must be all null or all present',
+    });
+    return;
+  }
+  if (finding.provisional === undefined && !allPresent) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['target'],
+      message: 'non-provisional findings require target and all identity hashes',
+    });
+    return;
+  }
+  if (
+    finding.target !== null
+    && finding.targetIdentityHash !== computeTargetIdentityHash(finding.target)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['targetIdentityHash'],
+      message: 'targetIdentityHash does not match the canonical target',
+    });
+  }
+});
 
 interface RawFindingRelationFields {
   relation: RawFindingRelation;
@@ -548,9 +709,15 @@ const RawFindingFieldsSchema = z.object({
   reviewer: nonEmptyString,
   familyTag: familyTagString.nullable(),
   severity: FindingSeveritySchema.nullable(),
-  title: rawFindingTitleString,
-  description: rawFindingDescriptionString,
+  title: rawFindingTitleString.nullable(),
+  description: rawFindingDescriptionString.nullable(),
   suggestion: rawFindingSuggestionString.nullable(),
+  target: FindingTargetSchema,
+  targetIdentityHash: Sha256Schema,
+  claimIdentityHash: Sha256Schema,
+  semanticClaimIdentityHash: Sha256Schema,
+  candidateIdentityHash: Sha256Schema,
+  sourceBinding: CandidateSourceBindingSchema,
   relation: z.enum(RAW_FINDING_RELATIONS),
   targetFindingId: nonEmptyString.nullable(),
   targetPrecondition: FindingMutationPreconditionSchema.optional(),
@@ -559,23 +726,86 @@ const RawFindingFieldsSchema = z.object({
 
 export const RawFindingSchema = RawFindingFieldsSchema.superRefine((value, ctx) => {
   validateRawFindingRelation(value, ctx, true);
+  try {
+    const targetIdentityHash = computeTargetIdentityHash(value.target);
+    const claimIdentityHash = computeClaimIdentityHash({
+      target: value.target,
+      familyTag: value.familyTag,
+      severity: value.severity,
+      title: value.title,
+      description: value.description,
+      suggestion: value.suggestion,
+    });
+    const semanticClaimIdentityHash = computeSemanticClaimIdentityHash({
+      target: value.target,
+      title: value.title,
+      description: value.description,
+    });
+    const candidateIdentityHash = computeCandidateIdentityHash({
+      claimIdentityHash,
+      sourceBinding: value.sourceBinding,
+    });
+    for (const [path, actual, expected] of [
+      ['targetIdentityHash', value.targetIdentityHash, targetIdentityHash],
+      ['claimIdentityHash', value.claimIdentityHash, claimIdentityHash],
+      [
+        'semanticClaimIdentityHash',
+        value.semanticClaimIdentityHash,
+        semanticClaimIdentityHash,
+      ],
+      ['candidateIdentityHash', value.candidateIdentityHash, candidateIdentityHash],
+    ] as const) {
+      if (actual !== expected) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [path],
+          message: `${path} does not match its canonical content address`,
+        });
+      }
+    }
+  } catch (error) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['target'],
+      message: error instanceof Error ? error.message : 'target is not canonical',
+    });
+  }
 });
 
-const ReviewerRawFindingFieldsSchema = z.object({
-  rawFindingId: rawFindingIdString,
+export const FindingEvidenceRequestSchema = z.discriminatedUnion('kind', [
+  FileQuoteEvidenceSchema.omit({ snapshotId: true }).strict(),
+  z.object({
+    kind: z.literal('engine_proof'),
+    subject: z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('repository_manifest') }).strict(),
+      z.object({ kind: z.literal('repository_query') }).strict(),
+      z.object({
+        kind: z.literal('authoritative_quote'),
+        source: z.enum(['task', 'public_declaration']),
+        declarationId: nonEmptyString,
+        verbatimExcerpt: nonEmptyString,
+      }).strict(),
+    ]),
+  }).strict(),
+]);
+
+const ReviewerCandidatePayloadSchema = z.object({
+  rawFindingId: rawFindingIdString.nullable(),
   familyTag: familyTagString.nullable(),
   severity: FindingSeveritySchema.nullable(),
-  title: rawFindingTitleString,
-  description: rawFindingDescriptionString,
+  title: rawFindingTitleString.nullable(),
+  description: rawFindingDescriptionString.nullable(),
   suggestion: rawFindingSuggestionString.nullable(),
-  relation: z.enum(RAW_FINDING_RELATIONS),
+  relation: z.enum(RAW_FINDING_RELATIONS).nullable(),
   targetFindingId: nonEmptyString.nullable(),
-  evidence: z.array(RawFindingEvidenceSchema).max(16),
+  target: FindingTargetSchema.nullable(),
+  evidenceRequests: z.array(FindingEvidenceRequestSchema).max(16),
 }).strict();
 
-export const ReviewerRawFindingSchema = ReviewerRawFindingFieldsSchema.superRefine((value, ctx) => {
-  validateRawFindingRelation(value, ctx, false);
-});
+export const ReviewerRawFindingSchema = z.object({
+  rawExcerpt: nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxDescriptionChars),
+  candidate: ReviewerCandidatePayloadSchema.nullable(),
+}).strict();
 
 export const FindingConflictAdjudicationOutcomeSchema = z.enum(FINDING_CONFLICT_ADJUDICATION_OUTCOMES);
 export const FindingConflictAdjudicationTransitionSchema = z.enum(FINDING_CONFLICT_ADJUDICATION_TRANSITIONS);
@@ -860,6 +1090,40 @@ const FindingManagerValidationReportSchema = z.object({
   interpretationRecoverySettlements: z.array(
     InterpretationRecoveryOriginSettlementSchema,
   ).optional(),
+  managerTaskAudits: z.array(z.discriminatedUnion('status', [
+    z.object({
+      taskId: Sha256Schema,
+      taskKind: z.enum([
+        'raw',
+        'finding_control',
+        'dispute',
+        'conflict',
+        'invalidate',
+        'duplicate',
+        'dismiss',
+      ]),
+      ownedIds: z.array(nonEmptyString),
+      status: z.literal('succeeded'),
+      inputBytes: z.number().int().nonnegative(),
+      output: z.unknown(),
+    }).strict(),
+    z.object({
+      taskId: Sha256Schema,
+      taskKind: z.enum([
+        'raw',
+        'finding_control',
+        'dispute',
+        'conflict',
+        'invalidate',
+        'duplicate',
+        'dismiss',
+      ]),
+      ownedIds: z.array(nonEmptyString),
+      status: z.enum(['failed', 'input_overflow']),
+      inputBytes: z.number().int().nonnegative().nullable(),
+      reason: nonEmptyString,
+    }).strict(),
+  ])).optional(),
 }).strict();
 
 const FindingManagerCommitProjectionSchema = z.object({
@@ -1007,6 +1271,14 @@ export function parseAmbiguousInterpretations(value: unknown): ParsedAmbiguousIn
 }
 
 export const FindingManagerOutputSchema = z.object({
+  anchorAdjudications: z.array(z.object({
+    rawFindingId: nonEmptyString,
+    rawDecision: z.enum(RAW_DECISION_KINDS),
+    findingId: nonEmptyString.nullable(),
+    decision: z.enum(['relevant', 'not_relevant', 'not_applicable']),
+    rationale: z.string(),
+    managerOutputBinding: Sha256Schema,
+  }).strict()),
   matches: z.array(z.object({
     findingId: nonEmptyString,
     rawFindingIds: z.array(nonEmptyString),
@@ -1072,6 +1344,7 @@ export const FindingManagerOutputSchema = z.object({
 export const FindingManagerRawDecisionSchema = z.object({
   rawFindingId: nonEmptyString,
   decision: z.enum(RAW_DECISION_KINDS),
+  anchorRelevance: z.enum(['relevant', 'not_relevant', 'not_applicable']),
   findingId: z.string().optional(),
   evidence: nonEmptyString,
 }).strict().transform(({ findingId, ...decision }) => (
@@ -1122,8 +1395,24 @@ export const FindingManagerDecisionsSchema = z.object({
 export const FindingManagerOutputJsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['matches', 'newFindings', 'resolvedFindings', 'reopenedFindings', 'conflicts', 'resolvedConflicts', 'waivedFindings', 'disputeNotes', 'invalidatedFindings', 'duplicateFindings', 'dismissedFindings'],
+  required: ['anchorAdjudications', 'matches', 'newFindings', 'resolvedFindings', 'reopenedFindings', 'conflicts', 'resolvedConflicts', 'waivedFindings', 'disputeNotes', 'invalidatedFindings', 'duplicateFindings', 'dismissedFindings'],
   properties: {
+    anchorAdjudications: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['rawFindingId', 'rawDecision', 'findingId', 'decision', 'rationale', 'managerOutputBinding'],
+        properties: {
+          rawFindingId: { type: 'string', minLength: 1 },
+          rawDecision: { enum: RAW_DECISION_KINDS },
+          findingId: { type: ['string', 'null'], minLength: 1 },
+          decision: { enum: ['relevant', 'not_relevant', 'not_applicable'] },
+          rationale: { type: 'string' },
+          managerOutputBinding: { type: 'string', pattern: SHA256_HEX_PATTERN.source },
+        },
+      },
+    },
     matches: {
       type: 'array',
       items: {
@@ -1285,7 +1574,7 @@ export const FindingManagerDecisionsJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['rawFindingId', 'decision', 'findingId', 'evidence'],
+        required: ['rawFindingId', 'decision', 'anchorRelevance', 'findingId', 'evidence'],
         properties: {
           rawFindingId: {
             type: 'string',
@@ -1295,6 +1584,10 @@ export const FindingManagerDecisionsJsonSchema = {
           decision: {
             enum: RAW_DECISION_KINDS,
             description: 'same = matches an existing open finding (familyTag and line-number differences alone are not disqualifying; judge by failure mode, trigger, impact, and required fix). new = no related finding exists yet. resolved = confirms an existing open finding is fixed. reopened = a previously resolved/waived/dismissed finding reappeared. conflict = contradicts an existing finding. unsupported = the raw finding explicitly referenced an existing finding (targetFindingId) as persists/reopened but the reference does not hold up; do not fall back to new.',
+          },
+          anchorRelevance: {
+            enum: ['relevant', 'not_relevant', 'not_applicable'],
+            description: 'For an absence target, explicitly decide whether its verified task/public authoritative quote is relevant to the claimed missing obligation. The engine has verified quote existence only. Use relevant only when the quote actually establishes the obligation, not_relevant otherwise. Use not_applicable for code/structure targets.',
           },
           findingId: {
             type: 'string',
@@ -1434,87 +1727,209 @@ const RawFindingsOutputIntakeJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['rawFindingId', 'relation', 'targetFindingId', 'familyTag', 'severity', 'title', 'description', 'suggestion', 'evidence'],
+        required: ['rawExcerpt', 'candidate'],
         properties: {
-          rawFindingId: {
-            type: 'string',
-            minLength: 1,
-            maxLength: RAW_FINDING_FIELD_LIMITS.maxRawFindingIdChars,
-          },
-          relation: {
-            enum: RAW_FINDING_RELATIONS,
-            description: 'This finding\'s relationship to the ledger. new = a fresh observation with no target (targetFindingId must be null). persists = you still observe an existing open finding (targetFindingId required). reopened = a previously resolved/waived/dismissed finding reappeared (targetFindingId required). resolution_confirmation = you verified an open finding is fixed (targetFindingId required) and MUST provide mechanically verifiable evidence.',
-          },
-          targetFindingId: {
-            type: ['string', 'null'],
-            description: 'Ledger finding id this entry refers to. Required for persists/reopened/resolution_confirmation. Null for new.',
-          },
-          familyTag: {
-            type: ['string', 'null'],
-            maxLength: RAW_FINDING_FIELD_LIMITS.maxFamilyTagChars,
-            description: 'Structured form of the Observed Findings family_tag value. A classification/search hint only — it is not used to determine whether two findings are the same issue.',
-          },
-          severity: { enum: [...FINDING_SEVERITIES, null] },
-          title: {
-            type: 'string',
-            minLength: 1,
-            maxLength: RAW_FINDING_FIELD_LIMITS.maxTitleChars,
-          },
-          description: {
+          rawExcerpt: {
             type: 'string',
             minLength: 1,
             maxLength: RAW_FINDING_FIELD_LIMITS.maxDescriptionChars,
           },
-          suggestion: {
-            type: ['string', 'null'],
-            maxLength: RAW_FINDING_FIELD_LIMITS.maxSuggestionChars,
-            description: 'Fix direction. Null when not applicable.',
-          },
-          evidence: {
-            type: 'array',
-            maxItems: 16,
-            items: {
-              oneOf: [
-                {
-                  type: 'object',
-                  additionalProperties: false,
-                  required: ['kind', 'path', 'startLine', 'endLine', 'verbatimExcerpt', 'snapshotId'],
-                  properties: {
-                    kind: { const: 'file_quote' },
-                    path: {
-                      type: 'string',
-                      minLength: 1,
-                      maxLength: RAW_FINDING_FIELD_LIMITS.maxEvidencePathChars,
-                    },
-                    startLine: { type: 'integer', minimum: 1 },
-                    endLine: { type: 'integer', minimum: 1 },
-                    verbatimExcerpt: {
-                      type: 'string',
-                      minLength: 1,
-                      maxLength: RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptChars,
-                    },
-                    snapshotId: {
-                      type: 'string',
-                      pattern: '^[a-f0-9]{64}$',
-                      maxLength: RAW_FINDING_FIELD_LIMITS.maxSnapshotIdChars,
+          candidate: {
+            anyOf: [
+              { type: 'null' },
+              {
+                type: 'object',
+                additionalProperties: false,
+                required: [
+                  'rawFindingId',
+                  'relation',
+                  'targetFindingId',
+                  'familyTag',
+                  'severity',
+                  'title',
+                  'description',
+                  'suggestion',
+                  'target',
+                  'evidenceRequests',
+                ],
+                properties: {
+                  rawFindingId: {
+                    type: ['string', 'null'],
+                    minLength: 1,
+                    maxLength: RAW_FINDING_FIELD_LIMITS.maxRawFindingIdChars,
+                  },
+                  relation: {
+                    enum: [...RAW_FINDING_RELATIONS, null],
+                    description: 'Extract the stated ledger relation, or null when the report does not state one. The engine normalizes null to new.',
+                  },
+                  targetFindingId: { type: ['string', 'null'] },
+                  familyTag: {
+                    type: ['string', 'null'],
+                    maxLength: RAW_FINDING_FIELD_LIMITS.maxFamilyTagChars,
+                  },
+                  severity: { enum: [...FINDING_SEVERITIES, null] },
+                  title: {
+                    type: ['string', 'null'],
+                    minLength: 1,
+                    maxLength: RAW_FINDING_FIELD_LIMITS.maxTitleChars,
+                  },
+                  description: {
+                    type: ['string', 'null'],
+                    minLength: 1,
+                    maxLength: RAW_FINDING_FIELD_LIMITS.maxDescriptionChars,
+                  },
+                  suggestion: {
+                    type: ['string', 'null'],
+                    minLength: 1,
+                    maxLength: RAW_FINDING_FIELD_LIMITS.maxSuggestionChars,
+                  },
+                  target: {
+                    anyOf: [
+                      { type: 'null' },
+                      {
+                        type: 'object',
+                        additionalProperties: false,
+                        required: ['kind', 'paths'],
+                        properties: {
+                          kind: { const: 'code' },
+                          paths: {
+                            type: 'array',
+                            minItems: 1,
+                            items: { type: 'string', minLength: 1 },
+                          },
+                        },
+                      },
+                      {
+                        type: 'object',
+                        additionalProperties: false,
+                        required: ['kind', 'scope', 'manifestTargets'],
+                        properties: {
+                          kind: { const: 'structure' },
+                          scope: {
+                            type: 'object',
+                            additionalProperties: false,
+                            required: ['kind', 'roots'],
+                            properties: {
+                              kind: { const: 'review_scope' },
+                              roots: {
+                                type: 'array',
+                                minItems: 1,
+                                items: { type: 'string', minLength: 1 },
+                              },
+                            },
+                          },
+                          manifestTargets: {
+                            type: 'array',
+                            minItems: 1,
+                            items: { type: 'string', minLength: 1 },
+                          },
+                        },
+                      },
+                      {
+                        type: 'object',
+                        additionalProperties: false,
+                        required: ['kind', 'predicate'],
+                        properties: {
+                          kind: { const: 'absence' },
+                          predicate: {
+                            anyOf: [
+                              {
+                                type: 'object',
+                                additionalProperties: false,
+                                required: ['kind', 'path', 'expected'],
+                                properties: {
+                                  kind: { const: 'path_state' },
+                                  path: { type: 'string', minLength: 1 },
+                                  expected: { const: 'absent' },
+                                },
+                              },
+                              {
+                                type: 'object',
+                                additionalProperties: false,
+                                required: ['kind', 'roots', 'literal', 'textDomain'],
+                                properties: {
+                                  kind: { const: 'exact_literal_search' },
+                                  roots: {
+                                    type: 'array',
+                                    minItems: 1,
+                                    items: { type: 'string', minLength: 1 },
+                                  },
+                                  literal: { type: 'string', minLength: 1 },
+                                  textDomain: { const: 'utf8' },
+                                },
+                              },
+                            ],
+                          },
+                        },
+                      },
+                    ],
+                  },
+                  evidenceRequests: {
+                    type: 'array',
+                    maxItems: 16,
+                    items: {
+                      anyOf: [
+                        {
+                          type: 'object',
+                          additionalProperties: false,
+                          required: ['kind', 'path', 'startLine', 'endLine', 'verbatimExcerpt'],
+                          properties: {
+                            kind: { const: 'file_quote' },
+                            path: {
+                              type: 'string',
+                              minLength: 1,
+                              maxLength: RAW_FINDING_FIELD_LIMITS.maxEvidencePathChars,
+                            },
+                            startLine: { type: 'integer', minimum: 1 },
+                            endLine: { type: 'integer', minimum: 1 },
+                            verbatimExcerpt: {
+                              type: 'string',
+                              minLength: 1,
+                              maxLength: RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptChars,
+                            },
+                          },
+                        },
+                        {
+                          type: 'object',
+                          additionalProperties: false,
+                          required: ['kind', 'subject'],
+                          properties: {
+                            kind: { const: 'engine_proof' },
+                            subject: {
+                              anyOf: [
+                                {
+                                  type: 'object',
+                                  additionalProperties: false,
+                                  required: ['kind'],
+                                  properties: { kind: { const: 'repository_manifest' } },
+                                },
+                                {
+                                  type: 'object',
+                                  additionalProperties: false,
+                                  required: ['kind'],
+                                  properties: { kind: { const: 'repository_query' } },
+                                },
+                                {
+                                  type: 'object',
+                                  additionalProperties: false,
+                                  required: ['kind', 'source', 'declarationId', 'verbatimExcerpt'],
+                                  properties: {
+                                    kind: { const: 'authoritative_quote' },
+                                    source: { enum: ['task', 'public_declaration'] },
+                                    declarationId: { type: 'string', minLength: 1 },
+                                    verbatimExcerpt: { type: 'string', minLength: 1 },
+                                  },
+                                },
+                              ],
+                            },
+                          },
+                        },
+                      ],
                     },
                   },
                 },
-                {
-                  type: 'object',
-                  additionalProperties: false,
-                  required: ['kind', 'proofId'],
-                  properties: {
-                    kind: { const: 'engine_proof' },
-                    proofId: {
-                      type: 'string',
-                      pattern: '^[a-f0-9]{64}$',
-                      maxLength: RAW_FINDING_FIELD_LIMITS.maxProofIdChars,
-                    },
-                  },
-                },
-              ],
-            },
+              },
+            ],
           },
         },
       },
@@ -1575,51 +1990,9 @@ export const RawFindingsOutputJsonSchema = projectNativeStructuredOutputSchema(
   RawFindingsOutputIntakeJsonSchema,
 ) as typeof RawFindingsOutputIntakeJsonSchema;
 
-/**
- * native structured output に渡す raw findings schema を現在の review scope に束縛する。
- */
-export function createRawFindingsOutputJsonSchema(reviewScopeSnapshotId: string) {
-  if (!reviewScopeSnapshotId) {
-    throw new Error('reviewScopeSnapshotId is required to create the raw findings output schema');
-  }
-  const rawFindings = RawFindingsOutputIntakeJsonSchema.properties.rawFindings;
-  const rawFindingItem = rawFindings.items;
-  const fileQuote = rawFindingItem.properties.evidence.items.oneOf[0];
-  const boundSchema = {
-    ...RawFindingsOutputIntakeJsonSchema,
-    properties: {
-      ...RawFindingsOutputIntakeJsonSchema.properties,
-      rawFindings: {
-        ...rawFindings,
-        items: {
-          ...rawFindingItem,
-          properties: {
-            ...rawFindingItem.properties,
-            evidence: {
-              ...rawFindingItem.properties.evidence,
-              items: {
-                ...rawFindingItem.properties.evidence.items,
-                oneOf: [
-                  {
-                    ...fileQuote,
-                    properties: {
-                      ...fileQuote.properties,
-                      snapshotId: {
-                        ...fileQuote.properties.snapshotId,
-                        const: reviewScopeSnapshotId,
-                      },
-                    },
-                  },
-                  rawFindingItem.properties.evidence.items.oneOf[1],
-                ],
-              },
-            },
-          },
-        },
-      },
-    },
-  };
-  return projectNativeStructuredOutputSchema(boundSchema) as typeof RawFindingsOutputIntakeJsonSchema;
+/** normalizer schema は snapshot/run/proof へ束縛せず、抽出だけを許可する。 */
+export function createRawFindingsOutputJsonSchema() {
+  return RawFindingsOutputJsonSchema;
 }
 
 /**
@@ -1666,4 +2039,10 @@ export function parseFindingManagerOutput(value: unknown): FindingManagerOutput 
 
 export function parseFindingManagerDecisions(value: unknown): FindingManagerDecisions {
   return FindingManagerDecisionsSchema.parse(value);
+}
+
+export function parseFindingManagerValidationReport(
+  value: unknown,
+): FindingManagerValidationReport {
+  return FindingManagerValidationReportSchema.parse(value);
 }

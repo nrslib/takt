@@ -28,16 +28,79 @@ import type {
   ReviewerAnomalyEntry,
 } from '../core/workflow/findings/types.js';
 import { compareBinaryStrings } from '../shared/utils/binary-string-comparator.js';
+import {
+  computeSemanticClaimIdentityHash,
+  computeTargetIdentityHash,
+} from '../core/models/finding-claim-identity.js';
+import {
+  canonicalRawFindingFixture,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
+import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
+import type { FindingManagerRawDecision } from '../core/models/finding-types.js';
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   const {
     findings: overrideFindings = [],
     evidenceRecords = [],
+    rawFindings: overrideRawFindings = [],
     ...ledgerOverrides
   } = overrides;
+  const rawFindings = overrideRawFindings.map((rawFinding) => {
+    if (
+      rawFinding.target !== undefined
+      && rawFinding.targetIdentityHash !== undefined
+      && rawFinding.claimIdentityHash !== undefined
+      && rawFinding.semanticClaimIdentityHash !== undefined
+      && rawFinding.candidateIdentityHash !== undefined
+      && rawFinding.sourceBinding !== undefined
+    ) {
+      return rawFinding;
+    }
+    const {
+      target,
+      sourceBinding,
+      targetIdentityHash: _targetIdentityHash,
+      claimIdentityHash: _claimIdentityHash,
+      semanticClaimIdentityHash: _semanticClaimIdentityHash,
+      candidateIdentityHash: _candidateIdentityHash,
+      ...input
+    } = rawFinding;
+    return canonicalRawFindingFixture({ ...input, target, sourceBinding });
+  });
+  const rawById = new Map(
+    rawFindings.map((rawFinding) => [rawFinding.rawFindingId, rawFinding]),
+  );
   const findings = overrideFindings.map((finding) => ({
-    ...finding,
-    evidenceIds: finding.evidenceIds ?? [],
+    ...(() => {
+      const sourceRaw = finding.rawFindingIds
+        .map((rawFindingId) => rawById.get(rawFindingId))
+        .find((rawFinding) => rawFinding !== undefined);
+      const target = finding.target ?? sourceRaw?.target ?? {
+        kind: 'code' as const,
+        paths: ['src/a.ts'],
+      };
+      const description = finding.description ?? finding.title;
+      return {
+        ...finding,
+        target,
+        targetIdentityHash: computeTargetIdentityHash(target),
+        claimIdentityHash: computeClaimIdentityHash({
+          target,
+          familyTag: sourceRaw?.familyTag ?? 'bug',
+          severity: finding.severity,
+          title: finding.title,
+          description,
+          suggestion: finding.suggestion ?? sourceRaw?.suggestion ?? null,
+        }),
+        semanticClaimIdentityHash: computeSemanticClaimIdentityHash({
+          target,
+          title: finding.title,
+          description,
+        }),
+        evidenceIds: finding.evidenceIds ?? [],
+      };
+    })(),
   }));
   return {
     workflowName: 'peer-review',
@@ -49,7 +112,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     lifecycleEvents: [],
     rawRecoveryAttempts: [],
     rawRecoveryResults: [],
-    rawFindings: [],
+    rawFindings,
     conflicts: [],
     interpretations: [],
     updatedAt: '2026-06-13T00:00:00.000Z',
@@ -90,7 +153,7 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
 }
 
 function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
-  return {
+  const base = canonicalRawFindingFixture({
     rawFindingId: 'raw-coding-review-1',
     stepName: 'coding-review',
     reviewer: 'coding-reviewer',
@@ -102,8 +165,17 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
     relation: 'new',
     targetFindingId: null,
     evidence: [],
-    ...overrides,
-  };
+  });
+  const {
+    target,
+    sourceBinding,
+    targetIdentityHash: _targetIdentityHash,
+    claimIdentityHash: _claimIdentityHash,
+    semanticClaimIdentityHash: _semanticClaimIdentityHash,
+    candidateIdentityHash: _candidateIdentityHash,
+    ...input
+  } = { ...base, ...overrides };
+  return canonicalRawFindingFixture({ ...input, target, sourceBinding });
 }
 
 function makeReviewerAnomaly(overrides: Partial<ReviewerAnomalyEntry> = {}): ReviewerAnomalyEntry {
@@ -124,7 +196,8 @@ function makeReviewerAnomaly(overrides: Partial<ReviewerAnomalyEntry> = {}): Rev
 }
 
 function makeManagerOutput(overrides: Partial<FindingManagerOutput> = {}): FindingManagerOutput {
-  return {
+  const output: FindingManagerOutput = {
+    anchorAdjudications: [],
     matches: [],
     newFindings: [],
     resolvedFindings: [],
@@ -137,6 +210,51 @@ function makeManagerOutput(overrides: Partial<FindingManagerOutput> = {}): Findi
     duplicateFindings: [],
     dismissedFindings: [],
     ...overrides,
+  };
+  if (overrides.anchorAdjudications !== undefined) {
+    return output;
+  }
+  const decisions: FindingManagerRawDecision[] = [
+    ...output.matches.flatMap((match) => match.rawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      decision: 'same' as const,
+      findingId: match.findingId,
+      anchorRelevance: 'not_applicable' as const,
+      evidence: match.evidence ?? 'Fixture match decision.',
+    }))),
+    ...output.newFindings.flatMap((finding) => finding.rawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      decision: 'new' as const,
+      anchorRelevance: 'not_applicable' as const,
+      evidence: 'Fixture new finding decision.',
+    }))),
+    ...output.resolvedFindings.flatMap((finding) => finding.rawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      decision: 'resolved' as const,
+      findingId: finding.findingId,
+      anchorRelevance: 'not_applicable' as const,
+      evidence: finding.evidence,
+    }))),
+    ...output.reopenedFindings.flatMap((finding) => finding.rawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      decision: 'reopened' as const,
+      findingId: finding.findingId,
+      anchorRelevance: 'not_applicable' as const,
+      evidence: finding.evidence,
+    }))),
+    ...output.conflicts.flatMap((conflict) => conflict.rawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      decision: 'conflict' as const,
+      ...(conflict.findingIds[0] === undefined
+        ? {}
+        : { findingId: conflict.findingIds[0] }),
+      anchorRelevance: 'not_applicable' as const,
+      evidence: conflict.description,
+    }))),
+  ].sort((left, right) => compareBinaryStrings(left.rawFindingId, right.rawFindingId));
+  return {
+    ...output,
+    anchorAdjudications: decisions.map(createAnchorAdjudication),
   };
 }
 
@@ -694,7 +812,7 @@ describe('reconcileFindingLedger', () => {
 
   it('accepts an engine-authorized correction-tainted open_conflict compound outcome', () => {
     const baseLedger = makeLedgerWithOpenFinding();
-    const candidate = createReviewerRawFindingCandidates([{
+    const extraction = reviewerRawExtractionFixture({
       rawFindingId: 'corrected-conflict',
       familyTag: 'bug',
       severity: 'high',
@@ -702,7 +820,10 @@ describe('reconcileFindingLedger', () => {
       description: 'The corrected observation still has uncertain identity.',
       relation: 'persists',
       targetFindingId: 'F-0001',
-    }], {
+      target: { kind: 'code', paths: ['src/a.ts'] },
+      evidenceRequests: [],
+    });
+    const candidate = createReviewerRawFindingCandidates([extraction], {
       workflowName: 'peer-review',
       callNamespace: '',
       parentStepName: 'peer-review',
@@ -710,7 +831,13 @@ describe('reconcileFindingLedger', () => {
       runId: 'run-2',
       reviewerStepName: 'coding-review',
       reviewerPersonaKey: 'coding-reviewer',
-    })[0]!;
+      reviewReport: extraction.rawExcerpt,
+      issueEvidenceRequests: () => ({
+        evidence: [],
+        engineProofRecords: [],
+        coverageGaps: [],
+      }),
+    }).candidates[0]!;
     const canonical = canonicalizeReviewerRawFinding(candidate, {
       ledger: baseLedger,
       clarificationAttempted: true,
@@ -898,7 +1025,8 @@ describe('reconcileFindingLedger', () => {
 
   it('rejects non-canonical object graphs without invoking accessors and freezes every canonical node', () => {
     const baseLedger = makeLedger();
-    const newCandidate = () => createReviewerRawFindingCandidates([{
+    const newCandidate = () => {
+      const extraction = reviewerRawExtractionFixture({
       rawFindingId: 'graph-shape',
       familyTag: 'bug',
       severity: 'high',
@@ -907,16 +1035,25 @@ describe('reconcileFindingLedger', () => {
       suggestion: null,
       relation: 'new',
       targetFindingId: null,
+      target: { kind: 'code', paths: ['src/a.ts'] },
       evidence: [],
-    }], {
-      workflowName: 'peer-review',
-      callNamespace: '',
-      parentStepName: 'peer-review',
-      stepIteration: 1,
-      runId: 'run-graph',
-      reviewerStepName: 'coding-review',
-      reviewerPersonaKey: 'coding-reviewer',
-    })[0]!;
+      });
+      return createReviewerRawFindingCandidates([extraction], {
+        workflowName: 'peer-review',
+        callNamespace: '',
+        parentStepName: 'peer-review',
+        stepIteration: 1,
+        runId: 'run-graph',
+        reviewerStepName: 'coding-review',
+        reviewerPersonaKey: 'coding-reviewer',
+        reviewReport: extraction.rawExcerpt,
+        issueEvidenceRequests: () => ({
+          evidence: [],
+          engineProofRecords: [],
+          coverageGaps: [],
+        }),
+      }).candidates[0]!;
+    };
 
     const symbolCandidate = newCandidate();
     Object.defineProperty(symbolCandidate, Symbol('hidden'), {
@@ -1262,11 +1399,7 @@ describe('reconcileFindingLedger', () => {
     const ledger = reconcileFindingLedger({
       previousLedger: makeLedger({ nextId: 1 }),
       rawFindings: [architectureFinding, securityFinding],
-      managerOutput: parseFindingManagerOutput({
-        matches: [],
-        newFindings: [],
-        resolvedFindings: [],
-        reopenedFindings: [],
+      managerOutput: parseFindingManagerOutput(makeManagerOutput({
         conflicts: [
           {
             findingIds: [],
@@ -1274,13 +1407,7 @@ describe('reconcileFindingLedger', () => {
             description: 'Reviewers disagree about whether the cache should remain.',
           },
         ],
-        resolvedConflicts: [],
-        waivedFindings: [],
-        disputeNotes: [],
-        invalidatedFindings: [],
-        duplicateFindings: [],
-        dismissedFindings: [],
-      }),
+      })),
       context: {
         workflowName: 'peer-review',
         stepName: 'reviewers',

@@ -10,6 +10,7 @@ export type FindingLifecycleAuthorityContract =
   | 'engine_policy:dismiss'
   | 'engine_policy:resolve_conflict'
   | 'engine_policy:semantic_duplicate'
+  | 'engine_policy:anchor_relevance'
   | 'conflict_adjudication'
   | 'rejected_observation'
   | 'system:record_recovery_attempt'
@@ -35,14 +36,14 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
   create_finding: {
     targetShape: 'one_finding',
     allowsCreate: true,
-    authorities: ['verified_evidence'],
+    authorities: ['verified_evidence', 'engine_policy:anchor_relevance'],
     findingDelta: [],
     conflictDelta: [],
   },
   persist_finding: {
     targetShape: 'one_finding',
     allowsCreate: false,
-    authorities: ['verified_evidence'],
+    authorities: ['verified_evidence', 'engine_policy:anchor_relevance'],
     findingDelta: [
       'lifecycle', 'revision', 'severity', 'title', 'description', 'suggestion',
       'rawFindingIds', 'reviewers', 'evidenceIds', 'lastSeen',
@@ -52,7 +53,7 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
   resolve_finding: {
     targetShape: 'one_finding',
     allowsCreate: false,
-    authorities: ['verified_evidence', 'system:settle_action_recovery'],
+    authorities: ['verified_evidence', 'engine_policy:anchor_relevance', 'system:settle_action_recovery'],
     findingDelta: [
       'status', 'lifecycle', 'revision', 'rawFindingIds', 'reviewers',
       'evidenceIds', 'lastSeen', 'resolvedAt', 'resolvedEvidence',
@@ -62,7 +63,7 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
   reopen_finding: {
     targetShape: 'one_finding',
     allowsCreate: false,
-    authorities: ['verified_evidence'],
+    authorities: ['verified_evidence', 'engine_policy:anchor_relevance'],
     findingDelta: [
       'status', 'lifecycle', 'revision', 'rawFindingIds', 'reviewers',
       'evidenceIds', 'lastSeen', 'description', 'suggestion',
@@ -125,7 +126,7 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
   promote_provisional: {
     targetShape: 'one_finding',
     allowsCreate: true,
-    authorities: ['verified_evidence'],
+    authorities: ['verified_evidence', 'engine_policy:anchor_relevance'],
     findingDelta: [
       'revision', 'status', 'lifecycle', 'severity', 'title', 'description',
       'suggestion', 'evidenceIds', 'rawFindingIds', 'reviewers', 'lastSeen',
@@ -157,14 +158,14 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
   create_conflict: {
     targetShape: 'one_conflict',
     allowsCreate: true,
-    authorities: ['verified_evidence'],
+    authorities: ['verified_evidence', 'engine_policy:anchor_relevance'],
     findingDelta: [],
     conflictDelta: [],
   },
   observe_conflict: {
     targetShape: 'one_conflict',
     allowsCreate: false,
-    authorities: ['verified_evidence'],
+    authorities: ['verified_evidence', 'engine_policy:anchor_relevance'],
     findingDelta: [],
     conflictDelta: ['revision', 'rawFindingIds', 'description', 'lastSeen'],
   },

@@ -114,6 +114,7 @@ export interface ParallelRunnerDeps {
   readonly getCwd: () => string;
   readonly getReportDir: () => string;
   readonly getWorkflowName: () => string;
+  readonly getTask: () => string;
   readonly getInteractive: () => boolean;
   readonly observabilityEnabled: boolean;
   readonly observabilityRunId?: string;
@@ -1060,6 +1061,7 @@ export class ParallelRunner {
       // ledger.workflowName が親の台帳と食い違い、次回 load/save で
       // assertLedgerWorkflowName が例外を投げる。
       workflowName: ledgerStore.workflowName,
+      workflowTask: this.deps.getTask(),
       analyticsWorkflowName: this.deps.getWorkflowName(),
       callNamespace: this.deps.getFindingCallNamespace(),
       timestamp: new Date().toISOString(),

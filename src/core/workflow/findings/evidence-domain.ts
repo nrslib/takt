@@ -150,6 +150,7 @@ export function verifyEngineProofEvidence(
     };
   }
   const mismatches = [
+    record.purpose === 'claim_evidence' ? undefined : 'purpose',
     record.proofId === evidence.proofId ? undefined : 'proofId',
     record.evidenceId === record.proofId ? undefined : 'evidenceId/proofId',
     record.workflowName === expected.workflowName ? undefined : 'workflowName',

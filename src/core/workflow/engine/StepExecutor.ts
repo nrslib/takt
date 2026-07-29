@@ -99,6 +99,7 @@ export interface StepExecutorDeps {
   readonly getInteractive: () => boolean;
   readonly getWorkflowSteps: () => ReadonlyArray<{ name: string; description?: string }>;
   readonly getWorkflowName: () => string;
+  readonly getTask: () => string;
   readonly getWorkflowDescription: () => string | undefined;
   readonly getRetryNote: () => string | undefined;
   readonly getPrContext?: () => PullRequestContext | undefined;
@@ -254,6 +255,7 @@ export class StepExecutor {
       // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の
       // ledger.workflowName が親の台帳と食い違う（ParallelRunner と同じ理由）。
       workflowName: this.deps.findingLedgerStore.workflowName,
+      workflowTask: this.deps.getTask(),
       analyticsWorkflowName: this.deps.getWorkflowName(),
       callNamespace: this.deps.getFindingCallNamespace(),
       timestamp: new Date().toISOString(),

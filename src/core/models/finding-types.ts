@@ -70,12 +70,26 @@ export interface FindingLifecycleMutationTarget {
 export interface FindingEvidenceBinding {
   bindingId: string;
   evidenceId: string;
-  claimIdentityHash: string;
+  claimIdentityHash: string | null;
   sourceRawFindingId: string | null;
   sourceRawIntegrityDigest: string | null;
   operation: FindingLifecycleOperation;
   target: FindingLifecycleMutationTarget;
 }
+
+export interface FindingAnchorAdjudication {
+  rawFindingId: string;
+  rawDecision: RawDecisionKind;
+  findingId: string | null;
+  decision: FindingAnchorRelevanceDecision;
+  rationale: string;
+  managerOutputBinding: string;
+}
+
+export type FindingAnchorAuthorityAdjudication = Omit<
+  FindingAnchorAdjudication,
+  'rawDecision' | 'findingId' | 'rationale'
+>;
 
 export type FindingLifecycleAuthority =
   | { kind: 'verified_evidence' }
@@ -83,6 +97,12 @@ export type FindingLifecycleAuthority =
       kind: 'engine_policy';
       decisionKind: 'waive' | 'dispute' | 'dismiss' | 'resolve_conflict' | 'semantic_duplicate';
       decisionDigest: string;
+    }
+  | {
+      kind: 'engine_policy';
+      decisionKind: 'anchor_relevance';
+      decisionDigest: string;
+      anchorAdjudications: FindingAnchorAuthorityAdjudication[];
     }
   | {
       kind: 'conflict_adjudication';
@@ -272,6 +292,7 @@ export const FINDING_PROVISIONAL_KINDS = [
   'raw-meaning-ambiguous',
   'reviewer-output-overflow',
   'manager-budget-exhausted',
+  'manager-input-overflow',
   'interpretation-interrupted',
   'stale-precondition',
   /**
@@ -361,6 +382,14 @@ export interface FindingLedgerEntry {
   id: string;
   status: FindingStatus;
   lifecycle: FindingLifecycle;
+  /**
+   * raw 由来 provisional は回復時の targetIdentity 照合用に target を保持できる。
+   * provisional metadata が残る限り、これは product lifecycle authority ではない。
+   */
+  target: FindingTarget | null;
+  targetIdentityHash: string | null;
+  claimIdentityHash: string | null;
+  semanticClaimIdentityHash: string | null;
   severity: FindingSeverity;
   title: string;
   /** この finding を裏づける検証済み証拠。実体は ledger.evidenceRecords に追記される。 */
@@ -582,6 +611,79 @@ export type RawAmbiguityCode = typeof RAW_AMBIGUITY_CODES[number];
 export const RAW_FINDING_EVIDENCE_KINDS = ['file_quote', 'engine_proof'] as const;
 export type RawFindingEvidenceKind = typeof RAW_FINDING_EVIDENCE_KINDS[number];
 
+/**
+ * finding が主張する対象の閉じた union。claim の種類を別フィールドへ重複保持せず、
+ * kind が対象と検証方式の唯一の識別子になる。
+ */
+export type FindingTarget =
+  | {
+      kind: 'code';
+      /** バイナリ順にソートし、重複を除いた review scope 内の相対パス。 */
+      paths: string[];
+    }
+  | {
+      kind: 'structure';
+      scope: {
+        kind: 'review_scope';
+        /** バイナリ順にソートし、重複を除いた明示 root。 */
+        roots: string[];
+      };
+      /** 存在を検証する明示 manifest target。 */
+      manifestTargets: string[];
+    }
+  | {
+      kind: 'absence';
+      predicate:
+        | {
+            kind: 'path_state';
+            path: string;
+            expected: 'absent';
+          }
+        | {
+            kind: 'exact_literal_search';
+            /** バイナリ順にソートし、重複を除いた明示 root。 */
+            roots: string[];
+            literal: string;
+            textDomain: 'utf8';
+          };
+    };
+
+/** review report 本文内の一意な完全一致をエンジンが確定した source binding。 */
+export interface CandidateSourceBinding {
+  reportDigest: string;
+  startByte: number;
+  endByte: number;
+  excerptDigest: string;
+}
+
+/** claimIdentityHash に含める exact claim payload。 */
+export interface FindingClaimPayload {
+  familyTag: string | null;
+  severity: FindingSeverity | null;
+  title: string | null;
+  description: string | null;
+  suggestion: string | null;
+}
+
+/** normalizer の唯一の出力 payload。repo 観測値や engine 発行 ID を含まない。 */
+export interface NormalizedFindingCandidatePayload {
+  rawFindingId: string | null;
+  familyTag: string | null;
+  severity: FindingSeverity | null;
+  title: string | null;
+  description: string | null;
+  suggestion: string | null;
+  relation: RawFindingRelation | null;
+  targetFindingId: string | null;
+  target: FindingTarget | null;
+  evidenceRequests: FindingEvidenceRequest[];
+}
+
+export interface NormalizedFindingExtraction {
+  rawExcerpt: string;
+  candidate: NormalizedFindingCandidatePayload | null;
+}
+
 declare const candidateBrand: unique symbol;
 declare const canonicalBrand: unique symbol;
 declare const sameProofBrand: unique symbol;
@@ -598,6 +700,13 @@ export interface ReviewerRawFindingCandidate {
   /** intake 内での一意 ID（正規化済み rawFindingId、または欠損時のエンジン採番）。 */
   readonly intakeId: string;
   readonly reviewerStableKey: string;
+  readonly rawExcerpt?: string;
+  readonly sourceBinding: CandidateSourceBinding;
+  readonly target: FindingTarget;
+  readonly targetIdentityHash: string;
+  readonly candidateIdentityHash: string;
+  readonly issuedEngineProofRecords: readonly EngineProofRecord[];
+  readonly evidenceCoverageGaps: readonly string[];
 
   readonly reviewerRawFindingId?: string;
   readonly familyTag?: string;
@@ -639,6 +748,13 @@ interface CanonicalRawFindingBase {
   readonly reviewerStableKey: string;
   readonly lineageKey: string;
   readonly claimIdentityHash: string;
+  readonly semanticClaimIdentityHash: string;
+  readonly target: FindingTarget;
+  readonly targetIdentityHash: string;
+  readonly candidateIdentityHash: string;
+  readonly sourceBinding: CandidateSourceBinding;
+  readonly issuedEngineProofRecords: readonly EngineProofRecord[];
+  readonly evidenceCoverageGaps: readonly string[];
   readonly evidenceSetHash: string;
 
   readonly relation: RawFindingRelation;
@@ -706,6 +822,7 @@ export interface DeterministicSameProof {
   readonly rawFindingId: string;
   readonly targetFindingId: string;
   readonly targetRevision: number;
+  readonly targetIdentityHash: string;
   readonly identityHash: string;
   readonly algorithmVersion: 1;
 }
@@ -955,7 +1072,36 @@ export interface FindingManagerValidationReport {
   relationClarifications?: Array<{ reviewer: string; flaggedRawFindingIds: string[] }>;
   rawFindingDispositions?: RawFindingDisposition[];
   interpretationRecoverySettlements?: InterpretationRecoveryOriginSettlement[];
+  managerTaskAudits?: FindingManagerTaskAudit[];
 }
+
+export type FindingManagerTaskKind =
+  | 'raw'
+  | 'finding_control'
+  | 'dispute'
+  | 'conflict'
+  | 'invalidate'
+  | 'duplicate'
+  | 'dismiss';
+
+/** Provider task の非権威監査。台帳変更権限や lifecycle head の正本には使わない。 */
+export type FindingManagerTaskAudit =
+  | {
+      taskId: string;
+      taskKind: FindingManagerTaskKind;
+      ownedIds: string[];
+      status: 'succeeded';
+      inputBytes: number;
+      output: unknown;
+    }
+  | {
+      taskId: string;
+      taskKind: FindingManagerTaskKind;
+      ownedIds: string[];
+      status: 'failed' | 'input_overflow';
+      inputBytes: number | null;
+      reason: string;
+    };
 
 export interface FindingManagerCommitProjection {
   nextId: number;
@@ -1000,10 +1146,9 @@ export interface FindingManagerPendingCommit {
  * code-backed な claim（欠陥がこの箇所に実在すると主張する finding）の証拠。
  * エンジンが決定的に機械照合できる唯一の evidence 種別 — path/startLine/endLine
  * が指す現在のファイル内容と verbatimExcerpt が完全一致するかを
- * admission-validation.ts が検証する。snapshotId は reviewer にレビュー開始時点で
- * 提示した review scope の識別子(snapshot.ts の computeReviewScopeSnapshotId)を
- * そのまま echo させたもの — 検証時に再計算した現在値と食い違えば、レビュー後に
- * 対象が変化した(stale)と判定し、一致/不一致のどちらとも判定しない。
+ * admission-validation.ts が検証する。snapshotId は reviewer request を受けた
+ * エンジンが immutable review scope snapshot へ束縛する。reviewer / normalizer
+ * は snapshotId を出力できない。
  */
 export interface FileQuoteEvidence {
   kind: 'file_quote';
@@ -1011,7 +1156,7 @@ export interface FileQuoteEvidence {
   startLine: number;
   endLine: number;
   verbatimExcerpt: string;
-  /** reviewer に提示した review scope snapshot の識別子。echo 専用 — reviewer 側で計算しない。 */
+  /** evidence issuer が束縛した review scope snapshot の識別子。 */
   snapshotId: string;
 }
 
@@ -1024,6 +1169,46 @@ export interface EngineProofEvidence {
 /** reviewer が提示できる証拠の閉じた union。 */
 export type RawFindingEvidence = FileQuoteEvidence | EngineProofEvidence;
 
+/** normalizer が抽出できる file quote request。snapshot は engine が束縛する。 */
+export interface FileQuoteEvidenceRequest {
+  kind: 'file_quote';
+  path: string;
+  startLine: number;
+  endLine: number;
+  verbatimExcerpt: string;
+}
+
+/**
+ * normalizer が抽出できる engine proof request。proofId・snapshot・run・観測結果を
+ * 含まず、真偽判定は proof issuer だけが行う。
+ */
+export type EngineProofEvidenceRequest =
+  | {
+      kind: 'engine_proof';
+      subject: {
+        kind: 'repository_manifest';
+      };
+    }
+  | {
+      kind: 'engine_proof';
+      subject: {
+        kind: 'repository_query';
+      };
+    }
+  | {
+      kind: 'engine_proof';
+      subject: {
+        kind: 'authoritative_quote';
+        source: 'task' | 'public_declaration';
+        declarationId: string;
+        verbatimExcerpt: string;
+      };
+    };
+
+export type FindingEvidenceRequest =
+  | FileQuoteEvidenceRequest
+  | EngineProofEvidenceRequest;
+
 export interface VerifiedFileQuoteEvidenceRecord extends FileQuoteEvidence {
   evidenceId: string;
   claimIdentityHash: string;
@@ -1032,31 +1217,55 @@ export interface VerifiedFileQuoteEvidenceRecord extends FileQuoteEvidence {
 
 export type EngineProofSubject =
   | {
-      kind: 'path_absent';
-      path: string;
+      kind: 'repository_manifest';
+      scope: {
+        kind: 'review_scope';
+        roots: string[];
+      };
+      manifestTargets: string[];
+      observedTargets: string[];
     }
   | {
-      kind: 'named_structural_check';
-      checkId: string;
-      parameters: Record<string, string>;
+      kind: 'repository_query';
+      predicate:
+        | {
+            kind: 'path_state';
+            path: string;
+            expected: 'absent';
+          }
+        | {
+            kind: 'exact_literal_search';
+            roots: string[];
+            literal: string;
+            textDomain: 'utf8';
+          };
+      result: 'absent' | 'zero_matches';
+      coverage: 'complete';
     }
   | {
-      kind: 'execution_result';
-      executionId: string;
-      expectedOutcome: 'passed' | 'failed';
+      kind: 'authoritative_quote';
+      source: 'task' | 'public_declaration';
+      declarationId: string;
+      verbatimExcerpt: string;
     }
   | {
-      kind: 'finding_location_set_invalid';
+      kind: 'finding_provisional_isolation';
+      findingId: string;
+      provisionalKind: FindingProvisionalKind;
+      stableKey: string;
+    }
+  | {
+      kind: 'finding_target_invalid';
       findingId: string;
       reason: string;
     }
   | {
       kind: 'finding_claim_sets_equal';
       findingIds: string[];
-      claimIdentityHashes: string[];
+      semanticClaimIdentityHashes: string[];
     };
 
-export interface EngineProofRecord {
+interface EngineProofRecordBase {
   evidenceId: string;
   proofId: string;
   kind: 'engine_proof';
@@ -1066,13 +1275,34 @@ export interface EngineProofRecord {
   runId: string;
   scopeIdentity: string;
   snapshotId: string;
-  claimIdentityHash: string;
   targetFindingId: string | null;
-  subject: EngineProofSubject;
   dependencyDigests: string[];
   resultDigest: string;
   issuedAt: string;
 }
+
+export type ClaimEvidenceSubject = Extract<
+  EngineProofSubject,
+  { kind: 'repository_manifest' | 'repository_query' | 'authoritative_quote' }
+>;
+
+export type LifecycleAuthoritySubject = Exclude<
+  EngineProofSubject,
+  ClaimEvidenceSubject
+>;
+
+export type EngineProofRecord = EngineProofRecordBase & (
+  | {
+      purpose: 'claim_evidence';
+      claimIdentityHash: string;
+      subject: ClaimEvidenceSubject;
+    }
+  | {
+      purpose: 'lifecycle_authority';
+      claimIdentityHash: string | null;
+      subject: LifecycleAuthoritySubject;
+    }
+);
 
 export type FindingEvidenceRecord =
   | VerifiedFileQuoteEvidenceRecord
@@ -1084,9 +1314,21 @@ export interface RawFinding {
   reviewer: string;
   familyTag: string | null;
   severity: FindingSeverity | null;
-  title: string;
-  description: string;
+  title: string | null;
+  description: string | null;
   suggestion: string | null;
+  /** claim 対象の正本。 */
+  target: FindingTarget;
+  /** target だけの content address。 */
+  targetIdentityHash: string;
+  /** target + exact claim payload の content address。 */
+  claimIdentityHash: string;
+  /** target + title + description の重複・同一欠陥判定用 content address。 */
+  semanticClaimIdentityHash: string;
+  /** claim identity と source binding を束縛する candidate content address。 */
+  candidateIdentityHash: string;
+  /** review report 本文へ束縛された候補の出典。 */
+  sourceBinding: CandidateSourceBinding;
   /** This raw finding's relationship to the ledger. */
   relation: RawFindingRelation;
   /** Ledger finding id this entry references (required for persists/reopened/resolution_confirmation; forbidden for new). */
@@ -1290,6 +1532,7 @@ export interface FindingLedgerConflict {
 }
 
 export interface FindingManagerOutput {
+  anchorAdjudications: FindingAnchorAdjudication[];
   matches: FindingManagerMatch[];
   newFindings: FindingManagerNewFinding[];
   resolvedFindings: FindingManagerResolvedFinding[];
@@ -1316,6 +1559,10 @@ export interface FindingManagerOutput {
 // nothing about the target changes. Recorded for audit only.
 export const RAW_DECISION_KINDS = ['same', 'new', 'resolved', 'reopened', 'conflict', 'unsupported'] as const;
 export type RawDecisionKind = typeof RAW_DECISION_KINDS[number];
+export type FindingAnchorRelevanceDecision =
+  | 'relevant'
+  | 'not_relevant'
+  | 'not_applicable';
 
 export const DISPUTE_DECISION_KINDS = ['waive', 'note'] as const;
 export type DisputeDecisionKind = typeof DISPUTE_DECISION_KINDS[number];
@@ -1326,6 +1573,11 @@ export type ConflictDecisionKind = typeof CONFLICT_DECISION_KINDS[number];
 export interface FindingManagerRawDecision {
   rawFindingId: string;
   decision: RawDecisionKind;
+  /**
+   * absence target では authoritative quote が元の義務を支えるかを manager が
+   * 明示裁定する。その他の target は not_applicable。
+   */
+  anchorRelevance: FindingAnchorRelevanceDecision;
   /** Ledger finding id. Required for same/resolved/reopened/conflict; absent for new. */
   findingId?: string;
   evidence: string;

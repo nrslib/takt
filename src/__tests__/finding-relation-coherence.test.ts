@@ -16,7 +16,10 @@ import {
   clarifyAmbiguousRawRelationsOnce,
   detectClarifiableRawMismatches,
 } from '../core/workflow/findings/relation-coherence.js';
-import { detectRawFindingAmbiguities } from '../core/workflow/findings/raw-canonicalization.js';
+import {
+  detectRawFindingAmbiguities,
+  extractLenientRawFields,
+} from '../core/workflow/findings/raw-canonicalization.js';
 import type { AgentResponse } from '../core/models/types.js';
 import type {
   FindingLedger,
@@ -25,6 +28,7 @@ import type {
   RawFindingEvidence,
   FindingStatus,
 } from '../core/workflow/findings/types.js';
+import { reviewerRawExtractionFixture } from './helpers/finding-lifecycle-fixture.js';
 
 const { executeAgent } = await import('../agents/agent-usecases.js');
 const executeAgentMock = vi.mocked(executeAgent);
@@ -71,8 +75,8 @@ interface WireRaw {
   evidence: RawFindingEvidence[];
 }
 
-function makeRawItem(overrides: Partial<WireRaw> = {}): WireRaw {
-  return {
+function makeRawItem(overrides: Partial<WireRaw> = {}) {
+  const candidate = {
     rawFindingId: 'raw-new',
     familyTag: 'security',
     severity: 'high',
@@ -84,6 +88,17 @@ function makeRawItem(overrides: Partial<WireRaw> = {}): WireRaw {
     evidence: [quote('src/secret.ts', 40)],
     ...overrides,
   };
+  const quotePaths = candidate.evidence.flatMap((evidence) => (
+    evidence.kind === 'file_quote' ? [evidence.path] : []
+  ));
+  return reviewerRawExtractionFixture({
+    ...candidate,
+    target: {
+      kind: 'code',
+      paths: [...new Set(quotePaths.length === 0 ? ['src/secret.ts'] : quotePaths)].sort(),
+    },
+    rawExcerpt: candidate.description,
+  });
 }
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
@@ -144,7 +159,10 @@ describe('detectClarifiableRawMismatches', () => {
         targetFindingId: 'F-0001',
       });
 
-      expect(detectRawFindingAmbiguities(raw, ledger).codes).toContain('confirmation-target-not-open');
+      expect(detectRawFindingAmbiguities(
+        extractLenientRawFields(raw),
+        ledger,
+      ).codes).toContain('confirmation-target-not-open');
       expect(detectClarifiableRawMismatches([raw], ledger)).toEqual([]);
     },
   );
@@ -156,7 +174,10 @@ describe('detectClarifiableRawMismatches', () => {
     });
     const ledger = makeLedger();
 
-    expect(detectRawFindingAmbiguities(raw, ledger).codes).toContain('confirmation-target-unknown');
+    expect(detectRawFindingAmbiguities(
+      extractLenientRawFields(raw),
+      ledger,
+    ).codes).toContain('confirmation-target-unknown');
     expect(detectClarifiableRawMismatches([raw], ledger)).toEqual([
       expect.objectContaining({
         rawFindingId: 'raw-new',
@@ -376,10 +397,19 @@ describe('clarifyAmbiguousRawRelationsOnce: 再生成契約 (codex B5 / 設計�
 
   it('対象 raw の relation/targetFindingId のみの変更は採用される', async () => {
     const result = await runWithRegeneratedRawFindings([
-      { ...originalRaw, relation: 'persists', targetFindingId: 'F-0001' },
+      {
+        ...originalRaw,
+        candidate: {
+          ...originalRaw.candidate,
+          relation: 'persists',
+          targetFindingId: 'F-0001',
+        },
+      },
       bystanderRaw,
     ]);
-    expect((result.response.structuredOutput?.rawFindings as Array<{ relation: string }>)[0]?.relation).toBe('persists');
+    const rawFindings = result.response.structuredOutput?.rawFindings as
+      Array<{ candidate: { relation: string } }>;
+    expect(rawFindings[0]?.candidate.relation).toBe('persists');
   });
 
   it('raw の欠落は破棄して元出力を保持する', async () => {

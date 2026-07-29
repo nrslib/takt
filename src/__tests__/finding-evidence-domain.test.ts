@@ -1,927 +1,344 @@
-import { createHash } from 'node:crypto';
+import { describe, expect, it } from 'vitest';
 import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import {
+  computeCandidateIdentityHash,
   computeClaimIdentityHash,
+  computeTargetIdentityHash,
+} from '../core/models/finding-claim-identity.js';
+import { createEngineProofRecord } from '../core/models/finding-evidence-record.js';
+import { FindingEvidenceRecordSchema } from '../core/models/finding-schemas.js';
+import type {
+  CandidateSourceBinding,
+  FindingLedger,
+  FindingTarget,
+  RawFinding,
+} from '../core/workflow/findings/types.js';
+import {
   computeEvidenceSetHash,
   createEngineProofVerifierRegistry,
   createLedgerEngineProofRegistry,
   deduplicateRawEvidence,
+  verifyEngineProofEvidence,
 } from '../core/workflow/findings/evidence-domain.js';
 import {
-  computeEngineProofRecordId,
-  computeFileQuoteEvidenceRecordId,
-} from '../core/models/finding-evidence-record.js';
+  createSnapshotEngineProofVerifiers,
+  issueFindingEvidenceRequests,
+} from '../core/workflow/findings/evidence-request-issuer.js';
 import { verifyFindingEvidenceSet } from '../core/workflow/findings/evidence-verification.js';
-import { verifyFileQuoteEvidence } from '../core/workflow/findings/admission-validation.js';
-import {
-  parseFindingLedger as parseFindingLedgerSchema,
-  parseRawFindings,
-} from '../core/workflow/findings/schemas.js';
-import { rawEvidenceFileQuoteLocations } from '../core/workflow/findings/evidence-location.js';
 import { buildManagerInputLedger } from '../core/workflow/findings/manager-agent.js';
-import { renderActionableFindingLedgerInstructionSummary } from '../core/workflow/findings/context.js';
-import {
-  issuePathAbsentEngineProof,
-  pathAbsentEngineProofVerifier,
-} from '../core/workflow/findings/path-absent-engine-proof.js';
-import {
-  cleanupRealRunStorages,
-  createRealRunStorage,
-} from './helpers/run-storage.js';
-import {
-  authorizeFindingLedgerFixture,
-  emptyFindingAuthorityProjection,
-} from './helpers/finding-lifecycle-fixture.js';
+import type { ReviewScopeProofSnapshot } from '../core/workflow/findings/snapshot.js';
 
-const temporaryDirectories: string[] = [];
-
-function sha256(value: string | Buffer): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
-function parseFindingLedger(value: unknown) {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return parseFindingLedgerSchema(value);
-  }
-  return parseFindingLedgerSchema({
-    ...emptyFindingAuthorityProjection(),
-    ...value,
-  });
-}
-
-afterEach(() => {
-  cleanupRealRunStorages();
-  for (const directory of temporaryDirectories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
-  }
+const snapshotId = 'a'.repeat(64);
+const issuedAt = '2026-07-29T00:00:00.000Z';
+const workflowTask = 'Remove legacyApi from every UTF-8 file under src.';
+const snapshot: ReviewScopeProofSnapshot = {
+  reviewScopeSnapshotId: snapshotId,
+  trackedDiff: undefined,
+  untrackedEvidence: [],
+  queryInventory: [{
+    path: 'src/current.ts',
+    kind: 'file',
+    contentDigest: 'b'.repeat(64),
+    content: Buffer.from('export const currentApi = true;\n'),
+    coverage: 'complete',
+  }],
+};
+const target: FindingTarget = {
+  kind: 'absence',
+  predicate: {
+    kind: 'exact_literal_search',
+    roots: ['src'],
+    literal: 'legacyApi',
+    textDomain: 'utf8',
+  },
+};
+const claimIdentityHash = computeClaimIdentityHash({
+  target,
+  familyTag: 'compatibility',
+  severity: 'high',
+  title: 'Legacy API remains required to be absent',
+  description: 'The task requires legacyApi to be absent.',
+  suggestion: null,
 });
 
-describe('Finding evidence domain', () => {
-  const proofVerifiers = createEngineProofVerifierRegistry([
-    pathAbsentEngineProofVerifier,
-  ]);
+function emptyLedger(
+  evidenceRecords: FindingLedger['evidenceRecords'] = [],
+): FindingLedger {
+  return {
+    workflowName: 'workflow',
+    nextId: 1,
+    updatedAt: issuedAt,
+    findings: [],
+    evidenceRecords,
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawRecoveryAttempts: [],
+    rawRecoveryResults: [],
+    rawFindings: [],
+    conflicts: [],
+    interpretations: [],
+  };
+}
 
-  it('separates claim identity from the unordered evidence set', () => {
-    const claim = computeClaimIdentityHash({
-      targetFindingId: null,
-      title: '  Missing Handler ',
-      description: 'Exact claim text.',
-    });
-    expect(claim).toBe(computeClaimIdentityHash({
-      targetFindingId: null,
-      title: 'Missing Handler',
-      description: 'Exact claim text.',
-    }));
-    expect(claim).not.toBe(computeClaimIdentityHash({
-      targetFindingId: null,
-      title: 'missing handler',
-      description: 'Exact claim text.',
-    }));
-    expect(computeEvidenceSetHash(['evidence-b', 'evidence-a', 'evidence-a']))
-      .toBe(computeEvidenceSetHash(['evidence-a', 'evidence-b']));
-    const quotes = [
-      {
-        kind: 'file_quote' as const,
-        path: 'src/z/../a.ts',
-        startLine: 2,
-        endLine: 2,
-        verbatimExcerpt: 'two',
-        snapshotId: sha256('snapshot'),
+function issueAbsenceEvidence() {
+  return issueFindingEvidenceRequests({
+    snapshot,
+    workflowName: 'workflow',
+    runId: 'run',
+    scopeIdentity: 'scope',
+    workflowTask,
+    issuedAt,
+  }, {
+    target,
+    claimIdentityHash,
+    targetFindingId: null,
+    requests: [{
+      kind: 'engine_proof',
+      subject: { kind: 'repository_query' },
+    }, {
+      kind: 'engine_proof',
+      subject: {
+        kind: 'authoritative_quote',
+        source: 'task',
+        declarationId: 'workflow_task',
+        verbatimExcerpt: 'Remove legacyApi',
       },
-      {
-        kind: 'file_quote' as const,
-        path: 'src/a.ts',
-        startLine: 1,
-        endLine: 1,
-        verbatimExcerpt: 'one',
-        snapshotId: sha256('snapshot'),
-      },
-    ];
-    expect(rawEvidenceFileQuoteLocations(quotes))
-      .toEqual(rawEvidenceFileQuoteLocations([...quotes].reverse()));
-    expect(deduplicateRawEvidence(quotes))
-      .toEqual(deduplicateRawEvidence([...quotes].reverse()));
+    }],
   });
+}
 
-  it('accepts only the nested evidence contract', () => {
-    expect(parseRawFindings([{
-      rawFindingId: 'raw-1',
-      stepName: 'review',
-      reviewer: 'reviewer',
-      familyTag: null,
-      severity: null,
-      title: 'Claim',
-      description: 'Description',
-      suggestion: null,
-      relation: 'new',
-      targetFindingId: null,
-      evidence: [],
-    }])).toHaveLength(1);
-
-    expect(() => parseRawFindings([{
-      rawFindingId: 'raw-legacy',
-      stepName: 'review',
-      reviewer: 'reviewer',
-      familyTag: 'correctness',
-      severity: 'high',
-      title: 'Legacy',
-      description: 'Legacy flat evidence',
-      relation: 'new',
-      location: 'src/a.ts:1',
-      evidenceKind: 'source_quote',
-      verbatimExcerpt: 'text',
-      snapshotId: 'snapshot',
-    }])).toThrow();
-  });
-
-  it('verifies mixed file quotes and a path_absent proof through one authority', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'takt-evidence-'));
-    temporaryDirectories.push(cwd);
-    mkdirSync(join(cwd, 'src'));
-    writeFileSync(join(cwd, 'src', 'a.ts'), 'one\ntwo\nthree\n');
-    const claimIdentityHash = computeClaimIdentityHash({
-      targetFindingId: null,
-      title: 'Claim',
-      description: 'Description',
-    });
-    const snapshotId = sha256('snapshot-1');
-    const context = {
-      cwd,
-      workflowName: 'default',
-      runId: 'run-1',
-      scopeIdentity: 'ledger-identity',
-      snapshotId,
-      claimIdentityHash,
-      targetFindingId: null,
-    };
-    const proof = issuePathAbsentEngineProof({
-      subject: { kind: 'path_absent', path: 'src/missing.ts' },
-      context,
-      issuedAt: '2026-07-28T00:00:00.000Z',
-    });
-    const ledger = parseFindingLedger({
-      workflowName: 'default',
-      nextId: 1,
-      updatedAt: '2026-07-28T00:00:00.000Z',
-      findings: [],
-      evidenceRecords: [proof],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [],
-    });
-    const proofRegistry = createLedgerEngineProofRegistry(ledger);
-    const result = verifyFindingEvidenceSet({
-      cwd,
-      evidence: [
-        {
-          kind: 'file_quote',
-          path: 'src/a.ts',
-          startLine: 1,
-          endLine: 1,
-          verbatimExcerpt: 'one',
-          snapshotId,
-        },
-        {
-          kind: 'file_quote',
-          path: 'src/a.ts',
-          startLine: 2,
-          endLine: 3,
-          verbatimExcerpt: 'two\nthree',
-          snapshotId,
-        },
-        { kind: 'engine_proof', proofId: proof.proofId },
-      ],
+describe('finding evidence domain', () => {
+  it('verifies query and authoritative-quote proofs through the general issuer registry', () => {
+    const issued = issueAbsenceEvidence();
+    const verification = verifyFindingEvidenceSet({
+      cwd: process.cwd(),
+      evidence: issued.evidence,
       expectedSnapshotId: snapshotId,
       claimIdentityHash,
       targetFindingId: null,
-      proofRegistry,
-      proofVerifiers,
+      proofRegistry: createLedgerEngineProofRegistry(
+        emptyLedger(issued.engineProofRecords),
+      ),
+      proofVerifiers: createEngineProofVerifierRegistry(
+        createSnapshotEngineProofVerifiers({ snapshot, workflowTask }),
+      ),
       proofContext: {
-        cwd,
-        workflowName: 'default',
-        runId: 'run-1',
-        scopeIdentity: 'ledger-identity',
+        cwd: process.cwd(),
+        workflowName: 'workflow',
+        runId: 'run',
+        scopeIdentity: 'scope',
       },
     });
-    expect(result).toMatchObject({ outcome: 'match' });
-    if (result.outcome === 'match') {
-      expect(result.records).toHaveLength(3);
-    }
+
+    expect(issued.coverageGaps).toEqual([]);
+    expect(verification).toMatchObject({ outcome: 'match' });
+    expect(verification.outcome === 'match'
+      ? verification.records.map((record) => (
+          record.kind === 'engine_proof' ? record.subject.kind : record.kind
+        ))
+      : []).toEqual(['repository_query', 'authoritative_quote']);
   });
 
-  it('reports the exact later evidence item when a multi-quote set fails', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'takt-evidence-later-failure-'));
-    temporaryDirectories.push(cwd);
-    mkdirSync(join(cwd, 'src'));
-    writeFileSync(join(cwd, 'src', 'a.ts'), 'first\nsecond\n');
-    const snapshotId = sha256('snapshot-later-failure');
-    const failedEvidence = {
-      kind: 'file_quote' as const,
-      path: 'src/a.ts',
-      startLine: 2,
-      endLine: 2,
-      verbatimExcerpt: 'not second',
-      snapshotId,
-    };
-    const result = verifyFindingEvidenceSet({
-      cwd,
-      evidence: [
-        {
-          kind: 'file_quote',
-          path: 'src/a.ts',
-          startLine: 1,
-          endLine: 1,
-          verbatimExcerpt: 'first',
-          snapshotId,
-        },
-        failedEvidence,
-      ],
-      expectedSnapshotId: snapshotId,
-      claimIdentityHash: sha256('claim-later-failure'),
-      targetFindingId: null,
-      proofRegistry: { get: () => undefined },
-      proofVerifiers,
-      proofContext: {
-        cwd,
-        workflowName: 'default',
-        runId: 'run-1',
-        scopeIdentity: 'ledger-identity',
-      },
-    });
-
-    expect(result).toMatchObject({
-      outcome: 'quote-mismatch',
-      failureLevel: 'item',
-      failedEvidenceIndex: 1,
-      failedEvidence,
-    });
-  });
-
-  it('canonicalizes engine proof timestamps before hashing and survives ledger verification', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'takt-engine-proof-time-'));
-    temporaryDirectories.push(cwd);
-    const snapshotId = sha256('snapshot-engine-proof-time');
-    const claimIdentityHash = sha256('claim-engine-proof-time');
-    const context = {
-      cwd,
-      workflowName: 'default',
-      runId: 'run-1',
-      scopeIdentity: 'ledger-identity',
-      snapshotId,
-      claimIdentityHash,
-      targetFindingId: null,
-    };
-    const utc = issuePathAbsentEngineProof({
-      subject: { kind: 'path_absent', path: 'missing.ts' },
-      context,
-      issuedAt: '2026-07-28T00:00:00Z',
-    });
-    const offset = issuePathAbsentEngineProof({
-      subject: { kind: 'path_absent', path: 'missing.ts' },
-      context,
-      issuedAt: '2026-07-28T09:00:00+09:00',
-    });
-
-    expect(offset.proofId).toBe(utc.proofId);
-    expect(offset.issuedAt).toBe('2026-07-28T00:00:00.000Z');
-    const ledger = parseFindingLedger({
-      workflowName: 'default',
-      nextId: 1,
-      updatedAt: offset.issuedAt,
-      findings: [],
-      evidenceRecords: [offset],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [],
-    });
-    expect(ledger.evidenceRecords[0]).toEqual(offset);
-    expect(verifyFindingEvidenceSet({
-      cwd,
-      evidence: [{ kind: 'engine_proof', proofId: offset.proofId }],
-      expectedSnapshotId: snapshotId,
-      claimIdentityHash,
-      targetFindingId: null,
-      proofRegistry: createLedgerEngineProofRegistry(ledger),
-      proofVerifiers,
-      proofContext: {
-        cwd,
-        workflowName: 'default',
-        runId: 'run-1',
-        scopeIdentity: 'ledger-identity',
-      },
-    })).toMatchObject({ outcome: 'match' });
-    expect(() => issuePathAbsentEngineProof({
-      subject: { kind: 'path_absent', path: 'another-missing.ts' },
-      context,
-      issuedAt: 'not-a-timestamp',
-    })).toThrow(/RFC 3339 timestamp/);
-  });
-
-  it('isolates unknown, stale, and binding-mismatched engine proofs', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'takt-engine-proof-'));
-    temporaryDirectories.push(cwd);
-    const snapshotId = sha256('snapshot');
-    const claimIdentityHash = sha256('claim');
-    const context = {
-      cwd,
-      workflowName: 'default',
-      runId: 'run-1',
-      scopeIdentity: 'ledger-identity',
-      snapshotId,
-      claimIdentityHash,
-      targetFindingId: null,
-    };
-    const proof = issuePathAbsentEngineProof({
-      subject: { kind: 'path_absent', path: 'missing.ts' },
-      context,
-      issuedAt: '2026-07-28T00:00:00.000Z',
-    });
-    const ledger = parseFindingLedger({
-      workflowName: 'default',
-      nextId: 1,
-      updatedAt: '2026-07-28T00:00:00.000Z',
-      findings: [],
-      evidenceRecords: [proof],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [],
-    });
-    const verify = (overrides?: {
-      snapshotId?: string;
-      claimIdentityHash?: string;
-      targetFindingId?: string | null;
-      scopeIdentity?: string;
-    }) => verifyFindingEvidenceSet({
-      cwd,
-      evidence: [{ kind: 'engine_proof', proofId: proof.proofId }],
-      expectedSnapshotId: overrides?.snapshotId ?? snapshotId,
-      claimIdentityHash: overrides?.claimIdentityHash ?? claimIdentityHash,
-      targetFindingId: overrides?.targetFindingId === undefined
-        ? null
-        : overrides.targetFindingId,
-      proofRegistry: createLedgerEngineProofRegistry(ledger),
-      proofVerifiers,
-      proofContext: {
-        cwd,
-        workflowName: 'default',
-        runId: 'run-1',
-        scopeIdentity: overrides?.scopeIdentity ?? 'ledger-identity',
-      },
-    });
-
-    expect(verify({ scopeIdentity: 'other-ledger' })).toMatchObject({ outcome: 'mismatch' });
-    expect(verify({ claimIdentityHash: sha256('other-claim') })).toMatchObject({ outcome: 'mismatch' });
-    expect(verify({ targetFindingId: 'F-0001' })).toMatchObject({ outcome: 'mismatch' });
-    expect(verify({ snapshotId: sha256('other-snapshot') })).toMatchObject({ outcome: 'mismatch' });
-    expect(verifyFindingEvidenceSet({
-      cwd,
-      evidence: [{ kind: 'engine_proof', proofId: sha256('unknown') }],
-      expectedSnapshotId: snapshotId,
-      claimIdentityHash,
-      targetFindingId: null,
-      proofRegistry: createLedgerEngineProofRegistry(ledger),
-      proofVerifiers,
-      proofContext: {
-        cwd,
-        workflowName: 'default',
-        runId: 'run-1',
-        scopeIdentity: 'ledger-identity',
-      },
-    })).toMatchObject({ outcome: 'mismatch' });
-
-    writeFileSync(join(cwd, 'missing.ts'), 'now present\n');
-    expect(verify()).toMatchObject({ outcome: 'mismatch' });
-  });
-
-  it('classifies a forged engine proof record as a protocol anomaly', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'takt-engine-proof-forged-'));
-    temporaryDirectories.push(cwd);
-    const snapshotId = sha256('snapshot');
-    const claimIdentityHash = sha256('claim');
-    const context = {
-      cwd,
-      workflowName: 'default',
-      runId: 'run-1',
-      scopeIdentity: 'ledger-identity',
-      snapshotId,
-      claimIdentityHash,
-      targetFindingId: null,
-    };
-    const proof = issuePathAbsentEngineProof({
-      subject: { kind: 'path_absent', path: 'missing.ts' },
-      context,
-      issuedAt: '2026-07-28T00:00:00.000Z',
-    });
-
-    expect(verifyFindingEvidenceSet({
-      cwd,
-      evidence: [{ kind: 'engine_proof', proofId: proof.proofId }],
-      expectedSnapshotId: snapshotId,
-      claimIdentityHash,
-      targetFindingId: null,
-      proofRegistry: {
-        get: () => ({ ...proof, resultDigest: sha256('forged') }),
-      },
-      proofVerifiers,
-      proofContext: {
-        cwd,
-        workflowName: 'default',
-        runId: 'run-1',
-        scopeIdentity: 'ledger-identity',
-      },
-    })).toMatchObject({ outcome: 'protocol-anomaly' });
-  });
-
-  it('routes a proof with an unregistered verifier to mismatch', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'takt-engine-proof-unsupported-'));
-    temporaryDirectories.push(cwd);
-    const snapshotId = sha256('snapshot');
-    const claimIdentityHash = sha256('claim');
-    const payload = {
-      kind: 'engine_proof' as const,
-      verifierId: 'takt.named-structural-check',
+  it('rejects lifecycle authority when it is referenced as public claim evidence', () => {
+    const record = createEngineProofRecord({
+      kind: 'engine_proof',
+      purpose: 'lifecycle_authority',
+      verifierId: 'takt.finding-lifecycle-policy',
       verifierVersion: '1',
-      workflowName: 'default',
-      runId: 'run-1',
-      scopeIdentity: 'ledger-identity',
+      workflowName: 'workflow',
+      runId: 'run',
+      scopeIdentity: 'scope',
       snapshotId,
       claimIdentityHash,
       targetFindingId: null,
       subject: {
-        kind: 'named_structural_check' as const,
-        checkId: 'check-generated-output',
-        parameters: { path: 'generated/output.ts' },
+        kind: 'finding_target_invalid',
+        findingId: 'F-0001',
+        reason: 'fixture invalid target',
       },
-      dependencyDigests: [sha256('dependency')],
-      resultDigest: sha256('result'),
-      issuedAt: '2026-07-28T00:00:00.000Z',
-    };
-    const proofId = computeEngineProofRecordId(payload);
-    const ledger = parseFindingLedger({
-      workflowName: 'default',
-      nextId: 1,
-      updatedAt: '2026-07-28T00:00:00.000Z',
-      findings: [],
-      evidenceRecords: [{ evidenceId: proofId, proofId, ...payload }],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [],
+      dependencyDigests: [],
+      resultDigest: 'c'.repeat(64),
+      issuedAt,
     });
-
-    expect(verifyFindingEvidenceSet({
-      cwd,
-      evidence: [{ kind: 'engine_proof', proofId }],
-      expectedSnapshotId: snapshotId,
-      claimIdentityHash,
-      targetFindingId: null,
-      proofRegistry: createLedgerEngineProofRegistry(ledger),
-      proofVerifiers,
-      proofContext: {
-        cwd,
-        workflowName: 'default',
-        runId: 'run-1',
-        scopeIdentity: 'ledger-identity',
-      },
-    })).toMatchObject({
-      outcome: 'mismatch',
-      reason: expect.stringContaining('is not registered'),
-    });
-  });
-
-  it('rejects a path_absent proof through an ancestor symlink at issuance', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'takt-engine-proof-symlink-'));
-    const outside = mkdtempSync(join(tmpdir(), 'takt-engine-proof-outside-'));
-    temporaryDirectories.push(cwd, outside);
-    symlinkSync(outside, join(cwd, 'escape'), 'dir');
-
-    expect(() => issuePathAbsentEngineProof({
-      subject: { kind: 'path_absent', path: 'escape/missing.ts' },
-      context: {
-        cwd,
-        workflowName: 'default',
-        runId: 'run-1',
-        scopeIdentity: 'ledger-identity',
-        snapshotId: sha256('snapshot'),
-        claimIdentityHash: sha256('claim'),
+    const verification = verifyEngineProofEvidence(
+      { kind: 'engine_proof', proofId: record.proofId },
+      {
+        cwd: process.cwd(),
+        workflowName: 'workflow',
+        runId: 'run',
+        scopeIdentity: 'scope',
+        snapshotId,
+        claimIdentityHash,
         targetFindingId: null,
       },
-      issuedAt: '2026-07-28T00:00:00.000Z',
-    })).toThrow(/boundary violation \(symlink\)/);
-  });
+      createLedgerEngineProofRegistry(emptyLedger([record])),
+      createEngineProofVerifierRegistry([{
+        verifierId: record.verifierId,
+        verifierVersion: record.verifierVersion,
+        verify: () => ({
+          outcome: 'evaluated',
+          predicateSatisfied: true,
+          dependencyDigests: record.dependencyDigests,
+          resultDigest: record.resultDigest,
+        }),
+      }]),
+    );
 
-  it('invalidates freshness when a missing ancestor becomes a directory', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'takt-engine-proof-ancestor-'));
-    temporaryDirectories.push(cwd);
-    const snapshotId = sha256('snapshot');
-    const claimIdentityHash = sha256('claim');
-    const context = {
-      cwd,
-      workflowName: 'default',
-      runId: 'run-1',
-      scopeIdentity: 'ledger-identity',
-      snapshotId,
-      claimIdentityHash,
-      targetFindingId: null,
-    };
-    const proof = issuePathAbsentEngineProof({
-      subject: { kind: 'path_absent', path: 'generated/missing.ts' },
-      context,
-      issuedAt: '2026-07-28T00:00:00.000Z',
-    });
-    const ledger = parseFindingLedger({
-      workflowName: 'default',
-      nextId: 1,
-      updatedAt: '2026-07-28T00:00:00.000Z',
-      findings: [],
-      evidenceRecords: [proof],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [],
-    });
-
-    mkdirSync(join(cwd, 'generated'));
-
-    expect(verifyFindingEvidenceSet({
-      cwd,
-      evidence: [{ kind: 'engine_proof', proofId: proof.proofId }],
-      expectedSnapshotId: snapshotId,
-      claimIdentityHash,
-      targetFindingId: null,
-      proofRegistry: createLedgerEngineProofRegistry(ledger),
-      proofVerifiers,
-      proofContext: {
-        cwd,
-        workflowName: 'default',
-        runId: 'run-1',
-        scopeIdentity: 'ledger-identity',
-      },
-    })).toMatchObject({
+    expect(verification).toEqual({
       outcome: 'mismatch',
-      reason: expect.stringContaining('dependencyDigests'),
+      reason: expect.stringContaining('purpose'),
     });
   });
 
-  it('routes a missing ancestor changed to an escaping symlink to mismatch', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'takt-engine-proof-stale-symlink-'));
-    const outside = mkdtempSync(join(tmpdir(), 'takt-engine-proof-stale-outside-'));
-    temporaryDirectories.push(cwd, outside);
-    const snapshotId = sha256('snapshot');
-    const claimIdentityHash = sha256('claim');
-    const context = {
-      cwd,
-      workflowName: 'default',
-      runId: 'run-1',
-      scopeIdentity: 'ledger-identity',
-      snapshotId,
-      claimIdentityHash,
-      targetFindingId: null,
-    };
-    const proof = issuePathAbsentEngineProof({
-      subject: { kind: 'path_absent', path: 'generated/missing.ts' },
-      context,
-      issuedAt: '2026-07-28T00:00:00.000Z',
-    });
-    const ledger = parseFindingLedger({
-      workflowName: 'default',
-      nextId: 1,
-      updatedAt: '2026-07-28T00:00:00.000Z',
-      findings: [],
-      evidenceRecords: [proof],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [],
-    });
+  it('rejects null claim identity and lifecycle subjects in claim_evidence records', () => {
+    const record = issueAbsenceEvidence().engineProofRecords[0]!;
 
-    symlinkSync(outside, join(cwd, 'generated'), 'dir');
-
-    expect(verifyFindingEvidenceSet({
-      cwd,
-      evidence: [{ kind: 'engine_proof', proofId: proof.proofId }],
-      expectedSnapshotId: snapshotId,
-      claimIdentityHash,
-      targetFindingId: null,
-      proofRegistry: createLedgerEngineProofRegistry(ledger),
-      proofVerifiers,
-      proofContext: {
-        cwd,
-        workflowName: 'default',
-        runId: 'run-1',
-        scopeIdentity: 'ledger-identity',
+    expect(() => FindingEvidenceRecordSchema.parse({
+      ...record,
+      claimIdentityHash: null,
+    })).toThrow();
+    expect(() => FindingEvidenceRecordSchema.parse({
+      ...record,
+      subject: {
+        kind: 'finding_target_invalid',
+        findingId: 'F-0001',
+        reason: 'invalid target',
       },
-    })).toMatchObject({
-      outcome: 'mismatch',
-      reason: expect.stringContaining('boundary violation (symlink)'),
-    });
+    })).toThrow();
   });
 
-  it.each([
-    '/absolute/missing.ts',
-    '../traversal/missing.ts',
-    'nested/../traversal/missing.ts',
-  ])('routes schema-valid invalid path_absent subject "%s" to mismatch', (path) => {
-    const cwd = mkdtempSync(join(tmpdir(), 'takt-engine-proof-invalid-path-'));
-    temporaryDirectories.push(cwd);
-    const snapshotId = sha256('snapshot');
-    const claimIdentityHash = sha256('claim');
-    const payload = {
-      kind: 'engine_proof' as const,
-      verifierId: pathAbsentEngineProofVerifier.verifierId,
-      verifierVersion: pathAbsentEngineProofVerifier.verifierVersion,
-      workflowName: 'default',
-      runId: 'run-1',
-      scopeIdentity: 'ledger-identity',
-      snapshotId,
-      claimIdentityHash,
-      targetFindingId: null,
-      subject: { kind: 'path_absent' as const, path },
-      dependencyDigests: [sha256('dependency')],
-      resultDigest: sha256('result'),
-      issuedAt: '2026-07-28T00:00:00.000Z',
+  it('detects a proof whose stored body no longer matches its content address', () => {
+    const issued = issueAbsenceEvidence();
+    const record = issued.engineProofRecords[0]!;
+    const tampered = {
+      ...record,
+      resultDigest: 'f'.repeat(64),
     };
-    const proofId = computeEngineProofRecordId(payload);
-    const ledger = parseFindingLedger({
-      workflowName: 'default',
-      nextId: 1,
-      updatedAt: '2026-07-28T00:00:00.000Z',
-      findings: [],
-      evidenceRecords: [{ evidenceId: proofId, proofId, ...payload }],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [],
-    });
-
-    expect(verifyFindingEvidenceSet({
-      cwd,
-      evidence: [{ kind: 'engine_proof', proofId }],
-      expectedSnapshotId: snapshotId,
-      claimIdentityHash,
-      targetFindingId: null,
-      proofRegistry: createLedgerEngineProofRegistry(ledger),
-      proofVerifiers,
-      proofContext: {
-        cwd,
-        workflowName: 'default',
-        runId: 'run-1',
-        scopeIdentity: 'ledger-identity',
-      },
-    })).toMatchObject({ outcome: 'mismatch' });
-  });
-
-  it.runIf(process.platform !== 'win32' && process.getuid() !== 0)(
-    'treats an inaccessible ancestor as unverifiable instead of absent',
-    () => {
-      const cwd = mkdtempSync(join(tmpdir(), 'takt-engine-proof-permission-'));
-      temporaryDirectories.push(cwd);
-      const locked = join(cwd, 'locked');
-      mkdirSync(locked);
-      chmodSync(locked, 0o000);
-      try {
-        expect(pathAbsentEngineProofVerifier.verify(
-          { kind: 'path_absent', path: 'locked/missing.ts' },
-          {
-            cwd,
-            workflowName: 'default',
-            runId: 'run-1',
-            scopeIdentity: 'ledger-identity',
-            snapshotId: sha256('snapshot'),
-            claimIdentityHash: sha256('claim'),
-            targetFindingId: null,
-          },
-        )).toMatchObject({ outcome: 'unverifiable' });
-      } finally {
-        chmodSync(locked, 0o700);
-      }
-    },
-  );
-
-  it('hashes raw bytes and verifies CRLF and Unicode without normalization', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'takt-evidence-utf8-'));
-    temporaryDirectories.push(cwd);
-    const content = Buffer.from('alpha\r\n日本語🙂\r\nomega\r\n', 'utf8');
-    writeFileSync(join(cwd, 'quoted.txt'), content);
-    const snapshotId = sha256('snapshot');
-    const evidence = {
-      kind: 'file_quote' as const,
-      path: 'quoted.txt',
-      startLine: 1,
-      endLine: 2,
-      verbatimExcerpt: 'alpha\r\n日本語🙂',
-      snapshotId,
-    };
-
-    expect(verifyFileQuoteEvidence(cwd, evidence, snapshotId)).toEqual({
-      outcome: 'match',
-      fileHash: sha256(content),
-    });
-    expect(verifyFileQuoteEvidence(cwd, {
-      ...evidence,
-      verbatimExcerpt: 'alpha\n日本語🙂',
-    }, snapshotId)).toMatchObject({ outcome: 'quote-mismatch' });
-
-    writeFileSync(join(cwd, 'invalid.txt'), Buffer.from([0x66, 0x80, 0x0a]));
-    expect(verifyFileQuoteEvidence(cwd, {
-      ...evidence,
-      path: 'invalid.txt',
-      startLine: 1,
-      endLine: 1,
-      verbatimExcerpt: 'f',
-    }, snapshotId)).toMatchObject({ outcome: 'unverifiable' });
-
-    const bomContent = Buffer.from('\uFEFFfirst\nsecond\n', 'utf8');
-    writeFileSync(join(cwd, 'bom.txt'), bomContent);
-    const bomEvidence = {
-      ...evidence,
-      path: 'bom.txt',
-      startLine: 1,
-      endLine: 1,
-      verbatimExcerpt: '\uFEFFfirst',
-    };
-    expect(verifyFileQuoteEvidence(cwd, bomEvidence, snapshotId)).toEqual({
-      outcome: 'match',
-      fileHash: sha256(bomContent),
-    });
-    expect(verifyFileQuoteEvidence(cwd, {
-      ...bomEvidence,
-      verbatimExcerpt: 'first',
-    }, snapshotId)).toMatchObject({ outcome: 'quote-mismatch' });
-    expect(verifyFileQuoteEvidence(cwd, {
-      ...evidence,
-      path: 'quoted.txt',
-      startLine: 1,
-      endLine: 1,
-      verbatimExcerpt: '\uFEFFalpha',
-    }, snapshotId)).toMatchObject({ outcome: 'quote-mismatch' });
-  });
-
-  it('rejects forged content addresses at the ledger schema boundary', () => {
-    const payload = {
-      kind: 'file_quote' as const,
-      path: 'src/a.ts',
-      startLine: 1,
-      endLine: 1,
-      verbatimExcerpt: 'one',
-      snapshotId: sha256('snapshot'),
-      claimIdentityHash: sha256('claim'),
-      fileHash: sha256('file'),
-    };
-    const validRecord = {
-      evidenceId: computeFileQuoteEvidenceRecordId(payload),
-      ...payload,
-    };
-    const ledger = {
-      workflowName: 'default',
-      nextId: 1,
-      updatedAt: '2026-07-28T00:00:00.000Z',
-      findings: [],
-      evidenceRecords: [validRecord],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [],
-    };
-    expect(parseFindingLedger(ledger).evidenceRecords).toEqual([validRecord]);
-    expect(() => parseFindingLedger({
-      ...ledger,
-      evidenceRecords: [{ ...validRecord, evidenceId: sha256('forged') }],
-    })).toThrow(/canonical content address/);
-  });
-
-  it('passes every file quote location to manager and fixer contexts', () => {
-    const claimIdentityHash = computeClaimIdentityHash({
-      targetFindingId: null,
-      title: 'Cross-file claim',
-      description: 'Both files participate.',
-    });
-    const evidenceRecords = ['b.ts', 'a.ts'].map((path) => {
-      const payload = {
-        kind: 'file_quote' as const,
-        path,
-        startLine: 1,
-        endLine: 1,
-        verbatimExcerpt: path,
-        snapshotId: sha256('snapshot'),
+    const verification = verifyEngineProofEvidence(
+      { kind: 'engine_proof', proofId: record.proofId },
+      {
+        cwd: process.cwd(),
+        workflowName: 'workflow',
+        runId: 'run',
+        scopeIdentity: 'scope',
+        snapshotId,
         claimIdentityHash,
-        fileHash: sha256(path),
-      };
-      return {
-        evidenceId: computeFileQuoteEvidenceRecordId(payload),
-        ...payload,
-      };
-    });
-    const observation = {
-      runId: 'run-1',
-      stepName: 'review',
-      timestamp: '2026-07-28T00:00:00.000Z',
-    };
-    const ledger = parseFindingLedger({
-      workflowName: 'default',
-      nextId: 2,
-      updatedAt: observation.timestamp,
-      findings: [{
-        id: 'F-0001',
-        status: 'open',
-        lifecycle: 'new',
-        severity: 'high',
-        title: 'Cross-file claim',
-        description: 'Both files participate.',
-        evidenceIds: evidenceRecords.map(({ evidenceId }) => evidenceId).sort(),
-        reviewers: ['reviewer'],
-        rawFindingIds: [],
-        firstSeen: observation,
-        lastSeen: observation,
-        revision: 1,
-      }],
-      evidenceRecords,
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [],
-    });
-    const manager = buildManagerInputLedger(ledger) as {
-      findings: Array<{ locations: string[] }>;
-    };
-    const fixer = JSON.parse(
-      renderActionableFindingLedgerInstructionSummary(ledger),
-    ) as { open: Array<{ locations: string[] }> };
+        targetFindingId: null,
+      },
+      createLedgerEngineProofRegistry(emptyLedger([tampered])),
+      createEngineProofVerifierRegistry(
+        createSnapshotEngineProofVerifiers({ snapshot, workflowTask }),
+      ),
+    );
 
-    expect(manager.findings[0]?.locations).toEqual(['a.ts:1', 'b.ts:1']);
-    expect(fixer.open[0]?.locations).toEqual(['a.ts:1', 'b.ts:1']);
+    expect(verification).toEqual({
+      outcome: 'protocol-anomaly',
+      reason: expect.stringContaining('canonical content address'),
+    });
   });
 
-  it('round-trips evidence records through the SQLite authority projection', async () => {
-    const { root } = createRealRunStorage({ findingContractEnabled: true });
-    const lease = root.claimLease({ ownerKey: 'evidence-domain', leaseDurationMs: 9_000 });
-    const runtime = root.runtime({ lease });
-    const execution = runtime.execution.startStep({
-      stepKey: 'findings-manager',
-      expectedScopeRevision: 0,
-    });
-    const store = runtime.findingManager({
-      workflowName: 'default',
-      producer: execution.handle,
-    });
-    const claimIdentityHash = computeClaimIdentityHash({
-      targetFindingId: null,
-      title: 'Claim',
-      description: 'Description',
-    });
-    const evidencePayload = {
-      kind: 'file_quote' as const,
-      path: 'src/a.ts',
-      startLine: 1,
-      endLine: 1,
-      verbatimExcerpt: 'one',
-      snapshotId: sha256('snapshot-1'),
-      claimIdentityHash,
-      fileHash: sha256('one'),
+  it('shows typed proof details and all three identities to the manager', () => {
+    const issued = issueAbsenceEvidence();
+    const sourceBinding: CandidateSourceBinding = {
+      reportDigest: '1'.repeat(64),
+      startByte: 8,
+      endByte: 40,
+      excerptDigest: '2'.repeat(64),
     };
-    const evidenceRecord = {
-      evidenceId: computeFileQuoteEvidenceRecordId(evidencePayload),
-      ...evidencePayload,
-    };
-    const observation = {
-      runId: 'run-1',
+    const raw: RawFinding = {
+      rawFindingId: 'raw-1',
       stepName: 'review',
-      timestamp: '2026-07-28T00:00:00.000Z',
+      reviewer: 'reviewer',
+      familyTag: 'compatibility',
+      severity: 'high',
+      title: 'Legacy API remains required to be absent',
+      description: 'The task requires legacyApi to be absent.',
+      suggestion: null,
+      target,
+      targetIdentityHash: computeTargetIdentityHash(target),
+      claimIdentityHash,
+      candidateIdentityHash: computeCandidateIdentityHash({
+        claimIdentityHash,
+        sourceBinding,
+      }),
+      sourceBinding,
+      relation: 'new',
+      targetFindingId: null,
+      evidence: issued.evidence,
     };
-    const authorizedLedger = authorizeFindingLedgerFixture({
-      ...store.loadLedger(),
-      evidenceRecords: [evidenceRecord],
+    const ledger: FindingLedger = {
+      ...emptyLedger(issued.engineProofRecords),
+      nextId: 2,
+      rawFindings: [raw],
       findings: [{
         id: 'F-0001',
         status: 'open',
         lifecycle: 'new',
+        target,
+        targetIdentityHash: raw.targetIdentityHash,
+        claimIdentityHash,
         severity: 'high',
-        title: 'Claim',
-        evidenceIds: [evidenceRecord.evidenceId],
+        title: raw.title!,
+        description: raw.description!,
+        evidenceIds: issued.engineProofRecords.map((record) => record.evidenceId),
         reviewers: ['reviewer'],
-        rawFindingIds: [],
-        firstSeen: observation,
-        lastSeen: observation,
+        rawFindingIds: [raw.rawFindingId],
+        firstSeen: { runId: 'run', stepName: 'review', timestamp: issuedAt },
+        lastSeen: { runId: 'run', stepName: 'review', timestamp: issuedAt },
         revision: 1,
       }],
-      nextId: 2,
-    });
-    await store.updateLedger(() => ({
-      ledger: authorizedLedger,
-      result: undefined,
-    }));
+    };
+    const manager = buildManagerInputLedger(ledger) as {
+      findings: Array<{
+        revision: number;
+        targetIdentityHash: string;
+        claimIdentityHash: string;
+        rawFindings: Array<{
+          candidateIdentityHash: string;
+          sourceBinding: CandidateSourceBinding;
+          evidenceDetails: Array<Record<string, unknown>>;
+        }>;
+        evidenceDetails: Array<Record<string, unknown>>;
+      }>;
+    };
 
-    const ledger = store.loadLedger();
-    expect(parseFindingLedger(ledger)).toEqual(ledger);
-    expect(ledger.evidenceRecords).toEqual(authorizedLedger.evidenceRecords);
-    expect(ledger.findings[0]?.evidenceIds).toEqual(authorizedLedger.findings[0]?.evidenceIds);
-    expect(() => store.updateLedger((current) => ({
-      ledger: { ...current, evidenceRecords: [], findings: [] },
-      result: undefined,
-    }))).toThrow(/references unknown evidence/);
+    expect(manager.findings[0]).toMatchObject({
+      revision: 1,
+      targetIdentityHash: raw.targetIdentityHash,
+      claimIdentityHash,
+      rawFindings: [expect.objectContaining({
+        candidateIdentityHash: raw.candidateIdentityHash,
+        sourceBinding,
+        evidenceDetails: expect.arrayContaining([
+          expect.objectContaining({
+            purpose: 'claim_evidence',
+            subject: expect.objectContaining({ kind: 'repository_query' }),
+            resultDigest: expect.any(String),
+          }),
+        ]),
+      })],
+      evidenceDetails: expect.arrayContaining([
+        expect.objectContaining({
+          purpose: 'claim_evidence',
+          subject: expect.objectContaining({ kind: 'authoritative_quote' }),
+        }),
+      ]),
+    });
+  });
+
+  it('deduplicates evidence by exact canonical payload and hashes only record identities', () => {
+    const issued = issueAbsenceEvidence();
+    const evidence = deduplicateRawEvidence([
+      issued.evidence[1]!,
+      issued.evidence[0]!,
+      issued.evidence[1]!,
+    ]);
+
+    expect(evidence).toHaveLength(2);
+    expect(computeEvidenceSetHash(
+      issued.engineProofRecords.map((record) => record.evidenceId),
+    )).toBe(computeEvidenceSetHash(
+      [...issued.engineProofRecords].reverse().map((record) => record.evidenceId),
+    ));
   });
 });

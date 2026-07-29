@@ -22,8 +22,8 @@ import {
 import { evaluateRawAdmission } from '../core/workflow/findings/manager-admission.js';
 import { computeInvalidLocationCandidates } from '../core/workflow/findings/manager-utils.js';
 import {
+  candidateFromStoredRawFinding,
   canonicalizeReviewerRawFinding,
-  createReviewerRawFindingCandidates,
   toLedgerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
@@ -33,6 +33,7 @@ import {
 } from '../core/workflow/findings/lifecycle-mutation.js';
 import {
   authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
   emptyFindingAuthorityProjection,
 } from './helpers/finding-lifecycle-fixture.js';
 
@@ -74,8 +75,10 @@ function makeLedger(): FindingLedger {
 describe('unverifiable propagation', () => {
   it('manager admission は file quote の検証不能を anomaly に変換せず停止する', () => {
     const ledger = makeLedger();
-    const [candidate] = createReviewerRawFindingCandidates([{
+    const raw = canonicalRawFindingFixture({
       rawFindingId: 'raw-1',
+      stepName: 'reviewers',
+      reviewer: 'reviewer',
       relation: 'new',
       title: 'New issue',
       description: 'description',
@@ -83,6 +86,7 @@ describe('unverifiable propagation', () => {
       severity: 'high',
       familyTag: 'bug',
       targetFindingId: null,
+      target: { kind: 'code', paths: ['src/a.ts'] },
       evidence: [{
         kind: 'file_quote',
         path: 'src/a.ts',
@@ -91,19 +95,28 @@ describe('unverifiable propagation', () => {
         verbatimExcerpt: 'const value = 1;',
         snapshotId: '1'.repeat(64),
       }],
-    }], {
-      callNamespace: '',
-      parentStepName: 'reviewers',
-      stepIteration: 1,
-      runId: 'run-1',
-      reviewerStepName: 'reviewer',
-      reviewerPersonaKey: 'reviewer',
     });
-    const { canonical } = canonicalizeReviewerRawFinding(candidate!, { ledger });
+    const candidate = candidateFromStoredRawFinding(raw, 'reviewer');
+    const { canonical } = canonicalizeReviewerRawFinding(candidate, { ledger });
 
     expect(() => evaluateRawAdmission({
       cwd: '/project',
       reviewScopeSnapshotId: 'snapshot',
+      reviewScopeSnapshot: {
+        reviewScopeSnapshotId: 'snapshot',
+        trackedDiff: undefined,
+        untrackedEvidence: [],
+        queryInventory: [{
+          path: 'src/a.ts',
+          kind: 'file',
+          contentDigest: '4'.repeat(64),
+          content: Buffer.from('const value = 1;\n'),
+          coverage: 'complete',
+        }],
+      },
+      runId: 'run-1',
+      scopeIdentity: '/project/.takt/findings/ledger.json',
+      workflowTask: 'Review the project.',
       previousLedger: ledger,
       intake: {
         items: [{ canonical, wire: toLedgerRawFinding(canonical) }],

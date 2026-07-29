@@ -23,12 +23,11 @@ import {
 } from './evidence-domain.js';
 import { formatFileQuoteLocation } from './evidence-location.js';
 import { verifyFindingEvidenceSet } from './evidence-verification.js';
-import { pathAbsentEngineProofVerifier } from './path-absent-engine-proof.js';
 import { provisionalSpecForRawKind } from './manager-provisional.js';
-
-const ENGINE_PROOF_VERIFIERS = createEngineProofVerifierRegistry([
-  pathAbsentEngineProofVerifier,
-]);
+import {
+  createSnapshotEngineProofVerifiers,
+} from './evidence-request-issuer.js';
+import type { ReviewScopeProofSnapshot } from './snapshot.js';
 
 interface CanonicalIntakeItemBase {
   canonical: CanonicalRawFinding;
@@ -63,6 +62,10 @@ function isProvisionalRecoveryOrigin(value: unknown): value is ProvisionalRecove
     && typeof origin.expectedProvisionalRevision === 'number'
     && Number.isSafeInteger(origin.expectedProvisionalRevision)
     && origin.expectedProvisionalRevision > 0
+    && (
+      origin.expectedTargetIdentityHash === null
+      || isNonEmptyString(origin.expectedTargetIdentityHash)
+    )
     && isNonEmptyString(origin.expectedProvisionalStableKey)
     && isNonEmptyString(origin.expectedProvisionalLineageKey)
     && (
@@ -143,7 +146,7 @@ export function assertCanonicalIntakeRecoveryStates(
 export interface ReviewerIntakeResult {
   items: CanonicalIntakeItem[];
   overflowRawFindingIds: Set<string>;
-  overflowSpecs: ProvisionalFindingSpec[];
+  intakeProvisionalSpecs: ProvisionalFindingSpec[];
   overflowReports: ReviewerOutputOverflowReport[];
   clarifications: Array<{ reviewer: string; flaggedRawFindingIds: string[] }>;
   rawNormalizations: RawNormalizationAuditRecord[];
@@ -211,6 +214,8 @@ function classifyEvidence(input: {
   scopeIdentity: string;
   previousLedger: FindingLedger;
   item: CanonicalIntakeItem;
+  reviewScopeSnapshot: ReviewScopeProofSnapshot;
+  workflowTask: string;
 }): EvidenceClassification {
   const { cwd, reviewScopeSnapshotId, item } = input;
   if (item.canonical.provenance.ambiguityCodes.includes('invalid-evidence-shape')) {
@@ -221,15 +226,34 @@ function classifyEvidence(input: {
       reason: 'Reviewer evidence does not match the typed evidence protocol',
     };
   }
+  if (item.canonical.evidenceCoverageGaps.length > 0) {
+    return {
+      admit: false,
+      disposition: 'provisional',
+      reason: item.canonical.evidenceCoverageGaps.join('; '),
+    };
+  }
   const evidence = item.canonical.evidence;
+  const proofLedger = {
+    ...input.previousLedger,
+    evidenceRecords: [
+      ...input.previousLedger.evidenceRecords,
+      ...item.canonical.issuedEngineProofRecords,
+    ],
+  };
   const verification = verifyFindingEvidenceSet({
     cwd,
     evidence,
     expectedSnapshotId: reviewScopeSnapshotId,
     claimIdentityHash: item.canonical.claimIdentityHash,
     targetFindingId: item.wire.targetFindingId,
-    proofRegistry: createLedgerEngineProofRegistry(input.previousLedger),
-    proofVerifiers: ENGINE_PROOF_VERIFIERS,
+    proofRegistry: createLedgerEngineProofRegistry(proofLedger),
+    proofVerifiers: createEngineProofVerifierRegistry(
+      createSnapshotEngineProofVerifiers({
+        snapshot: input.reviewScopeSnapshot,
+        workflowTask: input.workflowTask,
+      }),
+    ),
     proofContext: {
       cwd,
       workflowName: input.previousLedger.workflowName,
@@ -238,6 +262,42 @@ function classifyEvidence(input: {
     },
   });
   if (verification.outcome === 'match') {
+    const records = verification.records;
+    const matrixSatisfied = (() => {
+      if (item.canonical.target.kind === 'code') {
+        return records.some((record) => (
+          record.kind === 'file_quote'
+          && item.canonical.target.kind === 'code'
+          && item.canonical.target.paths.includes(record.path)
+        ));
+      }
+      if (item.canonical.target.kind === 'structure') {
+        return records.some((record) => (
+          record.kind === 'engine_proof'
+          && record.purpose === 'claim_evidence'
+          && record.subject.kind === 'repository_manifest'
+        ));
+      }
+      const hasCompleteQuery = records.some((record) => (
+        record.kind === 'engine_proof'
+        && record.purpose === 'claim_evidence'
+        && record.subject.kind === 'repository_query'
+        && record.subject.coverage === 'complete'
+      ));
+      const hasOriginalAnchor = records.some((record) => (
+        record.kind === 'engine_proof'
+        && record.purpose === 'claim_evidence'
+        && record.subject.kind === 'authoritative_quote'
+      ));
+      return hasCompleteQuery && hasOriginalAnchor;
+    })();
+    if (!matrixSatisfied) {
+      return {
+        admit: false,
+        disposition: 'provisional',
+        reason: `Evidence matrix is incomplete for target kind "${item.canonical.target.kind}"`,
+      };
+    }
     return { admit: true, evidenceRecords: verification.records };
   }
   if (verification.outcome === 'unverifiable') {
@@ -366,6 +426,8 @@ function evaluateAdmissionItem(input: {
   item: CanonicalIntakeItem;
   pool: AdmissionPool;
   previousFindingsById: ReadonlyMap<string, FindingLedger['findings'][number]>;
+  reviewScopeSnapshot: ReviewScopeProofSnapshot;
+  workflowTask: string;
 }): AdmissionItemEvaluation {
   const classification = classifyEvidence(input);
   const { item, pool } = input;
@@ -401,6 +463,8 @@ export function evaluateRawAdmission(input: {
   scopeIdentity: string;
   previousLedger: FindingLedger;
   intake: ReviewerIntakeResult;
+  reviewScopeSnapshot: ReviewScopeProofSnapshot;
+  workflowTask: string;
 }): RawAdmissionEvaluation {
   assertCanonicalIntakeRecoveryStates(input.intake.items, input.previousLedger);
   const nonOverflow = input.intake.items.filter(
@@ -421,6 +485,8 @@ export function evaluateRawAdmission(input: {
       item,
       pool: 'clean',
       previousFindingsById,
+      reviewScopeSnapshot: input.reviewScopeSnapshot,
+      workflowTask: input.workflowTask,
     })),
     ...tainted.map((item) => evaluateAdmissionItem({
       cwd: input.cwd,
@@ -431,6 +497,8 @@ export function evaluateRawAdmission(input: {
       item,
       pool: 'tainted',
       previousFindingsById,
+      reviewScopeSnapshot: input.reviewScopeSnapshot,
+      workflowTask: input.workflowTask,
     })),
   ];
   const cleanAdmitted = definedValues(

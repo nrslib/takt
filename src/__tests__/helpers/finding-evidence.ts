@@ -42,6 +42,9 @@ export function verifiedFindingEvidenceFixture(input: {
   title: string;
   description: string;
   targetFindingId: string | null;
+  familyTag: string | null;
+  severity?: 'critical' | 'high' | 'medium' | 'low' | null;
+  suggestion?: string | null;
 }): {
   evidence: FileQuoteEvidence;
   record: FindingEvidenceRecord;
@@ -57,9 +60,15 @@ export function verifiedFindingEvidenceFixture(input: {
     evidence: [evidence],
     expectedSnapshotId: evidence.snapshotId,
     claimIdentityHash: computeClaimIdentityHash({
-      targetFindingId: input.targetFindingId,
+      target: {
+        kind: 'code',
+        paths: [input.path],
+      },
+      familyTag: input.familyTag,
+      severity: input.severity ?? 'high',
       title: input.title,
       description: input.description,
+      suggestion: input.suggestion ?? null,
     }),
     targetFindingId: input.targetFindingId,
     proofRegistry: createLedgerEngineProofRegistry({

@@ -12,7 +12,10 @@ import {
   createRunStorage,
   openRunStorage,
 } from '../infra/run-storage/root.js';
-import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import {
   cleanupRealRunStorages,
   createRealRunStorage,
@@ -318,7 +321,7 @@ describe('run storage adversarial SOL contracts', () => {
       stepName: 'raw-recovery-terminal-seal',
       timestamp: '2026-07-29T00:00:00.000Z',
     };
-    const sourceRaw = {
+    const sourceRaw = canonicalRawFindingFixture({
       rawFindingId: 'raw-provisional-source',
       stepName: observation.stepName,
       reviewer: 'reviewer',
@@ -337,7 +340,7 @@ describe('run storage adversarial SOL contracts', () => {
         verbatimExcerpt: 'provisional target',
         snapshotId: '1'.repeat(64),
       }],
-    };
+    });
     const authorized = authorizeFindingLedgerFixture({
       workflowName: 'default',
       nextId: 3,

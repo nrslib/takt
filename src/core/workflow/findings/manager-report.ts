@@ -10,6 +10,7 @@ import type {
 } from './store.js';
 import type {
   FindingManagerOutput,
+  FindingManagerTaskAudit,
   FindingManagerValidationReport,
   InterpretationRecoveryOriginSettlement,
   RawFindingDisposition,
@@ -31,6 +32,7 @@ interface ManagerCommitReportInput {
   interpretationStats: InterpretationStatsReport;
   rawFindingDispositions: RawFindingDisposition[];
   interpretationRecoverySettlements: InterpretationRecoveryOriginSettlement[];
+  managerTaskAudits: FindingManagerTaskAudit[];
 }
 
 export function buildManagerCommitReport(
@@ -46,7 +48,8 @@ export function buildManagerCommitReport(
     || input.clarifications.length > 0
     || input.rawNormalizations.length > 0
     || input.rawFindingDispositions.length > 0
-    || input.interpretationRecoverySettlements.length > 0;
+    || input.interpretationRecoverySettlements.length > 0
+    || input.managerTaskAudits.length > 0;
   if (!reportNeeded) {
     return undefined;
   }
@@ -74,6 +77,9 @@ export function buildManagerCommitReport(
       : {}),
     ...(input.interpretationRecoverySettlements.length > 0
       ? { interpretationRecoverySettlements: input.interpretationRecoverySettlements }
+      : {}),
+    ...(input.managerTaskAudits.length > 0
+      ? { managerTaskAudits: input.managerTaskAudits }
       : {}),
     interpretationStats: input.interpretationStats,
     attempts: input.staleRejections.length > 0

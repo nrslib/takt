@@ -26,12 +26,13 @@ import {
 import { collectLandedRawIds } from './manager-utils.js';
 import type { FindingLedger, FindingObservation } from './types.js';
 import { matchesProvisionalRecoveryOrigin } from './provisional-recovery-origin.js';
+import type { ReviewScopeProofSnapshot } from './snapshot.js';
 
 function emptyIntake(): ReviewerIntakeResult {
   return {
     items: [],
     overflowRawFindingIds: new Set(),
-    overflowSpecs: [],
+    intakeProvisionalSpecs: [],
     overflowReports: [],
     clarifications: [],
     rawNormalizations: [],
@@ -93,6 +94,7 @@ function buildReplayIntake(input: {
       sourceRawFindingId: sourceResult.sourceRawFindingId,
       expectedHead: reservation.expectedHead,
       expectedProvisionalRevision: reservation.expectedRevision,
+      expectedTargetIdentityHash: reservation.recoveryOrigin.expectedTargetIdentityHash,
       attempt,
       recoveryOrigin: reservation.recoveryOrigin,
     });
@@ -189,6 +191,7 @@ export async function runRawAdjudicationRecovery(input: {
   managerStep: AgentWorkflowStep;
   observation: FindingObservation;
   reviewScopeSnapshotId: string;
+  reviewScopeSnapshot: ReviewScopeProofSnapshot;
 }): Promise<RawAdjudicationRecoveryResult> {
   const reservation = await reserveRawAdjudicationRecovery(
     input.runInput.ledgerStore,
@@ -215,6 +218,7 @@ async function runReservedRawAdjudicationRecovery(input: {
   managerStep: AgentWorkflowStep;
   observation: FindingObservation;
   reviewScopeSnapshotId: string;
+  reviewScopeSnapshot: ReviewScopeProofSnapshot;
   reservations: readonly RawAdjudicationReservation[];
   reservationTokens: Set<string>;
 }): Promise<RawAdjudicationRecoveryResult> {
@@ -246,6 +250,8 @@ async function runReservedRawAdjudicationRecovery(input: {
     scopeIdentity: input.runInput.ledgerStore.ledgerIdentity,
     previousLedger: input.previousLedger,
     intake: prepared.intake,
+    reviewScopeSnapshot: input.reviewScopeSnapshot,
+    workflowTask: input.runInput.workflowTask,
   });
   const admittedRawIds = new Set(admission.cleanWire.map((wire) => wire.rawFindingId));
   const failures = new Map([

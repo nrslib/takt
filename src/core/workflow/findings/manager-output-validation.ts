@@ -8,6 +8,7 @@ import type {
 import { FILE_LINE_EVIDENCE_PATTERN } from './evidence.js';
 export { FILE_LINE_EVIDENCE_PATTERN } from './evidence.js';
 import { validateFindingDecisionSets } from './decision-rules.js';
+import { computeManagerOutputBinding } from '../../models/finding-anchor-relevance.js';
 
 export type FindingManagerValidationResult =
   | { ok: true }
@@ -61,6 +62,7 @@ export function validateManagerActionRecoveryOutput(
 }
 
 const FINDING_MANAGER_OUTPUT_ARRAY_KEYS = [
+  'anchorAdjudications',
   'matches',
   'newFindings',
   'resolvedFindings',
@@ -96,12 +98,66 @@ function validateFindingManagerOutputWithPolicy(
     requireCoderWaiverEvidence,
   };
   const errors = [
+    ...validateAnchorAdjudications(input.managerOutput, context),
     ...validateRawFindingDecisionRefs(input.managerOutput, context),
     ...validateFindingDecisionRefs(input.managerOutput, context),
     ...validateResolvedConflicts(input.managerOutput, context),
   ];
 
   return errors.length === 0 ? { ok: true } : { ok: false, errors };
+}
+
+function validateAnchorAdjudications(
+  managerOutput: FindingManagerOutput,
+  context: ValidationContext,
+): string[] {
+  const errors: string[] = [];
+  const landedRawFindingIds = new Set([
+    ...managerOutput.matches.flatMap((match) => match.rawFindingIds),
+    ...managerOutput.newFindings.flatMap((finding) => finding.rawFindingIds),
+    ...managerOutput.resolvedFindings.flatMap((finding) => finding.rawFindingIds),
+    ...managerOutput.reopenedFindings.flatMap((finding) => finding.rawFindingIds),
+    ...managerOutput.conflicts.flatMap((conflict) => conflict.rawFindingIds),
+  ]);
+  const adjudicationsByRawFindingId = new Map<string, FindingManagerOutput['anchorAdjudications'][number]>();
+  for (const adjudication of managerOutput.anchorAdjudications) {
+    if (adjudicationsByRawFindingId.has(adjudication.rawFindingId)) {
+      errors.push(`Duplicate anchor adjudication for raw finding "${adjudication.rawFindingId}"`);
+      continue;
+    }
+    adjudicationsByRawFindingId.set(adjudication.rawFindingId, adjudication);
+    if (!landedRawFindingIds.has(adjudication.rawFindingId)) {
+      errors.push(`Anchor adjudication references non-landed raw finding "${adjudication.rawFindingId}"`);
+    }
+    const rawFinding = context.currentRawFindingsById.get(adjudication.rawFindingId)
+      ?? context.previousRawFindingsById.get(adjudication.rawFindingId);
+    if (rawFinding === undefined) {
+      errors.push(`Anchor adjudication references unknown raw finding "${adjudication.rawFindingId}"`);
+    } else if (
+      rawFinding.target.kind === 'absence'
+        ? adjudication.decision !== 'relevant'
+        : adjudication.decision !== 'not_applicable'
+    ) {
+      errors.push(
+        `Anchor adjudication "${adjudication.rawFindingId}" has invalid decision "${adjudication.decision}" for target kind "${rawFinding.target.kind}"`,
+      );
+    }
+    const expectedBinding = computeManagerOutputBinding({
+      rawFindingId: adjudication.rawFindingId,
+      decision: adjudication.rawDecision,
+      findingId: adjudication.findingId ?? undefined,
+      anchorRelevance: adjudication.decision,
+    });
+    if (adjudication.managerOutputBinding !== expectedBinding) {
+      errors.push(`Anchor adjudication "${adjudication.rawFindingId}" has a mismatched manager output binding`);
+    }
+  }
+  for (const rawFindingId of landedRawFindingIds) {
+    if (!adjudicationsByRawFindingId.has(rawFindingId)) {
+      errors.push(`Finding manager output is missing anchor adjudication for raw finding "${rawFindingId}"`);
+    }
+  }
+  return errors;
 }
 
 

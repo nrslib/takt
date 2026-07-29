@@ -40,6 +40,7 @@ import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepos
 import {
   authorizeFindingLedgerFixture,
   emptyFindingAuthorityProjection,
+  reviewerRawExtractionFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
@@ -264,6 +265,7 @@ function makeRunner(options: {
     getCwd: () => projectCwd,
     getReportDir: () => reportDir,
     getWorkflowName: () => 'test-workflow',
+    getTask: () => 'test task',
     getInteractive: () => false,
     observabilityEnabled: false,
     structuredCaller: {
@@ -327,7 +329,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       if (findingContractPolicy?.mode !== 'explicit') throw new Error('Expected explicit Finding Contract context');
       expect(findingContractPolicy.context).toBe(builtContext);
       expect(findingContractPolicy.context.reviewScopeSnapshotId).toBe('round-snapshot-abc123');
-      expect(getFileQuoteSnapshotIdConst(findingContractPolicy.context)).toBe('round-snapshot-abc123');
+      expect(getFileQuoteSnapshotIdConst(findingContractPolicy.context)).toBeUndefined();
     }
 
     const outputContract = builtContext?.rawFindingsStructuredOutput;
@@ -358,7 +360,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         reportDir,
         findingContractContext,
       });
-      const reviewerRawFindings = [{
+      const reviewerRawFindings = [reviewerRawExtractionFixture({
         rawFindingId: 'confirmation-resolved',
         familyTag: 'bug',
         severity: 'high',
@@ -368,7 +370,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
         evidence: [evidence],
-      }];
+      })];
       let ledger: FindingLedger = authorizeFindingLedgerFixture({
         workflowName: 'test-workflow',
         nextId: 2,
@@ -409,6 +411,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       vi.mocked(ledgerStore.saveRawFindings).mockReturnValue(join(projectCwd, 'raw-findings.json'));
       queueAgentResponse(makeAgentResponse({
         persona: 'ai-antipattern-review',
+        content: reviewerRawFindings[0]!.rawExcerpt,
         structuredOutput: { rawFindings: reviewerRawFindings },
       }));
       queueAgentResponse(makeAgentResponse({
@@ -451,11 +454,13 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     }
   });
 
-  it('rejects a parallel reviewer context when the schema snapshot enum is A but the prompt snapshot token is B', async () => {
+  it('keeps the engine snapshot out of the reviewer schema', async () => {
     const { runner, deps } = makeRunner();
     vi.mocked(deps.optionsBuilder.buildFindingContractInstructionContext).mockReturnValue(
       makeFindingContractContext({ reviewScopeSnapshotId: 'prompt-snapshot-B' }),
     );
+    queueAgentResponse(makeAgentResponse({ persona: 'ai-antipattern-review' }));
+    queueAgentResponse(makeAgentResponse({ persona: 'security-review' }));
 
     const result = await runner.runParallelStep(
       makeParallelStep(),
@@ -465,9 +470,11 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       vi.fn(),
     );
 
-    expect(result.response.status).toBe('error');
-    expect(result.response.error).toMatch(/snapshotId const.*equal reviewScopeSnapshotId/);
-    expect(executeAgent).not.toHaveBeenCalled();
+    expect(result.response.status).toBe('done');
+    expect(getFileQuoteSnapshotIdConst(
+      vi.mocked(deps.optionsBuilder.buildFindingContractInstructionContext).mock.results[0]!.value,
+    )).toBeUndefined();
+    expect(executeAgent).toHaveBeenCalledTimes(2);
   });
 
   it('does not call optionsBuilder.buildFindingContractInstructionContext when the workflow has no finding_contract configured', async () => {

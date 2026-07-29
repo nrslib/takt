@@ -43,6 +43,7 @@ import type {
   RawFinding,
   VerifiedFileQuoteEvidenceRecord,
 } from '../core/workflow/findings/types.js';
+import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
 
 function makeEvidenceRecord(
   path = 'src/a.ts',
@@ -75,14 +76,57 @@ function buildFindingsRuleContext(ledger: FindingLedger) {
   return buildFindingsRuleContextWithScope(ledger, process.cwd());
 }
 
+function makeRaw(overrides: Partial<RawFinding> = {}): RawFinding {
+  const base = canonicalRawFindingFixture({
+    rawFindingId: 'raw-1',
+    stepName: 'reviewers',
+    reviewer: 'coding-review',
+    familyTag: 'bug',
+    severity: 'high',
+    title: 'Disputed issue',
+    description: 'The bug is present.',
+    suggestion: null,
+    relation: 'new',
+    targetFindingId: null,
+    target: { kind: 'code', paths: ['src/a.ts'] },
+    evidence: [{
+      kind: 'file_quote',
+      path: 'src/a.ts',
+      startLine: 10,
+      endLine: 10,
+      verbatimExcerpt: '// line 10',
+      snapshotId: 'a'.repeat(64),
+    }],
+  });
+  const {
+    targetIdentityHash: _targetIdentityHash,
+    claimIdentityHash: _claimIdentityHash,
+    semanticClaimIdentityHash: _semanticClaimIdentityHash,
+    candidateIdentityHash: _candidateIdentityHash,
+    target,
+    sourceBinding,
+    ...raw
+  } = { ...base, ...overrides };
+  return canonicalRawFindingFixture({
+    ...raw,
+    target,
+    sourceBinding,
+  });
+}
+
 function makeFinding(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
 ): FindingLedgerEntry {
   const evidenceRecord = makeEvidenceRecord();
+  const raw = makeRaw();
   return {
     id: 'F-0001',
     status: 'open',
     lifecycle: 'new',
+    target: raw.target,
+    targetIdentityHash: raw.targetIdentityHash,
+    claimIdentityHash: raw.claimIdentityHash,
+    semanticClaimIdentityHash: raw.semanticClaimIdentityHash,
     severity: 'high',
     title: 'Disputed issue',
     evidenceIds: [evidenceRecord.evidenceId],
@@ -115,26 +159,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     updatedAt: '2026-06-13T00:00:00.000Z',
     findings: [makeFinding({ revision: 1 })],
     evidenceRecords: [evidenceRecord],
-    rawFindings: [{
-      rawFindingId: 'raw-1',
-      stepName: 'reviewers',
-      reviewer: 'coding-review',
-      familyTag: 'bug',
-      severity: 'high',
-      title: 'Disputed issue',
-      description: 'The bug is present.',
-      suggestion: null,
-      relation: 'new',
-      targetFindingId: null,
-      evidence: [{
-        kind: 'file_quote',
-        path: 'src/a.ts',
-        startLine: 10,
-        endLine: 10,
-        verbatimExcerpt: '// line 10',
-        snapshotId: 'a'.repeat(64),
-      }],
-    }],
+    rawFindings: [makeRaw()],
     conflicts: [makeConflict()],
     interpretations: [],
     ...overrides,
@@ -150,28 +175,6 @@ function makeOutput(overrides: Partial<FindingConflictAdjudicationOutput> = {}):
 }
 
 describe('computeConflictEvidenceHash / isConflictUnadjudicated', () => {
-  const makeRaw = (overrides: Partial<RawFinding> = {}): RawFinding => ({
-    rawFindingId: 'raw-1',
-    stepName: 'reviewers',
-    reviewer: 'coding-review',
-    familyTag: 'bug',
-    severity: 'high' as const,
-    title: 'Disputed issue',
-    description: 'The bug is present.',
-    suggestion: null,
-    relation: 'new',
-    targetFindingId: null,
-    evidence: [{
-      kind: 'file_quote',
-      path: 'src/a.ts',
-      startLine: 10,
-      endLine: 10,
-      verbatimExcerpt: '// line 10',
-      snapshotId: 'a'.repeat(64),
-    }],
-    ...overrides,
-  });
-
   it('is deterministic for the same ledger state', () => {
     const ledger = makeLedger({ rawFindings: [makeRaw()] });
     const first = computeConflictEvidenceHash(ledger.conflicts[0]!, ledger);
@@ -272,6 +275,29 @@ describe('computeConflictEvidenceHash / isConflictUnadjudicated', () => {
     });
     const hashAfter = computeConflictEvidenceHash(after.conflicts[0]!, after);
     expect(hashAfter).not.toBe(hashBefore);
+  });
+
+  it('非権威の rejected observation 監査追加だけでは hash が変わらない', () => {
+    const before = makeLedger({ rawFindings: [makeRaw()] });
+    const hashBefore = computeConflictEvidenceHash(before.conflicts[0]!, before);
+    const after = makeLedger({
+      rawFindings: [makeRaw()],
+      findings: [makeFinding({
+        revision: 1,
+        rejectedObservations: [{
+          rawFindingId: 'raw-rejected-audit',
+          reason: 'The observation failed evidence admission.',
+          observedAt: {
+            runId: 'run-2',
+            stepName: 'reviewers',
+            timestamp: '2026-06-13T01:00:00.000Z',
+          },
+        }],
+      })],
+    });
+    const hashAfter = computeConflictEvidenceHash(after.conflicts[0]!, after);
+
+    expect(hashAfter).toBe(hashBefore);
   });
 
   it('conflict の description の変化で hash が変わる', () => {

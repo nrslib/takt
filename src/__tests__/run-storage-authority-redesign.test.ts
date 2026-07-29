@@ -7,6 +7,7 @@ import {
   cleanupRealRunStorages,
   createRealRunStorage,
 } from './helpers/run-storage.js';
+import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
 
 afterEach(cleanupRealRunStorages);
 
@@ -56,7 +57,7 @@ describe('run storage authority redesign', () => {
       ledger: {
         ...emptyLedger(),
         nextId: 2,
-        rawFindings: [{
+        rawFindings: [canonicalRawFindingFixture({
           rawFindingId: 'raw-1',
           stepName: 'architecture-review',
           reviewer: 'architecture',
@@ -68,7 +69,7 @@ describe('run storage authority redesign', () => {
           relation: 'new',
           targetFindingId: null,
           evidence: [],
-        }],
+        })],
       },
       result: undefined,
     }));

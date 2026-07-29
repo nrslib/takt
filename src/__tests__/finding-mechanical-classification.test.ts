@@ -4,6 +4,10 @@ import {
   mergeFindingManagerOutputs,
 } from '../core/workflow/findings/mechanical-classification.js';
 import { validateFindingManagerOutput } from '../core/workflow/findings/manager-output-validation.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import type {
   FindingLedger,
   FindingLedgerEntry,
@@ -23,7 +27,7 @@ function quote(path: string, line: number) {
 }
 
 function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
-  return {
+  return canonicalRawFindingFixture({
     rawFindingId: 'raw-current',
     stepName: 'architecture-review',
     reviewer: 'architecture-review',
@@ -34,9 +38,10 @@ function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
     suggestion: null,
     relation: 'new',
     targetFindingId: null,
+    target: { kind: 'code', paths: ['src/a.ts'] },
     evidence: [quote('src/a.ts', 10)],
     ...overrides,
-  };
+  });
 }
 
 function makeFinding(
@@ -58,7 +63,7 @@ function makeFinding(
 }
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
-  return {
+  return authorizeFindingLedgerFixture({
     workflowName: 'peer-review',
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
@@ -68,7 +73,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     interpretations: [],
     findings: [makeFinding({ revision: 1 })],
     ...overrides,
-  };
+  });
 }
 
 describe('classifyRawFindingsMechanically resolution confirmations (case 3)', () => {
@@ -104,7 +109,9 @@ describe('classifyRawFindingsMechanically resolution confirmations (case 3)', ()
   });
 
   it('Given a confirmation targeting an already resolved finding When classified Then it goes to residual', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, status: 'resolved' })] });
+    const ledger = makeLedger({
+      findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })],
+    });
     const raw = makeRawFinding({ rawFindingId: 'raw-confirm', relation: 'resolution_confirmation', targetFindingId: 'F-0001' });
     const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
     expect(result.residualRawFindings).toEqual([raw]);
@@ -131,7 +138,9 @@ describe('classifyRawFindingsMechanically explicit reference (case 2)', () => {
   });
 
   it('Given relation "persists" with targetFindingId pointing at a non-open finding When classified Then it goes to residual', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, status: 'resolved' })] });
+    const ledger = makeLedger({
+      findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })],
+    });
     const raw = makeRawFinding({ rawFindingId: 'raw-persist', relation: 'persists', targetFindingId: 'F-0001' });
     const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
     expect(result.output.matches).toEqual([]);
@@ -208,7 +217,10 @@ describe('classifyRawFindingsMechanically exact duplicate content (case 1)', () 
 
   it('Given a raw whose content matches a RESOLVED finding\'s raw (not open) When classified Then it goes to residual as a reopen candidate', () => {
     const existingRaw = makeRawFinding({ rawFindingId: 'raw-existing' });
-    const ledger = makeLedger({ rawFindings: [existingRaw], findings: [makeFinding({ revision: 1, status: 'resolved' })] });
+    const ledger = makeLedger({
+      rawFindings: [existingRaw],
+      findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })],
+    });
     const raw = makeRawFinding({ rawFindingId: 'raw-issue', relation: 'new' });
     const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
     expect(result.output.matches).toEqual([]);
@@ -242,6 +254,7 @@ describe('classifyRawFindingsMechanically exact duplicate content (case 1)', () 
 describe('mergeFindingManagerOutputs', () => {
   function makeOutput(overrides: Partial<FindingManagerOutput> = {}): FindingManagerOutput {
     return {
+      anchorAdjudications: [],
       matches: [],
       newFindings: [],
       resolvedFindings: [],

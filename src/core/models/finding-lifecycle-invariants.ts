@@ -1,6 +1,5 @@
 import { compareBinaryStrings } from '../../shared/utils/binary-string-comparator.js';
 import { canonicalJson } from '../../shared/utils/canonical-json.js';
-import { computeClaimIdentityHash } from './finding-claim-identity.js';
 import {
   evidenceRecordMatchesRawEvidence,
   findingEvidenceRecordIdentityViolation,
@@ -14,6 +13,9 @@ import {
   sortFindingLifecycleTargets,
 } from './finding-lifecycle-identity.js';
 import { computeRawFindingIntegrityDigest } from './finding-raw-integrity.js';
+import {
+  computeAnchorRelevanceDecisionDigest,
+} from './finding-anchor-relevance.js';
 import {
   FINDING_LIFECYCLE_OPERATION_CONTRACTS,
   findingLifecycleAuthorityContract,
@@ -185,7 +187,7 @@ function assertRawEvidenceBinding(input: {
   if (input.binding.sourceRawIntegrityDigest !== computeRawFindingIntegrityDigest(input.raw)) {
     throw new Error(`Evidence binding "${input.binding.bindingId}" has stale raw finding integrity`);
   }
-  const claimIdentityHash = computeClaimIdentityHash(input.raw);
+  const claimIdentityHash = input.raw.claimIdentityHash;
   if (input.binding.claimIdentityHash !== claimIdentityHash) {
     throw new Error(`Evidence binding "${input.binding.bindingId}" does not match its raw claim identity`);
   }
@@ -241,15 +243,8 @@ function assertRawEvidenceBinding(input: {
           || (
             operation === 'persist_finding'
             && input.findingsById.get(target.entityId)?.description !== undefined
-            && computeClaimIdentityHash({
-              targetFindingId: null,
-              title: input.raw.title,
-              description: input.raw.description,
-            }) === computeClaimIdentityHash({
-              targetFindingId: null,
-              title: input.findingsById.get(target.entityId)!.title,
-              description: input.findingsById.get(target.entityId)!.description!,
-            })
+            && input.findingsById.get(target.entityId)?.claimIdentityHash
+              === input.raw.claimIdentityHash
           )
         )
       );
@@ -262,18 +257,16 @@ function assertRawEvidenceBinding(input: {
         input.raw.relation === 'new'
         && input.raw.targetFindingId === null
         && input.findingsById.get(target.entityId)?.provisional !== undefined
-        && computeClaimIdentityHash(input.raw) === computeClaimIdentityHash({
-          targetFindingId: null,
-          title: input.findingsById.get(target.entityId)!.title,
-          description: input.findingsById.get(target.entityId)!.description ?? '',
-        })
+        && input.raw.claimIdentityHash
+          === input.findingsById.get(target.entityId)?.claimIdentityHash
       );
     }
     if (operation === 'reopen_finding') {
       return input.raw.relation === 'reopened' && input.raw.targetFindingId === target.entityId;
     }
     if (operation === 'promote_provisional') {
-      return input.raw.relation === 'new';
+      return input.raw.relation === 'persists'
+        && input.raw.targetFindingId === target.entityId;
     }
     if (
       operation === 'waive_finding'
@@ -362,26 +355,40 @@ function assertEngineProofOperation(input: {
     );
   };
   if (
-    input.record.verifierId === 'takt.path-absent'
-    && input.record.verifierVersion === '2'
-    && input.record.subject.kind === 'path_absent'
+    input.record.purpose === 'claim_evidence'
   ) {
+    const findingOperations: FindingLifecycleOperation[] = [
+      'create_finding',
+      'persist_finding',
+      'resolve_finding',
+      'reopen_finding',
+      'update_provisional',
+      'promote_provisional',
+      'record_rejected_observation',
+      'apply_resolution_renotification',
+    ];
+    const conflictOperations: FindingLifecycleOperation[] = [
+      'create_conflict',
+      'observe_conflict',
+      'apply_resolution_renotification',
+    ];
     if (
-      input.target.entityKind !== 'finding'
-      || ![
-        'create_finding',
-        'persist_finding',
-        'reopen_finding',
-        'update_provisional',
-        'promote_provisional',
-        'record_rejected_observation',
-      ].includes(input.operation)
+      (
+        input.target.entityKind === 'finding'
+        && !findingOperations.includes(input.operation)
+      )
+      || (
+        input.target.entityKind === 'conflict'
+        && !conflictOperations.includes(input.operation)
+      )
     ) {
       reject();
     }
     return;
   }
   if (
+    input.record.purpose !== 'lifecycle_authority'
+    ||
     input.record.verifierId !== 'takt.finding-lifecycle-policy'
     || input.record.verifierVersion !== '1'
     || input.target.entityKind !== 'finding'
@@ -390,17 +397,15 @@ function assertEngineProofOperation(input: {
   }
   const subject = input.record.subject;
   switch (subject.kind) {
-    case 'named_structural_check':
+    case 'finding_provisional_isolation':
       if (
         input.operation !== 'update_provisional'
-        || subject.checkId !== 'finding-provisional-isolation'
-        || Object.keys(subject.parameters).sort(compareBinaryStrings).join('\0')
-          !== ['provisionalKind', 'stableKey'].sort(compareBinaryStrings).join('\0')
+        || subject.findingId !== input.target.entityId
       ) {
         reject();
       }
       return;
-    case 'finding_location_set_invalid':
+    case 'finding_target_invalid':
       if (
         input.operation !== 'invalidate_finding'
         || subject.findingId !== input.target.entityId
@@ -508,6 +513,66 @@ export function assertEligibleEvidenceForLifecycleOperation(input: {
     return;
   }
   if (input.authority.kind === 'engine_policy') {
+    if (input.authority.decisionKind === 'anchor_relevance') {
+      if (
+        input.evidenceBindingIds.length === 0
+        || coveredTargets.size !== targetByKey.size
+      ) {
+        throw new Error(
+          `Lifecycle operation "${input.operation}" lacks evidence for anchor relevance authority`,
+        );
+      }
+      const boundRecordsByRawFindingId = new Map<string, FindingEvidenceRecord[]>();
+      for (const bindingId of input.evidenceBindingIds) {
+        const binding = bindingsById.get(bindingId)!;
+        if (binding.sourceRawFindingId === null) {
+          continue;
+        }
+        const records = boundRecordsByRawFindingId.get(binding.sourceRawFindingId) ?? [];
+        records.push(evidenceRecordsById.get(binding.evidenceId)!);
+        boundRecordsByRawFindingId.set(binding.sourceRawFindingId, records);
+      }
+      const anchorRawFindings = [...boundRecordsByRawFindingId.keys()]
+        .map((rawFindingId) => rawFindingsById.get(rawFindingId))
+        .filter((rawFinding): rawFinding is RawFinding => (
+          rawFinding?.target.kind === 'absence'
+        ));
+      if (anchorRawFindings.length === 0) {
+        throw new Error(
+          `Lifecycle operation "${input.operation}" has anchor relevance authority without an absence raw finding`,
+        );
+      }
+      for (const rawFinding of anchorRawFindings) {
+        const records = boundRecordsByRawFindingId.get(rawFinding.rawFindingId) ?? [];
+        const hasCompleteQuery = records.some((record) => (
+          record.kind === 'engine_proof'
+          && record.purpose === 'claim_evidence'
+          && record.subject.kind === 'repository_query'
+          && record.subject.coverage === 'complete'
+        ));
+        const hasOriginalAnchor = records.some((record) => (
+          record.kind === 'engine_proof'
+          && record.purpose === 'claim_evidence'
+          && record.subject.kind === 'authoritative_quote'
+        ));
+        if (!hasCompleteQuery || !hasOriginalAnchor) {
+          throw new Error(
+            `Absence raw finding "${rawFinding.rawFindingId}" lacks its complete query or original anchor binding`,
+          );
+        }
+      }
+      const expectedDigest = computeAnchorRelevanceDecisionDigest({
+        operation: input.operation,
+        rawFindings: anchorRawFindings,
+        adjudications: input.authority.anchorAdjudications,
+      });
+      if (input.authority.decisionDigest !== expectedDigest) {
+        throw new Error(
+          `Lifecycle operation "${input.operation}" has a mismatched anchor relevance decision digest`,
+        );
+      }
+      return;
+    }
     if (input.evidenceBindingIds.length !== 0) {
       throw new Error(`Lifecycle operation "${input.operation}" has an invalid manager policy authority`);
     }

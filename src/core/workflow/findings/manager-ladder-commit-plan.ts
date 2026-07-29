@@ -23,6 +23,9 @@ import {
 } from './provisional-recovery-origin.js';
 import { findingMatchesMutationPrecondition } from './finding-preconditions.js';
 import { canonicalRawIntegrityDigestOf } from './raw-canonicalization.js';
+import { createAnchorAdjudication } from '../../models/finding-anchor-relevance.js';
+import type { RawFinding } from './types.js';
+import { isProvisionalPromotionSource } from './provisional-promotion-eligibility.js';
 
 export interface LadderCommitPlan {
   output: FindingManagerOutput;
@@ -33,6 +36,57 @@ export interface LadderCommitPlan {
   recoveryProvisionalRawFindingIds: Set<string>;
   staleRecoveryRawFindingIds: Set<string>;
   openConflictOutcomeAuthorities: Map<string, OpenConflictOutcomeAuthority>;
+}
+
+function appendNonAbsenceAnchorAdjudication(input: {
+  output: FindingManagerOutput;
+  raw: RawFinding;
+  decision: 'same' | 'new' | 'conflict';
+  findingId?: string;
+  evidence: string;
+}): FindingManagerOutput {
+  if (input.raw.target.kind === 'absence') {
+    throw new Error(
+      `Absence raw finding "${input.raw.rawFindingId}" cannot leave the interpretation ladder without an explicit manager anchor-relevance decision`,
+    );
+  }
+  return {
+    ...input.output,
+    anchorAdjudications: [
+      ...input.output.anchorAdjudications,
+      createAnchorAdjudication({
+        rawFindingId: input.raw.rawFindingId,
+        decision: input.decision,
+        anchorRelevance: 'not_applicable',
+        ...(input.findingId === undefined ? {} : { findingId: input.findingId }),
+        evidence: input.evidence,
+      }),
+    ],
+  };
+}
+
+function holdAbsencePendingManagerAnchor(input: {
+  plan: LadderCommitPlan;
+  raw: RawFinding;
+  canonical: Parameters<typeof provisionalSpecForRawKind>[0]['canonical'];
+  interpretationKey?: string;
+}): LadderCommitPlan {
+  return {
+    ...input.plan,
+    provisionalSpecs: [
+      ...input.plan.provisionalSpecs,
+      provisionalSpecForRawKind({
+        wire: input.raw,
+        canonical: input.canonical,
+        reason: 'Absence claims require an explicit manager judgment that the authoritative declaration establishes the claimed obligation',
+      }, 'raw-adjudication-unresolved'),
+    ],
+    interpretationResults: withInterpretationResult(
+      input.plan.interpretationResults,
+      input.interpretationKey,
+      'provisional_created',
+    ),
+  };
 }
 
 function withInterpretationResult(
@@ -268,6 +322,14 @@ export function buildLadderCommitPlan(
     openConflictOutcomeAuthorities: new Map(),
   };
   const withMatches = ladder.pendingSameWithProof.reduce<LadderCommitPlan>((plan, pending) => {
+    if (pending.target.wire.target.kind === 'absence') {
+      return holdAbsencePendingManagerAnchor({
+        plan,
+        raw: pending.target.wire,
+        canonical: pending.target.canonical,
+        interpretationKey: pending.viaInterpretationKey,
+      });
+    }
     const origins = pending.target.recoveryOrigins;
     const freshOrigins = origins === undefined
       ? undefined
@@ -306,14 +368,20 @@ export function buildLadderCommitPlan(
     }
     return {
       ...plan,
-      output: {
-        ...plan.output,
-        matches: [...plan.output.matches, {
-          findingId: pending.proof.targetFindingId,
-          rawFindingIds: [pending.target.wire.rawFindingId],
-          evidence: `Deterministic same proof ${pending.proof.proofId.slice(0, 12)} (exact normalized identity match)`,
-        }],
-      },
+      output: appendNonAbsenceAnchorAdjudication({
+        output: {
+          ...plan.output,
+          matches: [...plan.output.matches, {
+            findingId: pending.proof.targetFindingId,
+            rawFindingIds: [pending.target.wire.rawFindingId],
+            evidence: `Deterministic same proof ${pending.proof.proofId.slice(0, 12)} (exact normalized identity match)`,
+          }],
+        },
+        raw: pending.target.wire,
+        decision: 'same',
+        findingId: pending.proof.targetFindingId,
+        evidence: `Deterministic same proof ${pending.proof.proofId.slice(0, 12)} (exact normalized identity match)`,
+      }),
       interpretationResults: withInterpretationResult(
         plan.interpretationResults,
         pending.viaInterpretationKey,
@@ -331,8 +399,20 @@ export function buildLadderCommitPlan(
     };
   }, initial);
   const withIndependent = ladder.pendingIndependentNew.reduce<LadderCommitPlan>((plan, pending) => {
-    if (pending.wire.severity === null) {
-      throw new Error(`Independent raw finding "${pending.wire.rawFindingId}" has no severity`);
+    if (pending.wire.target.kind === 'absence') {
+      return holdAbsencePendingManagerAnchor({
+        plan,
+        raw: pending.wire,
+        canonical: pending.canonical,
+        interpretationKey: pending.viaInterpretationKey,
+      });
+    }
+    if (
+      pending.wire.severity === null
+      || pending.wire.title === null
+      || pending.wire.description === null
+    ) {
+      throw new Error(`Independent raw finding "${pending.wire.rawFindingId}" has an incomplete claim payload`);
     }
     const origins = pending.recoveryOrigins;
     const freshOrigins = origins === undefined
@@ -352,31 +432,48 @@ export function buildLadderCommitPlan(
         ),
       };
     }
-    const recovery = freshOrigins === undefined
+    const promotionOrigins = freshOrigins?.filter((origin) => {
+      const process = freshLedger.findings.find(
+        (finding) => finding.id === origin.provisionalFindingId,
+      );
+      return process !== undefined && isProvisionalPromotionSource({
+        ledger: freshLedger,
+        provisional: process,
+        wire: pending.wire,
+      });
+    });
+    const recovery = promotionOrigins === undefined || promotionOrigins.length === 0
       ? undefined
-      : {
-          primary: primaryRecoveryOrigin(freshOrigins),
-          secondary: freshOrigins.slice(1),
-        };
+      : primaryRecoveryOrigin(promotionOrigins);
     return {
       ...plan,
-      output: recovery === undefined
-        ? {
-            ...plan.output,
-            newFindings: [...plan.output.newFindings, {
-              rawFindingIds: [pending.wire.rawFindingId],
-              title: pending.wire.title,
-              severity: pending.wire.severity,
-            }],
-          }
-        : {
-            ...plan.output,
-            matches: [...plan.output.matches, {
-              findingId: recovery.primary.provisionalFindingId,
-              rawFindingIds: [pending.wire.rawFindingId],
-              evidence: 'A fresh interpretation attempt confirmed the provisional as an independent finding',
-            }],
-          },
+      output: appendNonAbsenceAnchorAdjudication({
+        output: recovery === undefined
+          ? {
+              ...plan.output,
+              newFindings: [...plan.output.newFindings, {
+                rawFindingIds: [pending.wire.rawFindingId],
+                title: pending.wire.title,
+                severity: pending.wire.severity,
+              }],
+            }
+          : {
+              ...plan.output,
+              matches: [...plan.output.matches, {
+                findingId: recovery.provisionalFindingId,
+                rawFindingIds: [pending.wire.rawFindingId],
+                evidence: 'A fresh interpretation attempt confirmed the provisional as an independent finding',
+              }],
+            },
+        raw: pending.wire,
+        decision: recovery === undefined ? 'new' : 'same',
+        ...(recovery === undefined
+          ? {}
+          : { findingId: recovery.provisionalFindingId }),
+        evidence: recovery === undefined
+          ? 'Manager interpretation confirmed an independent finding'
+          : 'A fresh interpretation attempt confirmed the provisional as an independent finding',
+      }),
       interpretationResults: withInterpretationResult(
         plan.interpretationResults,
         pending.viaInterpretationKey,
@@ -384,17 +481,18 @@ export function buildLadderCommitPlan(
       ),
       recoveryPromotions: recovery === undefined
         ? plan.recoveryPromotions
-        : new Set([...plan.recoveryPromotions, recovery.primary.provisionalFindingId]),
-      recoverySettlements: recovery === undefined
-        ? plan.recoverySettlements
-        : addRecoverySettlements(
-            plan.recoverySettlements,
-            recovery.secondary,
-            recovery.primary.provisionalFindingId,
-          ),
+        : new Set([...plan.recoveryPromotions, recovery.provisionalFindingId]),
     };
   }, withMatches);
   const withConflicts = ladder.pendingConflicts.reduce<LadderCommitPlan>((plan, pending) => {
+    if (pending.target.wire.target.kind === 'absence') {
+      return holdAbsencePendingManagerAnchor({
+        plan,
+        raw: pending.target.wire,
+        canonical: pending.target.canonical,
+        interpretationKey: pending.viaInterpretationKey,
+      });
+    }
     const recoveryOrigins = pending.target.recoveryOrigins;
     const freshOrigins = recoveryOrigins === undefined
       ? undefined
@@ -464,10 +562,16 @@ export function buildLadderCommitPlan(
         });
     return {
       ...plan,
-      output: {
-        ...plan.output,
-        conflicts: [...plan.output.conflicts, conflict],
-      },
+      output: appendNonAbsenceAnchorAdjudication({
+        output: {
+          ...plan.output,
+          conflicts: [...plan.output.conflicts, conflict],
+        },
+        raw: pending.target.wire,
+        decision: 'conflict',
+        findingId: pending.targetFindingId,
+        evidence: conflict.description,
+      }),
       provisionalSpecs: provisionalSpec === undefined
         ? plan.provisionalSpecs
         : [...plan.provisionalSpecs, provisionalSpec],
@@ -482,16 +586,18 @@ export function buildLadderCommitPlan(
         pending.viaInterpretationKey,
         'conflict_created',
       ),
-      recoveryPromotions: origins === undefined
-        ? plan.recoveryPromotions
-        : new Set([
-            ...plan.recoveryPromotions,
-            ...origins.map((origin) => origin.provisionalFindingId),
-          ]),
+      recoveryPromotions: plan.recoveryPromotions,
     };
   }, withIndependent);
   const freshRawsById = new Map(freshLedger.rawFindings.map((raw) => [raw.rawFindingId, raw]));
   return ladder.pendingAppliedReattach.reduce<LadderCommitPlan>((plan, pending) => {
+    if (pending.target.wire.target.kind === 'absence') {
+      return holdAbsencePendingManagerAnchor({
+        plan,
+        raw: pending.target.wire,
+        canonical: pending.target.canonical,
+      });
+    }
     const recoveryOrigins = pending.target.recoveryOrigins;
     const origins = recoveryOrigins === undefined
       ? undefined
@@ -523,10 +629,17 @@ export function buildLadderCommitPlan(
           : plan;
       }
     }
-    const identity = fullIdentityKeyOf(
-      pending.target.wire.title,
-      pending.target.wire.description,
-    );
+    const identity = fullIdentityKeyOf(pending.target.wire);
+    if (identity === undefined) {
+      return {
+        ...plan,
+        provisionalSpecs: [...plan.provisionalSpecs, provisionalSpecForRaw({
+          wire: pending.target.wire,
+          canonical: pending.target.canonical,
+          reason: 'The candidate has no claim identity and cannot be re-identified as a product finding',
+        })],
+      };
+    }
     const candidates = freshLedger.findings.filter((finding) => {
       if (origins?.some((origin) => origin.provisionalFindingId === finding.id) === true) {
         return false;
@@ -534,18 +647,12 @@ export function buildLadderCommitPlan(
       if (finding.status !== 'open') {
         return false;
       }
-      if (fullIdentityKeyOf(
-        finding.title,
-        finding.description,
-      ) === identity) {
+      if (fullIdentityKeyOf(finding) === identity) {
         return true;
       }
       return finding.rawFindingIds.some((rawFindingId) => {
         const raw = freshRawsById.get(rawFindingId);
-        return raw !== undefined && fullIdentityKeyOf(
-          raw.title,
-          raw.description,
-        ) === identity;
+        return raw !== undefined && fullIdentityKeyOf(raw) === identity;
       });
     });
     if (candidates.length !== 1) {
@@ -570,14 +677,20 @@ export function buildLadderCommitPlan(
     }
     return {
       ...plan,
-      output: {
-        ...plan.output,
-        matches: [...plan.output.matches, {
-          findingId: candidates[0]!.id,
-          rawFindingIds: [pending.target.wire.rawFindingId],
-          evidence: 'Same-evidence observation reattached to its previously applied finding (exact identity)',
-        }],
-      },
+      output: appendNonAbsenceAnchorAdjudication({
+        output: {
+          ...plan.output,
+          matches: [...plan.output.matches, {
+            findingId: candidates[0]!.id,
+            rawFindingIds: [pending.target.wire.rawFindingId],
+            evidence: 'Same-evidence observation reattached to its previously applied finding (exact identity)',
+          }],
+        },
+        raw: pending.target.wire,
+        decision: 'same',
+        findingId: candidates[0]!.id,
+        evidence: 'Same-evidence observation reattached to its previously applied finding (exact identity)',
+      }),
     };
   }, withConflicts);
 }

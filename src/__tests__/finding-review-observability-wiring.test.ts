@@ -16,6 +16,7 @@ import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
+import { reviewerRawExtractionFixture } from './helpers/finding-lifecycle-fixture.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -42,50 +43,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function readSingleSchemaValue(value: unknown): unknown {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  if (value.const !== undefined) {
-    return value.const;
-  }
-  return Array.isArray(value.enum) && value.enum.length === 1
-    ? value.enum[0]
-    : undefined;
-}
-
-function readSnapshotIdConst(schema: unknown): string {
-  if (!isRecord(schema) || !isRecord(schema.properties)) {
-    throw new Error('Expected raw findings schema properties');
-  }
-  const rawFindings = schema.properties.rawFindings;
-  if (!isRecord(rawFindings) || !isRecord(rawFindings.items)) {
-    throw new Error('Expected raw findings item schema');
-  }
-  const itemProperties = rawFindings.items.properties;
-  const evidence = isRecord(itemProperties) ? itemProperties.evidence : undefined;
-  const evidenceItems = isRecord(evidence) ? evidence.items : undefined;
-  const branches = isRecord(evidenceItems) && Array.isArray(evidenceItems.anyOf)
-    ? evidenceItems.anyOf
-    : isRecord(evidenceItems)
-      ? evidenceItems.oneOf
-      : undefined;
-  const fileQuote = Array.isArray(branches)
-    ? branches.find((branch) => (
-        isRecord(branch)
-        && isRecord(branch.properties)
-        && readSingleSchemaValue(branch.properties.kind) === 'file_quote'
-      ))
-    : undefined;
-  const evidenceProperties = isRecord(fileQuote) ? fileQuote.properties : undefined;
-  const snapshotId = isRecord(evidenceProperties) ? evidenceProperties.snapshotId : undefined;
-  const snapshotIdValue = readSingleSchemaValue(snapshotId);
-  if (typeof snapshotIdValue !== 'string') {
-    throw new Error('Expected file quote snapshotId binding');
-  }
-  return snapshotIdValue;
-}
-
 function hasSchemaProperty(schema: unknown, property: string): boolean {
   return isRecord(schema) && isRecord(schema.properties) && property in schema.properties;
 }
@@ -96,14 +53,6 @@ function readSpanInstruction(span: ReadableSpan): string {
     throw new Error(`Expected instruction on span ${span.name}`);
   }
   return instruction;
-}
-
-function readPromptSnapshotId(instruction: string): string {
-  const snapshotId = instruction.match(/unchanged: ([0-9a-f]{64})\b/)?.[1];
-  if (!snapshotId) {
-    throw new Error('Expected reviewScopeSnapshotId in reviewer instruction');
-  }
-  return snapshotId;
 }
 
 function makeFindingContract() {
@@ -119,11 +68,10 @@ function makeFindingContract() {
 }
 
 function makeSourceQuoteFinding(persona: string | undefined, schema: unknown): Record<string, unknown> {
-  const snapshotId = readSnapshotIdConst(schema);
-  if (typeof snapshotId !== 'string' || snapshotId.length === 0) {
-    throw new Error('Expected provider schema to require a non-empty snapshotId');
+  if (JSON.stringify(schema).includes('"snapshotId"')) {
+    throw new Error('Reviewer schema must not expose engine-issued snapshotId');
   }
-  return {
+  return reviewerRawExtractionFixture({
     rawFindingId: `raw-${persona ?? 'reviewer'}`,
     familyTag: 'snapshot-ordering',
     severity: 'high',
@@ -138,9 +86,10 @@ function makeSourceQuoteFinding(persona: string | undefined, schema: unknown): R
       startLine: 1,
       endLine: 1,
       verbatimExcerpt: 'export const reviewed = true;',
-      snapshotId,
+      snapshotId: '0'.repeat(64),
     }],
-  };
+    rawExcerpt: 'One finding.',
+  });
 }
 
 function readFindingLedger(cwd: string): {
@@ -282,6 +231,7 @@ describe('finding reviewer observability wiring', () => {
               decision: 'new',
               findingId: '',
               evidence: 'No related open finding.',
+              anchorRelevance: 'relevant',
             })),
             disputeDecisions: [],
             conflictDecisions: [],
@@ -318,7 +268,7 @@ describe('finding reviewer observability wiring', () => {
   it.each([
     { mode: 'full' as const },
     { mode: 'single' as const },
-  ])('single reviewer shares prompt snapshot, schema enum, provider outputSchema, and real phase span in $mode mode', async ({ mode }) => {
+  ])('single reviewer keeps engine proof fields out of provider schema and exposes the real phase span in $mode mode', async ({ mode }) => {
     const config = makeSingleReviewerConfig();
     const engine = new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
@@ -345,8 +295,8 @@ describe('finding reviewer observability wiring', () => {
     expect(reviewerCalls).toHaveLength(1);
     const [, providerPrompt, providerOptions] = reviewerCalls[0]!;
     const providerSchema = providerOptions?.outputSchema;
-    const snapshotId = readSnapshotIdConst(providerSchema);
-    expect(snapshotId).toBe(readPromptSnapshotId(providerPrompt));
+    expect(JSON.stringify(providerSchema)).not.toContain('"snapshotId"');
+    expect(providerPrompt).toContain('Do not output proofId, snapshotId, runId');
     expect(providerPrompt).toContain(JSON.stringify(providerSchema, null, 2));
 
     const phaseSpan = exporter.spans.find((span) =>
@@ -371,7 +321,7 @@ describe('finding reviewer observability wiring', () => {
     expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
   });
 
-  it('parallel reviewers expose real phase spans whose instructions match the shared provider schema snapshot', async () => {
+  it('parallel reviewers share the request-only provider schema and expose matching real phase spans', async () => {
     const config = makeParallelReviewerConfig();
     await new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
@@ -387,12 +337,12 @@ describe('finding reviewer observability wiring', () => {
     );
     expect(reviewerCalls).toHaveLength(2);
     const sharedProviderSchema = reviewerCalls[0]?.[2]?.outputSchema;
-    const snapshotId = readSnapshotIdConst(sharedProviderSchema);
+    expect(JSON.stringify(sharedProviderSchema)).not.toContain('"snapshotId"');
 
     for (const [persona, providerPrompt, providerOptions] of reviewerCalls) {
       expect(providerOptions?.outputSchema).toBe(sharedProviderSchema);
       expect(providerPrompt).toContain(JSON.stringify(sharedProviderSchema, null, 2));
-      expect(snapshotId).toBe(readPromptSnapshotId(providerPrompt));
+      expect(providerPrompt).toContain('Do not output proofId, snapshotId, runId');
       const stepName = persona === 'architecture-reviewer' ? 'architecture-review' : 'security-review';
       const phaseSpan = exporter.spans.find((span) =>
         span.name === `phase.${stepName}.execute` && span.attributes['takt.phase.number'] === 1,
@@ -415,7 +365,7 @@ describe('finding reviewer observability wiring', () => {
     expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
   });
 
-  it('reviewer 実行中に source が変わると旧 snapshot の finding を reviewer anomaly に隔離する', async () => {
+  it('reviewer 実行中に source が変わると不一致 quote を reviewer anomaly に隔離する', async () => {
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       if (hasSchemaProperty(options?.outputSchema, 'rawFindings')) {
@@ -424,7 +374,7 @@ describe('finding reviewer observability wiring', () => {
         return {
           persona,
           status: 'done',
-          content: 'One finding from the inspected snapshot.',
+          content: String(finding.rawExcerpt),
           structuredOutput: { rawFindings: [finding] },
           timestamp: new Date('2026-07-22T00:00:00.000Z'),
         };
@@ -448,6 +398,6 @@ describe('finding reviewer observability wiring', () => {
     const ledger = readFindingLedger(cwd);
     expect(ledger.findings).toHaveLength(0);
     expect(ledger.reviewerAnomalies).toHaveLength(1);
-    expect(ledger.reviewerAnomalies?.[0]?.kind).toBe('stale-snapshot');
+    expect(ledger.reviewerAnomalies?.[0]?.kind).toBe('quote-mismatch');
   });
 });

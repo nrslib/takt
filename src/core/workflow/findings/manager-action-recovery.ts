@@ -337,7 +337,8 @@ export function applyManagerActionRecoveryLifecycleCommands(input: {
     }
     const proofIds = input.proofedLedger.evidenceRecords.flatMap((record) => (
       record.kind === 'engine_proof'
-      && record.subject.kind === 'finding_location_set_invalid'
+      && record.purpose === 'lifecycle_authority'
+      && record.subject.kind === 'finding_target_invalid'
       && record.subject.findingId === invalidated.findingId
         ? [record.evidenceId]
         : []

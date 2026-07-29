@@ -6,6 +6,7 @@ import type {
 export interface ProvisionalRecoveryOrigin {
   provisionalFindingId: string;
   expectedProvisionalRevision: number;
+  expectedTargetIdentityHash: string | null;
   expectedProvisionalStableKey: string;
   expectedProvisionalLineageKey: string;
   expectedRecoveryReviewerStableKey: string | undefined;
@@ -17,6 +18,7 @@ export function snapshotProvisionalRecoveryOrigin(
   return {
     provisionalFindingId: finding.id,
     expectedProvisionalRevision: finding.revision,
+    expectedTargetIdentityHash: finding.targetIdentityHash,
     expectedProvisionalStableKey: finding.provisional.stableKey,
     expectedProvisionalLineageKey: finding.provisional.lineageKey,
     expectedRecoveryReviewerStableKey: finding.provisional.recoveryReviewerStableKey,
@@ -31,6 +33,7 @@ export function matchesProvisionalRecoveryOrigin(
     && finding.status === 'open'
     && finding.provisional !== undefined
     && finding.revision === origin.expectedProvisionalRevision
+    && finding.targetIdentityHash === origin.expectedTargetIdentityHash
     && finding.provisional.stableKey === origin.expectedProvisionalStableKey
     && finding.provisional.lineageKey === origin.expectedProvisionalLineageKey
     && finding.provisional.recoveryReviewerStableKey

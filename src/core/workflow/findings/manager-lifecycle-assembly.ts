@@ -21,6 +21,10 @@ import { managerDuplicateLifecycleCommandKey } from './manager-lifecycle-authori
  */
 export function assembleAndApplyManagerLifecycleTransactions(input: {
   current: FindingLedger;
+  rawRecoveryManagerDecisionProposed?: FindingLedger;
+  rawRecoveryManagerDecisionCommands?: readonly FindingLifecycleCommand[];
+  rawRecoveryProposed?: FindingLedger;
+  rawRecoverySettlementCommands?: readonly FindingLifecycleCommand[];
   managerDecisionProposed: FindingLedger;
   managerDecisionCommands: readonly FindingLifecycleCommand[];
   proposed: FindingLedger;
@@ -37,6 +41,32 @@ export function assembleAndApplyManagerLifecycleTransactions(input: {
   actionRecoveryPlan: ManagerActionRecoveryLifecyclePlan | null;
   occurredAt: FindingObservation;
 }): FindingLedger {
+  const rawRecoveryManagerDecisionLedger = input.rawRecoveryManagerDecisionProposed === undefined
+    ? input.current
+    : applyManagerDecisionLifecycleCommands({
+        current: input.current,
+        proposed: input.rawRecoveryManagerDecisionProposed,
+        commands: input.rawRecoveryManagerDecisionCommands ?? [],
+        occurredAt: input.occurredAt,
+      });
+  const appliedRawRecoveryLedger = applyFindingLifecycleCommands({
+    ledger: rawRecoveryManagerDecisionLedger,
+    commands: input.rawRecoverySettlementCommands ?? [],
+    occurredAt: input.occurredAt,
+  });
+  const rawRecoveryLedger = input.rawRecoveryProposed === undefined
+    ? appliedRawRecoveryLedger
+    : mergeFindingLifecycleCommandState(
+        appliedRawRecoveryLedger,
+        {
+          ...input.rawRecoveryProposed,
+          evidenceBindings: appliedRawRecoveryLedger.evidenceBindings,
+          lifecycleReservations: appliedRawRecoveryLedger.lifecycleReservations,
+          lifecycleEvents: appliedRawRecoveryLedger.lifecycleEvents,
+          rawRecoveryAttempts: appliedRawRecoveryLedger.rawRecoveryAttempts,
+          rawRecoveryResults: appliedRawRecoveryLedger.rawRecoveryResults,
+        },
+      );
   const accumulatedProofIdsByFinding = new Map<string, string[]>();
   const managerDecisionCommands = input.managerDecisionCommands.map((command) => {
     const duplicateProofIdsByTarget = command.operation === 'supersede_findings'
@@ -96,8 +126,15 @@ export function assembleAndApplyManagerLifecycleTransactions(input: {
     };
   });
   const managerDecisionLedger = applyManagerDecisionLifecycleCommands({
-    current: input.current,
-    proposed: input.managerDecisionProposed,
+    current: rawRecoveryLedger,
+    proposed: {
+      ...input.managerDecisionProposed,
+      evidenceBindings: rawRecoveryLedger.evidenceBindings,
+      lifecycleReservations: rawRecoveryLedger.lifecycleReservations,
+      lifecycleEvents: rawRecoveryLedger.lifecycleEvents,
+      rawRecoveryAttempts: rawRecoveryLedger.rawRecoveryAttempts,
+      rawRecoveryResults: rawRecoveryLedger.rawRecoveryResults,
+    },
     commands: managerDecisionCommands,
     occurredAt: input.occurredAt,
   });

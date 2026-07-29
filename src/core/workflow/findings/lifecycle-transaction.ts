@@ -21,6 +21,7 @@ import type {
   FindingLedgerConflict,
   FindingLedgerEntry,
   FindingLifecycleMutationTarget,
+  FindingLifecycleEntityHead,
   FindingLifecycleOperation,
   FindingLifecycleAuthority,
   FindingLifecycleReservationContext,
@@ -32,6 +33,8 @@ import {
   captureFindingLifecycleHead,
   reserveVerifiedLifecycleMutation,
 } from './lifecycle-mutation.js';
+import { computeConflictEvidenceHash } from './adjudication-evidence.js';
+import { captureReviewScopeSnapshot } from './snapshot.js';
 
 function targetKey(target: { entityKind: string; entityId: string }): string {
   return `${target.entityKind}\0${target.entityId}`;
@@ -104,25 +107,27 @@ function lifecycleTargets(input: {
   current: FindingLedger;
   findings: readonly FindingLedgerEntry[];
   conflicts: readonly FindingLedgerConflict[];
+  expectedHeadsByTarget?: ReadonlyMap<string, FindingLifecycleEntityHead | null>;
 }): FindingLifecycleMutationTarget[] {
+  const expectedHead = (
+    entityKind: 'finding' | 'conflict',
+    entityId: string,
+  ): FindingLifecycleEntityHead | null => {
+    const key = targetKey({ entityKind, entityId });
+    return input.expectedHeadsByTarget?.has(key)
+      ? input.expectedHeadsByTarget.get(key) ?? null
+      : captureFindingLifecycleHead(input.current, entityKind, entityId) ?? null;
+  };
   return sortFindingLifecycleTargets([
     ...input.findings.map((finding) => ({
       entityKind: 'finding' as const,
       entityId: finding.id,
-      expectedHead: captureFindingLifecycleHead(
-        input.current,
-        'finding',
-        finding.id,
-      ) ?? null,
+      expectedHead: expectedHead('finding', finding.id),
     })),
     ...input.conflicts.map((conflict) => ({
       entityKind: 'conflict' as const,
       entityId: conflict.id,
-      expectedHead: captureFindingLifecycleHead(
-        input.current,
-        'conflict',
-        conflict.id,
-      ) ?? null,
+      expectedHead: expectedHead('conflict', conflict.id),
     })),
   ]);
 }
@@ -172,7 +177,46 @@ export interface FindingLifecycleCommand {
   };
   authority: LifecycleAuthorityInput;
   evidenceSourcesByTarget: ReadonlyMap<string, LifecycleEvidenceSource>;
+  expectedHeadsByTarget?: ReadonlyMap<string, FindingLifecycleEntityHead | null>;
+  conflictEvidencePrecondition?: {
+    conflictId: string;
+    evidenceSetHash: string;
+    cwd: string;
+  };
   reservedMutationId?: string;
+}
+
+function assertConflictEvidencePrecondition(
+  ledger: FindingLedger,
+  command: FindingLifecycleCommand,
+): void {
+  const precondition = command.conflictEvidencePrecondition;
+  if (precondition === undefined) {
+    return;
+  }
+  if (
+    command.operation !== 'resolve_conflict'
+    || !command.changes.conflicts.some(
+      (conflict) => conflict.id === precondition.conflictId,
+    )
+  ) {
+    throw new Error('Conflict evidence precondition is only valid for its resolve command');
+  }
+  const conflict = ledger.conflicts.find(
+    (candidate) => candidate.id === precondition.conflictId,
+  );
+  const freshEvidenceSetHash = conflict === undefined
+    ? null
+    : computeConflictEvidenceHash(
+        conflict,
+        ledger,
+        captureReviewScopeSnapshot(precondition.cwd).reviewScopeSnapshotId,
+      );
+  if (freshEvidenceSetHash !== precondition.evidenceSetHash) {
+    throw new Error(
+      `Conflict evidence dependency CAS failed for "${precondition.conflictId}"`,
+    );
+  }
 }
 
 export function reserveFindingConflictAdjudicationLifecycle(input: {
@@ -370,6 +414,7 @@ export function applyFindingLifecycleCommands(input: {
 }): FindingLedger {
   let ledger = input.ledger;
   for (const command of input.commands) {
+    assertConflictEvidencePrecondition(ledger, command);
     const changes = commandChanges(ledger, command);
     if (command.reservedMutationId !== undefined) {
       const reservation = ledger.lifecycleReservations.find(
@@ -400,6 +445,7 @@ export function applyFindingLifecycleCommands(input: {
       current: ledger,
       findings: changes.findings,
       conflicts: changes.conflicts,
+      expectedHeadsByTarget: command.expectedHeadsByTarget,
     });
     const bindings = evidenceBindings({
       ledger,

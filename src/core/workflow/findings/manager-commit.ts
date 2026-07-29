@@ -28,6 +28,7 @@ import { assembleAndApplyManagerLifecycleTransactions } from './manager-lifecycl
 import { completeRawRecoveryAttempts } from './raw-recovery-result.js';
 import { applyRejectedObservationAttachments } from './manager-provisional-settlement.js';
 import { attachFixpointState } from './fixpoint.js';
+import type { ReviewScopeProofSnapshot } from './snapshot.js';
 
 export interface CommitFindingManagerRoundResult {
   applied: boolean;
@@ -60,6 +61,7 @@ export async function commitFindingManagerRound(params: {
   stopBudgetRoundMarker: string;
   reviewIntegrityLimits: ReturnType<typeof resolveReviewIntegrityLimits>;
   reviewScopeSnapshotId: string;
+  reviewScopeSnapshot: ReviewScopeProofSnapshot;
 }): Promise<CommitFindingManagerRoundResult> {
   try {
     const mutation = await params.input.ledgerStore.commitManagerLedger((freshLedger) => {
@@ -80,7 +82,7 @@ export async function commitFindingManagerRound(params: {
         };
       }
       const proofed = issueManagerLifecycleAuthority({
-        current: freshLedger,
+        current: commitMutation.result.rawRecoveryLedger,
         managerDecisionCommands: commitMutation.result.managerDecisionCommands,
         proposed: commitMutation.ledger,
         managerOutput: {
@@ -99,6 +101,13 @@ export async function commitFindingManagerRound(params: {
       });
       const lifecycleLedger = assembleAndApplyManagerLifecycleTransactions({
         current: freshLedger,
+        rawRecoveryManagerDecisionCommands:
+          commitMutation.result.rawRecoveryManagerDecisionCommands,
+        rawRecoveryManagerDecisionProposed:
+          commitMutation.result.rawRecoveryManagerDecisionLedger,
+        rawRecoverySettlementCommands:
+          commitMutation.result.rawRecoverySettlementCommands,
+        rawRecoveryProposed: commitMutation.result.rawRecoveryLedger,
         managerDecisionCommands: commitMutation.result.managerDecisionCommands,
         managerDecisionProposed: {
           ...proofed.ledger,
@@ -235,6 +244,7 @@ function buildCommitReport(
     interpretationStats: managerDecision.ladder.stats,
     rawFindingDispositions: committed.rawFindingDispositions,
     interpretationRecoverySettlements: committed.interpretationRecoverySettlements,
+    managerTaskAudits: managerDecision.taskAudits,
   });
 }
 

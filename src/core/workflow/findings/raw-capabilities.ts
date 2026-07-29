@@ -33,7 +33,6 @@ import {
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import type { ProvisionalFindingSpec } from './reconciler.js';
 import { computeCanonicalRawIntegrityDigest } from './finding-integrity.js';
-import { computeClaimIdentityHash } from './evidence-domain.js';
 
 // エンジン発行の証明だけを本物と認めるための runtime 登録簿。
 const SAME_PROOF_REGISTRY = new WeakSet<object>();
@@ -283,12 +282,12 @@ function openConflictIssuanceIntegrityDigest(input: {
 }): string {
   return createHash('sha256').update(canonicalJson({
     version: 1,
-    canonicalWire: input.canonicalWire,
-    provenance: input.provenance,
-    stableIdentity: input.stableIdentity,
-    validatedDecision: input.validatedDecision,
-    conflict: input.conflict,
-    provisionalSpec: input.provisionalSpec,
+    canonicalWire: canonicalJson(input.canonicalWire),
+    provenance: canonicalJson(input.provenance),
+    stableIdentity: canonicalJson(input.stableIdentity),
+    validatedDecision: canonicalJson(input.validatedDecision),
+    conflict: canonicalJson(input.conflict),
+    provisionalSpec: canonicalJson(input.provisionalSpec),
   })).digest('hex');
 }
 
@@ -311,14 +310,15 @@ function issueProof(value: UnbrandedSameProof): DeterministicSameProof {
  * 正規化 — 大小文字は保存する。contract invariant: 大小文字を潰すと別問題を誤統合）。
  */
 function sameProofIdentityKey(fields: {
-  title?: string;
-  description?: string;
-}): string {
-  return computeClaimIdentityHash({
-    targetFindingId: null,
-    title: fields.title ?? '',
-    description: fields.description ?? '',
-  });
+  targetIdentityHash: string | null;
+  semanticClaimIdentityHash: string | null;
+}): string | undefined {
+  return fields.targetIdentityHash === null || fields.semanticClaimIdentityHash === null
+    ? undefined
+    : canonicalJson({
+        targetIdentityHash: fields.targetIdentityHash,
+        semanticClaimIdentityHash: fields.semanticClaimIdentityHash,
+      });
 }
 
 function findingRevisionOf(entry: FindingLedgerEntry): number {
@@ -328,7 +328,7 @@ function findingRevisionOf(entry: FindingLedgerEntry): number {
 /**
  * ambiguous canonical raw に対して成立する決定的 SameProof をエンジンが発行する。
  * 証明条件は、open finding に紐づく raw（または finding 自身の
- * フィールド）との claimIdentityHash 完全一致。
+ * フィールド）との semanticClaimIdentityHash 完全一致。
  * 返り値は rawFindingId → proof。証明が成立しない raw は含まれない。
  */
 export function issueDeterministicSameProofs(input: {
@@ -349,14 +349,18 @@ export function issueDeterministicSameProofs(input: {
       continue;
     }
     const ownKey = sameProofIdentityKey(finding);
-    indexFinding(ownKey, finding);
+    if (ownKey !== undefined) {
+      indexFinding(ownKey, finding);
+    }
     for (const rawFindingId of finding.rawFindingIds) {
       const raw = rawById.get(rawFindingId);
       if (raw === undefined) {
         continue;
       }
       const key = sameProofIdentityKey(raw);
-      indexFinding(key, finding);
+      if (key !== undefined) {
+        indexFinding(key, finding);
+      }
     }
   }
 
@@ -369,10 +373,14 @@ export function issueDeterministicSameProofs(input: {
     if (raw.title === undefined || raw.description === undefined) {
       continue;
     }
-    const identityHash = createHash('sha256').update(sameProofIdentityKey(raw)).digest('hex');
+    const sameIdentity = sameProofIdentityKey(raw);
+    if (sameIdentity === undefined) {
+      continue;
+    }
+    const identityHash = createHash('sha256').update(sameIdentity).digest('hex');
     const excludedTargetFindingIds = input.excludedTargetFindingIdsByRawFindingId
       .get(raw.rawFindingId);
-    const target = identityToOpenFindings.get(sameProofIdentityKey(raw))
+    const target = identityToOpenFindings.get(sameIdentity)
       ?.find((candidate) => excludedTargetFindingIds?.has(candidate.id) !== true);
     if (target === undefined) {
       continue;
@@ -386,6 +394,7 @@ export function issueDeterministicSameProofs(input: {
       rawFindingId: raw.rawFindingId,
       targetFindingId: target.id,
       targetRevision,
+      targetIdentityHash: raw.targetIdentityHash,
       identityHash,
       algorithmVersion: 1,
     }));
@@ -416,6 +425,12 @@ export function verifySameProofAgainstLedger(
     return {
       ok: false,
       reason: `target finding "${proof.targetFindingId}" revision changed from ${proof.targetRevision} to ${findingRevisionOf(target)} since the proof was issued`,
+    };
+  }
+  if (target.targetIdentityHash !== proof.targetIdentityHash) {
+    return {
+      ok: false,
+      reason: `target finding "${proof.targetFindingId}" no longer has target identity "${proof.targetIdentityHash}"`,
     };
   }
   return { ok: true, target };

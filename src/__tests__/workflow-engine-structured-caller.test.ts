@@ -177,6 +177,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       startLine: 10,
       title: 'Existing issue',
       description: 'Existing issue body.',
+      familyTag: 'bug',
       targetFindingId: null,
     });
     const initialLedger = {
@@ -2472,6 +2473,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       startLine: 10,
       title: 'Existing issue',
       description: 'Existing issue body.',
+      familyTag: 'bug',
       targetFindingId: null,
     });
     const initialLedger = {
@@ -2676,6 +2678,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       startLine: 10,
       title: 'Existing issue',
       description: 'Existing issue body.',
+      familyTag: 'bug',
       targetFindingId: null,
     });
     const initialLedger = {

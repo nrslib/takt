@@ -9,6 +9,8 @@ const SNAPSHOT_FORMAT = Buffer.from('review-scope-snapshot');
 const SNAPSHOT_DIFF_MAX_BYTES = 20_000;
 const SNAPSHOT_DIFF_CAPTURE_MAX_BYTES = 128 * 1024;
 const SNAPSHOT_UNTRACKED_CONTENT_MAX_BYTES = 20_000;
+const SNAPSHOT_QUERY_CONTENT_MAX_BYTES = 8 * 1024 * 1024;
+const SNAPSHOT_QUERY_FILE_MAX_BYTES = 1024 * 1024;
 
 class ReviewScopeSnapshotError extends Error {
   constructor(operation: string, path: string, cause: unknown) {
@@ -30,6 +32,7 @@ interface SnapshotEntry {
   sortOrder: number;
   stage: Buffer;
   untrackedEvidence?: ReviewScopeUntrackedEvidence;
+  queryEntry: ReviewScopeQueryInventoryEntry;
 }
 
 interface CapturedSnapshot {
@@ -38,6 +41,7 @@ interface CapturedSnapshot {
   trackedDiff: string | undefined;
   untrackedEvidence: ReviewScopeUntrackedEvidence[];
   presentationDigest: string;
+  queryInventory: ReviewScopeQueryInventoryEntry[];
 }
 
 export interface ReviewScopeUntrackedEvidence {
@@ -55,13 +59,38 @@ export interface ReviewScopeSnapshot {
   untrackedEvidence: ReviewScopeUntrackedEvidence[];
 }
 
+export interface ReviewScopeQueryInventoryEntry {
+  path: string;
+  kind: string;
+  contentDigest?: string;
+  /** exact bytes retained from the same immutable snapshot read. */
+  content?: Buffer;
+  coverage:
+    | 'complete'
+    | 'resource_cap'
+    | 'unsupported_kind'
+    | 'unsupported_path_encoding'
+    | 'excluded'
+    | 'deleted';
+}
+
+export interface ReviewScopeProofSnapshot extends ReviewScopeSnapshot {
+  queryInventory: ReviewScopeQueryInventoryEntry[];
+}
+
 interface FileSnapshot {
   digest: Buffer;
   preview: Buffer;
   truncated: boolean;
+  queryContent: Buffer;
+  queryTruncated: boolean;
 }
 
 interface PreviewBudget {
+  remainingBytes: number;
+}
+
+interface QueryBudget {
   remainingBytes: number;
 }
 
@@ -218,6 +247,7 @@ function readFileSnapshot(
   path: Buffer,
   expectedStat: Stats,
   maxPreviewBytes: number,
+  maxQueryBytes: number,
 ): FileSnapshot {
   if (constants.O_NOFOLLOW === undefined) {
     return fail('open', displayPath(path), new Error('O_NOFOLLOW is unavailable on this platform'));
@@ -232,7 +262,9 @@ function readFileSnapshot(
 
   const hash = createHash('sha256');
   const previewChunks: Buffer[] = [];
+  const queryChunks: Buffer[] = [];
   let previewBytes = 0;
+  let queryBytes = 0;
   let contentBytes = 0;
   let failure: unknown;
   let closeFailure: unknown;
@@ -269,6 +301,11 @@ function readFileSnapshot(
         previewChunks.push(Buffer.from(chunk.subarray(0, previewLength)));
         previewBytes += previewLength;
       }
+      const queryLength = Math.min(bytesRead, maxQueryBytes - queryBytes);
+      if (queryLength > 0) {
+        queryChunks.push(Buffer.from(chunk.subarray(0, queryLength)));
+        queryBytes += queryLength;
+      }
     }
   } finally {
     try {
@@ -286,6 +323,8 @@ function readFileSnapshot(
     digest: hash.digest(),
     preview: Buffer.concat(previewChunks),
     truncated: contentBytes > previewBytes,
+    queryContent: Buffer.concat(queryChunks),
+    queryTruncated: contentBytes > queryBytes,
   };
 }
 
@@ -324,6 +363,7 @@ function trackedSnapshotEntry(
   cwd: string,
   entry: TrackedEntry,
   visitedDirectories: Set<string>,
+  queryBudget: QueryBudget,
 ): SnapshotEntry {
   const absPath = absolutePath(cwd, entry.path);
   const stat = lstatPath(absPath, entry.path, true);
@@ -345,10 +385,20 @@ function trackedSnapshotEntry(
       ]),
       sortOrder: 0,
       stage: entry.stage,
+      queryEntry: protectUnsupportedPathEncoding(entry.path, {
+        path: displayRepositoryPath(entry.path),
+        kind: 'deleted',
+        coverage: 'deleted',
+      }),
     };
   }
 
   const fields = [...baseFields, ['kind', fileKind(stat)], ['actualMode', actualMode(stat)], ['deleted', 0]] as Array<[string, Buffer | string | number]>;
+  let queryEntry: ReviewScopeQueryInventoryEntry = {
+    path: displayRepositoryPath(entry.path),
+    kind: fileKind(stat),
+    coverage: 'unsupported_kind',
+  };
   if (entry.indexMode.equals(Buffer.from('160000'))) {
     assertGitlinkDirectory(stat, entry.path);
     let digest: string;
@@ -359,10 +409,26 @@ function trackedSnapshotEntry(
     }
     fields[5] = ['kind', 'submodule'];
     fields.push(['submoduleGitlink', entry.indexObject], ['submoduleWorkingTreeDigest', digest]);
+    queryEntry = { ...queryEntry, kind: 'submodule' };
   } else if (stat.isSymbolicLink()) {
     fields.push(['symlinkTarget', readSymlinkTarget(absPath, entry.path)]);
   } else if (stat.isFile()) {
-    fields.push(['contentDigest', readFileSnapshot(absPath, entry.path, stat, 0).digest]);
+    const retainedBytes = Math.min(
+      queryBudget.remainingBytes,
+      SNAPSHOT_QUERY_FILE_MAX_BYTES,
+    );
+    const fileSnapshot = readFileSnapshot(absPath, entry.path, stat, 0, retainedBytes);
+    queryBudget.remainingBytes -= fileSnapshot.queryContent.length;
+    fields.push(['contentDigest', fileSnapshot.digest]);
+    queryEntry = {
+      ...queryEntry,
+      kind: 'file',
+      contentDigest: fileSnapshot.digest.toString('hex'),
+      content: fileSnapshot.queryContent,
+      coverage: fileSnapshot.queryTruncated ? 'resource_cap' : 'complete',
+    };
+  } else if (stat.isDirectory()) {
+    queryEntry = { ...queryEntry, coverage: 'complete' };
   }
 
   return {
@@ -370,12 +436,30 @@ function trackedSnapshotEntry(
     record: normalizeRecord(fields),
     sortOrder: 0,
     stage: entry.stage,
+    queryEntry: protectUnsupportedPathEncoding(entry.path, queryEntry),
   };
 }
 
 function displayRepositoryPath(path: Buffer): string {
   const decoded = path.toString('utf8');
   return Buffer.from(decoded, 'utf8').equals(path) ? decoded : displayPath(path);
+}
+
+export function protectUnsupportedPathEncoding(
+  path: Buffer,
+  entry: ReviewScopeQueryInventoryEntry,
+): ReviewScopeQueryInventoryEntry {
+  const decoded = path.toString('utf8');
+  if (Buffer.from(decoded, 'utf8').equals(path)) {
+    return entry;
+  }
+  const withoutContent = { ...entry };
+  delete withoutContent.content;
+  return {
+    ...withoutContent,
+    path: displayPath(path),
+    coverage: 'unsupported_path_encoding',
+  };
 }
 
 function encodePreview(preview: Buffer): Pick<ReviewScopeUntrackedEvidence, 'content' | 'contentEncoding'> {
@@ -391,6 +475,7 @@ function untrackedSnapshotEntry(
   path: Buffer,
   visitedDirectories: Set<string>,
   previewBudget: PreviewBudget,
+  queryBudget: QueryBudget,
 ): SnapshotEntry {
   const absPath = absolutePath(cwd, path);
   const stat = lstatPath(absPath, path, false);
@@ -409,6 +494,11 @@ function untrackedSnapshotEntry(
     path: displayRepositoryPath(path),
     kind: fileKind(stat),
   };
+  let queryEntry: ReviewScopeQueryInventoryEntry = {
+    path: displayRepositoryPath(path),
+    kind: fileKind(stat),
+    coverage: 'unsupported_kind',
+  };
   if (stat.isSymbolicLink()) {
     const target = readSymlinkTarget(absPath, path);
     fields.push(['symlinkTarget', target]);
@@ -417,14 +507,32 @@ function untrackedSnapshotEntry(
       contentDigest: createHash('sha256').update(target).digest('hex'),
     };
   } else if (stat.isFile()) {
-    const fileSnapshot = readFileSnapshot(absPath, path, stat, previewBudget.remainingBytes);
+    const retainedBytes = Math.min(
+      queryBudget.remainingBytes,
+      SNAPSHOT_QUERY_FILE_MAX_BYTES,
+    );
+    const fileSnapshot = readFileSnapshot(
+      absPath,
+      path,
+      stat,
+      previewBudget.remainingBytes,
+      retainedBytes,
+    );
     previewBudget.remainingBytes -= fileSnapshot.preview.length;
+    queryBudget.remainingBytes -= fileSnapshot.queryContent.length;
     fields.push(['contentDigest', fileSnapshot.digest]);
     untrackedEvidence = {
       ...untrackedEvidence,
       contentDigest: fileSnapshot.digest.toString('hex'),
       ...encodePreview(fileSnapshot.preview),
       ...(fileSnapshot.truncated ? { truncated: true } : {}),
+    };
+    queryEntry = {
+      ...queryEntry,
+      kind: 'file',
+      contentDigest: fileSnapshot.digest.toString('hex'),
+      content: fileSnapshot.queryContent,
+      coverage: fileSnapshot.queryTruncated ? 'resource_cap' : 'complete',
     };
   } else if (stat.isDirectory()) {
     let digest: string;
@@ -435,6 +543,7 @@ function untrackedSnapshotEntry(
     }
     fields.push(['embeddedRepositoryWorkingTreeDigest', digest]);
     untrackedEvidence = { ...untrackedEvidence, contentDigest: digest };
+    queryEntry = { ...queryEntry, kind: 'embedded_repository' };
   }
 
   return {
@@ -443,6 +552,29 @@ function untrackedSnapshotEntry(
     sortOrder: 1,
     stage: Buffer.alloc(0),
     untrackedEvidence,
+    queryEntry: protectUnsupportedPathEncoding(path, queryEntry),
+  };
+}
+
+function excludedSnapshotEntry(cwd: string, path: Buffer): SnapshotEntry {
+  const absPath = absolutePath(cwd, path);
+  const stat = lstatPath(absPath, path, false);
+  return {
+    path,
+    record: normalizeRecord([
+      ['path', path],
+      ['tracked', 0],
+      ['excluded', 1],
+      ['kind', fileKind(stat)],
+      ['actualMode', actualMode(stat)],
+    ]),
+    sortOrder: 2,
+    stage: Buffer.alloc(0),
+    queryEntry: protectUnsupportedPathEncoding(path, {
+      path: displayRepositoryPath(path),
+      kind: fileKind(stat),
+      coverage: 'excluded',
+    }),
   };
 }
 
@@ -478,16 +610,31 @@ function captureSnapshot(
 ): CapturedSnapshot {
   const trackedOutput = runGit(cwd, ['ls-files', '--cached', '--stage', '-z']);
   const untrackedOutput = runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z']);
+  const excludedOutput = runGit(
+    cwd,
+    ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'],
+  );
   const head = runGit(cwd, ['rev-parse', '--verify', 'HEAD']);
   const tracked = parseNulEntries(trackedOutput, 'git ls-files --cached --stage -z parse', cwd)
     .map((record) => parseTrackedEntry(record, cwd));
   const untracked = parseNulEntries(untrackedOutput, 'git ls-files --others --exclude-standard -z parse', cwd);
+  const excluded = parseNulEntries(
+    excludedOutput,
+    'git ls-files --others --ignored --exclude-standard --directory -z parse',
+    cwd,
+  );
   const previewBudget: PreviewBudget = {
     remainingBytes: includeEvidence ? SNAPSHOT_UNTRACKED_CONTENT_MAX_BYTES : 0,
   };
+  const queryBudget: QueryBudget = {
+    remainingBytes: includeEvidence ? SNAPSHOT_QUERY_CONTENT_MAX_BYTES : 0,
+  };
   const entries = [
-    ...tracked.map((entry) => trackedSnapshotEntry(cwd, entry, visitedDirectories)),
-    ...untracked.map((path) => untrackedSnapshotEntry(cwd, path, visitedDirectories, previewBudget)),
+    ...tracked.map((entry) => trackedSnapshotEntry(cwd, entry, visitedDirectories, queryBudget)),
+    ...untracked.map((path) => (
+      untrackedSnapshotEntry(cwd, path, visitedDirectories, previewBudget, queryBudget)
+    )),
+    ...excluded.map((path) => excludedSnapshotEntry(cwd, path)),
   ];
   entries.sort((left, right) => Buffer.compare(left.path, right.path)
     || left.sortOrder - right.sortOrder
@@ -516,6 +663,12 @@ function captureSnapshot(
     trackedDiff,
     untrackedEvidence,
     presentationDigest,
+    queryInventory: entries.map((entry) => ({
+      ...entry.queryEntry,
+      ...(entry.queryEntry.content === undefined
+        ? {}
+        : { content: Buffer.from(entry.queryEntry.content) }),
+    })),
   };
 }
 
@@ -540,7 +693,7 @@ function computeStableSnapshot(
   cwd: string,
   visitedDirectories: Set<string>,
   includeEvidence: boolean,
-): ReviewScopeSnapshot {
+): ReviewScopeProofSnapshot {
   const identity = captureDirectoryIdentity(cwd);
   if (visitedDirectories.has(identity)) {
     return fail('capture recursion', cwd, new Error('directory cycle detected'));
@@ -557,6 +710,10 @@ function computeStableSnapshot(
           reviewScopeSnapshotId: second.snapshotId,
           trackedDiff: second.trackedDiff,
           untrackedEvidence: second.untrackedEvidence,
+          queryInventory: second.queryInventory.map((entry) => ({
+            ...entry,
+            ...(entry.content === undefined ? {} : { content: Buffer.from(entry.content) }),
+          })),
         };
       }
     }
@@ -575,5 +732,14 @@ export function computeReviewScopeSnapshotId(cwd: string): string {
 }
 
 export function captureReviewScopeSnapshot(cwd: string): ReviewScopeSnapshot {
+  const snapshot = computeStableSnapshot(cwd, new Set(), true);
+  return {
+    reviewScopeSnapshotId: snapshot.reviewScopeSnapshotId,
+    trackedDiff: snapshot.trackedDiff,
+    untrackedEvidence: snapshot.untrackedEvidence,
+  };
+}
+
+export function captureReviewScopeProofSnapshot(cwd: string): ReviewScopeProofSnapshot {
   return computeStableSnapshot(cwd, new Set(), true);
 }

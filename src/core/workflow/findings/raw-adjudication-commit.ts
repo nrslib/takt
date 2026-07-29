@@ -9,10 +9,11 @@ import type {
 import { revalidateManagerPlan } from './manager-commit-revalidation.js';
 import {
   applyProvisionalSettlement,
+  buildProvisionalSettlementLifecycleCommands,
   settleProvisionalsWithCleanEvidence,
 } from './manager-provisional-settlement.js';
 import { collectLandedRawIds } from './manager-utils.js';
-import { reconcileFindingLedger } from './reconciler.js';
+import { reconcileFindingLedgerPlan } from './reconciler.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
@@ -22,6 +23,8 @@ import type {
 import { matchesProvisionalRecoveryOrigin } from './provisional-recovery-origin.js';
 import { canonicalRawIntegrityDigestOf } from './raw-canonicalization.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
+import type { FindingLifecycleCommand } from './lifecycle-transaction.js';
+import type { ReviewScopeProofSnapshot } from './snapshot.js';
 
 function filterReplayOutput(input: {
   output: FindingManagerOutput;
@@ -33,13 +36,28 @@ function filterReplayOutput(input: {
       && entry.rawFindingIds.every((rawFindingId) => input.eligibleRawIds.has(rawFindingId))
     ))
   );
+  const matches = retainEligibleEntries(input.output.matches);
+  const newFindings = retainEligibleEntries(input.output.newFindings);
+  const resolvedFindings = retainEligibleEntries(input.output.resolvedFindings);
+  const reopenedFindings = retainEligibleEntries(input.output.reopenedFindings);
+  const conflicts = retainEligibleEntries(input.output.conflicts);
+  const retainedRawFindingIds = new Set([
+    ...matches.flatMap((entry) => entry.rawFindingIds),
+    ...newFindings.flatMap((entry) => entry.rawFindingIds),
+    ...resolvedFindings.flatMap((entry) => entry.rawFindingIds),
+    ...reopenedFindings.flatMap((entry) => entry.rawFindingIds),
+    ...conflicts.flatMap((entry) => entry.rawFindingIds),
+  ]);
   return {
     ...input.output,
-    matches: retainEligibleEntries(input.output.matches),
-    newFindings: retainEligibleEntries(input.output.newFindings),
-    resolvedFindings: retainEligibleEntries(input.output.resolvedFindings),
-    reopenedFindings: retainEligibleEntries(input.output.reopenedFindings),
-    conflicts: retainEligibleEntries(input.output.conflicts),
+    anchorAdjudications: input.output.anchorAdjudications.filter((adjudication) => (
+      retainedRawFindingIds.has(adjudication.rawFindingId)
+    )),
+    matches,
+    newFindings,
+    resolvedFindings,
+    reopenedFindings,
+    conflicts,
     resolvedConflicts: [],
     waivedFindings: [],
     disputeNotes: [],
@@ -154,12 +172,22 @@ export function applyRawAdjudicationRecovery(input: {
   runInput: RunFindingManagerForStepInput;
   observation: FindingObservation;
   reviewScopeSnapshotId: string;
+  reviewScopeSnapshot: ReviewScopeProofSnapshot;
 }): {
   ledger: FindingLedger;
+  managerDecisionLedger: FindingLedger;
+  managerDecisionCommands: FindingLifecycleCommand[];
+  settlementCommands: FindingLifecycleCommand[];
   rawFindingDispositions: RawFindingDisposition[];
 } {
   if (input.recovery.origins.size === 0) {
-    return { ledger: input.freshLedger, rawFindingDispositions: [] };
+    return {
+      ledger: input.freshLedger,
+      managerDecisionLedger: input.freshLedger,
+      managerDecisionCommands: [],
+      settlementCommands: [],
+      rawFindingDispositions: [],
+    };
   }
   const fresh = collectFreshOrigins({
     freshLedger: input.freshLedger,
@@ -176,6 +204,9 @@ export function applyRawAdjudicationRecovery(input: {
   if (origins.size === 0) {
     return {
       ledger: input.freshLedger,
+      managerDecisionLedger: input.freshLedger,
+      managerDecisionCommands: [],
+      settlementCommands: [],
       rawFindingDispositions: [...input.recovery.origins.keys()].map((rawFindingId) => {
         const failure = failures.get(rawFindingId);
         if (failure === undefined) {
@@ -199,6 +230,8 @@ export function applyRawAdjudicationRecovery(input: {
     scopeIdentity: input.runInput.ledgerStore.ledgerIdentity,
     previousLedger: input.freshLedger,
     intake: eligibleIntake,
+    reviewScopeSnapshot: input.reviewScopeSnapshot,
+    workflowTask: input.runInput.workflowTask,
   });
   const admittedRawIds = new Set(admission.cleanWire.map((wire) => wire.rawFindingId));
   const adjudicableRawIds = new Set(
@@ -232,6 +265,8 @@ export function applyRawAdjudicationRecovery(input: {
     cleanWireById: freshWireById,
     cleanCanonicalById: freshCanonicalById,
     capturedPreconditions: input.recovery.capturedPreconditions,
+    capturedConflictHeads: new Map(),
+    reviewScopeSnapshotId: input.reviewScopeSnapshotId,
     runInput: { ...input.runInput, priorStepResponseText: undefined },
   });
   for (const spec of revalidated.provisionalSpecs) {
@@ -245,7 +280,7 @@ export function applyRawAdjudicationRecovery(input: {
   }
   const settlement = settleProvisionalsWithCleanEvidence({
     output: revalidated.output,
-    cleanRawIds: new Set(),
+    cleanRawIds: adjudicableRawIds,
     wireById: freshWireById,
     freshLedger: input.freshLedger,
     explicitResolvedByMapping: new Map(),
@@ -298,7 +333,7 @@ export function applyRawAdjudicationRecovery(input: {
     throw new Error(`Replay raw finding "${rawFindingId}" has no finite disposition`);
   });
   const replayRawFindingIds = new Set(replayWire.map((rawFinding) => rawFinding.rawFindingId));
-  const reconciled = reconcileFindingLedger({
+  const reconciledPlan = reconcileFindingLedgerPlan({
     previousLedger: input.freshLedger,
     rawFindings: replayWire,
     managerOutput: settledOutput,
@@ -316,12 +351,18 @@ export function applyRawAdjudicationRecovery(input: {
     },
   });
   const appliedSettlement = applyProvisionalSettlement(
-    reconciled,
+    reconciledPlan.ledger,
     settlement,
     input.runInput.timestamp,
   );
   return {
     ledger: appliedSettlement,
+    managerDecisionLedger: reconciledPlan.ledger,
+    managerDecisionCommands: reconciledPlan.lifecycleCommands,
+    settlementCommands: buildProvisionalSettlementLifecycleCommands({
+      after: appliedSettlement,
+      settlement,
+    }),
     rawFindingDispositions,
   };
 }

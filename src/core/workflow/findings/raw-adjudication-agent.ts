@@ -20,14 +20,41 @@ export function prepareRawAdjudicationBatch(input: {
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction'>;
 }): PreparedRawAdjudicationBatch {
   const prepare = (batch: RawFinding[]): PreparedRawAdjudicationBatch => {
+    const batchRawFindingIds = new Set(batch.map((rawFinding) => rawFinding.rawFindingId));
+    const contextFindings = input.previousLedger.findings.filter((finding) => (
+      finding.provisional === undefined
+      || finding.rawFindingIds.some((rawFindingId) => batchRawFindingIds.has(rawFindingId))
+    ));
+    const contextFindingIds = new Set(contextFindings.map((finding) => finding.id));
+    const fullDetailFindingIds = new Set(
+      contextFindings
+        .filter((finding) => finding.rawFindingIds.some((rawFindingId) => (
+          batchRawFindingIds.has(rawFindingId)
+        )))
+        .map((finding) => finding.id),
+    );
+    const contextLedger: FindingLedger = {
+      ...input.previousLedger,
+      findings: contextFindings,
+      conflicts: input.previousLedger.conflicts.filter((conflict) => (
+        conflict.findingIds.every((findingId) => contextFindingIds.has(findingId))
+      )),
+    };
     const instruction = buildManagerInstruction({
       contract: input.contract,
-      previousLedger: input.previousLedger,
+      previousLedger: contextLedger,
       residualRawFindings: batch,
       mechanicallyClassifiedCount: input.mechanicallyClassifiedCount,
       priorStepResponseText: undefined,
       invalidLocationCandidates: new Map(),
       dismissCandidates: new Map(),
+      verifiedEvidenceRecordsByRawFindingId: new Map(
+        batch.map((rawFinding) => [
+          rawFinding.rawFindingId,
+          input.previousLedger.evidenceRecords,
+        ]),
+      ),
+      fullDetailFindingIds,
     });
     const phase1Instruction = input.stepExecutor.buildPhase1Instruction(instruction, input.managerStep);
     const inputTokens = estimateTokens(phase1Instruction);

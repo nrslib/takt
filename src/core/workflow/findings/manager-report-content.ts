@@ -42,6 +42,15 @@ function canonicalizeReport(
       sourceRawFindingIds: sortStrings(landing.sourceRawFindingIds),
     }))
     .sort(compareCanonicalJsonValues);
+  const managerTaskAudits = report.managerTaskAudits
+    ?.map((audit) => ({
+      ...audit,
+      ownedIds: sortStrings(audit.ownedIds),
+    }))
+    .sort((left, right) => (
+      compareBinaryStrings(left.taskId, right.taskId)
+      || compareCanonicalJsonValues(left, right)
+    ));
   return {
     ...report,
     finalErrors: [...report.finalErrors],
@@ -77,6 +86,7 @@ function canonicalizeReport(
             || compareCanonicalJsonValues(left, right)
           )),
         }),
+    ...(managerTaskAudits === undefined ? {} : { managerTaskAudits }),
   };
 }
 

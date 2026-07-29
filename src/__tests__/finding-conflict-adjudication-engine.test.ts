@@ -52,7 +52,10 @@ import {
   verifiedFindingEvidenceFixture,
   verifiedSourceQuoteFields,
 } from './helpers/finding-evidence.js';
-import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
+import {
+  authorizeFindingLedgerFixture,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 function isAdjudicationSchema(outputSchema: unknown): boolean {
@@ -115,6 +118,28 @@ function supervisorPersonaPath(cwd: string): string {
   return join(cwd, 'personas', 'supervisor.md');
 }
 
+function reviewerExtraction(
+  raw: Record<string, unknown>,
+  rawExcerpt: string,
+): Record<string, unknown> {
+  const finding = raw as Partial<import('../core/workflow/findings/types.js').RawFinding>;
+  return reviewerRawExtractionFixture({
+    rawFindingId: typeof finding.rawFindingId === 'string' ? finding.rawFindingId : null,
+    familyTag: typeof finding.familyTag === 'string' ? finding.familyTag : null,
+    severity: finding.severity ?? null,
+    title: typeof finding.title === 'string' ? finding.title : null,
+    description: typeof finding.description === 'string' ? finding.description : null,
+    suggestion: typeof finding.suggestion === 'string' ? finding.suggestion : null,
+    relation: finding.relation ?? null,
+    targetFindingId: typeof finding.targetFindingId === 'string' && finding.targetFindingId !== ''
+      ? finding.targetFindingId
+      : null,
+    target: finding.target,
+    evidence: finding.evidence,
+    rawExcerpt,
+  });
+}
+
 function getAuthoritativeLedgerPath(cwd: string): string {
   return join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'peer-review.json');
 }
@@ -175,6 +200,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       startLine: 5,
       title: 'Disputed issue',
       description: 'Reviewers disagree about F-0001.',
+      familyTag: 'bug',
       targetFindingId: 'F-0001',
     });
     const seededLedger = authorizeFindingLedgerFixture({
@@ -1174,7 +1200,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           status: 'done',
           content: 'Confirmed the fix.',
           structuredOutput: {
-            rawFindings: [{
+            rawFindings: [reviewerExtraction({
               rawFindingId: 'raw-confirm',
               familyTag: 'bug',
               severity: 'high',
@@ -1187,7 +1213,7 @@ describe('finding-conflict-adjudication engine detour', () => {
               // 機械照合済み verbatimExcerpt が要る。無いと A-1 の audit-only
               // 経路に落ち、F-0001 が解消されない。
               evidence: [verifiedSourceQuoteFields(cwd, 'src/a.ts', 5)],
-            }],
+            }, 'Confirmed the fix.')],
           },
           timestamp: new Date('2026-06-13T03:00:01.000Z'),
         };
@@ -1302,6 +1328,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       startLine: 12,
       title: 'Secret is logged',
       description: 'The code logs a token.',
+      familyTag: 'security',
       targetFindingId: null,
     });
     const seededLedger = authorizeFindingLedgerFixture({
@@ -1338,12 +1365,13 @@ describe('finding-conflict-adjudication engine detour', () => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       if (instruction.includes('contradictory relation/targetFindingId labeling')) {
         // 突き返し呼び出し: relation を persists に直して全量再出力
+        const rawExcerpt = 'Token logging is still present, observed at a new line.';
         return {
           persona,
           status: 'done',
-          content: '',
+          content: rawExcerpt,
           structuredOutput: {
-            rawFindings: [{
+            rawFindings: [reviewerExtraction({
               rawFindingId: 'raw-1',
               familyTag: 'security',
               severity: 'high',
@@ -1357,7 +1385,7 @@ describe('finding-conflict-adjudication engine detour', () => {
               // admission 自体ではない）。評価対象は「証跡が成立しても taint は
               // 残る」ことなので、機械照合済み evidence を与える。
               evidence: [verifiedSourceQuoteFields(cwd, 'src/secret.ts', 40)],
-            }],
+            }, rawExcerpt)],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -1383,12 +1411,13 @@ describe('finding-conflict-adjudication engine detour', () => {
         };
       }
       if (schemaText.includes('"rawFindings"')) {
+        const rawExcerpt = 'Token logging is still present, observed at a new line.';
         return {
           persona,
           status: 'done',
-          content: 'Review report body.',
+          content: rawExcerpt,
           structuredOutput: {
-            rawFindings: [{
+            rawFindings: [reviewerExtraction({
               rawFindingId: 'raw-1',
               familyTag: 'security',
               severity: 'high',
@@ -1398,7 +1427,7 @@ describe('finding-conflict-adjudication engine detour', () => {
               relation: 'new',
               targetFindingId: 'F-0001',
               evidence: [verifiedSourceQuoteFields(cwd, 'src/secret.ts', 40)],
-            }],
+            }, rawExcerpt)],
           },
           timestamp: new Date('2026-06-13T00:00:01.000Z'),
         };
@@ -1482,6 +1511,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       startLine: 12,
       title: 'Secret is logged',
       description: 'The code logs a token.',
+      familyTag: 'security',
       targetFindingId: null,
     });
     const seededLedger = authorizeFindingLedgerFixture({
@@ -1514,8 +1544,9 @@ describe('finding-conflict-adjudication engine detour', () => {
     });
     writeFileSync(ledgerPath, JSON.stringify(seededLedger, null, 2), 'utf-8');
 
+    const incoherentRawExcerpt = 'Token logging is still present, observed at a new line.';
     const incoherentOutput = {
-      rawFindings: [{
+      rawFindings: [reviewerExtraction({
         rawFindingId: 'raw-1',
         familyTag: 'security',
         severity: 'high',
@@ -1529,7 +1560,7 @@ describe('finding-conflict-adjudication engine detour', () => {
         // あって admission ではないため、機械照合済み evidence を与えて
         // admission を通す（無いと ladder に届く前に anomaly へ隔離される）。
         evidence: [verifiedSourceQuoteFields(cwd, 'src/secret.ts', 40)],
-      }],
+      }, incoherentRawExcerpt)],
     };
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
@@ -1538,7 +1569,7 @@ describe('finding-conflict-adjudication engine detour', () => {
         return {
           persona,
           status: 'done',
-          content: '',
+          content: incoherentRawExcerpt,
           structuredOutput: incoherentOutput,
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -1566,7 +1597,7 @@ describe('finding-conflict-adjudication engine detour', () => {
         return {
           persona,
           status: 'done',
-          content: 'Review report body.',
+          content: incoherentRawExcerpt,
           structuredOutput: incoherentOutput,
           timestamp: new Date('2026-06-13T00:00:01.000Z'),
         };

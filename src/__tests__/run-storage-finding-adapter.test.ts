@@ -28,6 +28,7 @@ import type {
 } from '../core/workflow/findings/types.js';
 import { canonicalJson } from '../shared/utils/canonical-json.js';
 import { openRunStorage } from '../infra/run-storage/root.js';
+import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
 
 afterEach(cleanupRealRunStorages);
 
@@ -390,7 +391,7 @@ describe('Finding manager SQLite adapter', () => {
   it.each([
     ['raw deletion', (_raw: RawFinding) => []],
     ['typed evidence replacement', (raw: RawFinding) => [{
-      ...raw,
+      ...structuredClone(raw),
       evidence: [{ kind: 'engine_proof' as const, proofId: '2'.repeat(64) }],
     }]],
   ])('rejects pending %s at SQLite stage and dedicated finalization', async (
@@ -415,7 +416,7 @@ describe('Finding manager SQLite adapter', () => {
     });
     const runId = store.runId;
     const internalRunId = root.readResumeSnapshot().run.runId;
-    const rawE1: RawFinding = {
+    const rawE1: RawFinding = canonicalRawFindingFixture({
       rawFindingId: 'raw-pending-integrity',
       stepName: 'reviewers',
       reviewer: 'reviewer',
@@ -427,7 +428,7 @@ describe('Finding manager SQLite adapter', () => {
       relation: 'new',
       targetFindingId: null,
       evidence: [{ kind: 'engine_proof', proofId: '1'.repeat(64) }],
-    };
+    });
     await store.updateLedger((current) => ({
       ledger: { ...current, rawFindings: [rawE1] },
       result: undefined,

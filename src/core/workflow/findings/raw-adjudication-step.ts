@@ -22,7 +22,7 @@ export const RawAdjudicationDecisionsJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['rawFindingId', 'decision', 'findingId', 'evidence'],
+        required: ['rawFindingId', 'decision', 'findingId', 'anchorRelevance', 'evidence'],
         properties: {
           rawFindingId: {
             type: 'string',
@@ -36,8 +36,12 @@ export const RawAdjudicationDecisionsJsonSchema = {
             maxLength: 6,
             pattern: '^(|F-[0-9]{4})$',
           },
-          // 制御文字が JSON 上で6 bytesへ膨張しても、4回分の応答が step 予算内に収まる上限。
-          evidence: { type: 'string', minLength: 1, maxLength: 58 },
+          anchorRelevance: {
+            enum: ['relevant', 'not_relevant', 'not_applicable'],
+          },
+          // anchorRelevance を含め、制御文字が JSON 上で6 bytesへ膨張しても
+          // 4回分の応答が step 予算内に収まる上限。
+          evidence: { type: 'string', minLength: 1, maxLength: 52 },
         },
       },
     },

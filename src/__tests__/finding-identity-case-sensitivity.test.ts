@@ -12,14 +12,23 @@ import type {
   FindingManagerOutput,
   RawFinding,
 } from '../core/workflow/findings/types.js';
+import {
+  canonicalRawFindingFixture,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 
 const observation = { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-18T00:00:00.000Z' };
 
 function finding(id: string, title: string, provisional = false): FindingLedgerEntry {
+  const identityRaw = raw(`identity-${id}`, title);
   return {
     id,
     status: 'open',
     lifecycle: 'new',
+    target: identityRaw.target,
+    targetIdentityHash: identityRaw.targetIdentityHash,
+    claimIdentityHash: identityRaw.claimIdentityHash,
+    semanticClaimIdentityHash: identityRaw.semanticClaimIdentityHash,
     revision: 1,
     severity: 'high',
     title,
@@ -60,7 +69,7 @@ function ledger(findings: FindingLedgerEntry[], rawFindings: RawFinding[] = []):
 }
 
 function raw(rawFindingId: string, title: string): RawFinding {
-  return {
+  return canonicalRawFindingFixture({
     rawFindingId,
     stepName: 'reviewer',
     reviewer: 'reviewer',
@@ -72,11 +81,12 @@ function raw(rawFindingId: string, title: string): RawFinding {
     relation: 'new',
     targetFindingId: null,
     evidence: [],
-  };
+  });
 }
 
 function emptyOutput(): FindingManagerOutput {
   return {
+    anchorAdjudications: [],
     matches: [],
     newFindings: [],
     resolvedFindings: [],
@@ -133,7 +143,19 @@ describe('finding identity case sensitivity', () => {
   it('should keep an applied reattachment provisional when the existing identity differs only by case', () => {
     const wire = raw('raw-reattach', 'Parser Path');
     const currentLedger = ledger([finding('F-0001', 'Parser PATH')]);
-    const candidate = createReviewerRawFindingCandidates([wire], {
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: wire.rawFindingId,
+      familyTag: wire.familyTag,
+      severity: wire.severity,
+      title: wire.title,
+      description: wire.description,
+      suggestion: wire.suggestion,
+      relation: wire.relation,
+      targetFindingId: wire.targetFindingId,
+      target: wire.target,
+      evidence: wire.evidence,
+    });
+    const candidate = createReviewerRawFindingCandidates([extraction], {
       workflowName: 'peer-review',
       callNamespace: '',
       parentStepName: 'reviewers',
@@ -141,7 +163,13 @@ describe('finding identity case sensitivity', () => {
       runId: 'run-2',
       reviewerStepName: 'reviewer',
       reviewerPersonaKey: 'reviewer',
-    })[0]!;
+      reviewReport: extraction.rawExcerpt,
+      issueEvidenceRequests: () => ({
+        evidence: [],
+        engineProofRecords: [],
+        coverageGaps: [],
+      }),
+    }).candidates[0]!;
     const canonical = canonicalizeReviewerRawFinding(candidate, { ledger: currentLedger }).canonical;
     const ladder: LadderResult = {
       interpretationReservations: new Map(),
