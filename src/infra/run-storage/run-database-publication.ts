@@ -32,6 +32,7 @@ import {
   configureConnectionSafety,
   createFixedSchema,
   setJournalMode,
+  validateRecordedEngineProvenance,
   validateRunDatabase,
 } from './schema-contract.js';
 import { throwAfterCleanup } from './cleanup-error.js';
@@ -192,6 +193,19 @@ export function openPublishedRunDatabase(
     databasePath,
     currentEngineArtifactIdentity(),
   );
+  const run = opened.database.prepare(
+    'SELECT run_id AS runId FROM runs',
+  ).get() as { readonly runId: string };
+  return { ...opened, runId: run.runId };
+}
+
+export function openPublishedRunDatabaseForRecovery(
+  databasePath: string,
+): PublishedRunDatabase {
+  if (!existsSync(databasePath)) {
+    throw new Error(`Run database does not exist: ${databasePath}`);
+  }
+  const opened = openValidatedRecordedEngineDatabase(databasePath);
   const run = opened.database.prepare(
     'SELECT run_id AS runId FROM runs',
   ).get() as { readonly runId: string };
@@ -439,6 +453,34 @@ function openValidatedWritable(
   readonly database: DatabaseSync;
   readonly file: RunDatabaseFile;
 } {
+  return openValidatedDatabase(databasePath, (database) => {
+    validateRunDatabase(
+      database,
+      'wal',
+      expectedEngineBuild,
+    );
+  });
+}
+
+function openValidatedRecordedEngineDatabase(
+  databasePath: string,
+): {
+  readonly database: DatabaseSync;
+  readonly file: RunDatabaseFile;
+} {
+  return openValidatedDatabase(databasePath, (database) => {
+    validateRunDatabase(database, 'wal');
+    validateRecordedEngineProvenance(database);
+  });
+}
+
+function openValidatedDatabase(
+  databasePath: string,
+  validate: (database: DatabaseSync) => void,
+): {
+  readonly database: DatabaseSync;
+  readonly file: RunDatabaseFile;
+} {
   let opened: {
     readonly database: DatabaseSync;
     readonly file: RunDatabaseFile;
@@ -449,11 +491,7 @@ function openValidatedWritable(
     configureConnectionSafety(database);
     database.exec('BEGIN IMMEDIATE');
     try {
-      validateRunDatabase(
-        database,
-        'wal',
-        expectedEngineBuild,
-      );
+      validate(database);
       database.exec('COMMIT');
     } catch (error) {
       throwAfterCleanup(error, [

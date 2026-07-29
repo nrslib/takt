@@ -6,8 +6,8 @@ import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import type { RunMeta } from '../../../core/workflow/run/run-meta.js';
 import { loadSessionLog, type SessionLog } from '../../../infra/fs/index.js';
 import {
-  openRunStorage,
-} from '../../../infra/run-storage/index.js';
+  openRunStorageTerminalRecovery,
+} from '../../../infra/run-storage/root.js';
 import {
   createWorkflowTerminalPayloadFactory,
   serializeWorkflowTerminalPublication,
@@ -16,7 +16,7 @@ import {
   createFileWorkflowRunTerminalPublisher,
 } from './fileWorkflowRunTerminalPublisher.js';
 import {
-  reconcileWorkflowTerminalPublication,
+  recoverWorkflowTerminalPublication,
 } from './workflowTerminalPublication.js';
 import type {
   WorkflowRunForceFailContext,
@@ -85,7 +85,9 @@ class SqliteTaskRunForceFailStorage implements WorkflowRunForceFailHandle {
       meta: this.context.meta,
       reason,
     });
-    const root = openRunStorage({ databasePath: runPaths.databaseAbs });
+    const root = openRunStorageTerminalRecovery({
+      databasePath: runPaths.databaseAbs,
+    });
     let primaryError: unknown;
     let commitReceipt: ReturnType<typeof root.forceFailRun> | undefined;
     try {
@@ -119,7 +121,7 @@ class SqliteTaskRunForceFailStorage implements WorkflowRunForceFailHandle {
     if (commitReceipt === undefined) {
       throw new Error('SQLite force-fail terminal commit receipt is missing');
     }
-    const finalization = await reconcileWorkflowTerminalPublication({
+    const finalization = await recoverWorkflowTerminalPublication({
       databasePath: runPaths.databaseAbs,
       expectedRunId: this.context.meta.runSlug,
     });

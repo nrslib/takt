@@ -5,11 +5,16 @@ import {
   createPublishedRunDatabase,
   createPublishedResumedRunDatabase,
   openPublishedRunDatabase,
+  openPublishedRunDatabaseForRecovery,
 } from './run-database-publication.js';
 import {
+  createRunStorageResumeSource,
   createRunStorageRoot,
+  createRunStorageTerminalRecovery,
   readTrustedRunStorageResumeSnapshot,
+  type RunStorageResumeSource,
   type RunStorageRoot,
+  type RunStorageTerminalRecovery,
 } from './run-storage-root-core.js';
 import type { BusyRetryPolicy } from './unit-of-work.js';
 import { captureTrustedRunStorageResumeSnapshot } from './resume-import.js';
@@ -52,7 +57,7 @@ export interface OpenRunStorageOptions {
 }
 
 export interface ResumeRunStorageOptions extends CreateRunStorageOptions {
-  readonly source: RunStorageRoot;
+  readonly source: RunStorageResumeSource;
 }
 
 export type {
@@ -110,6 +115,44 @@ export function openRunStorage(
     openPublishedRunDatabase(options.databasePath),
     options.busyRetry ?? DEFAULT_BUSY_RETRY,
     SYSTEM_RUN_STORAGE_CLOCK,
+  );
+}
+
+export function openRunStorageResumeSource(
+  options: OpenRunStorageOptions,
+): RunStorageResumeSource {
+  assertExactPublicInput(
+    options,
+    ['databasePath', 'busyRetry'],
+    'openRunStorageResumeSource',
+  );
+  rejectPublicEngineIdentityInput(options);
+  assertNoFileAuthority(options.databasePath);
+  return createRunStorageResumeSource(
+    createRunStorageRoot(
+      openPublishedRunDatabaseForRecovery(options.databasePath),
+      options.busyRetry ?? DEFAULT_BUSY_RETRY,
+      SYSTEM_RUN_STORAGE_CLOCK,
+    ),
+  );
+}
+
+export function openRunStorageTerminalRecovery(
+  options: OpenRunStorageOptions,
+): RunStorageTerminalRecovery {
+  assertExactPublicInput(
+    options,
+    ['databasePath', 'busyRetry'],
+    'openRunStorageTerminalRecovery',
+  );
+  rejectPublicEngineIdentityInput(options);
+  assertNoFileAuthority(options.databasePath);
+  return createRunStorageTerminalRecovery(
+    createRunStorageRoot(
+      openPublishedRunDatabaseForRecovery(options.databasePath),
+      options.busyRetry ?? DEFAULT_BUSY_RETRY,
+      SYSTEM_RUN_STORAGE_CLOCK,
+    ),
   );
 }
 

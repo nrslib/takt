@@ -26,10 +26,13 @@ import {
 } from '../../../shared/utils/index.js';
 import {
   createRunStorage,
-  openRunStorage,
   resumeRunStorage,
   type RunStorageRoot,
 } from '../../../infra/run-storage/index.js';
+import {
+  openRunStorageResumeSource,
+  openRunStorageTerminalRecovery,
+} from '../../../infra/run-storage/root.js';
 import {
   SqliteWorkflowRunStorageLifecycle,
 } from './sqliteWorkflowRunStorageLifecycle.js';
@@ -49,6 +52,7 @@ import {
   createFileWorkflowRunTerminalPublisher,
 } from './fileWorkflowRunTerminalPublisher.js';
 import {
+  recoverWorkflowTerminalPublication,
   reconcileWorkflowTerminalPublication,
 } from './workflowTerminalPublication.js';
 import {
@@ -156,7 +160,7 @@ export function createWorkflowRunComposition(
   const strategy = createWorkflowRunStorageAdapter(backend, input);
   return Object.freeze({
     recovery: Object.freeze({
-      reconcilePending: () => reconcilePendingWorkflowTerminalPublications({
+      reconcilePending: () => reconcilePendingWorkflowRuns({
         cwd: input.cwd,
       }),
     }),
@@ -215,7 +219,7 @@ function createWorkflowRunStorageAdapter(
   }
 }
 
-async function reconcilePendingWorkflowTerminalPublications(input: {
+export async function reconcilePendingWorkflowRuns(input: {
   readonly cwd: string;
 }): Promise<void> {
   const runsDirectory = join(input.cwd, '.takt', 'runs');
@@ -480,7 +484,9 @@ class SqliteWorkflowRunStorageAdapter
     if (!existsSync(runPaths.databaseAbs)) {
       return;
     }
-    const root = openRunStorage({ databasePath: runPaths.databaseAbs });
+    const root = openRunStorageTerminalRecovery({
+      databasePath: runPaths.databaseAbs,
+    });
     let shouldReconcile = true;
     try {
       const snapshot = root.readResumeSnapshot();
@@ -519,7 +525,7 @@ class SqliteWorkflowRunStorageAdapter
     if (!shouldReconcile) {
       return;
     }
-    const finalization = await reconcileWorkflowTerminalPublication({
+    const finalization = await recoverWorkflowTerminalPublication({
       databasePath: runPaths.databaseAbs,
       expectedRunId: runPaths.slug,
     });
@@ -913,7 +919,9 @@ function assertSqliteResumeSourceIdentity(
   sourceRunSlug: string,
 ): void {
   const sourcePaths = buildRunPaths(cwd, sourceRunSlug);
-  const source = openRunStorage({ databasePath: sourcePaths.databaseAbs });
+  const source = openRunStorageResumeSource({
+    databasePath: sourcePaths.databaseAbs,
+  });
   let primaryError: unknown;
   try {
     const snapshot = source.readResumeSnapshot();
@@ -1005,7 +1013,9 @@ function createSqliteRunStorageRoot(
       `SQLite resume source and target database paths are identical: ${sourcePaths.databaseAbs}`,
     );
   }
-  const source = openRunStorage({ databasePath: sourcePaths.databaseAbs });
+  const source = openRunStorageResumeSource({
+    databasePath: sourcePaths.databaseAbs,
+  });
   let target: RunStorageRoot | undefined;
   let primaryError: unknown;
   try {

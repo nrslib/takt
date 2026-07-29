@@ -6,6 +6,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const artifactIdentity = vi.hoisted(() => ({
@@ -30,7 +31,16 @@ vi.mock('../infra/run-storage/engine-artifact.js', async (importOriginal) => {
 });
 
 import { deriveEngineArtifactIdentity } from '../infra/run-storage/engine-artifact.js';
-import { createRunStorage, openRunStorage } from '../infra/run-storage/root.js';
+import {
+  createRunStorage,
+  openRunStorage,
+  openRunStorageResumeSource,
+  openRunStorageTerminalRecovery,
+  resumeRunStorage,
+} from '../infra/run-storage/root.js';
+import {
+  validateRecordedEngineProvenance,
+} from '../infra/run-storage/schema-contract.js';
 import { createTestBootstrapSeed } from './helpers/run-storage.js';
 
 let directory: string | undefined;
@@ -84,5 +94,113 @@ describe('run storage artifact provenance', () => {
     artifactIdentity.current = deriveEngineArtifactIdentity(modulePath);
 
     expect(() => openRunStorage({ databasePath })).toThrow(/provenance/i);
+  });
+
+  it('resumes a compatible source created by another engine build', () => {
+    directory = mkdtempSync(join(tmpdir(), 'takt-artifact-resume-'));
+    const sourcePath = join(directory, 'source.sqlite');
+    const targetPath = join(directory, 'target.sqlite');
+    const sourceDigest = 'a'.repeat(64);
+    artifactIdentity.current = {
+      buildId: `takt@1.2.3+${sourceDigest.slice(0, 16)}`,
+      version: '1.2.3',
+      digest: sourceDigest,
+    };
+    createRunStorage({
+      databasePath: sourcePath,
+      bootstrapSeed: createTestBootstrapSeed({
+        workflowName: 'artifact-resume',
+        sessionId: 'artifact-resume-source',
+      }),
+      run: {
+        runId: 'artifact-resume-source',
+        findingContractEnabled: false,
+      },
+      workflowDefinition: {
+        name: 'artifact-resume',
+        codecName: 'json-v1',
+        definition: '{"name":"artifact-resume"}',
+      },
+    }).close();
+
+    const targetDigest = 'b'.repeat(64);
+    artifactIdentity.current = {
+      buildId: `takt@1.2.3+${targetDigest.slice(0, 16)}`,
+      version: '1.2.3',
+      digest: targetDigest,
+    };
+
+    expect(() => openRunStorage({ databasePath: sourcePath }))
+      .toThrow(/provenance/i);
+    const recovery = openRunStorageTerminalRecovery({
+      databasePath: sourcePath,
+    });
+    expect(Object.keys(recovery).sort()).toEqual([
+      'acknowledgeTerminalPublicationStage',
+      'claimTerminalPublicationStage',
+      'close',
+      'expireTerminalPublicationStageClaim',
+      'forceFailRun',
+      'readBootstrapSeed',
+      'readResumeSnapshot',
+      'readTerminalPublication',
+    ]);
+    expect(recovery).not.toHaveProperty('claimLease');
+    expect(recovery).not.toHaveProperty('runtime');
+    recovery.close();
+
+    const source = openRunStorageResumeSource({ databasePath: sourcePath });
+    expect(Object.keys(source).sort()).toEqual([
+      'close',
+      'readResumeSnapshot',
+    ]);
+    expect(source).not.toHaveProperty('forceFailRun');
+    expect(source).not.toHaveProperty('runtime');
+    const target = resumeRunStorage({
+      databasePath: targetPath,
+      bootstrapSeed: createTestBootstrapSeed({
+        workflowName: 'artifact-resume',
+        sessionId: 'artifact-resume-target',
+      }),
+      run: {
+        runId: 'artifact-resume-target',
+        findingContractEnabled: false,
+      },
+      workflowDefinition: {
+        name: 'artifact-resume',
+        codecName: 'json-v1',
+        definition: '{"name":"artifact-resume"}',
+      },
+      source,
+    });
+    target.close();
+    source.close();
+
+    const reopened = openRunStorage({ databasePath: targetPath });
+    expect(reopened.readResumeSnapshot().run.runId)
+      .toBe('artifact-resume-target');
+    reopened.close();
+  });
+
+  it('rejects malformed recorded engine provenance with FK-consistent rows', () => {
+    const database = new DatabaseSync(':memory:');
+    database.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE engine_builds (
+        build_id TEXT PRIMARY KEY,
+        version TEXT NOT NULL,
+        digest TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE runs (
+        engine_build_id TEXT NOT NULL REFERENCES engine_builds(build_id)
+      ) STRICT;
+      INSERT INTO engine_builds (build_id, version, digest)
+      VALUES ('malformed-build-id', '1.2.3', '${'c'.repeat(64)}');
+      INSERT INTO runs (engine_build_id) VALUES ('malformed-build-id');
+    `);
+    expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    expect(() => validateRecordedEngineProvenance(database))
+      .toThrow(/recorded engine build provenance/i);
+    database.close();
   });
 });

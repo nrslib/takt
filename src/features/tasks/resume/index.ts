@@ -39,6 +39,9 @@ import {
 import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { buildTraceTaskMetadata } from '../execute/traceTaskMetadata.js';
+import {
+  reconcilePendingWorkflowRuns,
+} from '../execute/workflowRunStorage.js';
 import type { TaskAttachment } from '../attachments.js';
 import {
   cleanupPreparedRetryTaskSpec,
@@ -432,6 +435,7 @@ export async function resumeDirectRun(
   projectDir: string,
   agentOverrides?: TaskExecutionOptions,
 ): Promise<boolean> {
+  await reconcilePendingWorkflowRuns({ cwd: projectDir });
   const run = findLatestResumableDirectRun(projectDir);
   if (!run) {
     info('No resumable direct run found. Use `takt list` for queued tasks.');

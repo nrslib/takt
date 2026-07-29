@@ -7,7 +7,12 @@ import type {
   TerminalPublication,
   TerminalPublicationStage,
 } from '../../../infra/run-storage/index.js';
-import { openRunStorage } from '../../../infra/run-storage/index.js';
+import {
+  openRunStorage,
+} from '../../../infra/run-storage/index.js';
+import {
+  openRunStorageTerminalRecovery,
+} from '../../../infra/run-storage/root.js';
 import { projectTerminalRunMeta } from './runMeta.js';
 import {
   RunCleanupError,
@@ -31,10 +36,46 @@ export async function reconcileWorkflowTerminalPublication(input: {
   readonly databasePath: string;
   readonly expectedRunId: string;
 }): Promise<RunFinalization> {
+  return reconcileTerminalPublication(
+    input,
+    () => openRunStorage({ databasePath: input.databasePath }),
+  );
+}
+
+export async function recoverWorkflowTerminalPublication(input: {
+  readonly databasePath: string;
+  readonly expectedRunId: string;
+}): Promise<RunFinalization> {
+  return reconcileTerminalPublication(
+    input,
+    () => openRunStorageTerminalRecovery({
+      databasePath: input.databasePath,
+    }),
+  );
+}
+
+type TerminalPublicationRecoveryPort = Pick<
+  RunStorageRoot,
+  | 'readResumeSnapshot'
+  | 'readBootstrapSeed'
+  | 'readTerminalPublication'
+  | 'claimTerminalPublicationStage'
+  | 'acknowledgeTerminalPublicationStage'
+  | 'expireTerminalPublicationStageClaim'
+  | 'close'
+>;
+
+async function reconcileTerminalPublication(
+  input: {
+    readonly databasePath: string;
+    readonly expectedRunId: string;
+  },
+  openRoot: () => TerminalPublicationRecoveryPort,
+): Promise<RunFinalization> {
   const issues: Array<RunProjectionError | RunCleanupError> = [];
-  let root: RunStorageRoot | undefined;
+  let root: TerminalPublicationRecoveryPort | undefined;
   try {
-    root = openRunStorage({ databasePath: input.databasePath });
+    root = openRoot();
     const snapshot = root.readResumeSnapshot();
     if (snapshot.run.runId !== input.expectedRunId) {
       throw new Error(
@@ -102,7 +143,7 @@ export async function reconcileWorkflowTerminalPublication(input: {
 }
 
 function assertBootstrapSeedMatchesPayload(
-  seed: ReturnType<RunStorageRoot['readBootstrapSeed']>,
+  seed: ReturnType<TerminalPublicationRecoveryPort['readBootstrapSeed']>,
   payload: WorkflowTerminalPublicationPayload,
 ): void {
   if (

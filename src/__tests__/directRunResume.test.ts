@@ -22,6 +22,7 @@ const {
   mockLocalBranchExists,
   mockMaterializePullRequestBase,
   mockGetCurrentBranch,
+  mockReconcilePendingWorkflowRuns,
 } = vi.hoisted(() => ({
   mockFindLatestResumableDirectRun: vi.fn(),
   mockSelectOption: vi.fn(),
@@ -39,6 +40,7 @@ const {
   mockMaterializePullRequestBase: vi.fn((_projectCwd, _targetCwd, baseBranch: string) =>
     `refs/takt/pr-base/${baseBranch}`),
   mockGetCurrentBranch: vi.fn(() => 'feature/direct-resume'),
+  mockReconcilePendingWorkflowRuns: vi.fn(),
 }));
 
 vi.mock('../features/tasks/resume/directRunFinder.js', () => ({
@@ -58,6 +60,10 @@ vi.mock('../shared/ui/index.js', () => ({
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
   executeTaskWithResult: mockExecuteTaskWithResult,
+}));
+
+vi.mock('../features/tasks/execute/workflowRunStorage.js', () => ({
+  reconcilePendingWorkflowRuns: mockReconcilePendingWorkflowRuns,
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -216,6 +222,12 @@ describe('resumeDirectRun', () => {
 
     await resumeDirectRun('/project');
 
+    expect(mockReconcilePendingWorkflowRuns).toHaveBeenCalledWith({
+      cwd: '/project',
+    });
+    expect(
+      mockReconcilePendingWorkflowRuns.mock.invocationCallOrder[0]!,
+    ).toBeLessThan(mockFindLatestResumableDirectRun.mock.invocationCallOrder[0]!);
     expect(mockInfo).toHaveBeenCalledTimes(1);
     expect(mockInfo).toHaveBeenCalledWith('No resumable direct run found. Use `takt list` for queued tasks.');
     expect(mockSelectOption).not.toHaveBeenCalled();

@@ -444,6 +444,38 @@ export function validateEngineProvenance(
   }
 }
 
+export function validateRecordedEngineProvenance(
+  database: DatabaseSync,
+): void {
+  const rows = database.prepare(`
+    SELECT
+      engine_builds.build_id AS buildId,
+      engine_builds.version,
+      engine_builds.digest
+    FROM runs
+    JOIN engine_builds ON engine_builds.build_id = runs.engine_build_id
+  `).all() as Array<{
+    readonly buildId: unknown;
+    readonly version: unknown;
+    readonly digest: unknown;
+  }>;
+  if (rows.length !== 1) {
+    throw new Error('Run storage recorded engine build provenance is invalid');
+  }
+  const recorded = rows[0]!;
+  if (
+    typeof recorded.buildId !== 'string'
+    || typeof recorded.version !== 'string'
+    || recorded.version.length === 0
+    || typeof recorded.digest !== 'string'
+    || !/^[0-9a-f]{64}$/.test(recorded.digest)
+    || recorded.buildId
+      !== `takt@${recorded.version}+${recorded.digest.slice(0, 16)}`
+  ) {
+    throw new Error('Run storage recorded engine build provenance is invalid');
+  }
+}
+
 export function validateWorkflowDefinitionDigests(database: DatabaseSync): void {
   const definitions = database.prepare(`
     SELECT
