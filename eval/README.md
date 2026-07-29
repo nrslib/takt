@@ -137,6 +137,14 @@ npm run eval:finding-normalizer -- --render-only --reports 1,2,3
 npm run eval:finding-normalizer -- --models luna --reports 1,2 --score-only
 npm run eval:finding-normalizer -- --models terra --timeout-ms 600000
 npm run eval:finding-normalizer -- --models terra,luna --score-only --result-set current
+node eval/scripts/run-finding-report-normalizer-eval.mjs --render-only
+node eval/scripts/run-finding-report-normalizer-eval.mjs \
+  --self-test \
+  --result-set scorer-self-test
+node eval/scripts/run-finding-report-normalizer-eval.mjs \
+  --cases summary-only-review-report,broad-target-review-reports \
+  --models luna,terra \
+  --result-set synthetic-comparison
 npx promptfoo view               # browse results in the web UI
 ```
 
@@ -148,6 +156,9 @@ The normalizer suite requires a prior `npm run build`; use `--render-only`
 to inspect its one-report prompts without calling a model. `--score-only`
 never calls a model and writes `*.rescored.json` plus
 `summary.rescored.json`, leaving the original response artifacts intact.
+The finding report normalizer is an extraction-only experiment. Its catalog,
+external-send guard, and measurement state are documented in
+`eval/cases/finding-normalizer/extraction-catalog.md`.
 
 ### Token budget rules
 
@@ -173,6 +184,8 @@ eval/
   scripts/run-evals.mjs          suite runner (failures don't stop the batch)
   scripts/run-finding-normalizer-eval.mjs
                                  multi-provider normalizer runner + scorer
+  scripts/run-finding-report-normalizer-eval.mjs
+                                 extraction-only Finding Contract runner
   scripts/run-finding-semantic-verifier-eval.mjs
                                  archived repository-inspecting experiment
   baselines/                     recorded experiment decisions and metrics

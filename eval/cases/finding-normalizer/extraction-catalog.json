@@ -1,0 +1,25 @@
+{
+  "cases": [
+    {
+      "id": "pr-attachments-six-reviews",
+      "source": "pr-attachments-review-reports.md",
+      "gold": "pr-attachments-six-reviews.gold.json",
+      "externalExecution": "requires_explicit_approval",
+      "purpose": "Six independent real review reports with approvals, empty output, false or speculative claims, code targets, and a broad missing-test claim."
+    },
+    {
+      "id": "summary-only-review-report",
+      "source": "summary-only-review-report.md",
+      "gold": "summary-only-review-report.gold.json",
+      "externalExecution": "synthetic",
+      "purpose": "A finding present only inside a summary section."
+    },
+    {
+      "id": "broad-target-review-reports",
+      "source": "broad-target-review-reports.md",
+      "gold": "broad-target-review-reports.gold.json",
+      "externalExecution": "synthetic",
+      "purpose": "Line-independent code, structure, absence, and deliberately ambiguous claims."
+    }
+  ]
+}
