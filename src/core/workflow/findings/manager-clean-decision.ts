@@ -52,13 +52,30 @@ export function assembleCleanManagerDecision(input: {
   const landRawAsProvisional = (rawFindingId: string, reason: string, kind: FindingProvisionalKind): void => {
     const wire = cleanWireById.get(rawFindingId);
     const canonical = cleanCanonicalById.get(rawFindingId);
-    if (wire === undefined || canonical === undefined || wire.relation === 'resolution_confirmation') {
+    if (wire === undefined || canonical === undefined || wire.relation !== 'new') {
       return;
     }
     cleanProvisionalSpecs = [
       ...cleanProvisionalSpecs,
       provisionalSpecForRawKind({ wire, canonical, reason }, kind),
     ];
+  };
+  const recordLifecycleAudit = (rawFindingId: string, evidence: string): boolean => {
+    const wire = cleanWireById.get(rawFindingId);
+    if (
+      wire === undefined
+      || wire.relation === null
+      || wire.relation === 'new'
+      || wire.targetFindingId === null
+    ) {
+      return false;
+    }
+    unsupportedRawFindingReports = [...unsupportedRawFindingReports, {
+      rawFindingId,
+      targetFindingId: wire.targetFindingId,
+      evidence,
+    }];
+    return true;
   };
 
   let managerOutput = input.mechanical.output;
@@ -80,21 +97,19 @@ export function assembleCleanManagerDecision(input: {
       }
       if (!landedRawIds.has(rejected.rawFindingId)) {
         const taskFailure = input.rawFailureById?.get(rejected.rawFindingId);
-        landRawAsProvisional(
-          rejected.rawFindingId,
-          taskFailure?.reason
-            ?? `Manager decision (${rejected.decision}) was rejected: ${rejected.reason}`,
-          taskFailure?.kind ?? 'raw-adjudication-unresolved',
-        );
+        const reason = taskFailure?.reason
+          ?? `Manager decision (${rejected.decision}) was rejected: ${rejected.reason}`;
+        if (!recordLifecycleAudit(rejected.rawFindingId, reason)) {
+          landRawAsProvisional(
+            rejected.rawFindingId,
+            reason,
+            taskFailure?.kind ?? 'raw-adjudication-unresolved',
+          );
+        }
       }
     }
     for (const unsupported of assembly.unsupportedRawDecisions) {
       unsupportedRawFindingReports = [...unsupportedRawFindingReports, unsupported];
-      landRawAsProvisional(
-        unsupported.rawFindingId,
-        `Manager decided "unsupported" against finding "${unsupported.targetFindingId}": ${unsupported.evidence}`,
-        'raw-adjudication-unresolved',
-      );
     }
     const rejectionDescriptions = describeManagerRejections(assembly);
     if (rejectionDescriptions.length > 0) {
@@ -153,11 +168,14 @@ export function assembleCleanManagerDecision(input: {
       if (mechanicallyLandedRawIds.has(wire.rawFindingId)) {
         continue;
       }
-      landRawAsProvisional(
-        wire.rawFindingId,
-        'Manager output violated ledger invariants and was discarded; raw finding kept provisional',
-        'manager-output-discarded',
-      );
+      const reason = 'Manager output violated ledger invariants and was discarded';
+      if (!recordLifecycleAudit(wire.rawFindingId, reason)) {
+        landRawAsProvisional(
+          wire.rawFindingId,
+          `${reason}; raw finding kept provisional`,
+          'manager-output-discarded',
+        );
+      }
     }
   }
 

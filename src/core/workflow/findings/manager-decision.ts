@@ -20,6 +20,10 @@ import { runRawAdjudicationRecovery } from './raw-adjudication-recovery.js';
 import { releaseRawAdjudicationReservations } from './raw-adjudication-reservation.js';
 import type { ReviewScopeProofSnapshot } from './snapshot.js';
 import { runMainManagerTasks } from './manager-task-runner.js';
+import {
+  hasLifecycleProductTransitionCapability,
+  hasLifecycleTransitionIntent,
+} from './raw-relation-capabilities.js';
 
 export {
   FINDING_MANAGER_SCHEMA_REF,
@@ -61,11 +65,40 @@ export async function runManagerDecisionStage(params: {
     reviewScopeSnapshot,
   });
   try {
+    const findingsById = new Map(previousLedger.findings.map((finding) => [finding.id, finding]));
+    const cleanAuditOnlyLifecycleRawIds = new Set(
+      admission.cleanAdmitted
+        .filter((item) => (
+          item.canonical.relation !== null
+          && item.canonical.relation !== 'new'
+          && !hasLifecycleProductTransitionCapability({
+            relation: item.canonical.relation,
+            target: item.canonical.targetFindingId === undefined
+              ? undefined
+              : findingsById.get(item.canonical.targetFindingId),
+          })
+        ))
+        .map((item) => item.wire.rawFindingId),
+    );
+    const decisionAdmission: RawAdmissionEvaluation = cleanAuditOnlyLifecycleRawIds.size === 0
+      ? admission
+      : {
+          ...admission,
+          cleanAdmitted: admission.cleanAdmitted.filter(
+            (item) => !cleanAuditOnlyLifecycleRawIds.has(item.wire.rawFindingId),
+          ),
+          cleanWire: cleanWire.filter(
+            (wire) => !cleanAuditOnlyLifecycleRawIds.has(wire.rawFindingId),
+          ),
+        };
     const invalidLocationCandidates = computeInvalidLocationCandidates(input.cwd, previousLedger);
     const invalidLocationCandidateFindingIds = new Set(invalidLocationCandidates.keys());
     const dismissCandidates = computeDismissCandidates(previousLedger);
     const dismissCandidateFindingIds = new Set(dismissCandidates.keys());
-    const mechanical = classifyRawFindingsMechanically({ previousLedger, rawFindings: cleanWire });
+    const mechanical = classifyRawFindingsMechanically({
+      previousLedger,
+      rawFindings: decisionAdmission.cleanWire,
+    });
     const hasDisputeClaims = hasDisputeClaimsHeading(input.priorStepResponseText);
     const hasActiveConflict = previousLedger.conflicts.some((conflict) => conflict.status === 'active');
     // dismiss 候補（滞留する provisional）が1件でもあれば、残余 raw がゼロでも
@@ -85,7 +118,8 @@ export async function runManagerDecisionStage(params: {
         previousLedger,
         reviewScopeSnapshotId,
         residualRawFindings: mechanical.residualRawFindings,
-        mechanicallyClassifiedCount: cleanWire.length - mechanical.residualRawFindings.length,
+        mechanicallyClassifiedCount: decisionAdmission.cleanWire.length
+          - mechanical.residualRawFindings.length,
         priorStepResponseText: input.priorStepResponseText,
         invalidLocationCandidates,
         dismissCandidates,
@@ -102,7 +136,7 @@ export async function runManagerDecisionStage(params: {
 
     const cleanDecision = assembleCleanManagerDecision({
       previousLedger,
-      admission,
+      admission: decisionAdmission,
       mechanical,
       decisions: taskExecution?.decisions,
       initialInvalidAttempts,
@@ -120,19 +154,35 @@ export async function runManagerDecisionStage(params: {
     } = cleanDecision;
     let unsupportedRawFindingReports = cleanDecision.unsupportedRawFindingReports;
 
-    // 曖昧起源の confirmation には resolve 権限がなく、blocker にも変換しない。
-    const taintedConfirmations = taintedAdmitted.filter(
-      (item) => item.canonical.relation === 'resolution_confirmation',
+    for (const item of admission.cleanAdmitted) {
+      if (!cleanAuditOnlyLifecycleRawIds.has(item.wire.rawFindingId)) {
+        continue;
+      }
+      unsupportedRawFindingReports = [...unsupportedRawFindingReports, {
+        rawFindingId: item.wire.rawFindingId,
+        targetFindingId: item.wire.targetFindingId
+          ?? item.canonical.targetFindingId
+          ?? '(none)',
+        evidence: 'Lifecycle claim has no transition capability for the target state; recorded for audit only — no finding was created or changed',
+      }];
+    }
+
+    // 曖昧起源の lifecycle claim には product finding の作成・変更権限がない。
+    const taintedLifecycle = taintedAdmitted.filter(
+      (item) => hasLifecycleTransitionIntent({
+        relation: item.canonical.relation,
+        targetFindingId: item.canonical.targetFindingId,
+      }),
     );
-    for (const item of taintedConfirmations) {
+    for (const item of taintedLifecycle) {
       unsupportedRawFindingReports = [...unsupportedRawFindingReports, {
         rawFindingId: item.wire.rawFindingId,
         targetFindingId: item.wire.targetFindingId ?? item.canonical.targetFindingId ?? '(none)',
-        evidence: 'Ambiguity-tainted resolution confirmation cannot serve as resolution evidence (no resolve capability); recorded for audit only — no finding was created or changed',
+        evidence: 'Ambiguity-tainted lifecycle claim has no product transition capability; recorded for audit only — no finding was created or changed',
       }];
     }
     const ladderTainted = taintedAdmitted.filter(
-      (item) => item.canonical.relation !== 'resolution_confirmation',
+      (item) => !taintedLifecycle.includes(item),
     );
     const ladder = await runAmbiguousLadder({
       tainted: ladderTainted,

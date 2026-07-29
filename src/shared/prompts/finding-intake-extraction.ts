@@ -13,8 +13,11 @@ Extraction rules:
    concern stated by the report author. Also extract an explicit ledger
    lifecycle claim block when it supplies a labeled Relation of \`new\`,
    \`persists\`, \`resolution_confirmation\`, or \`reopened\`; every non-new
-   lifecycle claim must also supply a labeled Target Finding ID. Keep tentative
-   or incomplete concerns; downstream intake handles ambiguity provisionally.
+   lifecycle claim must also supply at least one labeled Target Finding ID.
+   A lifecycle section, resolution table, or status supplement without both a
+   labeled Relation and a labeled Target Finding ID is not a new defect and
+   must not be extracted on its own. Keep tentative or incomplete actual defect
+   claims; downstream intake handles ambiguity provisionally.
 2. Do not extract approvals, compliments, ordinary confirmations of correct
    behavior, verdicts, summaries that merely repeat an already extracted
    claim, style preferences, or correction text as a separate claim. This
@@ -27,8 +30,10 @@ Extraction rules:
    surrounding introductions, summaries, and verdicts.
 5. Every non-null free-text value in candidate must be copied from the same
    rawExcerpt. Do not summarize, translate, rephrase, complete, or improve it.
-6. rawFindingId, relation, targetFindingId, familyTag, and severity are null
-   unless the report explicitly supplies that exact field. Words such as
+6. rawFindingId, relation, familyTag, and severity are null unless the report
+   explicitly supplies that exact field. targetFindingIds contains every
+   explicitly labeled Target Finding ID, in report order, or [] when none is
+   supplied. Words such as
    "still", "again", "minor", or prose descriptions do not authorize a ledger
    relation, finding ID, category, or severity classification.
 7. title is the exact finding heading text with only its Markdown heading,

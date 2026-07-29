@@ -28,6 +28,7 @@ import {
   createSnapshotEngineProofVerifiers,
 } from './evidence-request-issuer.js';
 import type { ReviewScopeProofSnapshot } from './snapshot.js';
+import { hasLifecycleTransitionIntent } from './raw-relation-capabilities.js';
 
 interface CanonicalIntakeItemBase {
   canonical: CanonicalRawFinding;
@@ -157,6 +158,7 @@ interface PendingRejectedObservation {
   item: CanonicalIntakeItem;
   targetFindingId: string;
   reason: string;
+  anomalyKind: ReviewerAnomalyKind;
   failedEvidence?: RawFindingEvidence;
 }
 
@@ -371,6 +373,37 @@ function evaluateRejectedItem(input: {
       }),
     };
   }
+  const lifecycleIntent = hasLifecycleTransitionIntent({
+    relation: item.canonical.relation,
+    targetFindingId: item.canonical.targetFindingId,
+  });
+  if (item.canonical.relation === 'resolution_confirmation') {
+    return { pool, rejection };
+  }
+
+  const targetFindingId = item.wire.targetFindingId
+    ?? item.canonical.targetFindingId
+    ?? null;
+  const target = targetFindingId !== null ? previousFindingsById.get(targetFindingId) : undefined;
+  if (lifecycleIntent && targetFindingId !== null && target !== undefined) {
+    return {
+      pool,
+      rejection,
+      rejectedItem: item,
+      pendingRejectedObservation: {
+        item,
+        targetFindingId,
+        reason: `Evidence failed deterministic admission (${classification.reason}); recorded as a rejected lifecycle observation of the target`,
+        anomalyKind: classification.disposition === 'anomaly'
+          ? classification.anomalyKind
+          : 'lifecycle-admission-failure',
+        failedEvidence: classification.failedEvidence,
+      },
+    };
+  }
+  if (lifecycleIntent) {
+    return { pool, rejection };
+  }
   if (classification.disposition === 'provisional') {
     return {
       pool,
@@ -381,25 +414,6 @@ function evaluateRejectedItem(input: {
         canonical: item.canonical,
         reason: `Engine proof failed deterministic admission (${classification.reason})`,
       }, 'raw-adjudication-unresolved'),
-    };
-  }
-  if (item.wire.relation === 'resolution_confirmation') {
-    return { pool, rejection };
-  }
-
-  const targetFindingId = item.wire.targetFindingId;
-  const target = targetFindingId !== null ? previousFindingsById.get(targetFindingId) : undefined;
-  if (item.canonical.relation === 'persists' && targetFindingId !== null && target?.status === 'open') {
-    return {
-      pool,
-      rejection,
-      ...(pool === 'clean' ? { rejectedItem: item } : {}),
-      pendingRejectedObservation: {
-        item,
-        targetFindingId,
-        reason: `Evidence failed deterministic admission (${classification.reason}); recorded as a rejected re-observation of the open target`,
-        failedEvidence: classification.failedEvidence,
-      },
     };
   }
 

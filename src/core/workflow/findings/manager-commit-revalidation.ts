@@ -25,12 +25,46 @@ import { compareBinaryStrings } from '../../../shared/utils/binary-string-compar
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
 import { computeConflictEvidenceHash } from './adjudication-evidence.js';
+import type { UnsupportedRawFindingReport } from './store.js';
+import {
+  hasLifecycleProductTransitionCapability,
+  hasLifecycleTransitionIntent,
+} from './raw-relation-capabilities.js';
 
 export interface RevalidatedManagerPlan {
   output: FindingManagerOutput;
   provisionalSpecs: ProvisionalFindingSpec[];
+  unsupportedRawFindingReports: UnsupportedRawFindingReport[];
   staleRejections: string[];
   resolutionRenotifications: ResolutionRenotificationTransition[];
+}
+
+function unsupportedLifecycleReport(input: {
+  wire: RawFinding;
+  freshLedger: FindingLedger;
+  reason: string;
+}): UnsupportedRawFindingReport | undefined {
+  if (!hasLifecycleTransitionIntent({
+    relation: input.wire.relation,
+    targetFindingId: input.wire.targetFindingId,
+  })) {
+    return undefined;
+  }
+  const targetFindingId = input.wire.targetFindingId;
+  const target = targetFindingId === null
+    ? undefined
+    : input.freshLedger.findings.find((finding) => finding.id === targetFindingId);
+  const hasTransitionCapability = input.wire.relation !== null
+    && input.wire.relation !== 'new'
+    && hasLifecycleProductTransitionCapability({
+      relation: input.wire.relation,
+      target,
+    });
+  return {
+    rawFindingId: input.wire.rawFindingId,
+    targetFindingId: targetFindingId ?? '(none)',
+    evidence: `${input.reason}; lifecycle transition is audit-only at commit (fresh target status: ${target?.status ?? 'missing'}, transition capability: ${hasTransitionCapability ? 'available but stale' : 'unavailable'})`,
+  };
 }
 
 export function revalidateManagerPlan(input: {
@@ -110,27 +144,44 @@ export function revalidateManagerPlan(input: {
       (transition) => transition.renotificationRawFindingIds,
     ),
   );
-  const staleDecisionSpecs = freshAssembly.rejectedRawDecisions.flatMap((rejected) => {
+  const staleDecisionPlan = freshAssembly.rejectedRawDecisions.reduce<{
+    provisionalSpecs: ProvisionalFindingSpec[];
+    unsupportedRawFindingReports: UnsupportedRawFindingReport[];
+  }>((plan, rejected) => {
     if (!('rawFindingId' in rejected)) {
-      return [];
+      return plan;
     }
     if (renotificationRawFindingIds.has(rejected.rawFindingId)) {
-      return [];
+      return plan;
     }
     if (freshLandedRawIds.has(rejected.rawFindingId)) {
-      return [];
+      return plan;
     }
     const wire = input.cleanWireById.get(rejected.rawFindingId);
     const canonical = input.cleanCanonicalById.get(rejected.rawFindingId);
     if (wire === undefined || canonical === undefined || wire.relation === 'resolution_confirmation') {
-      return [];
+      return plan;
     }
-    return [provisionalSpecForRawKind({
+    const reason = `Decision (${rejected.decision}) became stale against the freshly reloaded ledger: ${rejected.reason}`;
+    const unsupported = unsupportedLifecycleReport({
       wire,
-      canonical,
-      reason: `Decision (${rejected.decision}) became stale against the freshly reloaded ledger: ${rejected.reason}`,
-    }, 'raw-adjudication-unresolved')];
-  });
+      freshLedger: input.freshLedger,
+      reason,
+    });
+    return unsupported === undefined
+      ? {
+          ...plan,
+          provisionalSpecs: [...plan.provisionalSpecs, provisionalSpecForRawKind({
+            wire,
+            canonical,
+            reason,
+          }, 'raw-adjudication-unresolved')],
+        }
+      : {
+          ...plan,
+          unsupportedRawFindingReports: [...plan.unsupportedRawFindingReports, unsupported],
+        };
+  }, { provisionalSpecs: [], unsupportedRawFindingReports: [] });
   const preconditions = applyPreconditionChecks({
     output: freshAssembly.output,
     captured: input.capturedPreconditions,
@@ -142,7 +193,11 @@ export function revalidateManagerPlan(input: {
   });
   return {
     output: preconditions.output,
-    provisionalSpecs: [...staleDecisionSpecs, ...preconditions.provisionalSpecs],
+    provisionalSpecs: [...staleDecisionPlan.provisionalSpecs, ...preconditions.provisionalSpecs],
+    unsupportedRawFindingReports: [
+      ...staleDecisionPlan.unsupportedRawFindingReports,
+      ...preconditions.unsupportedRawFindingReports,
+    ],
     staleRejections: [
       ...describeManagerRejections({
         ...freshAssembly,
@@ -317,10 +372,12 @@ function applyPreconditionChecks(input: {
 }): {
   output: FindingManagerOutput;
   provisionalSpecs: ProvisionalFindingSpec[];
+  unsupportedRawFindingReports: UnsupportedRawFindingReport[];
   staleDetails: string[];
   resolutionRenotifications: ResolutionRenotificationTransition[];
 } {
   let provisionalSpecs: ProvisionalFindingSpec[] = [];
+  let unsupportedRawFindingReports: UnsupportedRawFindingReport[] = [];
   let staleDetails: string[] = [];
   let resolutionRenotifications: ResolutionRenotificationTransition[] = [];
 
@@ -330,6 +387,35 @@ function applyPreconditionChecks(input: {
     reason: string,
     actionRecovery?: FindingActionProposal,
   ): void => {
+    const lifecycleReports = sourceRawFindingIds.flatMap((rawFindingId) => {
+      const wire = input.cleanWireById.get(rawFindingId);
+      if (wire === undefined) {
+        return [];
+      }
+      const report = unsupportedLifecycleReport({
+        wire,
+        freshLedger: input.freshLedger,
+        reason,
+      });
+      return report === undefined ? [] : [report];
+    });
+    const lifecycleRawFindingIds = new Set(
+      lifecycleReports.map((report) => report.rawFindingId),
+    );
+    const provisionalSourceRawFindingIds = sourceRawFindingIds.filter(
+      (rawFindingId) => !lifecycleRawFindingIds.has(rawFindingId),
+    );
+    unsupportedRawFindingReports = [
+      ...unsupportedRawFindingReports,
+      ...lifecycleReports,
+    ];
+    if (
+      sourceRawFindingIds.length > 0
+      && provisionalSourceRawFindingIds.length === 0
+    ) {
+      staleDetails = [...staleDetails, reason];
+      return;
+    }
     const fresh = input.freshLedger.findings.find((finding) => finding.id === findingId);
     const issuedActionRecovery = actionRecovery === undefined
       ? undefined
@@ -340,7 +426,7 @@ function applyPreconditionChecks(input: {
       parentStepName: input.parentStepName,
       targetFindingId: findingId,
       targetTitle: fresh?.title ?? findingId,
-      sourceRawFindingIds,
+      sourceRawFindingIds: provisionalSourceRawFindingIds,
       reason,
       ...(issuedActionRecovery !== undefined
         ? { actionRecovery: issuedActionRecovery }
@@ -348,12 +434,15 @@ function applyPreconditionChecks(input: {
     })];
     staleDetails = [...staleDetails, reason];
   };
+  const rejectResolution = (reason: string): void => {
+    staleDetails = [...staleDetails, reason];
+  };
 
   const resolvedFindings = input.output.resolvedFindings.filter((resolved) => {
     const captured = input.captured.get(resolved.findingId);
     if (captured === undefined) {
       // prompt 時に存在しなかった finding への確認は成立し得ない（stale 扱い）。
-      specFor(resolved.findingId, [...resolved.rawFindingIds], `Confirmation targets finding "${resolved.findingId}" that did not exist when the prompt snapshot was taken`);
+      rejectResolution(`Confirmation targets finding "${resolved.findingId}" that did not exist when the prompt snapshot was taken`);
       return false;
     }
     const check = checkFindingPrecondition({
@@ -374,9 +463,7 @@ function applyPreconditionChecks(input: {
       case 'post-prompt-persists':
         {
           if (freshTarget === undefined) {
-            specFor(
-              resolved.findingId,
-              [...resolved.rawFindingIds],
+            rejectResolution(
               `Confirmation for "${resolved.findingId}" was not applied because the fresh target is missing`,
             );
             return false;
@@ -396,9 +483,7 @@ function applyPreconditionChecks(input: {
             ))
             || !sameFindingMutationPrecondition(observed, captured.precondition)
           ) {
-            specFor(
-              resolved.findingId,
-              [...resolved.rawFindingIds],
+            rejectResolution(
               `Confirmation for "${resolved.findingId}" was not applied because its engine-issued precondition is invalid`,
             );
             return false;
@@ -419,9 +504,7 @@ function applyPreconditionChecks(input: {
             || expectedTarget.targetRevision !== observed.targetRevision + 1
             || renotificationRawFindingIds.length === 0
           ) {
-            specFor(
-              resolved.findingId,
-              [...resolved.rawFindingIds],
+            rejectResolution(
               `Confirmation for "${resolved.findingId}" was not applied: ${check.detail}`,
             );
             return false;
@@ -439,7 +522,7 @@ function applyPreconditionChecks(input: {
         }
         return false;
       case 'stale':
-        specFor(resolved.findingId, [...resolved.rawFindingIds], `Confirmation for "${resolved.findingId}" was not applied (stale precondition): ${check.detail}`);
+        rejectResolution(`Confirmation for "${resolved.findingId}" was not applied (stale precondition): ${check.detail}`);
         return false;
     }
   });
@@ -555,6 +638,7 @@ function applyPreconditionChecks(input: {
       )),
     },
     provisionalSpecs,
+    unsupportedRawFindingReports,
     staleDetails,
     resolutionRenotifications,
   };

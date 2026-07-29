@@ -3,7 +3,10 @@ import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import { compareBinaryStrings } from '../../shared/utils/binary-string-comparator.js';
 import { normalizeRfc3339Timestamp } from './rfc3339.js';
 import { collectFindingLedgerProjectionInvariantViolations } from './finding-ledger-invariants.js';
-import { RAW_FINDING_FIELD_LIMITS } from './finding-contract-limits.js';
+import {
+  RAW_FINDING_FIELD_LIMITS,
+  RAW_FINDING_NORMALIZER_LIMITS,
+} from './finding-contract-limits.js';
 import {
   computeCandidateIdentityHash,
   computeClaimIdentityHash,
@@ -859,7 +862,9 @@ const ReviewerCandidatePayloadSchema = z.object({
   description: rawFindingDescriptionString.nullable(),
   suggestion: rawFindingSuggestionString.nullable(),
   relation: z.enum(RAW_FINDING_RELATIONS).nullable(),
-  targetFindingId: nonEmptyString.nullable(),
+  targetFindingIds: z.array(
+    nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxRawFindingIdChars),
+  ).max(RAW_FINDING_NORMALIZER_LIMITS.maxTargetFindingIdsPerCandidate),
   target: FindingTargetSchema.nullable(),
   evidenceRequests: z.array(FindingEvidenceRequestSchema).max(16),
 }).strict();
@@ -1805,7 +1810,7 @@ const RawFindingsOutputIntakeJsonSchema = {
                 required: [
                   'rawFindingId',
                   'relation',
-                  'targetFindingId',
+                  'targetFindingIds',
                   'familyTag',
                   'severity',
                   'title',
@@ -1822,9 +1827,18 @@ const RawFindingsOutputIntakeJsonSchema = {
                   },
                   relation: {
                     enum: [...RAW_FINDING_RELATIONS, null],
-                    description: 'Extract the stated ledger relation, or null when the report does not state one. The engine normalizes null to new.',
+                    description: 'Extract the stated ledger relation, or null when the report does not state one. Null remains an unresolved relation and is handled by canonical ambiguity admission.',
                   },
-                  targetFindingId: { type: ['string', 'null'] },
+                  targetFindingIds: {
+                    type: 'array',
+                    maxItems: RAW_FINDING_NORMALIZER_LIMITS.maxTargetFindingIdsPerCandidate,
+                    items: {
+                      type: 'string',
+                      minLength: 1,
+                      maxLength: RAW_FINDING_FIELD_LIMITS.maxRawFindingIdChars,
+                    },
+                    description: 'All explicitly labeled target finding IDs. Use [] for relation "new" or when the report states no target. The engine validates, deduplicates, and atomizes this list into one lifecycle raw finding per target.',
+                  },
                   familyTag: {
                     type: ['string', 'null'],
                     maxLength: RAW_FINDING_FIELD_LIMITS.maxFamilyTagChars,
@@ -2010,6 +2024,8 @@ const NATIVE_STRUCTURED_OUTPUT_SCHEMA_KEYWORDS = new Set([
   'enum',
   'anyOf',
   'items',
+  'minLength',
+  'maxLength',
   'minItems',
   'maxItems',
 ]);

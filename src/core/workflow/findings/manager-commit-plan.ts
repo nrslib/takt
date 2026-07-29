@@ -9,6 +9,7 @@ import type {
   FindingLedgerMutation,
   ProvisionalLandingReport,
   ReviewerAnomalyLandingReport,
+  UnsupportedRawFindingReport,
 } from './store.js';
 import type {
   FindingLedger,
@@ -106,6 +107,7 @@ export interface CommitMutationResult {
   managerDecisionCommands: FindingLifecycleCommand[];
   lifecycleManagerOutput: FindingManagerOutput;
   staleRejections: string[];
+  unsupportedRawFindingReports: UnsupportedRawFindingReport[];
   admissionRejections: RawAdmissionEvaluation['admissionRejections'];
   provisionalLandings: ProvisionalLandingReport[];
   reviewerAnomalyLandings: ReviewerAnomalyLandingReport[];
@@ -474,6 +476,7 @@ export function buildFindingManagerCommitMutation(
         managerDecisionCommands: [],
         lifecycleManagerOutput: params.managerDecision.managerOutput,
         staleRejections: [],
+        unsupportedRawFindingReports: [],
         admissionRejections: [],
         provisionalLandings: [],
         reviewerAnomalyLandings: [],
@@ -600,7 +603,10 @@ export function buildFindingManagerCommitMutation(
     staleRawFindingIds: ladderCommit.staleRecoveryRawFindingIds,
     deferredRawFindingIds: ladder.deferredRawFindingIds,
     resolutionRenotifications: revalidated.resolutionRenotifications,
-    unsupportedRawFindingReports: managerDecision.unsupportedRawFindingReports,
+    unsupportedRawFindingReports: [
+      ...managerDecision.unsupportedRawFindingReports,
+      ...revalidated.unsupportedRawFindingReports,
+    ],
     healthyReviewerStableKeys: params.intake.healthyReviewerStableKeys,
     verifiedEvidenceRecordsByRawFindingId: admission.verifiedEvidenceRecordsByRawFindingId,
   };
@@ -714,6 +720,7 @@ export function buildFindingManagerCommitMutation(
       }),
       lifecycleManagerOutput: reconcilePlan.managerOutput,
       staleRejections: [...staleRejections, ...reconcilePlan.normalizationRejections],
+      unsupportedRawFindingReports: revalidated.unsupportedRawFindingReports,
       admissionRejections: admission.admissionRejections,
       provisionalLandings,
       reviewerAnomalyLandings: finalized.reviewerAnomalyLandings,

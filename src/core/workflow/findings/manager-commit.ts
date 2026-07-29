@@ -231,6 +231,7 @@ function buildCommitReport(
     unsupportedRawFindingReports: [
       ...managerDecision.rawRecovery.unsupportedRawFindingReports,
       ...managerDecision.unsupportedRawFindingReports,
+      ...committed.unsupportedRawFindingReports,
     ],
     overflowReports: intake.overflowReports,
     provisionalLandings: committed.provisionalLandings,

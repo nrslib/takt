@@ -111,6 +111,30 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   });
 }
 
+function makeProvisionalLedger(): FindingLedger {
+  const ledger = makeLedger();
+  const finding = ledger.findings[0]!;
+  return authorizeFindingLedgerFixture({
+    ...ledger,
+    findings: [{
+      ...finding,
+      provisional: {
+        kind: 'reviewer-output-overflow',
+        stableKey: 'stable-F-0001',
+        lineageKey: 'lineage-F-0001',
+        sourceRawFindingIds: [],
+        reason: 'Pending recovery',
+        firstObservedAt: finding.firstSeen,
+        lastObservedAt: finding.lastSeen,
+        interpretationEpochs: 0,
+        gateEffect: 'block',
+        firstObservedRound: 1,
+        recoveryReviewerStableKey: 'reviewer-stable-a',
+      },
+    }],
+  });
+}
+
 function reviewerExtraction(raw: Record<string, unknown>): Record<string, unknown> {
   if ('rawExcerpt' in raw && 'candidate' in raw) {
     return raw;
@@ -147,10 +171,15 @@ interface Harness {
   }) => ReturnType<typeof runFindingManagerForStep>;
 }
 
-function makeHarness(initialLedger: FindingLedger): Harness {
+function makeHarness(
+  initialLedger: FindingLedger,
+  freshLedgerAtCommit?: FindingLedger,
+): Harness {
   // WAL（beginInterpretations / completeInterpretations）が保存を複数回
   // 行うため、テスト double も状態を持つ（mutator の結果を次回の読み込みに使う）。
-  const ledgerRepository = new RevisionedFindingLedgerTestRepository(initialLedger);
+  const ledgerRepository = new RevisionedFindingLedgerTestRepository(
+    freshLedgerAtCommit ?? initialLedger,
+  );
   const savedLedgers: FindingLedger[] = [];
   const savedRawFindings: RawFinding[][] = [];
   const savedValidationReports: FindingManagerValidationReport[] = [];
@@ -171,7 +200,9 @@ function makeHarness(initialLedger: FindingLedger): Harness {
   const ledgerStore: FindingLedgerStore = {
     ledgerIdentity: '/test/finding-manager-mechanical-runner/harness-ledger.json',
     workflowName: 'peer-review',
-    loadLedger: () => ledgerRepository.loadLedger(),
+    loadLedger: freshLedgerAtCommit === undefined
+      ? () => ledgerRepository.loadLedger()
+      : () => initialLedger,
     ...createFindingAdjudicationReservation(),
     saveLedgerSnapshot: () => {},
     saveRawFindings: (_runId, _stepName, rawFindings) => {
@@ -250,6 +281,24 @@ const CONFIRMATION_RAW = {
   relation: 'resolution_confirmation',
   targetFindingId: 'F-0001',
   evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 10)],
+};
+
+const PERSISTS_RAW = {
+  rawFindingId: 'p-1',
+  familyTag: 'bug',
+  severity: 'high',
+  title: 'Existing issue',
+  description: 'Existing issue body.',
+  suggestion: '',
+  relation: 'persists',
+  targetFindingId: 'F-0001',
+  evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 10)],
+};
+
+const REOPENED_RAW = {
+  ...PERSISTS_RAW,
+  rawFindingId: 'r-1',
+  relation: 'reopened',
 };
 
 const UNMATCHED_ISSUE_RAW = {
@@ -674,6 +723,216 @@ describe('runFindingManagerForStep mechanical path', () => {
     expect(finding?.status).toBe('resolved');
   });
 
+  it('resolves an open provisional through the normal runner and binds the resolution event to its source raw', async () => {
+    const initialLedger = makeProvisionalLedger();
+    const harness = makeHarness(initialLedger);
+
+    const result = await harness.run({ reviewerRawFindings: [CONFIRMATION_RAW] });
+
+    expect(result.status).toBe('updated');
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    const ledger = harness.currentLedger();
+    const finding = ledger.findings.find((entry) => entry.id === 'F-0001');
+    const confirmationRaw = ledger.rawFindings.find(
+      (entry) => entry.rawFindingId.endsWith(':c-1'),
+    );
+    expect(finding).toMatchObject({
+      status: 'resolved',
+      lifecycle: 'resolved',
+      provisional: { kind: 'reviewer-output-overflow' },
+      resolvedAt: '2026-06-14T00:00:00.000Z',
+    });
+    expect(finding?.rawFindingIds).toContain(confirmationRaw?.rawFindingId);
+    expect(confirmationRaw).toMatchObject({
+      relation: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+      sourceBinding: {
+        reportDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        excerptDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+    });
+    const resolutionEvent = ledger.lifecycleEvents.find(
+      (event) => event.operation === 'resolve_finding',
+    );
+    expect(resolutionEvent).toBeDefined();
+    const resolutionBindings = resolutionEvent!.evidenceBindingIds.map((bindingId) => (
+      ledger.evidenceBindings.find((binding) => binding.bindingId === bindingId)
+    ));
+    expect(resolutionBindings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceRawFindingId: confirmationRaw?.rawFindingId,
+        operation: 'resolve_finding',
+        evidenceId: expect.any(String),
+      }),
+    ]));
+    for (const binding of resolutionBindings) {
+      expect(binding).toBeDefined();
+      expect(ledger.evidenceRecords.some(
+        (record) => record.evidenceId === binding!.evidenceId,
+      )).toBe(true);
+      expect(finding?.evidenceIds).toContain(binding!.evidenceId);
+    }
+  });
+
+  it('resolves the provisional while an unsupported persists observation remains audit-only', async () => {
+    const initialLedger = makeProvisionalLedger();
+    const harness = makeHarness(initialLedger);
+    const persists = {
+      ...CONFIRMATION_RAW,
+      rawFindingId: 'p-unsupported',
+      relation: 'persists',
+      title: 'Claimed persistence without proof',
+      description: 'The issue allegedly persists.',
+      evidence: [],
+    };
+
+    await harness.run({ reviewerRawFindings: [persists, CONFIRMATION_RAW] });
+
+    const ledger = harness.currentLedger();
+    expect(ledger.findings.find((entry) => entry.id === 'F-0001')).toMatchObject({
+      status: 'resolved',
+      provisional: { kind: 'reviewer-output-overflow' },
+    });
+    expect(ledger.findings).toHaveLength(1);
+    expect(ledger.reviewerAnomalies).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'lifecycle-admission-failure',
+        stableKey: expect.stringMatching(/^[0-9a-f]{64}$/),
+        sourceRawFindingIds: expect.arrayContaining([
+          expect.stringMatching(/:p-unsupported$/),
+        ]),
+      }),
+    ]));
+  });
+
+  it('does not resolve an open provisional when its captured target precondition is stale at commit', async () => {
+    const initialLedger = makeProvisionalLedger();
+    const freshFinding = {
+      ...initialLedger.findings[0]!,
+      revision: 3,
+      lastSeen: {
+        runId: 'concurrent-run',
+        stepName: 'reviewers',
+        timestamp: '2026-06-14T00:00:00.000Z',
+      },
+    };
+    const freshLedger = authorizeFindingLedgerFixture({
+      ...initialLedger,
+      findings: [freshFinding],
+    });
+    const harness = makeHarness(initialLedger, freshLedger);
+
+    await harness.run({ reviewerRawFindings: [CONFIRMATION_RAW] });
+
+    expect(harness.currentLedger().findings.find((entry) => entry.id === 'F-0001'))
+      .toMatchObject({
+        status: 'open',
+        revision: 3,
+        provisional: { kind: 'reviewer-output-overflow' },
+      });
+    expect(harness.currentLedger().findings).toHaveLength(1);
+  });
+
+  it('keeps a persists observation audit-only when its open target becomes terminal before commit', async () => {
+    const initialLedger = makeLedger();
+    const freshLedger = makeLedger({
+      findings: [{
+        ...initialLedger.findings[0]!,
+        status: 'resolved',
+        lifecycle: 'resolved',
+        revision: 2,
+        lastSeen: {
+          runId: 'concurrent-run',
+          stepName: 'reviewers',
+          timestamp: '2026-06-14T00:00:00.000Z',
+        },
+      }],
+    });
+    const harness = makeHarness(initialLedger, freshLedger);
+
+    await harness.run({ reviewerRawFindings: [PERSISTS_RAW] });
+
+    const ledger = harness.currentLedger();
+    expect(ledger.findings).toHaveLength(1);
+    expect(ledger.findings[0]).toMatchObject({
+      id: 'F-0001',
+      status: 'resolved',
+      revision: 2,
+    });
+    expect(ledger.findings.every((finding) => finding.provisional === undefined)).toBe(true);
+    const report = harness.savedValidationReports.at(-1);
+    expect(report?.rawFindingDispositions).toContainEqual(expect.objectContaining({
+      rawFindingId: expect.stringMatching(/:p-1$/),
+      outcome: 'unsupported',
+      reason: expect.stringContaining('audit-only at commit'),
+    }));
+    expect(report?.unsupportedRawFindings).toContainEqual(expect.objectContaining({
+      rawFindingId: expect.stringMatching(/:p-1$/),
+      targetFindingId: 'F-0001',
+    }));
+  });
+
+  it('keeps a reopened observation audit-only when its resolved target is invalidated before commit', async () => {
+    const openLedger = makeLedger();
+    const initialLedger = makeLedger({
+      findings: [{
+        ...openLedger.findings[0]!,
+        status: 'resolved',
+        lifecycle: 'resolved',
+        revision: 2,
+      }],
+    });
+    const freshLedger = makeLedger({
+      findings: [{
+        ...openLedger.findings[0]!,
+        status: 'invalidated',
+        lifecycle: 'invalidated',
+        revision: 3,
+        lastSeen: {
+          runId: 'concurrent-run',
+          stepName: 'reviewers',
+          timestamp: '2026-06-14T00:00:00.000Z',
+        },
+      }],
+    });
+    const harness = makeHarness(initialLedger, freshLedger);
+    mockManagerTaskDecisions({
+      rawDecisions: [{
+        rawFindingId: 'run-2:reviewers:2:arch-review:r-1',
+        decision: 'reopened',
+        findingId: 'F-0001',
+        anchorRelevance: 'not_applicable',
+        evidence: 'Verified recurrence.',
+      }],
+      disputeDecisions: [],
+      conflictDecisions: [],
+      invalidateDecisions: [],
+      duplicateDecisions: [],
+      dismissDecisions: [],
+    });
+
+    await harness.run({ reviewerRawFindings: [REOPENED_RAW] });
+
+    const ledger = harness.currentLedger();
+    expect(ledger.findings).toHaveLength(1);
+    expect(ledger.findings[0]).toMatchObject({
+      id: 'F-0001',
+      status: 'invalidated',
+      revision: 3,
+    });
+    expect(ledger.findings.every((finding) => finding.provisional === undefined)).toBe(true);
+    const report = harness.savedValidationReports.at(-1);
+    expect(report?.rawFindingDispositions).toContainEqual(expect.objectContaining({
+      rawFindingId: expect.stringMatching(/:r-1$/),
+      outcome: 'unsupported',
+      reason: expect.stringContaining('transition capability: unavailable'),
+    }));
+    expect(report?.unsupportedRawFindings).toContainEqual(expect.objectContaining({
+      rawFindingId: expect.stringMatching(/:r-1$/),
+      targetFindingId: 'F-0001',
+    }));
+  });
+
   it('Given a residual raw finding When run Then the agent is called with only the residual raws and outputs are merged', async () => {
     executeAgentMock.mockResolvedValue({
       status: 'done',
@@ -916,7 +1175,7 @@ describe('runFindingManagerForStep rejected decisions land as provisional withou
     expect(report?.rawFindingDispositions).toContainEqual(expect.objectContaining({
       rawFindingId: 'run-2:reviewers:2:arch-review:c-1',
       outcome: 'unsupported',
-      reason: expect.stringContaining('cannot serve as resolution evidence'),
+      reason: expect.stringContaining('has no product transition capability'),
     }));
     expect(harness.currentLedger().findings.filter(
       (finding) => finding.rawFindingIds.includes('run-2:reviewers:2:arch-review:c-1'),

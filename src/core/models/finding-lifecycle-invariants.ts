@@ -206,12 +206,14 @@ function assertRawEvidenceBinding(input: {
   const target = input.binding.target;
   const validRelation = (() => {
     if (target.entityKind === 'conflict') {
-      return (
-        operation === 'create_conflict'
-        || operation === 'observe_conflict'
-        || operation === 'apply_conflict_adjudication'
-        || operation === 'apply_resolution_renotification'
-      ) && input.raw.targetFindingId !== null;
+      return operation === 'create_conflict' || (
+        (
+          operation === 'observe_conflict'
+          || operation === 'apply_conflict_adjudication'
+          || operation === 'apply_resolution_renotification'
+        )
+        && input.raw.targetFindingId !== null
+      );
     }
     if (operation === 'create_finding') {
       return (

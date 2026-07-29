@@ -151,7 +151,7 @@ export function reviewerRawExtractionFixture(input: {
       description: input.description,
       suggestion: input.suggestion === '' ? null : input.suggestion,
       relation: input.relation,
-      targetFindingId: input.targetFindingId,
+      targetFindingIds: input.targetFindingId === null ? [] : [input.targetFindingId],
       target,
       evidenceRequests: input.evidenceRequests ?? quoteRequests,
     },

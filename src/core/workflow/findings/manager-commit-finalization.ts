@@ -60,25 +60,14 @@ function classifyRejectedObservations(
 ): RejectedObservationPlan {
   return pendingObservations.reduce<RejectedObservationPlan>((plan, pending) => {
     const target = ledger.findings.find((finding) => finding.id === pending.targetFindingId);
-    if (target !== undefined && target.status === 'open') {
-      return {
-        ...plan,
-        attachments: [...plan.attachments, {
-          targetFindingId: pending.targetFindingId,
-          rawFindingId: pending.item.wire.rawFindingId,
-          reason: pending.reason,
-          rejectionCode: 'evidence_admission_failed',
-        }],
-      };
-    }
     return {
       ...plan,
       anomalySpecs: [...plan.anomalySpecs, createReviewerAnomalySpec({
         wire: pending.item.wire,
         canonical: pending.item.canonical,
-        anomalyKind: 'quote-mismatch',
+        anomalyKind: pending.anomalyKind,
         failedEvidence: pending.failedEvidence,
-        reason: `${pending.reason}; the target is no longer open after this round, so the observation is isolated as a reviewer anomaly instead`,
+        reason: `${pending.reason}; lifecycle evidence failure is audit-only and cannot mutate the target (current status: ${target?.status ?? 'missing'})`,
       })],
     };
   }, { attachments: [], anomalySpecs: [] });

@@ -16,3 +16,8 @@ export const RAW_FINDING_FIELD_LIMITS = {
   maxSnapshotIdChars: 64,
   maxProofIdChars: 64,
 } as const;
+
+export const RAW_FINDING_NORMALIZER_LIMITS = {
+  /** 1 extraction が atomize できる lifecycle target 数。 */
+  maxTargetFindingIdsPerCandidate: 64,
+} as const;

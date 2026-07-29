@@ -55,6 +55,48 @@ const ledger: FindingLedger = {
   interpretations: [],
 };
 
+function intakeExtractions(
+  reviewers: Array<{ name: string; extractions: unknown[] }>,
+) {
+  return intakeReviewerOutputs({
+    subResults: reviewers.map(({ name, extractions }) => ({
+      subStep: {
+        kind: 'agent',
+        name,
+        persona: name,
+        edit: false,
+      } as WorkflowStep,
+      response: {
+        persona: name,
+        status: 'done',
+        content: extractions.map((item) => (
+          typeof item === 'object' && item !== null && 'rawExcerpt' in item
+            ? String(item.rawExcerpt)
+            : ''
+        )).join('\n'),
+        structuredOutput: { rawFindings: extractions },
+        timestamp: new Date('2026-07-28T00:00:00.000Z'),
+      } as AgentResponse,
+    })),
+    previousLedger: ledger,
+    workflowName: 'peer-review',
+    callNamespace: '',
+    parentStepName: 'reviewers',
+    stepIteration: 1,
+    runId: 'run-1',
+    workflowTask: 'Review the project.',
+    cwd: process.cwd(),
+    scopeIdentity: '/test/finding-resource-envelope/ledger.json',
+    issuedAt: '2026-07-28T00:00:00.000Z',
+    reviewScopeSnapshot: {
+      reviewScopeSnapshotId: 'a'.repeat(64),
+      trackedDiff: undefined,
+      untrackedEvidence: [],
+      queryInventory: [],
+    },
+  });
+}
+
 describe('reviewer raw resource envelope', () => {
   it('preserves nullable candidate fields through projection before intake', () => {
     const nullableRaw = reviewerRawExtractionFixture({
@@ -305,5 +347,62 @@ describe('reviewer raw resource envelope', () => {
     expect(intake.intakeProvisionalSpecs).toHaveLength(1);
     expect(intake.items).toHaveLength(0);
     expect(intake.overflowReports[0]?.reason).toContain('per-reviewer limit');
+  });
+
+  it('rejects one extraction that would exceed the atomized reviewer limit', () => {
+    const extraction = structuredClone(raw);
+    extraction.candidate!.relation = 'persists';
+    extraction.candidate!.targetFindingIds = Array.from(
+      { length: RAW_FINDING_LIMITS.maxRawFindingsPerReviewer + 1 },
+      (_, index) => `F-${String(index + 1).padStart(4, '0')}`,
+    );
+    const intake = intakeExtractions([{ name: 'reviewer', extractions: [extraction] }]);
+
+    expect(intake.items).toEqual([]);
+    expect(intake.overflowReports[0]?.reason).toContain('atomized raw findings');
+  });
+
+  it('deduplicates target ids before enforcing the atomized boundary', () => {
+    const extraction = structuredClone(raw);
+    extraction.candidate!.relation = 'persists';
+    extraction.candidate!.targetFindingIds = Array.from(
+      { length: RAW_FINDING_LIMITS.maxTargetFindingIdsPerCandidate },
+      () => 'F-0001',
+    );
+    const intake = intakeExtractions([{ name: 'reviewer', extractions: [extraction] }]);
+
+    expect(intake.overflowReports).toEqual([]);
+    expect(intake.items).toHaveLength(1);
+  });
+
+  it('enforces the step limit across atomized outputs from multiple reviewers', () => {
+    const extractionFor = (prefix: string, count: number) => {
+      const extraction = structuredClone(raw);
+      extraction.rawExcerpt = `${prefix} observation`;
+      extraction.candidate!.rawFindingId = prefix;
+      extraction.candidate!.description = `${prefix} observation`;
+      extraction.candidate!.relation = 'persists';
+      extraction.candidate!.targetFindingIds = Array.from(
+        { length: count },
+        (_, index) => `${prefix}-${String(index + 1).padStart(4, '0')}`,
+      );
+      return extraction;
+    };
+    const intake = intakeExtractions([
+      {
+        name: 'reviewer-a',
+        extractions: [extractionFor('A', RAW_FINDING_LIMITS.maxRawFindingsPerReviewer)],
+      },
+      {
+        name: 'reviewer-b',
+        extractions: [extractionFor('B', RAW_FINDING_LIMITS.maxRawFindingsPerReviewer)],
+      },
+      { name: 'reviewer-c', extractions: [extractionFor('C', 1)] },
+    ]);
+
+    expect(intake.items).toHaveLength(RAW_FINDING_LIMITS.maxRawFindingsPerStep);
+    expect(intake.overflowReports).toEqual([
+      expect.objectContaining({ reviewer: 'reviewer-c' }),
+    ]);
   });
 });

@@ -7,7 +7,10 @@
  * 「やるな」リスト該当）。件数・byte の envelope 検査は巨大 JSON 全体を Zod
  * parse する前に行う（435件なら65件目を読んだ時点で打ち切る）。
  */
-import { RAW_FINDING_FIELD_LIMITS } from '../../models/finding-contract-limits.js';
+import {
+  RAW_FINDING_FIELD_LIMITS,
+  RAW_FINDING_NORMALIZER_LIMITS,
+} from '../../models/finding-contract-limits.js';
 
 export const RAW_FINDING_LIMITS = {
   /** raw 件数 / reviewer / review invocation */
@@ -19,6 +22,7 @@ export const RAW_FINDING_LIMITS = {
   /** reconciliation step 全 raw JSON バイト数 */
   maxStepRawFindingsJsonBytes: 512 * 1024,
   ...RAW_FINDING_FIELD_LIMITS,
+  ...RAW_FINDING_NORMALIZER_LIMITS,
   /** reviewer correction は reviewer あたり1回 */
   maxReviewerCorrectionsPerReviewer: 1,
   /** correction 出力の上限（output tokens 近似） */
@@ -95,11 +99,17 @@ export interface ReviewerEnvelopeViolation {
  */
 export function checkReviewerEnvelope(input: {
   itemCount: number;
+  atomizedItemCount: number;
   jsonBytes: number;
 }): ReviewerEnvelopeViolation | undefined {
   if (input.itemCount > RAW_FINDING_LIMITS.maxRawFindingsPerReviewer) {
     return {
       reason: `reviewer emitted ${input.itemCount} raw findings, exceeding the per-reviewer limit of ${RAW_FINDING_LIMITS.maxRawFindingsPerReviewer}`,
+    };
+  }
+  if (input.atomizedItemCount > RAW_FINDING_LIMITS.maxRawFindingsPerReviewer) {
+    return {
+      reason: `reviewer emitted ${input.atomizedItemCount} atomized raw findings, exceeding the per-reviewer limit of ${RAW_FINDING_LIMITS.maxRawFindingsPerReviewer}`,
     };
   }
   if (input.jsonBytes > RAW_FINDING_LIMITS.maxReviewerRawFindingsJsonBytes) {
@@ -144,6 +154,8 @@ export function findRawFieldLimitViolation(fields: {
   suggestion?: string;
   evidence?: readonly unknown[];
   rawExcerpt?: string;
+  targetFindingIds?: readonly string[];
+  targetFindingIdCount?: number;
   evidenceRequests?: readonly unknown[];
 }): string | undefined {
   const checks: Array<[string, string | undefined, number]> = [
@@ -157,6 +169,17 @@ export function findRawFieldLimitViolation(fields: {
   for (const [name, value, limit] of checks) {
     if (value !== undefined && value.length > limit) {
       return `${name} is ${value.length} characters, exceeding the limit of ${limit}`;
+    }
+  }
+  if (
+    (fields.targetFindingIdCount ?? 0)
+    > RAW_FINDING_LIMITS.maxTargetFindingIdsPerCandidate
+  ) {
+    return `targetFindingIds has ${fields.targetFindingIdCount} items, exceeding the limit of ${RAW_FINDING_LIMITS.maxTargetFindingIdsPerCandidate}`;
+  }
+  for (const [index, targetFindingId] of (fields.targetFindingIds ?? []).entries()) {
+    if (targetFindingId.length > RAW_FINDING_LIMITS.maxRawFindingIdChars) {
+      return `targetFindingIds[${index}] is ${targetFindingId.length} characters, exceeding the limit of ${RAW_FINDING_LIMITS.maxRawFindingIdChars}`;
     }
   }
   for (const [index, evidence] of (

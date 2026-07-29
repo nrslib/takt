@@ -85,6 +85,13 @@ const ISSUE_RAW: RawFinding = canonicalRawFindingFixture({
   evidence: [],
 });
 
+const PERSISTS_RAW: RawFinding = canonicalRawFindingFixture({
+  ...CONFIRMATION_RAW,
+  rawFindingId: 'raw-persists',
+  relation: 'persists',
+  description: 'The prior claim does not hold.',
+});
+
 function makeAdmission(cleanWire: RawFinding[]): RawAdmissionEvaluation {
   return {
     admissionRejections: [],
@@ -275,5 +282,53 @@ describe('assembleCleanManagerDecision の mechanical フォールバック', ()
       dismissCandidateFindingIds: new Set(),
       priorStepResponseText: undefined,
     })).toThrow(/engine bug/);
+  });
+
+  it('偽 persists と clean confirmation が同時でも対象を解消し、偽 claim を audit-only にする', () => {
+    const previousLedger = makeLedger([makeFinding({ revision: 1 })]);
+    const cleanWire = [PERSISTS_RAW, CONFIRMATION_RAW];
+    const mechanical = classifyRawFindingsMechanically({ previousLedger, rawFindings: cleanWire });
+    expect(mechanical.residualRawFindings.map((raw) => raw.rawFindingId).sort()).toEqual([
+      'raw-confirm',
+      'raw-persists',
+    ]);
+    validateMock.mockReturnValue({ ok: true });
+
+    const result = assembleCleanManagerDecision({
+      previousLedger,
+      admission: makeAdmission(cleanWire),
+      mechanical,
+      decisions: makeDecisions({
+        rawDecisions: [
+          {
+            rawFindingId: 'raw-persists',
+            decision: 'unsupported',
+            evidence: 'The persisted claim is contradicted by the verified source.',
+            anchorRelevance: 'not_applicable',
+          },
+          {
+            rawFindingId: 'raw-confirm',
+            decision: 'resolved',
+            findingId: 'F-0001',
+            evidence: 'The fix is present.',
+            anchorRelevance: 'not_applicable',
+          },
+        ],
+      }),
+      initialInvalidAttempts: [],
+      invalidLocationCandidateFindingIds: new Set(),
+      dismissCandidateFindingIds: new Set(),
+      priorStepResponseText: undefined,
+    });
+
+    expect(result.managerOutput.resolvedFindings).toEqual([
+      expect.objectContaining({ findingId: 'F-0001', rawFindingIds: ['raw-confirm'] }),
+    ]);
+    expect(result.cleanProvisionalSpecs).toEqual([]);
+    expect(result.unsupportedRawFindingReports).toEqual([{
+      rawFindingId: 'raw-persists',
+      targetFindingId: 'F-0001',
+      evidence: 'The persisted claim is contradicted by the verified source.',
+    }]);
   });
 });

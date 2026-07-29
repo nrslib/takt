@@ -58,7 +58,7 @@ export function intakeReviewerOutputs(input: {
     rawNormalizations: [],
     healthyReviewerStableKeys: new Set(),
   };
-  let admittedCount = 0;
+  let admittedAtomizedCount = 0;
   let admittedBytes = 0;
 
   for (const subResult of input.subResults) {
@@ -120,20 +120,26 @@ export function intakeReviewerOutputs(input: {
 
     // envelope 検査は Zod parse の前（65件目を読んだ時点で打ち切る）。
     const jsonBytes = resourceEnvelope.jsonBytes;
+    const lenientFields = items.map(extractLenientRawFields);
+    const atomizedItemCount = lenientFields.reduce(
+      (total, fields) => total + Math.max(1, fields.targetFindingIds?.length ?? 0),
+      0,
+    );
     const envelopeViolation = checkReviewerEnvelope({
       itemCount: resourceEnvelope.itemCount,
+      atomizedItemCount,
       jsonBytes,
     });
     const fieldViolation = envelopeViolation === undefined
-      ? items.map((item) => findRawFieldLimitViolation(extractLenientRawFields(item))).find((violation) => violation !== undefined)
+      ? lenientFields.map(findRawFieldLimitViolation).find((violation) => violation !== undefined)
       : undefined;
     const wouldExceedStep = envelopeViolation === undefined && fieldViolation === undefined
-      && (admittedCount + items.length > RAW_FINDING_LIMITS.maxRawFindingsPerStep
+      && (admittedAtomizedCount + atomizedItemCount > RAW_FINDING_LIMITS.maxRawFindingsPerStep
         || admittedBytes + jsonBytes > RAW_FINDING_LIMITS.maxStepRawFindingsJsonBytes);
     const overflowReason = envelopeViolation?.reason
       ?? (fieldViolation !== undefined ? `a raw finding field exceeded its limit: ${fieldViolation}` : undefined)
       ?? (wouldExceedStep
-        ? `admitting this reviewer's ${items.length} raw findings (${jsonBytes} bytes) would exceed the per-step limits (${RAW_FINDING_LIMITS.maxRawFindingsPerStep} findings / ${RAW_FINDING_LIMITS.maxStepRawFindingsJsonBytes} bytes)`
+        ? `admitting this reviewer's ${atomizedItemCount} atomized raw findings (${jsonBytes} bytes) would exceed the per-step limits (${RAW_FINDING_LIMITS.maxRawFindingsPerStep} findings / ${RAW_FINDING_LIMITS.maxStepRawFindingsJsonBytes} bytes)`
         : undefined);
 
     if (overflowReason !== undefined) {
@@ -166,7 +172,7 @@ export function intakeReviewerOutputs(input: {
       continue;
     }
 
-    admittedCount += items.length;
+    admittedAtomizedCount += atomizedItemCount;
     admittedBytes += jsonBytes;
     result.healthyReviewerStableKeys.add(computeReviewerStableKey({
       workflowName: input.workflowName,
@@ -203,9 +209,9 @@ export function intakeReviewerOutputs(input: {
     const clarification = subResult.relationClarification;
     for (const candidate of candidates) {
       const priorCodes = clarification !== undefined
-        && candidate.reviewerRawFindingId !== undefined
-        && Object.hasOwn(clarification.priorAmbiguityCodesByRawId, candidate.reviewerRawFindingId)
-        ? clarification.priorAmbiguityCodesByRawId[candidate.reviewerRawFindingId]
+        && candidate.sourceReviewerRawFindingId !== undefined
+        && Object.hasOwn(clarification.priorAmbiguityCodesByRawId, candidate.sourceReviewerRawFindingId)
+        ? clarification.priorAmbiguityCodesByRawId[candidate.sourceReviewerRawFindingId]
         : undefined;
       const canonicalized = canonicalizeReviewerRawFinding(candidate, {
         ledger: input.previousLedger,

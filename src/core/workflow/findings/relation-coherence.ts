@@ -106,20 +106,37 @@ export function detectClarifiableRawMismatches(
     if ((idCounts.get(fields.rawFindingId) ?? 0) > 1) {
       continue;
     }
-    const detection = detectRawFindingAmbiguities(fields, ledger);
-    const clarifiable = detection.codes.filter((code) => CLARIFIABLE_AMBIGUITY_CODES.has(code));
+    const atomicFields = fields.targetFindingIds !== undefined
+      && fields.targetFindingIds.length > 0
+      ? fields.targetFindingIds.map((targetFindingId) => ({ ...fields, targetFindingId }))
+      : [fields];
+    const detections = atomicFields.map((atomic) => (
+      detectRawFindingAmbiguities(atomic, ledger)
+    ));
+    const clarifiable = [...new Set(detections.flatMap((detection) => (
+      detection.codes.filter((code) => CLARIFIABLE_AMBIGUITY_CODES.has(code))
+    )))];
     if (clarifiable.length === 0) {
       continue;
     }
+    const collision = detections.find((detection) => (
+      detection.collidingFindingId !== undefined
+    ));
     mismatches.push({
       rawFindingId: fields.rawFindingId,
       ...(fields.title !== undefined ? { title: fields.title } : {}),
       locations: rawEvidenceFileQuoteLocations(fields.evidence ?? [])
         .map(formatFileQuoteLocation),
       codes: clarifiable,
-      ...(fields.targetFindingId !== undefined ? { targetFindingId: fields.targetFindingId } : {}),
-      ...(detection.collidingFindingId !== undefined ? { collidingFindingId: detection.collidingFindingId } : {}),
-      ...(detection.collidingFindingTitle !== undefined ? { collidingFindingTitle: detection.collidingFindingTitle } : {}),
+      ...(fields.targetFindingIds !== undefined && fields.targetFindingIds.length > 0
+        ? { targetFindingId: fields.targetFindingIds.join(', ') }
+        : {}),
+      ...(collision?.collidingFindingId !== undefined
+        ? { collidingFindingId: collision.collidingFindingId }
+        : {}),
+      ...(collision?.collidingFindingTitle !== undefined
+        ? { collidingFindingTitle: collision.collidingFindingTitle }
+        : {}),
     });
   }
   return mismatches;
@@ -130,7 +147,7 @@ function describeMismatch(mismatch: AmbiguousRawMismatch): string {
   for (const code of mismatch.codes) {
     switch (code) {
       case 'relation-target-mismatch':
-        parts.push('relation and targetFindingId contradict each other ("new" must have no target; every other relation requires one)');
+        parts.push('relation and targetFindingIds contradict each other ("new" must have no targets; every other relation requires at least one)');
         break;
       case 'persists-target-unknown':
         parts.push(`relation "persists" references target "${mismatch.targetFindingId ?? '?'}" which does not exist in the ledger`);
@@ -174,10 +191,10 @@ export function buildRelationCoherenceRegenerationInstruction(
     `  problem: ${describeMismatch(mismatch)}`,
   ].join('\n'));
   return [
-    'Some of your raw findings have contradictory relation/targetFindingId labeling against the current finding ledger:',
+    'Some of your raw findings have contradictory relation/targetFindingIds labeling against the current finding ledger:',
     ...mismatchBlock,
     '',
-    'Fix ONLY the relation and targetFindingId fields of the raw findings listed above. Do NOT change any other field (title, description, severity, suggestion, familyTag, evidence), do NOT add or remove raw findings, and do NOT touch raw findings that are not listed.',
+    'Fix ONLY the relation and targetFindingIds fields of the raw findings listed above. Do NOT change any other field (title, description, severity, suggestion, familyTag, evidence), do NOT add or remove raw findings, and do NOT touch raw findings that are not listed.',
     'Re-emit ONLY the corrected structured output matching the schema, including ALL raw findings from your previous output (corrected where needed). Do not repeat the report text. Do not add commentary.',
   ].join('\n');
 }
@@ -384,9 +401,9 @@ export function findRegenerationContractViolation(
     }
     if (!flaggedIds.has(fields.rawFindingId)) {
       const relationChanged = fields.relation !== originalRaw.relation
-        || fields.targetFindingId !== originalRaw.targetFindingId;
+        || JSON.stringify(fields.targetFindingIds) !== JSON.stringify(originalRaw.targetFindingIds);
       if (relationChanged) {
-        return `regenerated output changed relation/targetFindingId of non-flagged rawFindingId "${fields.rawFindingId}"`;
+        return `regenerated output changed relation/targetFindingIds of non-flagged rawFindingId "${fields.rawFindingId}"`;
       }
     }
   }

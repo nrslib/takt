@@ -252,7 +252,7 @@ const REVIEWER_CANDIDATE_KEYS: ReadonlySet<string> = new Set([
   'target',
   'rawFindingId',
   'relation',
-  'targetFindingId',
+  'targetFindingIds',
   'familyTag',
   'severity',
   'title',
@@ -464,6 +464,7 @@ function bindCandidateSource(
 export interface ProjectedReviewerRawItem {
   readonly record: Record<string, unknown>;
   readonly sourceBytes: number;
+  readonly targetFindingIdCount: number;
   readonly evidenceShapeValid: boolean;
   readonly candidateShapeValid: boolean;
 }
@@ -483,6 +484,7 @@ function rejectedReviewerRawItem(sourceBytes: number): ProjectedReviewerRawItem 
   return {
     record: {},
     sourceBytes,
+    targetFindingIdCount: 0,
     evidenceShapeValid: false,
     candidateShapeValid: false,
   };
@@ -529,6 +531,7 @@ function projectReviewerRawItem(
       return {
         record,
         sourceBytes,
+        targetFindingIdCount: 0,
         evidenceShapeValid: false,
         candidateShapeValid: false,
       };
@@ -561,13 +564,13 @@ function projectReviewerRawItem(
     }
     let evidenceShapeValid = false;
     let candidateShapeValid = true;
+    let targetFindingIdCount = 0;
     for (const key of Object.keys(descriptors)) {
       const descriptor = descriptors[key]!;
       const value = descriptor.value;
       if (
         value === null
         && [
-          'targetFindingId',
           'familyTag',
           'severity',
           'suggestion',
@@ -585,6 +588,16 @@ function projectReviewerRawItem(
         const relation = pickRelation(value);
         if (relation !== undefined) {
           record[key] = relation;
+        } else {
+          candidateShapeValid = false;
+        }
+        continue;
+      }
+      if (key === 'targetFindingIds') {
+        const targetFindingIds = canonicalStringSet(value);
+        if (targetFindingIds !== undefined) {
+          record.targetFindingIds = targetFindingIds;
+          targetFindingIdCount = Array.isArray(value) ? value.length : 0;
         } else {
           candidateShapeValid = false;
         }
@@ -630,6 +643,7 @@ function projectReviewerRawItem(
     return {
       record,
       sourceBytes,
+      targetFindingIdCount,
       evidenceShapeValid,
       candidateShapeValid,
     };
@@ -746,7 +760,7 @@ export function projectReviewerRawStructuredOutputWithEnvelope(
   const requiredCandidateKeys = [
     'rawFindingId',
     'relation',
-    'targetFindingId',
+    'targetFindingIds',
     'familyTag',
     'severity',
     'title',
@@ -943,6 +957,21 @@ export interface ReviewerCandidateIntakeBatch {
   rejections: ReviewerCandidateIntakeRejection[];
 }
 
+function atomizeTargetFindingIds(
+  projected: ProjectedReviewerRawItem,
+): ProjectedReviewerRawItem[] {
+  const targetFindingIds = canonicalStringSet(projected.record.targetFindingIds);
+  const base = { ...projected.record };
+  delete base.targetFindingIds;
+  if (targetFindingIds === undefined || targetFindingIds.length === 0) {
+    return [{ ...projected, record: base }];
+  }
+  return targetFindingIds.map((targetFindingId) => ({
+    ...projected,
+    record: { ...base, targetFindingId },
+  }));
+}
+
 export function createReviewerRawFindingCandidates(
   items: readonly unknown[],
   context: ReviewerRawIntakeContext,
@@ -976,7 +1005,7 @@ export function createReviewerRawFindingCandidates(
   const measuredEnvelope = resourceEnvelope ?? resourceEnvelopeForSnapshot(snapshot);
   const projectedItems = snapshot.map((item, index) => (
     projectReviewerRawItem(item, measuredEnvelope.itemSourceBytes[index]!)
-  ));
+  )).flatMap(atomizeTargetFindingIds);
   const records = projectedItems.map((item) => item.record);
   const claimedIds = records.map((record) => pickString(record.rawFindingId));
   const localIds = allocateReviewerLocalIds(records, claimedIds);
@@ -988,6 +1017,7 @@ export function createReviewerRawFindingCandidates(
     // reviewerRawFindingId は明示 ID があった場合だけ持つ（未指定の意味論 —
     // clarification 相関に参加しない — を保つ）。
     const reviewerRawFindingId = claimedId !== undefined ? localId : undefined;
+    const sourceReviewerRawFindingId = claimedId;
     const intakeId = namespacedRawFindingId(context, localId);
     // 構造化出力の strict 様式では該当なしの欄が空文字で埋まるため、空文字は
     // 未指定として扱う（pickString が弾く）。
@@ -1047,6 +1077,7 @@ export function createReviewerRawFindingCandidates(
       issuedEngineProofRecords: issued.engineProofRecords.map((record) => structuredClone(record)),
       evidenceCoverageGaps: [...issued.coverageGaps],
       ...(reviewerRawFindingId !== undefined ? { reviewerRawFindingId } : {}),
+      ...(sourceReviewerRawFindingId !== undefined ? { sourceReviewerRawFindingId } : {}),
       ...(pickString(record.familyTag) !== undefined ? { familyTag: pickString(record.familyTag)! } : {}),
       ...(pickSeverity(record.severity) !== undefined ? { severity: pickSeverity(record.severity)! } : {}),
       ...(pickString(record.title) !== undefined ? { title: pickString(record.title)! } : {}),
@@ -1207,8 +1238,9 @@ export function detectRawFindingAmbiguities(
   if (claimedRelation === undefined || claimedRelation === null) {
     codes.push('missing-required-field');
   }
-  if (fields.title === undefined || fields.description === undefined
-    || fields.severity === undefined || fields.familyTag === undefined) {
+  if (claimedRelation === 'new'
+    && (fields.title === undefined || fields.description === undefined
+      || fields.severity === undefined || fields.familyTag === undefined)) {
     codes.push('missing-required-field');
   }
 
@@ -1258,17 +1290,25 @@ export function extractLenientRawFields(
   rawFindingId?: string;
   suggestion?: string;
   rawExcerpt?: string;
+  targetFindingIds?: readonly string[];
+  targetFindingIdCount?: number;
   evidenceRequests?: readonly FindingEvidenceRequest[];
 } {
   // フィールド抽出は resource envelope の計測後にも呼ばれるため、
   // ここでは canonical JSON の byte 計測を繰り返さない。
-  const record = projectReviewerRawItem(item, 0).record;
+  const projected = projectReviewerRawItem(item, 0);
+  const record = projected.record;
   const evidenceRequests = projectEvidenceRequests(record.evidenceRequests) ?? [];
+  const targetFindingIds = canonicalStringSet(record.targetFindingIds);
   return {
     ...(pickString(record.rawExcerpt) !== undefined ? { rawExcerpt: pickString(record.rawExcerpt)! } : {}),
     ...(pickString(record.rawFindingId) !== undefined ? { rawFindingId: pickString(record.rawFindingId)! } : {}),
     ...(pickRelation(record.relation) !== undefined ? { relation: pickRelation(record.relation)! } : {}),
-    ...(pickString(record.targetFindingId) !== undefined ? { targetFindingId: pickString(record.targetFindingId)! } : {}),
+    ...(targetFindingIds !== undefined ? { targetFindingIds } : {}),
+    ...(projected.targetFindingIdCount > 0
+      ? { targetFindingIdCount: projected.targetFindingIdCount }
+      : {}),
+    ...(targetFindingIds?.length === 1 ? { targetFindingId: targetFindingIds[0]! } : {}),
     ...(pickString(record.title) !== undefined ? { title: pickString(record.title)! } : {}),
     ...(pickString(record.description) !== undefined ? { description: pickString(record.description)! } : {}),
     ...(pickSeverity(record.severity) !== undefined ? { severity: pickSeverity(record.severity)! } : {}),
@@ -1385,18 +1425,21 @@ export function canonicalizeReviewerRawFinding(
   // 形式が完全（codes 空）なら coherent。ただし taint（priorCodes）は保持する:
   // correction で relation が整った raw は形式上 coherent だが ambiguityOrigin は
   // true のままで、downstream の権限判定は provenance を見る。
+  const completeProductClaim = candidate.title !== undefined
+    && candidate.description !== undefined
+    && candidate.severity !== undefined
+    && candidate.familyTag !== undefined;
   if (codes.length === 0
     && relation !== null
-    && candidate.title !== undefined && candidate.description !== undefined
-    && candidate.severity !== undefined && candidate.familyTag !== undefined) {
+    && (relation !== 'new' || completeProductClaim)) {
     const canonical = registerCoherentCanonical({
       ...base,
       coherence: 'coherent',
       relation,
-      familyTag: candidate.familyTag,
-      severity: candidate.severity,
-      title: candidate.title,
-      description: candidate.description,
+      ...(candidate.familyTag !== undefined ? { familyTag: candidate.familyTag } : {}),
+      ...(candidate.severity !== undefined ? { severity: candidate.severity } : {}),
+      ...(candidate.title !== undefined ? { title: candidate.title } : {}),
+      ...(candidate.description !== undefined ? { description: candidate.description } : {}),
       ...(displayLocation !== undefined ? { location: displayLocation } : {}),
       ...(candidate.suggestion !== undefined ? { suggestion: candidate.suggestion } : {}),
       ...(candidate.targetFindingId !== undefined ? { targetFindingId: candidate.targetFindingId } : {}),

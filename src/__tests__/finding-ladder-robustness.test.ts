@@ -140,7 +140,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
       rawFindingId: 'raw-existing',
       stepName: 'reviewers',
       reviewer: 'arch-review',
-      familyTag: 'bug',
+      familyTag: null,
       severity: 'high',
       title: 'Existing issue',
       description: 'Existing issue body.',
@@ -339,16 +339,16 @@ const REVIEWER_STABLE_KEY = computeReviewerStableKey({
   reviewerPersonaKey: 'arch',
 });
 
-/** 対象 F-0001 を指す ambiguous persists（本文が target と異なる）。 */
+/** relation が欠けた不完全 new claim。一般の interpretation/WAL 安全性テスト用。 */
 const AMBIGUOUS_PERSISTS_RAW = {
   rawFindingId: 'p-1',
-  familyTag: 'bug',
+  familyTag: null,
   severity: 'high',
   title: 'Existing issue still present',
   description: 'Claims the resolved issue persists with different content.',
   suggestion: '',
-  relation: 'persists',
-  targetFindingId: 'F-0001',
+  relation: 'new',
+  targetFindingId: '',
   evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 20)],
 };
 
@@ -500,7 +500,7 @@ describe('ケース2: candidate/canonical 型混同（factory を通らない ob
       rawFindingId: 'raw-stored',
       stepName: 'reviewers',
       reviewer: 'arch-review',
-      familyTag: 'bug',
+      familyTag: null,
       severity: 'high',
       title: 'Stored issue',
       description: 'Stored body.',
@@ -759,10 +759,10 @@ describe('ケース4: persists の不正吸収（ambiguous persists を target �
     expect(target?.revision).toBe(5);
     expect(target?.lastSeen.runId).toBe('run-1');
     expect(target?.status).toBe('resolved');
-    // 独立した confirmed open finding が立つ（§5 規則2）。
+    // required field が欠けた new claim は confirmed finding に洗浄されない。
     const independent = saved.findings.find((finding) => finding.title === 'Existing issue still present');
     expect(independent?.status).toBe('open');
-    expect(independent?.provisional).toBeUndefined();
+    expect(independent?.provisional?.kind).toBe('raw-meaning-ambiguous');
   });
 });
 
@@ -1182,12 +1182,12 @@ describe('ケース7: resource exhaustion（435 raw・巨大 description・step 
 describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等性）', () => {
   const AMBIGUOUS_EVIDENCE = [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 20)];
   const AMBIGUOUS_FIELDS = {
-    relation: 'persists' as const,
-    targetFindingId: 'F-0001',
+    relation: 'new' as const,
+    targetFindingId: null,
     title: 'Existing issue still present',
     description: 'Claims the resolved issue persists with different content.',
     severity: 'high' as const,
-    familyTag: 'bug',
+    familyTag: null,
     evidence: AMBIGUOUS_EVIDENCE,
   };
   const LINEAGE_KEY = computeLineageKey({
@@ -1199,7 +1199,6 @@ describe('ケース8: crash/replay（WAL 各段での停止と resume の冪等�
       description: AMBIGUOUS_FIELDS.description,
       suggestion: null,
     }),
-    targetFindingId: 'F-0001',
   });
   const EVIDENCE_HASH = computeRawEvidenceHash(AMBIGUOUS_FIELDS);
   const BASE_INTERPRETATION_KEY = computeBaseInterpretationKey({
@@ -1335,11 +1334,11 @@ const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_K
     const saved = harness.currentLedger();
     const claimFindings = saved.findings.filter((finding) => finding.title === AMBIGUOUS_PERSISTS_RAW.title);
     expect(claimFindings).toHaveLength(1);
-    expect(claimFindings[0]?.provisional).toBeUndefined();
+    expect(claimFindings[0]?.provisional?.kind).toBe('raw-meaning-ambiguous');
     expect(saved.findings.filter((finding) => (
       finding.status === 'open' && finding.provisional !== undefined
-    ))).toHaveLength(0);
-    expect(buildFindingsRuleContext(saved).provisional.count).toBe(0);
+    ))).toHaveLength(1);
+    expect(buildFindingsRuleContext(saved).provisional.count).toBe(1);
     expect(saved.rawFindings.some((raw) => raw.rawFindingId.startsWith('contender-run:'))).toBe(true);
     expect(executeAgentMock).toHaveBeenCalledOnce();
     expect(saved.interpretations?.[0]?.stage).toBe('ledger_applied');
@@ -1356,10 +1355,8 @@ const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_K
       title: 'Existing issue still present',
       description: 'Claims the resolved issue persists with different content.',
       suggestion: null,
-      relation: 'persists',
-      targetFindingId: 'F-0001',
-      targetPrecondition: captureFindingPreconditions(baseLedger)
-        .get('F-0001')!.precondition,
+      relation: 'new',
+      targetFindingId: null,
       target: { kind: 'code', paths: ['src/a.ts'] },
       evidence: reviewerEvidence('src/a.ts', 20),
     });
@@ -1416,15 +1413,13 @@ const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_K
       rawFindingId: 'crashed-run:reviewers:1:arch-review:p-1',
       stepName: 'reviewers',
       reviewer: 'arch-review',
-      familyTag: 'bug',
+      familyTag: null,
       severity: 'high',
       title: 'Existing issue still present',
       description: 'Claims the resolved issue persists with different content.',
       suggestion: null,
-      relation: 'persists',
-      targetFindingId: 'F-0001',
-      targetPrecondition: captureFindingPreconditions(baseLedger)
-        .get('F-0001')!.precondition,
+      relation: 'new',
+      targetFindingId: null,
       target: { kind: 'code', paths: ['src/a.ts'] },
       evidence: reviewerEvidence('src/a.ts', 20),
     });
@@ -1513,9 +1508,7 @@ const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_K
       description: AMBIGUOUS_PERSISTS_RAW.description,
       suggestion: null,
       relation: AMBIGUOUS_PERSISTS_RAW.relation,
-      targetFindingId: AMBIGUOUS_PERSISTS_RAW.targetFindingId,
-      targetPrecondition: captureFindingPreconditions(resolvedTargetLedger())
-        .get('F-0001')!.precondition,
+      targetFindingId: null,
       target: { kind: 'code', paths: ['src/a.ts'] },
       evidence: AMBIGUOUS_PERSISTS_RAW.evidence,
     });
@@ -1779,7 +1772,7 @@ describe('解釈梯子の追加必須テスト', () => {
     expect(proof?.targetFindingId).toBe(validTarget.id);
   });
 
-  it('ambiguous reopened は terminal target を直接 reopen できない（target 不変 + provisional）', async () => {
+  it('verified terminal reopened は target を変えず audit-only となり recovery を起動しない', async () => {
     const ledger = makeLedger({
       findings: [makeFinding({ status: 'invalidated', lifecycle: 'invalidated', revision: 2 })],
     });
@@ -1810,7 +1803,8 @@ describe('解釈梯子の追加必須テスト', () => {
     const target = saved.findings.find((finding) => finding.id === 'F-0001');
     expect(target?.status).toBe('invalidated');
     expect(target?.revision).toBe(2);
-    expect(saved.findings.find((finding) => finding.provisional !== undefined)?.status).toBe('open');
+    expect(saved.findings).toHaveLength(1);
+    expect(executeAgentMock).not.toHaveBeenCalled();
   });
 
   it('clean な後続 raw だけが provisional を確定できる（fresh precondition 付き same で confirmed へ昇格、新規 ID は増えない）', async () => {
@@ -1831,8 +1825,8 @@ describe('解釈梯子の追加必須テスト', () => {
         title: 'Suspicious behaviour in parser',
         description: 'Something is off.',
         suggestion: '',
-        relation: 'new',
-        targetFindingId: 'F-9999',
+        relation: null,
+        targetFindingId: '',
         evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/b.ts', 7)],
       }],
     });
@@ -1956,8 +1950,8 @@ describe('解釈梯子の追加必須テスト', () => {
         title: 'Suspicious behaviour in parser',
         description: 'Something is off.',
         suggestion: '',
-        relation: 'new',
-        targetFindingId: 'F-9999',
+        relation: null,
+        targetFindingId: '',
         evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/b.ts', 7)],
       }],
     });
@@ -2026,14 +2020,14 @@ describe('解釈梯子の追加必須テスト', () => {
       title: 'Suspicious behaviour in parser',
       description: 'Something is off.',
       suggestion: '',
-      relation: 'new',
+      relation: null,
       targetFindingId: '',
       evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/b.ts', 7)],
     };
-    // round 1: relation/target 矛盾で ambiguous → provisional。
+    // round 1: relation 欠落で ambiguous → provisional。
     await harness.run({
       runId: 'run-2',
-      reviewerRawFindings: [{ ...observation, targetFindingId: 'F-9999' }],
+      reviewerRawFindings: [observation],
     });
     const provisionalId = harness.currentLedger().findings.find((finding) => finding.provisional !== undefined)?.id;
     expect(provisionalId).toBeDefined();
@@ -2045,6 +2039,7 @@ describe('解釈梯子の追加必須テスト', () => {
       runId: 'run-3',
       reviewerRawFindings: [{
         ...observation,
+        familyTag: 'bug',
         relation: 'persists',
         targetFindingId: provisionalId,
       }],
@@ -2123,7 +2118,7 @@ describe('解釈梯子の追加必須テスト', () => {
         title: 'Suspicious behaviour in parser',
         description: 'Something is off.',
         suggestion: null,
-        relation: 'new',
+        relation: null,
         targetFindingId: null,
         evidence: reviewerEvidence('src/b.ts', 8),
       }],
@@ -2461,30 +2456,23 @@ describe('解釈梯子の追加必須テスト', () => {
     expect(result.status).toBe('updated');
     const saved = harness.currentLedger();
 
-    // open target では canonical evidence / status を変えず、監査添付だけを行う。
+    // lifecycle evidence failure is audit-only and never mutates a target.
     const target = saved.findings.find((finding) => finding.id === 'F-0001')!;
     expect(target.status).toBe('open');
-    expect(target.revision).toBe(2);
+    expect(target.revision).toBe(1);
     expect(target.rawFindingIds).toEqual(['raw-existing']);
-    expect(target.rejectedObservations?.some((entry) => entry.rawFindingId.endsWith(':p-open'))).toBe(true);
+    expect(target.rejectedObservations ?? []).toEqual([]);
 
-    // provisional target にも新規 blocker を増やさず監査添付する。
+    // provisional target also remains unchanged.
     const provisionalTarget = saved.findings.find((finding) => finding.id === 'F-0002')!;
-    expect(provisionalTarget.rejectedObservations?.some((entry) => entry.rawFindingId.endsWith(':p-prov'))).toBe(true);
+    expect(provisionalTarget.rejectedObservations ?? []).toEqual([]);
 
     // terminal / unknown target は product finding へ混ぜず reviewer anomaly に隔離する。
     const terminalTarget = saved.findings.find((finding) => finding.id === 'F-0003')!;
     expect(terminalTarget.status).toBe('resolved');
     expect(terminalTarget.rejectedObservations ?? []).toEqual([]);
     expect(saved.findings.filter((finding) => finding.provisional !== undefined)).toHaveLength(1);
-    const terminalAnomaly = saved.reviewerAnomalies?.find((entry) => (
-      entry.sourceRawFindingIds.some((id) => id.endsWith(':p-terminal'))
-    ));
-    const unknownAnomaly = saved.reviewerAnomalies?.find((entry) => (
-      entry.sourceRawFindingIds.some((id) => id.endsWith(':p-unknown'))
-    ));
-    expect(terminalAnomaly?.kind).toBe('quote-mismatch');
-    expect(unknownAnomaly?.kind).toBe('quote-mismatch');
+    expect(saved.reviewerAnomalies ?? []).toHaveLength(3);
     expect(executeAgentMock).not.toHaveBeenCalled();
   });
 
@@ -2657,17 +2645,16 @@ describe('ケース9: fixpoint 悪用（意図的に provisional を固定して
     const harness = makeHarness(makeLedger({ findings: [], rawFindings: [] }));
     // location 付きの主張は typed evidence protocol（codex 対策#4）の admission
     // gate にかかり anomaly へ隔離される（fixpoint/provisional の対象外になる）
-    // ため、fixpoint の起点には構造的に曖昧な persists（location なし・target
-    // 不明）を使う。
+    // ため、fixpoint の起点には product field が欠けた不完全 new claim を使う。
     const ambiguous = (rawFindingId: string) => ({
       rawFindingId,
-      familyTag: 'bug',
+      familyTag: null,
       severity: 'high',
       title: 'Re-report of a finding that was never actually opened',
       description: 'Claims to persist a finding id the ledger has never seen.',
       suggestion: '',
-      relation: 'persists',
-      targetFindingId: 'F-9001',
+      relation: 'new',
+      targetFindingId: '',
       evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 20)],
     });
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
@@ -2711,9 +2698,8 @@ describe('ケース9: fixpoint 悪用（意図的に provisional を固定して
     // ならず、open のまま gate-blocking であり続ける。
     const provisional = ledger.findings.find((finding) => finding.provisional !== undefined);
     expect(provisional?.status).toBe('open');
-    // 'persists' は「同じ観測が繰り返された」ことを表す非終端 lifecycle。
-    // resolved/waived/invalidated/superseded/reopened のいずれにもなっていない
-    // ことが不変条件 — fixpoint 到達がこれらへ勝手に遷移させないことを見る。
+    // 同じ provisional への再観測は表示 lifecycle を persists に進め得るが、
+    // 終端 lifecycle へは遷移せず open のまま残る。
     expect(['new', 'persists']).toContain(provisional?.lifecycle);
     expect(provisional?.provisional?.gateEffect).toBe('block');
     expect(provisional?.resolvedAt).toBeUndefined();
@@ -2729,17 +2715,16 @@ describe('ケース9: fixpoint 悪用（意図的に provisional を固定して
 
   it('fixpoint 到達後にさらに同一の偽装観測を繰り返しても、新しい finding が増殖したり既存 finding の状態が動いたりしない（何も「通らない」）', async () => {
     const harness = makeHarness(makeLedger({ findings: [], rawFindings: [] }));
-    // ケース9 の1件目と同じ理由で、location hallucination ではなく構造的に
-    // 曖昧な persists を fixpoint の起点に使う（codex 対策#4）。
+    // ケース9 の1件目と同じ不完全 new claim を繰り返す。
     const ambiguous = (rawFindingId: string) => ({
       rawFindingId,
-      familyTag: 'bug',
+      familyTag: null,
       severity: 'high',
       title: 'Re-report of a finding that was never actually opened',
       description: 'Claims to persist a finding id the ledger has never seen.',
       suggestion: '',
-      relation: 'persists',
-      targetFindingId: 'F-9001',
+      relation: 'new',
+      targetFindingId: '',
       evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 20)],
     });
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
@@ -2785,13 +2770,13 @@ describe('ケース10: stop-budget 悪用（churn で fixpoint を回避しつ�
   function churnRaw(n: number): Record<string, unknown> {
     return {
       rawFindingId: `raw-churn-${n}`,
-      familyTag: 'bug',
+      familyTag: null,
       severity: 'high',
       title: `Re-report of fabricated finding ${n} that was never actually opened`,
       description: `Claims to persist finding id F-900${n}, which the ledger has never seen.`,
       suggestion: '',
-      relation: 'persists',
-      targetFindingId: `F-900${n}`,
+      relation: 'new',
+      targetFindingId: '',
       evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', n)],
     };
   }
@@ -2973,10 +2958,8 @@ describe('codex 検証2巡目#2: 未検証 persists/reopened は既存 finding �
     const target = saved.findings.find((finding) => finding.id === 'F-0001')!;
     expect(target.status).toBe('resolved');
     expect(target.revision).toBe(2);
-    // 観測は消えず reviewer anomaly として残る（product gate は塞がない）。
-    expect(saved.findings.find((finding) => finding.provisional !== undefined)
-      ?.provisional?.kind).toBe('raw-adjudication-unresolved');
-    expect(saved.reviewerAnomalies ?? []).toHaveLength(0);
+    expect(saved.findings).toHaveLength(1);
+    expect(saved.reviewerAnomalies ?? []).toHaveLength(1);
   });
 
   it('未検証 persists は有効な confirmation を conflict 化して close を妨害できない', async () => {
@@ -3026,13 +3009,8 @@ describe('codex 検証2巡目#2: 未検証 persists/reopened は既存 finding �
       'raw-existing',
       expect.stringContaining(':c-ok'),
     ]);
-    // 証拠なし観測は消さず、再裁定可能な gate-blocking provisional に保持する。
-    const provisional = saved.findings.find((finding) => (
-      finding.provisional !== undefined
-      && finding.rawFindingIds.some((id) => id.endsWith(':p-bad'))
-    ));
-    expect(provisional?.provisional?.kind).toBe('raw-adjudication-unresolved');
-    expect(saved.reviewerAnomalies ?? []).toHaveLength(0);
+    expect(saved.findings).toHaveLength(1);
+    expect(saved.reviewerAnomalies ?? []).toHaveLength(1);
   });
 });
 
@@ -3081,9 +3059,8 @@ describe('証拠なし raw finding の admission', () => {
       'raw-existing',
       expect.stringContaining(':c-ok'),
     ]);
-    expect(saved.findings.find((finding) => finding.provisional !== undefined)
-      ?.provisional?.kind).toBe('raw-adjudication-unresolved');
-    expect(saved.reviewerAnomalies ?? []).toHaveLength(0);
+    expect(saved.findings).toHaveLength(1);
+    expect(saved.reviewerAnomalies ?? []).toHaveLength(1);
   });
 
   it('証拠なし reopened は resolved finding を open に戻せない（anomaly 着地）', async () => {
@@ -3110,9 +3087,8 @@ describe('証拠なし raw finding の admission', () => {
     // F-0001 は resolved のまま（reopen されない・revision 不変）。
     expect(target.status).toBe('resolved');
     expect(target.revision).toBe(2);
-    expect(saved.findings.find((finding) => finding.provisional !== undefined)
-      ?.provisional?.kind).toBe('raw-adjudication-unresolved');
-    expect(saved.reviewerAnomalies ?? []).toHaveLength(0);
+    expect(saved.findings).toHaveLength(1);
+    expect(saved.reviewerAnomalies ?? []).toHaveLength(1);
   });
 
   it('証拠なし new claim は gate-blocking provisional に隔離する', async () => {
@@ -3237,10 +3213,8 @@ describe('codex 検証4巡目: 未検証 tainted persists/reopened は ambiguous
     expect(target.lifecycle).toBe('new');
     expect(target.description).toBe('The handler does not validate input.');
     expect(target.rawFindingIds).toEqual(['raw-existing']);
-    // raw は gate-blocking provisional として着地する（観測は消えない）。
-    const provisional = saved.findings.find((finding) => finding.id !== 'F-0001' && finding.provisional !== undefined);
-    expect(provisional?.provisional?.kind).toBe('raw-adjudication-unresolved');
-    expect(provisional?.rawFindingIds.some((id) => id.endsWith(':r-1'))).toBe(true);
+    expect(saved.findings).toHaveLength(1);
+    expect(executeAgentMock).not.toHaveBeenCalled();
   });
 
   it('tainted evidence-free persists は manager が create_independent を返しても provisional 止まり（新規 finding を作らない）', async () => {
@@ -3270,10 +3244,8 @@ describe('codex 検証4巡目: 未検証 tainted persists/reopened は ambiguous
     const saved = harness.currentLedger();
     // create_independent は封じられ、新規の confirmed finding は立たない。
     expect(saved.findings.some((finding) => finding.title === 'A brand new independent problem' && finding.provisional === undefined)).toBe(false);
-    // provisional として着地する。
-    const provisional = saved.findings.find((finding) => finding.provisional !== undefined);
-    expect(provisional?.provisional?.kind).toBe('raw-adjudication-unresolved');
-    expect(provisional?.rawFindingIds.some((id) => id.endsWith(':p-1'))).toBe(true);
+    expect(saved.findings).toHaveLength(1);
+    expect(executeAgentMock).not.toHaveBeenCalled();
     // resolved target は不変。
     expect(saved.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('resolved');
   });
@@ -3310,16 +3282,14 @@ describe('codex 検証4巡目: 未検証 tainted persists/reopened は ambiguous
     const saved = harness.currentLedger();
     // open_conflict は封じられ、active conflict は立たない。
     expect(saved.conflicts.filter((conflict) => conflict.status === 'active')).toEqual([]);
-    // F-0002 は不変、raw は provisional。
+    // F-0002 は不変、raw は audit-only。
     expect(saved.findings.find((finding) => finding.id === 'F-0002')?.rawFindingIds).toEqual(['raw-f2']);
-    const provisional = saved.findings.find((finding) => finding.provisional !== undefined);
-    expect(provisional?.provisional?.kind).toBe('raw-adjudication-unresolved');
+    expect(saved.findings).toHaveLength(2);
   });
 
-  it('対照: verified(file_quote match) の tainted persists は ladder の能力を維持する（create_independent が通る）', async () => {
-    // persists→resolved target（tainted）だが、matching file_quote 付き = 検証済み。
-    // provisional-only 制限の対象外なので、manager の create_independent が通り
-    // 新規 finding が立つ（退行させない）。
+  it('verified(file_quote match) でも terminal target への persists は audit-only となり recovery を起動しない', async () => {
+    // persists→resolved target は lifecycle supplement。証拠が検証済みでも
+    // product finding の作成・変更権限を持たず、manager recovery へも送らない。
     const harness = makeHarness(makeLedger({
       findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved', title: 'Old bug' })],
       nextId: 2,
@@ -3343,9 +3313,8 @@ describe('codex 検証4巡目: 未検証 tainted persists/reopened は ambiguous
     });
     expect(result.status).toBe('updated');
     const saved = harness.currentLedger();
-    // 検証済みなので create_independent が通り、新規 open finding が立つ（provisional ではない）。
-    const created = saved.findings.find((finding) => finding.title === 'A genuinely new problem with a real citation');
-    expect(created?.status).toBe('open');
-    expect(created?.provisional).toBeUndefined();
+    expect(saved.findings).toHaveLength(1);
+    expect(saved.findings[0]?.status).toBe('resolved');
+    expect(executeAgentMock).not.toHaveBeenCalled();
   });
 });

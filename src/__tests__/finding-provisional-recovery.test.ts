@@ -1375,6 +1375,50 @@ describe('provisional recovery', () => {
     expect(settlement.settledReplayRawIds).toEqual(new Set());
   });
 
+  it('recognizes a clean resolution confirmation as direct provisional settlement', () => {
+    const processFinding = provisional('F-0001', 'raw-adjudication-unresolved');
+    const freshLedger = ledger([processFinding], [raw('source-1')]);
+    const confirmation = canonicalRawFindingFixture({
+      rawFindingId: 'confirmation-1',
+      stepName: 'reviewer-a',
+      reviewer: 'reviewer-a',
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: null,
+      suggestion: null,
+      relation: 'resolution_confirmation',
+      targetFindingId: processFinding.id,
+      targetPrecondition: captureFindingPreconditions(freshLedger)
+        .get(processFinding.id)!.precondition,
+      target: processFinding.target!,
+      evidence: [],
+    });
+    const output = {
+      ...emptyOutput(),
+      resolvedFindings: [{
+        findingId: processFinding.id,
+        rawFindingIds: [confirmation.rawFindingId],
+        evidence: 'Verified resolution confirmation',
+      }],
+    };
+    const settlement = settleProvisionalsWithCleanEvidence({
+      output,
+      cleanRawIds: new Set([confirmation.rawFindingId]),
+      wireById: new Map([[confirmation.rawFindingId, confirmation]]),
+      freshLedger,
+      explicitResolvedByMapping: new Map(),
+      explicitPromotedFindingIds: new Set(),
+      healthyReviewerStableKeys: new Set(),
+      replayOrigins: new Map(),
+    });
+
+    expect(settlement.resolvedByEvidence).toEqual(new Map([
+      [processFinding.id, 'Verified resolution confirmation'],
+    ]));
+    expect(settlement.output.resolvedFindings).toEqual(output.resolvedFindings);
+  });
+
   it('promotes a replay origin only from clean targeted persists with a fresh precondition', () => {
     const process = provisional('F-0001', 'raw-adjudication-unresolved');
     process.severity = null;

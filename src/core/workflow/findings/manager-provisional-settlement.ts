@@ -144,6 +144,23 @@ export function settleProvisionalsWithCleanEvidence(input: {
     ...replay.resolvedByMapping,
   ]);
   let resolvedByEvidence = new Map<string, string>();
+  for (const resolved of replay.output.resolvedFindings) {
+    if (!provisionalById.has(resolved.findingId)) {
+      continue;
+    }
+    const hasCleanConfirmation = resolved.rawFindingIds.some((rawFindingId) => {
+      const wire = input.wireById.get(rawFindingId);
+      return input.cleanRawIds.has(rawFindingId)
+        && wire?.relation === 'resolution_confirmation'
+        && wire.targetFindingId === resolved.findingId;
+    });
+    if (hasCleanConfirmation) {
+      resolvedByEvidence = new Map([
+        ...resolvedByEvidence,
+        [resolved.findingId, resolved.evidence],
+      ]);
+    }
+  }
   for (const finding of openProvisionals) {
     if (finding.provisional?.kind !== 'reviewer-output-overflow') {
       continue;
@@ -540,6 +557,11 @@ export function buildProvisionalSettlementLifecycleCommands(input: {
     );
   }
   for (const findingId of input.settlement.resolvedByEvidence.keys()) {
+    if (input.settlement.output.resolvedFindings.some(
+      (resolved) => resolved.findingId === findingId,
+    )) {
+      continue;
+    }
     append(
       'resolve_finding',
       findingId,

@@ -688,7 +688,7 @@ export interface NormalizedFindingCandidatePayload {
   description: string | null;
   suggestion: string | null;
   relation: RawFindingRelation | null;
-  targetFindingId: string | null;
+  targetFindingIds: string[];
   target: FindingTarget | null;
   evidenceRequests: FindingEvidenceRequest[];
 }
@@ -723,6 +723,8 @@ export interface ReviewerRawFindingCandidate {
   readonly evidenceCoverageGaps: readonly string[];
 
   readonly reviewerRawFindingId?: string;
+  /** atomization・内部一意化前に reviewer が明示した相関 ID。 */
+  readonly sourceReviewerRawFindingId?: string;
   readonly familyTag?: string;
   readonly severity?: FindingSeverity;
   readonly title?: string;
@@ -787,10 +789,10 @@ interface CanonicalRawFindingBase {
 export interface CoherentCanonicalRawFinding extends CanonicalRawFindingBase {
   readonly coherence: 'coherent';
   readonly relation: RawFindingRelation;
-  readonly familyTag: string;
-  readonly severity: FindingSeverity;
-  readonly title: string;
-  readonly description: string;
+  readonly familyTag?: string;
+  readonly severity?: FindingSeverity;
+  readonly title?: string;
+  readonly description?: string;
   readonly location?: string;
   readonly suggestion?: string;
   readonly targetFindingId?: string;
@@ -1399,6 +1401,11 @@ export const REVIEWER_ANOMALY_KINDS = [
    * 再観測かを判定不能。再取得(次ラウンドの再レビュー)対象として隔離する。
    */
   'stale-snapshot',
+  /**
+   * lifecycle supplement の証拠が coverage gap や evidence matrix 不足などで
+   * admission を完了できなかった。file quote の不一致とは区別する。
+   */
+  'lifecycle-admission-failure',
 ] as const;
 export type ReviewerAnomalyKind = typeof REVIEWER_ANOMALY_KINDS[number];
 

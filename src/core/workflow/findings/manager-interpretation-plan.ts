@@ -272,12 +272,14 @@ export function applyInterpretationDecisions(input: {
     if (target === undefined) {
       return result;
     }
-    const decision: AmbiguousInterpretation = input.provisionalOnlyRawFindingIds.has(target.canonical.rawFindingId)
+    const decision: AmbiguousInterpretation = (
+      input.provisionalOnlyRawFindingIds.has(target.canonical.rawFindingId)
+    )
       && rawDecision.decision !== 'provisional'
       ? {
         decision: 'provisional',
         rawFindingId: rawDecision.rawFindingId,
-        reason: `Interpretation "${rawDecision.decision}" is not allowed for an unverified persists/reopened claim; restricted to a gate-blocking provisional so it cannot mutate an existing finding`,
+        reason: `Interpretation "${rawDecision.decision}" has no product transition capability for relation "${target.canonical.relation ?? 'unknown'}"; restricted to a gate-blocking provisional`,
       }
       : rawDecision;
     if (decision.decision === 'create_independent') {

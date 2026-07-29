@@ -43,6 +43,16 @@ function exactDuplicateKey(
   return raw.semanticClaimIdentityHash;
 }
 
+function lifecycleEvidenceSummary(raw: RawFinding): string {
+  if (raw.description !== null) {
+    return raw.description;
+  }
+  const quote = raw.evidence.find((evidence) => evidence.kind === 'file_quote');
+  return quote === undefined
+    ? `Verified lifecycle evidence from raw finding ${raw.rawFindingId}`
+    : `Verified file quote at ${quote.path}:${quote.startLine}-${quote.endLine}`;
+}
+
 /** Indexes every raw finding attached to an open ledger finding by its exact-duplicate key, for case-1 matching. */
 function buildExactDuplicateIndex(
   ledger: FindingLedger,
@@ -109,9 +119,10 @@ export function classifyRawFindingsMechanically(input: {
     // ケース3: resolution_confirmation は現行どおり。
     if (relation === 'resolution_confirmation') {
       const target = raw.targetFindingId === null ? undefined : findingsById.get(raw.targetFindingId);
-      if (target !== undefined && target.status === 'open' && raw.description !== null) {
+      if (target !== undefined && target.status === 'open') {
+        const evidence = lifecycleEvidenceSummary(raw);
         const entry = resolvedByFindingId.get(target.id)
-          ?? { findingId: target.id, rawFindingIds: [], evidence: raw.description };
+          ?? { findingId: target.id, rawFindingIds: [], evidence };
         entry.rawFindingIds.push(raw.rawFindingId);
         resolvedByFindingId.set(target.id, entry);
         trackRaw(target.id, raw);
@@ -120,7 +131,7 @@ export function classifyRawFindingsMechanically(input: {
           decision: 'resolved',
           findingId: target.id,
           anchorRelevance: 'not_applicable',
-          evidence: raw.description,
+          evidence,
         }));
         continue;
       }
@@ -143,7 +154,7 @@ export function classifyRawFindingsMechanically(input: {
             decision: 'same',
             findingId: target.id,
             anchorRelevance: 'not_applicable',
-            evidence: raw.description ?? '',
+            evidence: lifecycleEvidenceSummary(raw),
           }));
           continue;
         }

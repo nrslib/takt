@@ -36,6 +36,7 @@ import {
 } from './helpers/finding-lifecycle-fixture.js';
 import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.js';
 import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
+import { evaluateRawAdmission } from '../core/workflow/findings/manager-admission.js';
 
 function makeFinding(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
@@ -857,5 +858,252 @@ describe('detectClarifiableRawMismatches の重複 ID 除外', () => {
 
     expect(unique.length).toBeGreaterThan(0);
     expect(duplicated).toEqual([]);
+  });
+});
+
+describe('relation 別 intake と target atomization', () => {
+  function lifecycleLedger(): FindingLedger {
+    const source = makeRaw({
+      rawFindingId: 'source',
+      target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+    });
+    return makeLedger([
+      makeFinding({
+        revision: 1,
+        id: 'F-0001',
+        target: source.target,
+        targetIdentityHash: source.targetIdentityHash,
+        claimIdentityHash: source.claimIdentityHash,
+        semanticClaimIdentityHash: source.semanticClaimIdentityHash,
+        description: source.description ?? undefined,
+      }),
+      makeFinding({
+        revision: 1,
+        id: 'F-0006',
+        target: source.target,
+        targetIdentityHash: source.targetIdentityHash,
+        claimIdentityHash: source.claimIdentityHash,
+        semanticClaimIdentityHash: source.semanticClaimIdentityHash,
+        description: source.description ?? undefined,
+      }),
+    ]);
+  }
+
+  function candidateContext(report: string) {
+    return {
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      runId: 'run-lifecycle',
+      reviewerStepName: 'arch-review',
+      reviewerPersonaKey: 'arch-review',
+      reviewReport: report,
+      issueEvidenceRequests: () => ({
+        evidence: [],
+        engineProofRecords: [],
+        coverageGaps: [],
+      }),
+    };
+  }
+
+  it('deduplicates and atomizes targetFindingIds before canonical matching', () => {
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: 'confirmation',
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: null,
+      suggestion: null,
+      relation: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+      target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+      rawExcerpt: 'Relation: resolution_confirmation; Target Finding ID: F-0001, F-0006',
+    });
+    extraction.candidate!.targetFindingIds = ['F-0006', 'F-0001', 'F-0006'];
+    const batch = createReviewerRawFindingCandidates(
+      [extraction],
+      candidateContext(extraction.rawExcerpt),
+    );
+
+    expect(batch.rejections).toEqual([]);
+    expect(batch.candidates.map((candidate) => candidate.targetFindingId)).toEqual([
+      'F-0001',
+      'F-0006',
+    ]);
+    const canonical = batch.candidates.map((candidate) => (
+      canonicalizeReviewerRawFinding(candidate, { ledger: lifecycleLedger() }).canonical
+    ));
+    expect(canonical.map((item) => item.coherence)).toEqual(['coherent', 'coherent']);
+    expect(canonical.map(toLedgerRawFinding).map((wire) => wire.targetFindingId)).toEqual([
+      'F-0001',
+      'F-0006',
+    ]);
+  });
+
+  it('inherits clarification taint from the source raw id across every atom', () => {
+    const intakeFor = (targetFindingIds: string[]) => {
+      const extraction = reviewerRawExtractionFixture({
+        rawFindingId: 'multi-target',
+        familyTag: null,
+        severity: null,
+        title: null,
+        description: null,
+        suggestion: null,
+        relation: 'persists',
+        targetFindingId: 'F-0001',
+        target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+        rawExcerpt: 'Relation: persists; Target Finding IDs: F-0001, F-9999',
+      });
+      extraction.candidate!.targetFindingIds = targetFindingIds;
+      return intakeReviewerOutputs({
+        subResults: [{
+          subStep: {
+            kind: 'agent',
+            name: 'arch-review',
+            persona: 'arch-review',
+            edit: false,
+          } as never,
+          response: {
+            status: 'done',
+            content: extraction.rawExcerpt,
+            structuredOutput: { rawFindings: [extraction] },
+          } as never,
+          relationClarification: {
+            attempted: true,
+            flaggedRawFindingIds: ['multi-target'],
+            priorAmbiguityCodesByRawId: {
+              'multi-target': ['persists-target-unknown'],
+            },
+          },
+        }],
+        previousLedger: lifecycleLedger(),
+        workflowName: 'peer-review',
+        callNamespace: '',
+        parentStepName: 'reviewers',
+        stepIteration: 1,
+        runId: 'run-1',
+        workflowTask: 'Review.',
+        cwd: process.cwd(),
+        scopeIdentity: '/test/multi-target-taint/ledger.json',
+        issuedAt: '2026-07-30T00:00:00.000Z',
+        reviewScopeSnapshot: {
+          reviewScopeSnapshotId: 'a'.repeat(64),
+          trackedDiff: undefined,
+          untrackedEvidence: [],
+          queryInventory: [],
+        },
+      });
+    };
+
+    const correctionSucceeded = intakeFor(['F-9999', 'F-0001']);
+    const correctionFailed = intakeFor(['F-0001', 'F-9999']);
+    for (const intake of [correctionSucceeded, correctionFailed]) {
+      expect(intake.items).toHaveLength(2);
+      expect(intake.items.map(({ canonical }) => canonical.targetFindingId)).toEqual([
+        'F-0001',
+        'F-9999',
+      ]);
+      expect(intake.items.every(({ canonical }) => (
+        canonical.provenance.ambiguityOrigin
+        && canonical.provenance.ambiguityCodes.includes('persists-target-unknown')
+      ))).toBe(true);
+      expect(intake.items.map(({ canonical }) => canonical.rawFindingId)).toEqual([
+        expect.stringMatching(/:multi-target$/),
+        expect.stringMatching(/:multi-target-dup2$/),
+      ]);
+    }
+    expect(correctionSucceeded.items.map(({ canonical }) => canonical.rawFindingId))
+      .toEqual(correctionFailed.items.map(({ canonical }) => canonical.rawFindingId));
+    expect(correctionSucceeded.items.map(({ canonical }) => canonical.claimIdentityHash))
+      .toEqual(correctionFailed.items.map(({ canonical }) => canonical.claimIdentityHash));
+  });
+
+  it('keeps a lifecycle raw coherent without product finding fields', () => {
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: 'confirmation',
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: null,
+      suggestion: null,
+      relation: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+      target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+      rawExcerpt: 'Relation: resolution_confirmation; Target Finding ID: F-0001',
+    });
+    const [candidate] = createReviewerRawFindingCandidates(
+      [extraction],
+      candidateContext(extraction.rawExcerpt),
+    ).candidates;
+    const canonical = canonicalizeReviewerRawFinding(candidate!, {
+      ledger: lifecycleLedger(),
+    }).canonical;
+
+    expect(canonical).toMatchObject({
+      coherence: 'coherent',
+      relation: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+    });
+    expect(canonical.provenance.ambiguityCodes).not.toContain('missing-required-field');
+    expect(toLedgerRawFinding(canonical)).toMatchObject({
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: null,
+    });
+  });
+
+  it('records evidence-less lifecycle observations without creating provisional findings across rounds', () => {
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: 'persists',
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: null,
+      suggestion: null,
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+      target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+      rawExcerpt: 'Relation: persists; Target Finding ID: F-0001',
+    });
+    const ledger = lifecycleLedger();
+    const [candidate] = createReviewerRawFindingCandidates(
+      [extraction],
+      candidateContext(extraction.rawExcerpt),
+    ).candidates;
+    const canonical = canonicalizeReviewerRawFinding(candidate!, { ledger }).canonical;
+    const item = { canonical, wire: toLedgerRawFinding(canonical) };
+    for (let round = 0; round < 3; round += 1) {
+      const admission = evaluateRawAdmission({
+        cwd: process.cwd(),
+        reviewScopeSnapshotId: 'a'.repeat(64),
+        runId: `run-${round}`,
+        scopeIdentity: 'scope',
+        previousLedger: ledger,
+        intake: {
+          items: [item],
+          overflowRawFindingIds: new Set(),
+          intakeProvisionalSpecs: [],
+          overflowReports: [],
+          clarifications: [],
+          rawNormalizations: [],
+          healthyReviewerStableKeys: new Set(),
+        },
+        reviewScopeSnapshot: {
+          reviewScopeSnapshotId: 'a'.repeat(64),
+          trackedDiff: undefined,
+          untrackedEvidence: [],
+          queryInventory: [],
+        },
+        workflowTask: 'Review.',
+      });
+      expect(admission.admissionProvisionalSpecs).toEqual([]);
+      expect(admission.pendingRejectedObservations).toHaveLength(1);
+      expect(admission.pendingRejectedObservations[0]?.anomalyKind)
+        .toBe('lifecycle-admission-failure');
+      expect(admission.admissionRejectedItems).toHaveLength(1);
+    }
+    expect(ledger.nextId).toBe(100);
   });
 });

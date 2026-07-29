@@ -25,7 +25,10 @@ import {
 } from '../core/models/finding-schemas.js';
 import { compareRfc3339Timestamps } from '../core/models/rfc3339.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
-import { RAW_FINDING_FIELD_LIMITS } from '../core/models/finding-contract-limits.js';
+import {
+  RAW_FINDING_FIELD_LIMITS,
+  RAW_FINDING_NORMALIZER_LIMITS,
+} from '../core/models/finding-contract-limits.js';
 import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
 import {
   computeClaimIdentityHash,
@@ -888,6 +891,8 @@ describe('finding schemas', () => {
       'enum',
       'anyOf',
       'items',
+      'minLength',
+      'maxLength',
       'minItems',
       'maxItems',
     ]);
@@ -1071,10 +1076,12 @@ describe('finding schemas', () => {
     });
     const {
       evidenceRequests: _evidenceRequests,
+      targetFindingIds,
       ...persistedCandidate
     } = reviewerRawFinding.candidate!;
     const persistedRawFinding = canonicalRawFindingFixture({
       ...persistedCandidate,
+      targetFindingId: targetFindingIds[0] ?? null,
       stepName: 'ai-antipattern-review',
       reviewer: 'ai-antipattern-reviewer',
       evidence,
@@ -1095,8 +1102,13 @@ describe('finding schemas', () => {
     expect(candidateSchema.required).toContain('familyTag');
     expect(candidateSchema.required).toContain('evidenceRequests');
     expect(candidateSchema.required).toContain('suggestion');
+    expect(candidateSchema.properties.targetFindingIds.maxItems)
+      .toBe(RAW_FINDING_NORMALIZER_LIMITS.maxTargetFindingIdsPerCandidate);
+    expect(candidateSchema.properties.targetFindingIds.items.maxLength)
+      .toBe(RAW_FINDING_FIELD_LIMITS.maxRawFindingIdChars);
     expect(candidateSchema.properties.familyTag).toEqual({
       type: ['string', 'null'],
+      maxLength: RAW_FINDING_FIELD_LIMITS.maxFamilyTagChars,
     });
   });
 
@@ -1128,10 +1140,12 @@ describe('finding schemas', () => {
     };
     const {
       evidenceRequests: _evidenceRequests,
+      targetFindingIds,
       ...persistedTargetCandidate
     } = reviewerTarget.candidate!;
     const persistedTarget = {
       ...persistedTargetCandidate,
+      targetFindingId: targetFindingIds[0] ?? null,
       evidence: [{
         kind: 'file_quote' as const,
         path: 'src/state.ts',
