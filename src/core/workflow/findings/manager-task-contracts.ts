@@ -81,8 +81,9 @@ export const MainManagerRawTaskOutputJsonSchema = {
             pattern: '^[0-9a-f]{64}$',
           },
           rawFindingId: { type: 'string', minLength: 1 },
-          decision: { enum: RAW_DECISION_KINDS },
+          decision: { type: 'string', enum: RAW_DECISION_KINDS },
           anchorRelevance: {
+            type: 'string',
             enum: ['relevant', 'not_relevant', 'not_applicable'],
           },
           findingId: { type: 'string' },
@@ -197,7 +198,7 @@ const controlResultJsonSchemas = [
     additionalProperties: false,
     required: ['kind', 'reason'],
     properties: {
-      kind: { const: 'no_action' },
+      kind: { type: 'string', const: 'no_action' },
       reason: { type: 'string', minLength: 1, maxLength: 2_048 },
     },
   },
@@ -206,7 +207,7 @@ const controlResultJsonSchemas = [
     additionalProperties: false,
     required: ['kind', 'findingId', 'reason', 'evidence'],
     properties: {
-      kind: { enum: ['waive', 'note'] },
+      kind: { type: 'string', enum: ['waive', 'note'] },
       findingId: { type: 'string', minLength: 1 },
       reason: { type: 'string', minLength: 1, maxLength: 2_048 },
       evidence: { type: 'string', minLength: 1, maxLength: 2_048 },
@@ -217,7 +218,7 @@ const controlResultJsonSchemas = [
     additionalProperties: false,
     required: ['kind', 'conflictId', 'evidence'],
     properties: {
-      kind: { enum: ['resolve', 'keep'] },
+      kind: { type: 'string', enum: ['resolve', 'keep'] },
       conflictId: { type: 'string', minLength: 1 },
       evidence: { type: 'string', minLength: 1, maxLength: 2_048 },
     },
@@ -227,7 +228,7 @@ const controlResultJsonSchemas = [
     additionalProperties: false,
     required: ['kind', 'findingId', 'evidence'],
     properties: {
-      kind: { const: 'invalidate' },
+      kind: { type: 'string', const: 'invalidate' },
       findingId: { type: 'string', minLength: 1 },
       evidence: { type: 'string', minLength: 1, maxLength: 2_048 },
     },
@@ -237,9 +238,9 @@ const controlResultJsonSchemas = [
     additionalProperties: false,
     required: ['kind', 'findingId', 'basis', 'reason'],
     properties: {
-      kind: { const: 'dismiss' },
+      kind: { type: 'string', const: 'dismiss' },
       findingId: { type: 'string', minLength: 1 },
-      basis: { enum: FINDING_DISMISSAL_BASES },
+      basis: { type: 'string', enum: FINDING_DISMISSAL_BASES },
       reason: { type: 'string', minLength: 1, maxLength: 2_048 },
     },
   },
