@@ -80,6 +80,9 @@ class MockEventStream implements AsyncGenerator<MockStreamEvent, void, unknown> 
       return { done: true, value: undefined };
     }
     const event = this.events[this.index];
+    if (event === undefined) {
+      return { done: true, value: undefined };
+    }
     this.index += 1;
     return {
       done: false,
@@ -861,13 +864,15 @@ describe('OpenCodeClient retry', () => {
     ]);
   });
 
-  it('keeps reasoning offsets in sync when an unknown delta is later identified as reasoning', async () => {
+  it('keeps an unknown delta as text when the part is later identified as reasoning', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const sessionId = 'session-unknown-delta-reasoning';
     const reasoningPrefix = 'x'.repeat(40_000);
     const reasoningSuffix = 'tail';
     const fallbackDelta = reasoningPrefix;
     const reasoningText = `${reasoningPrefix}${reasoningSuffix}`;
+    // Once emitted through the compatibility fallback, the prefix remains text.
+    // The later reasoning snapshot emits only the previously unseen suffix.
     const stream = new MockEventStream([
       {
         type: 'message.part.delta',

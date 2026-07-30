@@ -290,14 +290,26 @@ describe('OpenCodeClient tool call failure logging', () => {
       { type: 'session.idle', properties: { sessionID: 'session-1' } },
     ]);
     const client = new OpenCodeClient();
+    const observed = vi.fn();
 
     const result = await client.call('coder', 'prompt', {
       cwd: '/tmp',
       model: 'opencode/big-pickle',
+      onStream: observed,
     });
 
     expect(result.status).toBe('done');
     expect(result.content).toBe('');
+
+    const visibleEvents = observed.mock.calls
+      .map(([event]) => event as { type: string; data?: { text?: string; thinking?: string } })
+      .filter((event) => event.type === 'text' || event.type === 'thinking');
+    expect(visibleEvents).toEqual([]);
+    for (const event of visibleEvents) {
+      const value = event.type === 'text' ? event.data?.text : event.data?.thinking;
+      expect(value).not.toContain(secret);
+      expect(value).not.toContain(partId);
+    }
 
     const evidence = JSON.stringify({
       result,
@@ -789,6 +801,15 @@ describe('OpenCodeClient tool call failure logging', () => {
       expect(evidence).not.toContain(`opaque-child-env-${eventType}`);
       expect(evidence).toContain('[REDACTED]');
       expect(evidence).toContain('OpenCode stream tracking limit exceeded');
+      for (const internalReason of [
+        'event_count',
+        'tracked_id_count',
+        'text_bytes',
+        'sensitive_sources',
+      ]) {
+        expect(result.error).not.toContain(internalReason);
+        expect(evidence).not.toContain(internalReason);
+      }
     } finally {
       rmSync(logsDir, { recursive: true, force: true });
     }

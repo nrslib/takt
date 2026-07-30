@@ -498,7 +498,12 @@ describe('handlePartUpdated', () => {
     const state = createStreamTrackingState();
     const repeatCount = Math.floor(OPENCODE_STREAM_TEXT_BYTE_LIMIT / 'Reasoning '.length) + 1;
     const reasoning = 'Reasoning '.repeat(repeatCount);
-    const part: OpenCodeReasoningPart = { id: 'r1', type: 'reasoning', text: reasoning };
+    const part: OpenCodeReasoningPart = {
+      id: 'r1',
+      sessionID: 'session-1',
+      type: 'reasoning',
+      text: reasoning,
+    };
 
     handlePartUpdated(part, reasoning, onStream, state);
 

@@ -17,6 +17,7 @@ import {
   OPENCODE_STREAM_ID_LIMIT,
   OPENCODE_STREAM_TEXT_BYTE_LIMIT,
 } from '../infra/opencode/OpenCodeStreamHandler.js';
+import { MAX_TRACKED_SENSITIVE_SOURCES } from '../shared/utils/sensitiveText.js';
 
 /**
  * 自セッションの進捗が止まったまま、サーバ全体のバスに無関係イベントが
@@ -736,16 +737,23 @@ describe('OpenCodeClient stream cleanup', () => {
 
     expect(result.status).toBe('done');
     expect(result.content).toBe(supportedText);
-    expect(onStream.mock.calls.filter(([event]) => event.type === 'text')).toEqual([
-      [{ type: 'text', data: { text: supportedText } }],
+    const visibleEvents = onStream.mock.calls
+      .map(([event]) => event as { type: string; data?: { text?: string; thinking?: string } })
+      .filter((event) => event.type === 'text' || event.type === 'thinking');
+    expect(visibleEvents.filter((event) => event.type === 'text')).toEqual([
+      { type: 'text', data: { text: supportedText } },
     ]);
-    expect(JSON.stringify(onStream.mock.calls)).not.toContain(unsupportedDelta);
+    expect(visibleEvents.filter((event) => event.type === 'thinking')).toEqual([]);
+    for (const event of visibleEvents) {
+      const value = event.type === 'text' ? event.data?.text : event.data?.thinking;
+      expect(value).not.toContain(unsupportedDelta);
+    }
   });
 
   it('fails an attempt when sensitive source tracking is exhausted and reports sensitive_sources', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const sessionId = 'session-sensitive-source-limit';
-    const events = Array.from({ length: 260 }, (_, index) => (
+    const events = Array.from({ length: MAX_TRACKED_SENSITIVE_SOURCES + 1 }, (_, index) => (
       sensitiveToolPartUpdated(sessionId, `tool-${index}`, `secret-${index}`)
     ));
     const stream = new MockEventStream(events, sessionId);
