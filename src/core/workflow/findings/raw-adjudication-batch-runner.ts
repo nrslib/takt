@@ -152,6 +152,7 @@ export async function runRawAdjudicationBatches(input: {
         initialInvalidAttempts: [],
         invalidLocationCandidateFindingIds: new Set(),
         dismissCandidateFindingIds: new Set(),
+        managerAuthority: 'standard',
         priorStepResponseText: undefined,
       });
       const recorded = recordBatchSpecs(clean.cleanProvisionalSpecs);
@@ -211,6 +212,7 @@ export async function runRawAdjudicationBatches(input: {
     initialInvalidAttempts: invalidAttempts,
     invalidLocationCandidateFindingIds: new Set(),
     dismissCandidateFindingIds: new Set(),
+    managerAuthority: 'standard',
     priorStepResponseText: undefined,
   });
   for (const [rawFindingId, failure] of recordBatchSpecs(clean.cleanProvisionalSpecs)) {

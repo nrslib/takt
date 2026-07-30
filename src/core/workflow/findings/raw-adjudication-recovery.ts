@@ -282,6 +282,7 @@ async function runReservedRawAdjudicationRecovery(input: {
     initialInvalidAttempts: [],
     invalidLocationCandidateFindingIds: new Set(),
     dismissCandidateFindingIds: new Set(),
+    managerAuthority: 'standard',
     priorStepResponseText: undefined,
   });
   let batchExecution = {

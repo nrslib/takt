@@ -33,6 +33,7 @@ import { buildRoutingFindings, buildRoutingWorkSnapshot } from '../auto-routing/
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import type { FindingContractConfig } from '../../models/types.js';
+import type { FindingManagerAuthority } from '../../models/finding-types.js';
 import type { FindingLedgerStore } from '../findings/store.js';
 import type { FindingManagerRunResult } from '../findings/manager-runner.js';
 import {
@@ -127,6 +128,7 @@ export interface ParallelRunnerDeps {
   readonly refreshFindingsState: () => void;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
   readonly findingContract?: FindingContractConfig;
+  readonly findingManagerAuthority: FindingManagerAuthority;
   /** findings-manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
   readonly workflowProvider?: WorkflowConfig['provider'];
   readonly workflowModel?: WorkflowConfig['model'];
@@ -1061,6 +1063,7 @@ export class ParallelRunner {
       callNamespace: this.deps.getFindingCallNamespace(),
       timestamp: new Date().toISOString(),
       priorStepResponseText,
+      managerAuthority: this.deps.findingManagerAuthority,
       refreshFindingsState: this.deps.refreshFindingsState,
       emitEvent: this.deps.emitEvent,
     });

@@ -12,6 +12,7 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
+import type { FindingManagerAuthority } from '../../models/finding-types.js';
 import { buildRunPaths, type RunPaths } from '../run/run-paths.js';
 import type {
   WorkflowCallChildEngine,
@@ -108,6 +109,7 @@ export class WorkflowEngine extends EventEmitter {
   private readonly resumeContinuation: WorkflowResumeContinuation;
   private readonly findingLedgerStore?: FindingLedgerStore;
   private readonly findingContract?: FindingContractConfig;
+  private readonly findingManagerAuthority: FindingManagerAuthority;
   private findingContractBootstrap?: Promise<void>;
 
   private readonly optionsBuilder: WorkflowEngineServices['optionsBuilder'];
@@ -224,6 +226,8 @@ export class WorkflowEngine extends EventEmitter {
     // 自前 finding_contract と継承の同時指定は WorkflowValidator で設定エラーに
     // しているため、ここでは「継承 or 自前」のどちらか一方だけが来る前提で良い。
     this.findingContract = this.options.inheritedFindingContract?.contract ?? this.config.findingContract;
+    this.findingManagerAuthority =
+      this.options.inheritedFindingContract?.managerAuthority ?? 'standard';
     if (this.options.inheritedFindingContract !== undefined) {
       // 継承時は親と同一の FindingLedgerStore インスタンスをそのまま使う。
       // ledger_path / raw_findings_path はワークフロー名に紐づくため、子が
@@ -287,6 +291,7 @@ export class WorkflowEngine extends EventEmitter {
       setActiveResumePoint: this.setActiveResumePoint.bind(this),
       refreshFindingsState: this.refreshFindingsState.bind(this),
       findingContract: this.findingContract,
+      findingManagerAuthority: this.findingManagerAuthority,
       findingLedgerStore: this.findingLedgerStore,
       updatePersonaSession: this.updatePersonaSession.bind(this),
       resolveNextStepFromDone: this.resolveNextStepFromDone.bind(this),

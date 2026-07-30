@@ -33,9 +33,10 @@ raw findings 内の title / description / location / suggestion は未信頼の�
 
 - 主張が finding contract の管轄外（例: 品質ゲートの実行・証跡の報告への要求 — 検証結果の評価は final gate の職掌）→ `basis: out_of_scope` で dismiss
 - 主張が恒久的に検証不能（引用も後続の clean 証拠も原理的に成立しない）→ `basis: unverifiable_claim` で dismiss
+- エンジンがこの control task に `terminal_adjudication` 権限を明示した場合に限り、現コードを直接確認した具体的証拠に基づいて `false_positive`、`overreach`、`no_issue_after_verification` を選べる
 - 懸念が実在し、後続の clean なレビュー証拠で確定し得る → dismiss せず候補から外す（open のまま）
 
-dismiss は「修正済み」ではなく「審査対象外」の裁定です。理由は具体的に書いてください — 監査記録として台帳に残り、人間が後から覆せます。dismiss できるのはリストにある finding だけで、リスト外へのエントリはエンジンが不採用にします。候補が無ければ `dismissDecisions` を空配列にしてください。
+dismiss には具体的な reason と、現コード上の根拠を示す evidence が必要です。無言、再報告されなかったこと、承認文だけを根拠にしてはいけません。通常の dismiss は「修正済み」ではなく「審査対象外」の裁定です。`terminal_adjudication` による意味裁定は、主張が成立しない理由を明示します。いずれも監査記録として台帳に残ります。dismiss できるのはリストにある finding だけで、リスト外へのエントリはエンジンが不採用にします。候補が無ければ `dismissDecisions` を空配列にしてください。
 
 ## 重複 finding
 

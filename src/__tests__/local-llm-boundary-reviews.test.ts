@@ -392,6 +392,12 @@ describe('takt-default-localllm boundary reviews', () => {
     expect(transitionFor(finalGate, 'needs_review')).toBe('boundary-reviewers');
     expect(localIntegrityGate.call).toBe('merge-readiness-finding-contract-final-gate');
     expect(finalGate.call).toBe(localIntegrityGate.call);
+    expect(localIntegrityGate.finding_contract_authority).toBe('terminal_adjudication');
+    expect(finalGate.finding_contract_authority).toBe('terminal_adjudication');
+    expect(transitionFor(reviewers, 'findings.provisional.dismissEligible.count > 0'))
+      .toBe('local-review-integrity-gate');
+    expect(transitionFor(boundary, 'findings.provisional.dismissEligible.count > 0'))
+      .toBe('final-gate');
 
     const expected = [
       {

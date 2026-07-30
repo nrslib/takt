@@ -70,7 +70,8 @@
     {
       "findingId": "F-0021",
       "basis": "out_of_scope",
-      "reason": "Demands evidence of quality-gate execution; evaluating verification results is the final gate's jurisdiction, and the claim alleges no code defect"
+      "reason": "Demands evidence of quality-gate execution; evaluating verification results is the final gate's jurisdiction, and the claim alleges no code defect",
+      "evidence": "The claim addresses only the quality-gate execution record and identifies no behavior or structure in the changed code"
     }
   ]
 }
@@ -93,8 +94,9 @@ Rules for `invalidateDecisions` and `duplicateDecisions`:
 
 Rules for `dismissDecisions`:
 - Only finding ids the prompt lists as dismissal candidates (open provisional findings whose claims cannot be settled mechanically) are eligible. The engine rejects dismissals outside the list.
-- `basis` is `out_of_scope` (the claim is outside the finding contract's jurisdiction — for example, demands about verification-result reporting belong to the final gate) or `unverifiable_claim` (the claim can never be substantiated).
-- Keep a candidate open (leave it out) when the underlying concern is real and could still be settled by later clean review evidence. A dismissal means "outside adjudication scope", never "fixed", and stays on the ledger with an audit record.
+- `basis` is normally `out_of_scope` or `unverifiable_claim`. Only when the engine explicitly grants `terminal_adjudication` for the control task may it be `false_positive`, `overreach`, or `no_issue_after_verification`.
+- `evidence` must state concrete current-code evidence. Silence or lack of a repeated report is insufficient.
+- Keep a candidate open (leave it out) when the underlying concern is real and could still be settled by later clean review evidence. A standard dismissal means "outside adjudication scope", never "fixed". A `terminal_adjudication` semantic dismissal records why the claim does not hold. Both stay on the ledger with an audit record.
 - An engine decision rejection, stale findingId, unsupported decision, or missing decision is not itself grounds for dismissal. Evaluate the raw claim and keep it open when it describes a real code concern.
 - Leave empty when there are no candidates or every candidate deserves to stay open.
 

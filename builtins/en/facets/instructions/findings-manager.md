@@ -32,9 +32,10 @@ The prompt may list open provisional findings that hold mechanically unsettleabl
 
 - The claim is outside the finding contract's jurisdiction (for example, demands about quality-gate execution or its evidence reporting — evaluating verification results is the final gate's job) → dismiss with `basis: out_of_scope`
 - The claim can never be substantiated (neither a quote nor later clean evidence can ever establish it) → dismiss with `basis: unverifiable_claim`
+- Only when the engine explicitly grants `terminal_adjudication` authority for this control task, you may use `false_positive`, `overreach`, or `no_issue_after_verification`, backed by concrete evidence from directly inspecting the current code
 - The underlying concern is real and could still be settled by later clean review evidence → do not dismiss; leave it out (stays open)
 
-A dismissal means "outside adjudication scope", never "fixed". Write a concrete reason — it stays on the ledger as an audit record and a human can reverse it. You may only dismiss findings from the list; the engine rejects entries outside it. Leave `dismissDecisions` empty when there are no candidates.
+A dismissal requires both a concrete reason and current-code evidence. Silence, non-repetition, or an approval label alone is never evidence. A standard dismissal means "outside adjudication scope", never "fixed". A `terminal_adjudication` semantic dismissal must explain why the claim does not hold. Both remain on the ledger as audit records. You may only dismiss findings from the list; the engine rejects entries outside it. Leave `dismissDecisions` empty when there are no candidates.
 
 ## Duplicate findings
 

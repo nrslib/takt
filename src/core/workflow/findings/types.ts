@@ -72,6 +72,7 @@ export type {
   FindingLifecycleOutcome,
   FindingLifecycleReservationContext,
   FindingManagerConflict,
+  FindingManagerAuthority,
   FindingManagerConflictDecision,
   FindingManagerDecisions,
   FindingManagerDisputeDecision,

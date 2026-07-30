@@ -945,13 +945,18 @@ function buildControlTaskInstruction(input: {
   contract: FindingContractConfig;
   previousLedger: FindingLedger;
   task: MainManagerControlTask;
+  managerAuthority: RunFindingManagerForStepInput['managerAuthority'];
 }): string {
+  const dismissalAuthorityInstruction = input.managerAuthority === 'terminal_adjudication'
+    ? 'For dismiss intents, you may additionally use false_positive, overreach, or no_issue_after_verification after directly checking the current code. Each dismissal requires concrete current-code evidence; silence or non-repetition is never sufficient.'
+    : 'For dismiss intents, only out_of_scope or unverifiable_claim are allowed. false_positive, overreach, and no_issue_after_verification are not authorized in this task.';
   return [
     input.contract.manager.instruction,
     '',
     'This is one engine-owned control task. Return the exact taskId and exact-cover evaluations for every candidate intent.',
     'Set selectedIntentId to null when every evaluation is no_action. Otherwise select exactly one intent, return its matching action, and return no_action for every other intent.',
     'Never reference an entity outside the intent entityId. The engine will reject stale target heads at commit.',
+    dismissalAuthorityInstruction,
     '',
     '## Task manifest',
     renderFencedJsonBlock({
@@ -1064,6 +1069,7 @@ function appendControlResult(
         findingId: result.findingId,
         basis: result.basis,
         reason: result.reason,
+        evidence: result.evidence,
       });
   }
 }
@@ -1077,6 +1083,7 @@ async function executeControlTasks(input: {
   dismissCandidates: ReadonlyMap<string, string>;
   managerStep: AgentWorkflowStep;
   runInput: Pick<RunFindingManagerForStepInput, 'optionsBuilder' | 'stepExecutor'>;
+  managerAuthority: RunFindingManagerForStepInput['managerAuthority'];
 }): Promise<{
   decisions: FindingManagerDecisions;
   conflictTargetHeads: Map<string, CapturedManagerConflictHead>;
@@ -1094,6 +1101,7 @@ async function executeControlTasks(input: {
       contract: input.contract,
       previousLedger: input.previousLedger,
       task: item.task,
+      managerAuthority: input.managerAuthority,
     });
     const phase1Instruction = input.runInput.stepExecutor.buildPhase1Instruction(
       instruction,
@@ -1234,6 +1242,7 @@ export async function runMainManagerTasks(input: {
   evidenceRecordsByRawFindingId: ReadonlyMap<string, readonly FindingEvidenceRecord[]>;
   managerStep: AgentWorkflowStep;
   runInput: Pick<RunFindingManagerForStepInput, 'optionsBuilder' | 'stepExecutor'>;
+  managerAuthority: RunFindingManagerForStepInput['managerAuthority'];
 }): Promise<MainManagerTaskExecution> {
   assertFixedPrefixFits({
     contract: input.contract,

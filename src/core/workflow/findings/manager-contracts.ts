@@ -20,6 +20,7 @@ import type {
   FindingLedger,
   FindingLifecycleEntityHead,
   FindingManagerOutput,
+  FindingManagerAuthority,
   FindingManagerTaskAudit,
   RawFinding,
   RawFindingDispositionOutcome,
@@ -49,6 +50,7 @@ export interface RunFindingManagerForStepInput {
   callNamespace: string;
   timestamp: string;
   priorStepResponseText?: string;
+  managerAuthority: FindingManagerAuthority;
 }
 
 export type FindingManagerRunResult =

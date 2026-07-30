@@ -1,5 +1,10 @@
 import type { FindingManagerValidationAttemptReport, UnsupportedRawFindingReport } from './store.js';
-import type { FindingLedger, FindingManagerDecisions, FindingManagerOutput } from './types.js';
+import type {
+  FindingLedger,
+  FindingManagerAuthority,
+  FindingManagerDecisions,
+  FindingManagerOutput,
+} from './types.js';
 import type { ProvisionalFindingSpec } from './reconciler.js';
 import type { RawAdmissionEvaluation } from './manager-admission.js';
 import type { classifyRawFindingsMechanically } from './mechanical-classification.js';
@@ -34,6 +39,7 @@ export function assembleCleanManagerDecision(input: {
   initialInvalidAttempts: FindingManagerValidationAttemptReport[];
   invalidLocationCandidateFindingIds: ReadonlySet<string>;
   dismissCandidateFindingIds: ReadonlySet<string>;
+  managerAuthority: FindingManagerAuthority;
   priorStepResponseText: string | undefined;
   rawFailureById?: ReadonlyMap<string, {
     kind: FindingProvisionalKind;
@@ -89,6 +95,7 @@ export function assembleCleanManagerDecision(input: {
       mechanicalOutput: input.mechanical.output,
       invalidLocationCandidateFindingIds: input.invalidLocationCandidateFindingIds,
       dismissCandidateFindingIds: input.dismissCandidateFindingIds,
+      managerAuthority: input.managerAuthority,
     });
     const landedRawIds = collectLandedRawIds(assembly.output);
     for (const rejected of assembly.rejectedRawDecisions) {

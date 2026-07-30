@@ -7,7 +7,8 @@ export const FINDING_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const
 // but CAN be invalidated, because invalidation says the finding was never real.
 // 'superseded': the finding was merged into a canonical duplicate (duplicateDecisions).
 // 'dismissed': a provisional finding's claim was adjudicated out of the
-// contract's jurisdiction or permanently unverifiable (dismissDecisions).
+// contract's jurisdiction, found semantically false by a terminal adjudicator,
+// or cannot be verified (dismissDecisions).
 // All are terminal, additive statuses.
 export const FINDING_STATUSES = ['open', 'resolved', 'waived', 'invalidated', 'superseded', 'dismissed'] as const;
 export const FINDING_LIFECYCLES = ['new', 'persists', 'resolved', 'reopened', 'waived', 'invalidated', 'superseded', 'dismissed'] as const;
@@ -327,14 +328,39 @@ export const DISMISSABLE_PROVISIONAL_KINDS = [
   'raw-adjudication-unresolved',
 ] as const satisfies readonly FindingProvisionalKind[];
 
-/** dismiss 裁定の根拠分類。out_of_scope: finding contract の管轄外（例: 検証結果の評価は final gate の職掌）。unverifiable_claim: 機械検証も後続 clean 証拠も成立し得ない主張。 */
-export const FINDING_DISMISSAL_BASES = ['out_of_scope', 'unverifiable_claim'] as const;
+/**
+ * dismiss 裁定の根拠分類。
+ * out_of_scope / unverifiable_claim は通常の管轄裁定、
+ * false_positive / overreach / no_issue_after_verification は
+ * terminal_adjudication 専用の意味裁定。
+ */
+export const FINDING_DISMISSAL_BASES = [
+  'out_of_scope',
+  'unverifiable_claim',
+  'false_positive',
+  'overreach',
+  'no_issue_after_verification',
+] as const;
 export type FindingDismissalBasis = typeof FINDING_DISMISSAL_BASES[number];
+export const SEMANTIC_FINDING_DISMISSAL_BASES = [
+  'false_positive',
+  'overreach',
+  'no_issue_after_verification',
+] as const satisfies readonly FindingDismissalBasis[];
 
-/** manager の dismiss 裁定の監査記録。黙って消さない — 理由と判断時点を finding に残し、人間が後から覆せる。 */
+export const FINDING_MANAGER_AUTHORITIES = [
+  'standard',
+  'terminal_adjudication',
+] as const;
+export type FindingManagerAuthority =
+  typeof FINDING_MANAGER_AUTHORITIES[number];
+
+/** manager の dismiss 裁定の監査記録。黙って消さない — 根拠と授権を finding に残す。 */
 export interface FindingDismissalRecord {
   basis: FindingDismissalBasis;
   reason: string;
+  evidence: string;
+  authority: FindingManagerAuthority;
   decidedAt: FindingObservation;
 }
 
@@ -353,7 +379,14 @@ export type FindingActionProposal =
       duplicateFindingIds: string[];
       evidence: string;
     }
-  | { action: 'dismiss'; findingId: string; basis: FindingDismissalBasis; reason: string };
+  | {
+      action: 'dismiss';
+      findingId: string;
+      basis: FindingDismissalBasis;
+      reason: string;
+      evidence: string;
+      authority: FindingManagerAuthority;
+    };
 
 export type FindingActionRecovery = FindingActionProposal & {
   targetPreconditions: FindingMutationPrecondition[];
@@ -412,7 +445,7 @@ export interface FindingLedgerEntry {
   invalidatedEvidence?: string;
   /** Set when status/lifecycle becomes 'superseded' by a duplicateDecisions merge. */
   supersededByFindingId?: string;
-  /** 人間が dismiss 裁定を後から覆しても根拠を監査できるよう、reopen 後も保持する。 */
+  /** 後続の検証済み証拠で reopen された後も、過去の裁定根拠として保持する。 */
   dismissal?: FindingDismissalRecord;
   /** 楽観的前提条件（CAS）の版数。エントリを変更するたびに +1。 */
   revision: number;
@@ -1511,6 +1544,8 @@ export interface FindingManagerDismissedFinding {
   findingId: string;
   basis: FindingDismissalBasis;
   reason: string;
+  evidence: string;
+  authority: FindingManagerAuthority;
 }
 
 /** Merges duplicateFindingIds into canonicalFindingId (rawFindingIds/reviewers/disputes) and marks the duplicates 'superseded'. Never used to resolve or waive — "superseded" and "fixed" are different claims. */
@@ -1666,6 +1701,7 @@ export interface FindingManagerDismissDecision {
   findingId: string;
   basis: FindingDismissalBasis;
   reason: string;
+  evidence: string;
 }
 
 /** LLM が返す「判断だけ」の出力。組み立て・不変条件の強制は decision-assembly.ts が行う。 */
@@ -1715,6 +1751,9 @@ export interface FindingsRuleContext {
    */
   provisional: {
     count: number;
+    dismissEligible: {
+      count: number;
+    };
     /**
      * 直前の findings-manager ラウンドが、その前のラウンドから
      * 意味的な変化（provisional 集合・substantive finding の status・未裁定

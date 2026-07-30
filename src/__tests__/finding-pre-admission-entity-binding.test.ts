@@ -1045,6 +1045,8 @@ describe('pre-admission semantic entity binding', () => {
           findingId: existing.id,
           basis: 'unverifiable_claim',
           reason: 'The ambiguity is terminal.',
+          evidence: 'The observation contains no verifiable subject.',
+          authority: 'standard',
         }],
       },
     });

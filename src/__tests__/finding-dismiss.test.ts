@@ -196,7 +196,12 @@ describe('computeDismissCandidates', () => {
 });
 
 describe('assembleManagerOutput dismissDecisions', () => {
-  const dismissal = { findingId: 'F-0001', basis: 'out_of_scope' as const, reason: '検証結果の評価は final gate の職掌' };
+  const dismissal = {
+    findingId: 'F-0001',
+    basis: 'out_of_scope' as const,
+    reason: '検証結果の評価は final gate の職掌',
+    evidence: '主張はコードではなく品質ゲートの実行記録だけを対象にしている',
+  };
 
   it('候補集合にある open provisional への dismiss を採用する', () => {
     const ledger = makeLedger([provisionalEntry({ revision: 1 })]);
@@ -205,10 +210,88 @@ describe('assembleManagerOutput dismissDecisions', () => {
       residualRawFindings: [],
       decisions: makeDecisions({ dismissDecisions: [dismissal] }),
       dismissCandidateFindingIds: new Set(['F-0001']),
+      managerAuthority: 'standard',
     });
 
-    expect(assembly.output.dismissedFindings).toEqual([dismissal]);
+    expect(assembly.output.dismissedFindings).toEqual([{
+      ...dismissal,
+      authority: 'standard',
+    }]);
     expect(assembly.rejectedDismissDecisions).toEqual([]);
+  });
+
+  it('standard authority では semantic dismissal を拒否する', () => {
+    const ledger = makeLedger([provisionalEntry({ revision: 1 })]);
+    const semanticDismissal = {
+      findingId: 'F-0001',
+      basis: 'false_positive' as const,
+      reason: '現行コードには指摘された分岐が存在しない',
+      evidence: 'src/example.ts の実装は入力を検証してから分岐する',
+    };
+    const assembly = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [],
+      decisions: makeDecisions({ dismissDecisions: [semanticDismissal] }),
+      dismissCandidateFindingIds: new Set(['F-0001']),
+      managerAuthority: 'standard',
+    });
+
+    expect(assembly.output.dismissedFindings).toEqual([]);
+    expect(assembly.rejectedDismissDecisions[0]?.reason).toContain('without terminal_adjudication authority');
+  });
+
+  it('terminal adjudicator は明示的な根拠付き semantic dismissal を採用する', () => {
+    const ledger = makeLedger([provisionalEntry({ revision: 1 })]);
+    const semanticDismissal = {
+      findingId: 'F-0001',
+      basis: 'no_issue_after_verification' as const,
+      reason: '現行コードを検証した結果、指摘された問題は成立しない',
+      evidence: 'src/example.ts の実装は入力を検証してから分岐する',
+    };
+    const assembly = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [],
+      decisions: makeDecisions({ dismissDecisions: [semanticDismissal] }),
+      dismissCandidateFindingIds: new Set(['F-0001']),
+      managerAuthority: 'terminal_adjudication',
+    });
+
+    expect(assembly.output.dismissedFindings).toEqual([{
+      ...semanticDismissal,
+      authority: 'terminal_adjudication',
+    }]);
+    expect(assembly.output.newFindings).toEqual([]);
+    expect(assembly.rejectedDismissDecisions).toEqual([]);
+  });
+
+  it('terminal adjudicator でも同一ラウンドで再観測された finding は dismiss しない', () => {
+    const ledger = makeLedger([provisionalEntry({ revision: 1 })]);
+    const assembly = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [],
+      decisions: makeDecisions({
+        dismissDecisions: [{
+          findingId: 'F-0001',
+          basis: 'false_positive',
+          reason: '現行コードには指摘された問題がない',
+          evidence: 'src/example.ts を確認した',
+        }],
+      }),
+      mechanicalOutput: {
+        ...createEmptyManagerOutput(),
+        matches: [{
+          findingId: 'F-0001',
+          rawFindingIds: ['persist-1'],
+          evidence: '同じ問題を現行コードで再観測した',
+        }],
+      },
+      dismissCandidateFindingIds: new Set(['F-0001']),
+      managerAuthority: 'terminal_adjudication',
+    });
+
+    expect(assembly.output.dismissedFindings).toEqual([]);
+    expect(assembly.output.matches.map((match) => match.findingId)).toEqual(['F-0001']);
+    expect(assembly.rejectedDismissDecisions[0]?.reason).toContain('re-observed');
   });
 
   it('エンジンが候補として提示していない finding への dismiss は不採用にする', () => {
@@ -217,6 +300,7 @@ describe('assembleManagerOutput dismissDecisions', () => {
       previousLedger: ledger,
       residualRawFindings: [],
       decisions: makeDecisions({ dismissDecisions: [dismissal] }),
+      managerAuthority: 'standard',
       // 候補集合を渡さない = LLM の reason だけでは権限が生まれない
     });
 
@@ -257,6 +341,7 @@ describe('assembleManagerOutput dismissDecisions', () => {
       decisions: makeDecisions({ dismissDecisions: [dismissal] }),
       mechanicalOutput,
       dismissCandidateFindingIds: new Set(['F-0001']),
+      managerAuthority: 'standard',
     });
 
     expect(assembly.output.dismissedFindings).toEqual([]);
@@ -282,6 +367,7 @@ describe('assembleManagerOutput dismissDecisions', () => {
       residualRawFindings: [],
       decisions: makeDecisions({ dismissDecisions: [dismissal] }),
       dismissCandidateFindingIds: new Set(['F-0001']),
+      managerAuthority: 'standard',
     });
 
     expect(assembly.output.dismissedFindings).toEqual([]);
@@ -297,7 +383,13 @@ describe('reconcileFindingLedger dismissedFindings', () => {
       rawFindings: [],
       managerOutput: {
         ...createEmptyManagerOutput(),
-        dismissedFindings: [{ findingId: 'F-0001', basis: 'out_of_scope', reason: 'final gate の職掌' }],
+        dismissedFindings: [{
+          findingId: 'F-0001',
+          basis: 'out_of_scope',
+          reason: 'final gate の職掌',
+          evidence: '品質ゲートの実行記録だけを対象にしている',
+          authority: 'standard',
+        }],
       },
       context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-02T00:00:00.000Z' },
     });
@@ -309,6 +401,8 @@ describe('reconcileFindingLedger dismissedFindings', () => {
     expect(dismissed.dismissal).toMatchObject({
       basis: 'out_of_scope',
       reason: 'final gate の職掌',
+      evidence: '品質ゲートの実行記録だけを対象にしている',
+      authority: 'standard',
       decidedAt: { runId: 'run-2', stepName: 'reviewers' },
     });
   });
@@ -346,6 +440,8 @@ describe('reconcileFindingLedger dismissedFindings', () => {
           findingId: current.id,
           basis: 'out_of_scope',
           reason: 'final gate の職掌',
+          evidence: '品質ゲートの実行記録だけを対象にしている',
+          authority: 'standard',
         }],
       },
       provisionalSpecs: [{
@@ -403,7 +499,13 @@ describe('reconcileFindingLedger dismissedFindings', () => {
       rawFindings: [],
       managerOutput: {
         ...createEmptyManagerOutput(),
-        dismissedFindings: [{ findingId: 'F-0001', basis: 'unverifiable_claim', reason: 'x' }],
+        dismissedFindings: [{
+          findingId: 'F-0001',
+          basis: 'unverifiable_claim',
+          reason: 'x',
+          evidence: 'claim has no verifiable subject',
+          authority: 'standard',
+        }],
       },
       context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-02T00:00:00.000Z' },
     })).toThrow(/not provisional/);
@@ -424,6 +526,8 @@ describe('fixpoint snapshot with dismissed provisionals', () => {
         dismissal: {
           basis: 'out_of_scope',
           reason: 'final gate の職掌',
+          evidence: '品質ゲートの実行記録だけを対象にしている',
+          authority: 'standard',
           decidedAt: { runId: 'run-2', stepName: 'reviewers', timestamp: '2026-07-02T00:00:00.000Z' },
         },
       })]),
@@ -478,6 +582,7 @@ describe('runFindingManagerForStep dismiss round trip', () => {
           findingId: 'F-0001',
           basis: 'out_of_scope',
           reason: '品質ゲート証跡の評価は final gate の職掌',
+          evidence: '主張は品質ゲートの実行記録だけを対象にしている',
         }],
       })
     ));
@@ -507,6 +612,7 @@ describe('runFindingManagerForStep dismiss round trip', () => {
       runId: 'run-2',
       callNamespace: '',
       timestamp: '2026-07-02T00:00:00.000Z',
+      managerAuthority: 'standard',
       });
 
       expect(executeAgentMock).toHaveBeenCalledTimes(1);

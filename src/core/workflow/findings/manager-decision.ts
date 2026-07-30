@@ -129,6 +129,7 @@ export async function runManagerDecisionStage(params: {
         evidenceRecordsByRawFindingId: admission.verifiedEvidenceRecordsByRawFindingId,
         managerStep,
         runInput: input,
+        managerAuthority: input.managerAuthority,
       });
       initialInvalidAttempts = taskExecution.invalidAttemptMessages.map((message, index) => ({
         attempt: index + 1,
@@ -145,6 +146,7 @@ export async function runManagerDecisionStage(params: {
       initialInvalidAttempts,
       invalidLocationCandidateFindingIds,
       dismissCandidateFindingIds,
+      managerAuthority: input.managerAuthority,
       priorStepResponseText: input.priorStepResponseText,
       rawFailureById: taskExecution?.rawFailures,
     });

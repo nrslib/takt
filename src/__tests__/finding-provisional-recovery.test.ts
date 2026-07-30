@@ -3817,13 +3817,15 @@ describe('provisional recovery', () => {
     });
   });
 
-  it('allows verified reviewer evidence to reopen a human-auditable dismissal', () => {
+  it('allows verified reviewer evidence to reopen a recorded dismissal', () => {
     const dismissed = provisional('F-0001', 'raw-meaning-ambiguous');
     dismissed.status = 'dismissed';
     dismissed.lifecycle = 'dismissed';
     dismissed.dismissal = {
       basis: 'unverifiable_claim',
       reason: 'No verifiable evidence was available.',
+      evidence: 'The original observation contained no verifiable subject.',
+      authority: 'standard',
       decidedAt: observation,
     };
     const previousLedger = ledger([dismissed], [raw('source-1')]);

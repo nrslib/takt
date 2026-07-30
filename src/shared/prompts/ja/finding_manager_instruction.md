@@ -29,7 +29,7 @@ waive の前提が崩れたことを現在の raw findings が示す場合は、
 invalidate 候補:
 {{invalidateCandidatesBlock}}
 {{else}}invalidateDecisions は空にしてください。今回のラウンドで決定的検証に落ちた finding はありません。
-{{/if}}{{#if hasDismissCandidates}}下記の open な provisional finding は、機械では確定できない主張（evidence coverage gap、意味の曖昧な観測、または関連性裁定の不採用）を保持しており、確定するまで完了ゲートを塞ぎ続けます。主張がこの contract の管轄外（例: 検証結果の報告有無への要求 — 検証結果の評価は final gate の職掌です）、または恒久的に検証不能と裁定したものについて、findingId・basis（out_of_scope または unverifiable_claim）・reason を dismissDecisions に返してください。dismiss できるのはこのリストにある finding のみです。エンジンによる decision rejection、stale findingId、unsupported、decision 欠落そのものは dismiss の根拠にしないでください。raw の内容を評価し、実在するコード上の懸念なら open のまま残してください。dismiss は監査用に台帳へ記録され、人間の裁定で覆せます。
+{{/if}}{{#if hasDismissCandidates}}下記の open な provisional finding は、機械では確定できない主張（evidence coverage gap、意味の曖昧な観測、または関連性裁定の不採用）を保持しており、確定するまで完了ゲートを塞ぎ続けます。主張がこの contract の管轄外、または検証不能と裁定したものについて、findingId・basis（out_of_scope または unverifiable_claim）・reason・evidence を dismissDecisions に返してください。別途 terminal_adjudication 権限が明示された場合に限り、現行コードを直接検証した根拠とともに false_positive・overreach・no_issue_after_verification も使用できます。無言、再報告がないこと、承認ラベルだけでは根拠になりません。dismiss できるのはこのリストにある finding のみです。エンジンによる decision rejection、stale findingId、unsupported、decision 欠落そのものは dismiss の根拠にしないでください。raw の内容を評価し、実在するコード上の懸念なら open のまま残してください。dismiss は裁定根拠と権限を含めて台帳へ記録され、後続の検証済み証拠で reopen できます。
 dismiss 候補:
 {{dismissCandidatesBlock}}
 {{else}}dismissDecisions は空にしてください。今回のラウンドに dismiss 候補はありません。

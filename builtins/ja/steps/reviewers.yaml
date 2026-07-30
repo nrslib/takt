@@ -94,6 +94,8 @@ rules:
     next: finding-conflict-adjudication
   - condition: when(findings.conflicts.count > 0)
     next: ABORT
+  - condition: when(findings.provisional.dismissEligible.count > 0 && findings.conflicts.count == 0)
+    next: final-gate
   - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
     next: replan
   - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)

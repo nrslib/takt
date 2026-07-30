@@ -2388,6 +2388,8 @@ describe('reconcileFindingLedger', () => {
         dismissal: {
           basis: 'unverifiable_claim',
           reason: 'The original observation was incomplete.',
+          evidence: 'The original observation contained no verifiable subject.',
+          authority: 'standard',
           decidedAt: {
             runId: 'run-1',
             stepName: 'peer-review',

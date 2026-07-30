@@ -235,6 +235,7 @@ const dismissResultSchema = z.object({
   findingId: z.string().min(1),
   basis: z.enum(FINDING_DISMISSAL_BASES),
   reason: z.string().min(1).max(2_048),
+  evidence: z.string().min(1).max(2_048),
 }).strict();
 
 export const MainManagerControlTaskResultSchema = z.union([
@@ -311,12 +312,13 @@ const controlResultJsonSchemas = [
   {
     type: 'object',
     additionalProperties: false,
-    required: ['kind', 'findingId', 'basis', 'reason'],
+    required: ['kind', 'findingId', 'basis', 'reason', 'evidence'],
     properties: {
       kind: { type: 'string', const: 'dismiss' },
       findingId: { type: 'string', minLength: 1 },
       basis: { type: 'string', enum: FINDING_DISMISSAL_BASES },
       reason: { type: 'string', minLength: 1, maxLength: 2_048 },
+      evidence: { type: 'string', minLength: 1, maxLength: 2_048 },
     },
   },
 ] as const;

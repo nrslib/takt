@@ -462,7 +462,11 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      inheritedFindingContract: { contract: inheritedContract!, ledgerStore: parentLedgerStore },
+      inheritedFindingContract: {
+        contract: inheritedContract!,
+        ledgerStore: parentLedgerStore,
+        managerAuthority: 'standard',
+      },
     }).run();
 
     expect(result.status).toBe('completed');

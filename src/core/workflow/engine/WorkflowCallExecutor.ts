@@ -543,6 +543,7 @@ export class WorkflowCallExecutor {
             inheritedFindingContract: {
               contract: this.deps.findingContract,
               ledgerStore: this.deps.findingLedgerStore,
+              managerAuthority: request.step.findingContractAuthority ?? 'standard',
             },
           }
         : {}),

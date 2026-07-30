@@ -9,6 +9,7 @@ import type {
   FindingManagerDismissedFinding,
   FindingManagerInvalidatedFinding,
   FindingManagerMatch,
+  FindingManagerAuthority,
   FindingManagerNewFinding,
   FindingManagerOutput,
   FindingManagerReopenedFinding,
@@ -20,7 +21,10 @@ import type {
   RawDecisionKind,
   RawFinding,
 } from './types.js';
-import { FINDING_SEVERITIES } from '../../models/finding-types.js';
+import {
+  FINDING_SEVERITIES,
+  SEMANTIC_FINDING_DISMISSAL_BASES,
+} from '../../models/finding-types.js';
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import { hasDisputeClaimFor } from './manager-output-validation.js';
 import { FILE_LINE_EVIDENCE_PATTERN } from './evidence.js';
@@ -190,6 +194,7 @@ export interface AssembleManagerOutputInput {
    * between the initial judgment and the save is rejected as stale.
    */
   dismissCandidateFindingIds?: ReadonlySet<string>;
+  managerAuthority: FindingManagerAuthority;
 }
 
 interface GroupedFindingDecision {
@@ -601,6 +606,7 @@ function assembleDismissDecisions(input: {
   transitionedFindingIds: ReadonlySet<string>;
   /** このラウンドで match / conflict として再観測された finding。clean 証拠の再観測は dismiss より優先する。 */
   reobservedFindingIds: ReadonlySet<string>;
+  managerAuthority: FindingManagerAuthority;
 }): { dismissedFindings: FindingManagerDismissedFinding[]; rejected: RejectedDismissDecision[] } {
   const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
   const activeConflictFindingIds = collectActiveConflictFindingIds(input.previousLedger);
@@ -631,6 +637,16 @@ function assembleDismissDecisions(input: {
       });
       continue;
     }
+    if (
+      input.managerAuthority !== 'terminal_adjudication'
+      && SEMANTIC_FINDING_DISMISSAL_BASES.some((basis) => basis === decision.basis)
+    ) {
+      rejected.push({
+        findingId: decision.findingId,
+        reason: `Cannot dismiss finding "${decision.findingId}" with basis "${decision.basis}" without terminal_adjudication authority`,
+      });
+      continue;
+    }
     if (input.transitionedFindingIds.has(decision.findingId)) {
       rejected.push({
         findingId: decision.findingId,
@@ -652,7 +668,13 @@ function assembleDismissDecisions(input: {
       });
       continue;
     }
-    dismissedFindings.push({ findingId: decision.findingId, basis: decision.basis, reason: decision.reason });
+    dismissedFindings.push({
+      findingId: decision.findingId,
+      basis: decision.basis,
+      reason: decision.reason,
+      evidence: decision.evidence,
+      authority: input.managerAuthority,
+    });
   }
 
   return { dismissedFindings, rejected };
@@ -1083,6 +1105,7 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     eligibleFindingIds: input.dismissCandidateFindingIds ?? new Set(),
     transitionedFindingIds: stateTransitionFindingIds,
     reobservedFindingIds: unresolvedEvidenceFindingIds,
+    managerAuthority: input.managerAuthority,
   });
   const withInvalidateTransitioned = new Set([
     ...stateTransitionFindingIds,
@@ -1302,6 +1325,7 @@ export function flattenManagerOutputToDecisions(
     findingId: dismissed.findingId,
     basis: dismissed.basis,
     reason: dismissed.reason,
+    evidence: dismissed.evidence,
   }));
 
   return {

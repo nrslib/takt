@@ -20,6 +20,7 @@ import type {
   WorkflowResumePointEntry,
 } from '../../models/types.js';
 import type { FindingIntakeNormalizeConfig } from '../../models/config-types.js';
+import type { FindingManagerAuthority } from '../../models/finding-types.js';
 import type {
   PhaseName,
   PhasePromptParts,
@@ -123,6 +124,7 @@ export interface StepExecutorDeps {
   readonly abortSignal?: AbortSignal;
   /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
   readonly findingContract?: FindingContractConfig;
+  readonly findingManagerAuthority: FindingManagerAuthority;
   /** findings-manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
   readonly workflowProvider?: WorkflowConfig['provider'];
   readonly workflowModel?: WorkflowConfig['model'];
@@ -272,6 +274,7 @@ export class StepExecutor {
       callNamespace: this.deps.getFindingCallNamespace(),
       timestamp: new Date().toISOString(),
       priorStepResponseText: input.priorStepResponseText,
+      managerAuthority: this.deps.findingManagerAuthority,
       refreshFindingsState: this.deps.refreshFindingsState,
       emitEvent: this.deps.emitEvent,
     });

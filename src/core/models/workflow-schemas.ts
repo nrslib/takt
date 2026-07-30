@@ -56,6 +56,7 @@ const WorkflowCallArgsRawSchema = z.record(
   z.string().min(1),
   z.union([WorkflowFacetRefValueSchema, WorkflowParamReferenceRawSchema]),
 );
+const WorkflowCallFindingContractAuthoritySchema = z.literal('terminal_adjudication');
 
 const WorkflowStepProviderOptionsSchema = StepProviderOptionsObjectSchema.extend({
   extends: z.string().min(1).optional(),
@@ -389,6 +390,7 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   call: z.string().min(1),
   overrides: WorkflowCallOverridesRawSchema.optional(),
   args: WorkflowCallArgsRawSchema.optional(),
+  finding_contract_authority: WorkflowCallFindingContractAuthoritySchema.optional(),
   description: z.string().optional(),
   session_key: z.never().optional(),
   session: z.never().optional(),
@@ -482,6 +484,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     call: z.string().min(1).optional(),
     overrides: WorkflowCallOverridesRawSchema.optional(),
     args: WorkflowCallArgsRawSchema.optional(),
+    finding_contract_authority: WorkflowCallFindingContractAuthoritySchema.optional(),
     session: z.enum(WORKFLOW_SESSION_MODES).optional(),
     persona: z.string().optional(),
     persona_name: z.string().optional(),
@@ -604,6 +607,14 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
         code: z.ZodIssueCode.custom,
         path: ['args'],
         message: 'Only workflow_call steps can declare "args"',
+      });
+    }
+
+    if (data.finding_contract_authority !== undefined && stepKind !== 'workflow_call') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['finding_contract_authority'],
+        message: 'Only workflow_call steps can declare "finding_contract_authority"',
       });
     }
 

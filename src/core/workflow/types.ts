@@ -14,6 +14,7 @@ import type {
   FallbackContext,
   McpServerConfig,
 } from '../models/types.js';
+import type { FindingManagerAuthority } from '../models/finding-types.js';
 import type {
   AutoRoutingConfig,
   FindingIntakeNormalizeConfig,
@@ -497,6 +498,7 @@ export interface WorkflowEngineOptions {
   inheritedFindingContract?: {
     contract: FindingContractConfig;
     ledgerStore: FindingLedgerStore;
+    managerAuthority: FindingManagerAuthority;
   };
   /**
    * workflow_call の呼び出しスタックを表す名前空間。raw finding id にこの値を

@@ -1270,6 +1270,8 @@ describe('verified finding lifecycle mutation', () => {
       dismissal: {
         basis: 'unverifiable_claim' as const,
         reason: 'The incomplete claim was dismissed.',
+        evidence: 'The claim contained no verifiable subject.',
+        authority: 'standard' as const,
         decidedAt: { ...OBSERVATION },
       },
     };

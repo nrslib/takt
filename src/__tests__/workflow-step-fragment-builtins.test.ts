@@ -116,4 +116,41 @@ describe('builtin workflow step fragment migration', () => {
     }
   });
 
+  it.each(LANGUAGES)(
+    'expands the %s high workflows with terminal provisional routing and typed final-gate authority',
+    (lang) => {
+      for (const name of REVIEWER_WORKFLOWS) {
+        const workflow = loadWorkflowFromFile(
+          join(getBuiltinWorkflowsDir(lang), name + '.yaml'),
+          projectDir,
+        );
+        const reviewers = workflow.steps.find((step) => step.name === 'reviewers');
+        const finalGate = workflow.steps.find((step) => step.name === 'final-gate');
+        const terminalRouteIndex = reviewers?.rules.findIndex((rule) => (
+          rule.condition.kind === 'when'
+          && rule.condition.expression
+            === 'findings.provisional.dismissEligible.count > 0 && findings.conflicts.count == 0'
+          && rule.next === 'final-gate'
+        )) ?? -1;
+        const activeConflictIndex = reviewers?.rules.findIndex((rule) => (
+          rule.condition.kind === 'when'
+          && rule.condition.expression === 'findings.conflicts.count > 0'
+        )) ?? -1;
+        const fixpointIndex = reviewers?.rules.findIndex((rule) => (
+          rule.condition.kind === 'when'
+          && rule.condition.expression
+            === 'findings.provisional.fixpoint == true && findings.conflicts.count == 0'
+        )) ?? -1;
+
+        expect(activeConflictIndex).toBeGreaterThanOrEqual(0);
+        expect(terminalRouteIndex).toBeGreaterThan(activeConflictIndex);
+        expect(fixpointIndex).toBeGreaterThan(terminalRouteIndex);
+        expect(finalGate).toMatchObject({
+          kind: 'workflow_call',
+          findingContractAuthority: 'terminal_adjudication',
+        });
+      }
+    },
+  );
+
 });

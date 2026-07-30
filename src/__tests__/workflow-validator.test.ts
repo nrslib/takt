@@ -1428,6 +1428,7 @@ describe('validateWorkflowConfig', () => {
             },
           },
           ledgerStore: createFakeLedgerStore(),
+          managerAuthority: 'standard',
         },
       })).not.toThrow();
     });
@@ -1460,6 +1461,7 @@ describe('validateWorkflowConfig', () => {
             },
           },
           ledgerStore: createFakeLedgerStore(),
+          managerAuthority: 'standard',
         },
       })).not.toThrow();
     });
@@ -1496,6 +1498,7 @@ describe('validateWorkflowConfig', () => {
             },
           },
           ledgerStore: createFakeLedgerStore(),
+          managerAuthority: 'standard',
         },
       })).not.toThrow();
     });
@@ -1526,6 +1529,7 @@ describe('validateWorkflowConfig', () => {
             },
           },
           ledgerStore: createFakeLedgerStore(),
+          managerAuthority: 'standard',
         },
       })).toThrow(
         /declares its own finding_contract while also being called as a workflow_call subworkflow that inherits/,
@@ -1550,6 +1554,7 @@ describe('validateWorkflowConfig', () => {
             },
           },
           ledgerStore: createFakeLedgerStore(),
+          managerAuthority: 'standard',
         },
       })).toThrow(/provider 'opencode' requires model/);
     });
@@ -1573,6 +1578,7 @@ describe('validateWorkflowConfig', () => {
             },
           },
           ledgerStore: createFakeLedgerStore(),
+          managerAuthority: 'standard',
         },
       })).not.toThrow();
     });

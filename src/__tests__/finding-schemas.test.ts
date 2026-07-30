@@ -4,11 +4,14 @@ import {
   FINDING_LIFECYCLES,
   FINDING_SEVERITIES,
   FINDING_STATUSES,
+  type FindingDismissalBasis,
+  type FindingManagerAuthority,
 } from '../core/models/finding-types.js';
 import {
   FindingLifecycleSchema,
   FindingLifecycleReservationSchema,
   FindingLedgerEntrySchema,
+  FindingProvisionalMetadataSchema,
   FindingObservationSchema,
   FindingManagerDecisionsJsonSchema,
   FindingManagerOutputJsonSchema,
@@ -1230,5 +1233,99 @@ describe('finding schemas', () => {
         description: 'Conflicting evidence.',
       }],
     })).toThrow();
+  });
+
+  it('enforces dismissal basis and authority in every persisted schema', () => {
+    type DismissalPair = {
+      basis: FindingDismissalBasis;
+      authority: FindingManagerAuthority;
+    };
+    const observation = {
+      runId: 'run-source',
+      stepName: 'reviewers',
+      timestamp: '2026-07-24T00:00:00.000Z',
+    };
+    const provisional = {
+      kind: 'raw-meaning-ambiguous' as const,
+      stableKey: 'stable-dismissal-authority',
+      lineageKey: 'lineage-dismissal-authority',
+      sourceRawFindingIds: ['raw-1'],
+      reason: 'The observation requires terminal adjudication.',
+      firstObservedAt: observation,
+      lastObservedAt: observation,
+      interpretationEpochs: 2,
+      gateEffect: 'block' as const,
+      firstObservedRound: 1,
+    };
+    const targetPrecondition = {
+      targetFindingId: 'F-0001',
+      targetRevision: 1,
+      targetStatus: 'open' as const,
+      targetEvidenceHash: 'a'.repeat(64),
+    };
+    const managerOutputBase = {
+      anchorAdjudications: [],
+      matches: [],
+      newFindings: [],
+      resolvedFindings: [],
+      reopenedFindings: [],
+      conflicts: [],
+      resolvedConflicts: [],
+      waivedFindings: [],
+      disputeNotes: [],
+      invalidatedFindings: [],
+      duplicateFindings: [],
+      dismissedFindings: [],
+    };
+    const parsers: Array<(dismissal: DismissalPair) => unknown> = [
+      (dismissal) => FindingProvisionalMetadataSchema.parse({
+        ...provisional,
+        actionRecovery: {
+          action: 'dismiss',
+          findingId: 'F-0001',
+          ...dismissal,
+          reason: 'Adjudicated claim.',
+          evidence: 'Current-code evidence.',
+          targetPreconditions: [targetPrecondition],
+        },
+      }),
+      (dismissal) => FindingLedgerEntrySchema.parse({
+        ...pendingFinding('F-0001'),
+        status: 'dismissed',
+        lifecycle: 'dismissed',
+        provisional,
+        dismissal: {
+          ...dismissal,
+          reason: 'Adjudicated claim.',
+          evidence: 'Current-code evidence.',
+          decidedAt: observation,
+        },
+      }),
+      (dismissal) => parseFindingManagerOutput({
+        ...managerOutputBase,
+        dismissedFindings: [{
+          findingId: 'F-0001',
+          ...dismissal,
+          reason: 'Adjudicated claim.',
+          evidence: 'Current-code evidence.',
+        }],
+      }),
+    ];
+
+    for (const parse of parsers) {
+      for (const basis of ['out_of_scope', 'unverifiable_claim'] as const) {
+        expect(() => parse({ basis, authority: 'standard' })).not.toThrow();
+        expect(() => parse({ basis, authority: 'terminal_adjudication' })).not.toThrow();
+      }
+      for (const basis of [
+        'false_positive',
+        'overreach',
+        'no_issue_after_verification',
+      ] as const) {
+        expect(() => parse({ basis, authority: 'terminal_adjudication' })).not.toThrow();
+        expect(() => parse({ basis, authority: 'standard' }))
+          .toThrow(/requires terminal_adjudication authority/u);
+      }
+    }
   });
 });

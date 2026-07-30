@@ -1157,6 +1157,8 @@ function reconcileFindingLedgerWithValidator(
       dismissal: {
         basis: dismissed.basis,
         reason: dismissed.reason,
+        evidence: dismissed.evidence,
+        authority: dismissed.authority,
         decidedAt: observationFromContext(input.context),
       },
     };

@@ -499,7 +499,13 @@ describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () =>
           { findingId: 'F-0002', rawFindingIds: ['raw-ladder-2'] },
         ],
         invalidatedFindings: [{ findingId: 'F-0001', evidence: 'location unresolvable' }],
-        dismissedFindings: [{ findingId: 'F-0002', basis: 'out_of_scope', reason: '管轄外' }],
+        dismissedFindings: [{
+          findingId: 'F-0002',
+          basis: 'out_of_scope',
+          reason: '管轄外',
+          evidence: '品質ゲートの実行記録だけを対象にしている',
+          authority: 'standard',
+        }],
       }),
       activeConflictFindingIds: new Set(),
     });

@@ -70,7 +70,8 @@
     {
       "findingId": "F-0021",
       "basis": "out_of_scope",
-      "reason": "品質ゲートの実行証跡への要求であり、検証結果の評価は final gate の職掌。コードの欠陥を主張していない"
+      "reason": "品質ゲートの実行証跡への要求であり、検証結果の評価は final gate の職掌。コードの欠陥を主張していない",
+      "evidence": "対象主張は品質ゲートの実行記録だけを要求しており、変更対象コードの挙動や構造を指していない"
     }
   ]
 }
@@ -93,8 +94,9 @@
 
 `dismissDecisions` のルール。
 - プロンプトが dismiss 候補として列挙した finding id（機械で確定できない open な暫定 finding）のみが対象です。リスト外への dismiss はエンジンが不採用にします。
-- `basis` は `out_of_scope`（主張が finding contract の管轄外 — 例: 検証結果の報告有無への要求は final gate の職掌）または `unverifiable_claim`（恒久的に検証不能な主張）です。
-- 懸念が実在し、後続の clean なレビュー証拠で確定し得るなら dismiss せず open のままにしてください。dismiss は「修正済み」ではなく「審査対象外」の裁定であり、監査記録付きで台帳に残ります。
+- `basis` は通常 `out_of_scope` または `unverifiable_claim` です。エンジンが control task に `terminal_adjudication` を明示した場合だけ `false_positive`、`overreach`、`no_issue_after_verification` も選べます。
+- `evidence` には現在のコードを確認した具体的根拠を入れます。沈黙や再報告されなかったことだけでは不十分です。
+- 懸念が実在し、後続の clean なレビュー証拠で確定し得るなら dismiss せず open のままにしてください。通常の dismiss は「修正済み」ではなく「審査対象外」の裁定であり、意味裁定を含め監査記録付きで台帳に残ります。
 - エンジンによる decision rejection、stale findingId、unsupported、decision 欠落そのものは dismiss の根拠にしないでください。raw の内容を評価し、実在するコード上の懸念なら open のまま残してください。
 - 候補が無い、またはすべて open のままにする場合は空配列にしてください。
 

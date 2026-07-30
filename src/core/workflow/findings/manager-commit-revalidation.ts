@@ -131,6 +131,7 @@ export function revalidateManagerPlan(input: {
     dismissCandidateFindingIds: new Set(
       computeDismissCandidates(input.freshLedger).keys(),
     ),
+    managerAuthority: input.runInput.managerAuthority,
   });
   const freshLandedRawIds = collectLandedRawIds(freshAssembly.output);
   const rejectedRenotifications = collectRejectedRenotifications({
@@ -610,13 +611,15 @@ function applyPreconditionChecks(input: {
   });
   // dismiss も他の終端遷移と同水準の楽観的前提条件を通す: manager 判断中に
   // 同じ provisional へ新しい観測が積まれて revision が進んでいたら、古い
-  // 判断のままでは却下しない（stale として不採用 → 次ラウンドで再裁定）。
+  // 判断のままでは適用しない（stale として不採用 → 次ラウンドで再裁定）。
   const dismissedFindings = input.output.dismissedFindings.filter((dismissed) => (
     checkClosingDecision(dismissed.findingId, [], ['open'], 'Dismiss', {
       action: 'dismiss',
       findingId: dismissed.findingId,
       basis: dismissed.basis,
       reason: dismissed.reason,
+      evidence: dismissed.evidence,
+      authority: dismissed.authority,
     })
   ));
 

@@ -561,7 +561,7 @@ describe('WorkflowCallExecutor', () => {
     expect(result.returnValue).toBe('retry_plan');
   });
 
-  it('親が finding_contract を持つとき、子エンジンへ contract と ledgerStore を継承させる', async () => {
+  it('親が finding_contract を持つとき、子エンジンへ contract・ledgerStore・typed authority を継承させる', async () => {
     const parentConfig = {
       name: 'parent',
       initialStep: 'delegate',
@@ -577,6 +577,7 @@ describe('WorkflowCallExecutor', () => {
     const step = {
       name: 'delegate',
       call: 'child',
+      findingContractAuthority: 'terminal_adjudication',
       personaDisplayName: 'delegate',
       instruction: '',
     } as WorkflowCallStep;
@@ -626,6 +627,7 @@ describe('WorkflowCallExecutor', () => {
     expect(childOptions?.inheritedFindingContract).toEqual({
       contract: FAKE_FINDING_CONTRACT,
       ledgerStore,
+      managerAuthority: 'terminal_adjudication',
     });
     expect(childOptions).not.toHaveProperty('findingLedgerStore');
   });

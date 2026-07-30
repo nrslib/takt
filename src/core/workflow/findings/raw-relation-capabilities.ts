@@ -25,7 +25,7 @@ export function hasLifecycleTransitionIntent(input: {
  *
  * invalidated / superseded target の reopen は、検証済み証拠があっても過去の
  * terminal adjudication を reviewer observation だけで覆せないため audit-only。
- * dismissed は後続証拠による human-auditable reopen の既存経路を維持する。
+ * dismissed は後続の検証済み証拠による reopen の既存経路を維持する。
  */
 export function hasLifecycleProductTransitionCapability(input: {
   relation: Exclude<RawFindingRelation, 'new'>;

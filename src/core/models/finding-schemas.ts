@@ -41,6 +41,7 @@ import {
   FINDING_LIFECYCLES,
   FINDING_LIFECYCLE_ENTITY_KINDS,
   FINDING_LIFECYCLE_OPERATIONS,
+  FINDING_MANAGER_AUTHORITIES,
   FINDING_REJECTED_OBSERVATION_CODES,
   FINDING_PROVISIONAL_KINDS,
   FINDING_SEVERITIES,
@@ -50,6 +51,7 @@ import {
   RAW_DECISION_KINDS,
   RAW_FINDING_DISPOSITION_OUTCOMES,
   REVIEWER_ANOMALY_KINDS,
+  SEMANTIC_FINDING_DISMISSAL_BASES,
 } from './finding-types.js';
 
 const nonEmptyString = z.string().min(1);
@@ -57,6 +59,25 @@ const Sha256Schema = z.string().regex(SHA256_HEX_PATTERN);
 const rawFindingIdString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxRawFindingIdChars);
 const familyTagString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxFamilyTagChars);
 const rawFindingTitleString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxTitleChars);
+
+function validateFindingDismissalAuthority(
+  dismissal: {
+    basis: typeof FINDING_DISMISSAL_BASES[number];
+    authority: typeof FINDING_MANAGER_AUTHORITIES[number];
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (
+    dismissal.authority !== 'terminal_adjudication'
+    && SEMANTIC_FINDING_DISMISSAL_BASES.some((basis) => basis === dismissal.basis)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['authority'],
+      message: `dismissal basis "${dismissal.basis}" requires terminal_adjudication authority`,
+    });
+  }
+}
 const rawFindingDescriptionString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxDescriptionChars);
 const rawFindingSuggestionString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxSuggestionChars);
 const BinarySortedUniqueStringSetSchema = z.array(nonEmptyString).superRefine((values, ctx) => {
@@ -569,9 +590,14 @@ const FindingActionRecoverySchema = z.discriminatedUnion('action', [
     findingId: nonEmptyString,
     basis: z.enum(FINDING_DISMISSAL_BASES),
     reason: nonEmptyString,
+    evidence: nonEmptyString,
+    authority: z.enum(FINDING_MANAGER_AUTHORITIES),
     targetPreconditions: z.array(FindingMutationPreconditionSchema).min(1),
   }).strict(),
 ]).superRefine((recovery, ctx) => {
+  if (recovery.action === 'dismiss') {
+    validateFindingDismissalAuthority(recovery, ctx);
+  }
   const targetFindingIds = recovery.action === 'duplicate'
     ? [recovery.canonicalFindingId, ...recovery.duplicateFindingIds]
     : [recovery.findingId];
@@ -649,8 +675,10 @@ export const FindingLedgerEntrySchema = z.object({
   dismissal: z.object({
     basis: z.enum(FINDING_DISMISSAL_BASES),
     reason: nonEmptyString,
+    evidence: nonEmptyString,
+    authority: z.enum(FINDING_MANAGER_AUTHORITIES),
     decidedAt: FindingObservationSchema,
-  }).strict().optional(),
+  }).strict().superRefine(validateFindingDismissalAuthority).optional(),
   revision: z.number().int().positive(),
   provisional: FindingProvisionalMetadataSchema.optional(),
   rejectedObservations: z.array(z.object({
@@ -1412,7 +1440,9 @@ export const FindingManagerOutputSchema = z.object({
     findingId: nonEmptyString,
     basis: z.enum(FINDING_DISMISSAL_BASES),
     reason: nonEmptyString,
-  }).strict()),
+    evidence: nonEmptyString,
+    authority: z.enum(FINDING_MANAGER_AUTHORITIES),
+  }).strict().superRefine(validateFindingDismissalAuthority)),
 }).strict();
 
 // LLM に返させるのは判断だけ。アクション配列への組み立てと不変条件の強制は
@@ -1453,6 +1483,7 @@ export const FindingManagerDismissDecisionSchema = z.object({
   findingId: nonEmptyString,
   basis: z.enum(FINDING_DISMISSAL_BASES),
   reason: nonEmptyString,
+  evidence: nonEmptyString,
 }).strict();
 
 export const FindingManagerDuplicateDecisionSchema = z.object({
@@ -1624,11 +1655,13 @@ export const FindingManagerOutputJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['findingId', 'basis', 'reason'],
+        required: ['findingId', 'basis', 'reason', 'evidence', 'authority'],
         properties: {
           findingId: { type: 'string', minLength: 1 },
           basis: { enum: FINDING_DISMISSAL_BASES },
           reason: { type: 'string', minLength: 1 },
+          evidence: { type: 'string', minLength: 1 },
+          authority: { enum: ['standard', 'terminal_adjudication'] },
         },
       },
     },
@@ -1739,18 +1772,23 @@ export const FindingManagerDecisionsJsonSchema = {
     },
     dismissDecisions: {
       type: 'array',
-      description: 'One optional adjudication per finding id listed as a dismissal candidate in the prompt (open provisional findings whose claims cannot be settled mechanically). Dismiss a candidate only when its claim is outside the finding contract\'s jurisdiction (e.g. demands about verification-result reporting, which belong to the final gate) or can never be substantiated. Leave empty when there are no candidates or every candidate deserves to stay open. You cannot dismiss a finding that is not in the candidate list.',
+      description: 'One optional adjudication per finding id listed as a dismissal candidate in the prompt. The allowed bases depend on the typed manager authority supplied by the engine. Leave empty when there are no candidates or every candidate deserves to stay open.',
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['findingId', 'basis', 'reason'],
+        required: ['findingId', 'basis', 'reason', 'evidence'],
         properties: {
           findingId: { type: 'string', minLength: 1 },
           basis: {
             enum: FINDING_DISMISSAL_BASES,
-            description: 'out_of_scope = the claim belongs to another mechanism (e.g. final gate). unverifiable_claim = the claim can never be substantiated by evidence.',
+            description: 'out_of_scope and unverifiable_claim are standard jurisdiction bases. false_positive, overreach, and no_issue_after_verification require terminal_adjudication authority.',
           },
           reason: { type: 'string', minLength: 1 },
+          evidence: {
+            type: 'string',
+            minLength: 1,
+            description: 'Concrete current-code evidence supporting the classification. Silence or lack of a repeated report is not evidence.',
+          },
         },
       },
     },

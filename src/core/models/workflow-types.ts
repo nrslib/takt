@@ -17,7 +17,11 @@ import type {
   WorkflowEffect,
   WorkflowSystemInput,
 } from './workflow-system-input-types.js';
-import type { FindingContractConfig, FindingsRuleContext } from './finding-types.js';
+import type {
+  FindingContractConfig,
+  FindingManagerAuthority,
+  FindingsRuleContext,
+} from './finding-types.js';
 import type { WorkflowRuleCondition } from './workflow-rule-condition.js';
 
 export const WORKFLOW_SESSION_MODES = ['continue', 'refresh', 'compact'] as const;
@@ -294,6 +298,7 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   call: string;
   overrides?: WorkflowCallOverrides;
   args?: Record<string, WorkflowCallArgValue>;
+  findingContractAuthority?: Exclude<FindingManagerAuthority, 'standard'>;
   sessionKey?: never;
   requiresUserInput?: never;
   persona?: never;

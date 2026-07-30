@@ -14,6 +14,7 @@ import type {
   WorkflowConfig,
   WorkflowStep,
 } from '../../models/types.js';
+import type { FindingManagerAuthority } from '../../models/finding-types.js';
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
@@ -82,6 +83,7 @@ export interface FindingContractIntakeInput {
   callNamespace: string;
   timestamp: string;
   priorStepResponseText?: string;
+  managerAuthority: FindingManagerAuthority;
   refreshFindingsState: () => void;
   emitEvent: (event: string, ...args: unknown[]) => void;
 }
@@ -112,6 +114,7 @@ export async function ingestFindingContractResults(
     callNamespace: input.callNamespace,
     timestamp: input.timestamp,
     priorStepResponseText: input.priorStepResponseText,
+    managerAuthority: input.managerAuthority,
   });
   if (result.status === 'updated') {
     input.refreshFindingsState();

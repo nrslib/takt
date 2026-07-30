@@ -14,6 +14,7 @@ import {
   findingFileQuoteLocations,
   formatFileQuoteLocation,
 } from './evidence-location.js';
+import { computeDismissCandidates } from './manager-utils.js';
 
 function findingLocations(
   ledger: FindingLedger,
@@ -289,6 +290,9 @@ export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): Fi
     // count > 0 での COMPLETE を最終不変条件として拒否する。
     provisional: {
       count: openItems.filter((finding) => finding.provisional !== undefined).length,
+      dismissEligible: {
+        count: computeDismissCandidates(ledger).size,
+      },
       // 直前の findings-manager ラウンドが fixpoint に達したか
       // （台帳側で計算・永続化済み。ここは読むだけ）。builtin workflow はこれを
       // 見て要件を維持した再計画へルーティングする。

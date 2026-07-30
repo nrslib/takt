@@ -11,6 +11,7 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
+import type { FindingManagerAuthority } from '../../models/finding-types.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
 import type { RunPaths } from '../run/run-paths.js';
 import type { WorkflowEngineOptions, WorkflowSharedRuntimeState } from '../types.js';
@@ -80,6 +81,7 @@ interface WorkflowEngineSetupParams {
   refreshFindingsState: () => void;
   /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
   findingContract?: FindingContractConfig;
+  findingManagerAuthority: FindingManagerAuthority;
   findingLedgerStore?: FindingLedgerStore;
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;
@@ -239,6 +241,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     ),
     abortSignal: params.options.abortSignal,
     findingContract: params.findingContract,
+    findingManagerAuthority: params.findingManagerAuthority,
     workflowProvider: params.config.provider,
     workflowModel: params.config.model,
     executionProvider: params.options.provider,
@@ -291,6 +294,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
     findingContract: params.findingContract,
+    findingManagerAuthority: params.findingManagerAuthority,
     workflowProvider: params.config.provider,
     workflowModel: params.config.model,
     findingLedgerStore: params.findingLedgerStore,
