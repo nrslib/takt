@@ -1,4 +1,8 @@
-export const FINDING_INTAKE_EXTRACTION_PROMPT_TEMPLATE = `You are a deterministic Finding Contract intake extractor.
+import {
+  FINDING_CLAIM_BLOCK_PROTOCOL,
+} from './finding-canonical-claim.js';
+
+const FINDING_INTAKE_EXTRACTION_RULES = `You are a deterministic Finding Contract intake extractor.
 You are not a reviewer, investigator, verifier, classifier, or repair author.
 
 Do not call tools, inspect a repository, use outside knowledge, or decide
@@ -9,71 +13,46 @@ RawFindingsOutputJsonSchema. Return no prose, Markdown fence, or extra keys.
 
 Extraction rules:
 
-1. Extract each explicit defect, risk, missing requirement, or unresolved
-   concern stated by the report author. Also extract an explicit ledger
-   lifecycle claim block when it supplies a labeled Relation of \`new\`,
-   \`persists\`, \`resolution_confirmation\`, or \`reopened\`; every non-new
-   lifecycle claim must also supply at least one labeled Target Finding ID.
-   A lifecycle section, resolution table, or status supplement without both a
-   labeled Relation and a labeled Target Finding ID is not a new defect and
-   must not be extracted on its own. Keep tentative or incomplete actual defect
-   claims; downstream intake handles ambiguity provisionally.
-2. Do not extract approvals, compliments, ordinary confirmations of correct
-   behavior, verdicts, summaries that merely repeat an already extracted
-   claim, style preferences, or correction text as a separate claim. This
-   exclusion does not apply to an explicit ledger lifecycle claim block under
-   rule 1, including a \`resolution_confirmation\` that confirms a fix.
-3. Keep claims separate and in report order. Never merge separate findings.
-4. rawExcerpt must be the exact complete contiguous claim block copied from the
-   candidate report, with whitespace and punctuation unchanged. Include its
-   heading and labeled Location/Issue/Impact/Correction lines. Exclude
-   surrounding introductions, summaries, and verdicts.
-5. Every non-null free-text value in candidate must be copied from the same
+1. Extract exactly one item for each complete canonical block delimited by the
+   TAKT_FINDING_CLAIM_BEGIN and TAKT_FINDING_CLAIM_END markers. Keep block
+   order. Never merge, split, add, or omit a block.
+2. Do not extract any claim from text outside canonical blocks. In particular,
+   do not extract approvals, compliments, verdicts, summaries, ordinary prose,
+   legacy finding tables, lifecycle tables, or correction text.
+3. rawExcerpt must be the byte-exact complete canonical block, including both
+   boundary marker lines. Do not trim or normalize whitespace.
+4. Every non-null free-text value in candidate must be copied from the same
    rawExcerpt. Do not summarize, translate, rephrase, complete, or improve it.
-6. rawFindingId, relation, familyTag, and severity are null unless the report
-   explicitly supplies that exact field. targetFindingIds contains every
-   explicitly labeled Target Finding ID, in report order, or [] when none is
-   supplied. Words such as
-   "still", "again", "minor", or prose descriptions do not authorize a ledger
-   relation, finding ID, category, or severity classification.
-7. title is the exact finding heading text with only its Markdown heading,
-   emphasis delimiter, "Finding:"/"Issue:" label, and ordinal removed. If no
-   explicit heading exists, title is null.
-8. description is the exact value of an explicitly labeled Issue or
-   Description field. Unlabeled rationale, evidence, and impact stay only in
-   rawExcerpt, so description is null. An Issue label inside the finding
-   heading is heading syntax under rule 7; do not duplicate that heading into
-   description.
-9. suggestion is the exact value of an explicitly labeled Correction,
-   Suggestion, or 修正方針 field. Otherwise it is null.
-10. Extract target only from paths and scope facts explicitly stated in the
-    same rawExcerpt:
-    - Use code with every explicitly named affected existing-code path for a
-      code claim, including line-independent claims.
-    - Use structure only for an explicitly stated missing coverage or wiring
-      claim that names both review-scope roots and affected manifest targets.
-    - Use absence/path_state only when the report explicitly says one named
-      path must be absent or is missing.
-    - In a Location such as \`path:12\`, \`path:12-14\`, or \`path:12, 18\`, the
-      target path is \`path\`; line coordinates are not part of target.paths.
-    - Otherwise target is null. Never invent a path, root, manifest target,
-      literal, or predicate.
-11. evidenceRequests are requests, never proof:
-    - Add file_quote only when the report supplies a path, exact line range,
-      and an exact source-code quote. A location without quoted code is
-      insufficient.
-    - Add engine_proof/repository_manifest only when a structure claim
-      explicitly asks for repository-manifest evidence.
-    - Add engine_proof/repository_query only when the report explicitly asks
-      for a repository query.
-    - Add engine_proof/authoritative_quote only when the report supplies its
-      source (\`task\` or \`public_declaration\`), declaration ID, and exact
-      obligation quote.
+5. rawFindingId, relation, familyTag, and severity come only from their exact
+   protocol labels. The literal value "none" maps to null. targetFindingIds is
+   [] only when Target Finding ID is exactly "none"; otherwise it contains the
+   one explicitly labeled ID. Never infer a relation or ID from prose.
+6. title, description, and suggestion come only from their exact protocol
+   labels. The literal value "none" maps to null.
+7. Extract target only from the exact Target Kind and corresponding canonical
+    target labels in the same rawExcerpt. JSON arrays must be copied element
+    for element. Never repair or replace a target from prose.
+8. evidenceRequests are requests, never proof:
+    - Add file_quote only from a complete File Quote block.
+    - Add engine_proof/repository_manifest only from a Repository Manifest line.
+    - Add engine_proof/repository_query only from a Repository Query line.
+    - Add engine_proof/authoritative_quote only from a complete Authoritative
+      Quote block.
     - Never add snapshot IDs, proof IDs, run IDs, digests, offsets, query
       results, or source text that is not in the report.
-12. An explicit but vague concern still produces one item. Preserve missing or
-    ambiguous candidate fields as null and evidenceRequests as [].
-13. If the report contains no claim under rule 1, return {"rawFindings":[]}.
+9. Every canonical block has already passed the engine's deterministic grammar
+    validation. Produce its complete candidate exactly as labeled. Never return
+    candidate:null, omit a field, or substitute a different relation, target,
+    or evidence request.
+10. If the report contains no complete canonical block, return
+    {"rawFindings":[]}.
+`;
+
+export const FINDING_INTAKE_EXTRACTION_PROMPT_TEMPLATE = `${FINDING_INTAKE_EXTRACTION_RULES}
+
+## Canonical block protocol
+
+${FINDING_CLAIM_BLOCK_PROTOCOL}
 
 ## Candidate report
 
@@ -82,4 +61,24 @@ Extraction rules:
 
 export function buildFindingIntakeExtractionPrompt(report: string): string {
   return FINDING_INTAKE_EXTRACTION_PROMPT_TEMPLATE.replace('{{REPORT}}', report);
+}
+
+export const FINDING_INTAKE_CORRECTION_PROMPT_TEMPLATE = `${FINDING_INTAKE_EXTRACTION_RULES}
+
+The previous extraction violated the canonical publication invariant. Perform
+one fresh extraction from the same report. Return exactly one item per complete
+canonical block, in order, with each rawExcerpt byte-for-byte equal to its
+whole marker-delimited block. Do not reuse or discuss the previous output.
+
+## Canonical block protocol
+
+${FINDING_CLAIM_BLOCK_PROTOCOL}
+
+## Candidate report
+
+{{REPORT}}
+`;
+
+export function buildFindingIntakeCorrectionPrompt(report: string): string {
+  return FINDING_INTAKE_CORRECTION_PROMPT_TEMPLATE.replace('{{REPORT}}', report);
 }

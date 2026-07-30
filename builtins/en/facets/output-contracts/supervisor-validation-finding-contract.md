@@ -13,17 +13,12 @@
 | Target | Check or Unverified Reason | Result | Next Required Verification |
 |--------|----------------------------|--------|----------------------------|
 | {test, build, or functional check} | {current-code-matched log/report or reason} | ✅ / ❌ / unverified | {verification for NEED_REPLAN or none} |
-## Observed Findings
-| # | family_tag | Severity | Location | Issue | Impact or Failure Condition | Required Action |
-|---|------------|----------|----------|-------|-----------------------------|-----------------|
-| 1 | validation | high / medium / low | `file:line` | {current observed defect} | {impact or condition} | {fix} |
-## Resolution Confirmations
-| Ledger Reference | Original Acceptance Criteria | Confirmation Evidence |
-|------------------|------------------------------|-----------------------|
-| {existing finding} | {expected result} | `file:line` |
+## Finding Contract Claims
+{When the injected Finding Contract instructions include the canonical block protocol, emit exactly one block per observed defect or explicit ledger lifecycle claim. Otherwise, describe claims here normally and use the required structured output as the sole machine format. Do not use a findings table. If there are no claims, write `None`.}
+
 ## Output Consistency
-- Markdown Observed Findings and structured issues, and Markdown Resolution Confirmations and structured confirmations, must each be the same set. Do not assign final finding IDs.
+- When the canonical block protocol is present, blocks and normalized items must be the same ordered set with byte-exact rawExcerpt values. When it is absent, the structured-output schema is the sole machine claim format. Do not assign final finding IDs.
 - APPROVE means zero issues and required evidence is confirmed; REJECT means one or more currently observed defect issues; NEED_REPLAN means zero issues but approval is impossible because a major requirement or required evidence is unverified. Auxiliary unverified items may still APPROVE when other confirmed evidence is sufficient.
 ```
 
-**Cognitive-load rule:** For APPROVE, include only requirement fulfillment and necessary evidence; for REJECT, include only relevant rows within 30 lines.
+**Cognitive-load rule:** For APPROVE, include only requirement fulfillment and necessary evidence; for REJECT, keep supporting prose concise while including every required machine claim.

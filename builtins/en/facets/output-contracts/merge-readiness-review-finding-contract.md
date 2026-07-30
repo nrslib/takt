@@ -16,17 +16,10 @@
 | Maintainability and ease of future change | pass / fail | {evidence} |
 | Security, data protection, and operational risk | pass / fail | {evidence} |
 
-## Observed Findings
-| # | family_tag | Severity | Location | Problem | Impact or breaking condition | Fix direction |
-|---|------------|----------|----------|---------|------------------------------|---------------|
-| 1 | merge-readiness | high / medium / low | `file:line` | {currently observed defect} | {impact or condition} | {fix direction} |
-
-## Resolution Confirmations
-| Ledger reference | Original acceptance condition | Verification evidence |
-|------------------|-----------------------------|-----------------------|
-| {existing finding} | {expected result} | `file:line` |
+## Finding Contract Claims
+{When the injected Finding Contract instructions include the canonical block protocol, emit exactly one block per observed defect or explicit ledger lifecycle claim. Otherwise, describe claims here normally and use the required structured output as the sole machine format. Do not use a findings table. If there are no claims, write `None`.}
 
 ## Output Consistency
-- Markdown Observed Findings and structured issues, and Markdown Resolution Confirmations and structured confirmations, must each be the same set. Keep Markdown and structured output 1:1.
+- When the canonical block protocol is present, blocks and normalized items must be the same ordered set with byte-exact rawExcerpt values. When it is absent, the structured-output schema is the sole machine claim format. Do not assign final finding IDs.
 - APPROVE means zero issues; REJECT means one or more issues.
 ```

@@ -28,6 +28,17 @@ function build(overrides: {
   });
 }
 
+function buildReport(overrides: {
+  contract?: Partial<FindingContractInstructionContext>;
+  language?: 'ja' | 'en';
+} = {}): string {
+  return buildFindingContractReportInstruction({
+    contract: makeContract(overrides.contract),
+    language: overrides.language ?? 'en',
+    renderFencedJsonBlock,
+  });
+}
+
 const REVIEWER_STRUCTURED_OUTPUT = { schemaRef: 'test.raw-findings', schema: { type: 'object' } };
 // codex 対策#4: 本物の reviewer context では WorkflowEngineSetup が
 // rawFindingsStructuredOutput と同時に必ず設定する（snapshot.ts の
@@ -37,6 +48,10 @@ const REVIEWER_SNAPSHOT_ID = 'snap-test-0000000000000000000000000000000000000000
 const REVIEWER = {
   mode: 'structured' as const,
   rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT,
+  reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+};
+const FREEFORM_REVIEWER = {
+  mode: 'freeform' as const,
   reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
 };
 
@@ -69,6 +84,35 @@ describe('buildFindingContractInstruction', () => {
       });
       expect(rendered).not.toContain('統合台帳のコピー');
       expect(rendered).toContain('構造化 raw finding として報告してください');
+    });
+
+    it('injects canonical claim grammar only for freeform reviewers in both languages', () => {
+      for (const language of ['en', 'ja'] as const) {
+        for (const render of [build, buildReport]) {
+          const freeform = render({
+            contract: { reviewer: FREEFORM_REVIEWER, hasOpenFindings: true },
+            language,
+          });
+          expect(freeform).toContain('<!-- TAKT_FINDING_CLAIM_BEGIN -->');
+          expect(freeform).toContain(
+            'Relation: <new | persists | resolution_confirmation | reopened>',
+          );
+          expect(freeform).toContain('<!-- TAKT_FINDING_CLAIM_END -->');
+
+          const structured = render({
+            contract: { reviewer: REVIEWER, hasOpenFindings: true },
+            language,
+          });
+          expect(structured).not.toContain('<!-- TAKT_FINDING_CLAIM_BEGIN -->');
+          expect(structured).not.toContain('canonical block protocol');
+          expect(structured).not.toContain('canonical block');
+          expect(structured).not.toContain('typed evidence matrix');
+          expect(structured).toContain('structured output');
+          expect(structured).toContain('resolution_confirmation');
+          expect(structured).toContain('targetFindingIds');
+          expect(structured).toMatch(/one-to-one|1対1/u);
+        }
+      }
     });
 
     it('does not inject the dispute guide into reviewers', () => {
@@ -130,21 +174,38 @@ describe('buildFindingContractInstruction', () => {
     });
 
     it('requires current exact evidence requests without reviewer-issued proof fields in both languages', () => {
-      const contract = {
-        reviewer: REVIEWER,
-        hasOpenFindings: true,
-      };
-      const en = build({ contract });
-      const ja = build({ contract, language: 'ja' });
+      const structuredEn = build({
+        contract: { reviewer: REVIEWER, hasOpenFindings: true },
+      });
+      const structuredJa = build({
+        contract: { reviewer: REVIEWER, hasOpenFindings: true },
+        language: 'ja',
+      });
+      expect(structuredEn).toContain('code confirmation needs `file_quote`');
+      expect(structuredEn).toContain('structure confirmation needs `repository_manifest`');
+      expect(structuredEn).toContain('absence confirmation needs `repository_query` plus `authoritative_quote`');
+      expect(structuredJa).toContain('code の確認は `file_quote`');
+      expect(structuredJa).toContain('structure の確認は `repository_manifest`');
+      expect(structuredJa).toContain('absence の確認は `repository_query` と `authoritative_quote`');
 
-      expect(en).toContain('at least one `file_quote` with one contiguous path/startLine/endLine range');
-      expect(en).toContain('exactly matches the complete current text');
-      expect(en).toContain('Do not output snapshotId');
-      expect(en).not.toContain(REVIEWER_SNAPSHOT_ID);
-      expect(ja).toContain('単一の path/startLine/endLine 連続範囲');
-      expect(ja).toContain('現在の全文に完全一致');
-      expect(ja).toContain('snapshotId・runId・proofId');
-      expect(ja).not.toContain(REVIEWER_SNAPSHOT_ID);
+      const freeformEn = build({
+        contract: { reviewer: FREEFORM_REVIEWER, hasOpenFindings: true },
+      });
+      const freeformJa = build({
+        contract: { reviewer: FREEFORM_REVIEWER, hasOpenFindings: true },
+        language: 'ja',
+      });
+      expect(freeformEn).toContain('code confirmation needs File Quote');
+      expect(freeformEn).toContain('structure confirmation needs Repository Manifest');
+      expect(freeformEn).toContain('absence confirmation needs Repository Query plus Authoritative Quote');
+      expect(freeformJa).toContain('code の確認は File Quote');
+      expect(freeformJa).toContain('structure の確認は Repository Manifest');
+      expect(freeformJa).toContain('absence の確認は Repository Query と Authoritative Quote');
+
+      for (const rendered of [structuredEn, structuredJa, freeformEn, freeformJa]) {
+        expect(rendered).toMatch(/Do not output snapshotId|snapshotId・runId・proofId/u);
+        expect(rendered).not.toContain(REVIEWER_SNAPSHOT_ID);
+      }
     });
   });
 

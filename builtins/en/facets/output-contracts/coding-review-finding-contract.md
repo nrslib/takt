@@ -15,17 +15,12 @@
 | Checked Chapters | Unverified Chapters (only when any) | Checked Route | Current Evidence | Result |
 |------------------|------------------------------------|---------------|------------------|--------|
 | Checked Chapters N/N | {unverified chapters; otherwise "none"} | {cumulative diff, code, and test} | {current file:line or execution evidence} | {verified result or unverified} |
-## Observed Findings
-| # | family_tag | Severity | Location | Issue | Impact or Failure Condition | Fix Direction |
-|---|------------|----------|----------|-------|-----------------------------|---------------|
-| 1 | bug | high / medium / low | `file:line` | {current observed defect} | {impact or condition} | {fix direction} |
-## Resolution Confirmations
-| Ledger Reference | Original Acceptance Criteria | Confirmation Evidence |
-|------------------|------------------------------|-----------------------|
-| {existing finding} | {expected result} | `file:line` |
+## Finding Contract Claims
+{When the injected Finding Contract instructions include the canonical block protocol, emit exactly one block per observed defect or explicit ledger lifecycle claim. Otherwise, describe claims here normally and use the required structured output as the sole machine format. Do not use a findings table. If there are no claims, write `None`.}
+
 ## Output Consistency
-- Markdown Observed Findings and structured issues, and Markdown Resolution Confirmations and structured confirmations, must each be the same set.
+- When the canonical block protocol is present, blocks and normalized items must be the same ordered set with byte-exact rawExcerpt values. When it is absent, the structured-output schema is the sole machine claim format. Do not assign final finding IDs.
 - APPROVE means zero issues; REJECT means one or more issues. Do not make approvals or summaries issues.
 ```
 
-**Cognitive-load rule:** Even for APPROVE, include the one aggregated re-scan row; group like targets and stay within 30 lines. For REJECT, include only relevant rows.
+**Cognitive-load rule:** Keep verification evidence concise, but include every machine claim required by the active Finding Contract format without truncation.

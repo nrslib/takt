@@ -4,7 +4,10 @@ import { join } from 'node:path';
 import type { AgentResponse, Language, StepProviderOptions } from '../core/models/types.js';
 import { createRawFindingsOutputJsonSchema } from '../core/models/finding-schemas.js';
 import type { ProviderType } from '../shared/types/provider.js';
-import { buildFindingIntakeExtractionPrompt } from '../shared/prompts/finding-intake-extraction.js';
+import {
+  buildFindingIntakeCorrectionPrompt,
+  buildFindingIntakeExtractionPrompt,
+} from '../shared/prompts/finding-intake-extraction.js';
 import { runAgent } from './runner.js';
 
 export interface NormalizeFindingIntakeOptions {
@@ -17,6 +20,7 @@ export interface NormalizeFindingIntakeOptions {
     systemPrompt: string;
     userInstruction: string;
   }) => void;
+  mode?: 'initial' | 'correction';
 }
 
 export async function normalizeFindingIntake(
@@ -25,7 +29,10 @@ export async function normalizeFindingIntake(
 ): Promise<AgentResponse> {
   const isolatedCwd = mkdtempSync(join(tmpdir(), 'takt-finding-intake-'));
   try {
-    return await runAgent(undefined, buildFindingIntakeExtractionPrompt(report), {
+    const instruction = options.mode === 'correction'
+      ? buildFindingIntakeCorrectionPrompt(report)
+      : buildFindingIntakeExtractionPrompt(report);
+    return await runAgent(undefined, instruction, {
       cwd: isolatedCwd,
       executionProfile: 'isolated-structured',
       resolvedProvider: options.provider,

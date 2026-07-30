@@ -15,12 +15,8 @@
 - [x] lifecycle rules
 - [x] Cost trade-off documentation
 
-## Observed Findings
-| # | family_tag | Severity | Scope | Location | Issue | Impact | Fix Suggestion |
-|---|------------|----------|-------|----------|-------|--------|----------------|
-| 1 | tf-convention | High / Medium / Low | In-scope | `modules/example/main.tf:42` | Issue description | Operations, security, or maintainability impact | Fix approach |
-
-Scope: "In-scope" (fixable in this change) / "Out-of-scope" (existing issue, non-blocking)
+## Finding Contract Claims
+{When the injected Finding Contract instructions include the canonical block protocol, emit exactly one block per observed defect or explicit ledger lifecycle claim. Otherwise, describe claims here normally and use the required structured output as the sole machine format. Do not use a findings table. If there are no claims, write `None`.}
 
 ## Rejection Gate
 - REJECT only when at least one blocking finding is observed
@@ -28,4 +24,4 @@ Scope: "In-scope" (fixable in this change) / "Out-of-scope" (existing issue, non
 
 **Cognitive load reduction rules:**
 - APPROVE → Summary only (5 lines or fewer)
-- REJECT → Include only relevant finding rows (30 lines or fewer)
+- REJECT → Include every relevant claim in the active Finding Contract format

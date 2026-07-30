@@ -1,6 +1,7 @@
 import type { Language } from '../../models/types.js';
 import type { FindingContractInstructionContext } from './instruction-context.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
+import { FINDING_CLAIM_BLOCK_PROTOCOL } from '../../../shared/prompts/finding-canonical-claim.js';
 
 /**
  * Finding Contract の指示文を組み立てる。
@@ -79,10 +80,15 @@ function renderFindingContractInstruction(input: {
     structuredReviewer,
     freeformReviewer,
     reviewerHasOpenFindings: isReviewer && contract.hasOpenFindings,
+    structuredReviewerHasOpenFindings: structuredReviewer && contract.hasOpenFindings,
+    freeformReviewerHasOpenFindings: freeformReviewer && contract.hasOpenFindings,
     reviewerHasWaivedFindings: isReviewer && contract.hasWaivedFindings,
     reviewerHasDismissedFindings: isReviewer && contract.hasDismissedFindings,
     rawFindingsJsonSchema: rawFindingsStructuredOutput
       ? renderFencedJsonBlock(rawFindingsStructuredOutput.schema)
+      : '',
+    canonicalClaimBlockProtocol: freeformReviewer
+      ? FINDING_CLAIM_BLOCK_PROTOCOL
       : '',
     // review-integrity protocol: reviewer step のときだけ設定される（instruction-context.ts
     // 参照）。空文字は「該当なし」— テンプレート側は isReviewer と一緒にしか

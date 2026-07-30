@@ -13,17 +13,12 @@
 | 対象 | 確認内容または未確認理由 | 結果 | 次に必要な検証 |
 |------|----------------------------|------|------------------|
 | {テスト・ビルド・動作確認} | {現在コードと一致する実行ログ・レポート、または理由} | ✅ / ❌ / 未確認 | {NEED_REPLAN 時の検証またはなし} |
-## 観測した指摘
-| # | family_tag | 重大度 | 場所 | 問題 | 影響または壊れる条件 | 必要アクション |
-|---|------------|--------|------|------|----------------------|----------------|
-| 1 | validation | high / medium / low | `file:line` | {現在の観測欠陥} | {影響または条件} | {修正} |
-## 解消確認
-| 台帳参照 | 元の受入条件 | 確認証跡 |
-|----------|--------------|----------|
-| {既存指摘} | {期待結果} | `file:line` |
+## Finding Contract Claims
+{注入された Finding Contract 指示に canonical block protocol がある場合は、観測した欠陥または明示的な台帳 lifecycle claim ごとに正確に1つの block を出力する。protocol がない場合は、claim を通常の文章で記載し、必須 structured output だけを機械形式とする。指摘表は使わない。claim がなければ `None` と記載する。}
+
 ## 出力整合性
-- Markdown の観測した指摘と structured issue、解消確認と structured confirmation はそれぞれ同じ集合にする。最終 finding ID は採番しない。
+- canonical block protocol がある場合は、block と normalized item を同じ順序集合とし、rawExcerpt を byte-exact に一致させる。protocol がない場合は structured-output schema だけを機械 claim 形式とする。最終 finding ID は採番しない。
 - APPROVE は issue 0 件かつ必須証跡の確認完了、REJECT は現在の観測欠陥 issue が1件以上、NEED_REPLAN は issue 0 件のまま主要要件または必須証跡が未確認で承認不能とする。補助的未確認だけで、他の確認済み根拠により APPROVE にできる。
 ```
 
-**認知負荷軽減ルール:** APPROVE は要件充足と必要な証跡のみ、REJECT は関連行のみを30行以内で記載する。
+**認知負荷軽減ルール:** APPROVE は要件充足と必要な証跡のみとし、REJECT は補足説明を簡潔にしつつ必要な機械 claim をすべて記載する。

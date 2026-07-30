@@ -17,10 +17,8 @@
 | Test strategy (unit/integration/E2E) | ✅ | - |
 | Contract input location (body/query/path) | ✅ | - |
 
-## Observed Findings
-| # | family_tag | Category | Severity | Location | Issue | Fix Suggestion |
-|---|------------|----------|----------|----------|-------|----------------|
-| 1 | test-structure | Coverage | high / medium / low | `src/test.ts:42` | Issue description | Fix suggestion |
+## Finding Contract Claims
+{When the injected Finding Contract instructions include the canonical block protocol, emit exactly one block per observed defect or explicit ledger lifecycle claim. Otherwise, describe claims here normally and use the required structured output as the sole machine format. Do not use a findings table. If there are no claims, write `None`.}
 
 ## Verification Evidence
 - Build: {Verified target, what was checked, and observed result; or state that it was unverified}
@@ -38,4 +36,4 @@
 
 **Cognitive load reduction rules:**
 - APPROVE: Summary and unverified scope only (8 lines or fewer)
-- REJECT: Only relevant findings in tables (30 lines or fewer)
+- REJECT: Include every relevant claim using the active Finding Contract format

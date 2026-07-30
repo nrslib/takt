@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -49,20 +50,20 @@ interface RawWorkflow {
 
 const SHARED_CONTRACT_HASHES: Record<Locale, Record<string, string>> = {
   ja: {
-    architecture: 'f27a0ab5a0200e89e098bced9b29b8f144a3cb5d64180f377ca2976913efeb08',
-    'ai-antipattern': '00d2719aa9a7a5308bf5fb7920f7ec4760cee8261722b87baf221dc86aa8ad38',
-    coding: 'd9996bfdb9e906f60f855ec417ce257898a923a747a13cdd3704ea334d48c750',
-    'implementation-semantics': '0cf0d7bef3237d7d60d1000b3a89c9688254a1339ea8f39177efc0fa505c78cd',
-    'contract-lifecycle': 'fec174921aa46e5d4bca9cda1bdc5a91ced12a22f02f6708db4bfd27b98dc6bd',
-    robustness: '54b011ebb1c61876356a29a87833fe2f23691a3f5bb27ae9403867719d1fb485',
+    architecture: 'cee57809603b1d17312929f1183b6657ab52153350af0c92787ea5de2b7afa63',
+    'ai-antipattern': '0709aab13d86b7d5f3bb527e00420fde033bea677b80036609d5768a3301efb5',
+    coding: '23d4894081921f2b21aacbf9badd6e2acf5b8c281ed9b6952c8cb28939293d2d',
+    'implementation-semantics': 'a93779cf922f6dc0f54d5dbb7944d54fec095c949c1140cc050243050837b4d3',
+    'contract-lifecycle': 'd5d630d06d360f11667ac20ee5d27f34f7bc525123b1d3f0ac79fe0805d5fc72',
+    robustness: '96d993ce895cd4e91b00a6155843dae79c39906387cfe4b82c43cfe26ce59c5d',
   },
   en: {
-    architecture: '385cc9374649504ca4d890fea895c8c85664fa4d0f432ad054d09803e792eb50',
-    'ai-antipattern': '208fc4a67b3593795b9821c70ce0aa44ca59c0318fe9574a1df286bde334d0d4',
-    coding: '9c9250c3d3881751b07e17fc2f144ee411d9ebdb00c44418996f39688bd1778f',
-    'implementation-semantics': '702ca4fc58ed4a58e5eb7ad05b2716e32c5f8a69a70da8b034b27a1f458b2c05',
-    'contract-lifecycle': 'c24d489246866b7f5396e86b9a100434fba4c97719a67ef69107ee6a97859d7e',
-    robustness: '03d6fe3011c1ba74500abc2250f8dfccac8d700bbfdf1c7c5d9576577a77d35c',
+    architecture: '4c08eb25037e6f5d30ee3e6151c1bff97174286a9918bcd77622c47748d95c76',
+    'ai-antipattern': 'f762ff39032a522d3e19853fc0ed0f648a07dbcd5a56cacfae994df1343bb93a',
+    coding: '07137afc9fe6d5de49785a56394cf6846880fe217ce20fd57179239acd2d9590',
+    'implementation-semantics': '8042bb926e3a2ad75b9737deebf39059ec6140c6f2867d62c8d6d6bd99d3e3c0',
+    'contract-lifecycle': '9f580fac8fcbbf9c15ecf12ea3968d9582dce4175b9b0e6cbf2eeab1f582d802',
+    robustness: '8189740da213954a3b8cd09580614aecfd03c645ec1eb1c7acd367582bfb9e11',
   },
 };
 
@@ -532,6 +533,21 @@ describe('takt-default-localllm boundary reviews', () => {
     }
   });
 
+  it.each(['ja', 'en'] as const)('%s の全builtin Finding Contract outputは実行経路に応じた単一machine形式を要求する', (locale) => {
+    const dir = join(process.cwd(), 'builtins', locale, 'facets', 'output-contracts');
+    const names = readdirSync(dir).filter((name) => name.endsWith('-finding-contract.md'));
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) {
+      const outputContract = readFileSync(join(dir, name), 'utf8');
+      expect(outputContract.match(/^## Finding Contract Claims$/gmu)).toHaveLength(1);
+      expect(outputContract).toContain('canonical block protocol');
+      expect(outputContract).toContain('structured');
+      expect(outputContract).not.toMatch(/^## (?:Observed Findings|Resolution Confirmations|観測した指摘|解消確認)/mu);
+      expect(outputContract).not.toContain('| # | family_tag');
+      expect(outputContract).not.toMatch(/(?:20|30|40) lines|(?:20|30|40)行/u);
+    }
+  });
+
   it.each(['ja', 'en'] as const)('%s の専用契約はscope・引用・Finding Contract整合性を要求する', (locale) => {
     for (const name of ['contract-wiring', 'resource-ownership', 'failure-boundary']) {
       const path = join(
@@ -544,12 +560,15 @@ describe('takt-default-localllm boundary reviews', () => {
       );
       const outputContract = readFileSync(path, 'utf-8');
 
-      expect(outputContract).toContain(`| 1 | ${name} |`);
+      expect(outputContract).toContain('## Finding Contract Claims');
+      expect(outputContract).toContain('canonical block');
+      expect(outputContract).not.toContain('| # | family_tag');
+      expect(outputContract).toContain(`\`${name}\``);
       expect(outputContract).toContain('`file:line`');
       expect(outputContract).toContain('`file:line-line`');
       expect(outputContract).toMatch(locale === 'ja'
-        ? /観測した指摘と structured issue、解消確認と structured confirmation/
-        : /Observed Findings and structured issues, and Markdown Resolution Confirmations and structured confirmations/);
+        ? /block と normalized item を同じ順序集合/
+        : /blocks and normalized items must be the same ordered set/);
       expect(outputContract).toMatch(locale === 'ja'
         ? /欠陥を記述したまま APPROVE しない/
         : /Do not describe a defect while returning APPROVE/);

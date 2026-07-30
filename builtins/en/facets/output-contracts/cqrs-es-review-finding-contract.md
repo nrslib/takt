@@ -11,20 +11,14 @@
 | Command/Query separation | ✅ | - |
 | Projections | ✅ | - |
 | Eventual consistency | ✅ | - |
-## Observed Findings
-| # | family_tag | Severity | Location | Issue | Impact | Fix Suggestion |
-|---|------------|----------|----------|-------|--------|----------------|
-| 1 | cqrs-violation | High / Medium / Low | `src/file.ts:42` | Issue description | Domain consistency or maintainability impact | Fix approach |
+## Finding Contract Claims
+{When the injected Finding Contract instructions include the canonical block protocol, emit exactly one block per observed defect or explicit ledger lifecycle claim. Otherwise, describe claims here normally and use the required structured output as the sole machine format. Do not use a findings table. If there are no claims, write `None`.}
+
 ## Non-blocking / Out-of-scope Notes
 - {Existing issue or item not fixed in this change; do not report it as a finding}
 
-## Resolution Confirmations
-| Ledger Reference | Original Acceptance Criteria | Confirmation Evidence |
-|------------------|------------------------------|-----------------------|
-| {existing finding} | {expected result} | `file:line` |
-
 ## Output Consistency
-- Markdown Observed Findings and structured issues, and Markdown Resolution Confirmations and structured confirmations, must each be the same set.
+- When the canonical block protocol is present, blocks and normalized items must be the same ordered set with byte-exact rawExcerpt values. When it is absent, the structured-output schema is the sole machine claim format. Do not assign final finding IDs.
 - APPROVE means zero issues; REJECT means one or more issues. Do not make approvals or summaries issues.
 
 ## Rejection Gate
@@ -32,6 +26,6 @@
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE with no resolution confirmations → Summary only (5 lines or fewer)
-- APPROVE with resolution confirmations → Summary and Resolution Confirmations only
-- REJECT → Include only related finding rows and necessary resolution confirmations (30 lines or fewer)
+- APPROVE with no lifecycle claims → Summary only
+- APPROVE with confirmations → Summary and the required claims in the active Finding Contract format
+- REJECT → Include every related claim and necessary resolution confirmation in the active Finding Contract format

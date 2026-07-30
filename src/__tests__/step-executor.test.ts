@@ -32,6 +32,16 @@ import { createFindingLedgerStore, type FindingManagerValidationReport } from '.
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
+import {
+  FINDING_CLAIM_BEGIN_MARKER,
+  FINDING_CLAIM_END_MARKER,
+  parseCanonicalFindingClaimReport,
+} from '../shared/prompts/finding-canonical-claim.js';
+import {
+  createFindingReviewPublication,
+  FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+  persistFindingReviewPublication,
+} from '../core/workflow/findings/review-publication.js';
 
 function makeState(): WorkflowState {
   return {
@@ -177,8 +187,37 @@ describe('StepExecutor', () => {
 
   it('active normal reviewerをfree-formで実行し、reviewer phase確定後に独立normalizer phaseを取り込む', async () => {
     const reviewerTimestamp = new Date('2026-07-29T01:00:00.000Z');
+    const rawExcerpt = [
+      FINDING_CLAIM_BEGIN_MARKER,
+      'Finding Claim',
+      'Raw Finding ID: none',
+      'Relation: persists',
+      'Target Finding ID: F-missing',
+      'Family Tag: none',
+      'Severity: none',
+      'Title: none',
+      'Description: A concrete defect.',
+      'Suggestion: none',
+      'Target Kind: code',
+      'Target Paths: ["src/example.ts"]',
+      'Review Scope Roots: none',
+      'Manifest Targets: none',
+      'Absence Predicate: none',
+      'Absence Path: none',
+      'Absence Literal: none',
+      'Evidence Requests:',
+      '- File Quote',
+      '  Path: src/example.ts',
+      '  Start Line: 1',
+      '  End Line: 1',
+      '  Verbatim Excerpt:',
+      '  ```text',
+      '  const example = false;',
+      '  ```',
+      FINDING_CLAIM_END_MARKER,
+    ].join('\n');
     const normalizedRawFinding = {
-      rawExcerpt: 'A concrete defect.',
+      rawExcerpt,
       candidate: {
         rawFindingId: null,
         relation: 'persists',
@@ -189,7 +228,13 @@ describe('StepExecutor', () => {
         description: 'A concrete defect.',
         suggestion: null,
         target: { kind: 'code', paths: ['src/example.ts'] },
-        evidenceRequests: [],
+        evidenceRequests: [{
+          kind: 'file_quote',
+          path: 'src/example.ts',
+          startLine: 1,
+          endLine: 1,
+          verbatimExcerpt: 'const example = false;',
+        }],
       },
     };
     const reviewerResponse: AgentResponse = {
@@ -199,7 +244,7 @@ describe('StepExecutor', () => {
       sessionId: 'reviewer-session',
       timestamp: reviewerTimestamp,
     };
-    const reportContent = '## Finding\n- **Issue:** A concrete defect.';
+    const reportContent = `## Result: REJECT\n\n${rawExcerpt}`;
     let reviewerCall = 0;
     vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
       options?.onPromptResolved?.({
@@ -412,7 +457,7 @@ describe('StepExecutor', () => {
     await expect(executor.normalizeFindingIntakeReport(step, {
       persona: 'reviewer',
       status: 'done',
-      content: 'Review report.',
+      content: '## Result: APPROVE\n\nReview report.',
       timestamp: new Date('2026-07-29T00:00:00.000Z'),
     }, 3)).rejects.toThrow('normalizer failed');
 
@@ -421,10 +466,10 @@ describe('StepExecutor', () => {
       expect.objectContaining({ name: 'review:intake-normalize' }),
       1,
       'execute',
-      expect.stringContaining('Review report.'),
+      expect.stringContaining('## Result: APPROVE'),
       expect.objectContaining({
         systemPrompt: '',
-        userInstruction: expect.stringContaining('Review report.'),
+        userInstruction: expect.stringContaining('## Result: APPROVE'),
       }),
       'review:intake-normalize:3:1:1',
       3,
@@ -445,6 +490,235 @@ describe('StepExecutor', () => {
       false,
       undefined,
     );
+  });
+
+  it('canonical blockの欠落抽出を同じreportだけで1回訂正し、成功時だけ返す', async () => {
+    const block = [
+      FINDING_CLAIM_BEGIN_MARKER,
+      'Finding Claim',
+      'Raw Finding ID: none',
+      'Relation: new',
+      'Target Finding ID: none',
+      'Family Tag: bug',
+      'Severity: high',
+      'Title: Broken behavior',
+      'Description: The behavior is broken.',
+      'Suggestion: Fix it.',
+      'Target Kind: code',
+      'Target Paths: ["src/example.ts"]',
+      'Review Scope Roots: none',
+      'Manifest Targets: none',
+      'Absence Predicate: none',
+      'Absence Path: none',
+      'Absence Literal: none',
+      'Evidence Requests:',
+      '- File Quote',
+      '  Path: src/example.ts',
+      '  Start Line: 1',
+      '  End Line: 1',
+      '  Verbatim Excerpt:',
+      '  ```text',
+      '  const example = false;',
+      '  ```',
+      FINDING_CLAIM_END_MARKER,
+    ].join('\n');
+    const report = `## Result: REJECT\n\n${block}`;
+    const correctedItem = parseCanonicalFindingClaimReport(report).report!.items[0]!;
+    const normalizeFindingIntake = vi.fn()
+      .mockResolvedValueOnce({
+        persona: 'normalizer',
+        status: 'done',
+        content: '{"rawFindings":[]}',
+        structuredOutput: { rawFindings: [] },
+        timestamp: new Date('2026-07-29T02:00:00.000Z'),
+      })
+      .mockResolvedValueOnce({
+        persona: 'normalizer',
+        status: 'done',
+        content: JSON.stringify({ rawFindings: [correctedItem] }),
+        structuredOutput: { rawFindings: [correctedItem] },
+        timestamp: new Date('2026-07-29T02:00:01.000Z'),
+      });
+    const onPhaseStart = vi.fn();
+    const executor = new StepExecutor({
+      optionsBuilder: {
+        resolveStepProviderModel: vi.fn().mockReturnValue({
+          provider: 'mock',
+          model: 'normalizer-model',
+        }),
+      },
+      structuredCaller: { normalizeFindingIntake },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+      intakeNormalize: { provider: 'mock', model: 'normalizer-model' },
+      getLanguage: () => 'en',
+      getWorkflowName: () => 'test-workflow',
+      observabilityEnabled: () => false,
+      recordSynthesizedAgentUsage: vi.fn(),
+      onPhaseStart,
+      onPhaseComplete: vi.fn(),
+    } as unknown as StepExecutorDeps);
+    const step = makeStep({ name: 'review', persona: 'reviewer', instruction: 'Review.' });
+
+    const result = await executor.normalizeFindingIntakeReport(step, {
+      persona: 'reviewer',
+      status: 'done',
+      content: report,
+      timestamp: new Date('2026-07-29T02:00:00.000Z'),
+    }, 4);
+
+    expect(result.response.structuredOutput).toEqual({ rawFindings: [correctedItem] });
+    expect(normalizeFindingIntake).toHaveBeenCalledTimes(2);
+    expect(normalizeFindingIntake.mock.calls.map(([input]) => input)).toEqual([report, report]);
+    expect(normalizeFindingIntake.mock.calls.map(([, options]) => options.mode))
+      .toEqual(['initial', 'correction']);
+    expect(onPhaseStart.mock.calls.map(([phaseStep]) => phaseStep.name)).toEqual([
+      'review:intake-normalize',
+      'review:intake-normalize-correction',
+    ]);
+  });
+
+  it('normalized itemの訂正は1回だけ行い、不正blockはnormalizer前にfail-loudする', async () => {
+    const validBlock = [
+      FINDING_CLAIM_BEGIN_MARKER,
+      'Finding Claim',
+      'Raw Finding ID: code-1',
+      'Relation: new',
+      'Target Finding ID: none',
+      'Family Tag: bug',
+      'Severity: high',
+      'Title: Broken behavior',
+      'Description: The behavior is broken.',
+      'Suggestion: Fix it.',
+      'Target Kind: code',
+      'Target Paths: ["src/example.ts"]',
+      'Review Scope Roots: none',
+      'Manifest Targets: none',
+      'Absence Predicate: none',
+      'Absence Path: none',
+      'Absence Literal: none',
+      'Evidence Requests:',
+      '- File Quote',
+      '  Path: src/example.ts',
+      '  Start Line: 1',
+      '  End Line: 1',
+      '  Verbatim Excerpt:',
+      '  ```text',
+      '  const example = false;',
+      '  ```',
+      FINDING_CLAIM_END_MARKER,
+    ].join('\n');
+    const emptyResponse = {
+      persona: 'normalizer',
+      status: 'done' as const,
+      content: '{"rawFindings":[]}',
+      structuredOutput: { rawFindings: [] },
+      timestamp: new Date('2026-07-29T03:00:00.000Z'),
+    };
+    const normalizeFindingIntake = vi.fn().mockResolvedValue(emptyResponse);
+    const executor = new StepExecutor({
+      optionsBuilder: {
+        resolveStepProviderModel: vi.fn().mockReturnValue({
+          provider: 'mock',
+          model: 'normalizer-model',
+        }),
+      },
+      structuredCaller: { normalizeFindingIntake },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+      intakeNormalize: { provider: 'mock', model: 'normalizer-model' },
+      getLanguage: () => 'en',
+      getWorkflowName: () => 'test-workflow',
+      observabilityEnabled: () => false,
+      recordSynthesizedAgentUsage: vi.fn(),
+    } as unknown as StepExecutorDeps);
+    const step = makeStep({ name: 'review', persona: 'reviewer', instruction: 'Review.' });
+
+    await expect(executor.normalizeFindingIntakeReport(step, {
+      persona: 'reviewer',
+      status: 'done',
+      content: `## Result: REJECT\n\n${validBlock}`,
+      timestamp: new Date('2026-07-29T03:00:00.000Z'),
+    }, 5)).rejects.toThrow('remained invalid after one correction');
+    expect(normalizeFindingIntake).toHaveBeenCalledTimes(2);
+
+    normalizeFindingIntake.mockClear();
+    await expect(executor.normalizeFindingIntakeReport(step, {
+      persona: 'reviewer',
+      status: 'done',
+      content: [
+        '## Result: REJECT',
+        '',
+        FINDING_CLAIM_BEGIN_MARKER,
+        'Finding Claim',
+        'Relation: new',
+        FINDING_CLAIM_END_MARKER,
+      ].join('\n'),
+      timestamp: new Date('2026-07-29T03:00:02.000Z'),
+    }, 6)).rejects.toThrow('expected "Raw Finding ID"');
+    expect(normalizeFindingIntake).not.toHaveBeenCalled();
+
+    const needReplan = await executor.normalizeFindingIntakeReport(step, {
+      persona: 'reviewer',
+      status: 'done',
+      content: '## Result: NEED_REPLAN\n\nReview scope must be replanned.',
+      timestamp: new Date('2026-07-29T03:00:03.000Z'),
+    }, 7);
+    expect(needReplan.response.structuredOutput).toEqual({ rawFindings: [] });
+    expect(normalizeFindingIntake).toHaveBeenCalledOnce();
+  });
+
+  it('canonical publicationをresumeしてもnormalizerを再実行せず同じpublicationを再利用する', () => {
+    const reportContent = '## Result: APPROVE\n\nNo findings.';
+    const identity = {
+      scopeIdentity: 'scope-1',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration: 2,
+      reviewerStepName: 'review',
+      reportName: 'review.md',
+    };
+    const publication = createFindingReviewPublication({
+      identity,
+      protocol: FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent,
+      rawFindings: [],
+    });
+    persistFindingReviewPublication(runPaths.reportsAbs, { publication });
+    const normalizeFindingIntake = vi.fn();
+    const executor = new StepExecutor({
+      structuredCaller: { normalizeFindingIntake },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+      intakeNormalize: { provider: 'mock', model: 'normalizer-model' },
+      getRunPaths: () => runPaths,
+      getFindingCallNamespace: () => '',
+      findingLedgerStore: {
+        ledgerIdentity: 'scope-1',
+      },
+    } as unknown as StepExecutorDeps);
+    const step = makeStep({
+      name: 'review',
+      persona: 'reviewer',
+      instruction: 'Review.',
+      outputContracts: [
+        { name: 'review.md', format: 'review', formatRef: 'review-finding-contract' },
+      ],
+    });
+
+    const first = executor.resumeFindingReviewPublication({
+      step,
+      parentStepName: 'reviewers',
+      stepIteration: 2,
+    });
+    const second = executor.resumeFindingReviewPublication({
+      step,
+      parentStepName: 'reviewers',
+      stepIteration: 2,
+    });
+
+    expect(first?.publication.publicationId).toBe(publication.publicationId);
+    expect(second?.publication.publicationId).toBe(publication.publicationId);
+    expect(first?.response.structuredOutput).toEqual({ rawFindings: [] });
+    expect(normalizeFindingIntake).not.toHaveBeenCalled();
+    expect(readFileSync(join(runPaths.reportsAbs, 'review.md'), 'utf8')).toBe(reportContent);
   });
 
   it('単独 reviewer は snapshot A/B 不一致を拒否し、non-open confirmation の意味を変えず audit-only で取り込む', async () => {

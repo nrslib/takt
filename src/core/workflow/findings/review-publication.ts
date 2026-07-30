@@ -19,8 +19,28 @@ import {
   findRawFieldLimitViolation,
 } from './raw-finding-limits.js';
 import type { ReviewerRelationClarification } from './relation-coherence.js';
+import {
+  FINDING_CLAIM_PROTOCOL_REVISION,
+} from '../../../shared/prompts/finding-canonical-claim.js';
+import { inspectCanonicalClaimPublication } from './canonical-claim-publication.js';
 
 const PRIVATE_FILE_MODE = 0o600;
+
+export const STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
+  generationMode: 'structured',
+  format: 'structured-output',
+  protocolRevision: 1,
+} as const);
+
+export const FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
+  generationMode: 'freeform',
+  format: 'canonical-claim-blocks',
+  protocolRevision: FINDING_CLAIM_PROTOCOL_REVISION,
+} as const);
+
+export type FindingReviewPublicationProtocol =
+  | typeof STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL
+  | typeof FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL;
 
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
   if (typeof value !== 'object' || value === null || seen.has(value)) {
@@ -50,6 +70,7 @@ export interface FindingReviewPublicationIdentity {
 
 export interface CanonicalFindingReviewPublication extends FindingReviewPublicationIdentity {
   readonly publicationId: string;
+  readonly protocol: FindingReviewPublicationProtocol;
   readonly reportContent: string;
   readonly reportDigest: string;
   readonly rawFindings: readonly unknown[];
@@ -94,6 +115,39 @@ function assertIdentityField(value: unknown, field: string): asserts value is st
   if (typeof value !== 'string' || value.length === 0) {
     throw new Error(`Finding review publication requires ${field}`);
   }
+}
+
+function parsePublicationProtocol(value: unknown): FindingReviewPublicationProtocol {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Finding review publication requires protocol');
+  }
+  const record = value as Record<string, unknown>;
+  const structured = STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  if (
+    record.generationMode === structured.generationMode
+    && record.format === structured.format
+    && record.protocolRevision === structured.protocolRevision
+  ) {
+    return structured;
+  }
+  const freeform = FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  if (
+    record.generationMode === freeform.generationMode
+    && record.format === freeform.format
+    && record.protocolRevision === freeform.protocolRevision
+  ) {
+    return freeform;
+  }
+  throw new Error('Finding review publication has an unsupported protocol descriptor');
+}
+
+function samePublicationProtocol(
+  left: FindingReviewPublicationProtocol,
+  right: FindingReviewPublicationProtocol,
+): boolean {
+  return left.generationMode === right.generationMode
+    && left.format === right.format
+    && left.protocolRevision === right.protocolRevision;
 }
 
 function parseStoredRelationClarification(
@@ -176,6 +230,7 @@ function parseStoredPreparation(
     stepIteration: Number(publicationRecord.stepIteration),
     reviewerStepName: publicationRecord.reviewerStepName,
     reportName: publicationRecord.reportName,
+    protocol: parsePublicationProtocol(publicationRecord.protocol),
     reportContent: publicationRecord.reportContent,
     reportDigest: publicationRecord.reportDigest,
     rawFindings: publicationRecord.rawFindings,
@@ -235,6 +290,7 @@ function assertPublicationRawFindings(
 export function assertCanonicalFindingReviewPublication(
   publication: CanonicalFindingReviewPublication,
 ): void {
+  const protocol = parsePublicationProtocol(publication.protocol);
   const expectedId = computeFindingReviewPublicationId(publication);
   if (publication.publicationId !== expectedId) {
     throw new Error(`Finding review publication identity mismatch for "${publication.publicationId}"`);
@@ -244,10 +300,24 @@ export function assertCanonicalFindingReviewPublication(
     throw new Error(`Finding review publication digest mismatch for "${publication.publicationId}"`);
   }
   assertPublicationRawFindings(publication.reportContent, publication.rawFindings);
+  if (protocol.format === 'canonical-claim-blocks') {
+    const inspection = inspectCanonicalClaimPublication(
+      publication.reportContent,
+      publication.rawFindings,
+    );
+    if (!inspection.valid) {
+      throw new Error(
+        `Finding review publication canonical claim invariant failed: ${
+          inspection.detail ?? 'invalid canonical claim publication'
+        }`,
+      );
+    }
+  }
 }
 
 export function createFindingReviewPublication(input: {
   readonly identity: FindingReviewPublicationIdentity;
+  readonly protocol: FindingReviewPublicationProtocol;
   readonly reportContent: string;
   readonly rawFindings: readonly unknown[];
   readonly reviewerRawResourceEnvelope?: ReviewerRawResourceEnvelope;
@@ -255,6 +325,7 @@ export function createFindingReviewPublication(input: {
   const publication: CanonicalFindingReviewPublication = {
     ...input.identity,
     publicationId: computeFindingReviewPublicationId(input.identity),
+    protocol: input.protocol,
     reportContent: input.reportContent,
     reportDigest: sha256(Buffer.from(input.reportContent, 'utf8')),
     rawFindings: structuredClone(input.rawFindings),
@@ -271,6 +342,7 @@ export function createFindingReviewPublication(input: {
 export function loadFindingReviewPublication(
   reportDir: string,
   identity: FindingReviewPublicationIdentity,
+  expectedProtocol: FindingReviewPublicationProtocol,
 ): FindingReviewPublicationPreparation | undefined {
   const publicationId = computeFindingReviewPublicationId(identity);
   const path = publicationRecordPath(reportDir, publicationId);
@@ -282,7 +354,13 @@ export function loadFindingReviewPublication(
   if (!('content' in snapshot)) {
     throw new Error(`Finding review publication content is missing: ${path}`);
   }
-  return parseStoredPreparation(snapshot.content, publicationId);
+  const preparation = parseStoredPreparation(snapshot.content, publicationId);
+  if (!samePublicationProtocol(preparation.publication.protocol, expectedProtocol)) {
+    throw new Error(
+      `Finding review publication protocol mismatch for "${publicationId}"`,
+    );
+  }
+  return preparation;
 }
 
 export function persistFindingReviewPublication(
@@ -300,7 +378,10 @@ export function persistFindingReviewPublication(
         throw new Error(`Finding review publication content is missing: ${path}`);
       }
       const existing = parseStoredPreparation(snapshot.content, publication.publicationId);
-      if (existing.publication.reportDigest !== publication.reportDigest) {
+      if (
+        existing.publication.reportDigest !== publication.reportDigest
+        || !samePublicationProtocol(existing.publication.protocol, publication.protocol)
+      ) {
         throw new Error(
           `Finding review publication conflict for "${publication.publicationId}"`,
         );

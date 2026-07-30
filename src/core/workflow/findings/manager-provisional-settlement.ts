@@ -11,7 +11,10 @@ import type {
   RawFinding,
 } from './types.js';
 import { computeRawFindingIntegrityDigest } from '../../models/finding-raw-integrity.js';
-import type { FindingRejectedObservationCode } from '../../models/finding-types.js';
+import {
+  CLAIM_BEARING_PROVISIONAL_KINDS,
+  type FindingRejectedObservationCode,
+} from '../../models/finding-types.js';
 import {
   applyFindingLifecycleCommands,
   type FindingLifecycleCommand,
@@ -49,6 +52,16 @@ export function fullIdentityKeyOf(
   return value.claimIdentityHash ?? undefined;
 }
 
+function canResolveProvisionalByExplicitConfirmation(
+  finding: FindingLedgerEntry,
+): boolean {
+  const provisionalKind = finding.provisional?.kind;
+  return provisionalKind !== undefined
+    && CLAIM_BEARING_PROVISIONAL_KINDS.some(
+      (kind) => kind === provisionalKind,
+    );
+}
+
 /**
  * clean な後続 raw だけが provisional を確定・解消できる。
  *
@@ -66,6 +79,10 @@ export function fullIdentityKeyOf(
  *   含まれる → metadata を外して通常 open へ昇格する。
  * - clean raw が既存 target T へ完全 identity で一致し、同じ identity の open
  *   provisional P（P ≠ T、一意）がある → P を resolved にする（T を記録）。
+ * - 明示 resolution_confirmation で直接 resolved にできるのは、claim 自体を
+ *   保持する raw-meaning-ambiguous / raw-adjudication-unresolved だけ。overflow
+ *   や budget / interrupted / stale など処理失敗の provisional は、各 process
+ *   固有の機械回復を経由し、product confirmation では消さない。
  */
 export function settleProvisionalsWithCleanEvidence(input: {
   output: FindingManagerOutput;
@@ -98,6 +115,28 @@ export function settleProvisionalsWithCleanEvidence(input: {
     wireById: input.wireById,
   });
   const provisionalById = new Map(openProvisionals.map((finding) => [finding.id, finding]));
+  const ineligibleConfirmationRawIds = new Set(
+    replay.output.resolvedFindings.flatMap((resolved) => {
+      const provisional = provisionalById.get(resolved.findingId);
+      return provisional !== undefined
+        && !canResolveProvisionalByExplicitConfirmation(provisional)
+        ? resolved.rawFindingIds
+        : [];
+    }),
+  );
+  const settlementOutput: FindingManagerOutput = ineligibleConfirmationRawIds.size === 0
+    ? replay.output
+    : {
+        ...replay.output,
+        resolvedFindings: replay.output.resolvedFindings.filter((resolved) => (
+          !resolved.rawFindingIds.some((rawFindingId) => (
+            ineligibleConfirmationRawIds.has(rawFindingId)
+          ))
+        )),
+        anchorAdjudications: replay.output.anchorAdjudications.filter((adjudication) => (
+          !ineligibleConfirmationRawIds.has(adjudication.rawFindingId)
+        )),
+      };
 
   // 一意な identity / lineage は「既存 product finding への決定的 mapping」
   // にだけ使う。provisional 昇格には使わない。
@@ -144,8 +183,12 @@ export function settleProvisionalsWithCleanEvidence(input: {
     ...replay.resolvedByMapping,
   ]);
   let resolvedByEvidence = new Map<string, string>();
-  for (const resolved of replay.output.resolvedFindings) {
-    if (!provisionalById.has(resolved.findingId)) {
+  for (const resolved of settlementOutput.resolvedFindings) {
+    const provisional = provisionalById.get(resolved.findingId);
+    if (
+      provisional === undefined
+      || !canResolveProvisionalByExplicitConfirmation(provisional)
+    ) {
       continue;
     }
     const hasCleanConfirmation = resolved.rawFindingIds.some((rawFindingId) => {
@@ -179,12 +222,14 @@ export function settleProvisionalsWithCleanEvidence(input: {
       ]);
     }
   }
-  const matches = replay.output.matches.map((match) => ({ ...match, rawFindingIds: [...match.rawFindingIds] }));
+  const matches = settlementOutput.matches.map(
+    (match) => ({ ...match, rawFindingIds: [...match.rawFindingIds] }),
+  );
 
   // relation=new の group には既存 provisional の findingId/revision
   // precondition が無い。identity/lineage が一致しても昇格へ転用しない。
   const newFindings: FindingManagerOutput['newFindings'] = [
-    ...replay.output.newFindings,
+    ...settlementOutput.newFindings,
   ];
 
   for (const match of matches) {
@@ -284,7 +329,7 @@ export function settleProvisionalsWithCleanEvidence(input: {
   }));
 
   return {
-    output: { ...replay.output, newFindings, matches },
+    output: { ...settlementOutput, newFindings, matches },
     promotedFindingIds,
     promotionSourceRawFindingIds,
     resolvedByMapping,

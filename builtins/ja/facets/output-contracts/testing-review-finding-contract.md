@@ -17,10 +17,8 @@
 | テスト戦略（ユニット/統合/E2E） | ✅ | - |
 | 契約入力位置（body/query/path） | ✅ | - |
 
-## 観測した指摘
-| # | family_tag | カテゴリ | 重大度 | 場所 | 問題 | 修正案 |
-|---|------------|---------|--------|------|------|--------|
-| 1 | test-structure | カバレッジ | high / medium / low | `src/test.ts:42` | 問題の説明 | 修正方法 |
+## Finding Contract Claims
+{注入された Finding Contract 指示に canonical block protocol がある場合は、観測した欠陥または明示的な台帳 lifecycle claim ごとに正確に1つの block を出力する。protocol がない場合は、claim を通常の文章で記載し、必須 structured output だけを機械形式とする。指摘表は使わない。claim がなければ `None` と記載する。}
 
 ## 検証証跡
 - ビルド: {確認対象・確認内容・結果。未確認ならその旨}
@@ -38,4 +36,4 @@
 
 **認知負荷軽減ルール:**
 - APPROVE → サマリーと未確認範囲のみ（8行以内）
-- REJECT → 該当指摘のみ表で記載（30行以内）
+- REJECT → 有効な Finding Contract 形式で関連 claim を省略せず記載

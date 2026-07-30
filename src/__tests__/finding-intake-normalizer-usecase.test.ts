@@ -66,6 +66,24 @@ describe('normalizeFindingIntake', () => {
     });
   });
 
+  it('uses the correction extractor with the same report and no prior output, ledger, or repository context', async () => {
+    await normalizeFindingIntake('authoritative report', {
+      provider: 'codex',
+      model: 'gpt-5.6-terra',
+      mode: 'correction',
+    });
+
+    const prompt = runAgent.mock.calls[0]?.[1];
+    expect(prompt).toContain('previous extraction violated');
+    expect(prompt).toContain('## Candidate report\n\nauthoritative report');
+    expect(prompt.match(/authoritative report/g)).toHaveLength(1);
+    expect(runAgent.mock.calls[0]?.[2]).toMatchObject({
+      executionProfile: 'isolated-structured',
+      permissionMode: 'readonly',
+      allowedTools: [],
+    });
+  });
+
   it('removes the isolated working directory when the provider call throws', async () => {
     let isolatedCwd: string | undefined;
     runAgent.mockImplementationOnce(async (_persona, _prompt, options) => {

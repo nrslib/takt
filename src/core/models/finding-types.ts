@@ -315,6 +315,12 @@ export const FINDING_PROVISIONAL_KINDS = [
 ] as const;
 export type FindingProvisionalKind = typeof FINDING_PROVISIONAL_KINDS[number];
 
+/** substantive claim を保持し、clean lifecycle evidence で終端できる provisional。 */
+export const CLAIM_BEARING_PROVISIONAL_KINDS = [
+  'raw-meaning-ambiguous',
+  'raw-adjudication-unresolved',
+] as const satisfies readonly FindingProvisionalKind[];
+
 /**
  * manager の dismissDecisions が却下してよい provisional 種別の静的な下限。
  * 実際の候補判定は provisional-recovery.ts の分類が正本 — kind だけでなく
@@ -324,8 +330,7 @@ export type FindingProvisionalKind = typeof FINDING_PROVISIONAL_KINDS[number];
  * manager が消すと final gate の迂回路になるため候補にしない。
  */
 export const DISMISSABLE_PROVISIONAL_KINDS = [
-  'raw-meaning-ambiguous',
-  'raw-adjudication-unresolved',
+  ...CLAIM_BEARING_PROVISIONAL_KINDS,
 ] as const satisfies readonly FindingProvisionalKind[];
 
 /**

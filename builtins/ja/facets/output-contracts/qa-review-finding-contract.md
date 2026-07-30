@@ -15,10 +15,8 @@
 | ドキュメント | ✅ | - |
 | 保守性 | ✅ | - |
 
-## 観測した指摘
-| # | family_tag | カテゴリ | 重大度 | 場所 | 問題 | 修正案 |
-|---|------------|---------|--------|------|------|--------|
-| 1 | test-coverage | テスト | high / medium / low | `src/test.ts:42` | 異常系テスト不足 | 失敗系ケースを追加 |
+## Finding Contract Claims
+{注入された Finding Contract 指示に canonical block protocol がある場合は、観測した欠陥または明示的な台帳 lifecycle claim ごとに正確に1つの block を出力する。protocol がない場合は、claim を通常の文章で記載し、必須 structured output だけを機械形式とする。指摘表は使わない。claim がなければ `None` と記載する。}
 
 ## 検証証跡
 - ビルド: {確認対象・確認内容・結果。未確認ならその旨}

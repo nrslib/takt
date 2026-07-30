@@ -63,7 +63,10 @@ import { providerSupportsStructuredOutput } from '../../../infra/providers/provi
 import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { buildStructuredJsonSchemaInstruction } from '../../../shared/prompts/index.js';
-import { buildFindingIntakeExtractionPrompt } from '../../../shared/prompts/finding-intake-extraction.js';
+import {
+  buildFindingIntakeCorrectionPrompt,
+  buildFindingIntakeExtractionPrompt,
+} from '../../../shared/prompts/finding-intake-extraction.js';
 import type {
   StructuredOutputFailureReason,
   StructuredOutputNormalizerRegistry,
@@ -106,12 +109,17 @@ import {
 import type { RunAgentOptions } from '../../../agents/types.js';
 import {
   createFindingReviewPublication,
+  FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   loadFindingReviewPublication,
   persistFindingReviewPublication,
   publishFindingReviewPublication,
+  STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   type CanonicalFindingReviewPublication,
   type FindingReviewPublicationIdentity,
+  type FindingReviewPublicationProtocol,
 } from '../findings/review-publication.js';
+import { inspectCanonicalClaimPublication } from '../findings/canonical-claim-publication.js';
+import { parseCanonicalFindingClaimReport } from '../../../shared/prompts/finding-canonical-claim.js';
 import {
   FINDING_REVIEW_PUBLICATION_SCHEMA_REF,
   createFindingReviewPublicationStructuredOutput,
@@ -463,13 +471,71 @@ export class StepExecutor {
     reviewerResponse: AgentResponse,
     iteration: number,
   ): Promise<StructuredOutputNormalizationResult> {
+    const parsedReport = parseCanonicalFindingClaimReport(reviewerResponse.content);
+    if (parsedReport.error !== undefined) {
+      throw new Error(
+        `Finding intake publication invariant failed for step "${step.name}": ${
+          parsedReport.error
+        }`,
+      );
+    }
+    const initial = await this.executeFindingIntakeNormalization(
+      step,
+      reviewerResponse,
+      iteration,
+      'initial',
+    );
+    const initialInspection = inspectCanonicalClaimPublication(
+      reviewerResponse.content,
+      this.rawFindingsFromResponse(step.name, initial.response),
+    );
+    if (initialInspection.valid) {
+      return initial;
+    }
+    if (!initialInspection.correctable) {
+      throw new Error(
+        `Finding intake publication invariant failed for step "${step.name}": ${
+          initialInspection.detail ?? 'invalid canonical claim publication'
+        }`,
+      );
+    }
+
+    const corrected = await this.executeFindingIntakeNormalization(
+      step,
+      reviewerResponse,
+      iteration,
+      'correction',
+    );
+    const correctedInspection = inspectCanonicalClaimPublication(
+      reviewerResponse.content,
+      this.rawFindingsFromResponse(step.name, corrected.response),
+    );
+    if (!correctedInspection.valid) {
+      throw new Error(
+        `Finding intake publication invariant remained invalid after one correction for step "${step.name}": ${
+          correctedInspection.detail ?? 'invalid canonical claim publication'
+        }`,
+      );
+    }
+    return corrected;
+  }
+
+  private async executeFindingIntakeNormalization(
+    step: AgentWorkflowStep,
+    reviewerResponse: AgentResponse,
+    iteration: number,
+    mode: 'initial' | 'correction',
+  ): Promise<StructuredOutputNormalizationResult> {
     const config = this.deps.intakeNormalize;
     if (config === undefined) {
       throw new Error('Finding intake normalizer is not configured');
     }
 
+    const suffix = mode === 'correction'
+      ? 'intake-normalize-correction'
+      : 'intake-normalize';
     const normalizerStep: AgentWorkflowStep = {
-      name: `${step.name}:intake-normalize`,
+      name: `${step.name}:${suffix}`,
       personaDisplayName: 'Finding intake normalizer',
       instruction: 'Normalize one reviewer report for Finding Contract intake.',
       edit: false,
@@ -480,7 +546,9 @@ export class StepExecutor {
       model: config.model,
       providerOptions: config.providerOptions,
     };
-    const instruction = buildFindingIntakeExtractionPrompt(reviewerResponse.content);
+    const instruction = mode === 'correction'
+      ? buildFindingIntakeCorrectionPrompt(reviewerResponse.content)
+      : buildFindingIntakeExtractionPrompt(reviewerResponse.content);
     const phaseExecutionId = buildPhaseExecutionId({
       step: normalizerStep.name,
       iteration,
@@ -530,6 +598,7 @@ export class StepExecutor {
           providerOptions: config.providerOptions,
           language: this.deps.getLanguage(),
           abortSignal: this.deps.abortSignal,
+          mode,
           onPromptResolved: (promptParts) => {
             resolvedPromptParts = promptParts;
           },
@@ -642,6 +711,12 @@ export class StepExecutor {
     return rawFindings;
   }
 
+  private findingReviewPublicationProtocol(): FindingReviewPublicationProtocol {
+    return this.deps.intakeNormalize === undefined
+      ? STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL
+      : FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  }
+
   resumeFindingReviewPublication(input: {
     readonly step: AgentWorkflowStep;
     readonly parentStepName: string;
@@ -664,7 +739,11 @@ export class StepExecutor {
       reportName: reportFiles[0]!,
     });
     const reportDir = this.deps.getRunPaths().reportsAbs;
-    const preparation = loadFindingReviewPublication(reportDir, identity);
+    const preparation = loadFindingReviewPublication(
+      reportDir,
+      identity,
+      this.findingReviewPublicationProtocol(),
+    );
     if (preparation === undefined) {
       return undefined;
     }
@@ -734,7 +813,12 @@ export class StepExecutor {
       reportName: reportFiles[0]!,
     });
     const publicationReportDir = this.deps.getRunPaths().reportsAbs;
-    const stored = loadFindingReviewPublication(publicationReportDir, identity);
+    const publicationProtocol = this.findingReviewPublicationProtocol();
+    const stored = loadFindingReviewPublication(
+      publicationReportDir,
+      identity,
+      publicationProtocol,
+    );
     if (stored !== undefined) {
       publishFindingReviewPublication(publicationReportDir, stored.publication);
       return {
@@ -913,6 +997,7 @@ export class StepExecutor {
       {
         publication: createFindingReviewPublication({
           identity,
+          protocol: publicationProtocol,
           reportContent: report.reportContent,
           rawFindings: this.rawFindingsFromResponse(
             input.step.name,

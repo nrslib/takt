@@ -13,10 +13,8 @@
 | Data Protection | ✅ | - |
 | Dependencies | ✅ | - |
 
-## Observed Findings
-| # | family_tag | Severity | Type | Location | Issue | Fix Suggestion |
-|---|------------|----------|------|----------|-------|----------------|
-| 1 | injection-risk | High | SQLi | `src/db.ts:42` | Raw query string | Use parameterized queries |
+## Finding Contract Claims
+{When the injected Finding Contract instructions include the canonical block protocol, emit exactly one block per observed defect or explicit ledger lifecycle claim. Otherwise, describe claims here normally and use the required structured output as the sole machine format. Do not use a findings table. If there are no claims, write `None`.}
 
 ## Verification Evidence
 - Build: {Verified target, what was checked, and observed result; or state that it was unverified}
@@ -32,5 +30,5 @@
 
 **Cognitive load reduction rules:**
 - No issues → Checklist only (10 lines or fewer)
-- Warnings only → + Warnings in 1-2 lines (15 lines or fewer)
-- Vulnerabilities found → + finding tables (30 lines or fewer)
+- Warnings only → + concise warnings
+- Vulnerabilities found → + every vulnerability in the active Finding Contract format

@@ -113,7 +113,10 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   });
 }
 
-function makeProvisionalLedger(): FindingLedger {
+function makeProvisionalLedger(
+  kind: NonNullable<FindingLedger['findings'][number]['provisional']>['kind']
+    = 'reviewer-output-overflow',
+): FindingLedger {
   const ledger = makeLedger();
   const finding = ledger.findings[0]!;
   return authorizeFindingLedgerFixture({
@@ -121,7 +124,7 @@ function makeProvisionalLedger(): FindingLedger {
     findings: [{
       ...finding,
       provisional: {
-        kind: 'reviewer-output-overflow',
+        kind,
         stableKey: 'stable-F-0001',
         lineageKey: 'lineage-F-0001',
         sourceRawFindingIds: [],
@@ -749,8 +752,11 @@ describe('runFindingManagerForStep mechanical path', () => {
     expect(finding?.status).toBe('resolved');
   });
 
-  it('resolves an open provisional through the normal runner and binds the resolution event to its source raw', async () => {
-    const initialLedger = makeProvisionalLedger();
+  it.each([
+    'raw-meaning-ambiguous',
+    'raw-adjudication-unresolved',
+  ] as const)('resolves a claim-bearing %s provisional and binds the resolution event to its source raw', async (kind) => {
+    const initialLedger = makeProvisionalLedger(kind);
     const harness = makeHarness(initialLedger);
 
     const result = await harness.run({ reviewerRawFindings: [CONFIRMATION_RAW] });
@@ -765,7 +771,7 @@ describe('runFindingManagerForStep mechanical path', () => {
     expect(finding).toMatchObject({
       status: 'resolved',
       lifecycle: 'resolved',
-      provisional: { kind: 'reviewer-output-overflow' },
+      provisional: { kind },
       resolvedAt: '2026-06-14T00:00:00.000Z',
     });
     expect(finding?.rawFindingIds).toContain(confirmationRaw?.rawFindingId);
@@ -800,8 +806,35 @@ describe('runFindingManagerForStep mechanical path', () => {
     }
   });
 
+  it.each([
+    'reviewer-output-overflow',
+    'manager-budget-exhausted',
+    'manager-input-overflow',
+    'interpretation-interrupted',
+    'stale-precondition',
+    'manager-output-discarded',
+  ] as const)('does not resolve process provisional %s from a product confirmation', async (kind) => {
+    const harness = makeHarness(makeProvisionalLedger(kind));
+
+    await harness.run({ reviewerRawFindings: [CONFIRMATION_RAW] });
+
+    expect(harness.currentLedger().findings.find((entry) => entry.id === 'F-0001'))
+      .toMatchObject({
+        status: 'open',
+        provisional: { kind },
+      });
+    expect(harness.currentLedger().lifecycleEvents.some(
+      (event) => event.operation === 'resolve_finding',
+    )).toBe(false);
+    expect(harness.savedValidationReports.at(-1)?.rawFindingDispositions)
+      .toContainEqual(expect.objectContaining({
+        rawFindingId: expect.stringMatching(/:c-1$/),
+        outcome: 'confirmation_not_applied',
+      }));
+  });
+
   it('resolves the provisional while an unsupported persists observation remains audit-only', async () => {
-    const initialLedger = makeProvisionalLedger();
+    const initialLedger = makeProvisionalLedger('raw-adjudication-unresolved');
     const harness = makeHarness(initialLedger);
     const persists = {
       ...CONFIRMATION_RAW,
@@ -817,7 +850,7 @@ describe('runFindingManagerForStep mechanical path', () => {
     const ledger = harness.currentLedger();
     expect(ledger.findings.find((entry) => entry.id === 'F-0001')).toMatchObject({
       status: 'resolved',
-      provisional: { kind: 'reviewer-output-overflow' },
+      provisional: { kind: 'raw-adjudication-unresolved' },
     });
     expect(ledger.findings).toHaveLength(1);
     expect(ledger.reviewerAnomalies ?? []).toEqual([]);
@@ -830,7 +863,7 @@ describe('runFindingManagerForStep mechanical path', () => {
   });
 
   it('does not resolve an open provisional when its captured target precondition is stale at commit', async () => {
-    const initialLedger = makeProvisionalLedger();
+    const initialLedger = makeProvisionalLedger('raw-adjudication-unresolved');
     const freshFinding = {
       ...initialLedger.findings[0]!,
       revision: 3,
@@ -852,7 +885,7 @@ describe('runFindingManagerForStep mechanical path', () => {
       .toMatchObject({
         status: 'open',
         revision: 3,
-        provisional: { kind: 'reviewer-output-overflow' },
+        provisional: { kind: 'raw-adjudication-unresolved' },
       });
     expect(harness.currentLedger().findings).toHaveLength(1);
   });

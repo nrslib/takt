@@ -12,17 +12,12 @@ Use exactly two specialist tables in total: one row per requirement in the requi
 | Resource | Owner / Transfer | Last Consumer | Release / Persist | Success / Failure / Interruption / Retry |
 |----------|------------------|---------------|-------------------|-----------------------------------------|
 | {resource} | {owner and transfer} | {last consumer} | {release or persistence} | {outcome by path} |
-## Observed Findings
-| # | family_tag | Severity | Location | Issue | Impact or Failure Condition | Fix Direction |
-|---|------------|----------|----------|-------|-----------------------------|---------------|
-| 1 | contract-lifecycle | high / medium / low | `file:line` | {current observed defect} | {impact or condition} | {fix direction} |
-## Resolution Confirmations
-| Ledger Reference | Original Acceptance Criteria | Confirmation Evidence |
-|------------------|------------------------------|-----------------------|
-| {existing finding} | {expected result} | `file:line` |
+## Finding Contract Claims
+{When the injected Finding Contract instructions include the canonical block protocol, emit exactly one block per observed defect or explicit ledger lifecycle claim. Otherwise, describe claims here normally and use the required structured output as the sole machine format. Do not use a findings table. If there are no claims, write `None`.}
+
 ## Output Consistency
-- Markdown Observed Findings and structured issues, and Markdown Resolution Confirmations and structured confirmations, must each be the same set.
+- When the canonical block protocol is present, blocks and normalized items must be the same ordered set with byte-exact rawExcerpt values. When it is absent, the structured-output schema is the sole machine claim format. Do not assign final finding IDs.
 - APPROVE means zero issues; REJECT means one or more issues. Do not make approvals or summaries issues.
 ```
 
-**Cognitive-load rule:** For APPROVE, include only the summary and necessary evidence; for REJECT, include only relevant rows within 30 lines.
+**Cognitive-load rule:** For APPROVE, include only the summary and necessary evidence; for REJECT, keep supporting prose concise while including every required machine claim.

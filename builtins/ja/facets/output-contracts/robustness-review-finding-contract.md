@@ -12,17 +12,12 @@
 | 失敗操作 | 失敗型 | 継続可否 | caller・user 可視性 | 部分成功結果 |
 |----------|--------|----------|----------------------|----------------|
 | {操作} | {失敗} | {継続または停止} | {通知またはエラー} | {結果またはなし} |
-## 観測した指摘
-| # | family_tag | 重大度 | 場所 | 問題 | 影響または壊れる条件 | 修正方針 |
-|---|------------|--------|------|------|----------------------|----------|
-| 1 | robustness | high / medium / low | `file:line` | {現在の観測欠陥} | {影響または条件} | {修正方針} |
-## 解消確認
-| 台帳参照 | 元の受入条件 | 確認証跡 |
-|----------|--------------|----------|
-| {既存指摘} | {期待結果} | `file:line` |
+## Finding Contract Claims
+{注入された Finding Contract 指示に canonical block protocol がある場合は、観測した欠陥または明示的な台帳 lifecycle claim ごとに正確に1つの block を出力する。protocol がない場合は、claim を通常の文章で記載し、必須 structured output だけを機械形式とする。指摘表は使わない。claim がなければ `None` と記載する。}
+
 ## 出力整合性
-- Markdown の観測した指摘と structured issue、解消確認と structured confirmation はそれぞれ同じ集合にする。
+- canonical block protocol がある場合は、block と normalized item を同じ順序集合とし、rawExcerpt を byte-exact に一致させる。protocol がない場合は structured-output schema だけを機械 claim 形式とする。最終 finding ID は採番しない。
 - APPROVE は issue 0 件、REJECT は issue 1 件以上。承認や要約を issue にしない。
 ```
 
-**認知負荷軽減ルール:** APPROVE はサマリーと必要な証跡のみ、REJECT は関連行のみを30行以内で記載する。
+**認知負荷軽減ルール:** APPROVE はサマリーと必要な証跡のみとし、REJECT は補足説明を簡潔にしつつ必要な機械 claim をすべて記載する。

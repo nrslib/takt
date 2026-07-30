@@ -15,12 +15,8 @@
 - [x] lifecycle ルール
 - [x] コストトレードオフ文書化
 
-## 観測した指摘
-| # | family_tag | 重大度 | スコープ | 場所 | 問題 | 影響 | 修正案 |
-|---|------------|--------|---------|------|------|------|--------|
-| 1 | tf-convention | High / Medium / Low | スコープ内 | `modules/example/main.tf:42` | 問題の説明 | 運用・セキュリティ・保守性への影響 | 修正方法 |
-
-スコープ: 「スコープ内」（今回修正可能）/ 「スコープ外」（既存問題・非ブロッキング）
+## Finding Contract Claims
+{注入された Finding Contract 指示に canonical block protocol がある場合は、観測した欠陥または明示的な台帳 lifecycle claim ごとに正確に1つの block を出力する。protocol がない場合は、claim を通常の文章で記載し、必須 structured output だけを機械形式とする。指摘表は使わない。claim がなければ `None` と記載する。}
 
 ## REJECT判定条件
 - ブロッキング指摘が1件以上ある場合のみ REJECT
@@ -28,4 +24,4 @@
 
 **認知負荷軽減ルール:**
 - APPROVE → サマリーのみ（5行以内）
-- REJECT → 該当指摘のみ表で記載（30行以内）
+- REJECT → 有効な Finding Contract 形式で関連 claim を省略せず記載

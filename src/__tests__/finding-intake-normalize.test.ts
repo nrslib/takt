@@ -190,7 +190,7 @@ describe('intake normalizer policy', () => {
 describe('finding intake extraction prompt SSOT', () => {
   it('preserves the evaluated template hash and substitutes only the report', () => {
     expect(createHash('sha256').update(FINDING_INTAKE_EXTRACTION_PROMPT_TEMPLATE).digest('hex'))
-      .toBe('69e2597643beb5e8621b2c5dff65b09edcdaa01401586451481215ccd98e7927');
+      .toBe('688f2777230baf23b298c87d0823391ef9c6b233697bd910aec0aa449a15fe29');
     expect(FINDING_INTAKE_EXTRACTION_PROMPT_TEMPLATE.match(/\{\{REPORT\}\}/g)).toHaveLength(1);
     const prompt = buildFindingIntakeExtractionPrompt('## Finding\nIssue: broken');
     expect(prompt).toContain('## Finding\nIssue: broken');
