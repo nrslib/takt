@@ -9,7 +9,7 @@ export interface ProvisionalRecoveryOrigin {
   expectedTargetIdentityHash: string | null;
   expectedProvisionalStableKey: string;
   expectedProvisionalLineageKey: string;
-  expectedRecoveryReviewerStableKey: string | undefined;
+  expectedRecoveryReviewerStableKey?: string;
 }
 
 export function snapshotProvisionalRecoveryOrigin(
@@ -21,7 +21,12 @@ export function snapshotProvisionalRecoveryOrigin(
     expectedTargetIdentityHash: finding.targetIdentityHash,
     expectedProvisionalStableKey: finding.provisional.stableKey,
     expectedProvisionalLineageKey: finding.provisional.lineageKey,
-    expectedRecoveryReviewerStableKey: finding.provisional.recoveryReviewerStableKey,
+    ...(finding.provisional.recoveryReviewerStableKey === undefined
+      ? {}
+      : {
+          expectedRecoveryReviewerStableKey:
+            finding.provisional.recoveryReviewerStableKey,
+        }),
   };
 }
 

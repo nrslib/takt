@@ -86,6 +86,7 @@ import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidenc
 import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
 import { computeConflictEvidenceHash } from '../core/workflow/findings/adjudication-evidence.js';
 import * as reviewScopeSnapshot from '../core/workflow/findings/snapshot.js';
+import { canonicalJson } from '../shared/utils/canonical-json.js';
 
 const observation = {
   runId: 'run-1',
@@ -778,6 +779,8 @@ describe('provisional recovery', () => {
     };
 
     expect(origin.expectedRecoveryReviewerStableKey).toBeUndefined();
+    expect(origin).not.toHaveProperty('expectedRecoveryReviewerStableKey');
+    expect(() => canonicalJson(origin)).not.toThrow();
     expect(matchesProvisionalRecoveryOrigin(withoutReviewer, origin)).toBe(true);
     expect(matchesProvisionalRecoveryOrigin(explicitReviewer, origin)).toBe(false);
   });
