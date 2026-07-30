@@ -45,7 +45,7 @@ import {
 } from '../infra/config/paths.js';
 
 interface BuiltinFragmentCase {
-  fragment: 'fix' | 'gather';
+  fragment: 'fix' | 'gather' | 'replan';
   language: 'en' | 'ja';
   label: string;
   nextStep: string;
@@ -86,7 +86,11 @@ function findRuleIndex(rules: readonly RawRule[], field: 'next' | 'return', valu
   return index;
 }
 
-function fragmentRuleIndex(language: 'en' | 'ja', fragment: 'fix' | 'gather', nextStep: string): number {
+function fragmentRuleIndex(
+  language: 'en' | 'ja',
+  fragment: 'fix' | 'gather' | 'replan',
+  nextStep: string,
+): number {
   return findRuleIndex(
     readRules(join(getBuiltinLanguageStepsDir(language), `${fragment}.yaml`)),
     'next',
@@ -109,9 +113,13 @@ const BUILTIN_FRAGMENT_CASES: BuiltinFragmentCase[] = [
   { fragment: 'fix', language: 'en', label: 'Fixes are complete', nextStep: 'reviewers', persona: 'coder', ruleIndex: fragmentRuleIndex('en', 'fix', 'reviewers') },
   { fragment: 'fix', language: 'en', label: 'Cannot proceed with fixes, or the implementation approach must be redefined', nextStep: 'replan', persona: 'coder', ruleIndex: fragmentRuleIndex('en', 'fix', 'replan') },
   { fragment: 'gather', language: 'en', label: 'Review target information gathered', nextStep: 'plan', persona: 'planner', ruleIndex: fragmentRuleIndex('en', 'gather', 'plan') },
+  { fragment: 'replan', language: 'en', label: 'An actionable, untried project-scoped change or investigation and its verification steps were defined', nextStep: 'implement', persona: 'planner', ruleIndex: fragmentRuleIndex('en', 'replan', 'implement') },
+  { fragment: 'replan', language: 'en', label: 'Concrete evidence shows the current implementation meets the requirements and acceptance criteria, all required project-scoped verification is complete, no untried change or investigation remains, and only independent review is needed', nextStep: 'reviewers', persona: 'planner', ruleIndex: fragmentRuleIndex('en', 'replan', 'reviewers') },
   { fragment: 'fix', language: 'ja', label: '修正完了', nextStep: 'reviewers', persona: 'coder', ruleIndex: fragmentRuleIndex('ja', 'fix', 'reviewers') },
   { fragment: 'fix', language: 'ja', label: '修正を進められない、または実装方針の再定義が必要', nextStep: 'replan', persona: 'coder', ruleIndex: fragmentRuleIndex('ja', 'fix', 'replan') },
   { fragment: 'gather', language: 'ja', label: 'レビュー対象の情報収集完了', nextStep: 'plan', persona: 'planner', ruleIndex: fragmentRuleIndex('ja', 'gather', 'plan') },
+  { fragment: 'replan', language: 'ja', label: 'プロジェクト内で実行可能な未試行の変更または原因調査と、その検証手順を具体化した', nextStep: 'implement', persona: 'planner', ruleIndex: fragmentRuleIndex('ja', 'replan', 'implement') },
+  { fragment: 'replan', language: 'ja', label: '現行実装が要件・受入条件を満たす具体的根拠があり、必要なプロジェクト内検証が完了し、未試行の変更・調査を残さず、独立レビューだけが必要', nextStep: 'reviewers', persona: 'planner', ruleIndex: fragmentRuleIndex('ja', 'replan', 'reviewers') },
 ];
 
 const FINAL_GATE_RETURN_CASES: FinalGateReturnCase[] = [
@@ -158,6 +166,20 @@ function writeBuiltinFragmentWorkflow(projectDir: string, fragmentCase: BuiltinF
     ...(fragmentCase.nextStep === 'plan' ? [] : [
       '  - name: plan',
       '    instruction: plan',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ]),
+    ...(fragmentCase.nextStep === 'write_tests' ? [] : [
+      '  - name: write_tests',
+      '    instruction: write_tests',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ]),
+    ...(fragmentCase.nextStep === 'implement' ? [] : [
+      '  - name: implement',
+      '    instruction: implement',
       '    rules:',
       '      - condition: done',
       '        next: COMPLETE',
@@ -358,6 +380,39 @@ describe('builtin step fragment runtime contracts', () => {
         language,
         label,
         nextStep: 'plan',
+        persona: 'planner',
+        ruleIndex: abortRuleIndex,
+      }),
+      projectDir,
+    );
+    const engine = new WorkflowEngine(workflow, projectDir, 'test task', { projectCwd: projectDir });
+    engines.push(engine);
+    mockRunAgentSequence([makeResponse({ persona: 'planner', content: label })]);
+    mockRuleEvaluationSequence([{ index: abortRuleIndex, method: 'phase3_tag' }]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      language: 'en' as const,
+      label: 'Confirmed evidence shows that project-scoped changes or investigation cannot resolve the issue, leaving only external action or mutually unsatisfiable requirements',
+    },
+    {
+      language: 'ja' as const,
+      label: '確認済みの根拠により、プロジェクト内の変更や調査では解消できず、外部操作だけが残るか要件が両立不能である',
+    },
+  ])('routes the $language replan abort branch to the terminal sink', async ({ language, label }) => {
+    const abortRuleIndex = fragmentRuleIndex(language, 'replan', 'ABORT');
+    const workflow = loadWorkflowFromFile(
+      writeBuiltinFragmentWorkflow(projectDir, {
+        fragment: 'replan',
+        language,
+        label,
+        nextStep: 'implement',
         persona: 'planner',
         ruleIndex: abortRuleIndex,
       }),

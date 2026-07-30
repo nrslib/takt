@@ -13,7 +13,7 @@ initial_step: plan
 loop_monitors:
   - cycle: [replan, implement]
     threshold: 2
-    judge:
+    judge: &replan_standard_judge
       persona: supervisor
       instruction: loop-monitor-fix-replan
       rules:
@@ -53,7 +53,7 @@ loop_monitors:
           next: ABORT
   - cycle: [replan, implement, reviewers, fix]
     threshold: 2
-    judge:
+    judge: &replan_progress_judge
       persona: supervisor
       instruction: loop-monitor-fix-replan
       rules:
@@ -141,6 +141,48 @@ loop_monitors:
           next: replan
         - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
           next: ABORT
+  - cycle: [replan, reviewers]
+    threshold: 2
+    judge: *replan_standard_judge
+  - cycle: [replan, reviewers, boundary-reviewers]
+    threshold: 2
+    judge: *replan_standard_judge
+  - cycle: [replan, reviewers, boundary-reviewers, final-gate]
+    threshold: 2
+    judge: *replan_standard_judge
+  - cycle: [replan, reviewers, fix]
+    threshold: 2
+    judge: *replan_progress_judge
+  - cycle: [replan, reviewers, boundary-reviewers, fix]
+    threshold: 2
+    judge: *replan_progress_judge
+  - cycle: [replan, reviewers, boundary-reviewers, final-gate, fix]
+    threshold: 2
+    judge: *replan_progress_judge
+  - cycle: [replan, reviewers, local-review-integrity-gate]
+    threshold: 2
+    judge: *replan_standard_judge
+  - cycle: [replan, reviewers, local-review-integrity-gate, boundary-reviewers]
+    threshold: 2
+    judge: *replan_standard_judge
+  - cycle: [replan, reviewers, local-review-integrity-gate, boundary-reviewers, final-gate]
+    threshold: 2
+    judge: *replan_standard_judge
+  - cycle: [replan, reviewers, local-review-integrity-gate, fix]
+    threshold: 2
+    judge: *replan_progress_judge
+  - cycle: [replan, reviewers, local-review-integrity-gate, boundary-reviewers, fix]
+    threshold: 2
+    judge: *replan_progress_judge
+  - cycle: [replan, reviewers, local-review-integrity-gate, boundary-reviewers, final-gate, fix]
+    threshold: 2
+    judge: *replan_progress_judge
+  - cycle: [replan, reviewers, boundary-reviewers, final-gate, boundary-reviewers, final-gate]
+    threshold: 1
+    judge: *replan_standard_judge
+  - cycle: [replan, reviewers, local-review-integrity-gate, reviewers, local-review-integrity-gate]
+    threshold: 1
+    judge: *replan_standard_judge
   - cycle: [reviewers, local-review-integrity-gate]
     threshold: 2
     judge:
@@ -304,21 +346,8 @@ steps:
         - name: plan.md
           format: plan
 
-  - name: replan
-    tags: [plan]
-    edit: false
-    persona: planner
-    knowledge: architecture
-    instruction: replan-implementation
-    rules:
-      - condition: プロジェクト内で実行可能な未試行の変更または原因調査と、その検証手順を具体化した
-        next: implement
-      - condition: 確認済みの根拠により、プロジェクト内の変更や調査では解消できず、外部操作だけが残るか要件が両立不能である
-        next: ABORT
-    output_contracts:
-      report:
-        - name: plan.md
-          format: plan
+  - uses: replan
+    name: replan
 
   - name: write_tests
     tags: [coding, test-planning]

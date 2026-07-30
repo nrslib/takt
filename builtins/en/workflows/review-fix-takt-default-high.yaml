@@ -51,6 +51,36 @@ loop_monitors:
           next: replan
         - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
           next: ABORT
+  - cycle: [replan, reviewers]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, reviewers, final-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
+  - cycle: [replan, reviewers, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: Replanning is making progress on blockers
+          next: replan
+        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
+          next: ABORT
   - cycle: [fix, reviewers]
     threshold: 3
     judge:
@@ -96,21 +126,8 @@ steps:
         - name: plan.md
           format: plan
 
-  - name: replan
-    tags: [plan]
-    edit: false
-    persona: planner
-    knowledge: architecture
-    instruction: replan-implementation
-    rules:
-      - condition: An actionable, untried project-scoped change or investigation and its verification steps were defined
-        next: implement
-      - condition: Confirmed evidence shows that project-scoped changes or investigation cannot resolve the issue, leaving only external action or mutually unsatisfiable requirements
-        next: ABORT
-    output_contracts:
-      report:
-        - name: plan.md
-          format: plan
+  - uses: replan
+    name: replan
 
   - name: write_tests
     tags: [coding, test-planning]

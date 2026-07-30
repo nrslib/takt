@@ -28,6 +28,7 @@ interface RawRule {
 
 interface RawStep {
   name: string;
+  uses?: string;
   call?: string;
   tags?: string[];
   parallel?: Array<{ name: string }>;
@@ -113,6 +114,67 @@ const EXPECTED_CYCLES = [
       'fix',
     ],
     threshold: 2,
+  },
+  { cycle: ['replan', 'reviewers'], threshold: 2 },
+  { cycle: ['replan', 'reviewers', 'boundary-reviewers'], threshold: 2 },
+  { cycle: ['replan', 'reviewers', 'boundary-reviewers', 'final-gate'], threshold: 2 },
+  { cycle: ['replan', 'reviewers', 'fix'], threshold: 2 },
+  { cycle: ['replan', 'reviewers', 'boundary-reviewers', 'fix'], threshold: 2 },
+  {
+    cycle: ['replan', 'reviewers', 'boundary-reviewers', 'final-gate', 'fix'],
+    threshold: 2,
+  },
+  { cycle: ['replan', 'reviewers', 'local-review-integrity-gate'], threshold: 2 },
+  {
+    cycle: ['replan', 'reviewers', 'local-review-integrity-gate', 'boundary-reviewers'],
+    threshold: 2,
+  },
+  {
+    cycle: [
+      'replan',
+      'reviewers',
+      'local-review-integrity-gate',
+      'boundary-reviewers',
+      'final-gate',
+    ],
+    threshold: 2,
+  },
+  { cycle: ['replan', 'reviewers', 'local-review-integrity-gate', 'fix'], threshold: 2 },
+  {
+    cycle: ['replan', 'reviewers', 'local-review-integrity-gate', 'boundary-reviewers', 'fix'],
+    threshold: 2,
+  },
+  {
+    cycle: [
+      'replan',
+      'reviewers',
+      'local-review-integrity-gate',
+      'boundary-reviewers',
+      'final-gate',
+      'fix',
+    ],
+    threshold: 2,
+  },
+  {
+    cycle: [
+      'replan',
+      'reviewers',
+      'boundary-reviewers',
+      'final-gate',
+      'boundary-reviewers',
+      'final-gate',
+    ],
+    threshold: 1,
+  },
+  {
+    cycle: [
+      'replan',
+      'reviewers',
+      'local-review-integrity-gate',
+      'reviewers',
+      'local-review-integrity-gate',
+    ],
+    threshold: 1,
   },
   { cycle: ['reviewers', 'local-review-integrity-gate'], threshold: 2 },
   { cycle: ['boundary-reviewers', 'final-gate'], threshold: 2 },
@@ -241,7 +303,18 @@ function workflowPath(locale: Locale, name: string): string {
 }
 
 function readRawWorkflow(locale: Locale, name = 'takt-default-localllm'): RawWorkflow {
-  return parseYaml(readFileSync(workflowPath(locale, name), 'utf-8')) as RawWorkflow;
+  const workflow = parseYaml(readFileSync(workflowPath(locale, name), 'utf-8')) as RawWorkflow;
+  return {
+    ...workflow,
+    steps: workflow.steps.map((step) => {
+      if (step.uses === undefined) return step;
+      const fragment = parseYaml(readFileSync(
+        join(process.cwd(), 'builtins', locale, 'steps', `${step.uses}.yaml`),
+        'utf-8',
+      )) as Omit<RawStep, 'name'>;
+      return { ...fragment, ...step };
+    }),
+  };
 }
 
 function loadBuiltinWorkflow(locale: Locale, name = 'takt-default-localllm'): WorkflowConfig {
@@ -531,6 +604,31 @@ describe('takt-default-localllm boundary reviews', () => {
 
     expect(unmonitoredCycles).toEqual(EXPECTED_UNMONITORED_CYCLES);
   });
+
+  it.each(['ja', 'en'] as const)(
+    '%s のreplanからreviewersへ直行する全経路はimplement経由と同じ有限停止判定を持つ',
+    (locale) => {
+      const monitors = readRawWorkflow(locale).loop_monitors ?? [];
+      const implementCycles = monitors.filter(({ cycle }) => (
+        cycle[0] === 'replan'
+        && cycle[1] === 'implement'
+        && cycle[2] === 'reviewers'
+      ));
+
+      expect(implementCycles).toHaveLength(14);
+      for (const source of implementCycles) {
+        const companionCycle = [source.cycle[0]!, ...source.cycle.slice(2)];
+        const companion = monitors.find(({ cycle }) => (
+          cycleKey(cycle) === cycleKey(companionCycle)
+        ));
+
+        expect(companion).toMatchObject({
+          threshold: source.threshold,
+          judge: source.judge,
+        });
+      }
+    },
+  );
 
   it.each(['ja', 'en'] as const)('%s の全loop monitorは実CycleDetectorへ完全一致履歴を入れると発火する', (locale) => {
     const workflow = loadBuiltinWorkflow(locale);

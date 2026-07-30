@@ -1,0 +1,16 @@
+tags: [plan]
+edit: false
+persona: planner
+knowledge: architecture
+instruction: replan-implementation
+rules:
+  - condition: An actionable, untried project-scoped change or investigation and its verification steps were defined
+    next: implement
+  - condition: Concrete evidence shows the current implementation meets the requirements and acceptance criteria, all required project-scoped verification is complete, no untried change or investigation remains, and only independent review is needed
+    next: reviewers
+  - condition: Confirmed evidence shows that project-scoped changes or investigation cannot resolve the issue, leaving only external action or mutually unsatisfiable requirements
+    next: ABORT
+output_contracts:
+  report:
+    - name: plan.md
+      format: plan

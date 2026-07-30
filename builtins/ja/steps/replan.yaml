@@ -1,0 +1,16 @@
+tags: [plan]
+edit: false
+persona: planner
+knowledge: architecture
+instruction: replan-implementation
+rules:
+  - condition: プロジェクト内で実行可能な未試行の変更または原因調査と、その検証手順を具体化した
+    next: implement
+  - condition: 現行実装が要件・受入条件を満たす具体的根拠があり、必要なプロジェクト内検証が完了し、未試行の変更・調査を残さず、独立レビューだけが必要
+    next: reviewers
+  - condition: 確認済みの根拠により、プロジェクト内の変更や調査では解消できず、外部操作だけが残るか要件が両立不能である
+    next: ABORT
+output_contracts:
+  report:
+    - name: plan.md
+      format: plan

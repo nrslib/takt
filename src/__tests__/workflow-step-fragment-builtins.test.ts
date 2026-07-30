@@ -13,11 +13,17 @@ import { buildStepFragmentLookupDirs } from '../infra/config/loaders/stepFragmen
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 
 type RawStep = Record<string, unknown>;
-type RawWorkflow = { steps: RawStep[] };
+interface RawLoopMonitor {
+  cycle: string[];
+  threshold: number;
+  judge: unknown;
+}
+type RawWorkflow = { loop_monitors?: RawLoopMonitor[]; steps: RawStep[] };
 type Language = 'en' | 'ja';
 
 const LANGUAGES: Language[] = ['en', 'ja'];
 const REVIEWER_WORKFLOWS = ['takt-default-high', 'takt-default-team-high', 'review-fix-takt-default-high'];
+const REPLAN_WORKFLOWS = [...REVIEWER_WORKFLOWS, 'takt-default-localllm'];
 const GATHER_WORKFLOWS = ['review-fix-takt-default', 'review-fix-takt-default-high'];
 const FIX_WORKFLOWS = ['takt-default-high', 'review-fix-takt-default-high'];
 
@@ -92,6 +98,48 @@ describe('builtin workflow step fragment migration', () => {
     expect(existsSync(join(getBuiltinLanguageStepsDir(lang), `${refs[0]}.yaml`))).toBe(true);
   });
 
+  it.each(LANGUAGES)('moves the %s replan steps to one language-specific three-state fragment', (lang) => {
+    const refs = REPLAN_WORKFLOWS.map((workflow) =>
+      expectFragmentReference(getStep(readBuiltinWorkflow(lang, workflow), 'replan'), 'replan'));
+
+    expect(new Set(refs)).toEqual(new Set(['replan']));
+    expect(existsSync(join(getBuiltinLanguageStepsDir(lang), 'replan.yaml'))).toBe(true);
+
+    for (const name of REPLAN_WORKFLOWS) {
+      const workflow = loadWorkflowFromFile(
+        join(getBuiltinWorkflowsDir(lang), name + '.yaml'),
+        projectDir,
+      );
+      const replan = workflow.steps.find((step) => step.name === 'replan');
+
+      expect(replan?.rules.map((rule) => rule.next)).toEqual(['implement', 'reviewers', 'ABORT']);
+      expect(replan?.rules.map((rule) => rule.next)).not.toContain('COMPLETE');
+    }
+  });
+
+  it.each(LANGUAGES)('covers every direct %s replan-review cycle with the matching finite-stop monitor', (lang) => {
+    const companionCycles = [
+      ['replan', 'reviewers'],
+      ['replan', 'reviewers', 'final-gate'],
+      ['replan', 'reviewers', 'fix'],
+    ];
+
+    for (const name of REVIEWER_WORKFLOWS) {
+      const monitors = readBuiltinWorkflow(lang, name).loop_monitors ?? [];
+      for (const cycle of companionCycles) {
+        const sourceCycle = [cycle[0]!, 'implement', ...cycle.slice(1)];
+        const source = monitors.find((monitor) => monitor.cycle.join('\0') === sourceCycle.join('\0'));
+        const companion = monitors.find((monitor) => monitor.cycle.join('\0') === cycle.join('\0'));
+
+        expect(source).toBeDefined();
+        expect(companion).toMatchObject({
+          threshold: source?.threshold,
+          judge: source?.judge,
+        });
+      }
+    }
+  });
+
   it('moves both supervise steps to the same shared fragment', () => {
     const refs = LANGUAGES.map((lang) =>
       expectFragmentReference(getStep(readBuiltinWorkflow(lang, 'merge-readiness-finding-contract-final-gate'), 'supervise'), 'supervise'));
@@ -107,6 +155,7 @@ describe('builtin workflow step fragment migration', () => {
 
     const workflows = new Set([
       ...REVIEWER_WORKFLOWS,
+      ...REPLAN_WORKFLOWS,
       ...GATHER_WORKFLOWS,
       ...FIX_WORKFLOWS,
       'merge-readiness-finding-contract-final-gate',

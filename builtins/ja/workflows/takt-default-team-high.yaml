@@ -51,6 +51,36 @@ loop_monitors:
           next: replan
         - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
           next: ABORT
+  - cycle: [replan, reviewers]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 要件と受入条件を変えずに実装方針を再定義できる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, reviewers, final-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 要件と受入条件を変えずに実装方針を再定義できる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [replan, reviewers, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 再計画により blocker の解消が進んでいる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
   - cycle: [fix, reviewers]
     threshold: 3
     judge:
@@ -94,21 +124,8 @@ steps:
         - name: plan.md
           format: plan
 
-  - name: replan
-    tags: [plan]
-    edit: false
-    persona: planner
-    knowledge: architecture
-    instruction: replan-implementation
-    rules:
-      - condition: プロジェクト内で実行可能な未試行の変更または原因調査と、その検証手順を具体化した
-        next: implement
-      - condition: 確認済みの根拠により、プロジェクト内の変更や調査では解消できず、外部操作だけが残るか要件が両立不能である
-        next: ABORT
-    output_contracts:
-      report:
-        - name: plan.md
-          format: plan
+  - uses: replan
+    name: replan
 
   - name: write_tests
     tags: [coding, test-planning]
