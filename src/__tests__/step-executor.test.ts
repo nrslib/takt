@@ -181,8 +181,8 @@ describe('StepExecutor', () => {
       rawExcerpt: 'A concrete defect.',
       candidate: {
         rawFindingId: null,
-        relation: null,
-        targetFindingId: null,
+        relation: 'persists',
+        targetFindingIds: ['F-missing'],
         familyTag: null,
         severity: null,
         title: null,
@@ -195,16 +195,25 @@ describe('StepExecutor', () => {
     const reviewerResponse: AgentResponse = {
       persona: 'reviewer',
       status: 'done',
-      content: '## Finding\n- **Issue:** A concrete defect.',
+      content: 'Phase 1 draft; this is not the authoritative report.',
       sessionId: 'reviewer-session',
       timestamp: reviewerTimestamp,
     };
+    const reportContent = '## Finding\n- **Issue:** A concrete defect.';
+    let reviewerCall = 0;
     vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
       options?.onPromptResolved?.({
         systemPrompt: 'reviewer system',
         userInstruction: prompt,
       });
-      return reviewerResponse;
+      if (reviewerCall++ === 0) {
+        return reviewerResponse;
+      }
+      return {
+        ...reviewerResponse,
+        content: reportContent,
+        timestamp: new Date('2026-07-29T01:00:00.500Z'),
+      };
     });
 
     const normalizeFindingIntake = vi.fn(async (_report, options) => {
@@ -249,7 +258,7 @@ describe('StepExecutor', () => {
         buildAgentOptions: vi.fn().mockReturnValue({}),
         buildPhaseRunnerContext: vi.fn().mockReturnValue({
           cwd,
-          reportDir: runPaths.reportsRel,
+          reportDir: runPaths.reportsAbs,
           language: 'en',
           lastResponse: reviewerResponse.content,
           getSessionId: () => undefined,
@@ -302,7 +311,10 @@ describe('StepExecutor', () => {
           outputContract: 'Return JSON.',
         },
       },
-      findingLedgerStore: {} as StepExecutorDeps['findingLedgerStore'],
+      findingLedgerStore: {
+        ledgerIdentity: 'scope-1',
+        loadLedger: () => ({ findings: [] }),
+      } as StepExecutorDeps['findingLedgerStore'],
       refreshFindingsState: vi.fn(),
       emitEvent: vi.fn(),
       recordSynthesizedAgentUsage,
@@ -334,17 +346,18 @@ describe('StepExecutor', () => {
     );
 
     expect(normalizeFindingIntake).toHaveBeenCalledOnce();
+    expect(reviewerCall).toBe(2);
     expect(normalizeFindingIntake).toHaveBeenCalledWith(
-      reviewerResponse.content,
+      reportContent,
       expect.objectContaining({
         provider: 'mock',
         model: 'normalizer-model',
       }),
     );
     expect(result.response).toMatchObject({
-      content: reviewerResponse.content,
+      content: reportContent,
       sessionId: reviewerResponse.sessionId,
-      timestamp: reviewerTimestamp,
+      timestamp: new Date('2026-07-29T01:00:00.500Z'),
       structuredOutput: { rawFindings: [normalizedRawFinding] },
     });
     expect(updatePersonaSession).toHaveBeenCalledWith(
@@ -367,11 +380,8 @@ describe('StepExecutor', () => {
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
     expect(
       vi.mocked(ingestFindingContractResults).mock.calls[0]?.[0]
-        .subResults[0]?.reviewerRawResourceEnvelope,
-    ).toMatchObject({
-      itemCount: 1,
-      itemSourceBytes: [expect.any(Number)],
-    });
+        .subResults[0]?.publication.rawFindings,
+    ).toEqual([normalizedRawFinding]);
   });
 
   it('normalizerがprompt callback前にfail-fastしても合成phaseのstart/error/usageを記録する', async () => {
@@ -453,7 +463,7 @@ describe('StepExecutor', () => {
         description: 'The previously reported issue remains fixed.',
         suggestion: null,
         relation: 'resolution_confirmation',
-        targetFindingId: 'F-0001',
+        targetFindingIds: ['F-0001'],
         target: { kind: 'code', paths: ['src/fixed.ts'] },
         evidenceRequests: [{
           kind: 'file_quote',
@@ -483,11 +493,37 @@ describe('StepExecutor', () => {
         systemPrompt: 'system prompt',
         userInstruction: prompt,
       });
-      if (agentCallCount++ > 0) {
+      const callIndex = agentCallCount++;
+      if (callIndex === 1) {
+        return {
+          persona: 'reviewer',
+          status: 'error',
+          content: 'Primary report provider unavailable.',
+          error: 'Primary report provider unavailable.',
+          timestamp: new Date('2026-07-22T00:00:00.500Z'),
+        };
+      }
+      if (callIndex === 2) {
         return {
           persona: 'reviewer',
           status: 'done',
-          content: '[]',
+          content: '',
+          structuredOutput: {
+            reportContent: 'Confirmed fixed.',
+            rawFindings: 'invalid',
+          },
+          timestamp: new Date('2026-07-22T00:00:01.000Z'),
+        };
+      }
+      if (callIndex > 2) {
+        return {
+          persona: 'reviewer',
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            reportContent: 'Confirmed fixed.',
+            rawFindings: reviewerRawFindings,
+          },
           timestamp: new Date('2026-07-22T00:00:01.000Z'),
         };
       }
@@ -495,7 +531,7 @@ describe('StepExecutor', () => {
         persona: 'reviewer',
         status: 'done',
         content: 'Confirmed fixed.',
-        structuredOutput: { rawFindings: reviewerRawFindings },
+        structuredOutput: { rawFindings: [] },
         timestamp: new Date('2026-07-22T00:00:00.000Z'),
       };
     });
@@ -563,16 +599,27 @@ describe('StepExecutor', () => {
           language: 'en',
           lastResponse: 'No findings.',
           getSessionId: () => undefined,
-          resolveSessionKey: () => 'reviewer:claude',
+          resolveSessionKey: () => 'reviewer:primary',
           buildResumeOptions: () => ({}),
-          buildNewSessionReportOptions: () => ({}),
-          buildFallbackReportOptions: () => undefined,
-          resolveReportFallbackProviderModel: () => undefined,
+          buildNewSessionReportOptions: () => ({
+            resolvedProvider: 'mock',
+            resolvedModel: 'primary-capability-model',
+          }),
+          buildFallbackReportOptions: (reportStep) => ({
+            resolvedProvider: 'codex',
+            resolvedModel: 'fallback-capability-model',
+            resolvedProviderOptions: { codex: { reasoningEffort: 'high' } },
+            outputSchema: reportStep.structuredOutput?.schema,
+          }),
+          resolveReportFallbackProviderModel: () => ({
+            provider: 'codex',
+            model: 'fallback-capability-model',
+          }),
           updatePersonaSession: vi.fn(),
-          resolveStepProviderModel: () => ({ provider: 'claude', model: 'claude-sonnet' }),
+          resolveStepProviderModel: () => ({ provider: 'mock', model: 'primary-capability-model' }),
         }),
         buildFindingContractInstructionContext,
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'mock', model: 'primary-capability-model' }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,
       getProjectCwd: () => cwd,
@@ -713,19 +760,32 @@ describe('StepExecutor', () => {
     }), undefined);
     expect(result.instruction).not.toContain(evidence.snapshotId);
     expect(result.instruction).toContain(JSON.stringify(structuredOutput.schema, null, 2));
-    expect(agentCallCount).toBe(2);
+    expect(agentCallCount).toBe(4);
+    expect(vi.mocked(executeAgent).mock.calls[3]?.[2]).toMatchObject({
+      resolvedProvider: 'codex',
+      resolvedModel: 'fallback-capability-model',
+      resolvedProviderOptions: { codex: { reasoningEffort: 'high' } },
+      outputSchema: expect.objectContaining({
+        required: ['reportContent', 'rawFindings'],
+      }),
+      permissionMode: 'readonly',
+      allowedTools: [],
+    });
+    expect(vi.mocked(executeAgent).mock.calls[3]?.[2]?.sessionId).toBeUndefined();
+    const publicationCorrectionInstruction = vi.mocked(executeAgent).mock.calls[3]?.[1] as string;
+    expect(publicationCorrectionInstruction).toContain('MUST include both reportContent and rawFindings');
+    expect(publicationCorrectionInstruction).toContain('byte-for-byte identical');
+    expect(publicationCorrectionInstruction).toContain('"reportContent": "Confirmed fixed."');
+    expect(publicationCorrectionInstruction).toContain('"rawFindings": "invalid"');
+    expect(publicationCorrectionInstruction).not.toContain('Do not repeat the report text');
     expect(vi.mocked(executeAgent).mock.calls.some(
       ([, instruction]) => instruction.includes('Some of your raw findings have contradictory relation/targetFindingId labeling'),
     )).toBe(false);
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
     const intake = vi.mocked(ingestFindingContractResults).mock.calls[0]![0];
     expect(intake.subResults[0]?.relationClarification).toBeUndefined();
-    expect(intake.subResults[0]?.reviewerRawResourceEnvelope).toMatchObject({
-      itemCount: 1,
-      itemSourceBytes: [expect.any(Number)],
-      jsonBytes: expect.any(Number),
-    });
-    expect(intake.subResults[0]?.response.structuredOutput?.rawFindings).toEqual(reviewerRawFindings);
+    expect(intake.subResults[0]?.publication.rawFindings).toEqual(reviewerRawFindings);
+    expect(intake.subResults[0]?.publication.reportContent).toBe('Confirmed fixed.');
     const savedLedger = findingLedgerStore.loadLedger();
     expect(savedLedger.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('resolved');
     expect(savedLedger.findings.every((finding) => finding.provisional === undefined)).toBe(true);

@@ -13,6 +13,7 @@ import { RAW_FINDING_LIMITS } from '../core/workflow/findings/raw-finding-limits
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { reviewerRawExtractionFixture } from './helpers/finding-lifecycle-fixture.js';
+import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
 
 const raw = reviewerRawExtractionFixture({
   rawFindingId: 'raw-1',
@@ -67,17 +68,13 @@ function intakeExtractions(
         persona: name,
         edit: false,
       } as WorkflowStep,
-      response: {
-        persona: name,
-        status: 'done',
-        content: extractions.map((item) => (
-          typeof item === 'object' && item !== null && 'rawExcerpt' in item
-            ? String(item.rawExcerpt)
-            : ''
-        )).join('\n'),
-        structuredOutput: { rawFindings: extractions },
-        timestamp: new Date('2026-07-28T00:00:00.000Z'),
-      } as AgentResponse,
+      publication: findingReviewPublicationFixture({
+        scopeIdentity: '/test/finding-resource-envelope/ledger.json',
+        parentStepName: 'reviewers',
+        stepIteration: 1,
+        reviewerStepName: name,
+        rawFindings: extractions,
+      }),
     })),
     previousLedger: ledger,
     workflowName: 'peer-review',
@@ -310,44 +307,15 @@ describe('reviewer raw resource envelope', () => {
     expect(projected.resourceEnvelope.jsonBytes)
       .toBeGreaterThan(RAW_FINDING_LIMITS.maxReviewerRawFindingsJsonBytes);
 
-    const intake = intakeReviewerOutputs({
-      subResults: [{
-        subStep: {
-          kind: 'agent',
-          name: 'reviewer',
-          persona: 'reviewer',
-          edit: false,
-        } as WorkflowStep,
-        response: {
-          persona: 'reviewer',
-          status: 'done',
-          content: '',
-          structuredOutput: projected.structuredOutput,
-          timestamp: new Date('2026-07-28T00:00:00.000Z'),
-        } as AgentResponse,
-        reviewerRawResourceEnvelope: projected.resourceEnvelope,
-      }],
-      previousLedger: ledger,
-      workflowName: 'peer-review',
-      callNamespace: '',
+    expect(() => findingReviewPublicationFixture({
+      scopeIdentity: '/test/finding-resource-envelope/ledger.json',
       parentStepName: 'reviewers',
       stepIteration: 1,
-      runId: 'run-1',
-      workflowTask: 'Review the project.',
-      cwd: process.cwd(),
-      scopeIdentity: '/test/finding-resource-envelope/ledger.json',
-      issuedAt: '2026-07-28T00:00:00.000Z',
-      reviewScopeSnapshot: {
-        reviewScopeSnapshotId: 'a'.repeat(64),
-        trackedDiff: undefined,
-        untrackedEvidence: [],
-        queryInventory: [],
-      },
-    });
-
-    expect(intake.intakeProvisionalSpecs).toHaveLength(1);
-    expect(intake.items).toHaveLength(0);
-    expect(intake.overflowReports[0]?.reason).toContain('per-reviewer limit');
+      reviewerStepName: 'reviewer',
+      reportContent: 'oversized reviewer output',
+      rawFindings: projected.structuredOutput.rawFindings as unknown[],
+      reviewerRawResourceEnvelope: projected.resourceEnvelope,
+    })).toThrow(/exceeded limits/);
   });
 
   it('rejects one extraction that would exceed the atomized reviewer limit', () => {
@@ -357,10 +325,8 @@ describe('reviewer raw resource envelope', () => {
       { length: RAW_FINDING_LIMITS.maxRawFindingsPerReviewer + 1 },
       (_, index) => `F-${String(index + 1).padStart(4, '0')}`,
     );
-    const intake = intakeExtractions([{ name: 'reviewer', extractions: [extraction] }]);
-
-    expect(intake.items).toEqual([]);
-    expect(intake.overflowReports[0]?.reason).toContain('atomized raw findings');
+    expect(() => intakeExtractions([{ name: 'reviewer', extractions: [extraction] }]))
+      .toThrow(/atomized raw findings/);
   });
 
   it('deduplicates target ids before enforcing the atomized boundary', () => {

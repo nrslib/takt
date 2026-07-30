@@ -17,6 +17,7 @@ import {
 } from './InstructionBuilder.js';
 import { renderFencedJsonBlock } from './fenced-block.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
+import { FINDING_REVIEW_PUBLICATION_SCHEMA_REF } from '../findings/review-publication-structured-output.js';
 
 /**
  * Context for building report phase instruction.
@@ -107,6 +108,8 @@ export class ReportInstructionBuilder {
     }
     reportOutput = this.appendFindingContractReportInstruction(reportOutput, language);
     hasReportOutput = hasReportOutput || this.context.findingContract !== undefined;
+    const structuredPublication = this.context.findingContract?.reviewer?.mode === 'structured'
+      && this.step.structuredOutput?.schemaRef === FINDING_REVIEW_PUBLICATION_SCHEMA_REF;
 
     return loadTemplate('perform_phase2_message', language, {
       workingDirectory: this.context.cwd,
@@ -119,6 +122,7 @@ export class ReportInstructionBuilder {
       reportOutput,
       hasOutputContract,
       outputContract,
+      structuredPublication,
     });
   }
 
@@ -128,7 +132,7 @@ export class ReportInstructionBuilder {
     }
 
     const findingContractInstruction = buildFindingContractReportInstruction({
-      reportLedgerSummary: this.context.findingContract.reportLedgerSummary,
+      contract: this.context.findingContract,
       language,
       renderFencedJsonBlock,
     });

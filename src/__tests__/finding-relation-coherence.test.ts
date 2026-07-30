@@ -278,7 +278,72 @@ describe('clarifyAmbiguousRawRelationsOnce', () => {
     expect(result.clarification!.priorAmbiguityCodesByRawId['raw-new']).toContain('persists-target-unknown');
   });
 
-  it('再生成出力が不正なら元の応答を保持する（ステップは失敗させず、drop もしない）', async () => {
+  it('Phase 2成功にsessionIdがなくてもpublication全体を添付してrelationを明確化する', async () => {
+    executeAgentMock.mockReset();
+    const reportContent = `Review report body.${'x'.repeat(9_000)}`;
+    const correctedOutput = {
+      reportContent,
+      rawFindings: [makeRawItem({ relation: 'persists', targetFindingId: 'F-0001' })],
+    };
+    executeAgentMock.mockResolvedValueOnce({
+      persona: 'coding-reviewer',
+      status: 'done',
+      content: '',
+      structuredOutput: correctedOutput,
+      timestamp: new Date('2026-06-13T00:00:02.000Z'),
+    });
+    const outputSchema = {
+      type: 'object',
+      required: ['reportContent', 'rawFindings'],
+    };
+
+    const result = await clarifyAmbiguousRawRelationsOnce({
+      stepName: 'coding-review',
+      persona: 'coding-reviewer',
+      response: makeResponse({
+        structuredOutput: {
+          reportContent,
+          ...reviewerStructuredOutput,
+        },
+        sessionId: undefined,
+      }),
+      ledger: makeLedger(),
+      agentOptions: {
+        cwd: '/tmp/project',
+        resolvedProvider: 'mock',
+        resolvedModel: 'fallback-capability',
+        resolvedProviderOptions: { codex: { reasoningEffort: 'high' } },
+        outputSchema,
+      },
+      normalize: identityNormalize,
+      publicationInput: {
+        reportContent,
+        rawFindings: reviewerStructuredOutput.rawFindings,
+      },
+    });
+
+    const [, instruction, options] = executeAgentMock.mock.calls[0]!;
+    expect(instruction).toContain('combined publication object');
+    expect(instruction).toContain('byte-for-byte identical');
+    expect(instruction).toContain('"reportContent": "Review report body.');
+    expect(instruction).toContain('"rawFindingId": "raw-new"');
+    expect(instruction).toContain('"id": "F-0001"');
+    expect(instruction).toContain('"status": "open"');
+    expect(instruction).toContain('"title": "Secret is logged"');
+    expect(instruction).not.toContain('Do not repeat the report text');
+    expect(options).toMatchObject({
+      resolvedProvider: 'mock',
+      resolvedModel: 'fallback-capability',
+      resolvedProviderOptions: { codex: { reasoningEffort: 'high' } },
+      outputSchema,
+      permissionMode: 'readonly',
+      allowedTools: [],
+    });
+    expect(options?.sessionId).toBeUndefined();
+    expect(result.response.structuredOutput).toEqual(correctedOutput);
+  });
+
+  it('再生成出力が不正なら fail-closed で取り込みを止める', async () => {
     executeAgentMock.mockReset();
     executeAgentMock.mockResolvedValueOnce({
       persona: 'coding-reviewer',
@@ -287,19 +352,42 @@ describe('clarifyAmbiguousRawRelationsOnce', () => {
       timestamp: new Date('2026-06-13T00:00:02.000Z'),
     });
 
-    const original = makeResponse();
-    const result = await clarifyAmbiguousRawRelationsOnce({
+    await expect(clarifyAmbiguousRawRelationsOnce({
       stepName: 'coding-review',
       persona: 'coding-reviewer',
-      response: original,
+      response: makeResponse(),
       ledger: makeLedger(),
       agentOptions: { provider: 'claude' },
       normalize: (response) => ({ response, invalidDetail: 'schema validation failed' }),
-    });
+    })).rejects.toThrow('Relation clarification produced invalid structured output');
 
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
-    expect(result.response).toBe(original);
-    expect(result.clarification).toBeDefined();
+  });
+
+  it('訂正入力が既存のreviewer上限を超える場合はagentを呼ばずfail-loudにする', async () => {
+    executeAgentMock.mockReset();
+    const rawFindings = Array.from(
+      { length: 65 },
+      (_, index) => makeRawItem({
+        rawFindingId: `raw-${index}`,
+        relation: 'persists',
+        targetFindingId: 'F-9999',
+      }),
+    );
+
+    await expect(clarifyAmbiguousRawRelationsOnce({
+      stepName: 'coding-review',
+      persona: 'coding-reviewer',
+      response: makeResponse({
+        structuredOutput: { rawFindings },
+        sessionId: undefined,
+      }),
+      ledger: makeLedger(),
+      agentOptions: { provider: 'claude' },
+      normalize: identityNormalize,
+    })).rejects.toThrow('exceeded limits');
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
   });
 
   it('意味矛盾が無ければ再生成呼び出しをしない（clarification も付かない）', async () => {
@@ -402,7 +490,7 @@ describe('clarifyAmbiguousRawRelationsOnce: 再生成契約 (codex B5 / 設計�
         candidate: {
           ...originalRaw.candidate,
           relation: 'persists',
-          targetFindingId: 'F-0001',
+          targetFindingIds: ['F-0001'],
         },
       },
       bystanderRaw,
@@ -412,66 +500,53 @@ describe('clarifyAmbiguousRawRelationsOnce: 再生成契約 (codex B5 / 設計�
     expect(rawFindings[0]?.candidate.relation).toBe('persists');
   });
 
-  it('raw の欠落は破棄して元出力を保持する', async () => {
-    const original = makeTwoRawResponse();
-    const result = await runWithRegeneratedRawFindings([
+  it('raw の欠落は fail-closed で取り込みを止める', async () => {
+    await expect(runWithRegeneratedRawFindings([
       { ...originalRaw, relation: 'persists', targetFindingId: 'F-0001' },
       // bystanderRaw が消えた
-    ]);
-    expect(result.response.structuredOutput).toEqual(original.structuredOutput);
+    ])).rejects.toThrow('violated the regeneration contract');
   });
 
-  it('raw の追加は破棄して元出力を保持する', async () => {
-    const original = makeTwoRawResponse();
-    const result = await runWithRegeneratedRawFindings([
+  it('raw の追加は fail-closed で取り込みを止める', async () => {
+    await expect(runWithRegeneratedRawFindings([
       { ...originalRaw, relation: 'persists', targetFindingId: 'F-0001' },
       bystanderRaw,
       { ...bystanderRaw, rawFindingId: 'raw-smuggled', title: 'A smuggled-in extra finding' },
-    ]);
-    expect(result.response.structuredOutput).toEqual(original.structuredOutput);
+    ])).rejects.toThrow('violated the regeneration contract');
   });
 
-  it('非対象 raw の内容変更は破棄して元出力を保持する', async () => {
-    const original = makeTwoRawResponse();
-    const result = await runWithRegeneratedRawFindings([
+  it('非対象 raw の内容変更は fail-closed で取り込みを止める', async () => {
+    await expect(runWithRegeneratedRawFindings([
       { ...originalRaw, relation: 'persists', targetFindingId: 'F-0001' },
       { ...bystanderRaw, description: 'Rewritten description of the unrelated problem.' },
-    ]);
-    expect(result.response.structuredOutput).toEqual(original.structuredOutput);
+    ])).rejects.toThrow('violated the regeneration contract');
   });
 
-  it('非対象 raw の relation 変更は破棄して元出力を保持する', async () => {
-    const original = makeTwoRawResponse();
-    const result = await runWithRegeneratedRawFindings([
+  it('非対象 raw の relation 変更は fail-closed で取り込みを止める', async () => {
+    await expect(runWithRegeneratedRawFindings([
       { ...originalRaw, relation: 'persists', targetFindingId: 'F-0001' },
       { ...bystanderRaw, relation: 'persists', targetFindingId: 'F-0001' },
-    ]);
-    expect(result.response.structuredOutput).toEqual(original.structuredOutput);
+    ])).rejects.toThrow('violated the regeneration contract');
   });
 
-  it('対象 raw の内容（title 等）の変更は破棄して元出力を保持する', async () => {
-    const original = makeTwoRawResponse();
-    const result = await runWithRegeneratedRawFindings([
+  it('対象 raw の内容（title 等）の変更は fail-closed で取り込みを止める', async () => {
+    await expect(runWithRegeneratedRawFindings([
       { ...originalRaw, relation: 'persists', targetFindingId: 'F-0001', title: 'A rewritten title' },
       bystanderRaw,
-    ]);
-    expect(result.response.structuredOutput).toEqual(original.structuredOutput);
+    ])).rejects.toThrow('violated the regeneration contract');
   });
 
-  it('executeAgent の例外時は元出力を保持してステップを失敗させない（clarification は残す）', async () => {
+  it('executeAgent の例外時は fail-closed で取り込みを止める', async () => {
     executeAgentMock.mockReset();
     executeAgentMock.mockRejectedValueOnce(new Error('provider crashed mid-call'));
-    const original = makeTwoRawResponse();
-    const result = await clarifyAmbiguousRawRelationsOnce({
+    await expect(clarifyAmbiguousRawRelationsOnce({
       stepName: 'coding-review',
       persona: 'coding-reviewer',
-      response: original,
+      response: makeTwoRawResponse(),
       ledger: makeLedger(),
       agentOptions: { provider: 'claude' },
       normalize: identityNormalize,
-    });
-    expect(result.response).toBe(original);
-    expect(result.clarification).toBeDefined();
+    })).rejects.toThrow('Relation clarification failed');
   });
 });
 
@@ -490,5 +565,23 @@ describe('buildRelationCoherenceRegenerationInstruction', () => {
     expect(instruction).toContain('reopened');
     expect(instruction).toContain('ALL raw findings');
     expect(instruction).toContain('ONLY the relation and targetFindingId');
+  });
+
+  it('publication用はreportContent省略禁止を指示し、汎用の本文省略指示を出さない', () => {
+    const instruction = buildRelationCoherenceRegenerationInstruction([{
+      rawFindingId: 'raw-new',
+      locations: [],
+      codes: ['persists-target-unknown'],
+      targetFindingId: 'F-9999',
+    }], {
+      reportContent: 'Review report body.',
+      rawFindings: [],
+    });
+
+    expect(instruction).toContain('including reportContent and ALL raw findings');
+    expect(instruction).toContain('byte-for-byte identical');
+    expect(instruction).toContain('"reportContent": "Review report body."');
+    expect(instruction).toContain('"rawFindings": []');
+    expect(instruction).not.toContain('Do not repeat the report text');
   });
 });

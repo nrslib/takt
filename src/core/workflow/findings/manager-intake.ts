@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { AgentResponse, WorkflowStep } from '../../models/types.js';
+import type { AgentWorkflowStep } from '../../models/types.js';
 import type { ReviewerRelationClarification } from './relation-coherence.js';
 import {
   canonicalizeReviewerRawFinding,
@@ -10,7 +10,6 @@ import {
   extractLenientRawFields,
   projectReviewerRawStructuredOutputWithEnvelope,
   toLedgerRawFinding,
-  type ReviewerRawResourceEnvelope,
   type ReviewerRawIntakeContext,
 } from './raw-canonicalization.js';
 import {
@@ -21,18 +20,17 @@ import {
 import type { RawNormalizationAuditRecord } from './store.js';
 import type { FindingLedger } from './types.js';
 import type { ReviewerIntakeResult } from './manager-admission.js';
-import { isWorkflowCallStep } from '../step-kind.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { issueFindingEvidenceRequests } from './evidence-request-issuer.js';
 import type { ReviewScopeProofSnapshot } from './snapshot.js';
+import type { CanonicalFindingReviewPublication } from './review-publication.js';
 
 const log = createLogger('finding-manager-intake');
 
 export interface FindingManagerSubStepResult {
-  subStep: WorkflowStep;
-  response: AgentResponse;
+  subStep: AgentWorkflowStep;
+  publication: CanonicalFindingReviewPublication;
   relationClarification?: ReviewerRelationClarification;
-  reviewerRawResourceEnvelope?: ReviewerRawResourceEnvelope;
 }
 
 export function intakeReviewerOutputs(input: {
@@ -71,29 +69,10 @@ export function intakeReviewerOutputs(input: {
   let admittedBytes = 0;
 
   for (const subResult of input.subResults) {
-    // workflow_call サブステップは raw findings を返さない（子ワークフロー側で
-    // 取り込み済み）ため除外する。
-    if (isWorkflowCallStep(subResult.subStep)) {
-      continue;
-    }
-    const structuredOutput = subResult.response.structuredOutput;
-    // raw findings は Finding Contract の契約入力。構造化出力自体の欠落は raw の
-    // 意味矛盾ではなく provider / contract 障害なので従来どおり fail-fast する。
-    if (structuredOutput === undefined) {
-      throw new Error(
-        `Finding contract reviewer "${subResult.subStep.name}" returned no structured output; raw findings are required`,
-      );
-    }
-    if (!Array.isArray(structuredOutput.rawFindings)) {
-      throw new Error(
-        `Finding contract reviewer "${subResult.subStep.name}" returned structured output without a rawFindings array`,
-      );
-    }
-    const items = structuredOutput.rawFindings as unknown[];
-    const resourceEnvelope = subResult.reviewerRawResourceEnvelope
-      ?? projectReviewerRawStructuredOutputWithEnvelope({
-        rawFindings: items,
-      }).resourceEnvelope;
+    const items = [...subResult.publication.rawFindings];
+    const resourceEnvelope = projectReviewerRawStructuredOutputWithEnvelope({
+      rawFindings: items,
+    }).resourceEnvelope;
     if (
       resourceEnvelope.itemCount !== items.length
       || resourceEnvelope.itemSourceBytes.length !== items.length
@@ -110,7 +89,7 @@ export function intakeReviewerOutputs(input: {
       runId: input.runId,
       reviewerStepName: subResult.subStep.name,
       reviewerPersonaKey: (subResult.subStep as { persona?: string }).persona ?? subResult.subStep.name,
-      reviewReport: subResult.response.content,
+      reviewReport: subResult.publication.reportContent,
       ledger: input.previousLedger,
       authoritativeTargetByFindingId,
       issueEvidenceRequests: (request) => issueFindingEvidenceRequests({

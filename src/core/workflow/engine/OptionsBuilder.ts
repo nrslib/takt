@@ -347,6 +347,19 @@ export class OptionsBuilder {
     };
   }
 
+  private resolveReportPhaseOutputSchema(
+    step: WorkflowStep,
+    provider: ProviderType | undefined,
+  ): RunAgentOptions['outputSchema'] {
+    assertProviderResolvedForCapabilitySensitiveOptions(provider, {
+      stepName: step.name,
+      usesStructuredOutput: step.structuredOutput !== undefined,
+    });
+    return providerSupportsStructuredOutput(provider) === false
+      ? undefined
+      : step.structuredOutput?.schema;
+  }
+
   buildPhase1WorkflowMeta(
     workflowMeta: WorkflowMeta | undefined,
     runtime?: RuntimeStepResolution,
@@ -456,12 +469,14 @@ export class OptionsBuilder {
     runtime?: RuntimeStepResolution,
   ): RunAgentOptions {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
+    const baseOptions = this.buildReadonlyPhaseBaseOptions(step, undefined, runtime);
     return {
-      ...this.buildReadonlyPhaseBaseOptions(step, undefined, runtime),
+      ...baseOptions,
       // Report/status phases are read-only regardless of step settings.
       permissionMode: 'readonly',
       sessionId,
       allowedTools: [],
+      outputSchema: this.resolveReportPhaseOutputSchema(step, baseOptions.resolvedProvider),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
@@ -473,10 +488,12 @@ export class OptionsBuilder {
     runtime?: RuntimeStepResolution,
   ): RunAgentOptions {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
+    const baseOptions = this.buildReadonlyPhaseBaseOptions(step, undefined, runtime);
     return {
-      ...this.buildReadonlyPhaseBaseOptions(step, undefined, runtime),
+      ...baseOptions,
       permissionMode: 'readonly',
       allowedTools: overrides.allowedTools,
+      outputSchema: this.resolveReportPhaseOutputSchema(step, baseOptions.resolvedProvider),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
@@ -494,11 +511,13 @@ export class OptionsBuilder {
       providerInfo: this.engineOptions.reportFallbackProvider,
     };
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, fallbackRuntime);
+    const baseOptions = this.buildReadonlyPhaseBaseOptions(step, undefined, fallbackRuntime);
     const options: RunAgentOptions = {
-      ...this.buildReadonlyPhaseBaseOptions(step, undefined, fallbackRuntime),
+      ...baseOptions,
       permissionMode: 'readonly',
       sessionId: undefined,
       allowedTools: overrides.allowedTools,
+      outputSchema: this.resolveReportPhaseOutputSchema(step, baseOptions.resolvedProvider),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
 
@@ -577,10 +596,10 @@ export class OptionsBuilder {
       ),
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
-      buildFindingContractInstructionContext: (step, includeRawFindingsSchema) =>
+      buildFindingContractInstructionContext: (step, reviewerMode) =>
         this.buildFindingContractInstructionContext(
           step,
-          includeRawFindingsSchema ? 'structured' : undefined,
+          reviewerMode,
         ),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       resolveSessionKey: (step) => {

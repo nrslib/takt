@@ -348,6 +348,61 @@ function validateFindingContractOutputFormatRequiresContract(
   );
 }
 
+function validateFindingContractReviewerReports(
+  config: WorkflowConfig,
+  findingContractEnabled: boolean,
+): void {
+  if (!findingContractEnabled) {
+    return;
+  }
+  const visit = (
+    step: WorkflowStep,
+    fallbackPath: readonly PropertyKey[],
+    parallelReviewer: boolean,
+  ): void => {
+    const reviewer = parallelReviewer || hasFindingContractFormat(step);
+    if (reviewer && getWorkflowStepKind(step) === 'agent') {
+      const reports = step.outputContracts ?? [];
+      if (reports.length !== 1 || !hasFindingContractFormat(step)) {
+        throw withConfigStepErrorPath(
+          config,
+          step,
+          fallbackPath,
+          ['output_contracts', 'report'],
+          new Error(
+            `Configuration error: Finding Contract reviewer "${step.name}" requires exactly one Finding Contract report`,
+          ),
+        );
+      }
+    }
+    const siblingReportOwnerByName = new Map<string, WorkflowStep>();
+    for (const [index, subStep] of (step.parallel ?? []).entries()) {
+      const subStepPath = [...fallbackPath, 'parallel', index];
+      visit(subStep, subStepPath, true);
+      if (getWorkflowStepKind(subStep) !== 'agent') {
+        continue;
+      }
+      const reportName = subStep.outputContracts![0]!.name;
+      const existingOwner = siblingReportOwnerByName.get(reportName);
+      if (existingOwner !== undefined) {
+        throw withConfigStepErrorPath(
+          config,
+          subStep,
+          subStepPath,
+          ['output_contracts', 'report', 0, 'name'],
+          new Error(
+            `Configuration error: Finding Contract reviewers "${existingOwner.name}" and "${subStep.name}" under parallel step "${step.name}" use duplicate report name "${reportName}"`,
+          ),
+        );
+      }
+      siblingReportOwnerByName.set(reportName, subStep);
+    }
+  };
+  for (const [index, step] of config.steps.entries()) {
+    visit(step, ['steps', index], false);
+  }
+}
+
 function delegatedExecutionFieldPath(step: WorkflowStep): readonly PropertyKey[] {
   if (step.teamLeader !== undefined) {
     return ['team_leader'];
@@ -589,6 +644,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   validateRequiredInheritedFindingContract(config, options);
   validateFindingContractInheritanceConflict(config, options);
   validateFindingContractOutputFormatRequiresContract(config, findingContractEnabled);
+  validateFindingContractReviewerReports(config, findingContractEnabled);
   validateFindingContractDelegatedIntake(config, findingContractEnabled);
   validateFindingContractTeamLeaderMode(config, findingContractEnabled);
 

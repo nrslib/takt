@@ -10,8 +10,19 @@ import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { PhaseName, PhasePromptParts, JudgeStageEntry, StepProviderInfo } from './types.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { needsSemanticStatusJudgment } from '../models/workflow-rule-condition.js';
-import type { FindingContractInstructionContext } from './instruction/instruction-context.js';
-export { runReportPhase, ReportPhaseGenerationError, type ReportPhaseBlockedResult, type ReportPhaseRateLimitedResult } from './report-phase-runner.js';
+import type {
+  FindingContractInstructionContext,
+  FindingContractReviewerMode,
+} from './instruction/instruction-context.js';
+export {
+  generateReportPhase,
+  runReportPhase,
+  ReportPhaseGenerationError,
+  type GeneratedReport,
+  type GeneratedReportPhaseResult,
+  type ReportPhaseBlockedResult,
+  type ReportPhaseRateLimitedResult,
+} from './report-phase-runner.js';
 export { runStatusJudgmentPhase, type StatusJudgmentPhaseResult } from './status-judgment-phase.js';
 
 export interface BasePhaseRunnerContext {
@@ -90,7 +101,7 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   buildFindingContractInstructionContext?: (
     step: WorkflowStep,
-    includeRawFindingsSchema: boolean,
+    reviewerMode: FindingContractReviewerMode | undefined,
   ) => FindingContractInstructionContext | undefined;
   resolveStepProviderModel: (step: WorkflowStep) => StepProviderInfo;
 }

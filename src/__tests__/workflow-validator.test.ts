@@ -602,6 +602,11 @@ describe('validateWorkflowConfig', () => {
           name: 'review',
           persona: 'reviewer',
           personaDisplayName: 'reviewer',
+          outputContracts: [{
+            name: 'review.md',
+            format: 'review',
+            formatRef: 'review-finding-contract',
+          }],
           rules: [normalizeRule({ condition: 'conflicts', next: 'finding-conflict-adjudication' })],
         })],
       })],
@@ -754,6 +759,11 @@ describe('validateWorkflowConfig', () => {
               edit: false,
               instruction: 'review',
               passPreviousResponse: true,
+              outputContracts: [{
+                name: 'review.md',
+                format: 'review',
+                formatRef: 'review-finding-contract',
+              }],
               rules: [normalizeRule({ condition: 'approved' })],
             },
           ],
@@ -848,6 +858,11 @@ describe('validateWorkflowConfig', () => {
               edit: false,
               instruction: 'review',
               passPreviousResponse: true,
+              outputContracts: [{
+                name: 'review.md',
+                format: 'review',
+                formatRef: 'review-finding-contract',
+              }],
               rules: [normalizeRule({ condition: 'when(findings.open.count == 0)' })],
             },
           ],
@@ -878,6 +893,98 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
       'Invalid loop_monitor judge rule: findings.* conditions require finding_contract',
     );
+  });
+
+  it('rejects a parallel Finding Contract reviewer without a report', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [createPlanAgent({
+        parallel: [createPlanAgent({
+          name: 'review',
+          persona: 'reviewer',
+          personaDisplayName: 'reviewer',
+        })],
+      })],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() }))
+      .toThrow('Finding Contract reviewer "review" requires exactly one Finding Contract report');
+  });
+
+  it('rejects a Finding Contract reviewer with multiple reports', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [createPlanAgent({
+        outputContracts: [
+          {
+            name: 'review.md',
+            format: 'review',
+            formatRef: 'review-finding-contract',
+          },
+          {
+            name: 'summary.md',
+            format: 'summary',
+            formatRef: 'summary-finding-contract',
+          },
+        ],
+      })],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() }))
+      .toThrow('Finding Contract reviewer "plan" requires exactly one Finding Contract report');
+  });
+
+  it('rejects duplicate Finding Contract report names under the same parallel parent', () => {
+    const reviewer = (name: string) => createPlanAgent({
+      name,
+      persona: name,
+      personaDisplayName: name,
+      outputContracts: [{
+        name: 'review.md',
+        format: 'review',
+        formatRef: 'review-finding-contract',
+      }],
+    });
+    const workflow = createWorkflow({
+      initialStep: 'reviewers',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [createPlanAgent({
+        name: 'reviewers',
+        parallel: [
+          reviewer('architecture-review'),
+          reviewer('security-review'),
+        ],
+      })],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() }))
+      .toThrow(
+        'Finding Contract reviewers "architecture-review" and "security-review" under parallel step "reviewers" use duplicate report name "review.md"',
+      );
   });
 
   it('fails fast when findingContract parallel sub-steps already declare structuredOutput', () => {

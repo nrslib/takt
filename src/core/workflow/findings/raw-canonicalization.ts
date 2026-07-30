@@ -453,7 +453,7 @@ function projectFindingTarget(value: unknown): FindingTarget | undefined {
     : undefined;
 }
 
-function bindCandidateSource(
+export function bindReviewerReportExcerpt(
   report: string,
   rawExcerpt: string,
 ): ReviewerRawFindingCandidate['sourceBinding'] {
@@ -1150,7 +1150,7 @@ export function createReviewerRawFindingCandidates(
     });
     let sourceBinding: ReviewerRawFindingCandidate['sourceBinding'];
     try {
-      sourceBinding = bindCandidateSource(context.reviewReport, rawExcerpt);
+      sourceBinding = bindReviewerReportExcerpt(context.reviewReport, rawExcerpt);
     } catch (error) {
       rejections.push({
         intakeId,

@@ -266,6 +266,10 @@ steps:
       - name: review
         persona: reviewer
         instruction: review it
+        output_contracts:
+          report:
+            - name: review.md
+              format: architecture-review-finding-contract
         rules:
           - condition: approved
     rules:
@@ -300,6 +304,10 @@ steps:
       - name: review
         persona: reviewer
         instruction: review it
+        output_contracts:
+          report:
+            - name: review.md
+              format: architecture-review-finding-contract
         rules:
           - condition: approved
     rules:
@@ -419,6 +427,10 @@ steps:
   ) => {
     const parallelSteps = childConditions.map((condition, index) => `      - name: review-${index}
         instruction: review it
+        output_contracts:
+          report:
+            - name: review-${index}.md
+              format: architecture-review-finding-contract
         rules:
           - condition: ${condition}`).join('\n');
     const filePath = writeWorkflow(projectDir, '.takt/workflows/aggregate-condition-complete.yaml', `name: aggregate-condition-complete
@@ -484,6 +496,10 @@ steps:
       - name: review
         persona: reviewer
         instruction: review it
+        output_contracts:
+          report:
+            - name: review.md
+              format: architecture-review-finding-contract
         rules:
           - condition: approved
     rules:
@@ -534,6 +550,10 @@ steps:
       - name: review
         persona: reviewer
         instruction: review it
+        output_contracts:
+          report:
+            - name: review.md
+              format: architecture-review-finding-contract
         rules:
           - condition: approved
     rules:
@@ -599,6 +619,10 @@ steps:
       - name: review
         persona: reviewer
         instruction: review it
+        output_contracts:
+          report:
+            - name: review.md
+              format: architecture-review-finding-contract
         rules:
           - condition: approved
     rules:

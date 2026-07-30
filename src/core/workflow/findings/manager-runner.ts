@@ -32,11 +32,29 @@ export {
 export async function runFindingManagerForStep(
   input: RunFindingManagerForStepInput,
 ): Promise<FindingManagerRunResult> {
+  const publicationIds = input.subResults.map(({ subStep, publication }) => {
+    if (
+      publication.scopeIdentity !== input.ledgerStore.ledgerIdentity
+      || publication.callNamespace !== input.callNamespace
+      || publication.parentStepName !== input.parentStep.name
+      || publication.stepIteration !== input.stepIteration
+      || publication.reviewerStepName !== subStep.name
+    ) {
+      throw new Error(
+        `Finding review publication "${publication.publicationId}" does not match its manager round`,
+      );
+    }
+    return publication.publicationId;
+  });
+  if (new Set(publicationIds).size !== publicationIds.length) {
+    throw new Error('Finding manager round contains duplicate review publications');
+  }
   const stopBudgetRoundMarker = computeRoundMarker({
     runId: input.runId,
     callNamespace: input.callNamespace,
     parentStepName: input.parentStep.name,
     stepIteration: input.stepIteration,
+    publicationIds,
   });
 
   return runManagerRoundExclusive(input.ledgerStore, async () => {

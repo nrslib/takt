@@ -40,8 +40,8 @@ import {
   ingestFindingContractResults,
   withFindingContractStructuredOutput,
 } from '../findings/contract-intake.js';
-import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
-import type { ReviewerRawResourceEnvelope } from '../findings/raw-canonicalization.js';
+import type { ReviewerRelationClarification } from '../findings/relation-coherence.js';
+import type { CanonicalFindingReviewPublication } from '../findings/review-publication.js';
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallIsolatedStateSync, WorkflowCallSessionUpdates } from './WorkflowCallExecutor.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
@@ -50,7 +50,6 @@ import { recordAgentUsageEvent } from './agent-usage-event.js';
 import { formatWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import { buildScopedStepIterationIdentity } from '../step-iteration-identity.js';
-import { correctStructuredOutputOnce } from './structured-output-correction.js';
 import {
   completeObservedPhase1Attempt,
   executeObservedPhase1Attempt,
@@ -63,9 +62,8 @@ const log = createLogger('parallel-runner');
 type ParallelSubStepResult = {
   subStep: WorkflowStep;
   response: AgentResponse;
-  /** レビュア1回突き返しの実施記録（engine 発行の taint 根拠。manager-runner が canonicalization へ渡す）。 */
+  publication?: CanonicalFindingReviewPublication;
   relationClarification?: ReviewerRelationClarification;
-  reviewerRawResourceEnvelope?: ReviewerRawResourceEnvelope;
   instruction: string;
   providerInfo?: StepRunResult['providerInfo'];
   durationMs?: number;
@@ -369,6 +367,61 @@ export class ParallelRunner {
             interactive: this.deps.getInteractive(),
           };
 
+        if (findingContractContext !== undefined) {
+          const resumedPublication = this.deps.stepExecutor
+            .resumeFindingReviewPublication({
+              step: subStep,
+              parentStepName: step.name,
+              stepIteration,
+            });
+          if (resumedPublication !== undefined) {
+            const qualityGateResult = await this.deps.runQualityGates({
+              qualityGates: subStep.qualityGates,
+              projectRoot: this.deps.getCwd(),
+              step: subStep,
+              childProcessEnv: this.deps.engineOptions.childProcessEnv,
+            });
+            if (!qualityGateResult.ok) {
+              state.stepOutputs.set(subStep.name, qualityGateResult.response);
+              return {
+                subStep,
+                response: qualityGateResult.response,
+                instruction: phase1Instruction,
+                providerInfo: subPm,
+                durationMs: Math.max(
+                  0,
+                  qualityGateResult.response.timestamp.getTime() - startedAt,
+                ),
+                qualityGateFailure: true,
+              };
+            }
+            state.stepOutputs.set(subStep.name, resumedPublication.response);
+            this.deps.stepExecutor.emitStepReports(
+              subStep,
+              {
+                iteration: parentIteration,
+                resumeStepName: step.name,
+                stepIteration: subIteration,
+                providerInfo: subPm,
+              },
+            );
+            return {
+              subStep,
+              publication: resumedPublication.publication,
+              ...(resumedPublication.relationClarification !== undefined
+                ? { relationClarification: resumedPublication.relationClarification }
+                : {}),
+              response: resumedPublication.response,
+              instruction: phase1Instruction,
+              providerInfo: subPm,
+              durationMs: Math.max(
+                0,
+                resumedPublication.response.timestamp.getTime() - startedAt,
+              ),
+            };
+          }
+        }
+
         // Session key uses the same resolved provider as Phase 1 options and resume phases.
         const subSessionKey = buildSessionKey(executableSubStep, {
           provider: subPm.provider,
@@ -397,8 +450,6 @@ export class ParallelRunner {
               ...baseOptions,
               ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
             };
-        let subRelationClarification: ReviewerRelationClarification | undefined;
-        let reviewerRawResourceEnvelope: ReviewerRawResourceEnvelope | undefined;
         const promptResolvedAttempts = new Set<number>();
         const phase1Result = await runPhase1WithEmptyRecovery({
           instruction: phase1Instruction,
@@ -455,7 +506,7 @@ export class ParallelRunner {
             }
           },
         });
-        let subResponse = phase1Result.response;
+        const subResponse = phase1Result.response;
         if (!promptResolvedAttempts.has(phase1Result.finalAttempt.sequence)) {
           throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
         }
@@ -464,200 +515,143 @@ export class ParallelRunner {
             step: subStep.name,
           });
         }
-        if (intakeNormalizeActive) {
-          if (subResponse.sessionId !== undefined) {
-            updatePersonaSession(subSessionKey, subResponse.sessionId);
-          }
-          completeObservedPhase1Attempt({
-            eventStep: subStep,
-            iteration: parentIteration,
-            attempt: phase1Result.finalAttempt,
-            response: subResponse,
-            onPhaseComplete: this.deps.onPhaseComplete,
-          });
+        if (subResponse.sessionId !== undefined) {
+          updatePersonaSession(subSessionKey, subResponse.sessionId);
         }
-        if (findingContractContext !== undefined) {
-          let normalized = intakeNormalizeActive && subResponse.status === 'done'
-            ? await this.deps.stepExecutor.normalizeFindingIntakeReport(
-                subStep,
-                subResponse,
-                parentIteration,
-              )
-            : this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
-                executableSubStep,
-                subResponse,
-                subRuntime,
-              );
-          if (normalized.invalidKind === 'model_output') {
-            log.info('Structured output invalid for parallel sub-step, requesting one correction', {
-              step: subStep.name,
-              detail: normalized.invalidDetail,
-            });
-          }
-          if (!intakeNormalizeActive) {
-            normalized = await correctStructuredOutputOnce({
-              stepName: subStep.name,
-              initial: normalized,
-              executeCorrection: (correctionInstruction, sessionId) => this.executeSubStepAgent(
-                executableSubStep,
-                subPm,
-                correctionInstruction,
-                {
-                  ...agentOptions,
-                  permissionMode: 'readonly',
-                  allowedTools: [],
-                  onPromptResolved: undefined,
-                  onStream: undefined,
-                  sessionId,
-                },
-              ),
-              normalize: (candidate) => this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
-                executableSubStep,
-                candidate,
-                subRuntime,
-              ),
-            });
-          }
-          if (normalized.invalidDetail !== undefined) {
-            const provider = this.deps.optionsBuilder.resolveStepProviderModel(executableSubStep, subRuntime).provider;
-            throw new Error(
-              `Step "${executableSubStep.name}" requires structured_output for provider "${provider}": ${normalized.invalidDetail}`,
-            );
-          }
-          subResponse = normalized.response;
-          reviewerRawResourceEnvelope = normalized.reviewerRawResourceEnvelope;
-          // レビュア1回突き返し: relation/target/kind の意味
-          // 矛盾がある raw について同一セッションで1回だけ明確化を求める。
-          // 直らなかった raw は drop せず ambiguous のまま manager 解釈 /
-          // provisional へ進む。clarification は engine 発行の taint 根拠として
-          // manager-runner の canonicalization に渡す。
-          if (
-            !intakeNormalizeActive
-            && subResponse.status === 'done'
-            && this.deps.findingLedgerStore
-          ) {
-            const clarified = await clarifyAmbiguousRawRelationsOnce({
-              stepName: subStep.name,
-              persona: executableSubStep.persona,
-              response: subResponse,
-              ledger: this.deps.findingLedgerStore.loadLedger(),
-              agentOptions,
-              normalize: (candidate: AgentResponse) => this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
-                executableSubStep,
-                candidate,
-                subRuntime,
-              ),
-              reviewerRawResourceEnvelope,
-            });
-            subResponse = clarified.response;
-            reviewerRawResourceEnvelope = clarified.reviewerRawResourceEnvelope;
-            subRelationClarification = clarified.clarification;
-          }
-        }
-        if (!intakeNormalizeActive) {
-          if (subResponse.sessionId !== undefined) {
-            updatePersonaSession(subSessionKey, subResponse.sessionId);
-          }
-          completeObservedPhase1Attempt({
-            eventStep: subStep,
-            iteration: parentIteration,
-            attempt: phase1Result.finalAttempt,
-            response: subResponse,
-            onPhaseComplete: this.deps.onPhaseComplete,
-          });
-        }
+        completeObservedPhase1Attempt({
+          eventStep: subStep,
+          iteration: parentIteration,
+          attempt: phase1Result.finalAttempt,
+          response: subResponse,
+          onPhaseComplete: this.deps.onPhaseComplete,
+        });
         if (subResponse.status === 'error' || subResponse.status === 'blocked' || subResponse.status === 'rate_limited') {
           state.stepOutputs.set(subStep.name, subResponse);
           return {
             subStep,
             response: subResponse,
-            ...(reviewerRawResourceEnvelope !== undefined
-              ? { reviewerRawResourceEnvelope }
-              : {}),
-            ...(subRelationClarification !== undefined ? { relationClarification: subRelationClarification } : {}),
             instruction: phase1Instruction,
             providerInfo: subPm,
             durationMs: Math.max(0, subResponse.timestamp.getTime() - startedAt),
           };
         }
 
-        // Phase 2/3 context resolves the same runtime-aware session key as Phase 1.
-        const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(
-          subStep,
-          state,
-          subResponse.content,
-          updatePersonaSession,
-          this.deps.onPhaseStart,
-          this.deps.onPhaseComplete,
-          this.deps.onJudgeStage,
-          parentIteration,
-          subRuntime,
-          (
-            providerInfo: NonNullable<StepRunResult['providerInfo']>,
-            success: boolean,
-            usage: AgentResponse['providerUsage'],
-          ): void => {
-            recordAgentUsageEvent(
-              this.deps.engineOptions,
-              subStep.name,
-              'parallel',
-              providerInfo,
-              success,
-              usage,
-            );
-          },
-        );
-
-        // Phase 2: report output for sub-step
-        if (subStep.outputContracts && subStep.outputContracts.length > 0) {
-          try {
-            const reportResult = await runReportPhase(subStep, subIteration, phaseCtx);
-            if (reportResult && 'blocked' in reportResult) {
-              const blockedResponse: AgentResponse = {
-                ...subResponse,
-                status: 'blocked',
-                content: reportResult.response.content,
-              };
-              state.stepOutputs.set(subStep.name, blockedResponse);
-              return {
-                subStep,
-                response: blockedResponse,
-                instruction: phase1Instruction,
-                providerInfo: subPm,
-                durationMs: Math.max(0, blockedResponse.timestamp.getTime() - startedAt),
-              };
-            }
-            if (reportResult && 'rateLimited' in reportResult) {
-              const rateLimitedResponse: AgentResponse = {
-                ...reportResult.response,
-                persona: subStep.name,
-              };
-              state.stepOutputs.set(subStep.name, rateLimitedResponse);
-              return {
-                subStep,
-                response: rateLimitedResponse,
-                instruction: phase1Instruction,
-                providerInfo: subPm,
-                durationMs: Math.max(0, rateLimitedResponse.timestamp.getTime() - startedAt),
-              };
-            }
-          } catch (reportError) {
-            if (reportError instanceof ReportPhaseGenerationError) {
-              log.info('Report phase failed for parallel sub-step, continuing to status judgment', {
-                step: subStep.name,
-                error: getErrorMessage(reportError),
-              });
-            } else {
-              throw reportError;
+        let publication: CanonicalFindingReviewPublication | undefined;
+        let relationClarification: ReviewerRelationClarification | undefined;
+        let finalResponse = subResponse;
+        if (findingContractContext !== undefined) {
+          const prepared = await this.deps.stepExecutor.prepareFindingReviewPublication({
+            step: subStep,
+            executableStep: executableSubStep,
+            parentStepName: step.name,
+            stepIteration,
+            state,
+            phase1Response: subResponse,
+            agentOptions,
+            updatePersonaSession,
+            runtime: subRuntime,
+          });
+          if ('terminalResponse' in prepared) {
+            state.stepOutputs.set(subStep.name, prepared.terminalResponse);
+            return {
+              subStep,
+              response: prepared.terminalResponse,
+              instruction: phase1Instruction,
+              providerInfo: subPm,
+              durationMs: Math.max(
+                0,
+                prepared.terminalResponse.timestamp.getTime() - startedAt,
+              ),
+            };
+          }
+          publication = prepared.publication;
+          relationClarification = prepared.relationClarification;
+          finalResponse = prepared.response;
+        } else {
+          const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(
+            subStep,
+            state,
+            subResponse.content,
+            updatePersonaSession,
+            this.deps.onPhaseStart,
+            this.deps.onPhaseComplete,
+            this.deps.onJudgeStage,
+            parentIteration,
+            subRuntime,
+            (
+              providerInfo: NonNullable<StepRunResult['providerInfo']>,
+              success: boolean,
+              usage: AgentResponse['providerUsage'],
+            ): void => {
+              recordAgentUsageEvent(
+                this.deps.engineOptions,
+                subStep.name,
+                'parallel',
+                providerInfo,
+                success,
+                usage,
+              );
+            },
+          );
+          if (subStep.outputContracts && subStep.outputContracts.length > 0) {
+            try {
+              const reportResult = await runReportPhase(subStep, subIteration, phaseCtx);
+              if (reportResult && 'blocked' in reportResult) {
+                const blockedResponse: AgentResponse = {
+                  ...subResponse,
+                  status: 'blocked',
+                  content: reportResult.response.content,
+                };
+                state.stepOutputs.set(subStep.name, blockedResponse);
+                return {
+                  subStep,
+                  response: blockedResponse,
+                  instruction: phase1Instruction,
+                  providerInfo: subPm,
+                  durationMs: Math.max(
+                    0,
+                    blockedResponse.timestamp.getTime() - startedAt,
+                  ),
+                };
+              }
+              if (reportResult && 'rateLimited' in reportResult) {
+                const rateLimitedResponse: AgentResponse = {
+                  ...reportResult.response,
+                  persona: subStep.name,
+                };
+                state.stepOutputs.set(subStep.name, rateLimitedResponse);
+                return {
+                  subStep,
+                  response: rateLimitedResponse,
+                  instruction: phase1Instruction,
+                  providerInfo: subPm,
+                  durationMs: Math.max(
+                    0,
+                    rateLimitedResponse.timestamp.getTime() - startedAt,
+                  ),
+                };
+              }
+            } catch (reportError) {
+              if (reportError instanceof ReportPhaseGenerationError) {
+                log.info(
+                  'Report phase failed for parallel sub-step, continuing to status judgment',
+                  {
+                    step: subStep.name,
+                    error: getErrorMessage(reportError),
+                  },
+                );
+              } else {
+                throw reportError;
+              }
             }
           }
-        }
-
-        let finalResponse: AgentResponse;
-        {
           let match;
           try {
-            match = await evaluatePostExecutionRules(subStep, () => phaseCtx, subRuleCtx);
+            match = await evaluatePostExecutionRules(
+              subStep,
+              () => phaseCtx,
+              subRuleCtx,
+            );
           } catch (error) {
             if (error instanceof RuleDetectionExhaustedError) {
               invalidateExpectedPersonaSession(
@@ -671,7 +665,11 @@ export class ParallelRunner {
             throw error;
           }
           finalResponse = match
-            ? { ...subResponse, matchedRuleIndex: match.index, matchedRuleMethod: match.method }
+            ? {
+                ...subResponse,
+                matchedRuleIndex: match.index,
+                matchedRuleMethod: match.method,
+              }
             : subResponse;
         }
 
@@ -707,10 +705,8 @@ export class ParallelRunner {
         return {
           subStep,
           response: finalResponse,
-          ...(reviewerRawResourceEnvelope !== undefined
-            ? { reviewerRawResourceEnvelope }
-            : {}),
-          ...(subRelationClarification !== undefined ? { relationClarification: subRelationClarification } : {}),
+          ...(publication !== undefined ? { publication } : {}),
+          ...(relationClarification !== undefined ? { relationClarification } : {}),
           instruction: phase1Instruction,
           providerInfo: subPm,
           durationMs: Math.max(0, finalResponse.timestamp.getTime() - startedAt),
@@ -829,8 +825,8 @@ export class ParallelRunner {
       };
     }
 
-    // v2 梯子設計: 取り込みは常に 'updated' で完了する（manager の壊れた応答・
-    // 予算超過は provisional として台帳へ着地し、run-level の失敗経路は無い）。
+    // 全 reviewer の canonical publication が揃った後に一度だけ取り込む。
+    // ここより前の失敗では ledger と rules のどちらも動かさない。
     await this.runFindingContractManager(
       step,
       stepIteration,
@@ -838,6 +834,33 @@ export class ParallelRunner {
       subResults,
       priorStepResponseText,
     );
+
+    if (findingContractContext !== undefined) {
+      for (const result of subResults) {
+        if (!isAgentParallelSubStep(result.subStep)) {
+          continue;
+        }
+        if (result.publication === undefined) {
+          throw new Error(
+            `Finding contract reviewer "${result.subStep.name}" has no canonical publication`,
+          );
+        }
+        const subRuntime = routedProviderInfoByStep.has(result.subStep.name)
+          ? {
+              ...runtime,
+              providerInfo: routedProviderInfoByStep.get(result.subStep.name)!,
+            }
+          : runtime;
+        result.response = await this.deps.stepExecutor.applyPostExecutionRulesOnly(
+          result.subStep,
+          state,
+          result.response,
+          updatePersonaSession,
+          subRuntime,
+        );
+        state.stepOutputs.set(result.subStep.name, result.response);
+      }
+    }
 
     // Print completion summary
     if (parallelLogger) {
@@ -1040,6 +1063,26 @@ export class ParallelRunner {
     if (!ledgerStore) {
       throw new Error('Finding contract is configured but finding ledger store is not available');
     }
+    const reviewerResults = subResults.flatMap((result) => {
+      if (!isAgentParallelSubStep(result.subStep)) {
+        return [];
+      }
+      if (result.publication === undefined) {
+        throw new Error(
+          `Finding contract reviewer "${result.subStep.name}" has no canonical publication`,
+        );
+      }
+      return [{
+        subStep: result.subStep,
+        publication: result.publication,
+        ...(result.relationClarification !== undefined
+          ? { relationClarification: result.relationClarification }
+          : {}),
+      }];
+    });
+    if (reviewerResults.length === 0) {
+      return undefined;
+    }
     return ingestFindingContractResults({
       contract: this.deps.findingContract,
       workflowProvider: this.deps.workflowProvider,
@@ -1051,7 +1094,7 @@ export class ParallelRunner {
       parentStep: step,
       stepIteration,
       iteration,
-      subResults,
+      subResults: reviewerResults,
       // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
       // workflow_call の子が親の台帳を継承した場合、この engine 自身の
       // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の

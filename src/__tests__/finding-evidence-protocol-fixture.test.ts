@@ -43,6 +43,7 @@ import {
   emptyFindingAuthorityProjection,
   reviewerRawExtractionFixture,
 } from './helpers/finding-lifecycle-fixture.js';
+import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -270,13 +271,13 @@ function makeHarness(initialLedger: FindingLedger): {
         .map(reviewerExtraction);
       const subResults: FindingManagerSubStepResult[] = [{
         subStep: { kind: 'agent', name: 'ai-antipattern-review', persona: 'ai-antipattern-reviewer', edit: false } as WorkflowStep,
-        response: {
-          status: 'done',
-          content: extractions.map((item) => String(item.rawExcerpt ?? '')).join('\n'),
-          structuredOutput: {
-            rawFindings: extractions,
-          },
-        } as unknown as AgentResponse,
+        publication: findingReviewPublicationFixture({
+          scopeIdentity: ledgerStore.ledgerIdentity,
+          parentStepName: parentStep.name,
+          stepIteration: 2,
+          reviewerStepName: 'ai-antipattern-review',
+          rawFindings: extractions,
+        }),
       }];
       return runFindingManagerForStep({
         contract: contract as never,
@@ -288,9 +289,11 @@ function makeHarness(initialLedger: FindingLedger): {
         stepIteration: 2,
         subResults,
         workflowName: 'peer-review',
+        workflowTask: 'Review the implementation.',
         runId: '20260712-073441-pr-task-attachments-takt-add-p',
         callNamespace: '',
         timestamp: '2026-07-12T09:05:19.675Z',
+        managerAuthority: 'standard',
       });
     },
   };

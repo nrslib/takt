@@ -13,4 +13,4 @@
 - `検証証跡` は対象・確認内容・結果が揃う場合だけ補助証跡とします。モック、静的確認、限定的な単体テストは、その範囲を超える動作確認に使いません。
 - 記録を探索できない、アクセスできない、または必要経路を探索し切れない場合は coverage gap です。登録済み task / public declaration が存在・配線を要求し、明示 path/root と完全一致 literal の repository query で必要経路を完全探索できる場合だけ `absence` target をリクエストします。
 
-**出力:** `supervisor-validation-finding-contract` 出力契約に従って記録してください。APPROVE は issue 0件かつ必須証跡を確認できた場合、REJECT は現在の観測欠陥 issue が1件以上の場合、NEED_REPLAN は issue化できない主要要件または必須証跡が未確認の場合にします。判定に関係なく `supervisor-gate-summary-finding-contract` 出力契約に従い、実際の判定、要点、次アクションまたは未完了理由を正しく要約してください。
+**出力:** `supervisor-validation-finding-contract` 出力契約に従って記録してください。APPROVE は issue 0件かつ必須証跡を確認できた場合、REJECT は現在の観測欠陥 issue が1件以上の場合、NEED_REPLAN は issue化できない主要要件または必須証跡が未確認の場合にします。

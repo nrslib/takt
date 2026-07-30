@@ -38,7 +38,8 @@ vi.mock('../core/workflow/findings/snapshot.js', async (importOriginal) => ({
   computeReviewScopeSnapshotId: vi.fn(() => '1'.repeat(64)),
 }));
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../core/workflow/phase-runner.js')>(),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue(undefined),
 }));
@@ -103,11 +104,14 @@ function mockReviewerEmitsHallucination(): void {
     options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
     const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
     if (schemaText.includes('"rawFindings"')) {
+      const isPublication = schemaText.includes('"reportContent"');
       return {
         persona,
         status: 'done',
-        content: 'Review report body.',
-        structuredOutput: { rawFindings: [HALLUCINATED_RAW] },
+        content: isPublication ? '' : 'Review report body.',
+        structuredOutput: isPublication
+          ? { reportContent: 'Review report body.', rawFindings: [HALLUCINATED_RAW] }
+          : { rawFindings: [HALLUCINATED_RAW] },
         timestamp: new Date('2026-06-13T00:00:01.000Z'),
       };
     }
@@ -411,10 +415,10 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(ledger.reviewerAnomalies?.[0]?.occurrences).toBeGreaterThanOrEqual(1);
   });
 
-  it('final-gate supervisor は2つのFinding Contract報告を出しても、ステップごとに1回だけ取り込み、raw findingを重複保存しない', async () => {
+  it('final-gate supervisor の単一Finding Contract報告を1回だけ取り込み、raw findingを重複保存しない', async () => {
     mockReviewerEmitsHallucination();
     const config: WorkflowConfig = {
-      name: 'supervisor-two-reports',
+      name: 'supervisor-single-report',
       maxSteps: 4,
       initialStep: 'supervise',
       provider: 'claude',
@@ -430,7 +434,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
           instruction: 'Supervise the final gate.',
           outputContracts: [
             { name: 'supervisor-validation.md', format: 'validation', formatRef: 'supervisor-validation-finding-contract' },
-            { name: 'supervisor-gate-summary.md', format: 'summary', formatRef: 'supervisor-gate-summary-finding-contract' },
           ],
           rules: [makeRule('approved', 'COMPLETE')],
         }),
@@ -448,7 +451,11 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
       options?.outputSchema && JSON.stringify(options.outputSchema).includes('"rawFindings"')
     ));
-    expect(reviewerCalls).toHaveLength(1);
+    expect(reviewerCalls).toHaveLength(2);
+    const publicationCalls = reviewerCalls.filter(([, , options]) => (
+      JSON.stringify(options?.outputSchema).includes('"reportContent"')
+    ));
+    expect(publicationCalls).toHaveLength(1);
 
     const rawFindingsDir = join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'raw');
     const rawFindingFiles = readdirSync(rawFindingsDir);

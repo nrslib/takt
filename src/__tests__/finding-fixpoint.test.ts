@@ -31,6 +31,8 @@ import {
   emptyFindingAuthorityProjection,
   reviewerRawExtractionFixture,
 } from './helpers/finding-lifecycle-fixture.js';
+import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
+import { findingManagerTaskResponse } from './helpers/finding-manager-task-response.js';
 import { createRawRecoveryAttempt } from '../core/models/finding-raw-recovery.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
@@ -477,13 +479,13 @@ function makeRoundHarness(
       round += 1;
       const subResults: FindingManagerSubStepResult[] = [{
         subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-        response: {
-          status: 'done',
-          content: reviewerRawFindings
-            .map((item) => String(item.rawExcerpt ?? ''))
-            .join('\n'),
-          structuredOutput: { rawFindings: reviewerRawFindings },
-        } as unknown as AgentResponse,
+        publication: findingReviewPublicationFixture({
+          scopeIdentity: ledgerStore.ledgerIdentity,
+          parentStepName: parentStep.name,
+          stepIteration: round,
+          reviewerStepName: 'arch-review',
+          rawFindings: reviewerRawFindings,
+        }),
       }];
       return runFindingManagerForStep({
         contract: contract as never,
@@ -495,9 +497,11 @@ function makeRoundHarness(
         stepIteration: round,
         subResults,
         workflowName: 'peer-review',
+        workflowTask: 'Review the implementation.',
         runId,
         callNamespace: '',
         timestamp: `2026-07-0${round}T00:00:00.000Z`,
+        managerAuthority: 'standard',
       });
     },
   };
@@ -530,18 +534,71 @@ function hallucinatedRaw(overrides: Record<string, unknown> = {}): Record<string
 }
 
 /** Recovery が substantive outcome を返せない状況を再現する応答。 */
-function unresolvedRecoveryResponse(rawFindingId: string): AgentResponse {
-  return {
-    persona: 'findings-manager',
-    status: 'done',
-    content: '',
-    structuredOutput: {
-      interpretations: [
-        { decision: 'provisional', rawFindingId, proofId: '', targetFindingId: '', reason: 'Cannot determine the identity of this re-report.' },
-      ],
-    },
-    timestamp: new Date('2026-07-01T00:00:01.000Z'),
-  } as unknown as AgentResponse;
+function instructionSectionJson<T>(instruction: string, heading: string): T {
+  const start = instruction.indexOf(`${heading}\n`);
+  const rest = instruction.slice(start + heading.length + 1);
+  const match = /^(`{3,})json\n([\s\S]*?)\n\1/m.exec(rest);
+  if (start < 0 || match?.[2] === undefined) {
+    throw new Error(`Missing JSON block after ${heading}`);
+  }
+  return JSON.parse(match[2]) as T;
+}
+
+function unresolvedRecoveryResponse(
+  instruction: string,
+  rawFindingId: string,
+): AgentResponse {
+  if (instruction.includes('entity-binding contract')) {
+    const manifest = instructionSectionJson<{
+      taskId: string;
+      ownedRawFindingIds: string[];
+    }>(instruction, '## Task manifest');
+    const observations = instructionSectionJson<Array<{
+      rawFindingId: string;
+      title: string | null;
+      description: string | null;
+    }>>(instruction, '## Raw observations');
+    const projection = instructionSectionJson<{
+      findings: Array<{ id: string; title: string; description: string }>;
+    }>(instruction, '## Complete ledger entities for the supplied connected components');
+    return {
+      persona: 'findings-manager',
+      status: 'done',
+      content: '',
+      structuredOutput: {
+        taskId: manifest.taskId,
+        decisions: observations.map((observation) => {
+          const existing = projection.findings.find((finding) => (
+            finding.title === observation.title
+            && finding.description === observation.description
+          ));
+          return {
+            rawFindingId: observation.rawFindingId,
+            decision: existing === undefined ? 'new_entity' : 'bind_existing',
+            findingId: existing?.id ?? '',
+            groupRawFindingId: existing === undefined ? observation.rawFindingId : '',
+            reason: existing === undefined
+              ? 'This observation describes a distinct semantic entity.'
+              : 'This observation describes the existing semantic entity.',
+          };
+        }),
+      },
+      timestamp: new Date('2026-07-01T00:00:01.000Z'),
+    } as unknown as AgentResponse;
+  }
+  return findingManagerTaskResponse(instruction, {
+    rawDecisions: [{
+      decision: 'unsupported',
+      rawFindingId,
+      anchorRelevance: 'not_applicable',
+      evidence: 'Cannot determine the identity of this re-report.',
+    }],
+    disputeDecisions: [],
+    conflictDecisions: [],
+    invalidateDecisions: [],
+    duplicateDecisions: [],
+    dismissDecisions: [],
+  });
 }
 
 function unverifiedClaimRaw(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -607,7 +664,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
         instruction as string,
         ['ambiguous-1', 'ambiguous-1-again', 'ambiguous-1-final', 'ambiguous-1-stable'],
       );
-      return unresolvedRecoveryResponse(rawId);
+      return unresolvedRecoveryResponse(instruction as string, rawId);
     });
     await harness.run([unverifiedClaimRaw()]);
     await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-again' })]);
@@ -627,7 +684,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
 
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const rawId = extractResidualRawIdFromEitherLocalId(instruction as string, ['ambiguous-1', 'ambiguous-2']);
-      return unresolvedRecoveryResponse(rawId);
+      return unresolvedRecoveryResponse(instruction as string, rawId);
     });
     await harness.run([unverifiedClaimRaw()]);
     await harness.run([unverifiedClaimRaw({
@@ -686,7 +743,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
         instruction as string,
         ['ambiguous-1', 'ambiguous-1-r2', 'ambiguous-1-r3', 'ambiguous-1-r4'],
       );
-      return unresolvedRecoveryResponse(rawId);
+      return unresolvedRecoveryResponse(instruction as string, rawId);
     });
 
     // Round 1: the unverified claim is first observed; the substantive finding
@@ -739,7 +796,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
         instruction as string,
         ['ambiguous-1', 'ambiguous-1-resumed', 'ambiguous-1-resumed-again', 'ambiguous-1-resumed-stable'],
       );
-      return unresolvedRecoveryResponse(rawId);
+      return unresolvedRecoveryResponse(instruction as string, rawId);
     });
     await priorProcess.run([unverifiedClaimRaw()]);
     const ledgerFromPriorProcess = priorProcess.currentLedger();
@@ -765,7 +822,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
         instruction as string,
         ['ambiguous-1', 'ambiguous-1-r2', 'ambiguous-1-r3', 'ambiguous-1-r4', 'ambiguous-1-r5', 'new-observation'],
       );
-      return unresolvedRecoveryResponse(rawId);
+      return unresolvedRecoveryResponse(instruction as string, rawId);
     });
     await harness.run([unverifiedClaimRaw()]);
     await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r2' })]);

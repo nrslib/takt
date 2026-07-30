@@ -14,6 +14,7 @@ import {
   computeLineageKey,
   computeReviewerStableKey,
   createReviewerRawFindingCandidates,
+  projectReviewerRawStructuredOutputWithEnvelope,
   toLedgerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
 import { foldRawFindingEvidence } from '../core/workflow/findings/finding-evidence-fold.js';
@@ -41,6 +42,7 @@ import { applyCommitLedgerStates } from '../core/workflow/findings/manager-commi
 import { applyRejectedObservationAttachments } from '../core/workflow/findings/manager-provisional-settlement.js';
 import { resolveStopBudgetLimits } from '../core/workflow/findings/stop-budget.js';
 import { resolveReviewIntegrityLimits } from '../core/workflow/findings/review-integrity.js';
+import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
 
 function makeFinding(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
@@ -211,13 +213,14 @@ describe('normalizer source binding review integrity', () => {
           persona: 'arch-review',
           edit: false,
         },
-        response: {
-          persona: 'arch-review',
-          status: 'done',
-          content: report,
-          timestamp: new Date('2026-07-30T00:00:00.000Z'),
-          structuredOutput: { rawFindings: [extraction] },
-        },
+        publication: findingReviewPublicationFixture({
+          scopeIdentity: '/test/normalizer-source-binding/ledger.json',
+          parentStepName: 'reviewers',
+          stepIteration,
+          reviewerStepName: 'arch-review',
+          reportContent: report,
+          rawFindings: [extraction],
+        }),
       }],
       previousLedger,
       workflowName: 'peer-review',
@@ -238,135 +241,17 @@ describe('normalizer source binding review integrity', () => {
     });
   }
 
-  function landAnomalies(
-    ledger: FindingLedger,
-    intake: ReturnType<typeof intakeWithReport>,
-    round: number,
-  ) {
-    const observation = {
-      runId: `run-${round}`,
-      stepName: 'reviewers',
-      timestamp: `2026-07-30T00:00:0${round}.000Z`,
-    };
-    return applyCommitLedgerStates({
-      runInput: {
-        workflowName: ledger.workflowName,
-        parentStep: { name: 'reviewers' },
-        runId: observation.runId,
-        timestamp: observation.timestamp,
-      } as never,
-      freshLedger: ledger,
-      settledLedger: ledger,
-      baseAnomalySpecs: intake.intakeAnomalySpecs,
-      pendingRejectedObservations: [],
-      interpretationResults: new Map(),
-      interpretationReservations: new Map(),
-      interpretationIntegrityDigests: new Map(),
-      observation,
-      verifiedEvidenceCandidates: [],
-      stopBudgetLimits: resolveStopBudgetLimits(undefined),
-      stopBudgetRoundMarker: `normalizer-round-${round}`,
-      reviewIntegrityLimits: resolveReviewIntegrityLimits({ maxReviewRounds: 2 }),
-    });
-  }
-
   it.each([
     ['zero', 'No matching excerpt is present.'],
     ['multiple', 'F-0016 remains unresolved.\nF-0016 remains unresolved.'],
   ])(
-    'routes a %s-match rawExcerpt failure through finite review-integrity without a Finding',
+    'rejects a %s-match rawExcerpt before canonical publication',
     (_caseName, report) => {
-      const firstIntake = intakeWithReport(report, 1);
-
-      expect(firstIntake.items).toEqual([]);
-      expect(firstIntake.intakeProvisionalSpecs).toEqual([]);
-      expect(firstIntake.intakeAnomalySpecs).toMatchObject([{
-        kind: 'protocol-anomaly',
-        sourceRawFindingIds: [],
-        sourceIntakeIds: [
-          'run-normalizer:reviewers:1:arch-review:F-0016',
-        ],
-      }]);
-      const first = landAnomalies(makeLedger([], { nextId: 16 }), firstIntake, 1);
-
-      expect(first.ledger.findings).toEqual([]);
-      expect(first.ledger.nextId).toBe(16);
-      expect(first.ledger.reviewerAnomalies).toMatchObject([{
-        kind: 'protocol-anomaly',
-        occurrences: 1,
-      }]);
-      expect(first.ledger.reviewerAnomalies?.[0])
-        .not.toHaveProperty('promotedFindingId');
-      expect(first.ledger.reviewIntegrity).toMatchObject({
-        roundMarkers: ['normalizer-round-1'],
-        exhausted: false,
-      });
-      const corrected = intakeWithReport('F-0016 remains unresolved.', 3);
-      expect(corrected.items[0]?.canonical.lineageKey)
-        .toBe(first.ledger.reviewerAnomalies?.[0]?.lineageKey);
-
-      const second = landAnomalies(
-        first.ledger,
-        intakeWithReport(report, 2),
-        2,
-      );
-      expect(second.ledger.findings).toEqual([]);
-      expect(second.ledger.nextId).toBe(16);
-      expect(second.ledger.reviewerAnomalies).toMatchObject([{
-        occurrences: 2,
-        sourceRawFindingIds: [],
-        sourceIntakeIds: [
-          'run-normalizer:reviewers:1:arch-review:F-0016',
-          'run-normalizer:reviewers:2:arch-review:F-0016',
-        ],
-      }]);
-      expect(second.ledger.reviewIntegrity?.roundMarkers).toEqual([
-        'normalizer-round-1',
-        'normalizer-round-2',
-      ]);
-      expect(second.ledger.reviewIntegrity?.exhausted).toBe(true);
+      expect(() => intakeWithReport(report, 1))
+        .toThrow(/rawExcerpt must occur exactly once/);
     },
   );
 
-  it('uses the canonical collision lineage for a source-binding rejection', () => {
-    const cleanWithoutCollision = intakeWithReport(
-      'F-0016 remains unresolved.',
-      1,
-    ).items[0]!.canonical;
-    const collidingLedger = {
-      ...makeLedger([]),
-      findings: [makeFinding({
-        id: 'F-0016',
-        revision: 4,
-        target: cleanWithoutCollision.target,
-        targetIdentityHash: cleanWithoutCollision.targetIdentityHash,
-        claimIdentityHash: cleanWithoutCollision.claimIdentityHash,
-        semanticClaimIdentityHash: cleanWithoutCollision.semanticClaimIdentityHash,
-        severity: cleanWithoutCollision.severity,
-        title: cleanWithoutCollision.title,
-        description: cleanWithoutCollision.description,
-      })],
-    };
-
-    const rejected = intakeWithReport(
-      'No matching excerpt is present.',
-      2,
-      collidingLedger,
-    );
-    const canonical = intakeWithReport(
-      'F-0016 remains unresolved.',
-      3,
-      collidingLedger,
-    ).items[0]!.canonical;
-
-    expect(rejected.intakeAnomalySpecs[0]?.lineageKey).toBe(
-      canonical.lineageKey,
-    );
-    expect(canonical.lineageKey).toBe(computeLineageKey({
-      claimIdentityHash: canonical.claimIdentityHash,
-      collidingFindingId: 'F-0016',
-    }));
-  });
 });
 
 describe('transferSupersededMatches', () => {
@@ -985,51 +870,31 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
       }],
     }, 99);
 
-    const intake = intakeReviewerOutputs({
-      subResults: [{
-        subStep: {
-          name: 'arch-review',
-          persona: 'arch-review',
-        } as never,
-        response: {
-          status: 'done',
-          content: String(validItem.rawExcerpt),
-          structuredOutput: {
-            rawFindings: [
-              getterItem,
-              toJsonItem,
-              proxyItem,
-              symbolItem,
-              nonEnumerableItem,
-              extraItem,
-              cyclicItem,
-              sharedReferenceItem,
-              validItem,
-            ],
-          },
-        },
-      }],
-      previousLedger: makeLedger([]),
-      workflowName: 'peer-review',
-      callNamespace: '',
-      parentStepName: 'reviewers',
-      stepIteration: 1,
-      runId: 'run-provider-items',
+    const projected = projectReviewerRawStructuredOutputWithEnvelope({
+      rawFindings: [
+        getterItem,
+        toJsonItem,
+        proxyItem,
+        symbolItem,
+        nonEnumerableItem,
+        extraItem,
+        cyclicItem,
+        sharedReferenceItem,
+        validItem,
+      ],
     });
 
     expect(getterReads).toBe(0);
     expect(toJsonCalls).toBe(0);
     expect(proxyReads).toBe(0);
-    expect(intake.items).toHaveLength(0);
-    expect(intake.overflowRawFindingIds).toEqual(new Set());
-    expect(intake.intakeProvisionalSpecs).toEqual([
-      expect.objectContaining({ kind: 'reviewer-output-overflow' }),
-    ]);
-    expect(intake.overflowReports).toEqual([{
-      reviewer: 'arch-review',
-      reason: expect.stringContaining('exceed'),
-    }]);
-    expect(intake.items.some(({ wire }) => wire.title === 'valid title')).toBe(false);
+    expect(() => findingReviewPublicationFixture({
+      scopeIdentity: '/test/provider-items/ledger.json',
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      reviewerStepName: 'arch-review',
+      reportContent: String(validItem.rawExcerpt),
+      rawFindings: projected.structuredOutput.rawFindings as unknown[],
+    })).toThrow(/requires rawExcerpt/);
   });
 });
 
@@ -1163,11 +1028,13 @@ describe('relation 別 intake と target atomization', () => {
             persona: 'arch-review',
             edit: false,
           } as never,
-          response: {
-            status: 'done',
-            content: extraction.rawExcerpt,
-            structuredOutput: { rawFindings: [extraction] },
-          } as never,
+          publication: findingReviewPublicationFixture({
+            scopeIdentity: '/test/multi-target-taint/ledger.json',
+            parentStepName: 'reviewers',
+            stepIteration: 1,
+            reviewerStepName: 'arch-review',
+            rawFindings: [extraction],
+          }),
           relationClarification: {
             attempted: true,
             flaggedRawFindingIds: ['multi-target'],
@@ -1279,11 +1146,13 @@ describe('relation 別 intake と target atomization', () => {
               persona: 'arch-review',
               edit: false,
             } as never,
-            response: {
-              status: 'done',
-              content: extraction.rawExcerpt,
-              structuredOutput: { rawFindings: [extraction] },
-            } as never,
+            publication: findingReviewPublicationFixture({
+              scopeIdentity: '/test/lifecycle-target-hydration/ledger.json',
+              parentStepName: 'reviewers',
+              stepIteration: round + 1,
+              reviewerStepName: 'arch-review',
+              rawFindings: [extraction],
+            }),
           }],
           previousLedger: ledger,
           workflowName: 'peer-review',

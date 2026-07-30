@@ -206,7 +206,13 @@ describe('buildFindingContractInstruction', () => {
 describe('buildFindingContractReportInstruction', () => {
   function buildReport(language: 'ja' | 'en'): string {
     return buildFindingContractReportInstruction({
-      reportLedgerSummary: { ids: ['F-0001'] },
+      contract: {
+        ledgerSummary: { findings: [] },
+        reportLedgerSummary: { ids: ['F-0001'] },
+        hasOpenFindings: false,
+        hasWaivedFindings: false,
+        hasDismissedFindings: false,
+      },
       language,
       renderFencedJsonBlock,
     });

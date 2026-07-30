@@ -2,13 +2,20 @@ import type { AgentResponse, WorkflowStep } from '../models/types.js';
 import { resolveAgentErrorMessage } from '../models/response.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { executeAgent } from '../../agents/agent-usecases.js';
+import { parseStructuredOutputObject } from '../../agents/structured-caller/shared.js';
 import { createLogger } from '../../shared/utils/index.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
 import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
+import { buildSessionKey } from './session-key.js';
 import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder.js';
 import { getReportFiles } from './output-contract-files.js';
 import type { PhasePromptParts, StepProviderInfo } from './types.js';
 import type { ReportPhaseRunnerContext } from './phase-runner.js';
+import type { FindingContractReviewerMode } from './instruction/instruction-context.js';
+import {
+  FINDING_REVIEW_PUBLICATION_SCHEMA_REF,
+  findingReviewPublicationReportContent,
+} from './findings/review-publication-structured-output.js';
 import { runWithPhaseSpan } from './observability/workflowSpans.js';
 import { writeReportFile } from './report-writer.js';
 
@@ -18,6 +25,23 @@ const REPORT_PHASE_MAX_TURNS = 3;
 /** Result when Phase 2 encounters a blocked status */
 export type ReportPhaseBlockedResult = { blocked: true; response: AgentResponse };
 export type ReportPhaseRateLimitedResult = { rateLimited: true; response: AgentResponse };
+export interface GeneratedReport {
+  readonly reportName: string;
+  readonly reportContent: string;
+  readonly response: AgentResponse;
+  readonly attemptIdentity: ReportAttemptIdentity;
+}
+export interface GeneratedReportPhaseResult {
+  readonly reports: readonly GeneratedReport[];
+}
+
+export interface ReportAttemptIdentity {
+  readonly providerInfo: StepProviderInfo;
+  readonly sessionKey: string;
+  readonly sessionId: string | undefined;
+  /** Phase 2 の実試行に渡した capability-sensitive options の完全なスナップショット。 */
+  readonly agentOptions: Readonly<RunAgentOptions>;
+}
 
 class ReportPhaseToolCallError extends Error {
   constructor(message: string) {
@@ -37,15 +61,63 @@ export class ReportPhaseGenerationError extends Error {
  * Phase 2: Report output.
  * Resumes the agent session with no tools to request report content.
  * Each report file is generated individually in a loop.
- * Plain text responses are written directly to files (no JSON parsing).
+ * 通常レポートは plain text をそのまま扱う。Finding Contract reviewer は
+ * structured publication の reportContent だけを正準本文として扱う。
  */
 export async function runReportPhase(
   step: WorkflowStep,
   stepIteration: number,
   ctx: ReportPhaseRunnerContext,
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
-  const sessionKey = ctx.resolveSessionKey(step);
-  let currentSessionId = ctx.getSessionId(sessionKey);
+  return executeReportPhase(step, stepIteration, ctx, undefined, (report) => {
+    writeReportFile(ctx.reportDir, report.reportName, report.reportContent);
+  });
+}
+
+export async function generateReportPhase(
+  step: WorkflowStep,
+  stepIteration: number,
+  ctx: ReportPhaseRunnerContext,
+  reviewerMode?: FindingContractReviewerMode,
+): Promise<GeneratedReportPhaseResult | ReportPhaseBlockedResult | ReportPhaseRateLimitedResult> {
+  const reports: GeneratedReport[] = [];
+  const result = await executeReportPhase(step, stepIteration, ctx, reviewerMode, (report) => {
+    reports.push(report);
+  });
+  return result ?? { reports };
+}
+
+function buildReportFindingContractContext(
+  step: WorkflowStep,
+  ctx: ReportPhaseRunnerContext,
+  reviewerMode: FindingContractReviewerMode | undefined,
+) {
+  const context = ctx.buildFindingContractInstructionContext?.(step, reviewerMode);
+  if (
+    reviewerMode !== 'structured'
+    || context?.reviewer?.mode !== 'structured'
+    || step.structuredOutput === undefined
+  ) {
+    return context;
+  }
+  return {
+    ...context,
+    reviewer: {
+      ...context.reviewer,
+      rawFindingsStructuredOutput: step.structuredOutput,
+    },
+  };
+}
+
+async function executeReportPhase(
+  step: WorkflowStep,
+  stepIteration: number,
+  ctx: ReportPhaseRunnerContext,
+  reviewerMode: FindingContractReviewerMode | undefined,
+  acceptReport: (report: GeneratedReport) => void,
+): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
+  const primarySessionKey = ctx.resolveSessionKey(step);
+  let currentSessionId = ctx.getSessionId(primarySessionKey);
   const hasLastResponse = ctx.lastResponse != null && ctx.lastResponse.trim().length > 0;
 
   log.debug('Running report phase', {
@@ -67,7 +139,7 @@ export async function runReportPhase(
     }
 
     if (!currentSessionId && !hasLastResponse) {
-      throw new Error(`Report phase requires a session to resume, but no sessionId found for persona "${sessionKey}" in step "${step.name}"`);
+      throw new Error(`Report phase requires a session to resume, but no sessionId found for persona "${primarySessionKey}" in step "${step.name}"`);
     }
 
     log.debug('Generating report file', { step: step.name, fileName });
@@ -79,13 +151,16 @@ export async function runReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: currentSessionId ? undefined : ctx.lastResponse,
-      findingContract: ctx.buildFindingContractInstructionContext?.(step, false),
+      findingContract: buildReportFindingContractContext(step, ctx, reviewerMode),
     }).build();
-    const firstAttemptOptions = currentSessionId
-      ? ctx.buildResumeOptions(step, currentSessionId, {
+    let firstAttemptOptions: RunAgentOptions;
+    if (currentSessionId === undefined) {
+      firstAttemptOptions = buildNewSessionRetryOptions(step, ctx);
+    } else {
+      firstAttemptOptions = ctx.buildResumeOptions(step, currentSessionId, {
         maxTurns: REPORT_PHASE_MAX_TURNS,
-      })
-      : buildNewSessionRetryOptions(step, ctx);
+      });
+    }
     const firstAttemptPhaseExecutionId = nextReportPhaseExecutionId(step.name, ctx.iteration, ++phaseSequence);
 
     const firstAttempt = await runSingleReportAttempt(
@@ -102,11 +177,14 @@ export async function runReportPhase(
       return { rateLimited: true, response: firstAttempt.response };
     }
     if (firstAttempt.kind === 'success') {
-      writeReportFile(ctx.reportDir, fileName, firstAttempt.content);
-      if (firstAttempt.response.sessionId) {
-        currentSessionId = firstAttempt.response.sessionId;
-        ctx.updatePersonaSession(sessionKey, currentSessionId);
-      }
+      acceptReport({
+        reportName: fileName,
+        reportContent: firstAttempt.content,
+        response: firstAttempt.response,
+        attemptIdentity: firstAttempt.attemptIdentity,
+      });
+      currentSessionId = firstAttempt.attemptIdentity.sessionId;
+      ctx.updatePersonaSession(firstAttempt.attemptIdentity.sessionKey, currentSessionId);
       log.debug('Report file generated', { step: step.name, fileName });
       continue;
     }
@@ -122,7 +200,7 @@ export async function runReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: ctx.lastResponse,
-      findingContract: ctx.buildFindingContractInstructionContext?.(step, false),
+      findingContract: buildReportFindingContractContext(step, ctx, reviewerMode),
     }).build();
     const retryOptions = buildNewSessionRetryOptions(step, ctx);
     let retryFailure: Extract<ReportAttemptResult, { kind: 'retryable_failure' }> = firstAttempt;
@@ -145,9 +223,14 @@ export async function runReportPhase(
         return { rateLimited: true, response: retryAttempt.response };
       }
       if (retryAttempt.kind === 'success') {
-        writeReportFile(ctx.reportDir, fileName, retryAttempt.content);
-        currentSessionId = retryAttempt.response.sessionId;
-        ctx.updatePersonaSession(sessionKey, currentSessionId);
+        acceptReport({
+          reportName: fileName,
+          reportContent: retryAttempt.content,
+          response: retryAttempt.response,
+          attemptIdentity: retryAttempt.attemptIdentity,
+        });
+        currentSessionId = retryAttempt.attemptIdentity.sessionId;
+        ctx.updatePersonaSession(retryAttempt.attemptIdentity.sessionKey, currentSessionId);
         log.debug('Report file generated', { step: step.name, fileName });
         continue;
       }
@@ -186,7 +269,18 @@ export async function runReportPhase(
       throw new ReportPhaseGenerationError(`Report phase failed for ${fileName}: ${fallbackAttempt.errorMessage}`);
     }
 
-    writeReportFile(ctx.reportDir, fileName, fallbackAttempt.content);
+    acceptReport({
+      reportName: fileName,
+      reportContent: fallbackAttempt.content,
+      response: fallbackAttempt.response,
+      attemptIdentity: fallbackAttempt.attemptIdentity,
+    });
+    if (fallbackAttempt.attemptIdentity.sessionId !== undefined) {
+      ctx.updatePersonaSession(
+        fallbackAttempt.attemptIdentity.sessionKey,
+        fallbackAttempt.attemptIdentity.sessionId,
+      );
+    }
     log.debug('Report file generated by fallback provider', { step: step.name, fileName });
   }
 
@@ -244,7 +338,12 @@ function detectReportPhaseToolCall(event: StreamEvent): ReportPhaseToolCallError
 }
 
 type ReportAttemptResult =
-  | { kind: 'success'; content: string; response: AgentResponse }
+  | {
+    kind: 'success';
+    content: string;
+    response: AgentResponse;
+    attemptIdentity: ReportAttemptIdentity;
+  }
   | { kind: 'blocked'; response: AgentResponse }
   | { kind: 'rate_limited'; response: AgentResponse }
   | {
@@ -307,12 +406,12 @@ async function runSingleReportAttempt(
       providerInfo: attemptProviderInfo,
       getPromptParts: () => resolvedPromptParts,
     }, () => executeAgent(step.persona, instruction, callOptions), (result) =>
-      buildReportAttemptSpanOutcome(result, reportToolCallError));
+      buildReportAttemptSpanOutcome(step, result, reportToolCallError));
     ctx.onProviderAttempt?.(
       attemptProviderInfo,
       response.status === 'done'
         && reportToolCallError === undefined
-        && classifyRetryableFailure(response) === undefined,
+        && classifyRetryableFailure(step, response) === undefined,
       response.providerUsage,
     );
     didRecordProviderAttempt = true;
@@ -380,18 +479,24 @@ async function runSingleReportAttempt(
     };
   }
 
-  const trimmedContent = response.content.trim();
-  if (trimmedContent.length === 0) {
+  const finalReportContent = resolveReportContent(step, response);
+  if (finalReportContent.trim().length === 0) {
     const errorMessage = 'Report output is empty';
     ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMessage, phaseExecutionId, ctx.iteration);
     return { kind: 'retryable_failure', errorMessage, failureReason: 'empty_output' };
   }
 
-  ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, undefined, phaseExecutionId, ctx.iteration);
-  return { kind: 'success', content: trimmedContent, response };
+  ctx.onPhaseComplete?.(step, 2, 'report', finalReportContent, response.status, undefined, phaseExecutionId, ctx.iteration);
+  return {
+    kind: 'success',
+    content: finalReportContent,
+    response,
+    attemptIdentity: buildReportAttemptIdentity(step, options, response, ctx),
+  };
 }
 
 function buildReportAttemptSpanOutcome(
+  step: WorkflowStep,
   result: AgentResponse,
   reportToolCallError: ReportPhaseToolCallError | undefined,
 ) {
@@ -404,7 +509,7 @@ function buildReportAttemptSpanOutcome(
     };
   }
 
-  const retryableFailure = classifyRetryableFailure(result);
+  const retryableFailure = classifyRetryableFailure(step, result);
   if (retryableFailure !== undefined) {
     return {
       status: 'error',
@@ -422,14 +527,54 @@ function buildReportAttemptSpanOutcome(
   };
 }
 
-function classifyRetryableFailure(response: AgentResponse): ReportRetryFailureReason | undefined {
+function classifyRetryableFailure(
+  step: WorkflowStep,
+  response: AgentResponse,
+): ReportRetryFailureReason | undefined {
   if (response.status === 'blocked' || response.status === 'rate_limited' || response.errorKind === 'rate_limit') {
     return undefined;
   }
   if (response.status !== 'done') {
     return 'provider_error';
   }
-  return response.content.trim().length === 0 ? 'empty_output' : undefined;
+  const finalReportContent = resolveReportContent(step, response);
+  return finalReportContent.trim().length === 0 ? 'empty_output' : undefined;
+}
+
+function resolveReportContent(
+  step: WorkflowStep,
+  response: AgentResponse,
+): string {
+  if (step.structuredOutput?.schemaRef !== FINDING_REVIEW_PUBLICATION_SCHEMA_REF) {
+    return response.content.trim();
+  }
+  const structuredOutput = response.structuredOutput
+    ?? parseStructuredOutputObject(response.content);
+  const reportContent = findingReviewPublicationReportContent(structuredOutput);
+  if (reportContent === undefined) {
+    throw new Error('Finding review publication reportContent is missing');
+  }
+  return reportContent;
+}
+
+function buildReportAttemptIdentity(
+  step: WorkflowStep,
+  options: RunAgentOptions,
+  response: AgentResponse,
+  ctx: ReportPhaseRunnerContext,
+): ReportAttemptIdentity {
+  const providerInfo = resolveReportAttemptProviderInfo(step, options, ctx);
+  const primaryProviderInfo = ctx.resolveStepProviderModel(step);
+  const isPrimaryTarget = providerInfo.provider === primaryProviderInfo.provider
+    && providerInfo.model === primaryProviderInfo.model;
+  return {
+    providerInfo,
+    sessionKey: isPrimaryTarget
+      ? ctx.resolveSessionKey(step)
+      : buildSessionKey(step, providerInfo),
+    sessionId: response.sessionId ?? options.sessionId,
+    agentOptions: Object.freeze({ ...options }),
+  };
 }
 
 function buildRetryableFailureEventError(

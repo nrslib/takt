@@ -33,6 +33,7 @@ import { createFindingAdjudicationReservation } from './helpers/finding-adjudica
 import {
   verifiedSourceQuoteFields,
 } from './helpers/finding-evidence.js';
+import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
 import {
   createFindingManagerPublicationDouble,
   observeFindingLedgerMutations,
@@ -497,13 +498,13 @@ describe('item 1/4: raw admission validation and invalidate', () => {
         stepIteration: 1,
         subResults: [{
           subStep: { kind: 'agent', name: 'architecture-review', persona: 'arch', edit: false } as WorkflowStep,
-          response: {
-            status: 'done',
-            content: input.reviewerRawFindings
-              .map((item) => String(item.rawExcerpt ?? ''))
-              .join('\n'),
-            structuredOutput: { rawFindings: input.reviewerRawFindings },
-          } as unknown as AgentResponse,
+          publication: findingReviewPublicationFixture({
+            scopeIdentity: ledgerStore.ledgerIdentity,
+            parentStepName: parentStep.name,
+            stepIteration: 1,
+            reviewerStepName: 'architecture-review',
+            rawFindings: input.reviewerRawFindings,
+          }),
         }],
         workflowName: 'peer-review',
         runId: 'run-1',

@@ -41,6 +41,12 @@ import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot
 import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
 import type { FindingLedger, FindingLedgerStore } from '../core/workflow/findings/types.js';
 import { executeAgent } from '../agents/agent-usecases.js';
+import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
+import {
+  authorizeFindingLedgerFixture,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
+import { findingManagerTaskResponse } from './helpers/finding-manager-task-response.js';
 
 const executeAgentMock = vi.mocked(executeAgent);
 
@@ -103,7 +109,7 @@ describe('finding manager filesystem error propagation', () => {
       ledgerPath: FINDING_CONTRACT.ledgerPath,
       rawFindingsPath: FINDING_CONTRACT.rawFindingsPath,
     });
-    const initialLedger: FindingLedger = {
+    const initialLedger: FindingLedger = authorizeFindingLedgerFixture({
       workflowName: 'peer-review',
       nextId: 1,
       updatedAt: '2026-07-17T00:00:00.000Z',
@@ -112,7 +118,7 @@ describe('finding manager filesystem error propagation', () => {
       rawFindings: [],
       conflicts: [],
       interpretations: [],
-    };
+    });
     await ledgerStore.updateLedger(() => ({ ledger: initialLedger, result: undefined }));
     const ledgerPath = join(cwd, FINDING_CONTRACT.ledgerPath);
     const initialLedgerContent = readFileSync(ledgerPath, 'utf-8');
@@ -136,11 +142,12 @@ describe('finding manager filesystem error propagation', () => {
       stepIteration: 1,
       subResults: [{
         subStep: { kind: 'agent', name: 'review', persona: 'reviewer', edit: false },
-        response: {
-          status: 'done',
-          content: '',
-          structuredOutput: {
-            rawFindings: [{
+        publication: findingReviewPublicationFixture({
+          scopeIdentity: ledgerStore.ledgerIdentity,
+          parentStepName: 'reviewers',
+          stepIteration: 1,
+          reviewerStepName: 'review',
+          rawFindings: [reviewerRawExtractionFixture({
               rawFindingId: 'raw-1',
               familyTag: 'filesystem-error',
               severity: 'high',
@@ -157,9 +164,8 @@ describe('finding manager filesystem error propagation', () => {
                 verbatimExcerpt: 'export const value = 1;',
                 snapshotId,
               }],
-            }],
-          },
-        } as unknown as AgentResponse,
+          })],
+        }),
       }],
       workflowName: 'peer-review',
       runId: 'run-1',
@@ -173,7 +179,7 @@ describe('finding manager filesystem error propagation', () => {
     expect(ledgerStore.loadLedger()).toEqual(initialLedger);
   });
 
-  it('manager 応答待ち中に source quote が古くなった場合は provisional に保持する', async () => {
+  it('manager 応答待ち中に source quote が古くなった場合は reviewer anomaly に隔離する', async () => {
     const ledgerStore = createFindingLedgerStore({
       projectCwd: cwd,
       runId: 'run-1',
@@ -183,7 +189,7 @@ describe('finding manager filesystem error propagation', () => {
       rawFindingsPath: FINDING_CONTRACT.rawFindingsPath,
     });
     await ledgerStore.updateLedger(() => ({
-      ledger: {
+      ledger: authorizeFindingLedgerFixture({
         workflowName: 'peer-review',
         nextId: 1,
         updatedAt: '2026-07-17T00:00:00.000Z',
@@ -192,28 +198,26 @@ describe('finding manager filesystem error propagation', () => {
         rawFindings: [],
         conflicts: [],
         interpretations: [],
-      },
+      }),
       result: undefined,
     }));
     const snapshotId = computeReviewScopeSnapshotId(cwd);
-    executeAgentMock.mockImplementation(async () => {
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
       writeFileSync(sourcePath, 'export const value = 2;\n');
-      return {
-        status: 'done',
-        content: '',
-        structuredOutput: {
-          rawDecisions: [{
-            rawFindingId: 'run-1:reviewers:1:review:raw-1',
-            decision: 'new',
-            evidence: 'No related open finding.',
-          }],
-          disputeDecisions: [],
-          conflictDecisions: [],
-          invalidateDecisions: [],
-          duplicateDecisions: [],
-          dismissDecisions: [],
-        },
-      } as unknown as AgentResponse;
+      return findingManagerTaskResponse(instruction as string, {
+        rawDecisions: [{
+          rawFindingId: 'run-1:reviewers:1:review:raw-1',
+          decision: 'new',
+          findingId: '',
+          anchorRelevance: 'not_applicable',
+          evidence: 'No related open finding.',
+        }],
+        disputeDecisions: [],
+        conflictDecisions: [],
+        invalidateDecisions: [],
+        duplicateDecisions: [],
+        dismissDecisions: [],
+      });
     });
 
     await runFindingManagerForStep({
@@ -232,10 +236,12 @@ describe('finding manager filesystem error propagation', () => {
       stepIteration: 1,
       subResults: [{
         subStep: { kind: 'agent', name: 'review', persona: 'reviewer', edit: false },
-        response: {
-          status: 'done',
-          content: '',
-          structuredOutput: { rawFindings: [{
+        publication: findingReviewPublicationFixture({
+          scopeIdentity: ledgerStore.ledgerIdentity,
+          parentStepName: 'reviewers',
+          stepIteration: 1,
+          reviewerStepName: 'review',
+          rawFindings: [reviewerRawExtractionFixture({
             rawFindingId: 'raw-1',
             familyTag: 'evidence-revalidation',
             severity: 'high',
@@ -252,8 +258,8 @@ describe('finding manager filesystem error propagation', () => {
               verbatimExcerpt: 'export const value = 1;',
               snapshotId,
             }],
-          }] },
-        } as unknown as AgentResponse,
+          })],
+        }),
       }],
       workflowName: 'peer-review',
       runId: 'run-1',
@@ -262,13 +268,17 @@ describe('finding manager filesystem error propagation', () => {
     });
 
     const ledger = ledgerStore.loadLedger();
-    expect(ledger.findings).toHaveLength(1);
-    expect(ledger.findings[0]?.provisional?.kind).toBe('raw-adjudication-unresolved');
-    expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
+    expect(ledger.findings).toHaveLength(0);
+    expect(ledger.reviewerAnomalies).toEqual([
+      expect.objectContaining({
+        kind: 'quote-mismatch',
+        sourceRawFindingIds: ['run-1:reviewers:1:review:raw-1'],
+      }),
+    ]);
   });
 
   it('同じopen revisionを観測した解消と検証済みpersistsはcommit順に依存せず同じcanonical projectionへ収束する', async () => {
-    const initialLedger: FindingLedger = {
+    const initialLedger: FindingLedger = authorizeFindingLedgerFixture({
       workflowName: 'peer-review',
       nextId: 2,
       updatedAt: '2026-07-17T00:00:00.000Z',
@@ -306,11 +316,22 @@ describe('finding manager filesystem error propagation', () => {
         suggestion: null,
         relation: 'new',
         targetFindingId: null,
-        evidence: [],
+        target: {
+          kind: 'code',
+          paths: ['src/example.ts'],
+        },
+        evidence: [{
+          kind: 'file_quote',
+          path: 'src/example.ts',
+          startLine: 1,
+          endLine: 1,
+          verbatimExcerpt: 'export const value = 1;',
+          snapshotId: computeReviewScopeSnapshotId(cwd),
+        }],
       }],
       conflicts: [],
       interpretations: [],
-    };
+    });
     const storeOptions = {
       projectCwd: cwd,
       runId: 'run-1',
@@ -373,11 +394,13 @@ describe('finding manager filesystem error propagation', () => {
         stepIteration,
         subResults: [{
           subStep: { kind: 'agent', name: reviewerName, persona: 'reviewer', edit: false },
-          response: {
-            status: 'done',
-            content: '',
-            structuredOutput: { rawFindings: [rawFinding] },
-          } as unknown as AgentResponse,
+          publication: findingReviewPublicationFixture({
+            scopeIdentity: store.ledgerIdentity,
+            parentStepName: 'reviewers',
+            stepIteration,
+            reviewerStepName: reviewerName,
+            rawFindings: [reviewerRawExtractionFixture(rawFinding)],
+          }),
         }],
         workflowName: 'peer-review',
         runId: 'run-1',

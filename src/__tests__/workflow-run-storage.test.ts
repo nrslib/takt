@@ -50,6 +50,7 @@ import {
   resolveWorkflowRunTerminalStatus,
 } from '../features/tasks/execute/workflowTerminalStatus.js';
 import type { RunStorageBackend } from '../core/models/config-types.js';
+import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
 
 const roots: string[] = [];
 const TERMINAL_PUBLICATION_PAYLOAD = '{}';
@@ -269,11 +270,15 @@ async function runEmptyManagerRound(
         persona: 'architecture-reviewer',
         edit: false,
       } as never,
-      response: {
-        status: 'done',
-        content: '',
-        structuredOutput: { rawFindings: [] },
-      } as never,
+      publication: findingReviewPublicationFixture({
+        scopeIdentity: store.ledgerIdentity,
+        parentStepName: 'reviewers',
+        stepIteration: 1,
+        reviewerStepName: 'architecture-review',
+        callNamespace,
+        reportContent: 'APPROVE',
+        rawFindings: [],
+      }),
     }],
     workflowName: store.workflowName,
     runId: store.runId,

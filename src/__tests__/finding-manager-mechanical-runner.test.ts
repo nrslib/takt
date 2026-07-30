@@ -31,6 +31,8 @@ import {
   findingManagerTaskManifest,
   findingManagerTaskResponse,
 } from './helpers/finding-manager-task-response.js';
+import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
+import { computeFindingReviewPublicationId } from '../core/workflow/findings/review-publication.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -251,13 +253,13 @@ function makeHarness(
       subResults: [
         {
           subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-          response: {
-            status: 'done',
-            content: extractions.map((item) => String(item.rawExcerpt ?? '')).join('\n'),
-            structuredOutput: {
-              rawFindings: extractions,
-            },
-          } as unknown as AgentResponse,
+          publication: findingReviewPublicationFixture({
+            scopeIdentity: ledgerStore.ledgerIdentity,
+            parentStepName: parentStep.name,
+            stepIteration: 2,
+            reviewerStepName: 'arch-review',
+            rawFindings: extractions,
+          }),
         },
       ],
       workflowName: 'peer-review',
@@ -358,13 +360,13 @@ function runFindingManagerWithStore(input: {
     stepIteration: input.stepIteration,
     subResults: [{
       subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-      response: {
-        status: 'done',
-        content: extractions.map((item) => String(item.rawExcerpt ?? '')).join('\n'),
-        structuredOutput: {
-          rawFindings: extractions,
-        },
-      } as unknown as AgentResponse,
+      publication: findingReviewPublicationFixture({
+        scopeIdentity: input.ledgerStore.ledgerIdentity,
+        parentStepName: 'reviewers',
+        stepIteration: input.stepIteration,
+        reviewerStepName: 'arch-review',
+        rawFindings: extractions,
+      }),
     }],
     workflowName: 'peer-review',
     runId: input.runId,
@@ -384,6 +386,14 @@ describe('runFindingManagerForStep mechanical path', () => {
       callNamespace: '',
       parentStepName: 'reviewers',
       stepIteration: 2,
+      publicationIds: [computeFindingReviewPublicationId({
+        scopeIdentity: '/test/finding-manager-mechanical-runner/harness-ledger.json',
+        callNamespace: '',
+        parentStepName: 'reviewers',
+        stepIteration: 2,
+        reviewerStepName: 'arch-review',
+        reportName: 'arch-review.md',
+      })],
     });
     const initialLedger = makeLedger({
       stopBudget: {
@@ -466,6 +476,14 @@ describe('runFindingManagerForStep mechanical path', () => {
       callNamespace: '',
       parentStepName: 'reviewers',
       stepIteration: 2,
+      publicationIds: [computeFindingReviewPublicationId({
+        scopeIdentity: '/test/finding-manager-mechanical-runner/harness-ledger.json',
+        callNamespace: '',
+        parentStepName: 'reviewers',
+        stepIteration: 2,
+        reviewerStepName: 'arch-review',
+        reportName: 'arch-review.md',
+      })],
     });
 
     await expect(harness.run(input)).rejects.toThrow('injected manager report publication failure');
@@ -675,6 +693,14 @@ describe('runFindingManagerForStep mechanical path', () => {
           callNamespace: '',
           parentStepName: 'reviewers',
           stepIteration: 1,
+          publicationIds: [computeFindingReviewPublicationId({
+            scopeIdentity: storeA.ledgerIdentity,
+            callNamespace: '',
+            parentStepName: 'reviewers',
+            stepIteration: 1,
+            reviewerStepName: 'arch-review',
+            reportName: 'arch-review.md',
+          })],
         }),
       );
 
@@ -1471,13 +1497,6 @@ describe('runFindingManagerForStep workflow_call sub-steps', () => {
         outputContract: 'Return JSON.',
       },
     };
-    const workflowCallSubStep: WorkflowStep = {
-      kind: 'workflow_call',
-      name: 'child-delegate',
-      call: 'child',
-      personaDisplayName: 'child-delegate',
-      instruction: '',
-    } as WorkflowStep;
     const agentExtraction = reviewerExtraction(UNMATCHED_ISSUE_RAW);
 
     const result = await runFindingManagerForStep({
@@ -1491,22 +1510,13 @@ describe('runFindingManagerForStep workflow_call sub-steps', () => {
       subResults: [
         {
           subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-          response: {
-            status: 'done',
-            content: String(agentExtraction.rawExcerpt ?? ''),
-            structuredOutput: { rawFindings: [agentExtraction] },
-          } as unknown as AgentResponse,
-        },
-        {
-          // workflow_call のレスポンスは実運用でも structuredOutput を持たない
-          // （WorkflowCallRunner.buildWorkflowCallResponse が返す形そのもの）。
-          subStep: workflowCallSubStep,
-          response: {
-            persona: 'child-delegate',
-            status: 'done',
-            content: 'COMPLETE',
-            timestamp: new Date('2026-06-14T00:00:00.000Z'),
-          } as AgentResponse,
+          publication: findingReviewPublicationFixture({
+            scopeIdentity: ledgerStore.ledgerIdentity,
+            parentStepName: parentStep.name,
+            stepIteration: 2,
+            reviewerStepName: 'arch-review',
+            rawFindings: [agentExtraction],
+          }),
         },
       ],
       workflowName: 'peer-review',
@@ -1637,11 +1647,14 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
       subResults: [
         {
           subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-          response: {
-            status: 'done',
-            content: String(extraction.rawExcerpt ?? ''),
-            structuredOutput: { rawFindings: [extraction] },
-          } as unknown as AgentResponse,
+          publication: findingReviewPublicationFixture({
+            scopeIdentity: store.ledgerIdentity,
+            parentStepName: parentStep.name,
+            stepIteration: 1,
+            reviewerStepName: 'arch-review',
+            callNamespace,
+            rawFindings: [extraction],
+          }),
         },
       ],
       workflowName: 'peer-review',
@@ -1781,11 +1794,14 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
       subResults: [
         {
           subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-          response: {
-            status: 'done',
-            content: String(extraction.rawExcerpt ?? ''),
-            structuredOutput: { rawFindings: [extraction] },
-          } as unknown as AgentResponse,
+          publication: findingReviewPublicationFixture({
+            scopeIdentity: store.ledgerIdentity,
+            parentStepName: parentStep.name,
+            stepIteration: 1,
+            reviewerStepName: 'arch-review',
+            callNamespace,
+            rawFindings: [extraction],
+          }),
         },
       ],
       workflowName: 'peer-review',
@@ -1958,11 +1974,13 @@ describe('runFindingManagerForStep stale rejection isolation', () => {
       subResults: [
         {
           subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-          response: {
-            status: 'done',
-            content: String(extraction.rawExcerpt ?? ''),
-            structuredOutput: { rawFindings: [extraction] },
-          } as unknown as AgentResponse,
+          publication: findingReviewPublicationFixture({
+            scopeIdentity: ledgerStore.ledgerIdentity,
+            parentStepName: parentStep.name,
+            stepIteration: 2,
+            reviewerStepName: 'arch-review',
+            rawFindings: [extraction],
+          }),
         },
       ],
       workflowName: 'peer-review',

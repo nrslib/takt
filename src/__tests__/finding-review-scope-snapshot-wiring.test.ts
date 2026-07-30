@@ -105,6 +105,7 @@ function makeAgentResponse(overrides: Partial<AgentResponse>): AgentResponse {
     persona: 'test-agent',
     status: 'done',
     content: '[STEP:1] approved',
+    structuredOutput: { rawFindings: [] },
     timestamp: new Date('2026-07-13T00:00:00.000Z'),
     ...overrides,
   };
@@ -115,6 +116,11 @@ function makeReviewStep(name: string): WorkflowStep {
     name,
     persona: name,
     instruction: `Run ${name}`,
+    outputContracts: [{
+      name: `${name}.md`,
+      format: 'review',
+      formatRef: 'review-finding-contract',
+    }],
     rules: [
       makeRule('approved', 'COMPLETE'),
       makeRule('needs_fix', 'fix'),
@@ -245,6 +251,77 @@ function makeRunner(options: {
     ),
     saveConflictAdjudicationReport: vi.fn(),
   } as unknown as NonNullable<ParallelRunnerDeps['findingLedgerStore']>;
+  const stepExecutor = {
+    buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
+    buildPhase1Instruction: vi.fn((instruction: string) => instruction),
+    emitStepReports: vi.fn(),
+    persistPreviousResponseSnapshot: vi.fn(),
+    normalizeStructuredOutputWithDiagnostics: vi.fn(
+      (_step: WorkflowStep, response: AgentResponse) => ({
+        response,
+        invalidDetail: undefined,
+      }),
+    ),
+    isFindingIntakeNormalizeActive: vi.fn(() => false),
+    resumeFindingReviewPublication: vi.fn(() => undefined),
+    applyPostExecutionRulesOnly: vi.fn(
+      async (_step: WorkflowStep, _state: WorkflowState, response: AgentResponse) => ({
+        ...response,
+        matchedRuleIndex: 0,
+        matchedRuleMethod: 'phase3_tag' as const,
+      }),
+    ),
+  };
+  Object.assign(stepExecutor, {
+    prepareFindingReviewPublication: vi.fn(async (input: {
+      step: WorkflowStep;
+      parentStepName: string;
+      stepIteration: number;
+      phase1Response: AgentResponse;
+    }) => {
+      const normalized = stepExecutor.isFindingIntakeNormalizeActive()
+        ? await (
+            stepExecutor as typeof stepExecutor & {
+              normalizeFindingIntakeReport: (
+                step: WorkflowStep,
+                response: AgentResponse,
+                iteration: number,
+              ) => Promise<{ response: AgentResponse }>;
+            }
+          ).normalizeFindingIntakeReport(
+            input.step,
+            input.phase1Response,
+            1,
+          )
+        : stepExecutor.normalizeStructuredOutputWithDiagnostics(
+            input.step,
+            input.phase1Response,
+          );
+      const rawFindings = normalized.response.structuredOutput?.rawFindings;
+      if (!Array.isArray(rawFindings)) {
+        throw new Error(`Test reviewer "${input.step.name}" has no rawFindings`);
+      }
+      const reportName = input.step.outputContracts?.[0]?.name;
+      if (reportName === undefined) {
+        throw new Error(`Test reviewer "${input.step.name}" has no report`);
+      }
+      return {
+        publication: {
+          publicationId: `publication-${input.step.name}`,
+          scopeIdentity: findingLedgerStore.ledgerIdentity,
+          callNamespace: '',
+          parentStepName: input.parentStepName,
+          stepIteration: input.stepIteration,
+          reviewerStepName: input.step.name,
+          reportName,
+          reportContent: input.phase1Response.content,
+          reportDigest: `digest-${input.step.name}`,
+          rawFindings,
+        },
+        response: normalized.response,
+      };
+    }),
+  });
   const deps: ParallelRunnerDeps = {
     optionsBuilder: {
       buildAgentOptions: vi.fn().mockReturnValue({}),
@@ -254,16 +331,7 @@ function makeRunner(options: {
         options.findingContractContext ?? makeFindingContractContext(),
       ),
     } as unknown as ParallelRunnerDeps['optionsBuilder'],
-    stepExecutor: {
-      buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
-      buildPhase1Instruction: vi.fn((instruction: string) => instruction),
-      emitStepReports: vi.fn(),
-      persistPreviousResponseSnapshot: vi.fn(),
-      normalizeStructuredOutputWithDiagnostics: vi.fn((_step: WorkflowStep, response: AgentResponse) => ({
-        response,
-        invalidDetail: undefined,
-      })),
-    } as unknown as ParallelRunnerDeps['stepExecutor'],
+    stepExecutor: stepExecutor as unknown as ParallelRunnerDeps['stepExecutor'],
     engineOptions: {
       projectCwd,
     },
@@ -349,6 +417,12 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     }
     expect(executeAgent).toHaveBeenCalledTimes(2);
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(ingestFindingContractResults).mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      vi.mocked(deps.stepExecutor.applyPostExecutionRulesOnly)
+        .mock.invocationCallOrder[0]!,
+    );
   });
 
   it('normalizes each free-form reviewer report independently before manager intake', async () => {
@@ -439,6 +513,53 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     expect(vi.mocked(deps.onPhaseComplete!).mock.calls.map(([phaseStep]) => phaseStep.name).sort())
       .toEqual(['ai-antipattern-review', 'security-review']);
     expect(ingestFindingContractResults).not.toHaveBeenCalled();
+    expect(deps.stepExecutor.applyPostExecutionRulesOnly).not.toHaveBeenCalled();
+  });
+
+  it('reuses an already persisted sibling publication without rerunning that reviewer', async () => {
+    const { runner, deps } = makeRunner();
+    vi.mocked(deps.stepExecutor.resumeFindingReviewPublication)
+      .mockImplementation(({ step: reviewerStep }) => (
+        reviewerStep.name === 'ai-antipattern-review'
+          ? {
+              publication: {
+                publicationId: 'publication-ai-antipattern-review',
+                scopeIdentity: deps.findingLedgerStore!.ledgerIdentity,
+                callNamespace: '',
+                parentStepName: 'reviewers',
+                stepIteration: 1,
+                reviewerStepName: reviewerStep.name,
+                reportName: 'ai-antipattern-review.md',
+                reportContent: '**APPROVE**',
+                reportDigest: 'digest-ai-antipattern-review',
+                rawFindings: [],
+              },
+              response: makeAgentResponse({
+                persona: reviewerStep.name,
+                content: '**APPROVE**',
+                structuredOutput: { rawFindings: [] },
+              }),
+            }
+          : undefined
+      ));
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      content: '**APPROVE**',
+    }));
+
+    const result = await runner.runParallelStep(
+      makeParallelStep(),
+      makeState(),
+      'test task',
+      5,
+      vi.fn(),
+    );
+
+    expect(result.response.status).toBe('done');
+    expect(executeAgent).toHaveBeenCalledOnce();
+    expect(deps.stepExecutor.prepareFindingReviewPublication)
+      .toHaveBeenCalledOnce();
+    expect(ingestFindingContractResults).toHaveBeenCalledOnce();
   });
 
   it('resolves an open finding from a normalized free-form parallel lifecycle confirmation', async () => {
@@ -647,7 +768,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       expect(ingestFindingContractResults).toHaveBeenCalledOnce();
       const intake = vi.mocked(ingestFindingContractResults).mock.calls[0]![0];
       expect(intake.subResults[0]?.relationClarification).toBeUndefined();
-      expect(intake.subResults[0]?.response.structuredOutput?.rawFindings).toEqual(reviewerRawFindings);
+      expect(intake.subResults[0]?.publication.rawFindings).toEqual(reviewerRawFindings);
       expect(ledger.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('resolved');
       expect(ledger.findings.every((finding) => finding.provisional === undefined)).toBe(true);
       expect(reports.at(-1)?.unsupportedRawFindings?.some(

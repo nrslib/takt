@@ -20,8 +20,18 @@ export interface FindingContractInstructionInput {
   renderFencedJsonBlock: (value: unknown) => string;
 }
 
-export function buildFindingContractInstruction(input: FindingContractInstructionInput): string {
-  const { contract, language, renderFencedJsonBlock } = input;
+function renderFindingContractInstruction(input: {
+  contract: FindingContractInstructionContext;
+  language: Language;
+  renderFencedJsonBlock: (value: unknown) => string;
+  reportPhase: boolean;
+}): string {
+  const {
+    contract,
+    language,
+    renderFencedJsonBlock,
+    reportPhase,
+  } = input;
   const reviewer = contract.reviewer;
   const isReviewer = reviewer !== undefined;
   const structuredReviewer = reviewer?.mode === 'structured';
@@ -61,7 +71,10 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
   }
 
   const rendered = loadTemplate('parts/finding_contract_instruction', language, {
-    ledgerSummary: renderFencedJsonBlock(contract.ledgerSummary),
+    ledgerSummary: renderFencedJsonBlock(
+      reportPhase ? contract.reportLedgerSummary : contract.ledgerSummary,
+    ),
+    isReportPhase: reportPhase,
     isReviewer,
     structuredReviewer,
     freeformReviewer,
@@ -84,8 +97,15 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
   return rendered.trimEnd();
 }
 
+export function buildFindingContractInstruction(input: FindingContractInstructionInput): string {
+  return renderFindingContractInstruction({
+    ...input,
+    reportPhase: false,
+  });
+}
+
 export interface FindingContractReportInstructionInput {
-  reportLedgerSummary: unknown;
+  contract: FindingContractInstructionContext;
   language: Language;
   renderFencedJsonBlock: (value: unknown) => string;
 }
@@ -93,19 +113,14 @@ export interface FindingContractReportInstructionInput {
 /**
  * Phase 2（レポート出力フェーズ）用の Finding Contract 指示文を組み立てる。
  *
- * Phase 2 はツール呼び出しを行わない出力専用フェーズのため、isReviewer /
- * canDispute 系の分岐は常に false（未指定）で渡し、テンプレート側の
- * isReportPhase 分岐だけを使う。Phase 1 とは異なる文言（「inline ledger
- * summary」「ledger IDs」）になるのは reportLedgerSummary が ledgerSummary
- * とは別の（IDのみの）データだから。
+ * Phase 2 はツール呼び出しを行わない出力専用フェーズだが、reviewer 契約は
+ * Phase 1 と同じ context から引き継ぐ。これにより新規 session retry / provider
+ * fallback でも、レポート本文と raw findings を同じ応答から抽出する publication
+ * schema を欠落させない。台帳だけは ID 参照用の reportLedgerSummary を使う。
  */
 export function buildFindingContractReportInstruction(input: FindingContractReportInstructionInput): string {
-  const { reportLedgerSummary, language, renderFencedJsonBlock } = input;
-
-  const rendered = loadTemplate('parts/finding_contract_instruction', language, {
-    ledgerSummary: renderFencedJsonBlock(reportLedgerSummary),
-    isReportPhase: true,
+  return renderFindingContractInstruction({
+    ...input,
+    reportPhase: true,
   });
-
-  return rendered.trimEnd();
 }

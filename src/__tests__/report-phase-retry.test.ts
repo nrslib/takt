@@ -19,9 +19,14 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   })),
 }));
 
-import { runReportPhase, type ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
+import {
+  generateReportPhase,
+  runReportPhase,
+  type ReportPhaseRunnerContext,
+} from '../core/workflow/phase-runner.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { StreamEvent } from '../shared/types/provider.js';
+import { createFindingReviewPublicationStructuredOutput } from '../core/workflow/findings/review-publication-structured-output.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -40,6 +45,13 @@ function createStep(fileName: string): WorkflowStep {
     instruction: 'Implement task',
     passPreviousResponse: false,
     outputContracts: [{ name: fileName }],
+  };
+}
+
+function createFindingReviewStep(fileName: string): WorkflowStep {
+  return {
+    ...createStep(fileName),
+    structuredOutput: createFindingReviewPublicationStructuredOutput(),
   };
 }
 
@@ -78,8 +90,11 @@ function createContext(
       allowedTools: overrides.allowedTools,
       maxTurns: overrides.maxTurns,
     }),
-    buildFallbackReportOptions: (_step, failedPrimaryOptions, overrides) => {
-      if (failedPrimaryOptions.resolvedProvider !== 'opencode' || fallbackProvider === failedPrimaryOptions.resolvedProvider) {
+    buildFallbackReportOptions: (step, failedPrimaryOptions, overrides) => {
+      if (
+        failedPrimaryOptions.resolvedProvider !== 'opencode'
+        || fallbackProvider === failedPrimaryOptions.resolvedProvider
+      ) {
         return undefined;
       }
 
@@ -88,9 +103,13 @@ function createContext(
         permissionMode: 'readonly',
         resolvedProvider: fallbackProvider,
         resolvedModel: providers.fallbackModel,
+        resolvedProviderOptions: fallbackProvider === 'codex'
+          ? { codex: { reasoningEffort: 'high' } }
+          : undefined,
         sessionId: undefined,
         allowedTools: overrides.allowedTools,
         maxTurns: overrides.maxTurns,
+        outputSchema: step.structuredOutput?.schema,
       };
     },
     updatePersonaSession: (_persona, sessionId) => {
@@ -207,7 +226,39 @@ describe('runReportPhase retry with new session', () => {
 
     const secondCallOptions = runAgentMock.mock.calls[1]?.[2] as { sessionId?: string };
     expect(secondCallOptions.sessionId).toBeUndefined();
+    expect(runAgentMock.mock.calls[0]?.[1]).toContain(
+      'Respond with the report content directly as text.',
+    );
 
+  });
+
+  it('freeform Finding Contract Phase 2 は従来どおり本文テキストだけを要求する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(reportDir);
+    ctx.buildFindingContractInstructionContext = () => ({
+      ledgerSummary: '{"findings":[]}',
+      reportLedgerSummary: '{"findingIds":[]}',
+      hasOpenFindings: false,
+      hasWaivedFindings: false,
+      hasDismissedFindings: false,
+      reviewer: {
+        mode: 'freeform',
+        reviewScopeSnapshotId: '1'.repeat(64),
+      },
+    });
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: '# Freeform review',
+      timestamp: new Date('2026-02-11T00:00:02Z'),
+    }]);
+
+    await generateReportPhase(step, 1, ctx, 'freeform');
+
+    const prompt = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
+    expect(prompt).toContain('Respond with the report content directly as text.');
+    expect(prompt).not.toContain('combined Finding Contract publication schema');
   });
 
   it('should start report phase with a new session when no existing session is available', async () => {
@@ -370,7 +421,10 @@ describe('runReportPhase retry with new session', () => {
     await runReportPhase(step, 1, ctx);
 
     // Then
-    expect(sessionUpdates).toEqual([{ key: 'coder', sessionId: undefined }]);
+    expect(sessionUpdates).toEqual([
+      { key: 'coder', sessionId: undefined },
+      { key: 'coder', sessionId: undefined },
+    ]);
     expect(freshAttempts).toEqual(['implement', 'implement']);
     expect(readFileSync(join(reportDir, '03-retry-clear-first.md'), 'utf-8')).toBe('# Report\nRetry report without session id');
     expect(readFileSync(join(reportDir, '03-retry-clear-second.md'), 'utf-8')).toBe('# Report\nSecond report from fresh session');
@@ -432,7 +486,9 @@ describe('runReportPhase retry with new session', () => {
     expect(result).toBeUndefined();
     expect(readFileSync(join(reportDir, '03-opencode-loop.md'), 'utf-8')).toBe('# Report\nRecovered by Claude fallback');
     expect(runAgentMock).toHaveBeenCalledTimes(3);
-    expect(sessionUpdates).toEqual([]);
+    expect(sessionUpdates).toEqual([
+      { key: '["coder","claude"]', sessionId: 'claude-fallback-session' },
+    ]);
 
     const fallbackInstruction = runAgentMock.mock.calls[2]?.[1] as string;
     expect(fallbackInstruction).toContain('Implemented feature X');
@@ -453,6 +509,192 @@ describe('runReportPhase retry with new session', () => {
       sessionId: undefined,
     });
     expect(fallbackOptions.resolvedModel).toBeUndefined();
+  });
+
+  it('Finding Contract Phase 2 は全試行へpublication schemaを渡し、異なるcapabilityのfallback実行identityを保持する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createFindingReviewStep('finding-review.md');
+    const ctx = createContext(
+      reportDir,
+      'Phase 1 review draft',
+      'primary-review-session',
+      {
+        primaryProvider: 'mock',
+        fallbackProvider: 'codex',
+        fallbackModel: 'fallback-capability-model',
+      },
+    );
+    const sessionUpdates: Array<{ key: string; sessionId: string | undefined }> = [];
+    ctx.buildFallbackReportOptions = (reportStep, _failedOptions, overrides) => ({
+      cwd: reportDir,
+      permissionMode: 'readonly',
+      resolvedProvider: 'codex',
+      resolvedModel: 'fallback-capability-model',
+      resolvedProviderOptions: { codex: { reasoningEffort: 'high' } },
+      sessionId: undefined,
+      allowedTools: overrides.allowedTools,
+      maxTurns: overrides.maxTurns,
+      outputSchema: reportStep.structuredOutput?.schema,
+    });
+    ctx.updatePersonaSession = (key, sessionId) => {
+      sessionUpdates.push({ key, sessionId });
+    };
+    ctx.buildFindingContractInstructionContext = () => ({
+      ledgerSummary: '{"findings":[]}',
+      reportLedgerSummary: '{"findingIds":[]}',
+      hasOpenFindings: false,
+      hasWaivedFindings: false,
+      hasDismissedFindings: false,
+      reviewer: {
+        mode: 'structured',
+        rawFindingsStructuredOutput: step.structuredOutput!,
+        reviewScopeSnapshotId: '1'.repeat(64),
+      },
+    });
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'error',
+        content: 'primary unavailable',
+        error: 'primary unavailable',
+        timestamp: new Date('2026-02-11T00:01:20Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'error',
+        content: 'retry unavailable',
+        error: 'retry unavailable',
+        timestamp: new Date('2026-02-11T00:01:21Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: '',
+        structuredOutput: {
+          reportContent: '# Review\nNo findings.',
+          rawFindings: [],
+        },
+        sessionId: 'fallback-review-session',
+        timestamp: new Date('2026-02-11T00:01:22Z'),
+      },
+    ]);
+
+    const result = await generateReportPhase(step, 1, ctx, 'structured');
+
+    expect('reports' in result).toBe(true);
+    if (!('reports' in result)) {
+      throw new Error('Expected generated reports');
+    }
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]).toMatchObject({
+      reportName: 'finding-review.md',
+      reportContent: '# Review\nNo findings.',
+      attemptIdentity: {
+        providerInfo: { provider: 'codex', model: 'fallback-capability-model' },
+        sessionKey: '["coder","codex","fallback-capability-model"]',
+        sessionId: 'fallback-review-session',
+        agentOptions: {
+          resolvedProvider: 'codex',
+          resolvedModel: 'fallback-capability-model',
+          resolvedProviderOptions: { codex: { reasoningEffort: 'high' } },
+          outputSchema: step.structuredOutput?.schema,
+        },
+      },
+    });
+    expect(sessionUpdates).toEqual([
+      {
+        key: '["coder","codex","fallback-capability-model"]',
+        sessionId: 'fallback-review-session',
+      },
+    ]);
+
+    const prompts = vi.mocked(runAgent).mock.calls.map(([, instruction]) => instruction);
+    expect(prompts).toHaveLength(3);
+    for (const prompt of prompts) {
+      expect(prompt).toContain('"reportContent"');
+      expect(prompt).toContain('First write the review report. Then extract each structured entry');
+      expect(prompt).not.toContain('Respond with the report content directly as text.');
+      expect(prompt).not.toContain('Respond with only the report content');
+    }
+  });
+
+  it('structured Finding Contract Phase 2 の日本語promptもpublication objectだけを要求する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createFindingReviewStep('finding-review-ja.md');
+    const ctx = createContext(reportDir);
+    ctx.language = 'ja';
+    ctx.buildFindingContractInstructionContext = () => ({
+      ledgerSummary: '{"findings":[]}',
+      reportLedgerSummary: '{"findingIds":[]}',
+      hasOpenFindings: false,
+      hasWaivedFindings: false,
+      hasDismissedFindings: false,
+      reviewer: {
+        mode: 'structured',
+        rawFindingsStructuredOutput: step.structuredOutput!,
+        reviewScopeSnapshotId: '1'.repeat(64),
+      },
+    });
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: '',
+      structuredOutput: {
+        reportContent: '# レビュー\n指摘なし。',
+        rawFindings: [],
+      },
+      timestamp: new Date('2026-02-11T00:01:22Z'),
+    }]);
+
+    await generateReportPhase(step, 1, ctx, 'structured');
+
+    const prompt = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
+    expect(prompt).toContain('結合 publication schema に一致する構造化オブジェクト');
+    expect(prompt).not.toContain('レポート内容をテキストとして直接回答してください');
+    expect(prompt).not.toContain('レポート本文のみを回答してください');
+  });
+
+  it('Finding Contract Phase 2 は非native structured応答の完全JSONからreportContentだけを抽出する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createFindingReviewStep('finding-review-json.md');
+    const ctx = createContext(reportDir);
+    const wireJson = JSON.stringify({
+      reportContent: '# Canonical report',
+      rawFindings: [],
+    });
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: wireJson,
+      timestamp: new Date('2026-02-11T00:01:23Z'),
+      sessionId: 'opencode-review-session',
+    }]);
+
+    const result = await generateReportPhase(step, 1, ctx, 'structured');
+
+    expect('reports' in result).toBe(true);
+    if (!('reports' in result)) {
+      throw new Error('Expected generated reports');
+    }
+    expect(result.reports[0]?.reportContent).toBe('# Canonical report');
+    expect(result.reports[0]?.response.content).toBe(wireJson);
+  });
+
+  it('Finding Contract Phase 2 はreportContent欠落時にPhase 1本文へ縮退せずfail-loudする', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createFindingReviewStep('finding-review-missing-content.md');
+    const ctx = createContext(reportDir, 'This Phase 1 text must not become the report.');
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: JSON.stringify({ rawFindings: [] }),
+      timestamp: new Date('2026-02-11T00:01:24Z'),
+    }]);
+
+    await expect(generateReportPhase(step, 1, ctx, 'structured')).rejects.toThrow(
+      'Finding review publication reportContent is missing',
+    );
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
   });
 
   it('should resume the next report file with the primary session after a fallback report succeeds', async () => {
@@ -521,6 +763,7 @@ describe('runReportPhase retry with new session', () => {
     expect(readFileSync(join(reportDir, '03-second.md'), 'utf-8')).toBe('# Report\nSecond file from primary session');
     expect(runAgentMock).toHaveBeenCalledTimes(4);
     expect(sessionUpdates).toEqual([
+      { key: '["coder","claude"]', sessionId: 'claude-fallback-session' },
       { key: 'coder', sessionId: 'opencode-session-after-second-file' },
     ]);
 

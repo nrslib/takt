@@ -31,6 +31,7 @@ import {
 } from '../core/workflow/findings/stop-budget.js';
 import { computeRoundMarker } from '../core/workflow/findings/round-marker.js';
 import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../core/workflow/findings/manager-runner.js';
+import { createFindingReviewPublication } from '../core/workflow/findings/review-publication.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
@@ -116,20 +117,22 @@ describe('resolveStopBudgetLimits', () => {
 
 describe('computeRoundMarker', () => {
   it('is stable for the same (runId, callNamespace, stepName, stepIteration) and distinct for different ones', () => {
-    const a = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3 });
-    const aAgain = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3 });
-    const differentIteration = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 4 });
-    const differentRun = computeRoundMarker({ runId: 'run-2', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3 });
+    const a = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3, publicationIds: ['publication-1'] });
+    const aAgain = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3, publicationIds: ['publication-1'] });
+    const differentIteration = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 4, publicationIds: ['publication-1'] });
+    const differentRun = computeRoundMarker({ runId: 'run-2', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3, publicationIds: ['publication-1'] });
+    const differentPublication = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3, publicationIds: ['publication-2'] });
     expect(a).toBe(aAgain);
     expect(a).toContain('\0');
     expect(a).not.toBe(differentIteration);
     expect(a).not.toBe(differentRun);
+    expect(a).not.toBe(differentPublication);
   });
 });
 
 describe('attachStopBudgetState', () => {
   const limits: ResolvedStopBudgetLimits = { maxRounds: 3, maxMinutes: 90 };
-  const marker = (n: number) => computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: n });
+  const marker = (n: number) => computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: n, publicationIds: ['publication-1'] });
 
   it('records the first round marker and firstRoundAt on the very first round', () => {
     const result = attachStopBudgetState(ledger(), ledger(), limits, marker(1), '2026-07-01T00:00:00.000Z');
@@ -267,7 +270,7 @@ describe('attachStopBudgetState', () => {
   });
 
   it('builds on the freshest persisted marker set, so a concurrent round that already added its own marker is preserved alongside this round (monotonic, no lost update)', () => {
-    const concurrentMarker = computeRoundMarker({ runId: 'run-other', callNamespace: '', parentStepName: 'reviewers', stepIteration: 9 });
+    const concurrentMarker = computeRoundMarker({ runId: 'run-other', callNamespace: '', parentStepName: 'reviewers', stepIteration: 9, publicationIds: ['publication-1'] });
     const previous = ledger({ stopBudget: { roundMarkers: [marker(1), concurrentMarker], firstRoundAt: '2026-07-01T00:00:00.000Z', exhausted: false } });
     const result = attachStopBudgetState(previous, ledger(), limits, marker(2), '2026-07-01T00:10:00.000Z');
     expect(stopBudgetRoundsCompleted(result)).toBe(3);
@@ -370,15 +373,24 @@ function makeRoundHarness(
     currentLedger: () => ledgerRepository.loadLedger(),
     run: (reviewerRawFindings, timestamp) => {
       round += 1;
+      const reportContent = [
+        ...reviewerRawFindings.map((item) => String(item.rawExcerpt ?? '')),
+        '**APPROVE**',
+      ].join('\n');
       const subResults: FindingManagerSubStepResult[] = [{
         subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-        response: {
-          status: 'done',
-          content: reviewerRawFindings
-            .map((item) => String(item.rawExcerpt ?? ''))
-            .join('\n'),
-          structuredOutput: { rawFindings: reviewerRawFindings },
-        } as unknown as AgentResponse,
+        publication: createFindingReviewPublication({
+          identity: {
+            scopeIdentity: ledgerStore.ledgerIdentity,
+            callNamespace: '',
+            parentStepName: parentStep.name,
+            stepIteration: round,
+            reviewerStepName: 'arch-review',
+            reportName: 'arch-review.md',
+          },
+          reportContent,
+          rawFindings: reviewerRawFindings,
+        }),
       }];
       return runFindingManagerForStep({
         contract: contract as never,
@@ -621,6 +633,19 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
       manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'JSON.' },
       stopBudget: { maxRounds: 5 },
     };
+    const sameRoundRawFindings = [hallucinatedRaw('r1', 'Bug in file A', 'src/does-not-exist-a.ts')];
+    const sameRoundPublication = createFindingReviewPublication({
+      identity: {
+        scopeIdentity: ledgerStore.ledgerIdentity,
+        callNamespace: '',
+        parentStepName: 'reviewers',
+        stepIteration: 1,
+        reviewerStepName: 'arch-review',
+        reportName: 'arch-review.md',
+      },
+      reportContent: String(sameRoundRawFindings[0]!.rawExcerpt),
+      rawFindings: sameRoundRawFindings,
+    });
     const runSameRound = (timestamp: string) => runFindingManagerForStep({
       contract: contract as never,
       ledgerStore,
@@ -632,7 +657,7 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
       stepIteration: 1,
       subResults: [{
         subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-        response: { status: 'done', content: '', structuredOutput: { rawFindings: [hallucinatedRaw('r1', 'Bug in file A', 'src/does-not-exist-a.ts')] } } as unknown as AgentResponse,
+        publication: sameRoundPublication,
       }],
       workflowName: 'peer-review',
       runId: 'run-crashed',

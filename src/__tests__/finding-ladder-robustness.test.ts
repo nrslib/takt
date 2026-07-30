@@ -45,6 +45,7 @@ import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-dom
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import { stopBudgetRoundsCompleted } from '../core/workflow/findings/stop-budget.js';
 import { addRoundMarker, computeRoundMarker } from '../core/workflow/findings/round-marker.js';
+import { computeFindingReviewPublicationId } from '../core/workflow/findings/review-publication.js';
 import { captureFindingPreconditions } from '../core/workflow/findings/finding-preconditions.js';
 import { collectInterpretationRecoveryPlan } from '../core/workflow/findings/interpretation-recovery.js';
 import { processInterpretationLiveClaims } from '../core/workflow/findings/interpretation-live-claims.js';
@@ -59,6 +60,7 @@ import {
   observeFindingLedgerMutations,
   RevisionedFindingLedgerTestRepository,
 } from './helpers/finding-manager-publication.js';
+import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
 import {
   authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
@@ -310,22 +312,22 @@ function makeHarness(
         subResults: [
           {
             subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-            response: {
-              status: 'done',
-              content: extractions
-                .map((item) => String(item.rawExcerpt ?? ''))
-                .join('\n'),
-              structuredOutput: {
-                rawFindings: extractions,
-              },
-            } as unknown as AgentResponse,
+            publication: findingReviewPublicationFixture({
+              scopeIdentity: ledgerStore.ledgerIdentity,
+              parentStepName: parentStep.name,
+              stepIteration: 2,
+              reviewerStepName: 'arch-review',
+              rawFindings: extractions,
+            }),
           },
         ],
         workflowName: 'peer-review',
+        workflowTask: 'Review the implementation.',
         runId: input.runId ?? 'run-2',
         callNamespace: '',
         timestamp: '2026-06-14T00:00:00.000Z',
         priorStepResponseText: input.priorStepResponseText,
+        managerAuthority: 'standard',
       });
     },
   };
@@ -855,7 +857,12 @@ describe('ケース5 の出口: 解釈枯渇後の dismiss 裁定', () => {
             invalidateDecisions: [],
             duplicateDecisions: [],
             dismissDecisions: dismissTargetId !== undefined
-              ? [{ findingId: dismissTargetId, basis: 'unverifiable_claim', reason: '解釈2 epoch と再観測でも確定できない主張' }]
+              ? [{
+                  findingId: dismissTargetId,
+                  basis: 'unverifiable_claim',
+                  reason: '解釈2 epoch と再観測でも確定できない主張',
+                  evidence: 'Current review evidence remains contradictory after two interpretation epochs.',
+                }]
               : [],
         });
       }
@@ -1041,34 +1048,25 @@ describe('ケース7: resource exhaustion（435 raw・巨大 description・step 
     }));
   }
 
-  it('435 raw の reviewer は単一の reviewer-output-overflow blocker に置き換わり、finding が435件立つことはない（部分採用もしない）', async () => {
+  it('435 raw の reviewer は publication 前に fail-closed となり台帳を更新しない', async () => {
     const harness = makeHarness(makeLedger({ findings: [], rawFindings: [] }));
-    const result = await harness.run({ reviewerRawFindings: makeManyRaws(435, 'flood') });
+    expect(() => harness.run({ reviewerRawFindings: makeManyRaws(435, 'flood') }))
+      .toThrow(/exceeded limits/);
 
-    expect(result.status).toBe('updated');
-    // manager は呼ばれない（overflow は解釈対象ではない）。
     expect(executeAgentMock).not.toHaveBeenCalled();
-    const saved = harness.currentLedger();
-    expect(saved.findings).toHaveLength(1);
-    const blocker = saved.findings[0]!;
-    expect(blocker.provisional?.kind).toBe('reviewer-output-overflow');
-    expect(blocker.severity).toBe('high');
-    expect(blocker.status).toBe('open');
-    // 先頭64件の部分採用が起きていない（flood タイトルの finding が無い）。
-    expect(saved.findings.some((finding) => finding.title.startsWith('Flood finding'))).toBe(false);
-    expect(harness.savedReports[0]?.reviewerOutputOverflows).toHaveLength(1);
+    expect(harness.currentLedger().findings).toEqual([]);
+    expect(harness.savedReports).toEqual([]);
   });
 
-  it('巨大 description（8192超）を1件でも含む reviewer は全量が単一 overflow に置き換わる', async () => {
+  it('巨大 description（8192超）は publication 前に fail-closed となる', async () => {
     const harness = makeHarness(makeLedger({ findings: [], rawFindings: [] }));
     const raws = makeManyRaws(3, 'big');
     raws[1]!.description = 'x'.repeat(9000);
-    const result = await harness.run({ reviewerRawFindings: raws });
+    expect(() => harness.run({ reviewerRawFindings: raws }))
+      .toThrow(/field exceeded its limit/);
 
-    expect(result.status).toBe('updated');
-    const saved = harness.currentLedger();
-    expect(saved.findings).toHaveLength(1);
-    expect(saved.findings[0]?.provisional?.kind).toBe('reviewer-output-overflow');
+    expect(harness.currentLedger().findings).toEqual([]);
+    expect(harness.savedReports).toEqual([]);
   });
 
   it('複数 reviewer の合算が step 上限（128件）を超えると超過側の reviewer だけが overflow になり、正常 reviewer の raw は処理される', async () => {
@@ -1094,11 +1092,6 @@ describe('ケース7: resource exhaustion（435 raw・巨大 description・step 
         ledgerRepository,
       ),
     };
-    const stepExecutor = {
-      buildPhase1Instruction: (instruction: string) => instruction,
-      recordSynthesizedAgentUsage: () => {},
-      normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
-    };
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const ids = currentManagerRawFindingIds(instruction as string)
         .filter((rawFindingId) => /:ok-\d+$/.test(rawFindingId));
@@ -1123,57 +1116,23 @@ describe('ケース7: resource exhaustion（435 raw・巨大 description・step 
     ));
     const okExtractions = reviewerExtractions(okRaws);
     const floodExtractions = reviewerExtractions(makeManyRaws(130, 'flood'));
-    const result = await runFindingManagerForStep({
-      contract: {
-        ledgerPath: '.takt/findings/ledger.json',
-        rawFindingsPath: '.takt/findings/raw',
-        manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'JSON.' },
-      } as never,
-      ledgerStore,
-      optionsBuilder: {
-        buildAgentOptions: () => ({}),
-        resolveStepProviderModel: () => ({ provider: 'codex', model: 'gpt-test' }),
-      } as never,
-      stepExecutor: stepExecutor as never,
-      cwd: FIXTURE_CWD,
-      parentStep: { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep,
+    expect(() => findingReviewPublicationFixture({
+      scopeIdentity: ledgerStore.ledgerIdentity,
+      parentStepName: 'reviewers',
       stepIteration: 1,
-      subResults: [
-        {
-          subStep: { kind: 'agent', name: 'good-review', persona: 'good', edit: false } as WorkflowStep,
-          response: {
-            status: 'done',
-            content: okExtractions.map((item) => String(item.rawExcerpt ?? '')).join('\n'),
-            structuredOutput: { rawFindings: okExtractions },
-          } as unknown as AgentResponse,
-        },
-        {
-          subStep: { kind: 'agent', name: 'flood-review', persona: 'flood', edit: false } as WorkflowStep,
-          // 単体では 64 件以下 × 3 リクエスト分…ではなく、単体上限は超えないが
-          // 合算で 128 を超える 60 件 ×…を単純化して 130 件にする（per-reviewer
-          // 64 上限も超えるため、この reviewer は確実に overflow）。
-          response: {
-            status: 'done',
-            content: floodExtractions.map((item) => String(item.rawExcerpt ?? '')).join('\n'),
-            structuredOutput: { rawFindings: floodExtractions },
-          } as unknown as AgentResponse,
-        },
-      ],
-      workflowName: 'peer-review',
-      runId: 'run-2',
-      callNamespace: '',
-      timestamp: '2026-06-14T00:00:00.000Z',
-    });
+      reviewerStepName: 'good-review',
+      rawFindings: okExtractions,
+    })).not.toThrow();
+    expect(() => findingReviewPublicationFixture({
+      scopeIdentity: ledgerStore.ledgerIdentity,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      reviewerStepName: 'flood-review',
+      rawFindings: floodExtractions,
+    })).toThrow(/exceeded limits/);
 
-    expect(result.status).toBe('updated');
-    const ledger = ledgerRepository.loadLedger();
-    expect(executeAgentMock).toHaveBeenCalledTimes(1);
-    // 正常 reviewer の 3 件は confirmed finding として処理される。
-    expect(ledger.findings.filter((finding) => finding.title.startsWith('Legit finding'))).toHaveLength(3);
-    // flood reviewer は単一 overflow blocker のみ。
-    const overflows = ledger.findings.filter((finding) => finding.provisional?.kind === 'reviewer-output-overflow');
-    expect(overflows).toHaveLength(1);
-    expect(ledger.findings.some((finding) => finding.title.startsWith('Flood finding'))).toBe(false);
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(ledgerRepository.loadLedger().findings).toEqual([]);
   });
 });
 
@@ -2269,18 +2228,20 @@ describe('解釈梯子の追加必須テスト', () => {
         stepIteration: 1,
         subResults: [{
           subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-          response: {
-            status: 'done',
-            content: String(contradictoryExtraction.rawExcerpt ?? ''),
-            structuredOutput: {
-              rawFindings: [contradictoryExtraction],
-            },
-          } as unknown as AgentResponse,
+          publication: findingReviewPublicationFixture({
+            scopeIdentity: crashingStore.ledgerIdentity,
+            parentStepName: 'reviewers',
+            stepIteration: 1,
+            reviewerStepName: 'arch-review',
+            rawFindings: [contradictoryExtraction],
+          }),
         }],
         workflowName: 'peer-review',
+        workflowTask: 'Review the implementation.',
         runId: 'crash-run',
         callNamespace: '',
         timestamp: '2026-06-14T00:00:00.000Z',
+        managerAuthority: 'standard',
       })).rejects.toThrow('simulated crash after intake');
 
       // 例外にもかかわらず、write-ahead 保存された検証レポートがディスクに在り、
@@ -2570,18 +2531,21 @@ describe('解釈梯子の追加必須テスト', () => {
           stepIteration: 1,
           subResults: [{
             subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-            response: {
-              status: 'done',
-              content: String(extraction.rawExcerpt ?? ''),
-              structuredOutput: {
-                rawFindings: [extraction],
-              },
-            } as unknown as AgentResponse,
+            publication: findingReviewPublicationFixture({
+              scopeIdentity: store.ledgerIdentity,
+              parentStepName: 'reviewers',
+              stepIteration: 1,
+              reviewerStepName: 'arch-review',
+              callNamespace,
+              rawFindings: [extraction],
+            }),
           }],
           workflowName: 'peer-review',
+          workflowTask: 'Review the implementation.',
           runId: 'shared-run',
           callNamespace,
           timestamp: '2026-06-14T00:00:00.000Z',
+          managerAuthority: 'standard',
         });
       };
 
@@ -2902,7 +2866,20 @@ describe('ケース10: stop-budget 悪用（churn で fixpoint を回避しつ�
     mockChurnInterpretations();
     const concurrentMarker = 'concurrent-round-marker';
     // harness は runId='run-2', stepIteration=2, callNamespace='' で呼ぶ。
-    const thisRoundMarker = computeRoundMarker({ runId: 'run-2', callNamespace: '', parentStepName: 'reviewers', stepIteration: 2 });
+    const thisRoundMarker = computeRoundMarker({
+      runId: 'run-2',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration: 2,
+      publicationIds: [computeFindingReviewPublicationId({
+        scopeIdentity: '/test/finding-ladder-robustness/ledger.json',
+        callNamespace: '',
+        parentStepName: 'reviewers',
+        stepIteration: 2,
+        reviewerStepName: 'arch-review',
+        reportName: 'arch-review.md',
+      })],
+    });
 
     const result = await harness.run({
       reviewerRawFindings: [churnRaw(1)],
