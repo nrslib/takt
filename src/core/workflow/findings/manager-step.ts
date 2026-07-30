@@ -1,12 +1,14 @@
 import type { AgentWorkflowStep, FindingContractConfig, WorkflowConfig } from '../../models/types.js';
 import { AmbiguousInterpretationsOutputJsonSchema } from './schemas.js';
 import {
+  FindingEntityBindingTaskOutputJsonSchema,
   MainManagerControlTaskOutputJsonSchema,
   MainManagerRawTaskOutputJsonSchema,
 } from './manager-task-contracts.js';
 
 export const FINDING_MANAGER_SCHEMA_REF = 'takt.findings.manager.raw-task';
 export const FINDING_MANAGER_CONTROL_SCHEMA_REF = 'takt.findings.manager.control-task';
+export const FINDING_ENTITY_BINDING_SCHEMA_REF = 'takt.findings.manager.entity-binding';
 
 /** ambiguous raw 解釈フェーズの structured output。提案のみ。 */
 export const FINDING_INTERPRETATION_SCHEMA_REF = 'takt.findings.interpretation';
@@ -63,6 +65,19 @@ export function buildFindingManagerControlTaskStep(
     structuredOutput: {
       schemaRef: FINDING_MANAGER_CONTROL_SCHEMA_REF,
       schema: MainManagerControlTaskOutputJsonSchema,
+    },
+  };
+}
+
+export function buildFindingEntityBindingTaskStep(
+  managerStep: AgentWorkflowStep,
+): AgentWorkflowStep {
+  return {
+    ...managerStep,
+    name: 'findings-entity-binding',
+    structuredOutput: {
+      schemaRef: FINDING_ENTITY_BINDING_SCHEMA_REF,
+      schema: FindingEntityBindingTaskOutputJsonSchema,
     },
   };
 }

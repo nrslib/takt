@@ -1094,6 +1094,7 @@ export interface FindingManagerValidationReport {
 
 export type FindingManagerTaskKind =
   | 'raw'
+  | 'entity_binding'
   | 'finding_control'
   | 'dispute'
   | 'conflict'

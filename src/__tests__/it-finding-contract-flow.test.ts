@@ -187,6 +187,8 @@ describe('Finding Contract integration flow', () => {
         duplicateFindings: [],
         dismissedFindings: [],
       },
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
       rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map([[

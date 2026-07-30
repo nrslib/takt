@@ -1,6 +1,7 @@
 import type { AgentWorkflowStep } from '../../models/types.js';
 import type {
   FindingLedger,
+  FindingManagerTaskAudit,
   FindingObservation,
 } from './types.js';
 import { classifyRawFindingsMechanically } from './mechanical-classification.js';
@@ -40,6 +41,7 @@ export async function runManagerDecisionStage(params: {
   reviewScopeSnapshotId: string;
   reviewScopeSnapshot: ReviewScopeProofSnapshot;
   stopBudgetRoundMarker: string;
+  preAdmissionTaskAudits: FindingManagerTaskAudit[];
 }): Promise<ManagerDecisionStageResult> {
   const {
     input,
@@ -50,6 +52,7 @@ export async function runManagerDecisionStage(params: {
     reviewScopeSnapshotId,
     reviewScopeSnapshot,
     stopBudgetRoundMarker,
+    preAdmissionTaskAudits,
   } = params;
   const {
     cleanWire,
@@ -211,7 +214,10 @@ export async function runManagerDecisionStage(params: {
       cleanCanonicalById,
       ladder,
       rawRecovery,
-      taskAudits: taskExecution?.taskAudits ?? [],
+      taskAudits: [
+        ...preAdmissionTaskAudits,
+        ...(taskExecution?.taskAudits ?? []),
+      ],
     };
   } catch (error) {
     releaseRawAdjudicationReservations(input.ledgerStore, rawRecovery.reservationTokens);

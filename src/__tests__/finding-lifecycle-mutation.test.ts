@@ -749,6 +749,8 @@ function semanticManagerPlan(input: {
     previousLedger: input.current,
     rawFindings: input.sources.map((source) => source.raw),
     managerOutput,
+    entityProvisionalMutations: [],
+    terminalEntityAttachmentFindingIds: new Set(),
     provisionalFindings: [],
     rawFindingDispositions: [],
     verifiedEvidenceRecordsByRawFindingId: new Map(input.sources.map((source) => [

@@ -128,12 +128,16 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
 
 type TestReconcileInput = Omit<
   Parameters<typeof reconcileFindingLedgerStrict>[0],
-  'provisionalFindings' | 'rawFindingDispositions' | 'rawProvenanceByRawFindingId' | 'verifiedEvidenceRecordsByRawFindingId'
+  'provisionalFindings' | 'entityProvisionalMutations'
+  | 'terminalEntityAttachmentFindingIds' | 'rawFindingDispositions'
+  | 'rawProvenanceByRawFindingId' | 'verifiedEvidenceRecordsByRawFindingId'
 >;
 
 function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
   return reconcileFindingLedgerStrict({
     ...input,
+    entityProvisionalMutations: [],
+    terminalEntityAttachmentFindingIds: new Set(),
     provisionalFindings: [],
     rawFindingDispositions: [],
     verifiedEvidenceRecordsByRawFindingId: new Map(),
@@ -500,6 +504,8 @@ describe('reconcileFindingLedger', () => {
       previousLedger: baseLedger,
       rawFindings: [wire],
       managerOutput: makeManagerOutput(),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [provisional],
       rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map([[
@@ -654,6 +660,15 @@ describe('reconcileFindingLedger', () => {
     expect(() => Reflect.apply(reconcileFindingLedgerStrict, undefined, [incompletePlan])).toThrow(
       /provisionalFindings/,
     );
+    expect(() => Reflect.apply(reconcileFindingLedgerStrict, undefined, [{
+      ...incompletePlan,
+      provisionalFindings: [],
+    }])).toThrow(/entityProvisionalMutations/);
+    expect(() => Reflect.apply(reconcileFindingLedgerStrict, undefined, [{
+      ...incompletePlan,
+      provisionalFindings: [],
+      entityProvisionalMutations: [],
+    }])).toThrow(/terminalEntityAttachmentFindingIds/);
   });
 
   it('rejects a raw used by both a manager outcome and a provisional outcome', () => {
@@ -669,6 +684,8 @@ describe('reconcileFindingLedger', () => {
           severity: rawFinding.severity,
         }],
       }),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [{
         kind: 'raw-adjudication-unresolved',
         stableKey: 'stable-manager-and-provisional',
@@ -726,6 +743,8 @@ describe('reconcileFindingLedger', () => {
       previousLedger: makeLedger(),
       rawFindings: [rawFinding],
       managerOutput: makeManagerOutput(),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
       rawFindingDispositions: [{
         rawFindingId: rawFinding.rawFindingId,
@@ -796,6 +815,8 @@ describe('reconcileFindingLedger', () => {
           severity: firstRaw.severity,
         }],
       }),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
       rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map([
@@ -856,6 +877,8 @@ describe('reconcileFindingLedger', () => {
       previousLedger: makeLedger(),
       rawFindings: [firstRaw, secondRaw],
       managerOutput: makeManagerOutput(),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
       rawFindingDispositions: [
         { rawFindingId: firstRaw.rawFindingId, outcome: 'audit_only', reason: 'No mutation.' },
@@ -912,6 +935,8 @@ describe('reconcileFindingLedger', () => {
       previousLedger: makeLedger(),
       rawFindings: [firstRaw, secondRaw],
       managerOutput: makeManagerOutput(),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
       rawFindingDispositions: [
         { rawFindingId: firstRaw.rawFindingId, outcome: 'audit_only', reason: 'No mutation.' },
@@ -946,6 +971,8 @@ describe('reconcileFindingLedger', () => {
       previousLedger: makeLedger(),
       rawFindings: [rawFinding],
       managerOutput: makeManagerOutput(),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
       rawFindingDispositions: [{
         rawFindingId: rawFinding.rawFindingId,
@@ -984,6 +1011,8 @@ describe('reconcileFindingLedger', () => {
           description: 'The observation relates to F-0001 but identity remains ambiguous.',
         }],
       }),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [{
         kind: 'raw-meaning-ambiguous',
         stableKey: 'stable-conflict-and-provisional',
@@ -1097,6 +1126,8 @@ describe('reconcileFindingLedger', () => {
       managerOutput: makeManagerOutput({
         conflicts: [conflict],
       }),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [provisionalSpec],
       rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map([[
@@ -1158,6 +1189,8 @@ describe('reconcileFindingLedger', () => {
 
     expect(() => reconcileFindingLedgerStrict({
       ...reconcileInput,
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [{
         ...provisionalSpec,
         reason: 'Substituted provisional payload.',
@@ -1201,6 +1234,8 @@ describe('reconcileFindingLedger', () => {
 
     expect(() => reconcileFindingLedgerStrict({
       ...reconcileInput,
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [provisionalSpec, { ...provisionalSpec }],
     })).toThrow('authority requires exactly one conflict and one provisional outcome');
 
@@ -1355,6 +1390,8 @@ describe('reconcileFindingLedger', () => {
       previousLedger: makeLedger(),
       rawFindings: [rawFinding],
       managerOutput: makeManagerOutput(),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [
         { ...baseSpec, stableKey: 'stable-provisional-a' },
         { ...baseSpec, stableKey: 'stable-provisional-b' },
@@ -1374,6 +1411,8 @@ describe('reconcileFindingLedger', () => {
       previousLedger: makeLedger(),
       rawFindings: [],
       managerOutput: makeManagerOutput(),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [{
         kind: 'raw-adjudication-unresolved',
         stableKey: 'stable-unknown-provisional',
@@ -2569,6 +2608,8 @@ describe('reconcileFindingLedger', () => {
       previousLedger,
       rawFindings: [rawFinding],
       managerOutput: makeManagerOutput(),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
       rawFindingDispositions: [{
         rawFindingId: rawFinding.rawFindingId,
@@ -2597,6 +2638,8 @@ describe('reconcileFindingLedger', () => {
       previousLedger: makeLedger({ nextId: 1, rawFindings: [], findings: [] }),
       rawFindings: [rawFinding],
       managerOutput: makeManagerOutput(),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
       excludedRawFindingIds: new Set([rawFinding.rawFindingId]),
       rawProvenanceByRawFindingId: new Map([[
@@ -2625,6 +2668,8 @@ describe('reconcileFindingLedger', () => {
           severity: rawFinding.severity,
         }],
       }),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
       rawFindingDispositions: [{
         rawFindingId: rawFinding.rawFindingId,

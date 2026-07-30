@@ -85,12 +85,16 @@ function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLe
 
 type TestReconcileInput = Omit<
   Parameters<typeof reconcileFindingLedgerStrict>[0],
-  'provisionalFindings' | 'rawFindingDispositions' | 'rawProvenanceByRawFindingId' | 'verifiedEvidenceRecordsByRawFindingId'
+  'provisionalFindings' | 'entityProvisionalMutations'
+  | 'terminalEntityAttachmentFindingIds' | 'rawFindingDispositions'
+  | 'rawProvenanceByRawFindingId' | 'verifiedEvidenceRecordsByRawFindingId'
 >;
 
 function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
   return reconcileFindingLedgerStrict({
     ...input,
+    entityProvisionalMutations: [],
+    terminalEntityAttachmentFindingIds: new Set(),
     provisionalFindings: [],
     rawFindingDispositions: [],
     verifiedEvidenceRecordsByRawFindingId: new Map(),
@@ -352,6 +356,7 @@ describe('reconcileFindingLedger dismissedFindings', () => {
         description: rawFinding.description,
         reviewers: [rawFinding.reviewer],
       }],
+      entityProvisionalMutations: [],
       anomalySpecs: [],
       pendingRejectedObservations: [],
       verifiedEvidenceRecordsByRawFindingId: new Map(),

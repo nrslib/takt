@@ -1,0 +1,1288 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type {
+  AgentResponse,
+  AgentWorkflowStep,
+  FindingContractConfig,
+  WorkflowStep,
+} from '../core/models/types.js';
+import type {
+  FindingLedger,
+  FindingLedgerEntry,
+  FindingTarget,
+  RawFinding,
+} from '../core/workflow/findings/types.js';
+import type { RunFindingManagerForStepInput } from '../core/workflow/findings/manager-contracts.js';
+import {
+  evaluateRawAdmission,
+  type ReviewerIntakeResult,
+} from '../core/workflow/findings/manager-admission.js';
+import { bindPreAdmissionEntities } from '../core/workflow/findings/pre-admission-entity-binding.js';
+import { entityBindingDigest } from '../core/workflow/findings/pre-admission-entity-binding-identity.js';
+import {
+  applyPreAdmissionEntityProvisionalMutationsToLedger,
+  type ProvisionalFindingSpec,
+} from '../core/workflow/findings/reconciler.js';
+import { snapshotProvisionalRecoveryOrigin } from '../core/workflow/findings/provisional-recovery-origin.js';
+import { reconcileCommitPlan } from '../core/workflow/findings/manager-commit-finalization.js';
+import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
+import { applyRejectedObservationAttachments } from '../core/workflow/findings/manager-provisional-settlement.js';
+import {
+  candidateFromStoredRawFinding,
+  canonicalizeReviewerRawFinding,
+  computeLineageKey,
+  computeReviewerStableKey,
+  toLedgerRawFinding,
+} from '../core/workflow/findings/raw-canonicalization.js';
+import { captureFindingPreconditions } from '../core/workflow/findings/finding-preconditions.js';
+import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
+import type { ReviewScopeProofSnapshot } from '../core/workflow/findings/snapshot.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+} from './helpers/finding-lifecycle-fixture.js';
+import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+
+vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
+
+const { executeAgent } = await import('../agents/agent-usecases.js');
+const executeAgentMock = vi.mocked(executeAgent);
+
+const contract: FindingContractConfig = {
+  ledgerPath: '.takt/findings/ledger.json',
+  rawFindingsPath: '.takt/findings/raw',
+  manager: {
+    persona: 'findings-manager',
+    instruction: 'Reconcile only the supplied task.',
+    outputContract: 'Return structured JSON.',
+  },
+};
+
+const managerStep: AgentWorkflowStep = {
+  kind: 'agent',
+  name: 'findings-manager',
+  persona: 'findings-manager',
+  edit: false,
+};
+
+const reviewScopeSnapshot: ReviewScopeProofSnapshot = {
+  reviewScopeSnapshotId: 'scope-snapshot',
+  trackedDiff: undefined,
+  untrackedEvidence: [],
+  queryInventory: [],
+};
+
+function runInput(options: Record<string, unknown> = {}) {
+  return {
+    optionsBuilder: {
+      buildAgentOptions: () => options,
+    },
+    stepExecutor: {
+      buildPhase1Instruction: (instruction: string) => instruction,
+      normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
+      recordSynthesizedAgentUsage: () => {},
+    },
+  } as Pick<RunFindingManagerForStepInput, 'optionsBuilder' | 'stepExecutor'>;
+}
+
+function emptyLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
+  return {
+    workflowName: 'entity-binding',
+    nextId: 1,
+    updatedAt: '2026-07-30T00:00:00.000Z',
+    findings: [],
+    evidenceRecords: [],
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawRecoveryAttempts: [],
+    rawRecoveryResults: [],
+    rawFindings: [],
+    conflicts: [],
+    interpretations: [],
+    ...overrides,
+  };
+}
+
+function rawFinding(input: {
+  rawFindingId: string;
+  reviewer?: string;
+  title: string;
+  description: string;
+  target?: FindingTarget;
+}): RawFinding {
+  const reviewer = input.reviewer ?? 'reviewer';
+  return canonicalRawFindingFixture({
+    rawFindingId: input.rawFindingId,
+    stepName: reviewer,
+    reviewer,
+    target: input.target ?? { kind: 'code', paths: ['src/shared.ts'] },
+    familyTag: 'correctness',
+    severity: 'high',
+    title: input.title,
+    description: input.description,
+    suggestion: 'Fix the defect.',
+    relation: 'new',
+    targetFindingId: null,
+    evidence: [],
+  });
+}
+
+function intakeFor(ledger: FindingLedger, raws: readonly RawFinding[]): ReviewerIntakeResult {
+  return {
+    items: raws.map((raw, index) => {
+      const canonical = canonicalizeReviewerRawFinding(
+        candidateFromStoredRawFinding(raw, `reviewer-stable-${index}`),
+        { ledger },
+      ).canonical;
+      return { canonical, wire: toLedgerRawFinding(canonical) };
+    }),
+    entityBindings: new Map(),
+    overflowRawFindingIds: new Set(),
+    intakeProvisionalSpecs: [],
+    overflowReports: [],
+    clarifications: [],
+    rawNormalizations: [],
+    healthyReviewerStableKeys: new Set(),
+  };
+}
+
+function sectionJson<T>(instruction: string, heading: string): T {
+  const start = instruction.indexOf(`${heading}\n`);
+  const rest = instruction.slice(start + heading.length + 1);
+  const match = /^(`{3,})json\n([\s\S]*?)\n\1/m.exec(rest);
+  if (start < 0 || match?.[2] === undefined) {
+    throw new Error(`Missing JSON block after ${heading}`);
+  }
+  return JSON.parse(match[2]) as T;
+}
+
+function response(structuredOutput: Record<string, unknown>): AgentResponse {
+  return {
+    persona: 'findings-manager',
+    status: 'done',
+    content: '',
+    timestamp: new Date('2026-07-30T00:00:00.000Z'),
+    structuredOutput,
+  };
+}
+
+function mockGroupedDecision(
+  groupForRaw: (rawFindingId: string, owned: string[]) => {
+    decision: 'bind_existing' | 'new_entity' | 'ambiguous';
+    findingId?: string;
+    groupRawFindingId?: string;
+  },
+): void {
+  executeAgentMock.mockImplementation(async (_persona, instruction) => {
+    const manifest = sectionJson<{
+      taskId: string;
+      ownedRawFindingIds: string[];
+    }>(instruction, '## Task manifest');
+    return response({
+      taskId: manifest.taskId,
+      decisions: manifest.ownedRawFindingIds.map((rawFindingId) => {
+        const planned = groupForRaw(rawFindingId, manifest.ownedRawFindingIds);
+        return {
+          rawFindingId,
+          decision: planned.decision,
+          findingId: planned.findingId ?? '',
+          groupRawFindingId: planned.groupRawFindingId ?? '',
+          reason: 'Semantic entity classification.',
+        };
+      }),
+    });
+  });
+}
+
+async function bind(input: {
+  ledger: FindingLedger;
+  intake: ReviewerIntakeResult;
+  roundMarker?: string;
+  options?: Record<string, unknown>;
+}) {
+  return bindPreAdmissionEntities({
+    contract,
+    previousLedger: input.ledger,
+    intake: input.intake,
+    managerStep,
+    roundMarker: input.roundMarker ?? 'round-1',
+    runInput: runInput(input.options),
+  });
+}
+
+function evaluate(ledger: FindingLedger, intake: ReviewerIntakeResult) {
+  return evaluateRawAdmission({
+    cwd: process.cwd(),
+    reviewScopeSnapshotId: reviewScopeSnapshot.reviewScopeSnapshotId,
+    runId: 'run-1',
+    scopeIdentity: 'scope',
+    previousLedger: ledger,
+    intake,
+    reviewScopeSnapshot,
+    workflowTask: 'Review the project.',
+  });
+}
+
+function applyMutations(
+  ledger: FindingLedger,
+  intake: ReviewerIntakeResult,
+): FindingLedger {
+  const evaluation = evaluate(ledger, intake);
+  const applied = applyPreAdmissionEntityProvisionalMutationsToLedger(
+    ledger,
+    evaluation.preAdmissionEntityMutations,
+    {
+      workflowName: ledger.workflowName,
+      stepName: 'reviewers',
+      runId: 'run-1',
+      timestamp: '2026-07-30T00:00:00.000Z',
+    },
+  );
+  return {
+    ...applied,
+    rawFindings: [
+      ...ledger.rawFindings,
+      ...intake.items.map((item) => item.wire),
+    ],
+  };
+}
+
+function reconcileEntityCommit(input: {
+  ledger: FindingLedger;
+  rawFindings: RawFinding[];
+  managerOutput?: ReturnType<typeof createEmptyManagerOutput>;
+  mutations: ReturnType<typeof evaluate>['preAdmissionEntityMutations'];
+  provisionalSpecs?: ProvisionalFindingSpec[];
+  cleanWire?: RawFinding[];
+}) {
+  const timestamp = '2026-07-30T00:00:00.000Z';
+  return reconcileCommitPlan({
+    runInput: {
+      workflowName: input.ledger.workflowName,
+      callNamespace: '',
+      cwd: process.cwd(),
+      runId: 'run-1',
+      timestamp,
+      parentStep: managerStep,
+    } as never,
+    freshLedger: input.ledger,
+    rawFindings: input.rawFindings,
+    managerOutput: input.managerOutput ?? createEmptyManagerOutput(),
+    provisionalSpecs: input.provisionalSpecs ?? [],
+    entityProvisionalMutations: input.mutations,
+    anomalySpecs: [],
+    pendingRejectedObservations: [],
+    rawProvenanceByRawFindingId: new Map(input.rawFindings.map((raw) => {
+      const reviewerStableKey = computeReviewerStableKey({
+        workflowName: input.ledger.workflowName,
+        callNamespace: '',
+        parentStepName: managerStep.name,
+        reviewerPersonaKey: raw.reviewer,
+      });
+      return [raw.rawFindingId, storedRawReconcileProvenance(
+        raw,
+        reviewerStableKey,
+        computeLineageKey({
+          claimIdentityHash: raw.claimIdentityHash,
+          ...(raw.targetFindingId === null
+            ? {}
+            : { targetFindingId: raw.targetFindingId }),
+        }),
+      )] as const;
+    })),
+    cleanWire: input.cleanWire ?? [],
+    explicitResolvedByMapping: new Map(),
+    explicitPromotedFindingIds: new Set(),
+    recoveryProvisionalRawFindingIds: new Set(),
+    staleRawFindingIds: new Set(),
+    deferredRawFindingIds: new Set(),
+    resolutionRenotifications: [],
+    unsupportedRawFindingReports: [],
+    healthyReviewerStableKeys: new Set(),
+    verifiedEvidenceRecordsByRawFindingId: new Map(),
+  });
+}
+
+function provisionalFinding(input: {
+  id: string;
+  raw: RawFinding;
+  kind: 'raw-adjudication-unresolved' | 'raw-meaning-ambiguous';
+  status?: FindingLedgerEntry['status'];
+}): FindingLedgerEntry {
+  const observation = {
+    runId: 'run-0',
+    stepName: input.raw.stepName,
+    timestamp: '2026-07-29T00:00:00.000Z',
+  };
+  return {
+    id: input.id,
+    status: input.status ?? 'open',
+    lifecycle: input.status === 'dismissed' ? 'dismissed' : 'new',
+    revision: 1,
+    target: input.raw.target,
+    targetIdentityHash: input.raw.targetIdentityHash,
+    claimIdentityHash: input.raw.claimIdentityHash,
+    semanticClaimIdentityHash: input.raw.semanticClaimIdentityHash,
+    severity: input.raw.severity,
+    title: input.raw.title,
+    description: input.raw.description ?? undefined,
+    suggestion: input.raw.suggestion ?? undefined,
+    evidenceIds: [],
+    reviewers: [input.raw.reviewer],
+    rawFindingIds: [input.raw.rawFindingId],
+    firstSeen: { ...observation },
+    lastSeen: { ...observation },
+    provisional: {
+      kind: input.kind,
+      stableKey: entityBindingDigest('finding-provisional-entity-v1', input.id),
+      lineageKey: entityBindingDigest('finding-provisional-lineage-v1', input.id),
+      sourceRawFindingIds: [input.raw.rawFindingId],
+      reason: 'Existing provisional.',
+      firstObservedAt: { ...observation },
+      lastObservedAt: { ...observation },
+      interpretationEpochs: 0,
+      gateEffect: 'block',
+      firstObservedRound: 1,
+    },
+  };
+}
+
+function productFinding(raw: RawFinding, id = 'F-0001'): FindingLedgerEntry {
+  const finding = provisionalFinding({
+    id,
+    raw,
+    kind: 'raw-adjudication-unresolved',
+  });
+  const { provisional: _provisional, ...product } = finding;
+  return product;
+}
+
+beforeEach(() => {
+  executeAgentMock.mockReset();
+});
+
+describe('pre-admission semantic entity binding', () => {
+  it('creates one entity for same-round paraphrases and strips permissionResolution', async () => {
+    const ledger = emptyLedger();
+    const intake = intakeFor(ledger, [
+      rawFinding({
+        rawFindingId: 'raw-a',
+        reviewer: 'reviewer-a',
+        title: 'Cache invalidation skips renamed files',
+        description: 'A renamed source file keeps stale cache state.',
+      }),
+      rawFinding({
+        rawFindingId: 'raw-b',
+        reviewer: 'reviewer-b',
+        title: 'Renames leave an obsolete cache entry',
+        description: 'Moving a source path leaves the old cached value.',
+      }),
+    ]);
+    mockGroupedDecision((_rawFindingId, owned) => ({
+      decision: 'new_entity',
+      groupRawFindingId: owned[0],
+    }));
+
+    const bound = await bind({
+      ledger,
+      intake,
+      options: {
+        permissionMode: 'edit',
+        permissionResolution: 'edit',
+        allowedTools: ['write'],
+      },
+    });
+    const committed = applyMutations(ledger, bound.intake);
+    const options = executeAgentMock.mock.calls[0]?.[2] as Record<string, unknown>;
+
+    expect(options).toMatchObject({ permissionMode: 'readonly', allowedTools: [] });
+    expect(options).not.toHaveProperty('permissionResolution');
+    expect(committed.findings).toHaveLength(1);
+    expect(committed.findings[0]?.provisional?.sourceRawFindingIds)
+      .toEqual(['raw-a', 'raw-b']);
+    expect(committed.findings[0]?.provisional).toMatchObject({
+      stableKey: entityBindingDigest('finding-provisional-entity-v1', 'F-0001'),
+      lineageKey: entityBindingDigest('finding-provisional-lineage-v1', 'F-0001'),
+    });
+  });
+
+  it('routes a relation- and claim-incomplete evidence-less raw through binding', async () => {
+    const ledger = emptyLedger();
+    const incomplete = canonicalRawFindingFixture({
+      rawFindingId: 'raw-incomplete',
+      stepName: 'reviewer',
+      reviewer: 'reviewer',
+      target: { kind: 'code', paths: ['src/shared.ts'] },
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: null,
+      suggestion: null,
+      relation: null,
+      targetFindingId: null,
+      evidence: [],
+    });
+    const intake = intakeFor(ledger, [incomplete]);
+    mockGroupedDecision((rawFindingId) => ({
+      decision: 'ambiguous',
+      groupRawFindingId: rawFindingId,
+    }));
+
+    const bound = await bind({ ledger, intake });
+    const evaluation = evaluate(ledger, bound.intake);
+
+    expect(executeAgentMock).toHaveBeenCalledOnce();
+    expect(evaluation.preAdmissionEntityMutations).toMatchObject([{
+      operation: 'create_new',
+      provisionalKind: 'raw-meaning-ambiguous',
+      title: null,
+      severity: null,
+    }]);
+  });
+
+  it('does not bind fallback uncertainty to raw-adjudication-unresolved', async () => {
+    const priorRaw = rawFinding({
+      rawFindingId: 'raw-a',
+      title: 'Known unverified defect',
+      description: 'Existing raw-adjudication provisional.',
+    });
+    const existing = provisionalFinding({
+      id: 'F-0001',
+      raw: priorRaw,
+      kind: 'raw-adjudication-unresolved',
+    });
+    const ledger = emptyLedger({
+      findings: [existing],
+      rawFindings: [priorRaw],
+      nextId: 2,
+    });
+    const intake = intakeFor(ledger, [rawFinding({
+      rawFindingId: 'raw-b',
+      title: 'Different uncertain defect',
+      description: 'A separate observation at the same target.',
+    })]);
+    executeAgentMock.mockRejectedValue(new Error('provider unavailable'));
+
+    const bound = await bind({ ledger, intake });
+    const evaluation = evaluate(ledger, bound.intake);
+    const committed = applyMutations(ledger, bound.intake);
+
+    expect(evaluation.preAdmissionEntityMutations).toMatchObject([{
+      operation: 'create_new',
+      provisionalKind: 'raw-meaning-ambiguous',
+    }]);
+    expect(committed.findings).toHaveLength(2);
+    expect(committed.findings[0]?.rawFindingIds).toEqual(['raw-a']);
+    expect(committed.findings[1]?.rawFindingIds).toEqual(['raw-b']);
+  });
+
+  it('keeps uncertainty and nextId bounded while overlapping path sets change', async () => {
+    executeAgentMock.mockRejectedValue(new Error('provider unavailable'));
+    let ledger = emptyLedger();
+    const targets: FindingTarget[] = [
+      { kind: 'code', paths: ['src/a.ts'] },
+      { kind: 'code', paths: ['src/a.ts', 'src/b.ts'] },
+      { kind: 'code', paths: ['src/b.ts'] },
+    ];
+    for (const [index, target] of targets.entries()) {
+      const intake = intakeFor(ledger, [rawFinding({
+        rawFindingId: `raw-${index + 1}`,
+        title: `Uncertain defect ${index + 1}`,
+        description: 'The same uncertainty moves across an overlapping target locus.',
+        target,
+      })]);
+      const bound = await bind({
+        ledger,
+        intake,
+        roundMarker: `round-${index + 1}`,
+      });
+      ledger = applyMutations(ledger, bound.intake);
+    }
+
+    expect(ledger.findings).toHaveLength(1);
+    expect(ledger.nextId).toBe(2);
+    expect(ledger.findings[0]?.rawFindingIds).toEqual(['raw-1', 'raw-2', 'raw-3']);
+  });
+
+  it('creates every same-locus ambiguous manager group without dropping a raw', async () => {
+    const ledger = emptyLedger();
+    const intake = intakeFor(ledger, ['a', 'b', 'c', 'd'].map((suffix) => rawFinding({
+      rawFindingId: `raw-${suffix}`,
+      title: `Ambiguous ${suffix}`,
+      description: `Independent ambiguous group ${suffix}.`,
+    })));
+    mockGroupedDecision((rawFindingId) => ({
+      decision: 'ambiguous',
+      groupRawFindingId: rawFindingId.endsWith('a') || rawFindingId.endsWith('b')
+        ? 'raw-a'
+        : 'raw-c',
+    }));
+
+    const bound = await bind({ ledger, intake });
+    const evaluation = evaluate(ledger, bound.intake);
+    const committed = applyMutations(ledger, bound.intake);
+
+    expect(evaluation.preAdmissionEntityMutations).toHaveLength(2);
+    expect(committed.findings).toHaveLength(2);
+    expect(committed.findings.flatMap((finding) => finding.rawFindingIds).sort())
+      .toEqual(['raw-a', 'raw-b', 'raw-c', 'raw-d']);
+  });
+
+  it('keeps an ambiguous group uncertain when only one member appears exactly before commit', async () => {
+    const originalLedger = emptyLedger();
+    const rawA = rawFinding({
+      rawFindingId: 'raw-a',
+      title: 'Exact member A',
+      description: 'Only this group member appears concurrently.',
+    });
+    const rawB = rawFinding({
+      rawFindingId: 'raw-b',
+      title: 'Uncertain member B',
+      description: 'This member remains semantically unresolved.',
+    });
+    const intake = intakeFor(originalLedger, [rawA, rawB]);
+    mockGroupedDecision((_rawFindingId, owned) => ({
+      decision: 'ambiguous',
+      groupRawFindingId: owned[0],
+    }));
+    const bound = await bind({ ledger: originalLedger, intake });
+    const concurrentRaw = rawFinding({
+      rawFindingId: 'raw-concurrent',
+      title: rawA.title!,
+      description: rawA.description!,
+    });
+    const freshLedger = emptyLedger({
+      findings: [productFinding(concurrentRaw)],
+      rawFindings: [concurrentRaw],
+      nextId: 2,
+    });
+
+    const evaluation = evaluate(freshLedger, bound.intake);
+
+    expect(evaluation.pendingRejectedObservations).toEqual([]);
+    expect(evaluation.preAdmissionEntityMutations).toMatchObject([{
+      operation: 'create_new',
+      provisionalKind: 'raw-meaning-ambiguous',
+      sourceRawFindingIds: ['raw-a', 'raw-b'],
+    }]);
+  });
+
+  it('keeps interpretation recovery raws out of mixed entity-binding groups', async () => {
+    const sourceRaw = rawFinding({
+      rawFindingId: 'raw-source',
+      title: 'Existing recovery source',
+      description: 'The recovery raw belongs to the interpretation ladder.',
+    });
+    const process = provisionalFinding({
+      id: 'F-0001',
+      raw: sourceRaw,
+      kind: 'raw-meaning-ambiguous',
+    });
+    const ledger = emptyLedger({
+      findings: [process],
+      rawFindings: [sourceRaw],
+      nextId: 2,
+    });
+    const base = intakeFor(ledger, [
+      rawFinding({
+        rawFindingId: 'raw-recovery',
+        title: 'Recovery attempt',
+        description: 'This raw must stay with the interpretation ladder.',
+      }),
+      rawFinding({
+        rawFindingId: 'raw-normal',
+        title: 'Normal observation',
+        description: 'This raw remains eligible for entity binding.',
+      }),
+    ]);
+    const recovery = base.items[0]!;
+    const intake: ReviewerIntakeResult = {
+      ...base,
+      items: [
+        {
+          ...recovery,
+          interpretationRecoveryAttempt: true,
+          recoveryOrigins: [snapshotProvisionalRecoveryOrigin({
+            ...process,
+            provisional: process.provisional!,
+          })],
+        },
+        base.items[1]!,
+      ],
+    };
+    mockGroupedDecision((rawFindingId) => ({
+      decision: 'ambiguous',
+      groupRawFindingId: rawFindingId,
+    }));
+
+    const bound = await bind({ ledger, intake });
+
+    expect(executeAgentMock).toHaveBeenCalledOnce();
+    expect(bound.intake.entityBindings.has('raw-recovery')).toBe(false);
+    expect(bound.intake.entityBindings.has('raw-normal')).toBe(true);
+  });
+
+  it('does not reuse stable or lineage identity after a closed provisional', async () => {
+    executeAgentMock.mockRejectedValue(new Error('provider unavailable'));
+    const firstRaw = rawFinding({
+      rawFindingId: 'raw-first',
+      title: 'First uncertainty',
+      description: 'First episode.',
+    });
+    const closed = provisionalFinding({
+      id: 'F-0001',
+      raw: firstRaw,
+      kind: 'raw-meaning-ambiguous',
+      status: 'dismissed',
+    });
+    const ledger = emptyLedger({
+      findings: [closed],
+      rawFindings: [firstRaw],
+      nextId: 2,
+    });
+    const intake = intakeFor(ledger, [rawFinding({
+      rawFindingId: 'raw-second',
+      title: 'Second uncertainty',
+      description: 'New episode after closed history.',
+    })]);
+
+    const committed = applyMutations(
+      ledger,
+      (await bind({ ledger, intake })).intake,
+    );
+
+    expect(committed.findings).toHaveLength(2);
+    expect(committed.findings[1]?.provisional?.stableKey)
+      .not.toBe(closed.provisional?.stableKey);
+    expect(committed.findings[1]?.provisional?.lineageKey)
+      .not.toBe(closed.provisional?.lineageKey);
+  });
+
+  it('keeps semantic entity to Finding ID mapping stable when raw IDs are swapped', async () => {
+    const run = async (leftRawId: string, rightRawId: string) => {
+      const ledger = emptyLedger();
+      const intake = intakeFor(ledger, [
+        rawFinding({
+          rawFindingId: leftRawId,
+          title: 'Alpha defect',
+          description: 'Alpha semantic entity.',
+        }),
+        rawFinding({
+          rawFindingId: rightRawId,
+          title: 'Beta defect',
+          description: 'Beta semantic entity.',
+        }),
+      ]);
+      mockGroupedDecision((rawFindingId) => ({
+        decision: 'new_entity',
+        groupRawFindingId: rawFindingId,
+      }));
+      return applyMutations(ledger, (await bind({ ledger, intake })).intake);
+    };
+
+    const first = await run('raw-a', 'raw-b');
+    executeAgentMock.mockReset();
+    const swapped = await run('raw-b', 'raw-a');
+
+    expect(first.findings.map((finding) => [finding.id, finding.title]))
+      .toEqual(swapped.findings.map((finding) => [finding.id, finding.title]));
+  });
+
+  it('falls back on a changed fresh locus without attaching or double-creating', async () => {
+    const originalLedger = emptyLedger();
+    const intake = intakeFor(originalLedger, [rawFinding({
+      rawFindingId: 'raw-new',
+      title: 'New cache defect',
+      description: 'Manager judged a new semantic entity.',
+    })]);
+    mockGroupedDecision((rawFindingId) => ({
+      decision: 'new_entity',
+      groupRawFindingId: rawFindingId,
+    }));
+    const bound = await bind({ ledger: originalLedger, intake });
+    const concurrentRaw = rawFinding({
+      rawFindingId: 'raw-concurrent',
+      title: 'Different concurrent defect',
+      description: 'A different entity appeared at the same locus.',
+    });
+    const freshLedger = emptyLedger({
+      findings: [productFinding(concurrentRaw)],
+      rawFindings: [concurrentRaw],
+      nextId: 2,
+    });
+    const evaluation = evaluate(freshLedger, bound.intake);
+    const committed = applyMutations(freshLedger, bound.intake);
+
+    expect(evaluation.preAdmissionEntityMutations).toMatchObject([{
+      operation: 'create_new',
+      provisionalKind: 'raw-meaning-ambiguous',
+    }]);
+    expect(committed.findings).toHaveLength(2);
+    expect(committed.findings[0]?.rawFindingIds).toEqual(['raw-concurrent']);
+    expect(committed.findings[1]?.rawFindingIds).toEqual(['raw-new']);
+  });
+
+  it('converts a planned create to audit when a unique exact entity appears', async () => {
+    const originalLedger = emptyLedger();
+    const raw = rawFinding({
+      rawFindingId: 'raw-new',
+      title: 'Exact concurrent defect',
+      description: 'The exact entity appears before commit.',
+    });
+    const intake = intakeFor(originalLedger, [raw]);
+    mockGroupedDecision((rawFindingId) => ({
+      decision: 'new_entity',
+      groupRawFindingId: rawFindingId,
+    }));
+    const bound = await bind({ ledger: originalLedger, intake });
+    const concurrent = rawFinding({
+      rawFindingId: 'raw-concurrent',
+      title: raw.title!,
+      description: raw.description!,
+    });
+    const freshLedger = emptyLedger({
+      findings: [productFinding(concurrent)],
+      rawFindings: [concurrent],
+      nextId: 2,
+    });
+    const evaluation = evaluate(freshLedger, bound.intake);
+
+    expect(evaluation.preAdmissionEntityMutations).toEqual([]);
+    expect(evaluation.pendingRejectedObservations).toMatchObject([{
+      targetFindingId: 'F-0001',
+      destination: 'target_audit',
+    }]);
+    expect(freshLedger.nextId).toBe(2);
+  });
+
+  it('attaches fallback to the smallest ambiguity Finding ID without superseding peers', async () => {
+    const rawA = rawFinding({
+      rawFindingId: 'raw-a',
+      title: 'Uncertainty A',
+      description: 'First existing ambiguity.',
+    });
+    const rawB = rawFinding({
+      rawFindingId: 'raw-b',
+      title: 'Uncertainty B',
+      description: 'Second existing ambiguity.',
+    });
+    const ledger = emptyLedger({
+      findings: [
+        provisionalFinding({
+          id: 'F-0002',
+          raw: rawB,
+          kind: 'raw-meaning-ambiguous',
+        }),
+        provisionalFinding({
+          id: 'F-0001',
+          raw: rawA,
+          kind: 'raw-meaning-ambiguous',
+        }),
+      ],
+      rawFindings: [rawA, rawB],
+      nextId: 3,
+    });
+    const intake = intakeFor(ledger, [rawFinding({
+      rawFindingId: 'raw-c',
+      title: 'Uncertainty C',
+      description: 'Fallback observation.',
+    })]);
+    executeAgentMock.mockRejectedValue(new Error('provider unavailable'));
+
+    const bound = await bind({ ledger, intake });
+    const evaluation = evaluate(ledger, bound.intake);
+    const committed = applyMutations(ledger, bound.intake);
+
+    expect(evaluation.preAdmissionEntityMutations).toMatchObject([{
+      operation: 'attach_existing',
+      findingId: 'F-0001',
+    }]);
+    expect(committed.findings.find((finding) => finding.id === 'F-0001')?.rawFindingIds)
+      .toEqual(['raw-a', 'raw-c']);
+    expect(committed.findings.find((finding) => finding.id === 'F-0002')?.status)
+      .toBe('open');
+    expect(committed.nextId).toBe(3);
+  });
+
+  it('does not attach when the planned ambiguity episode is closed before commit', async () => {
+    const priorRaw = rawFinding({
+      rawFindingId: 'raw-prior',
+      title: 'Prior uncertainty',
+      description: 'An ambiguity episode that closes before commit.',
+    });
+    const openEpisode = provisionalFinding({
+      id: 'F-0001',
+      raw: priorRaw,
+      kind: 'raw-meaning-ambiguous',
+    });
+    const originalLedger = emptyLedger({
+      findings: [openEpisode],
+      rawFindings: [priorRaw],
+      nextId: 2,
+    });
+    const intake = intakeFor(originalLedger, [rawFinding({
+      rawFindingId: 'raw-new',
+      title: 'Later uncertainty',
+      description: 'The new episode must not attach to closed history.',
+    })]);
+    executeAgentMock.mockRejectedValue(new Error('provider unavailable'));
+
+    const bound = await bind({ ledger: originalLedger, intake });
+    const closedEpisode = {
+      ...openEpisode,
+      status: 'dismissed' as const,
+      revision: openEpisode.revision + 1,
+    };
+    const freshLedger = emptyLedger({
+      findings: [closedEpisode],
+      rawFindings: [priorRaw],
+      nextId: 2,
+    });
+    const evaluation = evaluate(freshLedger, bound.intake);
+    const committed = applyMutations(freshLedger, bound.intake);
+
+    expect(evaluation.preAdmissionEntityMutations).toMatchObject([{
+      operation: 'create_new',
+      provisionalKind: 'raw-meaning-ambiguous',
+      sourceRawFindingIds: ['raw-new'],
+    }]);
+    expect(committed.findings).toHaveLength(2);
+    expect(committed.findings[0]?.status).toBe('dismissed');
+    expect(committed.findings[1]?.rawFindingIds).toEqual(['raw-new']);
+    expect(committed.nextId).toBe(3);
+  });
+
+  it('fails fast when an attach precondition no longer matches', () => {
+    const raw = rawFinding({
+      rawFindingId: 'raw-a',
+      title: 'Uncertainty A',
+      description: 'Existing ambiguity.',
+    });
+    const existing = provisionalFinding({
+      id: 'F-0001',
+      raw,
+      kind: 'raw-meaning-ambiguous',
+    });
+    const ledger = emptyLedger({ findings: [existing], rawFindings: [raw], nextId: 2 });
+
+    expect(() => applyPreAdmissionEntityProvisionalMutationsToLedger(
+      ledger,
+      [{
+        operation: 'attach_existing',
+        findingId: 'F-0001',
+        expectedKind: 'raw-meaning-ambiguous',
+        expectedStableKey: 'stale-key',
+        expectedLineageKey: existing.provisional!.lineageKey,
+        sourceRawFindingIds: ['raw-new'],
+        reviewers: ['reviewer'],
+        reason: 'Stale attachment.',
+      }],
+      {
+        workflowName: ledger.workflowName,
+        stepName: 'reviewers',
+        runId: 'run-1',
+        timestamp: '2026-07-30T00:00:00.000Z',
+      },
+    )).toThrow(/attachment precondition failed/);
+  });
+
+  it('coalesces same-finding attachments into one persists revision', async () => {
+    const priorRaw = rawFinding({
+      rawFindingId: 'raw-prior',
+      title: 'Existing ambiguity',
+      description: 'The canonical ambiguity episode.',
+    });
+    const existing = provisionalFinding({
+      id: 'F-0001',
+      raw: priorRaw,
+      kind: 'raw-meaning-ambiguous',
+    });
+    const ledger = emptyLedger({
+      findings: [existing],
+      rawFindings: [priorRaw],
+      nextId: 2,
+    });
+    const intake = intakeFor(ledger, [
+      rawFinding({
+        rawFindingId: 'raw-a',
+        reviewer: 'reviewer-a',
+        title: 'Ambiguous A',
+        description: 'First separate manager group.',
+      }),
+      rawFinding({
+        rawFindingId: 'raw-b',
+        reviewer: 'reviewer-b',
+        title: 'Ambiguous B',
+        description: 'Second separate manager group.',
+      }),
+    ]);
+    mockGroupedDecision((rawFindingId) => ({
+      decision: 'ambiguous',
+      groupRawFindingId: rawFindingId,
+    }));
+
+    const bound = await bind({ ledger, intake });
+    const evaluation = evaluate(ledger, bound.intake);
+    const committed = applyMutations(ledger, bound.intake);
+    const attached = committed.findings[0]!;
+
+    expect(evaluation.preAdmissionEntityMutations).toHaveLength(2);
+    expect(attached.revision).toBe(existing.revision + 1);
+    expect(attached.lifecycle).toBe('persists');
+    expect(attached.rawFindingIds).toEqual(['raw-a', 'raw-b', 'raw-prior']);
+    expect(attached.reviewers).toEqual(['reviewer', 'reviewer-a', 'reviewer-b']);
+  });
+
+  it('merges a legacy spec and entity attachment into one revision and command', async () => {
+    const priorRaw = rawFinding({
+      rawFindingId: 'raw-prior',
+      title: 'Shared ambiguity',
+      description: 'The existing ambiguity projection.',
+    });
+    const existing = provisionalFinding({
+      id: 'F-0001',
+      raw: priorRaw,
+      kind: 'raw-meaning-ambiguous',
+    });
+    const ledger = emptyLedger({
+      findings: [existing],
+      rawFindings: [priorRaw],
+      nextId: 2,
+    });
+    const entityRaw = rawFinding({
+      rawFindingId: 'raw-entity',
+      reviewer: 'entity-reviewer',
+      title: 'Entity attachment',
+      description: 'Attached through pre-admission entity binding.',
+    });
+    const legacyRaw = rawFinding({
+      rawFindingId: 'raw-legacy',
+      reviewer: 'legacy-reviewer',
+      title: priorRaw.title!,
+      description: priorRaw.description!,
+    });
+    const intake = intakeFor(ledger, [entityRaw]);
+    executeAgentMock.mockRejectedValue(new Error('provider unavailable'));
+    const bound = await bind({ ledger, intake });
+    const evaluation = evaluate(ledger, bound.intake);
+    const provisional = existing.provisional!;
+
+    const committed = reconcileEntityCommit({
+      ledger,
+      rawFindings: [intake.items[0]!.wire, legacyRaw],
+      mutations: evaluation.preAdmissionEntityMutations,
+      provisionalSpecs: [{
+        kind: provisional.kind,
+        stableKey: provisional.stableKey,
+        lineageKey: provisional.lineageKey,
+        sourceRawFindingIds: [legacyRaw.rawFindingId],
+        reason: 'Legacy spec reason.',
+        title: legacyRaw.title,
+        severity: legacyRaw.severity,
+        description: legacyRaw.description ?? undefined,
+        suggestion: legacyRaw.suggestion ?? undefined,
+        reviewers: [legacyRaw.reviewer],
+        target: legacyRaw.target,
+        targetIdentityHash: legacyRaw.targetIdentityHash,
+        claimIdentityHash: legacyRaw.claimIdentityHash,
+        semanticClaimIdentityHash: legacyRaw.semanticClaimIdentityHash,
+      }],
+    });
+    const finding = committed.ledger.findings[0]!;
+
+    expect(finding.revision).toBe(existing.revision + 1);
+    expect(finding.lifecycle).toBe('persists');
+    expect(finding.rawFindingIds).toEqual([
+      'raw-entity',
+      'raw-legacy',
+      'raw-prior',
+    ]);
+    expect(finding.reviewers).toEqual([
+      'entity-reviewer',
+      'legacy-reviewer',
+      'reviewer',
+    ]);
+    expect(finding.provisional?.reason).toContain('Legacy spec reason.');
+    expect(finding.provisional?.reason).toContain('provider unavailable');
+    expect(committed.managerDecisionCommands).toHaveLength(1);
+    expect(committed.managerDecisionCommands[0]?.operation).toBe('update_provisional');
+  });
+
+  it('converts an attachment to terminal audit when the target is dismissed in the same commit', async () => {
+    const priorRaw = rawFinding({
+      rawFindingId: 'raw-prior',
+      title: 'Dismissed ambiguity',
+      description: 'The ambiguity is dismissed while a new raw is committing.',
+    });
+    const existing = provisionalFinding({
+      id: 'F-0001',
+      raw: priorRaw,
+      kind: 'raw-meaning-ambiguous',
+    });
+    const ledger = emptyLedger({
+      findings: [existing],
+      rawFindings: [priorRaw],
+      nextId: 2,
+    });
+    const intake = intakeFor(ledger, [rawFinding({
+      rawFindingId: 'raw-terminal',
+      title: 'Late uncertain observation',
+      description: 'This observation must become audit-only.',
+    })]);
+    executeAgentMock.mockRejectedValue(new Error('provider unavailable'));
+    const bound = await bind({ ledger, intake });
+    const evaluation = evaluate(ledger, bound.intake);
+
+    const committed = reconcileEntityCommit({
+      ledger,
+      rawFindings: [intake.items[0]!.wire],
+      mutations: evaluation.preAdmissionEntityMutations,
+      managerOutput: {
+        ...createEmptyManagerOutput(),
+        dismissedFindings: [{
+          findingId: existing.id,
+          basis: 'unverifiable_claim',
+          reason: 'The ambiguity is terminal.',
+        }],
+      },
+    });
+    const observation = {
+      runId: 'run-1',
+      stepName: managerStep.name,
+      timestamp: '2026-07-30T00:00:00.000Z',
+    };
+    const audited = applyRejectedObservationAttachments(
+      authorizeFindingLedgerFixture(committed.ledger),
+      committed.rejectedObservationAttachments,
+      observation,
+    );
+
+    expect(committed.entityMutationResults).toMatchObject([{
+      outcome: 'terminal_audit',
+      targetFindingId: existing.id,
+      sourceRawFindingIds: ['raw-terminal'],
+    }]);
+    expect(committed.ledger.rawFindings.map((raw) => raw.rawFindingId))
+      .toContain('raw-terminal');
+    expect(committed.ledger.findings[0]?.rawFindingIds).not.toContain('raw-terminal');
+    expect(committed.rawFindingDispositions).toMatchObject([{
+      rawFindingId: 'raw-terminal',
+      outcome: 'audit_only',
+    }]);
+    expect(audited.findings[0]?.rejectedObservations).toMatchObject([{
+      rawFindingId: 'raw-terminal',
+    }]);
+  });
+
+  it('converts an attachment to terminal audit when clean evidence promotes the target', async () => {
+    const priorRaw = rawFinding({
+      rawFindingId: 'raw-prior',
+      title: 'Promoted ambiguity',
+      description: 'Clean evidence will materialize this ambiguity.',
+    });
+    const existing = provisionalFinding({
+      id: 'F-0001',
+      raw: priorRaw,
+      kind: 'raw-meaning-ambiguous',
+    });
+    const ledger = emptyLedger({
+      findings: [existing],
+      rawFindings: [priorRaw],
+      nextId: 2,
+    });
+    const intake = intakeFor(ledger, [rawFinding({
+      rawFindingId: 'raw-terminal',
+      title: 'Late uncertain observation',
+      description: 'This observation must remain audit-only after promotion.',
+    })]);
+    executeAgentMock.mockRejectedValue(new Error('provider unavailable'));
+    const bound = await bind({ ledger, intake });
+    const evaluation = evaluate(ledger, bound.intake);
+    const promotionRaw = canonicalRawFindingFixture({
+      rawFindingId: 'raw-clean',
+      stepName: 'reviewer-clean',
+      reviewer: 'reviewer-clean',
+      target: priorRaw.target,
+      familyTag: priorRaw.familyTag,
+      severity: priorRaw.severity,
+      title: priorRaw.title,
+      description: priorRaw.description,
+      suggestion: priorRaw.suggestion,
+      relation: 'persists',
+      targetFindingId: existing.id,
+      targetPrecondition: captureFindingPreconditions(ledger)
+        .get(existing.id)!.precondition,
+      evidence: [],
+    });
+
+    const committed = reconcileEntityCommit({
+      ledger,
+      rawFindings: [intake.items[0]!.wire, promotionRaw],
+      mutations: evaluation.preAdmissionEntityMutations,
+      cleanWire: [promotionRaw],
+      managerOutput: {
+        ...createEmptyManagerOutput(),
+        anchorAdjudications: [createAnchorAdjudication({
+          rawFindingId: promotionRaw.rawFindingId,
+          decision: 'same',
+          findingId: existing.id,
+          anchorRelevance: 'not_applicable',
+          evidence: 'Clean confirmation of the same claim.',
+        })],
+        matches: [{
+          findingId: existing.id,
+          rawFindingIds: [promotionRaw.rawFindingId],
+        }],
+      },
+    });
+    const observation = {
+      runId: 'run-1',
+      stepName: managerStep.name,
+      timestamp: '2026-07-30T00:00:00.000Z',
+    };
+    const audited = applyRejectedObservationAttachments(
+      authorizeFindingLedgerFixture(committed.ledger),
+      committed.rejectedObservationAttachments,
+      observation,
+    );
+
+    expect(committed.entityMutationResults).toMatchObject([{
+      outcome: 'terminal_audit',
+      targetFindingId: existing.id,
+      sourceRawFindingIds: ['raw-terminal'],
+    }]);
+    expect(committed.ledger.findings[0]?.provisional).toBeUndefined();
+    expect(committed.ledger.rawFindings.map((raw) => raw.rawFindingId))
+      .toContain('raw-terminal');
+    expect(committed.ledger.findings[0]?.rawFindingIds).not.toContain('raw-terminal');
+    expect(committed.rawFindingDispositions).toMatchObject([{
+      rawFindingId: 'raw-terminal',
+      outcome: 'audit_only',
+    }]);
+    expect(audited.findings[0]?.rejectedObservations).toMatchObject([{
+      rawFindingId: 'raw-terminal',
+    }]);
+  });
+
+  it('sorts create mutations semantically before assigning Finding IDs', async () => {
+    const ledger = emptyLedger();
+    const intake = intakeFor(ledger, [
+      rawFinding({
+        rawFindingId: 'raw-z',
+        title: 'Alpha semantic entity',
+        description: 'First semantic payload.',
+      }),
+      rawFinding({
+        rawFindingId: 'raw-a',
+        title: 'Beta semantic entity',
+        description: 'Second semantic payload.',
+      }),
+    ]);
+    mockGroupedDecision((rawFindingId) => ({
+      decision: 'new_entity',
+      groupRawFindingId: rawFindingId,
+    }));
+    const evaluation = evaluate(
+      ledger,
+      (await bind({ ledger, intake })).intake,
+    );
+    const context = {
+      workflowName: ledger.workflowName,
+      stepName: 'reviewers',
+      runId: 'run-1',
+      timestamp: '2026-07-30T00:00:00.000Z',
+    };
+
+    const forward = applyPreAdmissionEntityProvisionalMutationsToLedger(
+      ledger,
+      evaluation.preAdmissionEntityMutations,
+      context,
+    );
+    const reversed = applyPreAdmissionEntityProvisionalMutationsToLedger(
+      ledger,
+      [...evaluation.preAdmissionEntityMutations].reverse(),
+      context,
+    );
+
+    expect(forward.findings.map((finding) => [finding.id, finding.title]))
+      .toEqual(reversed.findings.map((finding) => [finding.id, finding.title]));
+  });
+
+  it('rejects a disjoint manager group and falls back per connected component', async () => {
+    const ledger = emptyLedger();
+    const intake = intakeFor(ledger, [
+      rawFinding({
+        rawFindingId: 'raw-a',
+        title: 'A defect',
+        description: 'Component A.',
+        target: { kind: 'code', paths: ['src/a.ts'] },
+      }),
+      rawFinding({
+        rawFindingId: 'raw-b',
+        title: 'B defect',
+        description: 'Component B.',
+        target: { kind: 'code', paths: ['src/b.ts'] },
+      }),
+    ]);
+    mockGroupedDecision((_rawFindingId, owned) => ({
+      decision: 'ambiguous',
+      groupRawFindingId: owned[0],
+    }));
+
+    const bound = await bind({ ledger, intake });
+    const evaluation = evaluate(ledger, bound.intake);
+
+    expect(bound.taskAudits).toMatchObject([{ status: 'failed' }]);
+    expect(evaluation.preAdmissionEntityMutations).toHaveLength(2);
+    expect(applyMutations(ledger, bound.intake).findings).toHaveLength(2);
+  });
+
+  it('bounds a 128-item over-byte component without a manager call', async () => {
+    const ledger = emptyLedger();
+    const raws = Array.from({ length: 128 }, (_, index) => rawFinding({
+      rawFindingId: `raw-${String(index).padStart(3, '0')}`,
+      title: `Variant ${index}`,
+      description: `Same component ${index} ${'x'.repeat(300)}`,
+    }));
+    const intake = intakeFor(ledger, raws);
+
+    const bound = await bind({ ledger, intake });
+    const evaluation = evaluate(ledger, bound.intake);
+    const committed = applyMutations(ledger, bound.intake);
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(bound.taskAudits).toMatchObject([{ status: 'input_overflow' }]);
+    expect(evaluation.preAdmissionEntityMutations).toHaveLength(1);
+    expect(committed.findings).toHaveLength(1);
+    expect(committed.nextId).toBe(2);
+    expect(committed.findings[0]?.rawFindingIds).toHaveLength(128);
+  });
+
+  it('uses unique exact semantic identity as an audit-only fast path', async () => {
+    const original = rawFinding({
+      rawFindingId: 'raw-original',
+      title: 'Exact cache defect',
+      description: 'Exact semantic claim.',
+    });
+    const ledger = emptyLedger({
+      findings: [productFinding(original)],
+      rawFindings: [original],
+      nextId: 2,
+    });
+    const repeated = rawFinding({
+      rawFindingId: 'raw-repeat',
+      reviewer: 'reviewer-b',
+      title: 'Exact cache defect',
+      description: 'Exact semantic claim.',
+    });
+    const bound = await bind({ ledger, intake: intakeFor(ledger, [repeated]) });
+    const evaluation = evaluate(ledger, bound.intake);
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(evaluation.preAdmissionEntityMutations).toEqual([]);
+    expect(evaluation.pendingRejectedObservations).toMatchObject([{
+      targetFindingId: 'F-0001',
+      destination: 'target_audit',
+    }]);
+  });
+});

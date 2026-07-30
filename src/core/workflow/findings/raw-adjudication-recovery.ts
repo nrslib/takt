@@ -31,6 +31,7 @@ import type { ReviewScopeProofSnapshot } from './snapshot.js';
 function emptyIntake(): ReviewerIntakeResult {
   return {
     items: [],
+    entityBindings: new Map(),
     overflowRawFindingIds: new Set(),
     intakeProvisionalSpecs: [],
     overflowReports: [],

@@ -37,6 +37,10 @@ import {
 import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.js';
 import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
 import { evaluateRawAdmission } from '../core/workflow/findings/manager-admission.js';
+import { applyCommitLedgerStates } from '../core/workflow/findings/manager-commit-finalization.js';
+import { applyRejectedObservationAttachments } from '../core/workflow/findings/manager-provisional-settlement.js';
+import { resolveStopBudgetLimits } from '../core/workflow/findings/stop-budget.js';
+import { resolveReviewIntegrityLimits } from '../core/workflow/findings/review-integrity.js';
 
 function makeFinding(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
@@ -407,6 +411,7 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
         }],
       }),
       provisionalSpecs: [],
+      entityProvisionalMutations: [],
       anomalySpecs: [],
       pendingRejectedObservations: [],
       verifiedEvidenceRecordsByRawFindingId: new Map(),
@@ -490,6 +495,8 @@ describe('assembleManagerOutput → 保存正規化 → reconciler（ラウン�
       previousLedger: ledger,
       rawFindings: persistsRaws,
       managerOutput: normalized.output,
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
       rawFindingDispositions: [],
       verifiedEvidenceRecordsByRawFindingId: new Map(),
@@ -1054,56 +1061,129 @@ describe('relation 別 intake と target atomization', () => {
     });
   });
 
-  it('records evidence-less lifecycle observations without creating provisional findings across rounds', () => {
-    const extraction = reviewerRawExtractionFixture({
-      rawFindingId: 'persists',
-      familyTag: null,
-      severity: null,
-      title: null,
-      description: null,
-      suggestion: null,
-      relation: 'persists',
-      targetFindingId: 'F-0001',
-      target: { kind: 'code', paths: ['src/lifecycle.ts'] },
-      rawExcerpt: 'Relation: persists; Target Finding ID: F-0001',
-    });
-    const ledger = lifecycleLedger();
-    const [candidate] = createReviewerRawFindingCandidates(
-      [extraction],
-      candidateContext(extraction.rawExcerpt),
-    ).candidates;
-    const canonical = canonicalizeReviewerRawFinding(candidate!, { ledger }).canonical;
-    const item = { canonical, wire: toLedgerRawFinding(canonical) };
-    for (let round = 0; round < 3; round += 1) {
-      const admission = evaluateRawAdmission({
-        cwd: process.cwd(),
-        reviewScopeSnapshotId: 'a'.repeat(64),
-        runId: `run-${round}`,
-        scopeIdentity: 'scope',
-        previousLedger: ledger,
-        intake: {
-          items: [item],
-          overflowRawFindingIds: new Set(),
-          intakeProvisionalSpecs: [],
-          overflowReports: [],
-          clarifications: [],
-          rawNormalizations: [],
-          healthyReviewerStableKeys: new Set(),
-        },
-        reviewScopeSnapshot: {
+  it.each(['persists', 'resolution_confirmation'] as const)(
+    'hydrates target:null %s observations and keeps Finding allocation unchanged across rounds',
+    (relation) => {
+      let ledger = lifecycleLedger();
+      for (let round = 0; round < 3; round += 1) {
+        const extraction = reviewerRawExtractionFixture({
+          rawFindingId: `${relation}-${round}`,
+          familyTag: null,
+          severity: null,
+          title: null,
+          description: null,
+          suggestion: null,
+          relation,
+          targetFindingId: 'F-0001',
+          target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+          rawExcerpt: `Relation: ${relation}; Target Finding ID: F-0001; round ${round}`,
+        });
+        extraction.candidate!.target = null;
+        const intake = intakeReviewerOutputs({
+          subResults: [{
+            subStep: {
+              kind: 'agent',
+              name: 'arch-review',
+              persona: 'arch-review',
+              edit: false,
+            } as never,
+            response: {
+              status: 'done',
+              content: extraction.rawExcerpt,
+              structuredOutput: { rawFindings: [extraction] },
+            } as never,
+          }],
+          previousLedger: ledger,
+          workflowName: 'peer-review',
+          callNamespace: '',
+          parentStepName: 'reviewers',
+          stepIteration: round + 1,
+          runId: `run-${round}`,
+          workflowTask: 'Review.',
+          cwd: process.cwd(),
+          scopeIdentity: '/test/lifecycle-target-hydration/ledger.json',
+          issuedAt: `2026-07-30T00:00:0${round}.000Z`,
+          reviewScopeSnapshot: {
+            reviewScopeSnapshotId: 'a'.repeat(64),
+            trackedDiff: undefined,
+            untrackedEvidence: [],
+            queryInventory: [],
+          },
+        });
+        expect(intake.intakeProvisionalSpecs).toEqual([]);
+        expect(intake.items).toHaveLength(1);
+        expect(intake.items[0]?.canonical).toMatchObject({
+          coherence: 'coherent',
+          relation,
+          targetFindingId: 'F-0001',
+          target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+        });
+        const admission = evaluateRawAdmission({
+          cwd: process.cwd(),
           reviewScopeSnapshotId: 'a'.repeat(64),
-          trackedDiff: undefined,
-          untrackedEvidence: [],
-          queryInventory: [],
-        },
-        workflowTask: 'Review.',
-      });
-      expect(admission.admissionProvisionalSpecs).toEqual([]);
-      expect(admission.pendingRejectedObservations).toHaveLength(1);
-      expect(admission.pendingRejectedObservations[0]?.anomalyKind)
-        .toBe('lifecycle-admission-failure');
-      expect(admission.admissionRejectedItems).toHaveLength(1);
-    }
-    expect(ledger.nextId).toBe(100);
-  });
+          runId: `run-${round}`,
+          scopeIdentity: 'scope',
+          previousLedger: ledger,
+          intake,
+          reviewScopeSnapshot: {
+            reviewScopeSnapshotId: 'a'.repeat(64),
+            trackedDiff: undefined,
+            untrackedEvidence: [],
+            queryInventory: [],
+          },
+          workflowTask: 'Review.',
+        });
+        expect(admission.admissionProvisionalSpecs).toEqual([]);
+        expect(admission.pendingRejectedObservations).toHaveLength(1);
+        expect(admission.pendingRejectedObservations[0]?.anomalyKind)
+          .toBe('lifecycle-admission-failure');
+        expect(admission.pendingRejectedObservations[0]?.destination)
+          .toBe('target_audit');
+        expect(admission.pendingRejectedObservations[0]?.targetFindingId)
+          .toBe('F-0001');
+        expect(admission.admissionRejectedItems).toHaveLength(1);
+        expect(admission.admissionAnomalySpecs).toEqual([]);
+        const observation = {
+          runId: `run-${round}`,
+          stepName: 'reviewers',
+          timestamp: `2026-07-30T00:00:0${round}.000Z`,
+        };
+        const wire = intake.items[0]!.wire;
+        const committed = applyCommitLedgerStates({
+          runInput: {
+            workflowName: 'peer-review',
+            parentStep: { name: 'reviewers' },
+            runId: observation.runId,
+            timestamp: observation.timestamp,
+          } as never,
+          freshLedger: ledger,
+          settledLedger: {
+            ...ledger,
+            rawFindings: [...ledger.rawFindings, wire],
+          },
+          baseAnomalySpecs: [],
+          pendingRejectedObservations: admission.pendingRejectedObservations,
+          interpretationResults: new Map(),
+          interpretationReservations: new Map(),
+          interpretationIntegrityDigests: new Map(),
+          observation,
+          verifiedEvidenceCandidates: [],
+          stopBudgetLimits: resolveStopBudgetLimits(undefined),
+          stopBudgetRoundMarker: `round-${round}`,
+          reviewIntegrityLimits: resolveReviewIntegrityLimits(undefined),
+        });
+        expect(committed.reviewerAnomalyLandings).toEqual([]);
+        expect(committed.rejectedObservationAttachments).toHaveLength(1);
+        ledger = applyRejectedObservationAttachments(
+          committed.ledger,
+          committed.rejectedObservationAttachments,
+          observation,
+        );
+      }
+      expect(ledger.nextId).toBe(100);
+      expect(ledger.findings.map((finding) => finding.id)).toEqual(['F-0001', 'F-0006']);
+      expect(ledger.findings[0]?.status).toBe('open');
+      expect(ledger.findings[0]?.rejectedObservations).toHaveLength(3);
+    },
+  );
 });

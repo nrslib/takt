@@ -135,12 +135,16 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
 
 type TestReconcileInput = Omit<
   Parameters<typeof reconcileFindingLedgerStrict>[0],
-  'provisionalFindings' | 'rawFindingDispositions' | 'rawProvenanceByRawFindingId'
+  'provisionalFindings' | 'entityProvisionalMutations'
+  | 'terminalEntityAttachmentFindingIds' | 'rawFindingDispositions'
+  | 'rawProvenanceByRawFindingId'
 >;
 
 function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
   return reconcileFindingLedgerStrict({
     ...input,
+    entityProvisionalMutations: [],
+    terminalEntityAttachmentFindingIds: new Set(),
     provisionalFindings: [],
     rawFindingDispositions: [],
     rawProvenanceByRawFindingId: new Map(input.rawFindings.map((rawFinding) => [
@@ -510,7 +514,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     };
   }
 
-  it('Given a critical raw finding without mechanical evidence When run Then its explicit claim identity lands as a gate-blocking provisional', async () => {
+  it('Given a critical raw finding without mechanical evidence When entity binding is unavailable Then target uncertainty remains gate-blocking', async () => {
     const harness = makeHarness(makeLedger({ findings: [], rawFindings: [] }));
     const result = await harness.run({
       reviewerRawFindings: [reviewerRawExtractionFixture({
@@ -527,7 +531,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     });
 
     expect(result.status).toBe('updated');
-    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(executeAgentMock).toHaveBeenCalledTimes(1);
     const savedLedger = harness.currentLedger();
     const provisional = savedLedger.findings.find(
       (finding) => finding.title === 'Hallucinated critical finding',
@@ -536,7 +540,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
       status: 'open',
       severity: 'critical',
       provisional: {
-        kind: 'raw-adjudication-unresolved',
+        kind: 'raw-meaning-ambiguous',
         gateEffect: 'block',
       },
     });
@@ -546,7 +550,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     const report = harness.savedValidationReports[0] as { rawAdmissionRejections?: Array<{ rawFindingId: string; reason: string }> };
     expect(report.rawAdmissionRejections).toHaveLength(1);
     expect(report.rawAdmissionRejections?.[0]?.rawFindingId).toContain('raw-hallucinated');
-    expect(report.rawAdmissionRejections?.[0]?.reason).toContain('no mechanically verifiable evidence');
+    expect(report.rawAdmissionRejections?.[0]?.reason).toContain('classified as ambiguous');
   });
 
   it('Given an existing critical open finding whose stored location does not exist When the manager invalidates it from the engine-offered candidate list Then it becomes invalidated and drops out of the blocking open set', async () => {
@@ -694,40 +698,13 @@ describe('item 1/4: raw admission validation and invalidate', () => {
   // B2: 明示参照付き raw（relation persists/reopened）は、manager の判断が再問い
   // 合わせ後もなお不採用のとき、エンジンの「強制 new 化」フォールバックの対象に
   // ならない。強制すると根拠不成立の再報告が新規 finding として台帳に混入する。
-  it('Given a relation "persists" raw targeting a non-open finding When run Then it goes through the ambiguous ladder and lands as a gate-blocking provisional (never forced to new)', async () => {
-    // 対象 F-0001 を resolved にして、persists の機械分類（open target 前提）に
-    // 掛からず manager 送りになるようにする。
+  it('Given a relation "persists" raw targeting a non-open finding When run Then it remains an audit-only observation on that target', async () => {
+    // 対象 F-0001 を resolved にし、lifecycle authorityを持たない persists を
+    // product lifecycle へ流用できない状態にする。
     const ledger = makeLedger({
       findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })],
     });
     const harness = makeHarness(ledger);
-
-    // manager は2回とも 'new' を返す（B2 で reject される判断）。
-    executeAgentMock.mockImplementation(async (_persona: string, instruction: string) => {
-      const match = /"rawFindingId":\s*"([^"]+)"/.exec(instruction);
-      const rawFindingId = match?.[1];
-      if (rawFindingId === undefined) {
-        throw new Error('Test setup error: rawFindingId not found in manager instruction');
-      }
-      return {
-        status: 'done',
-        content: '',
-        structuredOutput: {
-          rawDecisions: [{
-            rawFindingId,
-            decision: 'new',
-            anchorRelevance: 'not_applicable',
-            findingId: '',
-            evidence: 'Treating it as fresh.',
-          }],
-          disputeDecisions: [],
-          conflictDecisions: [],
-          invalidateDecisions: [],
-          duplicateDecisions: [],
-          dismissDecisions: [],
-        },
-      } as unknown as AgentResponse;
-    });
 
     const result = await harness.run({
       reviewerRawFindings: [reviewerRawExtractionFixture({
@@ -739,33 +716,35 @@ describe('item 1/4: raw admission validation and invalidate', () => {
         suggestion: null,
         relation: 'persists',
         targetFindingId: 'F-0001',
-        // 機械照合済み evidence（typed evidence protocol、codex 対策#4）で
-        // admission を通し、この試験の主眼（ambiguous ladder が manager の
-        // 壊れた応答をどう扱うか）を admission gate と独立に検証できるようにする。
+        // 証拠があっても resolved target を persists で再開口する権限にはならない。
         evidence: [verifiedSourceQuoteFields(projectDir, 'src/real.ts', 2)],
       })],
     });
 
     expect(result.status).toBe('updated');
-    // 対象が open でない persists は ambiguous（persists-target-not-open）と
-    // して解釈フェーズへ進む。decisions manager は呼ばれない（clean residual 0）。
-    // この mock は decisions 形しか返さないため解釈 parse に失敗し、raw は
-    // provisional として着地する（強制 new 化も drop もされない）。
-    expect(executeAgentMock).toHaveBeenCalledTimes(1);
+    expect(executeAgentMock).not.toHaveBeenCalled();
     const savedLedger = harness.currentLedger();
-    expect(savedLedger?.findings.find((f) => f.id === 'F-0001')?.status).toBe('resolved');
-    const landed = savedLedger?.findings.find((f) => f.title === 'Existing issue still present');
-    expect(landed?.status).toBe('open');
-    expect(landed?.provisional).toMatchObject({ kind: 'raw-meaning-ambiguous', gateEffect: 'block' });
-    // 監査記録: 先行保存（write-ahead の正規化監査）+ 最終保存の2件。最終保存に
-    // provisionalLandings が残る。
+    const target = savedLedger?.findings.find((f) => f.id === 'F-0001');
+    expect(target?.status).toBe('resolved');
+    expect(savedLedger?.findings).toHaveLength(1);
+    expect(target?.rejectedObservations ?? []).toEqual([]);
+    expect(savedLedger?.reviewerAnomalies ?? []).toEqual([]);
+    expect(savedLedger?.rawFindings.some(
+      (rawFinding) => rawFinding.rawFindingId.includes('p-1'),
+    )).toBe(true);
+    // 監査記録: 先行保存（write-ahead の正規化監査）+ 最終保存の2件。
     expect(harness.savedValidationReports).toHaveLength(2);
     const report = harness.savedValidationReports.at(-1) as {
       provisionalLandings?: Array<{ kind: string; reason: string; sourceRawFindingIds: string[] }>;
+      rawFindingDispositions?: Array<{ rawFindingId: string; outcome: string }>;
     };
-    expect(report.provisionalLandings?.some((landing) => (
-      landing.sourceRawFindingIds.some((id) => id.includes('p-1'))
-    ))).toBe(true);
+    expect(report.provisionalLandings ?? []).toEqual([]);
+    expect(report.rawFindingDispositions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        rawFindingId: expect.stringContaining('p-1'),
+        outcome: 'unsupported',
+      }),
+    ]));
   });
 });
 

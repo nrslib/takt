@@ -120,6 +120,7 @@ describe('unverifiable propagation', () => {
       previousLedger: ledger,
       intake: {
         items: [{ canonical, wire: toLedgerRawFinding(canonical) }],
+        entityBindings: new Map(),
         overflowRawFindingIds: new Set(),
         overflowSpecs: [],
         overflowReports: [],

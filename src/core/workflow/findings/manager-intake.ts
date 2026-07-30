@@ -49,8 +49,16 @@ export function intakeReviewerOutputs(input: {
   issuedAt: string;
   reviewScopeSnapshot: ReviewScopeProofSnapshot;
 }): ReviewerIntakeResult {
+  const authoritativeTargetByFindingId = new Map(
+    input.previousLedger.findings.flatMap((finding) => (
+      finding.provisional === undefined && finding.target !== null
+        ? [[finding.id, structuredClone(finding.target)] as const]
+        : []
+    )),
+  );
   const result: ReviewerIntakeResult = {
     items: [],
+    entityBindings: new Map(),
     overflowRawFindingIds: new Set(),
     intakeProvisionalSpecs: [],
     overflowReports: [],
@@ -102,6 +110,7 @@ export function intakeReviewerOutputs(input: {
       reviewerStepName: subResult.subStep.name,
       reviewerPersonaKey: (subResult.subStep as { persona?: string }).persona ?? subResult.subStep.name,
       reviewReport: subResult.response.content,
+      authoritativeTargetByFindingId,
       issueEvidenceRequests: (request) => issueFindingEvidenceRequests({
         snapshot: input.reviewScopeSnapshot,
         workflowName: input.workflowName,

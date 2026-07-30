@@ -106,6 +106,7 @@ function intakeFor(
       canonical,
       wire: toLedgerRawFinding(canonical),
     }],
+    entityBindings: new Map(),
     overflowRawFindingIds: new Set(),
     intakeProvisionalSpecs: [],
     overflowReports: [],

@@ -8,6 +8,7 @@ import {
 } from './types.js';
 
 export const MAIN_MANAGER_RAW_TASK_MAX_ITEMS = 16;
+export const ENTITY_BINDING_TASK_MAX_ITEMS = 128;
 export const MAIN_MANAGER_INPUT_MAX_BYTES = 24_000;
 
 const taskIdSchema = z.string().regex(/^[0-9a-f]{64}$/);
@@ -96,6 +97,80 @@ export const MainManagerRawTaskOutputJsonSchema = {
 
 export function parseMainManagerRawTaskOutput(value: unknown): MainManagerRawTaskOutput {
   return mainManagerRawTaskOutputSchema.parse(value);
+}
+
+export const ENTITY_BINDING_DECISION_KINDS = [
+  'bind_existing',
+  'new_entity',
+  'ambiguous',
+] as const;
+
+export type EntityBindingDecisionKind =
+  typeof ENTITY_BINDING_DECISION_KINDS[number];
+
+export interface FindingEntityBindingTaskOutput {
+  taskId: string;
+  decisions: Array<{
+    rawFindingId: string;
+    decision: EntityBindingDecisionKind;
+    findingId: string;
+    groupRawFindingId: string;
+    reason: string;
+  }>;
+}
+
+const findingEntityBindingTaskOutputSchema = z.object({
+  taskId: taskIdSchema,
+  decisions: z.array(z.object({
+    rawFindingId: z.string().min(1),
+    decision: z.enum(ENTITY_BINDING_DECISION_KINDS),
+    findingId: z.string(),
+    groupRawFindingId: z.string(),
+    reason: z.string().min(1).max(2_048),
+  }).strict()).max(ENTITY_BINDING_TASK_MAX_ITEMS),
+}).strict();
+
+export const FindingEntityBindingTaskOutputJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['taskId', 'decisions'],
+  properties: {
+    taskId: {
+      type: 'string',
+      pattern: '^[0-9a-f]{64}$',
+    },
+    decisions: {
+      type: 'array',
+      maxItems: ENTITY_BINDING_TASK_MAX_ITEMS,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'rawFindingId',
+          'decision',
+          'findingId',
+          'groupRawFindingId',
+          'reason',
+        ],
+        properties: {
+          rawFindingId: { type: 'string', minLength: 1 },
+          decision: {
+            type: 'string',
+            enum: ENTITY_BINDING_DECISION_KINDS,
+          },
+          findingId: { type: 'string' },
+          groupRawFindingId: { type: 'string' },
+          reason: { type: 'string', minLength: 1, maxLength: 2_048 },
+        },
+      },
+    },
+  },
+} as const;
+
+export function parseFindingEntityBindingTaskOutput(
+  value: unknown,
+): FindingEntityBindingTaskOutput {
+  return findingEntityBindingTaskOutputSchema.parse(value);
 }
 
 export const MAIN_MANAGER_CONTROL_TASK_KINDS = [

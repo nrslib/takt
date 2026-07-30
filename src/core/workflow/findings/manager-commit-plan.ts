@@ -379,6 +379,9 @@ function prepareCommitReconciliation(
     ),
     admissionAnomalySpecs: evaluatedAdmission.admissionAnomalySpecs.filter(retainSpec),
     admissionProvisionalSpecs: evaluatedAdmission.admissionProvisionalSpecs.filter(retainSpec),
+    preAdmissionEntityMutations: evaluatedAdmission.preAdmissionEntityMutations.filter(
+      (mutation) => retainSpec(mutation),
+    ),
     admissionRejectedItems: evaluatedAdmission.admissionRejectedItems.filter(retainItem),
     pendingRejectedObservations: evaluatedAdmission.pendingRejectedObservations.filter(
       ({ item }) => retainItem(item),
@@ -589,6 +592,7 @@ export function buildFindingManagerCommitMutation(
     rawFindings: prepared.reconcileRawFindings,
     managerOutput: merged,
     provisionalSpecs: specs,
+    entityProvisionalMutations: admission.preAdmissionEntityMutations,
     anomalySpecs: prepared.anomalySpecs,
     pendingRejectedObservations: admission.pendingRejectedObservations,
     rawProvenanceByRawFindingId,
@@ -653,12 +657,30 @@ export function buildFindingManagerCommitMutation(
   }
   // 監査レポートには実際に着地した spec だけを載せる（dismiss と同一ラウンドで
   // 抑止された同一 claim の spec は着地していない — reconcileCommitPlan 参照）。
-  const provisionalLandings = reconcilePlan.landedSpecs.map((spec): ProvisionalLandingReport => ({
-    kind: spec.kind,
-    stableKey: spec.stableKey,
-    reason: spec.reason,
-    sourceRawFindingIds: spec.sourceRawFindingIds,
-  }));
+  const provisionalLandings = [
+    ...reconcilePlan.landedSpecs.map((spec): ProvisionalLandingReport => ({
+      kind: spec.kind,
+      stableKey: spec.stableKey,
+      reason: spec.reason,
+      sourceRawFindingIds: spec.sourceRawFindingIds,
+    })),
+    ...reconcilePlan.entityMutationResults.flatMap((result): ProvisionalLandingReport[] => {
+      if (result.outcome === 'terminal_audit') {
+        return [];
+      }
+      const finding = reconcilePlan.ledger.findings.find(
+        (entry) => entry.id === result.findingId,
+      );
+      return finding?.status === 'open' && finding.provisional !== undefined
+        ? [{
+            kind: finding.provisional.kind,
+            stableKey: finding.provisional.stableKey,
+            reason: result.mutation.reason,
+            sourceRawFindingIds: result.mutation.sourceRawFindingIds,
+          }]
+        : [];
+    }),
+  ];
 
   const finalized = applyCommitLedgerStates({
     runInput: input,

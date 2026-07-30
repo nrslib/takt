@@ -390,6 +390,11 @@ export function retainInterpretationRecoveryForLadder(
     admissionProvisionalSpecs: admission.admissionProvisionalSpecs.filter(
       (spec) => spec.sourceRawFindingIds.every((rawFindingId) => !recoveryRawIds.has(rawFindingId)),
     ),
+    preAdmissionEntityMutations: admission.preAdmissionEntityMutations.filter(
+      (mutation) => mutation.sourceRawFindingIds.every(
+        (rawFindingId) => !recoveryRawIds.has(rawFindingId),
+      ),
+    ),
     admissionRejectedItems: admission.admissionRejectedItems.filter(
       (item) => !recoveryRawIds.has(item.wire.rawFindingId),
     ),

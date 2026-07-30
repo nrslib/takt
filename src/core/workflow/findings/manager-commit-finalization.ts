@@ -25,6 +25,10 @@ import type {
   RawFinding,
 } from './types.js';
 import type { RawAdmissionEvaluation } from './manager-admission.js';
+import type {
+  PreAdmissionEntityMutationResult,
+  PreAdmissionEntityProvisionalMutation,
+} from './pre-admission-entity-binding-types.js';
 import type { RunFindingManagerForStepInput } from './manager-contracts.js';
 import {
   applyProvisionalSettlement,
@@ -60,6 +64,17 @@ function classifyRejectedObservations(
 ): RejectedObservationPlan {
   return pendingObservations.reduce<RejectedObservationPlan>((plan, pending) => {
     const target = ledger.findings.find((finding) => finding.id === pending.targetFindingId);
+    if (pending.destination === 'target_audit' && target !== undefined) {
+      return {
+        ...plan,
+        attachments: [...plan.attachments, {
+          targetFindingId: pending.targetFindingId,
+          rawFindingId: pending.item.wire.rawFindingId,
+          reason: `${pending.reason}; recorded for audit only without lifecycle or evidence authority`,
+          rejectionCode: 'evidence_admission_failed',
+        }],
+      };
+    }
     return {
       ...plan,
       anomalySpecs: [...plan.anomalySpecs, createReviewerAnomalySpec({
@@ -79,6 +94,7 @@ export function reconcileCommitPlan(input: {
   rawFindings: RawFinding[];
   managerOutput: FindingManagerOutput;
   provisionalSpecs: ProvisionalFindingSpec[];
+  entityProvisionalMutations: PreAdmissionEntityProvisionalMutation[];
   anomalySpecs: ReviewerAnomalySpec[];
   pendingRejectedObservations: RawAdmissionEvaluation['pendingRejectedObservations'];
   rawProvenanceByRawFindingId: Map<string, CanonicalRawReconcileProvenance>;
@@ -104,11 +120,17 @@ export function reconcileCommitPlan(input: {
   managerDecisionCommands: FindingLifecycleCommand[];
   managerOutput: FindingManagerOutput;
   landedSpecs: ProvisionalFindingSpec[];
+  entityMutationResults: PreAdmissionEntityMutationResult[];
   normalizationRejections: string[];
   rawFindingDispositions: RawFindingDisposition[];
   rejectedObservationAttachments: RejectedObservationAttachment[];
   settlementCommands: FindingLifecycleCommand[];
 } {
+  if (!Array.isArray(input.entityProvisionalMutations)) {
+    throw new Error(
+      'Commit reconciliation entityProvisionalMutations must be an explicit array',
+    );
+  }
   // ladder マージ（mergeOutputs）は matches / newFindings / conflicts を後着させる。
   // 閉じる決定との衝突をここで一括正規化し、残った統合の match 転写もこの1回で
   // 行う（reconciler の最終検証がこの後に走る）。
@@ -170,7 +192,12 @@ export function reconcileCommitPlan(input: {
     : input.provisionalSpecs;
   const landedRawFindingIds = collectLandedRawIds(settledOutput);
   const provisionalRawFindingIds = new Set(
-    landedSpecs.flatMap((spec) => spec.sourceRawFindingIds),
+    [
+      ...landedSpecs.flatMap((spec) => spec.sourceRawFindingIds),
+      ...input.entityProvisionalMutations.flatMap(
+        (mutation) => mutation.sourceRawFindingIds,
+      ),
+    ],
   );
   const rawFindingDispositions: RawFindingDisposition[] = [
     ...input.pendingRejectedObservations.map((pending) => ({
@@ -253,6 +280,12 @@ export function reconcileCommitPlan(input: {
     rawFindings: input.rawFindings,
     managerOutput: settledOutput,
     provisionalFindings: landedSpecs,
+    entityProvisionalMutations: input.entityProvisionalMutations,
+    terminalEntityAttachmentFindingIds: new Set([
+      ...settlement.promotedFindingIds,
+      ...settlement.resolvedByMapping.keys(),
+      ...settlement.resolvedByEvidence.keys(),
+    ]),
     rawProvenanceByRawFindingId: input.rawProvenanceByRawFindingId,
     rawFindingDispositions: rawFindingDispositions.filter(
       (disposition) => reconcileRawFindingIds.has(disposition.rawFindingId),
@@ -276,23 +309,72 @@ export function reconcileCommitPlan(input: {
     },
   });
   const settled = applyProvisionalSettlement(transitioned, settlement, input.runInput.timestamp);
+  const entityMutationResults = reconciledPlan.entityMutationResults.map(
+    (result): PreAdmissionEntityMutationResult => {
+      if (result.outcome === 'terminal_audit') {
+        return result;
+      }
+      const target = settled.findings.find((finding) => finding.id === result.findingId);
+      return target?.status === 'open' && target.provisional !== undefined
+        ? result
+        : {
+            outcome: 'terminal_audit',
+            targetFindingId: result.findingId,
+            sourceRawFindingIds: result.mutation.sourceRawFindingIds,
+            reason: `${result.mutation.reason}; target became terminal during commit`,
+          };
+    },
+  );
+  const terminalEntityResults = entityMutationResults.filter(
+    (result): result is Extract<
+      PreAdmissionEntityMutationResult,
+      { outcome: 'terminal_audit' }
+    > => result.outcome === 'terminal_audit',
+  );
   const settlementCommands = buildProvisionalSettlementLifecycleCommands({
     after: settled,
     settlement,
   });
-  const rejectedObservationAttachments = planSuppressedObservationsForDismissed(
-    settled,
-    suppressedSpecs,
-    new Set(settledOutput.dismissedFindings.map((dismissed) => dismissed.findingId)),
-  );
+  const rejectedObservationAttachments = [
+    ...planSuppressedObservationsForDismissed(
+      settled,
+      suppressedSpecs,
+      new Set(settledOutput.dismissedFindings.map((dismissed) => dismissed.findingId)),
+    ),
+    ...terminalEntityResults.flatMap((result) => (
+      result.sourceRawFindingIds.map((rawFindingId) => ({
+        targetFindingId: result.targetFindingId,
+        rawFindingId,
+        reason: `${result.reason}; recorded for audit because the ambiguity episode became terminal`,
+        rejectionCode: 'evidence_admission_failed' as const,
+      }))
+    )),
+  ];
+  const terminalEntityDispositions = terminalEntityResults.flatMap((result) => (
+    result.sourceRawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      outcome: 'audit_only' as const,
+      reason: result.reason,
+    }))
+  ));
+  const finalizedRawFindingDispositions = [
+    ...rawFindingDispositions,
+    ...terminalEntityDispositions,
+  ];
+  if (new Set(finalizedRawFindingDispositions.map(
+    (disposition) => disposition.rawFindingId,
+  )).size !== finalizedRawFindingDispositions.length) {
+    throw new Error('A terminal entity observation received multiple finite dispositions');
+  }
   return {
     ledger: settled,
     managerDecisionLedger: reconciled,
     managerDecisionCommands: reconciledPlan.lifecycleCommands,
     managerOutput: settledOutput,
     landedSpecs,
+    entityMutationResults,
     normalizationRejections,
-    rawFindingDispositions,
+    rawFindingDispositions: finalizedRawFindingDispositions,
     rejectedObservationAttachments,
     settlementCommands,
   };

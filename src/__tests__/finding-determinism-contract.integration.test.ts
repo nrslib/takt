@@ -92,6 +92,8 @@ function reconcileNewFindings(items: readonly unknown[]): Record<string, {
     previousLedger: EMPTY_LEDGER,
     rawFindings,
     managerOutput: assembly.output,
+    entityProvisionalMutations: [],
+    terminalEntityAttachmentFindingIds: new Set(),
     provisionalFindings: [],
     rawFindingDispositions: [],
     verifiedEvidenceRecordsByRawFindingId: new Map(),

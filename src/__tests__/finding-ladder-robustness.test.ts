@@ -2937,6 +2937,9 @@ describe('codex 検証2巡目#2: 未検証 persists/reopened は既存 finding �
     const harness = makeHarness(makeLedger({
       findings: [makeFinding({ status: 'resolved', lifecycle: 'resolved', revision: 2 })],
     }));
+    const initialEvidenceIds = [
+      ...harness.currentLedger().findings.find((finding) => finding.id === 'F-0001')!.evidenceIds,
+    ];
     const result = await harness.run({
       reviewerRawFindings: [{
         rawFindingId: 'r-1',
@@ -2954,12 +2957,19 @@ describe('codex 検証2巡目#2: 未検証 persists/reopened は既存 finding �
     // 解釈フェーズにも decisions manager にも掛からない（admission で止まる）。
     expect(executeAgentMock).not.toHaveBeenCalled();
     const saved = harness.currentLedger();
-    // F-0001 は resolved のまま（reopen されない・revision も動かない）。
+    // F-0001 は resolved のまま。監査添付だけが revision を進める。
     const target = saved.findings.find((finding) => finding.id === 'F-0001')!;
     expect(target.status).toBe('resolved');
-    expect(target.revision).toBe(2);
+    expect(target.lifecycle).toBe('resolved');
+    expect(target.revision).toBe(3);
+    expect(target.evidenceIds).toEqual(initialEvidenceIds);
+    expect(target.title).toBe('Existing issue');
+    expect(target.description).toBe('Existing issue body.');
+    expect(target.rejectedObservations).toEqual([
+      expect.objectContaining({ rawFindingId: expect.stringContaining(':r-1') }),
+    ]);
     expect(saved.findings).toHaveLength(1);
-    expect(saved.reviewerAnomalies ?? []).toHaveLength(1);
+    expect(saved.reviewerAnomalies ?? []).toHaveLength(0);
   });
 
   it('未検証 persists は有効な confirmation を conflict 化して close を妨害できない', async () => {
@@ -3009,8 +3019,11 @@ describe('codex 検証2巡目#2: 未検証 persists/reopened は既存 finding �
       'raw-existing',
       expect.stringContaining(':c-ok'),
     ]);
+    expect(target.rejectedObservations).toEqual([
+      expect.objectContaining({ rawFindingId: expect.stringContaining(':p-bad') }),
+    ]);
     expect(saved.findings).toHaveLength(1);
-    expect(saved.reviewerAnomalies ?? []).toHaveLength(1);
+    expect(saved.reviewerAnomalies ?? []).toHaveLength(0);
   });
 });
 
@@ -3059,14 +3072,20 @@ describe('証拠なし raw finding の admission', () => {
       'raw-existing',
       expect.stringContaining(':c-ok'),
     ]);
+    expect(target.rejectedObservations).toEqual([
+      expect.objectContaining({ rawFindingId: expect.stringContaining(':p-bad') }),
+    ]);
     expect(saved.findings).toHaveLength(1);
-    expect(saved.reviewerAnomalies ?? []).toHaveLength(1);
+    expect(saved.reviewerAnomalies ?? []).toHaveLength(0);
   });
 
-  it('証拠なし reopened は resolved finding を open に戻せない（anomaly 着地）', async () => {
+  it('証拠なし reopened は resolved finding を open に戻さず audit observation に留める', async () => {
     const harness = makeHarness(makeLedger({
       findings: [makeFinding({ status: 'resolved', lifecycle: 'resolved', revision: 2 })],
     }));
+    const initialEvidenceIds = [
+      ...harness.currentLedger().findings.find((finding) => finding.id === 'F-0001')!.evidenceIds,
+    ];
     const result = await harness.run({
       reviewerRawFindings: [{
         rawFindingId: 'r-1',
@@ -3084,11 +3103,18 @@ describe('証拠なし raw finding の admission', () => {
     expect(executeAgentMock).not.toHaveBeenCalled();
     const saved = harness.currentLedger();
     const target = saved.findings.find((finding) => finding.id === 'F-0001')!;
-    // F-0001 は resolved のまま（reopen されない・revision 不変）。
+    // F-0001 は resolved のまま。監査添付だけが revision を進める。
     expect(target.status).toBe('resolved');
-    expect(target.revision).toBe(2);
+    expect(target.lifecycle).toBe('resolved');
+    expect(target.revision).toBe(3);
+    expect(target.evidenceIds).toEqual(initialEvidenceIds);
+    expect(target.title).toBe('Existing issue');
+    expect(target.description).toBe('Existing issue body.');
+    expect(target.rejectedObservations).toEqual([
+      expect.objectContaining({ rawFindingId: expect.stringContaining(':r-1') }),
+    ]);
     expect(saved.findings).toHaveLength(1);
-    expect(saved.reviewerAnomalies ?? []).toHaveLength(1);
+    expect(saved.reviewerAnomalies ?? []).toHaveLength(0);
   });
 
   it('証拠なし new claim は gate-blocking provisional に隔離する', async () => {
@@ -3106,10 +3132,10 @@ describe('証拠なし raw finding の admission', () => {
     };
     const result = await harness.run({ reviewerRawFindings: [rawFinding] });
     expect(result.status).toBe('updated');
-    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(executeAgentMock).toHaveBeenCalledTimes(1);
     const saved = harness.currentLedger();
     const landed = saved.findings.find((finding) => finding.title === 'Missing rate limiter (absence finding)');
-    expect(landed?.provisional?.kind).toBe('raw-adjudication-unresolved');
+    expect(landed?.provisional?.kind).toBe('raw-meaning-ambiguous');
     expect(saved.rawFindings).toHaveLength(1);
     expect(saved.reviewerAnomalies ?? []).toHaveLength(0);
   });
@@ -3130,9 +3156,10 @@ describe('証拠なし raw finding の admission', () => {
       }],
     });
     expect(result.status).toBe('updated');
+    expect(executeAgentMock).toHaveBeenCalledTimes(1);
     const saved = harness.currentLedger();
     const landed = saved.findings.find((finding) => finding.title === 'Imaginary authentication bypass');
-    expect(landed?.provisional?.kind).toBe('raw-adjudication-unresolved');
+    expect(landed?.provisional?.kind).toBe('raw-meaning-ambiguous');
     expect(saved.reviewerAnomalies ?? []).toHaveLength(0);
   });
 
@@ -3186,6 +3213,9 @@ describe('codex 検証4巡目: 未検証 tainted persists/reopened は ambiguous
       rawFindingIds: ['raw-existing'],
     });
     const harness = makeHarness(makeLedger({ findings: [seed] }));
+    const initialEvidenceIds = [
+      ...harness.currentLedger().findings.find((finding) => finding.id === 'F-0001')!.evidenceIds,
+    ];
     // SameProof が塞がれた後、raw は解釈へ回る。provisional を返させて着地を固定。
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const rawId = extractResidualRawIdFromInterpretationInstruction(instruction as string, 'r-1');
@@ -3207,13 +3237,19 @@ describe('codex 検証4巡目: 未検証 tainted persists/reopened は ambiguous
     expect(result.status).toBe('updated');
     const saved = harness.currentLedger();
     const target = saved.findings.find((finding) => finding.id === 'F-0001')!;
-    // 変異なし: status/revision/lifecycle/description/rawFindingIds すべて不変。
+    // product state は不変で、監査添付だけが revision を進める。
     expect(target.status).toBe('open');
-    expect(target.revision).toBe(1);
+    expect(target.revision).toBe(2);
     expect(target.lifecycle).toBe('new');
+    expect(target.evidenceIds).toEqual(initialEvidenceIds);
+    expect(target.title).toBe('Missing input validation');
     expect(target.description).toBe('The handler does not validate input.');
     expect(target.rawFindingIds).toEqual(['raw-existing']);
+    expect(target.rejectedObservations).toEqual([
+      expect.objectContaining({ rawFindingId: expect.stringContaining(':r-1') }),
+    ]);
     expect(saved.findings).toHaveLength(1);
+    expect(saved.reviewerAnomalies ?? []).toHaveLength(0);
     expect(executeAgentMock).not.toHaveBeenCalled();
   });
 

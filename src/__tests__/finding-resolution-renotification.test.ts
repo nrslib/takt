@@ -428,6 +428,8 @@ describe('resolution/renotification exact authority', () => {
             runId: OBSERVATION.runId,
             timestamp: OBSERVATION.timestamp,
           },
+          entityProvisionalMutations: [],
+          terminalEntityAttachmentFindingIds: new Set(),
           provisionalFindings: [],
           rawFindingDispositions: [],
           verifiedEvidenceRecordsByRawFindingId: new Map(),

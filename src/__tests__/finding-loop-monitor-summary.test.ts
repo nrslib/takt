@@ -292,6 +292,8 @@ describe('provisional firstObservedRound persistence', () => {
       previousLedger: makeLedger([], ['r1', 'r2', 'r3']),
       rawFindings: [rawFinding],
       managerOutput: createEmptyManagerOutput(),
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [{
         kind: 'raw-meaning-ambiguous',
         stableKey: computeProvisionalStableKey({

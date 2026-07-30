@@ -29,6 +29,13 @@ import {
 } from './evidence-request-issuer.js';
 import type { ReviewScopeProofSnapshot } from './snapshot.js';
 import { hasLifecycleTransitionIntent } from './raw-relation-capabilities.js';
+import type {
+  PreAdmissionEntityBinding,
+  PreAdmissionEntityProvisionalMutation,
+} from './pre-admission-entity-binding-types.js';
+import { resolvePreAdmissionEntityBindings } from './pre-admission-entity-binding-commit.js';
+
+export type { PreAdmissionEntityBinding } from './pre-admission-entity-binding-types.js';
 
 interface CanonicalIntakeItemBase {
   canonical: CanonicalRawFinding;
@@ -146,6 +153,7 @@ export function assertCanonicalIntakeRecoveryStates(
 
 export interface ReviewerIntakeResult {
   items: CanonicalIntakeItem[];
+  entityBindings: ReadonlyMap<string, PreAdmissionEntityBinding>;
   overflowRawFindingIds: Set<string>;
   intakeProvisionalSpecs: ProvisionalFindingSpec[];
   overflowReports: ReviewerOutputOverflowReport[];
@@ -158,6 +166,7 @@ interface PendingRejectedObservation {
   item: CanonicalIntakeItem;
   targetFindingId: string;
   reason: string;
+  destination: 'target_audit' | 'reviewer_anomaly';
   anomalyKind: ReviewerAnomalyKind;
   failedEvidence?: RawFindingEvidence;
 }
@@ -166,6 +175,7 @@ export interface RawAdmissionEvaluation {
   admissionRejections: RawAdmissionRejectionReport[];
   admissionAnomalySpecs: ReviewerAnomalySpec[];
   admissionProvisionalSpecs: ProvisionalFindingSpec[];
+  preAdmissionEntityMutations: PreAdmissionEntityProvisionalMutation[];
   admissionRejectedItems: CanonicalIntakeItem[];
   pendingRejectedObservations: PendingRejectedObservation[];
   cleanAdmitted: CanonicalIntakeItem[];
@@ -377,7 +387,10 @@ function evaluateRejectedItem(input: {
     relation: item.canonical.relation,
     targetFindingId: item.canonical.targetFindingId,
   });
-  if (item.canonical.relation === 'resolution_confirmation') {
+  if (
+    item.canonical.relation === 'resolution_confirmation'
+    && classification.disposition === 'anomaly'
+  ) {
     return { pool, rejection };
   }
 
@@ -394,6 +407,9 @@ function evaluateRejectedItem(input: {
         item,
         targetFindingId,
         reason: `Evidence failed deterministic admission (${classification.reason}); recorded as a rejected lifecycle observation of the target`,
+        destination: classification.disposition === 'provisional'
+          ? 'target_audit'
+          : 'reviewer_anomaly',
         anomalyKind: classification.disposition === 'anomaly'
           ? classification.anomalyKind
           : 'lifecycle-admission-failure',
@@ -442,7 +458,16 @@ function evaluateAdmissionItem(input: {
   previousFindingsById: ReadonlyMap<string, FindingLedger['findings'][number]>;
   reviewScopeSnapshot: ReviewScopeProofSnapshot;
   workflowTask: string;
+  entityBindings: ReviewerIntakeResult['entityBindings'];
 }): AdmissionItemEvaluation {
+  const binding = input.entityBindings.get(input.item.wire.rawFindingId);
+  if (binding !== undefined) {
+    return evaluateEntityBindingItem({
+      item: input.item,
+      pool: input.pool,
+      binding,
+    });
+  }
   const classification = classifyEvidence(input);
   const { item, pool } = input;
   if (!classification.admit) {
@@ -466,6 +491,26 @@ function evaluateAdmissionItem(input: {
   };
 }
 
+function evaluateEntityBindingItem(input: {
+  item: CanonicalIntakeItem;
+  pool: AdmissionPool;
+  binding: PreAdmissionEntityBinding;
+}): AdmissionItemEvaluation {
+  const { item, pool, binding } = input;
+  const reason = binding.kind === 'bind_existing'
+    ? `Evidence-less observation was semantically associated with "${binding.targetFindingId}" by the Finding Manager; association grants audit authority only`
+    : `Evidence-less observation was classified as ${binding.decision} before admission`;
+  return {
+    pool,
+    rejection: {
+      rawFindingId: item.wire.rawFindingId,
+      location: '',
+      reason,
+    },
+    rejectedItem: item,
+  };
+}
+
 function definedValues<T>(items: readonly (T | undefined)[]): T[] {
   return items.filter((item): item is T => item !== undefined);
 }
@@ -481,6 +526,13 @@ export function evaluateRawAdmission(input: {
   workflowTask: string;
 }): RawAdmissionEvaluation {
   assertCanonicalIntakeRecoveryStates(input.intake.items, input.previousLedger);
+  const resolvedEntityBindings = resolvePreAdmissionEntityBindings({
+    ledger: input.previousLedger,
+    intake: input.intake,
+  });
+  const itemByRawFindingId = new Map(
+    input.intake.items.map((item) => [item.wire.rawFindingId, item]),
+  );
   const nonOverflow = input.intake.items.filter(
     (item) => !input.intake.overflowRawFindingIds.has(item.canonical.rawFindingId),
   );
@@ -501,6 +553,7 @@ export function evaluateRawAdmission(input: {
       previousFindingsById,
       reviewScopeSnapshot: input.reviewScopeSnapshot,
       workflowTask: input.workflowTask,
+      entityBindings: input.intake.entityBindings,
     })),
     ...tainted.map((item) => evaluateAdmissionItem({
       cwd: input.cwd,
@@ -513,6 +566,7 @@ export function evaluateRawAdmission(input: {
       previousFindingsById,
       reviewScopeSnapshot: input.reviewScopeSnapshot,
       workflowTask: input.workflowTask,
+      entityBindings: input.intake.entityBindings,
     })),
   ];
   const cleanAdmitted = definedValues(
@@ -531,10 +585,25 @@ export function evaluateRawAdmission(input: {
     admissionProvisionalSpecs: definedValues(
       evaluations.map((evaluation) => evaluation.provisionalSpec),
     ),
+    preAdmissionEntityMutations: resolvedEntityBindings.mutations,
     admissionRejectedItems: definedValues(evaluations.map((evaluation) => evaluation.rejectedItem)),
     pendingRejectedObservations: definedValues(
       evaluations.map((evaluation) => evaluation.pendingRejectedObservation),
-    ),
+    ).concat(resolvedEntityBindings.auditAttachments.map((attachment) => {
+      const item = itemByRawFindingId.get(attachment.rawFindingId);
+      if (item === undefined) {
+        throw new Error(
+          `Entity binding audit references missing raw finding "${attachment.rawFindingId}"`,
+        );
+      }
+      return {
+        item,
+        targetFindingId: attachment.targetFindingId,
+        reason: attachment.reason,
+        destination: 'target_audit',
+        anomalyKind: 'lifecycle-admission-failure',
+      };
+    })),
     cleanAdmitted,
     tainted,
     taintedAdmitted: definedValues(

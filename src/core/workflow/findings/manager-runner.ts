@@ -14,6 +14,7 @@ import { retainInterpretationRecoveryForLadder } from './interpretation-recovery
 import { captureReviewScopeProofSnapshot } from './snapshot.js';
 import { computeRoundMarker } from './round-marker.js';
 import { runManagerRoundExclusive } from './manager-round-lock.js';
+import { bindPreAdmissionEntities } from './pre-admission-entity-binding.js';
 
 const log = createLogger('finding-manager-runner');
 
@@ -62,16 +63,25 @@ export async function runFindingManagerForStep(
       stopBudgetRoundMarker,
       reviewScopeSnapshot,
     );
+    const entityBinding = await bindPreAdmissionEntities({
+      contract: input.contract,
+      previousLedger: prepared.previousLedger,
+      intake: prepared.intake,
+      managerStep: prepared.managerStep,
+      roundMarker: stopBudgetRoundMarker,
+      runInput: input,
+    });
+    const intake = entityBinding.intake;
     const admission = retainInterpretationRecoveryForLadder(evaluateRawAdmission({
       cwd: input.cwd,
       reviewScopeSnapshotId,
       runId: input.ledgerStore.runId,
       scopeIdentity: input.ledgerStore.ledgerIdentity,
       previousLedger: prepared.previousLedger,
-      intake: prepared.intake,
+      intake,
       reviewScopeSnapshot,
       workflowTask: input.workflowTask,
-    }), prepared.intake);
+    }), intake);
     const managerDecision = await runManagerDecisionStage({
       input,
       previousLedger: prepared.previousLedger,
@@ -81,11 +91,12 @@ export async function runFindingManagerForStep(
       reviewScopeSnapshotId,
       reviewScopeSnapshot,
       stopBudgetRoundMarker,
+      preAdmissionTaskAudits: entityBinding.taskAudits,
     });
     const committed = await commitFindingManagerRound({
       input,
       previousLedger: prepared.previousLedger,
-      intake: prepared.intake,
+      intake,
       interpretationRecoveryFailures: prepared.interpretationRecoveryFailures,
       admission,
       managerDecision,

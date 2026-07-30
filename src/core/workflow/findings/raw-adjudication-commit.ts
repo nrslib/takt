@@ -338,6 +338,8 @@ export function applyRawAdjudicationRecovery(input: {
     rawFindings: replayWire,
     managerOutput: settledOutput,
     provisionalFindings: [],
+    entityProvisionalMutations: [],
+    terminalEntityAttachmentFindingIds: new Set(),
     rawProvenanceByRawFindingId: rawProvenance,
     rawFindingDispositions: rawFindingDispositions.filter(
       (disposition) => replayRawFindingIds.has(disposition.rawFindingId),

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  FindingEntityBindingTaskOutputJsonSchema,
   MainManagerControlTaskOutputJsonSchema,
   MainManagerRawTaskOutputJsonSchema,
 } from '../core/workflow/findings/manager-task-contracts.js';
@@ -26,6 +27,7 @@ describe('finding manager task contracts', () => {
   it.each([
     ['raw task', MainManagerRawTaskOutputJsonSchema, 2],
     ['control task', MainManagerControlTaskOutputJsonSchema, 6],
+    ['entity binding task', FindingEntityBindingTaskOutputJsonSchema, 1],
   ])('declares matching string types for every enum and const in the %s output schema', (
     _name,
     schema,

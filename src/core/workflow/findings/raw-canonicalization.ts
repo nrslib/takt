@@ -205,6 +205,8 @@ export interface ReviewerRawIntakeContext {
   reviewerPersonaKey: string;
   /** rawExcerpt を一意な完全一致で束縛する reviewer report 本文。 */
   reviewReport: string;
+  /** normalizer が lifecycle target を反復しなくても、identity は ledger 正本へ束縛する。 */
+  authoritativeTargetByFindingId?: ReadonlyMap<string, FindingTarget>;
   issueEvidenceRequests(input: {
     target: FindingTarget;
     claimIdentityHash: string;
@@ -1023,7 +1025,17 @@ export function createReviewerRawFindingCandidates(
     // 未指定として扱う（pickString が弾く）。
     const requests = projectEvidenceRequests(record.evidenceRequests) ?? [];
     const rawExcerpt = pickString(record.rawExcerpt);
-    const target = projectFindingTarget(record.target);
+    const relation = pickRelation(record.relation);
+    const targetFindingId = pickString(record.targetFindingId);
+    const target = projectFindingTarget(record.target)
+      ?? (
+        record.target === null
+        && relation !== undefined
+        && relation !== 'new'
+        && targetFindingId !== undefined
+          ? context.authoritativeTargetByFindingId?.get(targetFindingId)
+          : undefined
+      );
     if (rawExcerpt === undefined || target === undefined) {
       rejections.push({
         intakeId,
@@ -1059,7 +1071,7 @@ export function createReviewerRawFindingCandidates(
     const issued = context.issueEvidenceRequests({
       target,
       claimIdentityHash,
-      targetFindingId: pickString(record.targetFindingId) ?? null,
+      targetFindingId: targetFindingId ?? null,
       requests,
     });
     const evidence = deduplicateRawEvidence(issued.evidence);
@@ -1083,10 +1095,10 @@ export function createReviewerRawFindingCandidates(
       ...(pickString(record.title) !== undefined ? { title: pickString(record.title)! } : {}),
       ...(pickString(record.description) !== undefined ? { description: pickString(record.description)! } : {}),
       ...(pickString(record.suggestion) !== undefined ? { suggestion: pickString(record.suggestion)! } : {}),
-      ...(pickRelation(record.relation) !== undefined
-        ? { relation: pickRelation(record.relation)! }
+      ...(relation !== undefined
+        ? { relation }
         : {}),
-      ...(pickString(record.targetFindingId) !== undefined ? { targetFindingId: pickString(record.targetFindingId)! } : {}),
+      ...(targetFindingId !== undefined ? { targetFindingId } : {}),
       evidence,
       sourceBytes: projectedItems[index]!.sourceBytes,
       reviewer: context.reviewerStepName,

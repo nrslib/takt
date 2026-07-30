@@ -151,6 +151,8 @@ function reconcileCurrentRaw(input: {
     previousLedger: input.previousLedger,
     rawFindings: [input.rawFinding],
     managerOutput: input.managerOutput,
+    entityProvisionalMutations: [],
+    terminalEntityAttachmentFindingIds: new Set(),
     provisionalFindings: [],
     rawFindingDispositions: [],
     verifiedEvidenceRecordsByRawFindingId: new Map([[

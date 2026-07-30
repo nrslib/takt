@@ -62,6 +62,11 @@ import {
   mergeProvisionalClaimProjection,
 } from './finding-entry.js';
 import { isProvisionalReopenSource } from './provisional-promotion-eligibility.js';
+import type {
+  PreAdmissionEntityMutationResult,
+  PreAdmissionEntityProvisionalMutation,
+} from './pre-admission-entity-binding-types.js';
+import { entityBindingDigest } from './pre-admission-entity-binding-identity.js';
 
 /**
  * provisional finding の upsert 指示。stableKey が同じ
@@ -105,6 +110,8 @@ interface ReconcileFindingLedgerInput {
   context: FindingReconcileContext;
   priorStepResponseText?: string;
   provisionalFindings: ProvisionalFindingSpec[];
+  entityProvisionalMutations: PreAdmissionEntityProvisionalMutation[];
+  terminalEntityAttachmentFindingIds: ReadonlySet<string>;
   rawFindingDispositions: readonly RawFindingDisposition[];
   rawProvenanceByRawFindingId: ReadonlyMap<string, CanonicalRawReconcileProvenance>;
   verifiedEvidenceRecordsByRawFindingId: ReadonlyMap<
@@ -547,6 +554,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
 export interface ReconcileFindingLedgerPlan {
   ledger: FindingLedger;
   lifecycleCommands: FindingLifecycleCommand[];
+  entityMutationResults: PreAdmissionEntityMutationResult[];
 }
 
 export function reconcileFindingLedgerPlan(
@@ -565,6 +573,8 @@ export function reconcileManagerActionRecovery(input: Pick<
       ...input,
       rawFindings: [],
       provisionalFindings: [],
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map(),
       verifiedEvidenceRecordsByRawFindingId: new Map(),
@@ -576,6 +586,14 @@ export function reconcileManagerActionRecovery(input: Pick<
 function assertCanonicalReconcileInput(input: ReconcileFindingLedgerInput): void {
   if (!Array.isArray(input.provisionalFindings)) {
     throw new Error('Reconciler input provisionalFindings must be an explicit array');
+  }
+  if (!Array.isArray(input.entityProvisionalMutations)) {
+    throw new Error('Reconciler input entityProvisionalMutations must be an explicit array');
+  }
+  if (!(input.terminalEntityAttachmentFindingIds instanceof Set)) {
+    throw new Error(
+      'Reconciler input terminalEntityAttachmentFindingIds must be an explicit Set',
+    );
   }
   if (!Array.isArray(input.rawFindingDispositions)) {
     throw new Error('Reconciler input rawFindingDispositions must be an explicit array');
@@ -775,6 +793,20 @@ function assertExactlyOneRawOutcome(input: ReconcileFindingLedgerInput): void {
         throw new Error(`Provisional outcome references unknown raw finding "${rawFindingId}"`);
       }
       outcomeCounts.get(rawFindingId)!.provisionalKinds.push(spec.kind);
+    }
+  }
+  for (const mutation of input.entityProvisionalMutations) {
+    for (const rawFindingId of mutation.sourceRawFindingIds) {
+      if (!knownRawFindingIds.has(rawFindingId)) {
+        throw new Error(
+          `Entity provisional outcome references unknown raw finding "${rawFindingId}"`,
+        );
+      }
+      outcomeCounts.get(rawFindingId)!.provisionalKinds.push(
+        mutation.operation === 'create_new'
+          ? mutation.provisionalKind
+          : mutation.expectedKind,
+      );
     }
   }
   for (const disposition of input.rawFindingDispositions) {
@@ -1275,7 +1307,27 @@ function reconcileFindingLedgerWithValidator(
     )),
     ...provisionalNewFindings,
   ];
-  for (const finding of provisionalChanges) {
+  const entityMutationApplication = applyPreAdmissionEntityProvisionalMutations({
+    updatedById,
+    ledger: input.previousLedger,
+    mutations: input.entityProvisionalMutations,
+    terminalAttachmentFindingIds: input.terminalEntityAttachmentFindingIds,
+    alreadyUpdatedFindingIds: new Set(
+      provisionalChanges.map((finding) => finding.id),
+    ),
+    allocateId: () => {
+      const id = formatFindingId(nextId);
+      nextId += 1;
+      return id;
+    },
+    context: input.context,
+  });
+  const provisionalChangesById = new Map(
+    [...provisionalChanges, ...entityMutationApplication.changes]
+      .map((finding) => [finding.id, finding]),
+  );
+  for (const finding of [...provisionalChangesById.values()]
+    .sort((left, right) => compareBinaryStrings(left.id, right.id))) {
     findingCommand(
       'update_provisional',
       [finding],
@@ -1307,7 +1359,11 @@ function reconcileFindingLedgerWithValidator(
       ? { reviewerAnomalies: input.previousLedger.reviewerAnomalies }
       : {}),
   };
-  return { ledger, lifecycleCommands };
+  return {
+    ledger,
+    lifecycleCommands,
+    entityMutationResults: entityMutationApplication.results,
+  };
 }
 
 /**
@@ -1345,6 +1401,277 @@ export function applyProvisionalFindingSpecsToLedger(
     nextId,
     updatedAt: context.timestamp,
     findings: [...updatedById.values(), ...created]
+      .sort((left, right) => compareBinaryStrings(left.id, right.id)),
+  };
+}
+
+type EntityAttachMutation = Extract<
+  PreAdmissionEntityProvisionalMutation,
+  { operation: 'attach_existing' }
+>;
+
+type EntityCreateMutation = Extract<
+  PreAdmissionEntityProvisionalMutation,
+  { operation: 'create_new' }
+>;
+
+function normalizeEntityAttachMutations(
+  mutations: readonly EntityAttachMutation[],
+): EntityAttachMutation[] {
+  const byFindingId = new Map<string, EntityAttachMutation[]>();
+  for (const mutation of mutations) {
+    byFindingId.set(
+      mutation.findingId,
+      [...(byFindingId.get(mutation.findingId) ?? []), mutation],
+    );
+  }
+  return [...byFindingId.entries()]
+    .sort(([left], [right]) => compareBinaryStrings(left, right))
+    .map(([findingId, grouped]) => {
+      const expected = grouped[0];
+      if (expected === undefined) {
+        throw new Error(`Pre-admission entity attachment group "${findingId}" is empty`);
+      }
+      if (grouped.some((mutation) => (
+        mutation.expectedKind !== expected.expectedKind
+        || mutation.expectedStableKey !== expected.expectedStableKey
+        || mutation.expectedLineageKey !== expected.expectedLineageKey
+      ))) {
+        throw new Error(
+          `Pre-admission entity attachment declarations disagree for finding "${findingId}"`,
+        );
+      }
+      return {
+        ...expected,
+        sourceRawFindingIds: mergeBinarySortedUniqueStrings(
+          [],
+          grouped.flatMap((mutation) => mutation.sourceRawFindingIds),
+        ),
+        reviewers: mergeBinarySortedUniqueStrings(
+          [],
+          grouped.flatMap((mutation) => mutation.reviewers),
+        ),
+        reason: [...new Set(grouped.map((mutation) => mutation.reason))]
+          .sort(compareBinaryStrings)
+          .join('; '),
+      };
+    });
+}
+
+function entityCreateCommitOrderKey(mutation: EntityCreateMutation): string {
+  return canonicalJson({
+    provisionalKind: mutation.provisionalKind,
+    target: mutation.target,
+    targetIdentityHash: mutation.targetIdentityHash,
+    claimIdentityHash: mutation.claimIdentityHash,
+    semanticClaimIdentityHash: mutation.semanticClaimIdentityHash,
+    title: mutation.title,
+    severity: mutation.severity,
+    description: mutation.description ?? null,
+    suggestion: mutation.suggestion ?? null,
+  });
+}
+
+function normalizeEntityMutations(
+  mutations: readonly PreAdmissionEntityProvisionalMutation[],
+): {
+  attaches: EntityAttachMutation[];
+  creates: EntityCreateMutation[];
+} {
+  const attaches = normalizeEntityAttachMutations(
+    mutations.filter((mutation): mutation is EntityAttachMutation => (
+      mutation.operation === 'attach_existing'
+    )),
+  );
+  const creates = mutations
+    .filter((mutation): mutation is EntityCreateMutation => (
+      mutation.operation === 'create_new'
+    ))
+    .map((mutation) => ({
+      mutation,
+      orderKey: entityCreateCommitOrderKey(mutation),
+    }))
+    .sort((left, right) => compareBinaryStrings(left.orderKey, right.orderKey))
+    .map(({ mutation }) => mutation);
+  return { attaches, creates };
+}
+
+function applyPreAdmissionEntityProvisionalMutations(input: {
+  updatedById: Map<string, FindingRecord>;
+  ledger: FindingLedger;
+  mutations: readonly PreAdmissionEntityProvisionalMutation[];
+  terminalAttachmentFindingIds: ReadonlySet<string>;
+  alreadyUpdatedFindingIds: ReadonlySet<string>;
+  allocateId: () => string;
+  context: FindingReconcileContext;
+}): {
+  changes: FindingRecord[];
+  results: PreAdmissionEntityMutationResult[];
+} {
+  const changes: FindingRecord[] = [];
+  const results: PreAdmissionEntityMutationResult[] = [];
+  const creationRequestKeys = new Set<string>();
+  const observation = observationFromContext(input.context);
+  const normalized = normalizeEntityMutations(input.mutations);
+  for (const mutation of normalized.attaches) {
+    const existing = input.updatedById.get(mutation.findingId);
+    const original = input.ledger.findings.find(
+      (finding) => finding.id === mutation.findingId,
+    );
+    if (existing === undefined) {
+      throw new Error(
+        `Pre-admission entity attachment target "${mutation.findingId}" is missing`,
+      );
+    }
+    if (
+      input.terminalAttachmentFindingIds.has(existing.id)
+      || existing.status !== 'open'
+      || existing.provisional?.kind !== 'raw-meaning-ambiguous'
+    ) {
+      results.push({
+        outcome: 'terminal_audit',
+        targetFindingId: existing.id,
+        sourceRawFindingIds: mutation.sourceRawFindingIds,
+        reason: mutation.reason,
+      });
+      continue;
+    }
+    if (
+      original?.status !== 'open'
+      || original.provisional?.kind !== mutation.expectedKind
+      || original.provisional.stableKey !== mutation.expectedStableKey
+      || original.provisional.lineageKey !== mutation.expectedLineageKey
+    ) {
+      throw new Error(
+        `Pre-admission entity attachment precondition failed for finding "${mutation.findingId}"`,
+      );
+    }
+    const updated = createProvisionalFindingEntry({
+      ...existing,
+      lifecycle: 'persists',
+      revision: input.alreadyUpdatedFindingIds.has(existing.id)
+        ? existing.revision
+        : bumpRevision(existing),
+      rawFindingIds: mergeBinarySortedUniqueStrings(
+        existing.rawFindingIds,
+        mutation.sourceRawFindingIds,
+      ),
+      reviewers: mergeBinarySortedUniqueStrings(
+        existing.reviewers,
+        mutation.reviewers,
+      ),
+      lastSeen: observation,
+      provisional: {
+        ...existing.provisional,
+        sourceRawFindingIds: mergeBinarySortedUniqueStrings(
+          existing.provisional.sourceRawFindingIds,
+          mutation.sourceRawFindingIds,
+        ),
+        reason: `${existing.provisional.reason}; ${mutation.reason}`,
+        lastObservedAt: observation,
+      },
+    });
+    input.updatedById.set(updated.id, updated);
+    changes.push(updated);
+    results.push({
+      outcome: 'applied_provisional',
+      findingId: updated.id,
+      mutation,
+    });
+  }
+  for (const mutation of normalized.creates) {
+    if (creationRequestKeys.has(mutation.creationRequestKey)) {
+      throw new Error(
+        `Duplicate pre-admission entity creation request "${mutation.creationRequestKey}"`,
+      );
+    }
+    creationRequestKeys.add(mutation.creationRequestKey);
+    const findingId = input.allocateId();
+    const stableKey = entityBindingDigest(
+      'finding-provisional-entity-v1',
+      findingId,
+    );
+    const lineageKey = entityBindingDigest(
+      'finding-provisional-lineage-v1',
+      findingId,
+    );
+    const created = createProvisionalFindingEntry({
+      id: findingId,
+      status: 'open',
+      lifecycle: 'new',
+      target: mutation.target,
+      targetIdentityHash: mutation.targetIdentityHash,
+      claimIdentityHash: mutation.claimIdentityHash,
+      semanticClaimIdentityHash: mutation.semanticClaimIdentityHash,
+      severity: mutation.severity,
+      title: mutation.title,
+      evidenceIds: [],
+      ...(mutation.description !== undefined
+        ? { description: mutation.description }
+        : {}),
+      ...(mutation.suggestion !== undefined
+        ? { suggestion: mutation.suggestion }
+        : {}),
+      reviewers: [...mutation.reviewers],
+      rawFindingIds: [...mutation.sourceRawFindingIds],
+      firstSeen: observation,
+      lastSeen: observation,
+      revision: 1,
+      provisional: {
+        kind: mutation.provisionalKind,
+        stableKey,
+        lineageKey,
+        sourceRawFindingIds: [...mutation.sourceRawFindingIds],
+        reason: mutation.reason,
+        firstObservedAt: observation,
+        lastObservedAt: observation,
+        interpretationEpochs: 0,
+        gateEffect: 'block',
+        firstObservedRound: stopBudgetRoundsCompleted(input.ledger) + 1,
+      },
+    });
+    input.updatedById.set(created.id, created);
+    changes.push(created);
+    results.push({
+      outcome: 'applied_provisional',
+      findingId: created.id,
+      mutation,
+    });
+  }
+  return { changes, results };
+}
+
+export function applyPreAdmissionEntityProvisionalMutationsToLedger(
+  ledger: FindingLedger,
+  mutations: readonly PreAdmissionEntityProvisionalMutation[],
+  context: FindingReconcileContext,
+): FindingLedger {
+  if (mutations.length === 0) {
+    return ledger;
+  }
+  const updatedById = new Map<string, FindingRecord>(
+    ledger.findings.map((finding) => [finding.id, structuredClone(finding)]),
+  );
+  let nextId = ledger.nextId;
+  applyPreAdmissionEntityProvisionalMutations({
+    updatedById,
+    ledger,
+    mutations,
+    terminalAttachmentFindingIds: new Set(),
+    alreadyUpdatedFindingIds: new Set(),
+    allocateId: () => {
+      const id = formatFindingId(nextId);
+      nextId += 1;
+      return id;
+    },
+    context,
+  });
+  return {
+    ...ledger,
+    nextId,
+    updatedAt: context.timestamp,
+    findings: [...updatedById.values()]
+      .map((finding) => createFindingLedgerEntry(finding))
       .sort((left, right) => compareBinaryStrings(left.id, right.id)),
   };
 }

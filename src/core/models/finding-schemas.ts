@@ -1162,6 +1162,7 @@ const FindingManagerValidationReportSchema = z.object({
       taskId: Sha256Schema,
       taskKind: z.enum([
         'raw',
+        'entity_binding',
         'finding_control',
         'dispute',
         'conflict',
@@ -1178,6 +1179,7 @@ const FindingManagerValidationReportSchema = z.object({
       taskId: Sha256Schema,
       taskKind: z.enum([
         'raw',
+        'entity_binding',
         'finding_control',
         'dispute',
         'conflict',

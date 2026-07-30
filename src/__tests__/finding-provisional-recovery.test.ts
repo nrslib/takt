@@ -317,6 +317,7 @@ function emptyCommitPlanInput(
     } as RunFindingManagerForStepInput,
     previousLedger,
     intake: {
+      entityBindings: new Map(),
       items: [],
       overflowRawFindingIds: new Set(),
       intakeProvisionalSpecs: [],
@@ -364,6 +365,7 @@ function emptyCommitPlanInput(
       },
       rawRecovery: {
         intake: {
+          entityBindings: new Map(),
           items: [],
           overflowRawFindingIds: new Set(),
           intakeProvisionalSpecs: [],
@@ -1656,6 +1658,7 @@ describe('provisional recovery', () => {
     );
     const rawRecovery = {
       intake: {
+        entityBindings: new Map(),
         items: [{
           canonical,
           wire,
@@ -1942,6 +1945,7 @@ describe('provisional recovery', () => {
       freshLedger: current,
       recovery: {
         intake: {
+          entityBindings: new Map(),
           items: [{ canonical, wire }],
           overflowRawFindingIds: new Set(),
           intakeProvisionalSpecs: [],
@@ -2002,6 +2006,7 @@ describe('provisional recovery', () => {
       freshLedger: current,
       recovery: {
         intake: {
+          entityBindings: new Map(),
           items: [{ canonical, wire }],
           overflowRawFindingIds: new Set(),
           intakeProvisionalSpecs: [],
@@ -2070,6 +2075,7 @@ describe('provisional recovery', () => {
       freshLedger: current,
       recovery: {
         intake: {
+          entityBindings: new Map(),
           items: [{ canonical, wire }],
           overflowRawFindingIds: new Set(),
           intakeProvisionalSpecs: [],
@@ -2613,6 +2619,7 @@ describe('provisional recovery', () => {
       ],
     };
     const intake = {
+      entityBindings: new Map(),
       items: [{
         canonical,
         wire,
@@ -2695,6 +2702,7 @@ describe('provisional recovery', () => {
         },
         rawRecovery: {
           intake: {
+            entityBindings: new Map(),
             items: [],
             overflowRawFindingIds: new Set(),
             intakeProvisionalSpecs: [],
@@ -2757,6 +2765,7 @@ describe('provisional recovery', () => {
       revision: processFinding.revision + 1,
     }], [raw('source-1')]);
     const intake = {
+      entityBindings: new Map(),
       items: [{
         canonical,
         wire,
@@ -2841,6 +2850,7 @@ describe('provisional recovery', () => {
         },
         rawRecovery: {
           intake: {
+            entityBindings: new Map(),
             items: [],
             overflowRawFindingIds: new Set(),
             intakeProvisionalSpecs: [],
@@ -2929,6 +2939,7 @@ describe('provisional recovery', () => {
     const params = emptyCommitPlanInput({
       previousLedger,
       intake: {
+        entityBindings: new Map(),
         items: [staleItem, freshItem],
         overflowRawFindingIds: new Set(),
         intakeProvisionalSpecs: [],
@@ -3056,6 +3067,7 @@ describe('provisional recovery', () => {
       input,
       previousLedger,
       intake: {
+        entityBindings: new Map(),
         items: [{
           canonical,
           wire,
@@ -3121,6 +3133,7 @@ describe('provisional recovery', () => {
         },
         rawRecovery: {
           intake: {
+            entityBindings: new Map(),
             items: [],
             overflowRawFindingIds: new Set(),
             intakeProvisionalSpecs: [],
@@ -3259,6 +3272,7 @@ describe('provisional recovery', () => {
       reviewScopeSnapshotId: 'unused-for-invalid-recovery',
       previousLedger,
       intake: {
+        entityBindings: new Map(),
         items: [{ canonical: candidate, wire, recoveryOrigins: [validOrigin] }],
         overflowRawFindingIds: new Set(),
         intakeProvisionalSpecs: [],
@@ -3822,6 +3836,8 @@ describe('provisional recovery', () => {
           evidence: 'A later reviewer supplied current evidence.',
         }],
       },
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
       rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map([[reopenedRaw.rawFindingId, {

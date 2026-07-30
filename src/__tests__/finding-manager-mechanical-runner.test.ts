@@ -794,13 +794,11 @@ describe('runFindingManagerForStep mechanical path', () => {
       provisional: { kind: 'reviewer-output-overflow' },
     });
     expect(ledger.findings).toHaveLength(1);
-    expect(ledger.reviewerAnomalies).toEqual(expect.arrayContaining([
+    expect(ledger.reviewerAnomalies ?? []).toEqual([]);
+    expect(ledger.findings[0]?.rejectedObservations).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        kind: 'lifecycle-admission-failure',
-        stableKey: expect.stringMatching(/^[0-9a-f]{64}$/),
-        sourceRawFindingIds: expect.arrayContaining([
-          expect.stringMatching(/:p-unsupported$/),
-        ]),
+        rawFindingId: expect.stringMatching(/:p-unsupported$/),
+        reason: expect.stringContaining('audit'),
       }),
     ]));
   });

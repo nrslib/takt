@@ -464,7 +464,12 @@ function buildManagerAgentOptions(
   optionsBuilder: OptionsBuilder,
   managerStep: AgentWorkflowStep,
 ): ReturnType<OptionsBuilder['buildAgentOptions']> {
-  const options = optionsBuilder.buildAgentOptions(managerStep);
+  const options = {
+    ...optionsBuilder.buildAgentOptions(managerStep),
+  } as ReturnType<OptionsBuilder['buildAgentOptions']> & {
+    permissionResolution?: unknown;
+  };
+  delete options.permissionResolution;
   return {
     ...options,
     sessionId: undefined,

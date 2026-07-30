@@ -122,12 +122,16 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
 
 type TestReconcileInput = Omit<
   Parameters<typeof reconcileFindingLedgerStrict>[0],
-  'provisionalFindings' | 'rawFindingDispositions' | 'rawProvenanceByRawFindingId'
+  'provisionalFindings' | 'entityProvisionalMutations'
+  | 'terminalEntityAttachmentFindingIds' | 'rawFindingDispositions'
+  | 'rawProvenanceByRawFindingId'
 >;
 
 function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
   return reconcileFindingLedgerStrict({
     ...input,
+    entityProvisionalMutations: [],
+    terminalEntityAttachmentFindingIds: new Set(),
     provisionalFindings: [],
     rawFindingDispositions: [],
     verifiedEvidenceRecordsByRawFindingId: new Map(),
@@ -1710,6 +1714,8 @@ describe('assembleManagerOutput carried conflicts', () => {
       rawFindings,
       managerOutput: fresh.output,
       priorStepResponseText: DISPUTE_CLAIM,
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
       rawFindingDispositions: fresh.rejectedRawDecisions.map((rejected) => ({
         rawFindingId: rejected.rawFindingId,
