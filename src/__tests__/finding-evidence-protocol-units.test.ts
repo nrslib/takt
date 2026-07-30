@@ -218,6 +218,7 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
       stableKey: 'sk-anomaly-1',
       lineageKey: 'lk-anomaly-1',
       sourceRawFindingIds: ['raw-1'],
+      sourceIntakeIds: [],
       reviewers: ['ai-antipattern-reviewer'],
       title: 'Hallucinated finding',
       mismatchReason: 'the location does not exist',
@@ -273,6 +274,33 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
     // ただし新しい raw finding id を持ち込む別ラウンドはちゃんと +1 される。
     const nextRound = applyReviewerAnomalySpecsToLedger(replayedAgain, [makeSpec({ sourceRawFindingIds: ['raw-next-round'] })], context);
     expect(nextRound.reviewerAnomalies![0]!.occurrences).toBe(2);
+  });
+
+  it('rawを生成できない観測はsourceIntakeIdsを冪等キーとしてupsertする', () => {
+    const spec = makeSpec({
+      sourceRawFindingIds: [],
+      sourceIntakeIds: ['intake-1'],
+    });
+    const first = applyReviewerAnomalySpecsToLedger(makeLedger(), [spec], context);
+    const replay = applyReviewerAnomalySpecsToLedger(first, [spec], {
+      ...context,
+      timestamp: '2026-07-12T02:00:00.000Z',
+    });
+    const next = applyReviewerAnomalySpecsToLedger(replay, [{
+      ...spec,
+      sourceIntakeIds: ['intake-2'],
+    }], context);
+
+    expect(replay.reviewerAnomalies?.[0]).toMatchObject({
+      occurrences: 1,
+      sourceRawFindingIds: [],
+      sourceIntakeIds: ['intake-1'],
+    });
+    expect(next.reviewerAnomalies?.[0]).toMatchObject({
+      occurrences: 2,
+      sourceRawFindingIds: [],
+      sourceIntakeIds: ['intake-1', 'intake-2'],
+    });
   });
 
   it('異なる stableKey は別レコードとして共存する', () => {
@@ -361,6 +389,7 @@ describe('review-integrity budget (review-integrity.ts, codex 検証ブロッカ
       stableKey: 'sk',
       lineageKey: 'lk',
       sourceRawFindingIds: ['raw-1'],
+      sourceIntakeIds: [],
       reviewers: ['reviewer'],
       title: 'Unverifiable claim',
       mismatchReason: 'no verifiable evidence',

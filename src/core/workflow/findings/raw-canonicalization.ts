@@ -133,6 +133,27 @@ export function computeLineageKey(input: {
 }
 
 /**
+ * canonicalization と source-binding rejection が共有する lineage projection。
+ * ambiguity 検出結果をこの純関数へ明示的に渡し、semantic collision の
+ * collidingFindingId をどちらの経路でも同じ優先順位で反映する。
+ */
+export function computeCanonicalLineageKey(input: {
+  claimIdentityHash: string;
+  targetFindingId?: string;
+  ambiguity: Pick<RawAmbiguityDetection, 'collidingFindingId'>;
+}): string {
+  return computeLineageKey({
+    claimIdentityHash: input.claimIdentityHash,
+    ...(input.targetFindingId !== undefined
+      ? { targetFindingId: input.targetFindingId }
+      : {}),
+    ...(input.ambiguity.collidingFindingId !== undefined
+      ? { collidingFindingId: input.ambiguity.collidingFindingId }
+      : {}),
+  });
+}
+
+/**
  * raw の evidence hash。行番号・rawFindingId・runId は含めない（それらだけを
  * 変えた再発は「同一 evidence」= manager を再呼び出さない）。
  * description 等の実質変更は hash を変え、再解釈候補になる（ただし epoch 上限
@@ -205,6 +226,8 @@ export interface ReviewerRawIntakeContext {
   reviewerPersonaKey: string;
   /** rawExcerpt を一意な完全一致で束縛する reviewer report 本文。 */
   reviewReport: string;
+  /** normalizer rejection と正常 canonicalization が共有する ambiguity 正本。 */
+  ledger: FindingLedger;
   /** normalizer が lifecycle target を反復しなくても、identity は ledger 正本へ束縛する。 */
   authoritativeTargetByFindingId?: ReadonlyMap<string, FindingTarget>;
   issueEvidenceRequests(input: {
@@ -951,12 +974,42 @@ export interface ReviewerCandidateIntakeRejection {
   intakeId: string;
   reviewerStableKey: string;
   reviewer: string;
+  lineageKey?: string;
+  claimedExcerpt?: string;
   reason: string;
 }
 
 export interface ReviewerCandidateIntakeBatch {
   candidates: ReviewerRawFindingCandidate[];
   rejections: ReviewerCandidateIntakeRejection[];
+}
+
+function projectedRawAmbiguityFields(
+  record: Record<string, unknown>,
+  targetFindingId: string | undefined,
+): RawAmbiguityFields {
+  return {
+    ...(pickRelation(record.relation) !== undefined
+      ? { relation: pickRelation(record.relation)! }
+      : {}),
+    ...(targetFindingId !== undefined ? { targetFindingId } : {}),
+    ...(pickString(record.title) !== undefined ? { title: pickString(record.title)! } : {}),
+    ...(pickString(record.description) !== undefined
+      ? { description: pickString(record.description)! }
+      : {}),
+    ...(pickSeverity(record.severity) !== undefined
+      ? { severity: pickSeverity(record.severity)! }
+      : {}),
+    ...(pickString(record.familyTag) !== undefined
+      ? { familyTag: pickString(record.familyTag)! }
+      : {}),
+    ...(pickString(record.suggestion) !== undefined
+      ? { suggestion: pickString(record.suggestion)! }
+      : {}),
+    ...(projectFindingTarget(record.target) !== undefined
+      ? { target: projectFindingTarget(record.target)! }
+      : {}),
+  };
 }
 
 function atomizeTargetFindingIds(
@@ -1036,30 +1089,48 @@ export function createReviewerRawFindingCandidates(
           ? context.authoritativeTargetByFindingId?.get(targetFindingId)
           : undefined
       );
-    if (rawExcerpt === undefined || target === undefined) {
+    if (rawExcerpt === undefined) {
+      const claimIdentityHash = target === undefined
+        ? undefined
+        : computeClaimIdentityHash({
+            target,
+            familyTag: pickString(record.familyTag) ?? null,
+            severity: pickSeverity(record.severity) ?? null,
+            title: pickString(record.title) ?? null,
+            description: pickString(record.description) ?? null,
+            suggestion: pickString(record.suggestion) ?? null,
+          });
+      const ambiguity = detectRawFindingAmbiguities(
+        projectedRawAmbiguityFields(record, targetFindingId),
+        context.ledger,
+      );
       rejections.push({
         intakeId,
         reviewerStableKey,
         reviewer: context.reviewerStepName,
-        reason: rawExcerpt === undefined
-          ? 'Normalizer extraction has no non-empty rawExcerpt'
-          : 'Normalizer extraction candidate is null or has no canonicalizable target',
+        ...(claimIdentityHash !== undefined
+          ? {
+              lineageKey: computeCanonicalLineageKey({
+                claimIdentityHash,
+                ...(targetFindingId !== undefined ? { targetFindingId } : {}),
+                ambiguity,
+              }),
+            }
+          : {}),
+        reason: 'Normalizer extraction has no non-empty rawExcerpt',
       });
       return;
     }
-    let sourceBinding: ReviewerRawFindingCandidate['sourceBinding'];
-    try {
-      sourceBinding = bindCandidateSource(context.reviewReport, rawExcerpt);
-    } catch (error) {
+    if (target === undefined) {
       rejections.push({
         intakeId,
         reviewerStableKey,
         reviewer: context.reviewerStepName,
-        reason: error instanceof Error ? error.message : 'rawExcerpt source binding failed',
+        claimedExcerpt: rawExcerpt,
+        reason: 'Normalizer extraction candidate is null or has no canonicalizable target',
       });
       return;
     }
-    const targetIdentityHash = computeTargetIdentityHash(target);
     const claimIdentityHash = computeClaimIdentityHash({
       target,
       familyTag: pickString(record.familyTag) ?? null,
@@ -1068,6 +1139,30 @@ export function createReviewerRawFindingCandidates(
       description: pickString(record.description) ?? null,
       suggestion: pickString(record.suggestion) ?? null,
     });
+    const ambiguity = detectRawFindingAmbiguities(
+      projectedRawAmbiguityFields(record, targetFindingId),
+      context.ledger,
+    );
+    const lineageKey = computeCanonicalLineageKey({
+      claimIdentityHash,
+      ...(targetFindingId !== undefined ? { targetFindingId } : {}),
+      ambiguity,
+    });
+    let sourceBinding: ReviewerRawFindingCandidate['sourceBinding'];
+    try {
+      sourceBinding = bindCandidateSource(context.reviewReport, rawExcerpt);
+    } catch (error) {
+      rejections.push({
+        intakeId,
+        reviewerStableKey,
+        reviewer: context.reviewerStepName,
+        lineageKey,
+        claimedExcerpt: rawExcerpt,
+        reason: error instanceof Error ? error.message : 'rawExcerpt source binding failed',
+      });
+      return;
+    }
+    const targetIdentityHash = computeTargetIdentityHash(target);
     const issued = context.issueEvidenceRequests({
       target,
       claimIdentityHash,
@@ -1216,8 +1311,10 @@ function buildSafeEvidenceExcerpt(candidate: ReviewerRawFindingCandidate): strin
 export interface RawAmbiguityFields {
   relation?: RawFindingRelation | null;
   targetFindingId?: string;
+  target?: FindingTarget;
   title?: string;
   description?: string;
+  suggestion?: string;
   severity?: FindingSeverity;
   familyTag?: string;
   evidence?: readonly RawFindingEvidence[];
@@ -1289,7 +1386,35 @@ export function detectRawFindingAmbiguities(
     }
   }
 
-  return { codes };
+  const semanticClaimIdentityHash = claimedRelation === 'new'
+    && fields.target !== undefined
+    && fields.title !== undefined
+    && fields.description !== undefined
+    ? computeSemanticClaimIdentityHash({
+        target: fields.target,
+        title: fields.title,
+        description: fields.description,
+      })
+    : undefined;
+  const collidingFinding = semanticClaimIdentityHash === undefined
+    ? undefined
+    : ledger.findings.find((finding) => (
+        finding.status === 'open'
+        && finding.provisional === undefined
+        && finding.semanticClaimIdentityHash === semanticClaimIdentityHash
+      ));
+
+  return {
+    codes,
+    ...(collidingFinding === undefined
+      ? {}
+      : {
+          collidingFindingId: collidingFinding.id,
+          ...(collidingFinding.title === null
+            ? {}
+            : { collidingFindingTitle: collidingFinding.title }),
+        }),
+  };
 }
 
 /**
@@ -1325,6 +1450,9 @@ export function extractLenientRawFields(
     ...(pickString(record.description) !== undefined ? { description: pickString(record.description)! } : {}),
     ...(pickSeverity(record.severity) !== undefined ? { severity: pickSeverity(record.severity)! } : {}),
     ...(pickString(record.familyTag) !== undefined ? { familyTag: pickString(record.familyTag)! } : {}),
+    ...(projectFindingTarget(record.target) !== undefined
+      ? { target: projectFindingTarget(record.target)! }
+      : {}),
     evidenceRequests,
     ...(pickString(record.suggestion) !== undefined ? { suggestion: pickString(record.suggestion)! } : {}),
   };
@@ -1347,7 +1475,6 @@ export function canonicalizeReviewerRawFinding(
   const codes: RawAmbiguityCode[] = CANDIDATE_INVALID_EVIDENCE_SHAPES.has(candidate)
     ? [...detection.codes, 'invalid-evidence-shape']
     : detection.codes;
-  const collidingFindingId = detection.collidingFindingId;
   const claimedRelation = candidate.relation;
   const storedTargetPrecondition = CANDIDATE_TARGET_PRECONDITIONS.get(candidate);
 
@@ -1398,10 +1525,10 @@ export function canonicalizeReviewerRawFinding(
     description: candidate.description ?? null,
   });
   const displayLocation = evidenceLocation(candidate.evidence);
-  const lineageKey = computeLineageKey({
+  const lineageKey = computeCanonicalLineageKey({
     claimIdentityHash,
     ...(candidate.targetFindingId !== undefined ? { targetFindingId: candidate.targetFindingId } : {}),
-    ...(collidingFindingId !== undefined ? { collidingFindingId } : {}),
+    ambiguity: detection,
   });
   const evidenceSetHash = computeRawEvidenceHash({ evidence: candidate.evidence });
 

@@ -9,7 +9,6 @@ import {
 } from './manager-task-contracts.js';
 import { buildFindingEntityBindingTaskStep } from './manager-step.js';
 import {
-  buildManagerInputLedger,
   runPreparedManagerAttempt,
 } from './manager-agent.js';
 import { renderFencedJsonBlock } from '../instruction/fenced-block.js';
@@ -29,6 +28,11 @@ import {
   planManagerEntityBindings,
   validateEntityBindingDecisions,
 } from './pre-admission-entity-binding-plan.js';
+import { buildCanonicalEntityHeadProjection } from './pre-admission-entity-binding-projection.js';
+import {
+  createReviewerAnomalySpec,
+  type ReviewerAnomalySpec,
+} from './reviewer-anomalies.js';
 
 export interface PreAdmissionEntityBindingResult {
   intake: ReviewerIntakeResult;
@@ -44,22 +48,33 @@ interface PreparedBindingTask {
   inputBytes: number;
 }
 
-function taskIdForCandidates(candidates: readonly BindingCandidate[]): string {
+interface PreparedBindingTaskOverflow {
+  task: PreparedBindingTask;
+  reason: string;
+}
+
+function taskIdForCandidates(
+  candidates: readonly BindingCandidate[],
+  entityHeadProjectionDigest: string,
+): string {
   return entityBindingDigest(
-    'finding-semantic-entity-binding-task-v2',
-    candidates.map(({ item }) => ({
-      rawFindingId: item.wire.rawFindingId,
-      semanticClaimIdentityHash: item.wire.semanticClaimIdentityHash,
-      targetIdentityHash: item.wire.targetIdentityHash,
-    })),
+    'finding-semantic-entity-binding-task-v3',
+    {
+      candidates: candidates.map(({ item }) => ({
+        rawFindingId: item.wire.rawFindingId,
+        semanticClaimIdentityHash: item.wire.semanticClaimIdentityHash,
+        targetIdentityHash: item.wire.targetIdentityHash,
+      })),
+      entityHeadProjectionDigest,
+    },
   );
 }
 
 function ledgerProjectionForComponents(
-  ledger: FindingLedger,
   components: readonly EntityBindingComponent[],
 ): {
   projection: unknown;
+  projectionDigest: string;
   allowedFindingIds: ReadonlySet<string>;
 } {
   const findingById = new Map(components.flatMap((component) => (
@@ -67,12 +82,13 @@ function ledgerProjectionForComponents(
   )));
   const findings = [...findingById.values()]
     .sort((left, right) => compareBinaryStrings(left.id, right.id));
+  const projection = buildCanonicalEntityHeadProjection(findings);
   return {
-    projection: buildManagerInputLedger({
-      ...ledger,
-      findings,
-      conflicts: [],
-    }, new Set()),
+    projection,
+    projectionDigest: entityBindingDigest(
+      'finding-canonical-entity-head-projection-v1',
+      projection,
+    ),
     allowedFindingIds: new Set(findings.map((finding) => finding.id)),
   };
 }
@@ -126,7 +142,6 @@ function taskInstruction(input: {
 
 function prepareBindingTask(input: {
   contract: FindingContractConfig;
-  previousLedger: FindingLedger;
   components: readonly EntityBindingComponent[];
   managerStep: AgentWorkflowStep;
   runInput: Pick<RunFindingManagerForStepInput, 'stepExecutor'>;
@@ -137,11 +152,10 @@ function prepareBindingTask(input: {
       left.item.wire.rawFindingId,
       right.item.wire.rawFindingId,
     ));
-  const taskId = taskIdForCandidates(candidates);
   const ledgerContext = ledgerProjectionForComponents(
-    input.previousLedger,
     input.components,
   );
+  const taskId = taskIdForCandidates(candidates, ledgerContext.projectionDigest);
   const instruction = taskInstruction({
     contract: input.contract,
     taskId,
@@ -183,7 +197,6 @@ function fallbackExecution(input: {
   task: PreparedBindingTask;
   roundMarker: string;
   reason: string;
-  status: 'failed' | 'input_overflow';
 }): {
   bindings: Map<string, PreAdmissionEntityBinding>;
   audit: FindingManagerTaskAudit;
@@ -199,8 +212,8 @@ function fallbackExecution(input: {
       taskId: input.task.taskId,
       taskKind: 'entity_binding',
       ownedIds: input.task.candidates.map(({ item }) => item.wire.rawFindingId),
-      status: input.status,
-      inputBytes: input.status === 'input_overflow' ? null : input.task.inputBytes,
+      status: 'failed',
+      inputBytes: input.task.inputBytes,
       reason: input.reason,
     },
   };
@@ -258,9 +271,65 @@ async function executeBindingTask(input: {
       task: input.task,
       roundMarker: input.roundMarker,
       reason: error instanceof Error ? error.message : String(error),
-      status: 'failed',
     });
   }
+}
+
+function bindingTaskOverflowReason(
+  component: EntityBindingComponent,
+  task: PreparedBindingTask,
+): string | undefined {
+  return component.candidates.length > ENTITY_BINDING_TASK_MAX_ITEMS
+    || task.inputBytes > MAIN_MANAGER_INPUT_MAX_BYTES
+    ? `Entity binding component "${component.componentKey}" exceeds the protocol budget `
+      + `(${component.candidates.length}/${ENTITY_BINDING_TASK_MAX_ITEMS} raw findings, `
+      + `${task.inputBytes}/${MAIN_MANAGER_INPUT_MAX_BYTES} UTF-8 bytes)`
+    : undefined;
+}
+
+function prepareBindingTasks(input: {
+  contract: FindingContractConfig;
+  components: readonly EntityBindingComponent[];
+  managerStep: AgentWorkflowStep;
+  runInput: Pick<RunFindingManagerForStepInput, 'stepExecutor'>;
+}): {
+  tasks: PreparedBindingTask[];
+  overflows: PreparedBindingTaskOverflow[];
+} {
+  const tasks: PreparedBindingTask[] = [];
+  const overflows: PreparedBindingTaskOverflow[] = [];
+  let current: PreparedBindingTask | undefined;
+  for (const component of input.components) {
+    const single = prepareBindingTask({ ...input, components: [component] });
+    const overflowReason = bindingTaskOverflowReason(component, single);
+    if (overflowReason !== undefined) {
+      if (current !== undefined) {
+        tasks.push(current);
+        current = undefined;
+      }
+      overflows.push({ task: single, reason: overflowReason });
+      continue;
+    }
+    if (current === undefined) {
+      current = single;
+      continue;
+    }
+    const combinedComponents = [...current.components, component];
+    const combinedRawCount = current.candidates.length + component.candidates.length;
+    const combined = combinedRawCount <= ENTITY_BINDING_TASK_MAX_ITEMS
+      ? prepareBindingTask({ ...input, components: combinedComponents })
+      : undefined;
+    if (combined !== undefined && combined.inputBytes <= MAIN_MANAGER_INPUT_MAX_BYTES) {
+      current = combined;
+      continue;
+    }
+    tasks.push(current);
+    current = single;
+  }
+  if (current !== undefined) {
+    tasks.push(current);
+  }
+  return { tasks, overflows };
 }
 
 function exactBindings(input: {
@@ -278,7 +347,8 @@ function exactBindings(input: {
       component,
     ] as const)
   )));
-  const exactTaskId = taskIdForCandidates(input.candidates);
+  const projectionDigest = ledgerProjectionForComponents(components).projectionDigest;
+  const exactTaskId = taskIdForCandidates(input.candidates, projectionDigest);
   const bindings = new Map<string, PreAdmissionEntityBinding>();
   const unresolved: BindingCandidate[] = [];
   input.candidates.forEach((candidate, groupOrdinal) => {
@@ -328,60 +398,35 @@ export async function bindPreAdmissionEntities(input: {
   });
   const bindings = new Map([...input.intake.entityBindings, ...exact.bindings]);
   const components = collectEntityBindingComponents(input.previousLedger, exact.unresolved);
-  const selected: EntityBindingComponent[] = [];
-  const overflow: EntityBindingComponent[] = [];
-  for (const component of components) {
-    const tentative = [...selected, component];
-    const rawCount = tentative.reduce(
-      (count, item) => count + item.candidates.length,
-      0,
-    );
-    if (rawCount > ENTITY_BINDING_TASK_MAX_ITEMS) {
-      overflow.push(component);
-      continue;
-    }
-    const prepared = prepareBindingTask({
-      contract: input.contract,
-      previousLedger: input.previousLedger,
-      components: tentative,
-      managerStep: input.managerStep,
-      runInput: input.runInput,
-    });
-    if (prepared.inputBytes > MAIN_MANAGER_INPUT_MAX_BYTES) {
-      overflow.push(component);
-    } else {
-      selected.push(component);
-    }
-  }
-
+  const prepared = prepareBindingTasks({
+    contract: input.contract,
+    components,
+    managerStep: input.managerStep,
+    runInput: input.runInput,
+  });
   const taskAudits: FindingManagerTaskAudit[] = [];
-  for (const component of overflow) {
-    const task = prepareBindingTask({
-      contract: input.contract,
-      previousLedger: input.previousLedger,
-      components: [component],
-      managerStep: input.managerStep,
-      runInput: input.runInput,
-    });
-    const fallback = fallbackExecution({
-      task,
-      roundMarker: input.roundMarker,
-      reason: `Complete target component exceeds the ${ENTITY_BINDING_TASK_MAX_ITEMS}-raw or ${MAIN_MANAGER_INPUT_MAX_BYTES}-byte entity-binding budget`,
-      status: 'input_overflow',
-    });
-    for (const [rawFindingId, binding] of fallback.bindings) {
-      bindings.set(rawFindingId, binding);
+  const overflowRawFindingIds = new Set(input.intake.overflowRawFindingIds);
+  const intakeAnomalySpecs: ReviewerAnomalySpec[] = [...input.intake.intakeAnomalySpecs];
+  for (const overflow of prepared.overflows) {
+    for (const candidate of overflow.task.candidates) {
+      overflowRawFindingIds.add(candidate.item.wire.rawFindingId);
+      intakeAnomalySpecs.push(createReviewerAnomalySpec({
+        wire: candidate.item.wire,
+        canonical: candidate.item.canonical,
+        anomalyKind: 'protocol-anomaly',
+        reason: `${overflow.reason}; the saved raw observation was quarantined without product or provisional mutation`,
+      }));
     }
-    taskAudits.push(fallback.audit);
-  }
-  if (selected.length > 0) {
-    const task = prepareBindingTask({
-      contract: input.contract,
-      previousLedger: input.previousLedger,
-      components: selected,
-      managerStep: input.managerStep,
-      runInput: input.runInput,
+    taskAudits.push({
+      taskId: overflow.task.taskId,
+      taskKind: 'entity_binding',
+      ownedIds: overflow.task.candidates.map(({ item }) => item.wire.rawFindingId),
+      status: 'input_overflow',
+      inputBytes: overflow.task.inputBytes,
+      reason: overflow.reason,
     });
+  }
+  for (const task of prepared.tasks) {
     const execution = await executeBindingTask({
       previousLedger: input.previousLedger,
       task,
@@ -398,6 +443,8 @@ export async function bindPreAdmissionEntities(input: {
     intake: {
       ...input.intake,
       entityBindings: bindings,
+      overflowRawFindingIds,
+      intakeAnomalySpecs,
     },
     taskAudits,
   };

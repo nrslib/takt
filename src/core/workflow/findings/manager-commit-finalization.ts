@@ -521,6 +521,7 @@ export function applyCommitLedgerStates(input: {
       stableKey: spec.stableKey,
       reason: spec.mismatchReason,
       sourceRawFindingIds: spec.sourceRawFindingIds,
+      sourceIntakeIds: spec.sourceIntakeIds,
     })),
     rejectedObservationAttachments: rejectedObservations.attachments,
   };

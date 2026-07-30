@@ -72,6 +72,7 @@ function reviewerAnomaly(overrides: Partial<ReviewerAnomalyEntry> = {}): Reviewe
     stableKey: 'reviewer-anomaly-stable-key',
     lineageKey: 'reviewer-anomaly-lineage-key',
     sourceRawFindingIds: ['raw-anomaly-1'],
+    sourceIntakeIds: [],
     reviewers: ['coding-review'],
     title: 'Unverified reviewer claim',
     mismatchReason: 'The quoted source did not match',

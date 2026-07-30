@@ -41,6 +41,7 @@ import {
   canonicalRawFindingFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import { MAIN_MANAGER_INPUT_MAX_BYTES } from '../core/workflow/findings/manager-task-contracts.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
 
@@ -139,6 +140,7 @@ function intakeFor(ledger: FindingLedger, raws: readonly RawFinding[]): Reviewer
     entityBindings: new Map(),
     overflowRawFindingIds: new Set(),
     intakeProvisionalSpecs: [],
+    intakeAnomalySpecs: [],
     overflowReports: [],
     clarifications: [],
     rawNormalizations: [],
@@ -1237,7 +1239,7 @@ describe('pre-admission semantic entity binding', () => {
     expect(applyMutations(ledger, bound.intake).findings).toHaveLength(2);
   });
 
-  it('bounds a 128-item over-byte component without a manager call', async () => {
+  it('quarantines one over-budget complete component as durable protocol incidents', async () => {
     const ledger = emptyLedger();
     const raws = Array.from({ length: 128 }, (_, index) => rawFinding({
       rawFindingId: `raw-${String(index).padStart(3, '0')}`,
@@ -1248,14 +1250,219 @@ describe('pre-admission semantic entity binding', () => {
 
     const bound = await bind({ ledger, intake });
     const evaluation = evaluate(ledger, bound.intake);
-    const committed = applyMutations(ledger, bound.intake);
 
     expect(executeAgentMock).not.toHaveBeenCalled();
-    expect(bound.taskAudits).toMatchObject([{ status: 'input_overflow' }]);
-    expect(evaluation.preAdmissionEntityMutations).toHaveLength(1);
-    expect(committed.findings).toHaveLength(1);
-    expect(committed.nextId).toBe(2);
-    expect(committed.findings[0]?.rawFindingIds).toHaveLength(128);
+    expect(bound.intake.items).toHaveLength(raws.length);
+    expect(bound.intake.overflowRawFindingIds).toEqual(
+      new Set(raws.map((raw) => raw.rawFindingId)),
+    );
+    expect(bound.intake.intakeAnomalySpecs).toHaveLength(raws.length);
+    expect(bound.intake.intakeAnomalySpecs.every((spec) => (
+      spec.sourceRawFindingIds.length === 1
+      && spec.sourceIntakeIds.length === 0
+    ))).toBe(true);
+    expect(bound.taskAudits).toMatchObject([{
+      status: 'input_overflow',
+      inputBytes: expect.any(Number),
+      ownedIds: raws.map((raw) => raw.rawFindingId),
+    }]);
+    expect(bound.taskAudits[0]?.inputBytes).toBeGreaterThan(
+      MAIN_MANAGER_INPUT_MAX_BYTES,
+    );
+    expect(evaluation.preAdmissionEntityMutations).toEqual([]);
+    expect(evaluation.admissionProvisionalSpecs).toEqual([]);
+    expect(evaluation.cleanAdmitted).toEqual([]);
+    expect(evaluation.taintedAdmitted).toEqual([]);
+    expect(ledger.findings).toEqual([]);
+    expect(ledger.nextId).toBe(1);
+  });
+
+  it('scans every disjoint component across deterministic budget pages', async () => {
+    const ledger = emptyLedger();
+    const raws = Array.from({ length: 129 }, (_, index) => rawFinding({
+      rawFindingId: `raw-page-${String(index).padStart(3, '0')}`,
+      title: `Independent defect ${index}`,
+      description: `Distinct component ${index}.`,
+      target: { kind: 'code', paths: [`src/component-${index}.ts`] },
+    }));
+    mockGroupedDecision((rawFindingId) => ({
+      decision: 'new_entity',
+      groupRawFindingId: rawFindingId,
+    }));
+
+    const bound = await bind({ ledger, intake: intakeFor(ledger, raws) });
+    const ownedIds = bound.taskAudits.flatMap((audit) => audit.ownedIds);
+    const evaluation = evaluate(ledger, bound.intake);
+
+    expect(executeAgentMock.mock.calls.length).toBeGreaterThan(1);
+    expect(ownedIds).toEqual(raws.map((raw) => raw.rawFindingId));
+    expect(bound.taskAudits.every((audit) => (
+      audit.inputBytes !== null
+      && audit.inputBytes <= MAIN_MANAGER_INPUT_MAX_BYTES
+    ))).toBe(true);
+    expect(evaluation.preAdmissionEntityMutations).toHaveLength(129);
+  });
+
+  it('binds an F-0016/F-0017 target component from compact heads without historical raw bodies', async () => {
+    const raw16 = rawFinding({
+      rawFindingId: 'raw-f-0016',
+      title: 'F-0016 entity',
+      description: 'The first defect at this target.',
+    });
+    const raw17 = rawFinding({
+      rawFindingId: 'raw-f-0017',
+      title: 'F-0017 entity',
+      description: 'A distinct defect at the same target.',
+    });
+    const historicalMarker = 'HISTORICAL_RAW_BODY_MUST_NOT_REACH_ENTITY_BINDING';
+    const historicalRaws = Array.from({ length: 32 }, (_, index) => rawFinding({
+      rawFindingId: `raw-history-${index}`,
+      title: `Historical observation ${index}`,
+      description: `${historicalMarker}-${index}-${'x'.repeat(2_000)}`,
+    }));
+    const baseFinding16 = productFinding(raw16, 'F-0016');
+    const baseFinding17 = productFinding(raw17, 'F-0017');
+    const baselineLedger = emptyLedger({
+      findings: [
+        baseFinding16,
+        baseFinding17,
+      ],
+      rawFindings: [raw16, raw17],
+      nextId: 18,
+    });
+    const ledger = emptyLedger({
+      findings: [
+        {
+          ...baseFinding16,
+          rawFindingIds: [
+            raw16.rawFindingId,
+            ...historicalRaws
+              .filter((_raw, index) => index % 2 === 0)
+              .map((raw) => raw.rawFindingId),
+          ],
+        },
+        {
+          ...baseFinding17,
+          rawFindingIds: [
+            raw17.rawFindingId,
+            ...historicalRaws
+              .filter((_raw, index) => index % 2 === 1)
+              .map((raw) => raw.rawFindingId),
+          ],
+        },
+      ],
+      rawFindings: [raw16, raw17, ...historicalRaws],
+      nextId: 18,
+    });
+    const current = rawFinding({
+      rawFindingId: 'raw-current',
+      title: 'Current paraphrase of F-0016',
+      description: 'This is semantically the first defect, phrased differently.',
+    });
+    const instructions: string[] = [];
+    executeAgentMock.mockImplementation(async (_persona, currentInstruction) => {
+      instructions.push(currentInstruction);
+      const manifest = sectionJson<{
+        taskId: string;
+        ownedRawFindingIds: string[];
+      }>(currentInstruction, '## Task manifest');
+      return response({
+        taskId: manifest.taskId,
+        decisions: [{
+          rawFindingId: 'raw-current',
+          decision: 'bind_existing',
+          findingId: 'F-0016',
+          groupRawFindingId: '',
+          reason: 'The observation is the F-0016 semantic entity.',
+        }],
+      });
+    });
+
+    const baseline = await bind({
+      ledger: baselineLedger,
+      intake: intakeFor(baselineLedger, [current]),
+    });
+    const bound = await bind({
+      ledger,
+      intake: intakeFor(ledger, [current]),
+    });
+    const instruction = instructions[1]!;
+    const projection = sectionJson<{
+      findings: Array<Record<string, unknown>>;
+    }>(instruction, '## Complete ledger entities for the supplied connected components');
+    const evaluation = evaluate(ledger, bound.intake);
+
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+    expect(instructions[0]).toBe(instructions[1]);
+    expect(bound.taskAudits[0]?.inputBytes).toBe(
+      baseline.taskAudits[0]?.inputBytes,
+    );
+    expect(bound.taskAudits[0]?.taskId).toBe(
+      baseline.taskAudits[0]?.taskId,
+    );
+    expect(bound.taskAudits[0]?.inputBytes).toBeLessThanOrEqual(
+      MAIN_MANAGER_INPUT_MAX_BYTES,
+    );
+    expect(projection.findings.map((finding) => finding.id))
+      .toEqual(['F-0016', 'F-0017']);
+    expect(projection.findings[0]).toEqual(expect.objectContaining({
+      id: 'F-0016',
+      revision: 1,
+      status: 'open',
+      lifecycle: 'new',
+      targetIdentityHash: raw16.targetIdentityHash,
+      claimIdentityHash: raw16.claimIdentityHash,
+      semanticClaimIdentityHash: raw16.semanticClaimIdentityHash,
+      provisional: null,
+    }));
+    expect(JSON.stringify(projection)).not.toMatch(
+      /rawFindingIds|sourceRawFindingIds|evidenceIds|waiver|dispute/,
+    );
+    expect(instruction).not.toContain(historicalMarker);
+    expect(evaluation.preAdmissionEntityMutations).toEqual([]);
+    expect(evaluation.pendingRejectedObservations).toMatchObject([{
+      targetFindingId: 'F-0016',
+      destination: 'target_audit',
+    }]);
+  });
+
+  it('changes task identity when the canonical entity head projection changes', async () => {
+    const original = rawFinding({
+      rawFindingId: 'raw-original-head',
+      title: 'Original entity',
+      description: 'The original semantic payload.',
+    });
+    const baseFinding = productFinding(original);
+    const ledgerAtRevision1 = emptyLedger({
+      findings: [baseFinding],
+      rawFindings: [original],
+      nextId: 2,
+    });
+    const ledgerAtRevision2 = emptyLedger({
+      findings: [{ ...baseFinding, revision: 2 }],
+      rawFindings: [original],
+      nextId: 2,
+    });
+    const current = rawFinding({
+      rawFindingId: 'raw-current-head',
+      title: 'Paraphrased entity',
+      description: 'A different wording that needs manager binding.',
+    });
+    mockGroupedDecision(() => ({
+      decision: 'bind_existing',
+      findingId: 'F-0001',
+    }));
+
+    const first = await bind({
+      ledger: ledgerAtRevision1,
+      intake: intakeFor(ledgerAtRevision1, [current]),
+    });
+    const second = await bind({
+      ledger: ledgerAtRevision2,
+      intake: intakeFor(ledgerAtRevision2, [current]),
+    });
+
+    expect(first.taskAudits[0]?.taskId).not.toBe(second.taskAudits[0]?.taskId);
   });
 
   it('uses unique exact semantic identity as an audit-only fast path', async () => {

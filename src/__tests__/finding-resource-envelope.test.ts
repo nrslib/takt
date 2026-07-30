@@ -28,22 +28,6 @@ const raw = reviewerRawExtractionFixture({
   rawExcerpt: 'Description',
 });
 
-const context = {
-  workflowName: 'peer-review',
-  callNamespace: '',
-  parentStepName: 'reviewers',
-  stepIteration: 1,
-  runId: 'run-1',
-  reviewerStepName: 'reviewer',
-  reviewerPersonaKey: 'reviewer',
-  reviewReport: raw.rawExcerpt,
-  issueEvidenceRequests: () => ({
-    evidence: [],
-    engineProofRecords: [],
-    coverageGaps: [],
-  }),
-};
-
 const ledger: FindingLedger = {
   workflowName: 'peer-review',
   nextId: 1,
@@ -53,6 +37,23 @@ const ledger: FindingLedger = {
   rawFindings: [],
   conflicts: [],
   interpretations: [],
+};
+
+const context = {
+  workflowName: 'peer-review',
+  callNamespace: '',
+  parentStepName: 'reviewers',
+  stepIteration: 1,
+  runId: 'run-1',
+  reviewerStepName: 'reviewer',
+  reviewerPersonaKey: 'reviewer',
+  reviewReport: raw.rawExcerpt,
+  ledger,
+  issueEvidenceRequests: () => ({
+    evidence: [],
+    engineProofRecords: [],
+    coverageGaps: [],
+  }),
 };
 
 function intakeExtractions(

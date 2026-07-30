@@ -69,6 +69,7 @@ function reviewerCandidates(items: readonly unknown[]) {
   ));
   return createReviewerRawFindingCandidates(extractions, {
     ...context,
+    ledger,
     reviewReport: extractions.map((item) => item.rawExcerpt).join('\n'),
     issueEvidenceRequests: ({ requests }: {
       requests: Array<Record<string, unknown>>;

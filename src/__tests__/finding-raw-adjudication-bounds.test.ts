@@ -2000,9 +2000,11 @@ describe('bounded raw adjudication recovery', () => {
       freshLedger,
       recovery: {
         intake: {
+          entityBindings: new Map(),
           items: replayItems,
           overflowRawFindingIds: new Set(),
           intakeProvisionalSpecs: [],
+          intakeAnomalySpecs: [],
           overflowReports: [],
           clarifications: [],
           rawNormalizations: [],

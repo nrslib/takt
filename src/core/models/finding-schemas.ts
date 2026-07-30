@@ -531,6 +531,7 @@ export const ReviewerAnomalyEntrySchema = z.object({
   stableKey: nonEmptyString,
   lineageKey: nonEmptyString,
   sourceRawFindingIds: z.array(nonEmptyString),
+  sourceIntakeIds: z.array(nonEmptyString),
   reviewers: z.array(nonEmptyString),
   title: nonEmptyString,
   claimedLocation: nonEmptyString.optional(),
@@ -1087,6 +1088,14 @@ const LandingReportSchema = z.object({
   sourceRawFindingIds: z.array(nonEmptyString),
 }).strict();
 
+const ReviewerAnomalyLandingReportSchema = z.object({
+  kind: nonEmptyString,
+  stableKey: nonEmptyString,
+  reason: nonEmptyString,
+  sourceRawFindingIds: z.array(nonEmptyString),
+  sourceIntakeIds: z.array(nonEmptyString),
+}).strict();
+
 const InterpretationStatsReportSchema = z.object({
   ambiguousRawCount: z.number().int().nonnegative(),
   managerCalls: z.number().int().nonnegative(),
@@ -1146,7 +1155,7 @@ const FindingManagerValidationReportSchema = z.object({
   unsupportedRawFindings: z.array(UnsupportedRawFindingReportSchema).optional(),
   reviewerOutputOverflows: z.array(ReviewerOutputOverflowReportSchema).optional(),
   provisionalLandings: z.array(LandingReportSchema).optional(),
-  reviewerAnomalyLandings: z.array(LandingReportSchema).optional(),
+  reviewerAnomalyLandings: z.array(ReviewerAnomalyLandingReportSchema).optional(),
   rawNormalizations: z.array(RawNormalizationAuditRecordSchema).optional(),
   interpretationStats: InterpretationStatsReportSchema.optional(),
   relationClarifications: z.array(z.object({

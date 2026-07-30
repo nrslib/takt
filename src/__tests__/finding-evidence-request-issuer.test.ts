@@ -573,8 +573,8 @@ describe('Finding evidence request issuer', () => {
       rawExcerpt: 'Legacy API remains.',
       candidate: {
         rawFindingId: 'R-1',
-        relation: null,
-        targetFindingId: null,
+        relation: 'new',
+        targetFindingIds: [],
         familyTag: 'compatibility',
         severity: 'high',
         title: 'Legacy API remains',
@@ -593,6 +593,7 @@ describe('Finding evidence request issuer', () => {
       reviewerStepName: 'reviewer',
       reviewerPersonaKey: 'reviewer',
       reviewReport: 'Summary.\nLegacy API remains.\nEnd.',
+      ledger: { findings: [] } as never,
       issueEvidenceRequests: () => ({
         evidence: [],
         engineProofRecords: [],

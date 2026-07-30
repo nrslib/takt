@@ -1523,6 +1523,7 @@ describe('FindingLedgerStore', () => {
         stableKey: 'pending-anomaly',
         lineageKey: 'pending-anomaly-lineage',
         sourceRawFindingIds: ['raw-pending'],
+        sourceIntakeIds: [],
         reviewers: ['reviewer'],
         title: 'Pending anomaly',
         mismatchReason: 'Pending quote does not match.',

@@ -40,6 +40,7 @@ function canonicalizeReport(
     ?.map((landing) => ({
       ...landing,
       sourceRawFindingIds: sortStrings(landing.sourceRawFindingIds),
+      sourceIntakeIds: sortStrings(landing.sourceIntakeIds),
     }))
     .sort(compareCanonicalJsonValues);
   const managerTaskAudits = report.managerTaskAudits

@@ -4,7 +4,7 @@ import type { ReviewerRelationClarification } from './relation-coherence.js';
 import {
   canonicalizeReviewerRawFinding,
   computeOverflowStableKey,
-  computeProvisionalStableKey,
+  computeReviewerAnomalyStableKey,
   computeReviewerStableKey,
   createReviewerRawFindingCandidates,
   extractLenientRawFields,
@@ -61,6 +61,7 @@ export function intakeReviewerOutputs(input: {
     entityBindings: new Map(),
     overflowRawFindingIds: new Set(),
     intakeProvisionalSpecs: [],
+    intakeAnomalySpecs: [],
     overflowReports: [],
     clarifications: [],
     rawNormalizations: [],
@@ -110,6 +111,7 @@ export function intakeReviewerOutputs(input: {
       reviewerStepName: subResult.subStep.name,
       reviewerPersonaKey: (subResult.subStep as { persona?: string }).persona ?? subResult.subStep.name,
       reviewReport: subResult.response.content,
+      ledger: input.previousLedger,
       authoritativeTargetByFindingId,
       issueEvidenceRequests: (request) => issueFindingEvidenceRequests({
         snapshot: input.reviewScopeSnapshot,
@@ -191,27 +193,29 @@ export function intakeReviewerOutputs(input: {
     }));
     const candidateBatch = createReviewerRawFindingCandidates(items, context, resourceEnvelope);
     for (const rejection of candidateBatch.rejections) {
-      const lineageKey = createHash('sha256').update(JSON.stringify({
-        domain: 'finding-normalizer-extraction-rejection',
-        intakeId: rejection.intakeId,
-        reviewerStableKey: rejection.reviewerStableKey,
-        reason: rejection.reason,
-      })).digest('hex');
-      result.intakeProvisionalSpecs.push({
-        kind: 'raw-adjudication-unresolved',
-        stableKey: computeProvisionalStableKey({
+      const lineageKey = rejection.lineageKey
+        ?? createHash('sha256').update(JSON.stringify({
+          domain: 'finding-normalizer-extraction-rejection',
+          intakeId: rejection.intakeId,
+          reviewerStableKey: rejection.reviewerStableKey,
+          reason: rejection.reason,
+        })).digest('hex');
+      result.intakeAnomalySpecs.push({
+        kind: 'protocol-anomaly',
+        stableKey: computeReviewerAnomalyStableKey({
           reviewerStableKey: rejection.reviewerStableKey,
           lineageKey,
-          provisionalKind: 'raw-adjudication-unresolved',
+          anomalyKind: 'protocol-anomaly',
         }),
         lineageKey,
         sourceRawFindingIds: [],
-        reason: rejection.reason,
-        title: `Unbound reviewer extraction ${rejection.intakeId}`,
-        severity: 'high',
-        description: rejection.reason,
+        sourceIntakeIds: [rejection.intakeId],
         reviewers: [rejection.reviewer],
-        recoveryReviewerStableKey: rejection.reviewerStableKey,
+        title: `Unbound reviewer extraction ${rejection.intakeId}`,
+        ...(rejection.claimedExcerpt !== undefined
+          ? { claimedExcerpt: rejection.claimedExcerpt }
+          : {}),
+        mismatchReason: rejection.reason,
       });
     }
     const candidates = candidateBatch.candidates;

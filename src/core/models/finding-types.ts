@@ -1059,6 +1059,7 @@ export interface ReviewerAnomalyLandingReport {
   stableKey: string;
   reason: string;
   sourceRawFindingIds: string[];
+  sourceIntakeIds: string[];
 }
 
 export interface InterpretationStatsReport {
@@ -1429,7 +1430,10 @@ export interface ReviewerAnomalyEntry {
   /** 決定的な再発同定キー(sha256(reviewerStableKey, lineageKey, 'reviewer-anomaly', kind))。upsert のキー。 */
   stableKey: string;
   lineageKey: string;
+  /** 実在して台帳へ保存された raw finding のみを参照する。 */
   sourceRawFindingIds: string[];
+  /** raw finding を生成できなかった reviewer extraction の intake 識別子。 */
+  sourceIntakeIds: string[];
   reviewers: string[];
   title: string;
   /** reviewer が主張した location(監査目的でそのまま保持。証拠としては採用されていない)。 */

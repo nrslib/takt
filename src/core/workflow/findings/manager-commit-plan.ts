@@ -458,7 +458,11 @@ function prepareCommitReconciliation(
       admission.cleanAdmitted.map((item) => [item.canonical.rawFindingId, item.canonical]),
     ),
     capturedPreconditions: captureFindingPreconditions(params.previousLedger),
-    anomalySpecs: [...admission.admissionAnomalySpecs, ...admission.ladderAnomalySpecs],
+    anomalySpecs: [
+      ...params.intake.intakeAnomalySpecs,
+      ...admission.admissionAnomalySpecs,
+      ...admission.ladderAnomalySpecs,
+    ],
   };
 }
 

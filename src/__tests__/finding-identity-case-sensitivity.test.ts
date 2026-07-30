@@ -164,6 +164,7 @@ describe('finding identity case sensitivity', () => {
       reviewerStepName: 'reviewer',
       reviewerPersonaKey: 'reviewer',
       reviewReport: extraction.rawExcerpt,
+      ledger: currentLedger,
       issueEvidenceRequests: () => ({
         evidence: [],
         engineProofRecords: [],

@@ -31,6 +31,7 @@ export interface ReviewerAnomalySpec {
   stableKey: string;
   lineageKey: string;
   sourceRawFindingIds: string[];
+  sourceIntakeIds: string[];
   reviewers: string[];
   title: string;
   claimedLocation?: string;
@@ -57,6 +58,7 @@ export function createReviewerAnomalySpec(input: {
     }),
     lineageKey: input.canonical.lineageKey,
     sourceRawFindingIds: [input.wire.rawFindingId],
+    sourceIntakeIds: [],
     reviewers: [input.wire.reviewer],
     title: input.wire.title ?? `Reviewer evidence anomaly ${input.wire.rawFindingId}`,
     ...(fileQuote?.kind === 'file_quote'
@@ -112,14 +114,16 @@ export function applyReviewerAnomalySpecsToLedger(
       // crash/replay 冪等（review-integrity requirement）: occurrences は「観測された
       // 回数」なので、同一 raw finding id の再適用（同一ラウンドが二度コミット
       // される crash/replay）で二重計上してはならない。stop budget の round
-      // marker（適用済みマーカー集合）と同じ思想で、適用済みの raw finding id を
-      // 冪等判定キーにする — 入力 spec が既存に無い新しい raw finding id を
-      // 1件も持ち込まないなら、それは既適用の再来なので完全な no-op にする
+      // marker（適用済みマーカー集合）と同じ思想で、適用済みの raw finding id
+      // または intake id を冪等判定キーにする — 入力 spec が既存に無い新しい
+      // 観測 id を1件も持ち込まないなら、それは既適用の再来なので完全な no-op にする
       // （occurrences も lastObserved も mismatchReason も動かさない）。別ラウンドの
       // 再観測は名前空間付き raw finding id（runId:step:iter:reviewer:localId）が
       // 必ず異なるため新規 id として現れ、正しく +1 される。
       const bringsNewObservation = spec.sourceRawFindingIds.some(
         (id) => !existing.sourceRawFindingIds.includes(id),
+      ) || spec.sourceIntakeIds.some(
+        (id) => !existing.sourceIntakeIds.includes(id),
       );
       if (!bringsNewObservation) {
         continue;
@@ -127,6 +131,7 @@ export function applyReviewerAnomalySpecsToLedger(
       byStableKey.set(spec.stableKey, {
         ...existing,
         sourceRawFindingIds: mergeUnique(existing.sourceRawFindingIds, spec.sourceRawFindingIds),
+        sourceIntakeIds: mergeUnique(existing.sourceIntakeIds, spec.sourceIntakeIds),
         reviewers: mergeUnique(existing.reviewers, spec.reviewers),
         mismatchReason: spec.mismatchReason,
         lastObserved: observation,
@@ -143,6 +148,7 @@ export function applyReviewerAnomalySpecsToLedger(
       stableKey: spec.stableKey,
       lineageKey: spec.lineageKey,
       sourceRawFindingIds: [...spec.sourceRawFindingIds],
+      sourceIntakeIds: [...spec.sourceIntakeIds],
       reviewers: [...spec.reviewers],
       title: spec.title,
       ...(spec.claimedLocation !== undefined ? { claimedLocation: spec.claimedLocation } : {}),

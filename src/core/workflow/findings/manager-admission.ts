@@ -156,6 +156,7 @@ export interface ReviewerIntakeResult {
   entityBindings: ReadonlyMap<string, PreAdmissionEntityBinding>;
   overflowRawFindingIds: Set<string>;
   intakeProvisionalSpecs: ProvisionalFindingSpec[];
+  intakeAnomalySpecs: ReviewerAnomalySpec[];
   overflowReports: ReviewerOutputOverflowReport[];
   clarifications: Array<{ reviewer: string; flaggedRawFindingIds: string[] }>;
   rawNormalizations: RawNormalizationAuditRecord[];

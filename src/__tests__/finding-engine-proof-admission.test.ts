@@ -109,6 +109,7 @@ function intakeFor(
     entityBindings: new Map(),
     overflowRawFindingIds: new Set(),
     intakeProvisionalSpecs: [],
+    intakeAnomalySpecs: [],
     overflowReports: [],
     clarifications: [],
     rawNormalizations: [],

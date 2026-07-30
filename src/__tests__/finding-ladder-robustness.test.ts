@@ -454,6 +454,7 @@ describe('ケース2: candidate/canonical 型混同（factory を通らない ob
     runId: 'run-x',
     reviewerStepName: 'arch-review',
     reviewerPersonaKey: 'arch',
+    ledger: makeLedger(),
   };
 
   it('手組みの candidate 風 object は canonical 生成関数が拒否する', () => {
@@ -1655,6 +1656,7 @@ describe('解釈梯子の追加必須テスト', () => {
       runId: 'run-x',
       reviewerStepName: 'arch-review',
       reviewerPersonaKey: 'arch',
+      ledger: makeLedger(),
     });
     const { outcome, canonical } = canonicalizeReviewerRawFinding(candidate!, {
       ledger: makeLedger(),
@@ -1688,6 +1690,7 @@ describe('解釈梯子の追加必須テスト', () => {
       runId: 'run-x',
       reviewerStepName: 'arch-review',
       reviewerPersonaKey: 'arch',
+      ledger,
     });
     const { canonical } = canonicalizeReviewerRawFinding(candidate!, { ledger });
     const proofs = issueDeterministicSameProofs({
@@ -1759,6 +1762,7 @@ describe('解釈梯子の追加必須テスト', () => {
       runId: 'run-x',
       reviewerStepName: 'arch-review',
       reviewerPersonaKey: 'arch',
+      ledger,
     });
     const { canonical } = canonicalizeReviewerRawFinding(candidate!, { ledger });
     const proof = issueDeterministicSameProofs({

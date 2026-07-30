@@ -46,6 +46,7 @@ const REVIEWER_CONTEXT = {
   runId: 'run-1',
   reviewerPersonaKey: 'architecture-review',
   reviewerStepName: 'architecture-review',
+  ledger: EMPTY_LEDGER,
 } as const;
 
 function decisionsFor(rawFindings: readonly RawFinding[]): FindingManagerDecisions {
@@ -67,7 +68,7 @@ function canonicalize(items: readonly unknown[]): {
   canonicals: CanonicalRawFinding[];
   rawFindings: RawFinding[];
 } {
-  const canonicals = createReviewerRawFindingCandidates(items, REVIEWER_CONTEXT)
+  const canonicals = createReviewerRawFindingCandidates(items, REVIEWER_CONTEXT).candidates
     .map((candidate) => canonicalizeReviewerRawFinding(candidate, {
       ledger: EMPTY_LEDGER,
       clarificationAttempted: false,

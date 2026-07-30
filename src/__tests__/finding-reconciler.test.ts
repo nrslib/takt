@@ -195,6 +195,7 @@ function makeReviewerAnomaly(overrides: Partial<ReviewerAnomalyEntry> = {}): Rev
     stableKey: 'reviewer-anomaly-unpromoted',
     lineageKey: 'lineage-unpromoted',
     sourceRawFindingIds: ['raw-anomaly-unpromoted'],
+    sourceIntakeIds: [],
     reviewers: ['coding-reviewer'],
     title: 'Unverified finding',
     mismatchReason: 'The quoted source does not match the reviewed snapshot.',
@@ -478,6 +479,7 @@ describe('reconcileFindingLedger', () => {
       reviewerStepName: 'ai-antipattern-review',
       reviewerPersonaKey: 'ai-antipattern-reviewer',
       reviewReport: extraction.rawExcerpt,
+      ledger: baseLedger,
       issueEvidenceRequests: () => ({
         evidence: [],
         engineProofRecords: [],
@@ -1055,6 +1057,7 @@ describe('reconcileFindingLedger', () => {
       reviewerStepName: 'coding-review',
       reviewerPersonaKey: 'coding-reviewer',
       reviewReport: extraction.rawExcerpt,
+      ledger: baseLedger,
       issueEvidenceRequests: () => ({
         evidence: [],
         engineProofRecords: [],
@@ -1276,12 +1279,13 @@ describe('reconcileFindingLedger', () => {
         reviewerStepName: 'coding-review',
         reviewerPersonaKey: 'coding-reviewer',
         reviewReport: extraction.rawExcerpt,
+        ledger: baseLedger,
         issueEvidenceRequests: () => ({
           evidence: [],
           engineProofRecords: [],
           coverageGaps: [],
         }),
-      }).candidates[0]!;
+    }).candidates[0]!;
     };
 
     const symbolCandidate = newCandidate();

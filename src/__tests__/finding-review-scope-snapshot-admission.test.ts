@@ -46,6 +46,7 @@ import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
+import { MAIN_MANAGER_INPUT_MAX_BYTES } from '../core/workflow/findings/manager-task-contracts.js';
 
 const FINDING_CONTRACT: FindingContractConfig = {
   ledgerPath: '.takt/findings/peer-review.json',
@@ -123,6 +124,11 @@ describe('engine-issued review scope evidence determines admission outcome (mana
   async function runManagerWithQuoteRequest(
     store: FindingLedgerStore,
     verbatimExcerpt?: string,
+    options: {
+      reviewReport?: string;
+      runId?: string;
+      stepIteration?: number;
+    } = {},
   ) {
     const quote = verifiedSourceQuoteFields(cwd, 'src/example.ts', 3);
     const extraction = reviewerRawExtractionFixture({
@@ -156,12 +162,12 @@ describe('engine-issued review scope evidence determines admission outcome (mana
       stepExecutor: stepExecutor as never,
       cwd,
       parentStep,
-      stepIteration: 1,
+      stepIteration: options.stepIteration ?? 1,
       subResults: [{
         subStep: { kind: 'agent', name: 'ai-antipattern-review', persona: 'ai-antipattern-reviewer', edit: false } as WorkflowStep,
         response: {
           status: 'done',
-          content: extraction.rawExcerpt,
+          content: options.reviewReport ?? extraction.rawExcerpt,
           structuredOutput: {
             rawFindings: [extraction],
           },
@@ -169,7 +175,64 @@ describe('engine-issued review scope evidence determines admission outcome (mana
       }],
       workflowName: 'peer-review',
       workflowTask: 'Review the implementation.',
-      runId: 'test-run',
+      runId: options.runId ?? 'test-run',
+      callNamespace: '',
+      timestamp: '2026-07-13T00:00:00.000Z',
+    });
+  }
+
+  async function runManagerWithEntityOverflow(store: FindingLedgerStore) {
+    const extractions = Array.from({ length: 4 }, (_, index) => (
+      reviewerRawExtractionFixture({
+        rawFindingId: `overflow-${index}`,
+        familyTag: 'correctness',
+        severity: 'high',
+        title: `Overflow semantic entity ${index}`,
+        description: `Overflow observation ${index} ${'x'.repeat(6_100)}`,
+        suggestion: 'Investigate.',
+        relation: 'new',
+        targetFindingId: null,
+        target: { kind: 'code', paths: ['src/shared-overflow.ts'] },
+        evidence: [],
+      })
+    ));
+    const parentStep: WorkflowStep = {
+      kind: 'agent',
+      name: 'reviewers',
+      persona: 'reviewer',
+      edit: false,
+    } as WorkflowStep;
+    return runFindingManagerForStep({
+      contract: FINDING_CONTRACT as never,
+      ledgerStore: store,
+      optionsBuilder: {
+        buildAgentOptions: () => ({}),
+        resolveStepProviderModel: () => ({ provider: 'claude', model: 'claude-sonnet' }),
+      } as never,
+      stepExecutor: {
+        buildPhase1Instruction: (instruction: string) => instruction,
+        recordSynthesizedAgentUsage: () => {},
+        normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
+      } as never,
+      cwd,
+      parentStep,
+      stepIteration: 1,
+      subResults: [{
+        subStep: {
+          kind: 'agent',
+          name: 'entity-overflow-review',
+          persona: 'entity-overflow-review',
+          edit: false,
+        } as WorkflowStep,
+        response: {
+          status: 'done',
+          content: extractions.map((extraction) => extraction.rawExcerpt).join('\n'),
+          structuredOutput: { rawFindings: extractions },
+        } as unknown as AgentResponse,
+      }],
+      workflowName: 'peer-review',
+      workflowTask: 'Review the implementation.',
+      runId: 'entity-overflow-run',
       callNamespace: '',
       timestamp: '2026-07-13T00:00:00.000Z',
     });
@@ -204,6 +267,111 @@ describe('engine-issued review scope evidence determines admission outcome (mana
     const anomalies = ledger.reviewerAnomalies ?? [];
     expect(anomalies).toHaveLength(1);
     expect(anomalies[0]?.kind).toBe('quote-mismatch');
+  });
+
+  it('promotes a source-binding anomaly after a clean retry and keeps replay idempotent', async () => {
+    const { store, current } = makeLedgerStore();
+
+    await runManagerWithQuoteRequest(store, undefined, {
+      reviewReport: 'The structured extraction is not quoted in this report.',
+      runId: 'source-binding-run-1',
+      stepIteration: 1,
+    });
+    const rejected = current();
+    expect(rejected.findings).toEqual([]);
+    expect(rejected.rawFindings).toEqual([]);
+    expect(rejected.reviewerAnomalies).toMatchObject([{
+      kind: 'protocol-anomaly',
+      sourceRawFindingIds: [],
+      sourceIntakeIds: [
+        'source-binding-run-1:reviewers:1:ai-antipattern-review:finding-1',
+      ],
+      occurrences: 1,
+    }]);
+    const rejectionReport = JSON.parse(readFileSync(
+      join(reportDir, 'findings-manager-validation.reviewers.json'),
+      'utf8',
+    )) as {
+      reviewerAnomalyLandings: Array<{
+        sourceRawFindingIds: string[];
+        sourceIntakeIds: string[];
+      }>;
+    };
+    expect(rejectionReport.reviewerAnomalyLandings).toMatchObject([{
+      sourceRawFindingIds: [],
+      sourceIntakeIds: [
+        'source-binding-run-1:reviewers:1:ai-antipattern-review:finding-1',
+      ],
+    }]);
+
+    await runManagerWithQuoteRequest(store, undefined, {
+      runId: 'source-binding-run-2',
+      stepIteration: 2,
+    });
+    const promoted = current();
+    expect(promoted.findings).toHaveLength(1);
+    expect(promoted.rawFindings).toHaveLength(1);
+    expect(promoted.reviewerAnomalies).toMatchObject([{
+      kind: 'protocol-anomaly',
+      promotedFindingId: promoted.findings[0]?.id,
+      occurrences: 1,
+    }]);
+    expect(
+      promoted.reviewerAnomalies?.filter((anomaly) => (
+        anomaly.promotedFindingId === undefined
+      )),
+    ).toHaveLength(0);
+
+    await runManagerWithQuoteRequest(store, undefined, {
+      runId: 'source-binding-run-2',
+      stepIteration: 2,
+    });
+    expect(current()).toEqual(promoted);
+  });
+
+  it('commits over-budget entity raws as durable incidents without product mutation', async () => {
+    const { store, current } = makeLedgerStore();
+
+    const result = await runManagerWithEntityOverflow(store);
+
+    expect(result.status).toBe('updated');
+    const ledger = current();
+    expect(ledger.rawFindings).toHaveLength(4);
+    expect(ledger.findings).toEqual([]);
+    expect(ledger.reviewerAnomalies).toHaveLength(4);
+    expect(ledger.reviewerAnomalies?.every((anomaly) => (
+      anomaly.kind === 'protocol-anomaly'
+      && anomaly.sourceRawFindingIds.length === 1
+      && anomaly.sourceIntakeIds.length === 0
+    ))).toBe(true);
+    expect(ledger.reviewIntegrity).toMatchObject({
+      exhausted: false,
+      roundMarkers: expect.arrayContaining([expect.any(String)]),
+    });
+    const report = JSON.parse(readFileSync(
+      join(reportDir, 'findings-manager-validation.reviewers.json'),
+      'utf8',
+    )) as {
+      managerTaskAudits: Array<{
+        status: string;
+        inputBytes: number;
+      }>;
+      rawFindingDispositions: Array<{
+        rawFindingId: string;
+        outcome: string;
+      }>;
+    };
+    expect(report.managerTaskAudits).toMatchObject([{
+      status: 'input_overflow',
+      inputBytes: expect.any(Number),
+    }]);
+    expect(report.managerTaskAudits[0]?.inputBytes).toBeGreaterThan(
+      MAIN_MANAGER_INPUT_MAX_BYTES,
+    );
+    expect(report.rawFindingDispositions).toHaveLength(4);
+    expect(report.rawFindingDispositions.every(
+      (disposition) => disposition.outcome === 'reviewer_anomaly',
+    )).toBe(true);
   });
 
   it('rejects admission when the source file is replaced after inspection and leaves the substitute unchanged', () => {

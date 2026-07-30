@@ -153,6 +153,7 @@ function reviewerCandidates(
   ));
   return createReviewerRawFindingCandidates(extractions, {
     ...context,
+    ledger: makeLedger([]),
     reviewReport: extractions.map((item) => item.rawExcerpt).join('\n'),
     issueEvidenceRequests: ({ requests }: {
       requests: Array<Record<string, unknown>>;
@@ -183,6 +184,190 @@ function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): Findin
 function outputWith(overrides: Partial<FindingManagerOutput>): FindingManagerOutput {
   return { ...createEmptyManagerOutput(), ...overrides };
 }
+
+describe('normalizer source binding review integrity', () => {
+  function intakeWithReport(
+    report: string,
+    stepIteration: number,
+    previousLedger = makeLedger([]),
+  ) {
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: 'F-0016',
+      familyTag: 'correctness',
+      severity: 'high',
+      title: 'F-0016 remains unresolved',
+      description: 'The same target still has the F-0016 defect.',
+      suggestion: 'Repair the target.',
+      relation: 'new',
+      targetFindingId: null,
+      target: { kind: 'code', paths: ['src/f-0016.ts'] },
+      rawExcerpt: 'F-0016 remains unresolved.',
+    });
+    return intakeReviewerOutputs({
+      subResults: [{
+        subStep: {
+          kind: 'agent',
+          name: 'arch-review',
+          persona: 'arch-review',
+          edit: false,
+        },
+        response: {
+          persona: 'arch-review',
+          status: 'done',
+          content: report,
+          timestamp: new Date('2026-07-30T00:00:00.000Z'),
+          structuredOutput: { rawFindings: [extraction] },
+        },
+      }],
+      previousLedger,
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration,
+      runId: 'run-normalizer',
+      workflowTask: 'Review.',
+      cwd: process.cwd(),
+      scopeIdentity: '/test/normalizer-source-binding/ledger.json',
+      issuedAt: '2026-07-30T00:00:00.000Z',
+      reviewScopeSnapshot: {
+        reviewScopeSnapshotId: 'a'.repeat(64),
+        trackedDiff: undefined,
+        untrackedEvidence: [],
+        queryInventory: [],
+      },
+    });
+  }
+
+  function landAnomalies(
+    ledger: FindingLedger,
+    intake: ReturnType<typeof intakeWithReport>,
+    round: number,
+  ) {
+    const observation = {
+      runId: `run-${round}`,
+      stepName: 'reviewers',
+      timestamp: `2026-07-30T00:00:0${round}.000Z`,
+    };
+    return applyCommitLedgerStates({
+      runInput: {
+        workflowName: ledger.workflowName,
+        parentStep: { name: 'reviewers' },
+        runId: observation.runId,
+        timestamp: observation.timestamp,
+      } as never,
+      freshLedger: ledger,
+      settledLedger: ledger,
+      baseAnomalySpecs: intake.intakeAnomalySpecs,
+      pendingRejectedObservations: [],
+      interpretationResults: new Map(),
+      interpretationReservations: new Map(),
+      interpretationIntegrityDigests: new Map(),
+      observation,
+      verifiedEvidenceCandidates: [],
+      stopBudgetLimits: resolveStopBudgetLimits(undefined),
+      stopBudgetRoundMarker: `normalizer-round-${round}`,
+      reviewIntegrityLimits: resolveReviewIntegrityLimits({ maxReviewRounds: 2 }),
+    });
+  }
+
+  it.each([
+    ['zero', 'No matching excerpt is present.'],
+    ['multiple', 'F-0016 remains unresolved.\nF-0016 remains unresolved.'],
+  ])(
+    'routes a %s-match rawExcerpt failure through finite review-integrity without a Finding',
+    (_caseName, report) => {
+      const firstIntake = intakeWithReport(report, 1);
+
+      expect(firstIntake.items).toEqual([]);
+      expect(firstIntake.intakeProvisionalSpecs).toEqual([]);
+      expect(firstIntake.intakeAnomalySpecs).toMatchObject([{
+        kind: 'protocol-anomaly',
+        sourceRawFindingIds: [],
+        sourceIntakeIds: [
+          'run-normalizer:reviewers:1:arch-review:F-0016',
+        ],
+      }]);
+      const first = landAnomalies(makeLedger([], { nextId: 16 }), firstIntake, 1);
+
+      expect(first.ledger.findings).toEqual([]);
+      expect(first.ledger.nextId).toBe(16);
+      expect(first.ledger.reviewerAnomalies).toMatchObject([{
+        kind: 'protocol-anomaly',
+        occurrences: 1,
+      }]);
+      expect(first.ledger.reviewerAnomalies?.[0])
+        .not.toHaveProperty('promotedFindingId');
+      expect(first.ledger.reviewIntegrity).toMatchObject({
+        roundMarkers: ['normalizer-round-1'],
+        exhausted: false,
+      });
+      const corrected = intakeWithReport('F-0016 remains unresolved.', 3);
+      expect(corrected.items[0]?.canonical.lineageKey)
+        .toBe(first.ledger.reviewerAnomalies?.[0]?.lineageKey);
+
+      const second = landAnomalies(
+        first.ledger,
+        intakeWithReport(report, 2),
+        2,
+      );
+      expect(second.ledger.findings).toEqual([]);
+      expect(second.ledger.nextId).toBe(16);
+      expect(second.ledger.reviewerAnomalies).toMatchObject([{
+        occurrences: 2,
+        sourceRawFindingIds: [],
+        sourceIntakeIds: [
+          'run-normalizer:reviewers:1:arch-review:F-0016',
+          'run-normalizer:reviewers:2:arch-review:F-0016',
+        ],
+      }]);
+      expect(second.ledger.reviewIntegrity?.roundMarkers).toEqual([
+        'normalizer-round-1',
+        'normalizer-round-2',
+      ]);
+      expect(second.ledger.reviewIntegrity?.exhausted).toBe(true);
+    },
+  );
+
+  it('uses the canonical collision lineage for a source-binding rejection', () => {
+    const cleanWithoutCollision = intakeWithReport(
+      'F-0016 remains unresolved.',
+      1,
+    ).items[0]!.canonical;
+    const collidingLedger = {
+      ...makeLedger([]),
+      findings: [makeFinding({
+        id: 'F-0016',
+        revision: 4,
+        target: cleanWithoutCollision.target,
+        targetIdentityHash: cleanWithoutCollision.targetIdentityHash,
+        claimIdentityHash: cleanWithoutCollision.claimIdentityHash,
+        semanticClaimIdentityHash: cleanWithoutCollision.semanticClaimIdentityHash,
+        severity: cleanWithoutCollision.severity,
+        title: cleanWithoutCollision.title,
+        description: cleanWithoutCollision.description,
+      })],
+    };
+
+    const rejected = intakeWithReport(
+      'No matching excerpt is present.',
+      2,
+      collidingLedger,
+    );
+    const canonical = intakeWithReport(
+      'F-0016 remains unresolved.',
+      3,
+      collidingLedger,
+    ).items[0]!.canonical;
+
+    expect(rejected.intakeAnomalySpecs[0]?.lineageKey).toBe(
+      canonical.lineageKey,
+    );
+    expect(canonical.lineageKey).toBe(computeLineageKey({
+      claimIdentityHash: canonical.claimIdentityHash,
+      collidingFindingId: 'F-0016',
+    }));
+  });
+});
 
 describe('transferSupersededMatches', () => {
   it('superseded 対象への match を canonical へ付け替え、既存の canonical match と統合する', () => {
@@ -906,6 +1091,7 @@ describe('relation 別 intake と target atomization', () => {
       reviewerStepName: 'arch-review',
       reviewerPersonaKey: 'arch-review',
       reviewReport: report,
+      ledger: lifecycleLedger(),
       issueEvidenceRequests: () => ({
         evidence: [],
         engineProofRecords: [],
