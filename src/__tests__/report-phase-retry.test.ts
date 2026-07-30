@@ -233,7 +233,7 @@ describe('runReportPhase retry with new session', () => {
 
   });
 
-  it('freeform Finding Contract Phase 2 は従来どおり本文テキストだけを要求する', async () => {
+  it('canonical-block Finding Contract Phase 2 は本文テキストだけを要求する', async () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('freeform-review.md');
     const ctx = createContext(reportDir);
@@ -244,7 +244,7 @@ describe('runReportPhase retry with new session', () => {
       hasWaivedFindings: false,
       hasDismissedFindings: false,
       reviewer: {
-        mode: 'freeform',
+        mode: 'canonical_blocks',
         reviewScopeSnapshotId: '1'.repeat(64),
       },
     });
@@ -255,7 +255,9 @@ describe('runReportPhase retry with new session', () => {
       timestamp: new Date('2026-02-11T00:00:02Z'),
     }]);
 
-    await generateReportPhase(step, 1, ctx, { reviewerMode: 'freeform' });
+    await generateReportPhase(step, 1, ctx, {
+      reviewerOutputStrategy: { kind: 'canonical_blocks' },
+    });
 
     const prompt = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
     expect(prompt).toContain('Respond with the report content directly as text.');
@@ -928,7 +930,9 @@ describe('runReportPhase retry with new session', () => {
       },
     ]);
 
-    const result = await generateReportPhase(step, 1, ctx, { reviewerMode: 'structured' });
+    const result = await generateReportPhase(step, 1, ctx, {
+      reviewerOutputStrategy: { kind: 'structured' },
+    });
 
     expect('reports' in result).toBe(true);
     if (!('reports' in result)) {
@@ -995,7 +999,9 @@ describe('runReportPhase retry with new session', () => {
       timestamp: new Date('2026-02-11T00:01:22Z'),
     }]);
 
-    await generateReportPhase(step, 1, ctx, { reviewerMode: 'structured' });
+    await generateReportPhase(step, 1, ctx, {
+      reviewerOutputStrategy: { kind: 'structured' },
+    });
 
     const prompt = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
     expect(prompt).toContain('結合 publication schema に一致する構造化オブジェクト');
@@ -1019,7 +1025,9 @@ describe('runReportPhase retry with new session', () => {
       sessionId: 'opencode-review-session',
     }]);
 
-    const result = await generateReportPhase(step, 1, ctx, { reviewerMode: 'structured' });
+    const result = await generateReportPhase(step, 1, ctx, {
+      reviewerOutputStrategy: { kind: 'structured' },
+    });
 
     expect('reports' in result).toBe(true);
     if (!('reports' in result)) {
@@ -1040,7 +1048,9 @@ describe('runReportPhase retry with new session', () => {
       timestamp: new Date('2026-02-11T00:01:24Z'),
     }]);
 
-    await expect(generateReportPhase(step, 1, ctx, { reviewerMode: 'structured' })).rejects.toThrow(
+    await expect(generateReportPhase(step, 1, ctx, {
+      reviewerOutputStrategy: { kind: 'structured' },
+    })).rejects.toThrow(
       'Finding review publication reportContent is missing',
     );
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);

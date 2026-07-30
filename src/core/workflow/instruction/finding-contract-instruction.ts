@@ -36,7 +36,7 @@ function renderFindingContractInstruction(input: {
   const reviewer = contract.reviewer;
   const isReviewer = reviewer !== undefined;
   const structuredReviewer = reviewer?.mode === 'structured';
-  const freeformReviewer = reviewer?.mode === 'freeform';
+  const canonicalBlocksReviewer = reviewer?.mode === 'canonical_blocks';
   const rawFindingsStructuredOutput = structuredReviewer
     ? reviewer.rawFindingsStructuredOutput
     : undefined;
@@ -78,16 +78,17 @@ function renderFindingContractInstruction(input: {
     isReportPhase: reportPhase,
     isReviewer,
     structuredReviewer,
-    freeformReviewer,
+    canonicalBlocksReviewer,
     reviewerHasOpenFindings: isReviewer && contract.hasOpenFindings,
     structuredReviewerHasOpenFindings: structuredReviewer && contract.hasOpenFindings,
-    freeformReviewerHasOpenFindings: freeformReviewer && contract.hasOpenFindings,
+    canonicalBlocksReviewerHasOpenFindings:
+      canonicalBlocksReviewer && contract.hasOpenFindings,
     reviewerHasWaivedFindings: isReviewer && contract.hasWaivedFindings,
     reviewerHasDismissedFindings: isReviewer && contract.hasDismissedFindings,
     rawFindingsJsonSchema: rawFindingsStructuredOutput
       ? renderFencedJsonBlock(rawFindingsStructuredOutput.schema)
       : '',
-    canonicalClaimBlockProtocol: freeformReviewer
+    canonicalClaimBlockProtocol: canonicalBlocksReviewer
       ? FINDING_CLAIM_BLOCK_PROTOCOL
       : '',
     // review-integrity protocol: reviewer step のときだけ設定される（instruction-context.ts

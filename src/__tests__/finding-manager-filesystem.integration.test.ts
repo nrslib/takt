@@ -53,6 +53,7 @@ const executeAgentMock = vi.mocked(executeAgent);
 const FINDING_CONTRACT: FindingContractConfig = {
   ledgerPath: '.takt/findings/peer-review.json',
   rawFindingsPath: '.takt/findings/raw',
+  reviewerOutput: 'structured',
   manager: {
     persona: 'findings-manager',
     instruction: 'Reconcile findings.',
@@ -108,6 +109,7 @@ describe('finding manager filesystem error propagation', () => {
       workflowName: 'peer-review',
       ledgerPath: FINDING_CONTRACT.ledgerPath,
       rawFindingsPath: FINDING_CONTRACT.rawFindingsPath,
+      reviewerOutput: 'structured',
     });
     const initialLedger: FindingLedger = authorizeFindingLedgerFixture({
       workflowName: 'peer-review',
@@ -187,6 +189,7 @@ describe('finding manager filesystem error propagation', () => {
       workflowName: 'peer-review',
       ledgerPath: FINDING_CONTRACT.ledgerPath,
       rawFindingsPath: FINDING_CONTRACT.rawFindingsPath,
+      reviewerOutput: 'structured',
     });
     await ledgerStore.updateLedger(() => ({
       ledger: authorizeFindingLedgerFixture({
@@ -339,6 +342,7 @@ describe('finding manager filesystem error propagation', () => {
       workflowName: 'peer-review',
       ledgerPath: FINDING_CONTRACT.ledgerPath,
       rawFindingsPath: FINDING_CONTRACT.rawFindingsPath,
+      reviewerOutput: 'structured',
     };
     const runOrder = async (
       first: 'resolution' | 'persists',

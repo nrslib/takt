@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   createFindingReviewPublication,
-  FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   loadFindingReviewPublication,
   persistFindingReviewPublication,
   publishFindingReviewPublication,
@@ -12,6 +12,11 @@ import {
   type FindingReviewPublicationIdentity,
 } from '../core/workflow/findings/review-publication.js';
 import { bindReviewerReportExcerpt } from '../core/workflow/findings/raw-canonicalization.js';
+import {
+  FINDING_CLAIM_BEGIN_MARKER,
+  FINDING_CLAIM_END_MARKER,
+  parseCanonicalFindingClaimReport,
+} from '../shared/prompts/finding-canonical-claim.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -35,6 +40,40 @@ function identity(
   };
 }
 
+function canonicalCodeReport(): string {
+  return [
+    '## Result: REJECT',
+    '',
+    FINDING_CLAIM_BEGIN_MARKER,
+    'Finding Claim',
+    'Raw Finding ID: code-1',
+    'Relation: new',
+    'Target Finding ID: none',
+    'Family Tag: correctness',
+    'Severity: high',
+    'Title: Incorrect value',
+    'Description: The value is incorrect.',
+    'Suggestion: Return the required value.',
+    'Target Kind: code',
+    'Target Paths: ["src/code.ts"]',
+    'Review Scope Roots: none',
+    'Manifest Targets: none',
+    'Absence Predicate: none',
+    'Absence Path: none',
+    'Absence Literal: none',
+    'Evidence Requests:',
+    '- File Quote',
+    '  Path: src/code.ts',
+    '  Start Line: 1',
+    '  End Line: 1',
+    '  Verbatim Excerpt:',
+    '  ```text',
+    '    const value = 1;',
+    '  ```',
+    FINDING_CLAIM_END_MARKER,
+  ].join('\n');
+}
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -46,7 +85,7 @@ describe('Finding review publication', () => {
     const reportDir = createReportDirectory();
     const publication = createFindingReviewPublication({
       identity: identity(),
-      protocol: FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      protocol: CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL,
       reportContent: '## Result: NEED_REPLAN\n\nReview scope must be replanned.',
       rawFindings: [],
     });
@@ -55,14 +94,72 @@ describe('Finding review publication', () => {
     const loaded = loadFindingReviewPublication(
       reportDir,
       identity(),
-      FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL,
     )!.publication;
-    expect(loaded.protocol).toEqual(FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL);
+    expect(loaded.protocol).toEqual(CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL);
     expect(() => loadFindingReviewPublication(
       reportDir,
       identity(),
       STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
     )).toThrow(/protocol mismatch/);
+  });
+
+  it.each([
+    {
+      label: 'relation',
+      mutate: (item: Record<string, unknown>) => {
+        (item.candidate as Record<string, unknown>).relation = 'reopened';
+      },
+    },
+    {
+      label: 'evidence indentation',
+      mutate: (item: Record<string, unknown>) => {
+        const candidate = item.candidate as {
+          evidenceRequests: Array<Record<string, unknown>>;
+        };
+        candidate.evidenceRequests[0]!.verbatimExcerpt = 'const value = 1;';
+      },
+    },
+  ])('rejects stored canonical raw findings with changed $label on resume', ({ mutate }) => {
+    const reportDir = createReportDirectory();
+    const reportContent = canonicalCodeReport();
+    const parsed = parseCanonicalFindingClaimReport(reportContent);
+    if (parsed.error !== undefined) {
+      throw new Error(parsed.error);
+    }
+    const changed = structuredClone(parsed.report.items[0]) as unknown as Record<string, unknown>;
+    mutate(changed);
+    const publication = createFindingReviewPublication({
+      identity: identity(),
+      protocol: CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent,
+      rawFindings: [changed],
+    });
+    persistFindingReviewPublication(reportDir, { publication });
+
+    expect(() => loadFindingReviewPublication(
+      reportDir,
+      identity(),
+      CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+    )).toThrow(/Stored finding review publication canonical claim invariant failed/);
+  });
+
+  it('does not apply the canonical claim parser to structured publications', () => {
+    const reportDir = createReportDirectory();
+    const reportContent = '## Result: REJECT\n\nNot a canonical claim block.';
+    const publication = createFindingReviewPublication({
+      identity: identity(),
+      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent,
+      rawFindings: [{ rawExcerpt: 'Not a canonical claim block.' }],
+    });
+    persistFindingReviewPublication(reportDir, { publication });
+
+    expect(loadFindingReviewPublication(
+      reportDir,
+      identity(),
+      STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+    )?.publication.reportContent).toBe(reportContent);
   });
 
   it('defensive clone後にpublication全体を再帰freezeする', () => {

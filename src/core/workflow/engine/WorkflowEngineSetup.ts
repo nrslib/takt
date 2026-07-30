@@ -41,10 +41,12 @@ import { renderLoopMonitorFindingsSummary } from '../findings/loop-monitor-summa
 import { computeReviewScopeSnapshotId } from '../findings/snapshot.js';
 import type {
   FindingContractInstructionContext,
-  FindingContractReviewerMode,
+  FindingContractReviewerOutputStrategy,
 } from '../instruction/instruction-context.js';
-import { resolveFindingIntakeNormalizeConfig } from '../findings/intake-normalize-policy.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
+import {
+  resolveFindingContractReviewerOutputStrategy,
+} from '../findings/reviewer-output-strategy.js';
 
 const log = createLogger('workflow-engine');
 
@@ -167,9 +169,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     (event, ...args) => params.emitEvent(event, ...args),
     params.getCurrentWorkflowStack,
   );
+  const reviewerOutputStrategy = resolveFindingContractReviewerOutputStrategy(
+    params.findingContract,
+  );
   const buildFindingContractInstructionContext = (
     _step: WorkflowStep,
-    reviewerMode: FindingContractReviewerMode | undefined,
+    strategy: FindingContractReviewerOutputStrategy | undefined,
   ): FindingContractInstructionContext | undefined => {
     if (!params.findingContract) {
       return undefined;
@@ -180,15 +185,15 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
 
     const ledger = params.findingLedgerStore.loadLedger();
     let reviewer: FindingContractInstructionContext['reviewer'];
-    if (reviewerMode !== undefined) {
+    if (strategy !== undefined) {
       const reviewScopeSnapshotId = computeReviewScopeSnapshotId(params.getCwd());
-      reviewer = reviewerMode === 'structured'
+      reviewer = strategy.kind === 'structured'
         ? {
             mode: 'structured',
             rawFindingsStructuredOutput: createRawFindingsStructuredOutput(),
             reviewScopeSnapshotId,
           }
-        : { mode: 'freeform', reviewScopeSnapshotId };
+        : { mode: 'canonical_blocks', reviewScopeSnapshotId };
     }
     return {
       ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
@@ -232,13 +237,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     observabilityEnabled: () => params.options.observability?.enabled === true,
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,
     getCurrentWorkflowStack: params.getCurrentWorkflowStack,
-    structuredCaller: params.structuredCaller,
     structuredOutputNormalizers: params.options.structuredOutputNormalizers,
-    intakeNormalize: resolveFindingIntakeNormalizeConfig(
-      params.options.intakeNormalize,
-      params.config.name,
-      params.findingContract,
-    ),
+    reviewerOutputStrategy,
     abortSignal: params.options.abortSignal,
     findingContract: params.findingContract,
     findingManagerAuthority: params.findingManagerAuthority,
@@ -294,6 +294,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
     findingContract: params.findingContract,
+    reviewerOutputStrategy,
     findingManagerAuthority: params.findingManagerAuthority,
     workflowProvider: params.config.provider,
     workflowModel: params.config.model,

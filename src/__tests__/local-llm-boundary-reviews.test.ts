@@ -455,6 +455,8 @@ describe('takt-default-localllm boundary reviews', () => {
     const boundary = getRawStep(rawWorkflow, 'boundary-reviewers');
     const finalGate = getRawStep(rawWorkflow, 'final-gate');
 
+    expect(loadedWorkflow.findingContract?.reviewerOutput)
+      .toBe('canonical_blocks');
     expect(transitionFor(reviewers, 'all(')).toBe('boundary-reviewers');
     expect(transitionFor(reviewers, 'reviewerAnomalies.count > 0')).toBe('local-review-integrity-gate');
     expect(reviewers.rules?.find((rule) => rule.condition.includes('all('))?.condition)
@@ -599,6 +601,7 @@ describe('takt-default-localllm boundary reviews', () => {
   it.each(['ja', 'en'] as const)('%s の既存high workflowは共有6契約の実効formatを維持する', (locale) => {
     for (const workflowName of ['takt-default-high', 'takt-default-team-high']) {
       const workflow = loadBuiltinWorkflow(locale, workflowName);
+      expect(workflow.findingContract?.reviewerOutput).toBe('structured');
       const substeps = getParallelSubsteps(workflow, 'reviewers');
       const contracts = substeps.map((step) => step.outputContracts?.[0]);
 

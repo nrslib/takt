@@ -43,7 +43,7 @@ import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata 
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
 import type {
   FindingContractInstructionContext,
-  FindingContractReviewerMode,
+  FindingContractReviewerOutputStrategy,
 } from '../instruction/instruction-context.js';
 
 type ResolvedRunAgentOptions = RunAgentOptions & {
@@ -83,7 +83,7 @@ export class OptionsBuilder {
     private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
     private readonly getFindingContractInstructionContext?: (
       step: WorkflowStep,
-      reviewerMode: FindingContractReviewerMode | undefined,
+      reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
     ) => FindingContractInstructionContext | undefined,
   ) {}
 
@@ -375,9 +375,9 @@ export class OptionsBuilder {
 
   buildFindingContractInstructionContext(
     step: WorkflowStep,
-    reviewerMode: FindingContractReviewerMode | undefined,
+    reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
   ): FindingContractInstructionContext | undefined {
-    return this.getFindingContractInstructionContext?.(step, reviewerMode);
+    return this.getFindingContractInstructionContext?.(step, reviewerOutputStrategy);
   }
 
   private resolveSupportedMaxTurns(
@@ -596,10 +596,10 @@ export class OptionsBuilder {
       ),
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
-      buildFindingContractInstructionContext: (step, reviewerMode) =>
+      buildFindingContractInstructionContext: (step, reviewerOutputStrategy) =>
         this.buildFindingContractInstructionContext(
           step,
-          reviewerMode,
+          reviewerOutputStrategy,
         ),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       resolveSessionKey: (step) => {

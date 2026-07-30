@@ -2983,6 +2983,7 @@ describe('verified finding lifecycle mutation', () => {
       workflowName: 'default',
       ledgerPath: '.takt/findings/default.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
     });
     await store.updateLedger(() => ({ ledger: created, result: undefined }));
 
@@ -3016,6 +3017,7 @@ describe('verified finding lifecycle mutation', () => {
       workflowName: 'default',
       ledgerPath: '.takt/findings/default.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
     });
     const sqlite = createRealRunStorage({ findingContractEnabled: true });
     sqlite.clock.set(Date.parse(OBSERVATION.timestamp));

@@ -19,7 +19,6 @@ import type {
   WorkflowConfig,
   WorkflowResumePointEntry,
 } from '../../models/types.js';
-import type { FindingIntakeNormalizeConfig } from '../../models/config-types.js';
 import type { FindingManagerAuthority } from '../../models/finding-types.js';
 import type {
   PhaseName,
@@ -49,7 +48,6 @@ import { incrementStepIteration, getPreviousOutput } from './state-manager.js';
 import { createLogger, getErrorMessage, slugify } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { RunPaths } from '../run/run-paths.js';
-import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { waitForStepDelay } from './step-delay.js';
 import { parseStructuredOutputObject } from '../../../agents/structured-caller/shared.js';
 import {
@@ -62,20 +60,15 @@ import {
 } from './structured-output-schema-validator.js';
 import { providerSupportsStructuredOutput } from '../../../infra/providers/provider-capabilities.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
-import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { buildStructuredJsonSchemaInstruction } from '../../../shared/prompts/index.js';
-import {
-  buildFindingIntakeCorrectionPrompt,
-  buildFindingIntakeExtractionPrompt,
-} from '../../../shared/prompts/finding-intake-extraction.js';
 import type {
   StructuredOutputFailureReason,
   StructuredOutputNormalizerRegistry,
 } from './structured-output-normalizer.js';
-import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import type {
   FindingContractInstructionContext,
   FindingContractInstructionPolicy,
+  FindingContractReviewerOutputStrategy,
 } from '../instruction/instruction-context.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
 import type { FindingLedgerStore } from '../findings/store.js';
@@ -110,8 +103,8 @@ import {
 } from './phase1-empty-recovery.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import {
+  CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   createFindingReviewPublication,
-  FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   loadFindingReviewPublication,
   persistFindingReviewPublication,
   publishFindingReviewPublication,
@@ -120,8 +113,10 @@ import {
   type FindingReviewPublicationIdentity,
   type FindingReviewPublicationProtocol,
 } from '../findings/review-publication.js';
-import { inspectCanonicalClaimPublication } from '../findings/canonical-claim-publication.js';
-import { parseCanonicalFindingClaimReport } from '../../../shared/prompts/finding-canonical-claim.js';
+import {
+  parseCanonicalFindingClaimReport,
+  type CanonicalFindingClaimItem,
+} from '../../../shared/prompts/finding-canonical-claim.js';
 import {
   FINDING_REVIEW_PUBLICATION_SCHEMA_REF,
   createFindingReviewPublicationStructuredOutput,
@@ -184,9 +179,8 @@ export interface StepExecutorDeps {
   readonly observabilityEnabled?: () => boolean;
   readonly sanitizeObservabilityText?: (text: string) => string;
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
-  readonly structuredCaller: StructuredCaller;
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
-  readonly intakeNormalize?: FindingIntakeNormalizeConfig;
+  readonly reviewerOutputStrategy?: FindingContractReviewerOutputStrategy;
   readonly abortSignal?: AbortSignal;
   /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
   readonly findingContract?: FindingContractConfig;
@@ -447,14 +441,17 @@ export class StepExecutor {
     runtime?: RuntimeStepResolution,
   ): PreparedNormalStepExecution {
     const findingContractIntakeStep = this.resolveFindingContractIntakeStep(step);
-    const reviewerMode = this.deps.intakeNormalize === undefined ? 'structured' : 'freeform';
+    const reviewerOutputStrategy = findingContractIntakeStep
+      ? this.requireFindingContractReviewerOutputStrategy()
+      : undefined;
     const findingContractContext = findingContractIntakeStep
       ? this.deps.optionsBuilder.buildFindingContractInstructionContext(
           findingContractIntakeStep,
-          reviewerMode,
+          reviewerOutputStrategy,
         )
       : this.buildFindingContractInstructionContext(step, undefined);
-    const executableStep = findingContractIntakeStep && reviewerMode === 'structured'
+    const executableStep = findingContractIntakeStep
+      && reviewerOutputStrategy?.kind === 'structured'
       ? withFindingContractStructuredOutput(
           findingContractIntakeStep,
           findingContractContext,
@@ -497,222 +494,6 @@ export class StepExecutor {
     );
   }
 
-  isFindingIntakeNormalizeActive(): boolean {
-    return this.deps.intakeNormalize !== undefined;
-  }
-
-  async normalizeFindingIntakeReport(
-    step: AgentWorkflowStep,
-    reviewerResponse: AgentResponse,
-    iteration: number,
-  ): Promise<StructuredOutputNormalizationResult> {
-    const parsedReport = parseCanonicalFindingClaimReport(reviewerResponse.content);
-    if (parsedReport.error !== undefined) {
-      throw new Error(
-        `Finding intake publication invariant failed for step "${step.name}": ${
-          parsedReport.error
-        }`,
-      );
-    }
-    const initial = await this.executeFindingIntakeNormalization(
-      step,
-      reviewerResponse,
-      iteration,
-      'initial',
-    );
-    const initialInspection = inspectCanonicalClaimPublication(
-      reviewerResponse.content,
-      this.rawFindingsFromResponse(step.name, initial.response),
-    );
-    if (initialInspection.valid) {
-      return initial;
-    }
-    if (!initialInspection.correctable) {
-      throw new Error(
-        `Finding intake publication invariant failed for step "${step.name}": ${
-          initialInspection.detail ?? 'invalid canonical claim publication'
-        }`,
-      );
-    }
-
-    const corrected = await this.executeFindingIntakeNormalization(
-      step,
-      reviewerResponse,
-      iteration,
-      'correction',
-    );
-    const correctedInspection = inspectCanonicalClaimPublication(
-      reviewerResponse.content,
-      this.rawFindingsFromResponse(step.name, corrected.response),
-    );
-    if (!correctedInspection.valid) {
-      throw new Error(
-        `Finding intake publication invariant remained invalid after one correction for step "${step.name}": ${
-          correctedInspection.detail ?? 'invalid canonical claim publication'
-        }`,
-      );
-    }
-    return corrected;
-  }
-
-  private async executeFindingIntakeNormalization(
-    step: AgentWorkflowStep,
-    reviewerResponse: AgentResponse,
-    iteration: number,
-    mode: 'initial' | 'correction',
-  ): Promise<StructuredOutputNormalizationResult> {
-    const config = this.deps.intakeNormalize;
-    if (config === undefined) {
-      throw new Error('Finding intake normalizer is not configured');
-    }
-
-    const suffix = mode === 'correction'
-      ? 'intake-normalize-correction'
-      : 'intake-normalize';
-    const normalizerStep: AgentWorkflowStep = {
-      name: `${step.name}:${suffix}`,
-      personaDisplayName: 'Finding intake normalizer',
-      instruction: 'Normalize one reviewer report for Finding Contract intake.',
-      edit: false,
-      engineSynthesized: true,
-    };
-    const providerInfo = {
-      provider: config.provider,
-      model: config.model,
-      providerOptions: config.providerOptions,
-    };
-    const instruction = mode === 'correction'
-      ? buildFindingIntakeCorrectionPrompt(reviewerResponse.content)
-      : buildFindingIntakeExtractionPrompt(reviewerResponse.content);
-    const phaseExecutionId = buildPhaseExecutionId({
-      step: normalizerStep.name,
-      iteration,
-      phase: 1,
-      sequence: 1,
-    });
-    let resolvedPromptParts: PhasePromptParts | undefined;
-    let phaseStarted = false;
-    let phaseCompleted = false;
-    let normalizationSucceeded = false;
-    let normalizerResponse: AgentResponse | undefined;
-    let normalized: StructuredOutputNormalizationResult | undefined;
-    try {
-      resolvedPromptParts = {
-        systemPrompt: '',
-        userInstruction: instruction,
-      };
-      this.deps.onPhaseStart?.(
-        normalizerStep,
-        1,
-        'execute',
-        instruction,
-        resolvedPromptParts,
-        phaseExecutionId,
-        iteration,
-      );
-      phaseStarted = true;
-      normalizerResponse = await runWithPhaseSpan({
-        enabled: this.deps.observabilityEnabled?.() === true,
-        runId: this.deps.getObservabilityRunId?.(),
-        workflowName: this.deps.getWorkflowName(),
-        step: normalizerStep,
-        iteration,
-        phase: 1,
-        phaseName: 'execute',
-        instruction,
-        phaseExecutionId,
-        workflowStack: this.deps.getCurrentWorkflowStack?.(),
-        sanitizeText: this.deps.sanitizeObservabilityText,
-        providerInfo,
-        getPromptParts: () => resolvedPromptParts,
-      }, () => this.deps.structuredCaller.normalizeFindingIntake(
-        reviewerResponse.content,
-        {
-          provider: config.provider,
-          model: config.model,
-          providerOptions: config.providerOptions,
-          language: this.deps.getLanguage(),
-          abortSignal: this.deps.abortSignal,
-          mode,
-          onPromptResolved: (promptParts) => {
-            resolvedPromptParts = promptParts;
-          },
-        },
-      ), (result) => ({
-        status: result.status,
-        content: result.content,
-        error: result.error,
-        providerUsage: result.providerUsage,
-      }));
-      if (normalizerResponse.status !== 'done') {
-        throw new Error(
-          `Finding intake normalizer failed for step "${step.name}": ${
-            normalizerResponse.error ?? normalizerResponse.content
-          }`,
-        );
-      }
-      if (normalizerResponse.structuredOutput === undefined) {
-        throw new Error(`Finding intake normalizer returned no structured output for step "${step.name}"`);
-      }
-
-      normalized = this.normalizeStructuredOutputWithDiagnostics(
-        {
-          ...step,
-          structuredOutput: createRawFindingsStructuredOutput(),
-        },
-        {
-          ...reviewerResponse,
-          structuredOutput: normalizerResponse.structuredOutput,
-        },
-        { providerInfo },
-      );
-      if (normalized.invalidDetail !== undefined) {
-        throw new Error(
-          `Finding intake normalizer returned invalid structured output for step "${step.name}": ${
-            normalized.invalidDetail
-          }`,
-        );
-      }
-      this.deps.onPhaseComplete?.(
-        normalizerStep,
-        1,
-        'execute',
-        normalizerResponse.content,
-        normalizerResponse.status,
-        normalizerResponse.error,
-        phaseExecutionId,
-        iteration,
-      );
-      phaseCompleted = true;
-      normalizationSucceeded = true;
-    } catch (error) {
-      if (phaseStarted && !phaseCompleted) {
-        this.deps.onPhaseComplete?.(
-          normalizerStep,
-          1,
-          'execute',
-          normalizerResponse?.content ?? '',
-          'error',
-          getErrorMessage(error),
-          phaseExecutionId,
-          iteration,
-        );
-      }
-      throw error;
-    } finally {
-      this.deps.recordSynthesizedAgentUsage(
-        normalizerStep.name,
-        providerInfo,
-        normalizationSucceeded,
-        normalizerResponse?.providerUsage,
-      );
-    }
-    if (normalized === undefined) {
-      throw new Error(`Finding intake normalizer produced no normalization result for step "${step.name}"`);
-    }
-    return normalized;
-  }
-
   private findingReviewPublicationIdentity(input: {
     readonly parentStepName: string;
     readonly stepIteration: number;
@@ -746,10 +527,61 @@ export class StepExecutor {
     return rawFindings;
   }
 
+  private requireCanonicalItems(
+    stepName: string,
+    items: readonly CanonicalFindingClaimItem[] | undefined,
+  ): readonly CanonicalFindingClaimItem[] {
+    if (items === undefined) {
+      throw new Error(
+        `Finding contract reviewer "${stepName}" has no validated canonical claims`,
+      );
+    }
+    return items;
+  }
+
+  private validateCanonicalFindingItems(
+    response: AgentResponse,
+    items: readonly CanonicalFindingClaimItem[],
+  ): StructuredOutputNormalizationResult {
+    try {
+      const projected = projectReviewerRawStructuredOutputWithEnvelope({
+        rawFindings: [...items],
+      });
+      const rawFindingsStructuredOutput = createRawFindingsStructuredOutput();
+      validateStructuredOutputAgainstSchema(
+        projected.structuredOutput,
+        rawFindingsStructuredOutput.validationSchema
+          ?? rawFindingsStructuredOutput.schema,
+      );
+      return {
+        response: {
+          ...response,
+          structuredOutput: projected.structuredOutput,
+        },
+        reviewerRawResourceEnvelope: projected.resourceEnvelope,
+      };
+    } catch (error) {
+      return {
+        response,
+        invalidDetail: getErrorMessage(error),
+      };
+    }
+  }
+
   private findingReviewPublicationProtocol(): FindingReviewPublicationProtocol {
-    return this.deps.intakeNormalize === undefined
+    return this.requireFindingContractReviewerOutputStrategy().kind === 'structured'
       ? STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL
-      : FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+      : CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  }
+
+  private requireFindingContractReviewerOutputStrategy(): FindingContractReviewerOutputStrategy {
+    const strategy = this.deps.reviewerOutputStrategy;
+    if (strategy === undefined) {
+      throw new Error(
+        'Finding contract reviewer output strategy is not configured',
+      );
+    }
+    return strategy;
   }
 
   resumeFindingReviewPublication(input: {
@@ -821,13 +653,14 @@ export class StepExecutor {
       }
     | { readonly terminalResponse: AgentResponse }
   > {
-    const intakeNormalizeActive = this.deps.intakeNormalize !== undefined;
-    const reportStep = intakeNormalizeActive
-      ? input.step
-      : {
+    const reviewerOutputStrategy =
+      this.requireFindingContractReviewerOutputStrategy();
+    const reportStep = reviewerOutputStrategy.kind === 'structured'
+      ? {
           ...input.executableStep,
           structuredOutput: createFindingReviewPublicationStructuredOutput(),
-        };
+        }
+      : input.step;
     const buildPhaseContext = (phase1Response: AgentResponse) => (
       this.deps.optionsBuilder.buildPhaseRunnerContext(
         reportStep,
@@ -879,12 +712,16 @@ export class StepExecutor {
 
     let phaseSequence = 0;
     const nextPhaseSequence = (): number => ++phaseSequence;
-    const validateReportContent = intakeNormalizeActive
+    let canonicalItems: readonly CanonicalFindingClaimItem[] | undefined;
+    const validateReportContent = reviewerOutputStrategy.kind === 'canonical_blocks'
       ? (reportContent: string) => {
           const parsed = parseCanonicalFindingClaimReport(reportContent);
-          return parsed.error === undefined
-            ? { valid: true } as const
-            : { valid: false } as const;
+          if (parsed.error !== undefined) {
+            canonicalItems = undefined;
+            return { valid: false } as const;
+          }
+          canonicalItems = parsed.report.items;
+          return { valid: true } as const;
         }
       : undefined;
     let activePhase1Response = input.phase1Response;
@@ -897,7 +734,7 @@ export class StepExecutor {
         input.stepIteration,
         phaseContext,
         {
-          reviewerMode: intakeNormalizeActive ? 'freeform' : 'structured',
+          reviewerOutputStrategy,
           validateReportContent,
           nextPhaseSequence,
         },
@@ -906,7 +743,7 @@ export class StepExecutor {
       if (
         !(error instanceof ReportPhaseGenerationError)
         || !error.recovery.requiresFreshPhase1
-        || !intakeNormalizeActive
+        || reviewerOutputStrategy.kind !== 'canonical_blocks'
       ) {
         throw error;
       }
@@ -952,7 +789,7 @@ export class StepExecutor {
           input.stepIteration,
           phaseContext,
           {
-            reviewerMode: 'freeform',
+            reviewerOutputStrategy,
             validateReportContent,
             retryMode: 'single-attempt',
             nextPhaseSequence,
@@ -1024,21 +861,20 @@ export class StepExecutor {
       ...input.runtime,
       providerInfo: report.attemptIdentity.providerInfo,
     };
-    let normalized = intakeNormalizeActive
-      ? await this.normalizeFindingIntakeReport(
-          input.step,
+    let normalized = reviewerOutputStrategy.kind === 'canonical_blocks'
+      ? this.validateCanonicalFindingItems(
           {
             ...reportResponse,
             content: report.reportContent,
           },
-          input.state.iteration,
+          this.requireCanonicalItems(input.step.name, canonicalItems),
         )
       : this.normalizeStructuredOutputWithDiagnostics(
           reportStep,
           reportResponse,
           reportRuntime,
         );
-    if (!intakeNormalizeActive) {
+    if (reviewerOutputStrategy.kind === 'structured') {
       const reportStructuredOutput = reportResponse.structuredOutput
         ?? parseStructuredOutputObject(reportResponse.content);
       const publicationCorrectionInput: FindingReviewPublicationCorrectionInput = {
@@ -1089,7 +925,7 @@ export class StepExecutor {
       );
     }
     if (
-      !intakeNormalizeActive
+      reviewerOutputStrategy.kind === 'structured'
       && findingReviewPublicationReportContent(normalized.response.structuredOutput)
         !== report.reportContent
     ) {
@@ -1104,7 +940,7 @@ export class StepExecutor {
     };
     let publicationResourceEnvelope = normalized.reviewerRawResourceEnvelope;
     let relationClarification: ReviewerRelationClarification | undefined;
-    if (!intakeNormalizeActive) {
+    if (reviewerOutputStrategy.kind === 'structured') {
       const ledgerStore = this.deps.findingLedgerStore;
       if (ledgerStore === undefined) {
         throw new Error('Finding contract reviewer requires a finding ledger store');
@@ -1605,7 +1441,7 @@ export class StepExecutor {
           throw new Error(`Prepared reviewer step "${step.name}" has mismatched structured output`);
         }
       } else if (preparedExecution.executableStep.structuredOutput !== undefined) {
-        throw new Error(`Prepared free-form reviewer step "${step.name}" must not require structured output`);
+        throw new Error(`Prepared canonical-block reviewer step "${step.name}" must not require structured output`);
       }
     }
     const findingContractContext = preparedExecution?.findingContractContext;

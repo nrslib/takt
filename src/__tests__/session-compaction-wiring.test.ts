@@ -450,7 +450,17 @@ describe('session compaction Phase 1 wiring', () => {
         evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
       },
       structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-      findingContract: {} as NonNullable<StepExecutorDeps['findingContract']>,
+      reviewerOutputStrategy: { kind: 'structured' },
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
       findingLedgerStore: {
         loadLedger: vi.fn().mockReturnValue({
           workflowName: 'test-workflow',

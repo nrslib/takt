@@ -12,7 +12,7 @@ import type { RunAgentOptions } from '../../agents/runner.js';
 import { needsSemanticStatusJudgment } from '../models/workflow-rule-condition.js';
 import type {
   FindingContractInstructionContext,
-  FindingContractReviewerMode,
+  FindingContractReviewerOutputStrategy,
 } from './instruction/instruction-context.js';
 export {
   generateReportPhase,
@@ -106,7 +106,7 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   buildFindingContractInstructionContext?: (
     step: WorkflowStep,
-    reviewerMode: FindingContractReviewerMode | undefined,
+    reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
   ) => FindingContractInstructionContext | undefined;
   resolveStepProviderModel: (step: WorkflowStep) => StepProviderInfo;
 }

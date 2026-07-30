@@ -51,6 +51,7 @@ const executeAgentMock = vi.mocked(executeAgent);
 const contract: FindingContractConfig = {
   ledgerPath: '.takt/findings/ledger.json',
   rawFindingsPath: '.takt/findings/raw',
+  reviewerOutput: 'structured',
   manager: {
     persona: 'findings-manager',
     instruction: 'Reconcile only the supplied task.',

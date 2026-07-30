@@ -19,6 +19,7 @@ const store = createFindingLedgerStore({
   workflowName: 'peer-review',
   ledgerPath: '.takt/findings/peer-review.json',
   rawFindingsPath: '.takt/findings/raw',
+  reviewerOutput: 'structured',
 });
 
 writeFileSync(readyPath, 'ready', 'utf-8');

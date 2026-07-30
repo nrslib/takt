@@ -7,6 +7,9 @@ import { ProjectConfigSchema } from '../core/models/config-schemas.js';
 import type { FindingContractConfig } from '../core/models/finding-types.js';
 import { resolveFindingIntakeNormalizeConfig } from '../core/workflow/findings/intake-normalize-policy.js';
 import {
+  resolveFindingContractReviewerOutputStrategy,
+} from '../core/workflow/findings/reviewer-output-strategy.js';
+import {
   buildFindingIntakeExtractionPrompt,
   FINDING_INTAKE_EXTRACTION_PROMPT_TEMPLATE,
 } from '../shared/prompts/finding-intake-extraction.js';
@@ -24,7 +27,16 @@ import {
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 const dirs: string[] = [];
-const findingContract = {} as FindingContractConfig;
+const findingContract: FindingContractConfig = {
+  ledgerPath: '.takt/findings/peer-review.json',
+  rawFindingsPath: '.takt/findings/raw',
+  reviewerOutput: 'structured',
+  manager: {
+    persona: 'findings-manager',
+    instruction: 'findings-manager',
+    outputContract: 'findings-manager',
+  },
+};
 let taktEnv: TaktEnvSnapshot;
 
 beforeEach(() => {
@@ -184,6 +196,43 @@ describe('intake normalizer policy', () => {
     expect(resolveFindingIntakeNormalizeConfig(targeted, 'child', findingContract)).toBe(targeted);
     expect(resolveFindingIntakeNormalizeConfig(targeted, 'Child', findingContract)).toBeUndefined();
     expect(resolveFindingIntakeNormalizeConfig(targeted, 'parent', findingContract)).toBeUndefined();
+  });
+});
+
+describe('finding contract reviewer output strategy', () => {
+  it('is selected only by workflow Finding Contract, regardless of normalizer config', () => {
+    const normalizerConfig = {
+      provider: 'codex',
+      model: 'gpt-5.6-terra',
+      targets: ['workflow'],
+    } as const;
+    const canonicalContract: FindingContractConfig = {
+      ledgerPath: '.takt/findings/ledger.json',
+      rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'canonical_blocks',
+      manager: {
+        persona: 'findings-manager',
+        instruction: 'findings-manager',
+        outputContract: 'findings-manager',
+      },
+    };
+    expect(resolveFindingIntakeNormalizeConfig(
+      normalizerConfig,
+      'workflow',
+      canonicalContract,
+    )).toBe(normalizerConfig);
+    expect(resolveFindingContractReviewerOutputStrategy(canonicalContract))
+      .toEqual({ kind: 'canonical_blocks' });
+    expect(resolveFindingContractReviewerOutputStrategy({
+      ledgerPath: '.takt/findings/ledger.json',
+      rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
+      manager: {
+        persona: 'findings-manager',
+        instruction: 'findings-manager',
+        outputContract: 'findings-manager',
+      },
+    })).toEqual({ kind: 'structured' });
   });
 });
 

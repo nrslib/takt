@@ -219,7 +219,9 @@ TAKT は 5 種類の step をサポートしています。必要な構造に応
 - サブ step の `rules` は取りうる結果を定義し、`next` は省略可能（親がルーティングを担当）
 - 並列サブ step は `promotion` をサポートしません
 
-### Finding Contract manager の provider/model
+### Finding Contract reviewer 出力と manager の provider/model
+
+`finding_contract.reviewer_output` は reviewer の intake 形式を明示的に選択します。省略時は `structured` です。canonical claim block protocol を出力する reviewer の workflow だけ `canonical_blocks` を指定してください。TAKT は block を決定的に parse し、provider や global normalizer 設定から形式を推論しません。
 
 `finding_contract.manager` では、合成 Finding Manager step 専用の provider と model を指定できます。
 
@@ -227,6 +229,7 @@ TAKT は 5 種類の step をサポートしています。必要な構造に応
 finding_contract:
   ledger_path: .takt/findings/review.json
   raw_findings_path: .takt/findings/review/raw
+  reviewer_output: canonical_blocks
   manager:
     persona: findings-manager
     instruction: findings-manager

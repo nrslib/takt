@@ -296,6 +296,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -521,6 +522,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -643,6 +645,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -807,6 +810,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -884,6 +888,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -986,6 +991,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1027,6 +1033,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [makeStep({
@@ -1106,6 +1113,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1191,6 +1199,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1296,6 +1305,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1399,6 +1409,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1509,6 +1520,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1608,6 +1620,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1716,6 +1729,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1860,6 +1874,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -2037,6 +2052,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -2236,6 +2252,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -2391,6 +2408,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -2597,6 +2615,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -2795,6 +2814,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -3023,6 +3043,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -3210,6 +3231,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -3302,6 +3324,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -3400,6 +3423,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -3522,6 +3546,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           providerRoutingPersonaKey: 'findings-manager',
@@ -3629,6 +3654,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           providerRoutingPersonaKey: 'findings-manager',
@@ -3773,6 +3799,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -3921,6 +3948,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -4004,6 +4032,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -4174,6 +4203,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',

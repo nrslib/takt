@@ -11,7 +11,9 @@ import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder
 import { getReportFiles } from './output-contract-files.js';
 import type { PhasePromptParts, StepProviderInfo } from './types.js';
 import type { ReportPhaseRunnerContext } from './phase-runner.js';
-import type { FindingContractReviewerMode } from './instruction/instruction-context.js';
+import type {
+  FindingContractReviewerOutputStrategy,
+} from './instruction/instruction-context.js';
 import {
   FINDING_REVIEW_PUBLICATION_SCHEMA_REF,
   findingReviewPublicationReportContent,
@@ -44,7 +46,7 @@ export type ReportContentValidator = (
 ) => ReportContentValidationResult;
 
 export interface ReportPhaseGenerationOptions {
-  readonly reviewerMode?: FindingContractReviewerMode;
+  readonly reviewerOutputStrategy?: FindingContractReviewerOutputStrategy;
   readonly validateReportContent?: ReportContentValidator;
   readonly retryMode?: 'standard' | 'single-attempt';
   readonly nextPhaseSequence?: () => number;
@@ -114,11 +116,14 @@ export async function generateReportPhase(
 function buildReportFindingContractContext(
   step: WorkflowStep,
   ctx: ReportPhaseRunnerContext,
-  reviewerMode: FindingContractReviewerMode | undefined,
+  reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
 ) {
-  const context = ctx.buildFindingContractInstructionContext?.(step, reviewerMode);
+  const context = ctx.buildFindingContractInstructionContext?.(
+    step,
+    reviewerOutputStrategy,
+  );
   if (
-    reviewerMode !== 'structured'
+    reviewerOutputStrategy?.kind !== 'structured'
     || context?.reviewer?.mode !== 'structured'
     || step.structuredOutput === undefined
   ) {
@@ -140,7 +145,7 @@ async function executeReportPhase(
   options: ReportPhaseGenerationOptions,
   acceptReport: (report: GeneratedReport) => void,
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
-  const reviewerMode = options.reviewerMode;
+  const reviewerOutputStrategy = options.reviewerOutputStrategy;
   const primarySessionKey = ctx.resolveSessionKey(step);
   let currentSessionId = ctx.getSessionId(primarySessionKey);
   const hasLastResponse = ctx.lastResponse != null && ctx.lastResponse.trim().length > 0;
@@ -179,7 +184,11 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: currentSessionId ? undefined : ctx.lastResponse,
-      findingContract: buildReportFindingContractContext(step, ctx, reviewerMode),
+      findingContract: buildReportFindingContractContext(
+        step,
+        ctx,
+        reviewerOutputStrategy,
+      ),
     }).build();
     let firstAttemptOptions: RunAgentOptions;
     if (currentSessionId === undefined) {
@@ -238,7 +247,11 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: ctx.lastResponse,
-      findingContract: buildReportFindingContractContext(step, ctx, reviewerMode),
+      findingContract: buildReportFindingContractContext(
+        step,
+        ctx,
+        reviewerOutputStrategy,
+      ),
     }).build();
     const retryInstruction = firstAttempt.failureReason === 'invalid_output'
       ? [

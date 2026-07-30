@@ -364,6 +364,7 @@ function createStore(options: {
     workflowName: 'peer-review',
     ledgerPath: '.takt/findings/peer-review.json',
     rawFindingsPath: '.takt/findings/raw',
+    reviewerOutput: 'structured',
   } as never);
 }
 
@@ -1296,6 +1297,7 @@ describe('FindingLedgerStore', () => {
       workflowName: 'peer-review',
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
     });
     await store.updateLedger(() => ({ ledger: makeLedger(), result: undefined }));
 
@@ -1392,6 +1394,7 @@ describe('FindingLedgerStore', () => {
       workflowName: 'peer-review',
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
     });
     const physicalStore = createFindingLedgerStore({
       projectCwd,
@@ -1400,6 +1403,7 @@ describe('FindingLedgerStore', () => {
       workflowName: 'peer-review',
       ledgerPath: 'state/findings/peer-review.json',
       rawFindingsPath: 'state/findings/raw',
+      reviewerOutput: 'structured',
     });
     const otherLedgerStore = createFindingLedgerStore({
       projectCwd,
@@ -1408,6 +1412,7 @@ describe('FindingLedgerStore', () => {
       workflowName: 'peer-review',
       ledgerPath: 'state/findings/other.json',
       rawFindingsPath: 'state/findings/raw',
+      reviewerOutput: 'structured',
     });
 
     expect(existsSync(join(stateDir, 'findings'))).toBe(false);

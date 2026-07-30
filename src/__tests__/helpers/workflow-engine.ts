@@ -25,6 +25,7 @@ export class WorkflowEngine extends WorkflowEngineImpl {
               workflowName: workflowConfig.name,
               ledgerPath: contract.ledgerPath,
               rawFindingsPath: contract.rawFindingsPath,
+              reviewerOutput: 'structured',
               ...(options.resumeSource?.sourceRunSlug === undefined
                 ? {}
                 : { trustedResumeSourceRunId: options.resumeSource.sourceRunSlug }),

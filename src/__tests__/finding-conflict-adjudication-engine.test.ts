@@ -153,6 +153,7 @@ function baseConfig(cwd: string, rules: ReturnType<typeof makeRule>[]): Workflow
     findingContract: {
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
       manager: {
         persona: 'findings-manager',
         instruction: 'findings-manager',
@@ -429,6 +430,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       workflowName: 'parent-workflow',
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
     });
 
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -572,6 +574,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       workflowName: 'adjudication-engine-test',
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
     });
     const reservation = await reserveFindingConflictAdjudication({
       ledgerStore,
@@ -683,6 +686,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       workflowName: 'adjudication-engine-test',
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
     });
     const reservation = await reserveFindingConflictAdjudication({
       ledgerStore,
@@ -1043,6 +1047,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1100,6 +1105,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1239,6 +1245,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1452,6 +1459,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1622,6 +1630,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',

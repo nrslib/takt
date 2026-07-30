@@ -59,6 +59,7 @@ function makeFindingContract() {
   return {
     ledgerPath: '.takt/findings/peer-review.json',
     rawFindingsPath: 'review-raw',
+    reviewerOutput: 'structured',
     manager: {
       persona: 'findings-manager',
       instruction: 'Reconcile findings.',
@@ -162,6 +163,7 @@ function createTestFindingAuthorityResolver(config: WorkflowConfig, cwd: string)
     workflowName: config.name,
     ledgerPath: contract.ledgerPath,
     rawFindingsPath: contract.rawFindingsPath,
+    reviewerOutput: 'structured',
   });
   return {
     resolve: () => store,

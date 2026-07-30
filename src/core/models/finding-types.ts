@@ -1,6 +1,10 @@
 import type { ProviderType } from '../../shared/types/provider.js';
 
 export const FINDING_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const;
+export const FINDING_CONTRACT_REVIEWER_OUTPUTS = [
+  'structured',
+  'canonical_blocks',
+] as const;
 // 'invalidated': the finding's premise does not hold (deterministically verified:
 // its location does not exist / is out of range). Distinct from 'waived' (the
 // finding is valid but won't be fixed) — critical findings can never be waived,
@@ -15,6 +19,8 @@ export const FINDING_LIFECYCLES = ['new', 'persists', 'resolved', 'reopened', 'w
 export const FINDING_CONFLICT_STATUSES = ['active', 'resolved'] as const;
 
 export type FindingSeverity = typeof FINDING_SEVERITIES[number];
+export type FindingContractReviewerOutput =
+  typeof FINDING_CONTRACT_REVIEWER_OUTPUTS[number];
 export type FindingStatus = typeof FINDING_STATUSES[number];
 export type FindingLifecycle = typeof FINDING_LIFECYCLES[number];
 export type FindingConflictStatus = typeof FINDING_CONFLICT_STATUSES[number];
@@ -254,6 +260,7 @@ export interface FindingContractReviewBudgetConfig {
 export interface FindingContractConfig {
   ledgerPath: string;
   rawFindingsPath: string;
+  reviewerOutput: FindingContractReviewerOutput;
   manager: FindingContractManagerConfig;
   /** Present when the supervisor persona was resolved for the finding-conflict-adjudication synthetic step. */
   adjudicator?: FindingContractAdjudicatorConfig;

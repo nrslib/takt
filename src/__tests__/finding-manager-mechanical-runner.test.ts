@@ -230,6 +230,7 @@ function makeHarness(
   const contract = {
     ledgerPath: '.takt/findings/ledger.json',
     rawFindingsPath: '.takt/findings/raw',
+    reviewerOutput: 'structured',
     manager: {
       persona: 'findings-manager',
       instruction: 'Reconcile findings.',
@@ -342,6 +343,7 @@ function runFindingManagerWithStore(input: {
     contract: {
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
       manager: {
         persona: 'findings-manager',
         instruction: 'Reconcile findings.',
@@ -522,6 +524,7 @@ describe('runFindingManagerForStep mechanical path', () => {
       workflowName: 'peer-review',
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
     });
     const storeA = createStore(reportDirA);
     const storeB = createStore(reportDirB);
@@ -619,6 +622,7 @@ describe('runFindingManagerForStep mechanical path', () => {
       workflowName: 'peer-review',
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
       ...(trustedResumeSourceRunId === undefined ? {} : { trustedResumeSourceRunId }),
     });
     const storeA = createStore('pending-run', reportDirA);
@@ -1524,6 +1528,7 @@ describe('runFindingManagerForStep workflow_call sub-steps', () => {
     const contract = {
       ledgerPath: '.takt/findings/ledger.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
       manager: {
         persona: 'findings-manager',
         instruction: 'Reconcile findings.',
@@ -1602,6 +1607,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
       workflowName: 'peer-review',
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
     });
     const storeA = store;
     const storeB = store;
@@ -1660,6 +1666,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     const contract = {
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
       manager: {
         persona: 'findings-manager',
         instruction: 'Reconcile findings.',
@@ -1757,6 +1764,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
       workflowName: 'peer-review',
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
     });
     await store.updateLedger(() => ({
       ledger: {
@@ -1807,6 +1815,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     const contract = {
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
       manager: {
         persona: 'findings-manager',
         instruction: 'Reconcile findings.',
@@ -1975,6 +1984,7 @@ describe('runFindingManagerForStep stale rejection isolation', () => {
     const contract = {
       ledgerPath: '.takt/findings/ledger.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
       manager: {
         persona: 'findings-manager',
         instruction: 'Reconcile findings.',

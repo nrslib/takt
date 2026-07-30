@@ -57,6 +57,9 @@ import {
   runPhase1WithEmptyRecovery,
   runSingleFreshPhase1Retry,
 } from './phase1-empty-recovery.js';
+import type {
+  FindingContractReviewerOutputStrategy,
+} from '../instruction/instruction-context.js';
 
 const log = createLogger('parallel-runner');
 
@@ -127,6 +130,7 @@ export interface ParallelRunnerDeps {
   readonly refreshFindingsState: () => void;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
   readonly findingContract?: FindingContractConfig;
+  readonly reviewerOutputStrategy?: FindingContractReviewerOutputStrategy;
   readonly findingManagerAuthority: FindingManagerAuthority;
   /** findings-manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
   readonly workflowProvider?: WorkflowConfig['provider'];
@@ -242,10 +246,14 @@ export class ParallelRunner {
     // findingContract 未設定のワークフローが大半のため、クロージャ呼び出し自体を
     // 避ける早期リターンは維持する（OptionsBuilder 側でも undefined を返すが、
     // 呼び出しコストを避けたい）。
-    const intakeNormalizeActive = this.deps.stepExecutor.isFindingIntakeNormalizeActive?.() === true;
-    const reviewerMode = intakeNormalizeActive ? 'freeform' : 'structured';
+    const reviewerOutputStrategy = this.deps.findingContract
+      ? this.requireFindingContractReviewerOutputStrategy()
+      : undefined;
     const findingContractContext = this.deps.findingContract
-      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(step, reviewerMode)
+      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(
+          step,
+          reviewerOutputStrategy,
+        )
       : undefined;
     const rawFindingsStructuredOutput = findingContractContext?.reviewer?.mode === 'structured'
       ? findingContractContext.reviewer.rawFindingsStructuredOutput
@@ -990,6 +998,16 @@ export class ParallelRunner {
       },
     );
     return { response: aggregatedResponse, instruction: aggregatedInstruction, providerInfo: parentPm };
+  }
+
+  private requireFindingContractReviewerOutputStrategy(): FindingContractReviewerOutputStrategy {
+    const strategy = this.deps.reviewerOutputStrategy;
+    if (strategy === undefined) {
+      throw new Error(
+        'Finding contract reviewer output strategy is not configured',
+      );
+    }
+    return strategy;
   }
 
   private async runWorkflowCallSubStep(

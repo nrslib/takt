@@ -15,7 +15,9 @@ import type {
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import type { PullRequestContext } from '../pr-context.js';
 
-export type FindingContractReviewerMode = 'structured' | 'freeform';
+export type FindingContractReviewerOutputStrategy =
+  | { readonly kind: 'structured' }
+  | { readonly kind: 'canonical_blocks' };
 
 export type FindingContractReviewerContext =
   | {
@@ -24,7 +26,7 @@ export type FindingContractReviewerContext =
       reviewScopeSnapshotId: string;
     }
   | {
-      mode: 'freeform';
+      mode: 'canonical_blocks';
       reviewScopeSnapshotId: string;
     };
 

@@ -778,6 +778,7 @@ function makeHarness(
     contract: {
       ledgerPath: '.takt/findings/ledger.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
       manager: {
         persona: 'findings-manager',
         instruction: 'Reconcile findings.',

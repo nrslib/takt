@@ -123,6 +123,7 @@ function makeContract(cwd: string): FindingContractConfig {
   return {
     ledgerPath: '.takt/findings/peer-review.json',
     rawFindingsPath: '.takt/findings/raw',
+    reviewerOutput: 'structured',
     manager: {
       persona: 'findings-manager',
       instruction: 'findings-manager',
@@ -263,6 +264,7 @@ describe('finding-conflict-adjudication runner', () => {
       workflowName: 'runner-test',
       ledgerPath: contract.ledgerPath,
       rawFindingsPath: contract.rawFindingsPath,
+      reviewerOutput: 'structured',
     });
     const step = buildFindingConflictAdjudicationStep({ contract, workflowProvider: 'claude' });
     const runner = createFindingConflictAdjudicationRunner({

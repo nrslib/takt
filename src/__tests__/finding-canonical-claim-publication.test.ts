@@ -210,6 +210,20 @@ describe('canonical Finding Contract claim publication', () => {
     });
   });
 
+  it('parses multiple claim kinds once in report order', () => {
+    const code = codeClaim();
+    const structure = structureClaim();
+    const report = `## Result: REJECT\n\n${code}\n\n${structure}`;
+    const items = parsedItems(report) as ReadonlyArray<{
+      rawExcerpt: string;
+      candidate: { target: { kind: string } };
+    }>;
+
+    expect(items.map((item) => item.rawExcerpt)).toEqual([code, structure]);
+    expect(items.map((item) => item.candidate.target.kind))
+      .toEqual(['code', 'structure']);
+  });
+
   it('uses matching variable-length fences and preserves shorter fence lines as content', () => {
     const block = fenceCollisionCodeClaim('\r\n');
     const report = `## Result: REJECT\r\n\r\n${block}`;
@@ -226,6 +240,40 @@ describe('canonical Finding Contract claim publication', () => {
       valid: true,
       correctable: false,
     });
+  });
+
+  it('removes only protocol indentation from file and authoritative excerpts', () => {
+    const fileBlock = codeClaim().replace(
+      '  const value = 1;',
+      '    const value = 1;',
+    );
+    const fileReport = `## Result: REJECT\n\n${fileBlock}`;
+    const fileItem = parsedItems(fileReport)[0] as {
+      rawExcerpt: string;
+      candidate: {
+        evidenceRequests: Array<{ verbatimExcerpt?: string }>;
+      };
+    };
+    expect(fileItem.rawExcerpt).toBe(fileBlock);
+    expect(fileItem.candidate.evidenceRequests[0]?.verbatimExcerpt)
+      .toBe('  const value = 1;');
+
+    const authoritativeBlock = absenceConfirmation().replace(
+      '  Remove forbidden().',
+      '    Remove forbidden().',
+    );
+    const authoritativeReport = `## Result: APPROVE\n\n${authoritativeBlock}`;
+    const authoritativeItem = parsedItems(authoritativeReport)[0] as {
+      rawExcerpt: string;
+      candidate: {
+        evidenceRequests: Array<{
+          subject?: { verbatimExcerpt?: string };
+        }>;
+      };
+    };
+    expect(authoritativeItem.rawExcerpt).toBe(authoritativeBlock);
+    expect(authoritativeItem.candidate.evidenceRequests[1]?.subject?.verbatimExcerpt)
+      .toBe('  Remove forbidden().\n```\nKeep the requirement exact.');
   });
 
   it('deep-compares every normalized field and rejects relation corruption', () => {

@@ -123,11 +123,11 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #     provider: claude
 #     model: opus
 
-# Finding Contract intake normalizer（省略可）
+# Finding Contract intake normalizer 予約設定（現runtimeには未接続）
 # intake_normalize:
 #   provider: codex
 #   model: gpt-5.6-terra
-#   targets: [takt-default-high] # canonical workflow name の完全一致。省略時は全 Finding Contract workflow
+#   targets: [takt-default-high] # 予約済みのworkflow name完全一致filter
 #   provider_options:
 #     codex:
 #       reasoning_effort: high
@@ -197,7 +197,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 | `persona_providers` | object | - | deprecated の旧設定。persona display name ごとの provider / model / provider_options 上書き。新規設定では `provider_routing` を推奨 |
 | `provider_options` | object | - | グローバルな provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
-| `intake_normalize` | object | - | free-form Finding Contract reviewer report用のstrict隔離structured normalizer。`provider`と`model`が必須 |
+| `intake_normalize` | object | - | intake normalizerの予約設定。parse・保存はされるが、現行Finding Contract runtimeには未接続。指定時は`provider`と`model`が必須 |
 | `anthropic_api_key` | string | - | Claude 用 Anthropic API キー |
 | `openai_api_key` | string | - | Codex 用 OpenAI API キー |
 | `opencode_api_key` | string | - | OpenCode API キー |
@@ -294,7 +294,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 | `assistant.init_files` | string[] | - | project config 専用のインタラクティブ assistant 初期コンテキストファイル。パスは project root 相対で指定します。絶対パス、project root 外へ解決されるパス、`.env*` / `.npmrc` / `.pypirc` / `.netrc` / `*.pem` / `*.key` / `.git/**` などの機密ファイルパターンは拒否されます。存在しないパス、ディレクトリ、読めないファイルは分かるエラーになります。最大16ファイルまで指定でき、1ファイルは256KiB、合計本文は1MiBまでです。未設定または空の場合、`CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` などは自動探索されません。assistant の provider/model だけを制御する `takt_providers.assistant` とは別設定です。 |
 | `provider_options` | object | - | provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
-| `intake_normalize` | object | global 設定 | free-form Finding Contract reviewer report用strict隔離structured normalizerの上書き |
+| `intake_normalize` | object | global 設定 | 現runtimeには未接続のintake normalizer予約設定に対するproject上書き |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（グローバルを上書き） |
 | `takt_providers` | object | - | TAKT 内部プロバイダー上書き。project の `takt_providers.assistant` は global assistant provider/model を上書きし、assistant 会話（インタラクティブモードの計画会話、既存タスクへの追加指示 (instruct)、リトライ対話）と、OpenCode の report retry 失敗後の Report phase fallback に使われます。project と global の assistant がどちらも未設定の場合、Report phase fallback は無効で、top-level `provider` / `model` は暗黙 fallback として使われません。 |
 | `workflow_mcp_servers` | object | - | MCP サーバートランスポートポリシー（グローバルを上書き） |
@@ -306,13 +306,11 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 プロジェクト設定の値は、両方が設定されている場合にグローバル設定を上書きします。
 
-`intake_normalize` はopt-inで、有効な Finding Contract を持つworkflowだけで動作します。
-`targets`を指定した場合はcanonical workflow nameとの完全一致で選択します。project blockは
-global block全体をatomicに置き換え、globalの`targets`や`provider_options`とはマージしません。
-normalizerへ渡すのは1件のreviewer reportだけです。task、ledger、repositoryのworking
-directory、他report、tool、MCP server、resume可能なsessionは渡さず、毎回新しい空の一時
-directoryで実行して終了結果にかかわらず削除します。このstrict execution profileのproduction
-対応providerはCodexです。境界を強制できないproviderは実行前に失敗します。
+`intake_normalize` はPhase B用の予約設定です。TAKTは現時点でもblockをparse・解決・保存しますが、
+Finding Contractのruntime経路からは呼び出しません。
+`finding_contract.reviewer_output`を選択・上書きすることもなく、workflow側で`structured`または
+`canonical_blocks`を明示する必要があります。`targets`と隔離provider profileはruntime接続まで
+予約状態です。project blockがglobal block全体をatomicに置き換える設定解決規則は維持します。
 
 `backend: sqlite` の場合、Finding Contractのauthorityは
 `.takt/runs/<run>/run.sqlite` のみです。file ledgerとのdual-writeやfileへのfallbackは行いません。

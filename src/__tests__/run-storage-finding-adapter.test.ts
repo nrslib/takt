@@ -247,6 +247,7 @@ describe('Finding manager SQLite adapter', () => {
         workflowName: 'default',
         ledgerPath: '.takt/findings/ledger.json',
         rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'structured',
       });
       const filesystemPublication = filesystemStore.planManagerValidationPublication(
         'round-serializer',

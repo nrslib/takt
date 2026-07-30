@@ -9,7 +9,7 @@
 
 {{#if structuredReviewer}}- 観測した新規の問題はすべて、relation を "new"（targetFindingId は空）にした構造化 raw finding として報告してください。
 - `new` / `persists` / `resolution_confirmation` / `reopened` は、証跡と必要な ledger ID を添える raw relation です。最終 lifecycle 判定と finding ID の対応づけは findings-manager とエンジンが行うため、レビュワーは最終状態を採番・判定しないでください。
-{{/if}}{{#if freeformReviewer}}- 通常の Markdown レビュー報告を書いてください。JSON や structured-output オブジェクトは返さないでください。
+{{/if}}{{#if canonicalBlocksReviewer}}- 通常の Markdown レビュー報告を書いてください。JSON や structured-output オブジェクトは返さないでください。
 - 観測した各問題と明示的な台帳 lifecycle claim は、下記の共通プロトコルを使い、必ず1件につき1つの canonical block にしてください。block 外の本文は説明専用であり、機械 intake の対象になりません。
 
 {{canonicalClaimBlockProtocol}}
@@ -17,7 +17,7 @@
 {{/if}}{{#if structuredReviewerHasOpenFindings}}- open な指摘が修正済みだと確認できたら、relation を `resolution_confirmation`、`targetFindingIds` にその台帳 ID だけを入れた structured raw finding を1件出力してください。指摘が resolved になる経路はこの確認だけです。
 - structured raw finding のフィールドから evidence をリクエストしてください。code の確認は `file_quote`、structure の確認は `repository_manifest`、absence の確認は `repository_query` と `authoritative_quote` を使います。snapshotId・runId・proofId・file hash・query 結果などの検証結果は出力しないでください。これらの束縛と検証はエンジンが行います。
 - 同じ場所で未修正のまま残っている open な指摘を再報告しないでください。まだ発生していることを明示的に確認する場合は、relation を `persists`、`targetFindingIds` にその台帳 ID だけを入れた structured raw finding を1件出力してください。実際に別問題へ退行した場合だけ `new` issue として報告してください。
-{{/if}}{{#if freeformReviewerHasOpenFindings}}- open な指摘が修正済みだと確認できたら、Relation を `resolution_confirmation`、Target Finding ID をその台帳 ID にした canonical block を1件報告してください。指摘が resolved になる経路はこの確認だけです。
+{{/if}}{{#if canonicalBlocksReviewerHasOpenFindings}}- open な指摘が修正済みだと確認できたら、Relation を `resolution_confirmation`、Target Finding ID をその台帳 ID にした canonical block を1件報告してください。指摘が resolved になる経路はこの確認だけです。
 - block の Target Kind に対応する typed evidence matrix を使ってください。code の確認は File Quote、structure の確認は Repository Manifest、absence の確認は Repository Query と Authoritative Quote を使います。snapshotId・runId・proofId・file hash・query 結果などの検証結果は出力しないでください。これらの束縛と検証はエンジンが行います。
 - 同じ場所で未修正のまま残っている open な指摘を再報告しないでください。まだ発生しているがそれを明示的に確認したい場合は、relation を "persists"、Target Finding ID にその台帳 finding ID を設定して報告してください。実際に別問題へ退行した場合にだけ、新しい "new" の issue として報告してください。
 {{/if}}{{#if reviewerHasWaivedFindings}}- 台帳サマリで waived になっている指摘を再報告しないでください。waive の前提が崩れていると観測した場合は、relation を "reopened"、targetFindingId にその waived finding ID を設定して報告してください。
@@ -34,7 +34,7 @@
 - raw issue は、現在存在し修正アクションを要する観測欠陥だけにしてください。要約、承認、正常確認、スコープ説明、未確認だけの事項、肯定文を raw issue にしないでください。`approval` や `review-summary` を familyTag に使わないでください。
 - 報告した各 issue または lifecycle claim と structured item を同じ順序で1対1に対応させてください。
 - APPROVE は structured defect claim 0件、REJECT は1件以上です。APPROVE かつ lifecycle claim もない場合は `rawFindings: []` にしてください。出力直前に report claim と structured item が同じ順序で1対1に対応していることを自己検査してください。
-{{/if}}{{#if freeformReviewer}}- レビュー固有のサマリー・検証表・説明本文は canonical block の外へ置いてください。それらは Finding Contract input ではありません。
+{{/if}}{{#if canonicalBlocksReviewer}}- レビュー固有のサマリー・検証表・説明本文は canonical block の外へ置いてください。それらは Finding Contract input ではありません。
 - 証拠は canonical block の matrix を通じてリクエストするだけで、発行済みとはしないでください。proofId・snapshotId・runId・offset・digest・query 結果・検証結果は出力しないでください。
 - claim は現在存在し修正アクションを要する観測欠陥、または明示的な lifecycle claim だけにしてください。承認・要約・正常確認・スコープ説明を claim にしないでください。APPROVE は `new` / `persists` / `reopened` の欠陥 block が0件であることを意味し、明示的な `resolution_confirmation` block は含められます。
 {{/if}}- 台帳で `provisional` が付いたエントリは system finding です: 意味を確定できなかった観測（ラベリングの矛盾、reviewer 出力の上限超過、解釈の中断など）を表し、コード変更では修正できず、異議申告の対象にもなりません。後続ラウンドの clean なレビュー証拠が確定・解消するまで final gate を塞ぎ続けます。provisional finding を「修正」しようとしないでください。

@@ -482,6 +482,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     const contract = {
       ledgerPath: '.takt/findings/ledger.json',
       rawFindingsPath: '.takt/findings/raw',
+      reviewerOutput: 'structured',
       manager: { persona: 'findings-manager', instruction: 'Reconcile findings.', outputContract: 'Return JSON.' },
     };
     return {

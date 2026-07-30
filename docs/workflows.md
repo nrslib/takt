@@ -220,7 +220,9 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 - Sub-step `rules` define possible outcomes; `next` is optional (parent handles routing)
 - Parallel sub-steps do not support `promotion`
 
-### Finding Contract manager provider/model
+### Finding Contract reviewer output and manager provider/model
+
+`finding_contract.reviewer_output` explicitly selects the reviewer intake format. It defaults to `structured`. Set `canonical_blocks` only for workflows whose reviewers emit the canonical claim-block protocol; TAKT parses those blocks deterministically and does not infer the format from a provider or global normalizer configuration.
 
 `finding_contract.manager` can set a dedicated provider and model for the synthetic Finding Manager step:
 
@@ -228,6 +230,7 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 finding_contract:
   ledger_path: .takt/findings/review.json
   raw_findings_path: .takt/findings/review/raw
+  reviewer_output: canonical_blocks
   manager:
     persona: findings-manager
     instruction: findings-manager

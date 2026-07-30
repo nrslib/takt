@@ -32,7 +32,7 @@ export const STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
   protocolRevision: 1,
 } as const);
 
-export const FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
+export const CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
   generationMode: 'freeform',
   format: 'canonical-claim-blocks',
   protocolRevision: FINDING_CLAIM_PROTOCOL_REVISION,
@@ -40,7 +40,7 @@ export const FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
 
 export type FindingReviewPublicationProtocol =
   | typeof STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL
-  | typeof FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  | typeof CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL;
 
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
   if (typeof value !== 'object' || value === null || seen.has(value)) {
@@ -130,13 +130,13 @@ function parsePublicationProtocol(value: unknown): FindingReviewPublicationProto
   ) {
     return structured;
   }
-  const freeform = FREEFORM_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  const canonicalBlocks = CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL;
   if (
-    record.generationMode === freeform.generationMode
-    && record.format === freeform.format
-    && record.protocolRevision === freeform.protocolRevision
+    record.generationMode === canonicalBlocks.generationMode
+    && record.format === canonicalBlocks.format
+    && record.protocolRevision === canonicalBlocks.protocolRevision
   ) {
-    return freeform;
+    return canonicalBlocks;
   }
   throw new Error('Finding review publication has an unsupported protocol descriptor');
 }
@@ -236,6 +236,19 @@ function parseStoredPreparation(
     rawFindings: publicationRecord.rawFindings,
   };
   assertCanonicalFindingReviewPublication(publication);
+  if (publication.protocol.format === 'canonical-claim-blocks') {
+    const inspection = inspectCanonicalClaimPublication(
+      publication.reportContent,
+      publication.rawFindings,
+    );
+    if (!inspection.valid) {
+      throw new Error(
+        `Stored finding review publication canonical claim invariant failed: ${
+          inspection.detail ?? 'invalid canonical claim publication'
+        }`,
+      );
+    }
+  }
   if (publication.publicationId !== expectedPublicationId) {
     throw new Error(`Finding review publication identity mismatch for "${expectedPublicationId}"`);
   }
@@ -290,7 +303,7 @@ function assertPublicationRawFindings(
 export function assertCanonicalFindingReviewPublication(
   publication: CanonicalFindingReviewPublication,
 ): void {
-  const protocol = parsePublicationProtocol(publication.protocol);
+  parsePublicationProtocol(publication.protocol);
   const expectedId = computeFindingReviewPublicationId(publication);
   if (publication.publicationId !== expectedId) {
     throw new Error(`Finding review publication identity mismatch for "${publication.publicationId}"`);
@@ -300,19 +313,6 @@ export function assertCanonicalFindingReviewPublication(
     throw new Error(`Finding review publication digest mismatch for "${publication.publicationId}"`);
   }
   assertPublicationRawFindings(publication.reportContent, publication.rawFindings);
-  if (protocol.format === 'canonical-claim-blocks') {
-    const inspection = inspectCanonicalClaimPublication(
-      publication.reportContent,
-      publication.rawFindings,
-    );
-    if (!inspection.valid) {
-      throw new Error(
-        `Finding review publication canonical claim invariant failed: ${
-          inspection.detail ?? 'invalid canonical claim publication'
-        }`,
-      );
-    }
-  }
 }
 
 export function createFindingReviewPublication(input: {
