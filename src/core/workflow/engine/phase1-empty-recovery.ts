@@ -24,7 +24,8 @@ export type Phase1AttemptReason =
   | 'initial'
   | 'provider_error_fresh'
   | 'empty_continuation'
-  | 'empty_fresh';
+  | 'empty_fresh'
+  | 'publication_retry_fresh';
 
 export interface Phase1Attempt {
   readonly sequence: number;
@@ -48,6 +49,20 @@ interface Phase1EmptyRecoveryOptions {
 export interface Phase1EmptyRecoveryResult {
   readonly response: AgentResponse;
   readonly finalAttempt: Phase1Attempt;
+}
+
+interface SingleFreshPhase1RetryOptions {
+  readonly stepName: string;
+  readonly sequence: number;
+  readonly instruction: string;
+  readonly discardSession: () => void;
+  readonly execute: (
+    attempt: Phase1Attempt,
+  ) => Promise<{ response: AgentResponse; promptResolved: boolean }>;
+  readonly complete: (
+    response: AgentResponse,
+    attempt: Phase1Attempt,
+  ) => void;
 }
 
 interface ObservedPhase1AttemptOptions {
@@ -164,6 +179,27 @@ export function completeObservedPhase1Attempt(
     }),
     options.iteration,
   );
+}
+
+export async function runSingleFreshPhase1Retry(
+  options: SingleFreshPhase1RetryOptions,
+): Promise<AgentResponse> {
+  options.discardSession();
+  const attempt: Phase1Attempt = {
+    sequence: options.sequence,
+    reason: 'publication_retry_fresh',
+    instruction: options.instruction,
+    sessionId: undefined,
+  };
+  const result = await options.execute(attempt);
+  if (!result.promptResolved) {
+    throw new Error(`Missing prompt parts for phase start: ${options.stepName}:1`);
+  }
+  const response = isEmptyPhase1Response(result.response)
+    ? { ...asEmptyOutputError(result.response), content: '' }
+    : result.response;
+  options.complete(response, attempt);
+  return response;
 }
 
 function isEmptyPhase1Response(response: AgentResponse): boolean {

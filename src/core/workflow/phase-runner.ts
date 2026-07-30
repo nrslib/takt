@@ -20,8 +20,13 @@ export {
   ReportPhaseGenerationError,
   type GeneratedReport,
   type GeneratedReportPhaseResult,
+  type ReportContentValidationResult,
+  type ReportContentValidator,
+  type ReportPhaseGenerationOptions,
+  type ReportPhaseRecoveryMetadata,
   type ReportPhaseBlockedResult,
   type ReportPhaseRateLimitedResult,
+  type ReportRetryFailureReason,
 } from './report-phase-runner.js';
 export { runStatusJudgmentPhase, type StatusJudgmentPhaseResult } from './status-judgment-phase.js';
 

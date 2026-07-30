@@ -35,6 +35,26 @@ export interface GeneratedReportPhaseResult {
   readonly reports: readonly GeneratedReport[];
 }
 
+export type ReportContentValidationResult =
+  | { readonly valid: true }
+  | { readonly valid: false };
+
+export type ReportContentValidator = (
+  reportContent: string,
+) => ReportContentValidationResult;
+
+export interface ReportPhaseGenerationOptions {
+  readonly reviewerMode?: FindingContractReviewerMode;
+  readonly validateReportContent?: ReportContentValidator;
+  readonly retryMode?: 'standard' | 'single-attempt';
+  readonly nextPhaseSequence?: () => number;
+}
+
+export interface ReportPhaseRecoveryMetadata {
+  readonly requiresFreshPhase1: boolean;
+  readonly failureReasons: readonly ReportRetryFailureReason[];
+}
+
 export interface ReportAttemptIdentity {
   readonly providerInfo: StepProviderInfo;
   readonly sessionKey: string;
@@ -51,7 +71,11 @@ class ReportPhaseToolCallError extends Error {
 }
 
 export class ReportPhaseGenerationError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly failureReason: ReportRetryFailureReason,
+    readonly recovery: ReportPhaseRecoveryMetadata,
+  ) {
     super(message);
     this.name = 'ReportPhaseGenerationError';
   }
@@ -69,7 +93,7 @@ export async function runReportPhase(
   stepIteration: number,
   ctx: ReportPhaseRunnerContext,
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
-  return executeReportPhase(step, stepIteration, ctx, undefined, (report) => {
+  return executeReportPhase(step, stepIteration, ctx, {}, (report) => {
     writeReportFile(ctx.reportDir, report.reportName, report.reportContent);
   });
 }
@@ -78,10 +102,10 @@ export async function generateReportPhase(
   step: WorkflowStep,
   stepIteration: number,
   ctx: ReportPhaseRunnerContext,
-  reviewerMode?: FindingContractReviewerMode,
+  options: ReportPhaseGenerationOptions = {},
 ): Promise<GeneratedReportPhaseResult | ReportPhaseBlockedResult | ReportPhaseRateLimitedResult> {
   const reports: GeneratedReport[] = [];
-  const result = await executeReportPhase(step, stepIteration, ctx, reviewerMode, (report) => {
+  const result = await executeReportPhase(step, stepIteration, ctx, options, (report) => {
     reports.push(report);
   });
   return result ?? { reports };
@@ -113,9 +137,10 @@ async function executeReportPhase(
   step: WorkflowStep,
   stepIteration: number,
   ctx: ReportPhaseRunnerContext,
-  reviewerMode: FindingContractReviewerMode | undefined,
+  options: ReportPhaseGenerationOptions,
   acceptReport: (report: GeneratedReport) => void,
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
+  const reviewerMode = options.reviewerMode;
   const primarySessionKey = ctx.resolveSessionKey(step);
   let currentSessionId = ctx.getSessionId(primarySessionKey);
   const hasLastResponse = ctx.lastResponse != null && ctx.lastResponse.trim().length > 0;
@@ -132,8 +157,11 @@ async function executeReportPhase(
     return;
   }
 
-  let phaseSequence = 0;
+  let localPhaseSequence = 0;
+  const nextPhaseSequence = options.nextPhaseSequence
+    ?? (() => ++localPhaseSequence);
   for (const fileName of reportFiles) {
+    const failureReasons = new Set<ReportRetryFailureReason>();
     if (!fileName) {
       throw new Error(`Invalid report file name: ${fileName}`);
     }
@@ -161,7 +189,11 @@ async function executeReportPhase(
         maxTurns: REPORT_PHASE_MAX_TURNS,
       });
     }
-    const firstAttemptPhaseExecutionId = nextReportPhaseExecutionId(step.name, ctx.iteration, ++phaseSequence);
+    const firstAttemptPhaseExecutionId = nextReportPhaseExecutionId(
+      step.name,
+      ctx.iteration,
+      nextPhaseSequence(),
+    );
 
     const firstAttempt = await runSingleReportAttempt(
       step,
@@ -169,6 +201,7 @@ async function executeReportPhase(
       firstAttemptOptions,
       ctx,
       firstAttemptPhaseExecutionId,
+      options.validateReportContent,
     );
     if (firstAttempt.kind === 'blocked') {
       return { blocked: true, response: firstAttempt.response };
@@ -188,12 +221,17 @@ async function executeReportPhase(
       log.debug('Report file generated', { step: step.name, fileName });
       continue;
     }
+    failureReasons.add(firstAttempt.failureReason);
 
-    if (!hasLastResponse) {
-      throw new ReportPhaseGenerationError(`Report phase failed for ${fileName}: ${firstAttempt.errorMessage}`);
+    if (options.retryMode === 'single-attempt' || !hasLastResponse) {
+      throw new ReportPhaseGenerationError(
+        `Report phase failed for ${fileName}: ${firstAttempt.errorMessage}`,
+        firstAttempt.failureReason,
+        buildReportPhaseRecoveryMetadata(failureReasons),
+      );
     }
 
-    const retryInstruction = new ReportInstructionBuilder(step, {
+    const baseRetryInstruction = new ReportInstructionBuilder(step, {
       cwd: ctx.cwd,
       reportDir: ctx.reportDir,
       stepIteration,
@@ -202,20 +240,40 @@ async function executeReportPhase(
       lastResponse: ctx.lastResponse,
       findingContract: buildReportFindingContractContext(step, ctx, reviewerMode),
     }).build();
+    const retryInstruction = firstAttempt.failureReason === 'invalid_output'
+      ? [
+          baseRetryInstruction,
+          '',
+          'The previous report was rejected by deterministic output validation.',
+          'Generate the complete report again from the authoritative Phase 1 response.',
+          'Do not summarize, quote, repair, or reuse the rejected report.',
+        ].join('\n')
+      : baseRetryInstruction;
     const retryOptions = buildNewSessionRetryOptions(step, ctx);
     let retryFailure: Extract<ReportAttemptResult, { kind: 'retryable_failure' }> = firstAttempt;
     let fallbackBaseOptions = firstAttemptOptions;
 
-    if (currentSessionId) {
+    if (currentSessionId || firstAttempt.failureReason === 'invalid_output') {
       log.info('Report phase failed, retrying with new session', {
         step: step.name,
         fileName,
         reason: firstAttempt.failureReason,
       });
 
-      const retryAttemptPhaseExecutionId = nextReportPhaseExecutionId(step.name, ctx.iteration, ++phaseSequence);
+      const retryAttemptPhaseExecutionId = nextReportPhaseExecutionId(
+        step.name,
+        ctx.iteration,
+        nextPhaseSequence(),
+      );
 
-      const retryAttempt = await runSingleReportAttempt(step, retryInstruction, retryOptions, ctx, retryAttemptPhaseExecutionId);
+      const retryAttempt = await runSingleReportAttempt(
+        step,
+        retryInstruction,
+        retryOptions,
+        ctx,
+        retryAttemptPhaseExecutionId,
+        options.validateReportContent,
+      );
       if (retryAttempt.kind === 'blocked') {
         return { blocked: true, response: retryAttempt.response };
       }
@@ -236,12 +294,17 @@ async function executeReportPhase(
       }
 
       retryFailure = retryAttempt;
+      failureReasons.add(retryAttempt.failureReason);
       fallbackBaseOptions = retryOptions;
     }
 
     const fallbackOptions = buildFallbackReportOptions(step, fallbackBaseOptions, ctx);
     if (fallbackOptions === undefined) {
-      throw new ReportPhaseGenerationError(`Report phase failed for ${fileName}: ${retryFailure.errorMessage}`);
+      throw new ReportPhaseGenerationError(
+        `Report phase failed for ${fileName}: ${retryFailure.errorMessage}`,
+        retryFailure.failureReason,
+        buildReportPhaseRecoveryMetadata(failureReasons),
+      );
     }
 
     log.info('Report phase failed, falling back to report provider', {
@@ -251,13 +314,18 @@ async function executeReportPhase(
       provider: fallbackOptions.resolvedProvider,
     });
 
-    const fallbackAttemptPhaseExecutionId = nextReportPhaseExecutionId(step.name, ctx.iteration, ++phaseSequence);
+    const fallbackAttemptPhaseExecutionId = nextReportPhaseExecutionId(
+      step.name,
+      ctx.iteration,
+      nextPhaseSequence(),
+    );
     const fallbackAttempt = await runSingleReportAttempt(
       step,
       retryInstruction,
       fallbackOptions,
       ctx,
       fallbackAttemptPhaseExecutionId,
+      options.validateReportContent,
     );
     if (fallbackAttempt.kind === 'blocked') {
       return { blocked: true, response: fallbackAttempt.response };
@@ -266,7 +334,12 @@ async function executeReportPhase(
       return { rateLimited: true, response: fallbackAttempt.response };
     }
     if (fallbackAttempt.kind === 'retryable_failure') {
-      throw new ReportPhaseGenerationError(`Report phase failed for ${fileName}: ${fallbackAttempt.errorMessage}`);
+      failureReasons.add(fallbackAttempt.failureReason);
+      throw new ReportPhaseGenerationError(
+        `Report phase failed for ${fileName}: ${fallbackAttempt.errorMessage}`,
+        fallbackAttempt.failureReason,
+        buildReportPhaseRecoveryMetadata(failureReasons),
+      );
     }
 
     acceptReport({
@@ -353,7 +426,32 @@ type ReportAttemptResult =
     errorKind?: AgentResponse['errorKind'];
   };
 
-type ReportRetryFailureReason = 'tool_call' | 'empty_output' | 'provider_error';
+export type ReportRetryFailureReason =
+  | 'tool_call'
+  | 'empty_output'
+  | 'provider_error'
+  | 'invalid_output';
+
+function isFreshPhase1RecoveryFailure(
+  failureReason: ReportRetryFailureReason,
+): boolean {
+  return failureReason !== 'provider_error';
+}
+
+function buildReportPhaseRecoveryMetadata(
+  failureReasons: ReadonlySet<ReportRetryFailureReason>,
+): ReportPhaseRecoveryMetadata {
+  const reasons = [...failureReasons];
+  return {
+    requiresFreshPhase1: reasons.some(isFreshPhase1RecoveryFailure),
+    failureReasons: reasons,
+  };
+}
+
+interface ReportRetryableFailure {
+  readonly failureReason: ReportRetryFailureReason;
+  readonly errorMessage: string;
+}
 
 async function runSingleReportAttempt(
   step: WorkflowStep,
@@ -361,6 +459,7 @@ async function runSingleReportAttempt(
   options: RunAgentOptions,
   ctx: ReportPhaseRunnerContext,
   phaseExecutionId: string | undefined,
+  validateReportContent: ReportContentValidator | undefined,
 ): Promise<ReportAttemptResult> {
   let didEmitPhaseStart = false;
   let resolvedPromptParts: PhasePromptParts | undefined;
@@ -388,8 +487,11 @@ async function runSingleReportAttempt(
   };
 
   let response: AgentResponse;
+  let classifiedFailure: ReportRetryableFailure | undefined;
+  let didClassifySpanOutcome = false;
   const attemptProviderInfo = resolveReportAttemptProviderInfo(step, options, ctx);
   let didRecordProviderAttempt = false;
+  let providerResponse: AgentResponse | undefined;
   try {
     response = await runWithPhaseSpan({
       enabled: ctx.observabilityEnabled === true,
@@ -405,22 +507,49 @@ async function runSingleReportAttempt(
       sanitizeText: ctx.sanitizeObservabilityText,
       providerInfo: attemptProviderInfo,
       getPromptParts: () => resolvedPromptParts,
-    }, () => executeAgent(step.persona, instruction, callOptions), (result) =>
-      buildReportAttemptSpanOutcome(step, result, reportToolCallError));
+    }, async () => {
+      const result = await executeAgent(step.persona, instruction, callOptions);
+      providerResponse = result;
+      return result;
+    }, (result) => {
+      didClassifySpanOutcome = true;
+      classifiedFailure = classifyRetryableFailure(
+        step,
+        result,
+        validateReportContent,
+      );
+      return buildReportAttemptSpanOutcome(
+        result,
+        reportToolCallError,
+        classifiedFailure,
+      );
+    });
+    if (!didClassifySpanOutcome) {
+      classifiedFailure = classifyRetryableFailure(
+        step,
+        response,
+        validateReportContent,
+      );
+    }
+    didRecordProviderAttempt = true;
     ctx.onProviderAttempt?.(
       attemptProviderInfo,
       response.status === 'done'
         && reportToolCallError === undefined
-        && classifyRetryableFailure(step, response) === undefined,
+        && classifiedFailure === undefined,
       response.providerUsage,
     );
-    didRecordProviderAttempt = true;
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:2`);
     }
   } catch (error) {
     if (!didRecordProviderAttempt) {
-      ctx.onProviderAttempt?.(attemptProviderInfo, false, undefined);
+      didRecordProviderAttempt = true;
+      ctx.onProviderAttempt?.(
+        attemptProviderInfo,
+        false,
+        providerResponse?.providerUsage,
+      );
     }
     if (error instanceof ReportPhaseToolCallError) {
       ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', error.message, phaseExecutionId, ctx.iteration);
@@ -480,10 +609,22 @@ async function runSingleReportAttempt(
   }
 
   const finalReportContent = resolveReportContent(step, response);
-  if (finalReportContent.trim().length === 0) {
-    const errorMessage = 'Report output is empty';
-    ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMessage, phaseExecutionId, ctx.iteration);
-    return { kind: 'retryable_failure', errorMessage, failureReason: 'empty_output' };
+  if (classifiedFailure !== undefined) {
+    ctx.onPhaseComplete?.(
+      step,
+      2,
+      'report',
+      '',
+      'error',
+      classifiedFailure.errorMessage,
+      phaseExecutionId,
+      ctx.iteration,
+    );
+    return {
+      kind: 'retryable_failure',
+      errorMessage: classifiedFailure.errorMessage,
+      failureReason: classifiedFailure.failureReason,
+    };
   }
 
   ctx.onPhaseComplete?.(step, 2, 'report', finalReportContent, response.status, undefined, phaseExecutionId, ctx.iteration);
@@ -496,9 +637,9 @@ async function runSingleReportAttempt(
 }
 
 function buildReportAttemptSpanOutcome(
-  step: WorkflowStep,
   result: AgentResponse,
   reportToolCallError: ReportPhaseToolCallError | undefined,
+  retryableFailure: ReportRetryableFailure | undefined,
 ) {
   if (reportToolCallError !== undefined) {
     return {
@@ -509,12 +650,11 @@ function buildReportAttemptSpanOutcome(
     };
   }
 
-  const retryableFailure = classifyRetryableFailure(step, result);
   if (retryableFailure !== undefined) {
     return {
       status: 'error',
       content: '',
-      error: buildRetryableFailureEventError(retryableFailure, result.status),
+      error: retryableFailure.errorMessage,
       providerUsage: result.providerUsage,
     };
   }
@@ -530,15 +670,41 @@ function buildReportAttemptSpanOutcome(
 function classifyRetryableFailure(
   step: WorkflowStep,
   response: AgentResponse,
-): ReportRetryFailureReason | undefined {
+  validateReportContent: ReportContentValidator | undefined,
+): ReportRetryableFailure | undefined {
   if (response.status === 'blocked' || response.status === 'rate_limited' || response.errorKind === 'rate_limit') {
     return undefined;
   }
   if (response.status !== 'done') {
-    return 'provider_error';
+    return {
+      failureReason: 'provider_error',
+      errorMessage: buildRetryableFailureEventError(
+        'provider_error',
+        response.status,
+      ),
+    };
   }
   const finalReportContent = resolveReportContent(step, response);
-  return finalReportContent.trim().length === 0 ? 'empty_output' : undefined;
+  if (finalReportContent.trim().length === 0) {
+    return {
+      failureReason: 'empty_output',
+      errorMessage: buildRetryableFailureEventError(
+        'empty_output',
+        response.status,
+      ),
+    };
+  }
+  const validation = validateReportContent?.(finalReportContent);
+  if (validation !== undefined && !validation.valid) {
+    return {
+      failureReason: 'invalid_output',
+      errorMessage: buildRetryableFailureEventError(
+        'invalid_output',
+        response.status,
+      ),
+    };
+  }
+  return undefined;
 }
 
 function resolveReportContent(
@@ -586,6 +752,9 @@ function buildRetryableFailureEventError(
   }
   if (failureReason === 'tool_call') {
     return 'Report phase emitted a tool call';
+  }
+  if (failureReason === 'invalid_output') {
+    return 'Report output failed deterministic validation';
   }
   return `Report phase provider returned status "${status}"`;
 }

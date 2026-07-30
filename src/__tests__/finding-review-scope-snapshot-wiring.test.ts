@@ -27,6 +27,8 @@ import { join } from 'node:path';
 import { afterAll, describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import type { AgentResponse, FindingContractConfig, WorkflowState, WorkflowStep } from '../core/models/types.js';
+import type { ProviderUsageSnapshot } from '../core/models/response.js';
+import type { StepProviderInfo } from '../core/workflow/types.js';
 import type {
   FindingContractInstructionContext,
   FindingContractInstructionPolicy,
@@ -212,6 +214,11 @@ function makeRunner(options: {
   projectCwd?: string;
   reportDir?: string;
   findingContractContext?: FindingContractInstructionContext;
+  reportAttempt?: {
+    readonly providerInfo: StepProviderInfo;
+    readonly success: boolean;
+    readonly usage?: ProviderUsageSnapshot;
+  };
 } = {}): {
   runner: ParallelRunner;
   deps: ParallelRunnerDeps;
@@ -278,7 +285,19 @@ function makeRunner(options: {
       parentStepName: string;
       stepIteration: number;
       phase1Response: AgentResponse;
+      onProviderAttempt: (
+        providerInfo: StepProviderInfo,
+        success: boolean,
+        usage: ProviderUsageSnapshot | undefined,
+      ) => void;
     }) => {
+      if (options.reportAttempt !== undefined) {
+        input.onProviderAttempt(
+          options.reportAttempt.providerInfo,
+          options.reportAttempt.success,
+          options.reportAttempt.usage,
+        );
+      }
       const normalized = stepExecutor.isFindingIntakeNormalizeActive()
         ? await (
             stepExecutor as typeof stepExecutor & {
@@ -476,6 +495,95 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       expect((call[0] as WorkflowStep).structuredOutput).toBeUndefined();
     }
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
+  });
+
+  it('records parallel Phase 1 and report attempts once with their actual providers', async () => {
+    const phase1UsageA: ProviderUsageSnapshot = {
+      inputTokens: 11,
+      outputTokens: 3,
+      totalTokens: 14,
+      usageMissing: false,
+    };
+    const phase1UsageB: ProviderUsageSnapshot = {
+      inputTokens: 13,
+      outputTokens: 5,
+      totalTokens: 18,
+      usageMissing: false,
+    };
+    const reportUsage: ProviderUsageSnapshot = {
+      inputTokens: 17,
+      outputTokens: 7,
+      totalTokens: 24,
+      usageMissing: false,
+    };
+    const onDelegatedAgentUsage = vi.fn();
+    const { runner, deps } = makeRunner({
+      reportAttempt: {
+        providerInfo: {
+          provider: 'claude',
+          model: 'fallback-review-model',
+        },
+        success: true,
+        usage: reportUsage,
+      },
+    });
+    deps.engineOptions.onDelegatedAgentUsage = onDelegatedAgentUsage;
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review',
+      providerUsage: phase1UsageA,
+    }));
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      providerUsage: phase1UsageB,
+    }));
+
+    await runner.runParallelStep(
+      makeParallelStep(),
+      makeState(),
+      'test task',
+      5,
+      vi.fn(),
+    );
+
+    expect(onDelegatedAgentUsage).toHaveBeenCalledTimes(4);
+    expect(onDelegatedAgentUsage.mock.calls).toEqual(expect.arrayContaining([
+      [
+        {
+          step: 'ai-antipattern-review',
+          stepType: 'parallel',
+          provider: 'claude',
+          providerModel: 'claude-sonnet',
+        },
+        { success: true, usage: phase1UsageA },
+      ],
+      [
+        {
+          step: 'security-review',
+          stepType: 'parallel',
+          provider: 'claude',
+          providerModel: 'claude-sonnet',
+        },
+        { success: true, usage: phase1UsageB },
+      ],
+      [
+        {
+          step: 'ai-antipattern-review',
+          stepType: 'parallel',
+          provider: 'claude',
+          providerModel: 'fallback-review-model',
+        },
+        { success: true, usage: reportUsage },
+      ],
+      [
+        {
+          step: 'security-review',
+          stepType: 'parallel',
+          provider: 'claude',
+          providerModel: 'fallback-review-model',
+        },
+        { success: true, usage: reportUsage },
+      ],
+    ]));
   });
 
   it('does not run manager intake when one free-form reviewer normalization fails', async () => {

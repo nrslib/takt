@@ -5,12 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import type { AgentResponse, WorkflowState } from '../core/models/types.js';
+import type { StreamEvent } from '../shared/types/provider.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import {
   makeStep,
   makeWorkflowResumePointEntry,
 } from './test-helpers.js';
 import { createTeamLeaderPlanningStep } from '../core/workflow/engine/team-leader-common.js';
+import { PHASE1_EMPTY_OUTPUT_ERROR } from '../core/workflow/engine/phase1-empty-recovery.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -59,6 +61,33 @@ function makeState(): WorkflowState {
   };
 }
 
+function malformedCanonicalFindingReport(): string {
+  return [
+    '## Result: REJECT',
+    '',
+    FINDING_CLAIM_BEGIN_MARKER,
+    'Finding Claim',
+    'Raw Finding ID: missing-feature',
+    'Relation: new',
+    'Target Finding ID: none',
+    'Family Tag: architecture',
+    'Severity: high',
+    'Title: Feature is missing',
+    'Description: The feature is absent.',
+    'Suggestion: Implement it.',
+    'Target Kind: absence',
+    'Target Paths: none',
+    'Review Scope Roots: ["src"]',
+    'Manifest Targets: none',
+    'Absence Predicate: exact_literal_absent',
+    'Absence Path: none',
+    'Absence Literal: attachPullRequestImages',
+    'Evidence Requests:',
+    '  Authoritative Quote',
+    FINDING_CLAIM_END_MARKER,
+  ].join('\n');
+}
+
 describe('StepExecutor', () => {
   let cwd: string;
   let runPaths: RunPaths;
@@ -91,6 +120,185 @@ describe('StepExecutor', () => {
   afterEach(() => {
     rmSync(cwd, { recursive: true, force: true });
   });
+
+  function createFreeformPublicationRetryHarness(options: {
+    readonly reportResponses: readonly (
+      | string
+      | Pick<AgentResponse, 'status' | 'content'>
+        & Partial<Pick<
+          AgentResponse,
+          'error' | 'errorKind' | 'providerUsage' | 'sessionId' | 'timestamp'
+        >>
+        & { readonly streamEvents?: readonly StreamEvent[] }
+    )[];
+    readonly fallback: boolean;
+  }) {
+    let currentSessionId: string | undefined = 'initial-phase1-session';
+    const updatePersonaSession = vi.fn((_sessionKey: string, sessionId: string | undefined) => {
+      currentSessionId = sessionId;
+    });
+    const onPhaseStart = vi.fn();
+    const onPhaseComplete = vi.fn();
+    const normalizeFindingIntake = vi.fn(async (_reportContent, normalizerOptions) => {
+      normalizerOptions.onPromptResolved?.({
+        systemPrompt: 'normalizer system',
+        userInstruction: 'normalizer prompt',
+      });
+      return {
+        persona: 'normalizer',
+        status: 'done' as const,
+        content: '{"rawFindings":[]}',
+        structuredOutput: { rawFindings: [] },
+        timestamp: new Date('2026-07-30T00:00:10.000Z'),
+      };
+    });
+    const reportResponses = [...options.reportResponses];
+    vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, agentOptions) => {
+      agentOptions?.onPromptResolved?.({
+        systemPrompt: 'reviewer system',
+        userInstruction: prompt,
+      });
+      const attempt = reportResponses.shift();
+      if (attempt === undefined) {
+        throw new Error('Unexpected report attempt');
+      }
+      const response = typeof attempt === 'string'
+        ? {
+            status: 'done' as const,
+            content: attempt,
+            streamEvents: undefined,
+          }
+        : attempt;
+      for (const event of response.streamEvents ?? []) {
+        agentOptions?.onStream?.(event);
+      }
+      const { streamEvents: _streamEvents, ...agentResponse } = response;
+      return {
+        persona: 'reviewer',
+        ...agentResponse,
+        sessionId: `report-session-${options.reportResponses.length - reportResponses.length}`,
+        timestamp: new Date('2026-07-30T00:00:00.000Z'),
+      };
+    });
+    const buildPhaseRunnerContext = vi.fn((
+      _step,
+      state: WorkflowState,
+      lastResponse: string,
+      _updatePersonaSession,
+      _onPhaseStart,
+      _onPhaseComplete,
+      _onJudgeStage,
+      _iteration,
+      _runtime,
+      onProviderAttempt,
+    ) => ({
+      cwd,
+      reportDir: runPaths.reportsAbs,
+      language: 'en' as const,
+      lastResponse,
+      workflowName: 'test-workflow',
+      iteration: state.iteration,
+      getSessionId: () => currentSessionId,
+      resolveSessionKey: () => 'reviewer:mock',
+      buildResumeOptions: (_reportStep, sessionId: string, overrides) => ({
+        resolvedProvider: 'mock' as const,
+        sessionId,
+        maxTurns: overrides.maxTurns,
+      }),
+      buildNewSessionReportOptions: (_reportStep, overrides) => ({
+        resolvedProvider: 'mock' as const,
+        allowedTools: overrides.allowedTools,
+        maxTurns: overrides.maxTurns,
+      }),
+      buildFallbackReportOptions: (_reportStep, _failedOptions, overrides) => (
+        options.fallback
+          ? {
+              resolvedProvider: 'claude' as const,
+              allowedTools: overrides.allowedTools,
+              maxTurns: overrides.maxTurns,
+            }
+          : undefined
+      ),
+      resolveReportFallbackProviderModel: () => (
+        options.fallback ? { provider: 'claude' as const } : undefined
+      ),
+      updatePersonaSession,
+      resolveStepProviderModel: () => ({ provider: 'mock' as const }),
+      onPhaseStart,
+      onPhaseComplete,
+      onProviderAttempt,
+    }));
+    const recordSynthesizedAgentUsage = vi.fn();
+    const onProviderAttempt = vi.fn((providerInfo, success, usage) => {
+      recordSynthesizedAgentUsage(
+        'review',
+        providerInfo,
+        success,
+        usage,
+      );
+    });
+    const executor = new StepExecutor({
+      optionsBuilder: {
+        buildPhaseRunnerContext,
+        resolveStepProviderModel: vi.fn().mockReturnValue({
+          provider: 'mock',
+          model: 'reviewer-model',
+        }),
+      },
+      structuredCaller: { normalizeFindingIntake },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+      intakeNormalize: { provider: 'mock', model: 'normalizer-model' },
+      getRunPaths: () => runPaths,
+      getFindingCallNamespace: () => '',
+      getLanguage: () => 'en',
+      getWorkflowName: () => 'test-workflow',
+      observabilityEnabled: () => false,
+      recordSynthesizedAgentUsage,
+      findingLedgerStore: {
+        ledgerIdentity: 'scope-retry',
+      },
+      onPhaseStart,
+      onPhaseComplete,
+    } as unknown as StepExecutorDeps);
+    const step = makeStep({
+      name: 'review',
+      persona: 'reviewer',
+      instruction: 'Review.',
+      outputContracts: [
+        { name: 'review.md', format: 'review', formatRef: 'review-finding-contract' },
+      ],
+    });
+    const state = makeState();
+    const initialPhase1Response: AgentResponse = {
+      persona: 'reviewer',
+      status: 'done',
+      content: 'Initial authoritative Phase 1 review.',
+      sessionId: 'initial-phase1-session',
+      timestamp: new Date('2026-07-30T00:00:00.000Z'),
+    };
+    const rerunPhase1Fresh = vi.fn(async () => {
+      currentSessionId = 'fresh-phase1-session';
+      return {
+        ...initialPhase1Response,
+        content: 'Fresh authoritative Phase 1 review.',
+        sessionId: 'fresh-phase1-session',
+        timestamp: new Date('2026-07-30T00:00:05.000Z'),
+      };
+    });
+
+    return {
+      executor,
+      step,
+      state,
+      initialPhase1Response,
+      rerunPhase1Fresh,
+      onProviderAttempt,
+      updatePersonaSession,
+      normalizeFindingIntake,
+      onPhaseStart,
+      recordSynthesizedAgentUsage,
+    };
+  }
 
   it('phase:start には structured_output 用に差し替えた実 instruction を渡す', async () => {
     vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
@@ -187,6 +395,18 @@ describe('StepExecutor', () => {
 
   it('active normal reviewerをfree-formで実行し、reviewer phase確定後に独立normalizer phaseを取り込む', async () => {
     const reviewerTimestamp = new Date('2026-07-29T01:00:00.000Z');
+    const phase1Usage = {
+      inputTokens: 20,
+      outputTokens: 8,
+      totalTokens: 28,
+      usageMissing: false,
+    };
+    const phase2Usage = {
+      inputTokens: 12,
+      outputTokens: 6,
+      totalTokens: 18,
+      usageMissing: false,
+    };
     const rawExcerpt = [
       FINDING_CLAIM_BEGIN_MARKER,
       'Finding Claim',
@@ -242,6 +462,7 @@ describe('StepExecutor', () => {
       status: 'done',
       content: 'Phase 1 draft; this is not the authoritative report.',
       sessionId: 'reviewer-session',
+      providerUsage: phase1Usage,
       timestamp: reviewerTimestamp,
     };
     const reportContent = `## Result: REJECT\n\n${rawExcerpt}`;
@@ -257,6 +478,7 @@ describe('StepExecutor', () => {
       return {
         ...reviewerResponse,
         content: reportContent,
+        providerUsage: phase2Usage,
         timestamp: new Date('2026-07-29T01:00:00.500Z'),
       };
     });
@@ -301,20 +523,35 @@ describe('StepExecutor', () => {
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({
+        buildPhaseRunnerContext: vi.fn((
+          _reportStep,
+          _state,
+          lastResponse,
+          phaseUpdatePersonaSession,
+          phaseOnStart,
+          phaseOnComplete,
+          _onJudgeStage,
+          _iteration,
+          _runtime,
+          onProviderAttempt,
+        ) => ({
           cwd,
           reportDir: runPaths.reportsAbs,
           language: 'en',
-          lastResponse: reviewerResponse.content,
+          lastResponse,
+          workflowName: 'test-workflow',
           getSessionId: () => undefined,
           resolveSessionKey: () => 'reviewer:mock',
           buildResumeOptions: () => ({}),
           buildNewSessionReportOptions: () => ({}),
           buildFallbackReportOptions: () => undefined,
           resolveReportFallbackProviderModel: () => undefined,
-          updatePersonaSession: vi.fn(),
+          updatePersonaSession: phaseUpdatePersonaSession,
           resolveStepProviderModel: () => ({ provider: 'mock', model: 'reviewer-model' }),
-        }),
+          onPhaseStart: phaseOnStart,
+          onPhaseComplete: phaseOnComplete,
+          onProviderAttempt,
+        })),
         resolveStepProviderModel: vi.fn().mockReturnValue({
           provider: 'claude',
           model: 'sonnet',
@@ -402,6 +639,7 @@ describe('StepExecutor', () => {
     expect(result.response).toMatchObject({
       content: reportContent,
       sessionId: reviewerResponse.sessionId,
+      providerUsage: phase1Usage,
       timestamp: new Date('2026-07-29T01:00:00.500Z'),
       structuredOutput: { rawFindings: [normalizedRawFinding] },
     });
@@ -413,9 +651,20 @@ describe('StepExecutor', () => {
       normalizeFindingIntake.mock.invocationCallOrder[0]!,
     );
     expect(onPhaseComplete.mock.calls.map(([phaseStep]) => phaseStep.name))
-      .toEqual(['review', 'review:intake-normalize']);
+      .toEqual(['review', 'review', 'review:intake-normalize']);
     expect(onPhaseStart.mock.calls.map(([phaseStep]) => phaseStep.name))
-      .toEqual(['review', 'review:intake-normalize']);
+      .toEqual(['review', 'review', 'review:intake-normalize']);
+    expect(
+      recordSynthesizedAgentUsage.mock.calls
+        .filter(([stepName]) => stepName === 'review'),
+    ).toEqual([
+      [
+        'review',
+        { provider: 'mock', model: 'reviewer-model' },
+        true,
+        phase2Usage,
+      ],
+    ]);
     expect(recordSynthesizedAgentUsage).toHaveBeenCalledWith(
       'review:intake-normalize',
       expect.objectContaining({ provider: 'mock', model: 'normalizer-model' }),
@@ -428,6 +677,594 @@ describe('StepExecutor', () => {
         .subResults[0]?.publication.rawFindings,
     ).toEqual([normalizedRawFinding]);
   });
+
+  it.each([
+    { freshOutcome: 'done' as const, expectedSuccess: true },
+    { freshOutcome: 'throw' as const, expectedSuccess: false },
+  ])(
+    'normal FC fresh Phase 1は$freshOutcome時もusage attemptを一度だけ記録する',
+    async ({ freshOutcome, expectedSuccess }) => {
+      const initialResponse: AgentResponse = {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'Initial Phase 1 response.',
+        timestamp: new Date('2026-07-30T01:00:00.000Z'),
+      };
+      const freshUsage = {
+        inputTokens: 23,
+        outputTokens: 7,
+        totalTokens: 30,
+        usageMissing: false,
+      };
+      const freshResponse: AgentResponse = {
+        ...initialResponse,
+        content: 'Fresh Phase 1 response.',
+        providerUsage: freshUsage,
+        timestamp: new Date('2026-07-30T01:00:01.000Z'),
+      };
+      let callCount = 0;
+      vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'reviewer system',
+          userInstruction: prompt,
+        });
+        callCount += 1;
+        if (callCount === 1) {
+          return initialResponse;
+        }
+        if (freshOutcome === 'throw') {
+          throw new Error('fresh Phase 1 failed');
+        }
+        return freshResponse;
+      });
+
+      const recordSynthesizedAgentUsage = vi.fn();
+      const step = makeStep({
+        name: 'review',
+        persona: 'reviewer',
+        instruction: 'Review.',
+        outputContracts: [
+          { name: 'review.md', format: 'review', formatRef: 'review-finding-contract' },
+        ],
+      });
+      const deps = {
+        optionsBuilder: {
+          buildAgentOptions: vi.fn().mockReturnValue({}),
+          resolveStepProviderModel: vi.fn().mockReturnValue({
+            provider: 'claude',
+            model: 'sonnet',
+          }),
+          buildFindingContractInstructionContext: vi.fn().mockReturnValue({
+            ledgerSummary: '{"findings":[]}',
+            reportLedgerSummary: '{"ids":[]}',
+            hasOpenFindings: false,
+            hasWaivedFindings: false,
+            hasDismissedFindings: false,
+            reviewer: {
+              mode: 'freeform',
+              reviewScopeSnapshotId: 'snapshot-1',
+            },
+          }),
+        },
+        getCwd: () => cwd,
+        getProjectCwd: () => cwd,
+        getReportDir: () => '.takt/reports',
+        getRunPaths: () => runPaths,
+        getLanguage: () => 'en',
+        getInteractive: () => false,
+        getWorkflowSteps: () => [{ name: 'review' }],
+        getWorkflowName: () => 'test-workflow',
+        getTask: () => 'test task',
+        getWorkflowDescription: () => undefined,
+        getRetryNote: () => undefined,
+        structuredCaller: {
+          evaluateCondition: vi.fn(),
+          judgeStatus: vi.fn(),
+          decomposeTask: vi.fn(),
+          requestMoreParts: vi.fn(),
+        },
+        structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+        intakeNormalize: {
+          provider: 'mock',
+          model: 'normalizer-model',
+        },
+        findingContract: {
+          ledgerPath: '.takt/findings/ledger.json',
+          rawFindingsPath: '.takt/findings/raw',
+          manager: {
+            persona: 'findings-manager',
+            instruction: 'Reconcile.',
+            outputContract: 'Return JSON.',
+          },
+        },
+        findingLedgerStore: {
+          ledgerIdentity: 'scope-1',
+          loadLedger: () => ({ findings: [] }),
+        },
+        refreshFindingsState: vi.fn(),
+        emitEvent: vi.fn(),
+        recordSynthesizedAgentUsage,
+        getFindingCallNamespace: () => '',
+        onPhaseStart: vi.fn(),
+        onPhaseComplete: vi.fn(),
+      } as unknown as StepExecutorDeps;
+      const executor = new StepExecutor(deps);
+      vi.spyOn(executor, 'prepareFindingReviewPublication')
+        .mockImplementation(async (input) => ({
+          terminalResponse: await input.rerunPhase1Fresh(),
+        }));
+      const state = makeState();
+      const prepared = executor.prepareNormalStepExecution(
+        step,
+        state,
+        'test task',
+        5,
+        1,
+      );
+      const execution = executor.runNormalStep(
+        step,
+        state,
+        'test task',
+        5,
+        vi.fn(),
+        undefined,
+        undefined,
+        prepared,
+      );
+
+      if (freshOutcome === 'throw') {
+        await expect(execution).rejects.toThrow('fresh Phase 1 failed');
+      } else {
+        await expect(execution).resolves.toBeDefined();
+      }
+      expect(
+        recordSynthesizedAgentUsage.mock.calls
+          .filter(([stepName]) => stepName === 'review'),
+      ).toEqual([[
+        'review',
+        { provider: 'claude', model: 'sonnet' },
+        expectedSuccess,
+        freshOutcome === 'done' ? freshUsage : undefined,
+      ]]);
+    },
+  );
+
+  it('canonical grammar invalidをreport retry後にfresh Phase1から一度だけ再調査し、valid reportだけnormalizerへ渡す', async () => {
+    const malformedReport = [
+      '## Result: REJECT',
+      '',
+      FINDING_CLAIM_BEGIN_MARKER,
+      'Finding Claim',
+      'Raw Finding ID: missing-feature',
+      'Relation: new',
+      'Target Finding ID: none',
+      'Family Tag: architecture',
+      'Severity: high',
+      'Title: Feature is missing',
+      'Description: The feature is absent.',
+      'Suggestion: Implement it.',
+      'Target Kind: absence',
+      'Target Paths: none',
+      'Review Scope Roots: ["src"]',
+      'Manifest Targets: none',
+      'Absence Predicate: exact_literal_absent',
+      'Absence Path: none',
+      'Absence Literal: attachPullRequestImages',
+      'Evidence Requests:',
+      '  Authoritative Quote',
+      FINDING_CLAIM_END_MARKER,
+    ].join('\n');
+    const validReport = '## Result: APPROVE\n\nNo findings.';
+    const harness = createFreeformPublicationRetryHarness({
+      reportResponses: [malformedReport, malformedReport, validReport],
+      fallback: false,
+    });
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: harness.initialPhase1Response,
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: harness.rerunPhase1Fresh,
+      onProviderAttempt: harness.onProviderAttempt,
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect('publication' in result).toBe(true);
+    if (!('publication' in result)) {
+      throw new Error('Expected publication');
+    }
+    expect(result.publication.reportContent).toBe(validReport);
+    expect(harness.rerunPhase1Fresh).toHaveBeenCalledOnce();
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledOnce();
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledWith(
+      validReport,
+      expect.anything(),
+    );
+    expect(
+      harness.onPhaseStart.mock.calls
+        .filter(([, phase]) => phase === 2)
+        .map((call) => call[5]),
+    ).toEqual([
+      'review:3:2:1',
+      'review:3:2:2',
+      'review:3:2:3',
+    ]);
+  });
+
+  it('empty reportをfresh sessionでも回復できなければfresh Phase 1後のvalid reportを採用する', async () => {
+    const validReport = '## Result: APPROVE\n\nNo findings.';
+    const harness = createFreeformPublicationRetryHarness({
+      reportResponses: ['   ', '', validReport],
+      fallback: false,
+    });
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: harness.initialPhase1Response,
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: harness.rerunPhase1Fresh,
+      onProviderAttempt: harness.onProviderAttempt,
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect('publication' in result && result.publication.reportContent)
+      .toBe(validReport);
+    expect(harness.rerunPhase1Fresh).toHaveBeenCalledOnce();
+    expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(3);
+  });
+
+  it('invalid後のretryとfallbackがprovider errorでもfresh Phase 1回復を失わない', async () => {
+    const validReport = '## Result: APPROVE\n\nNo findings.';
+    const harness = createFreeformPublicationRetryHarness({
+      reportResponses: [
+        malformedCanonicalFindingReport(),
+        malformedCanonicalFindingReport(),
+        {
+          status: 'error',
+          content: '',
+          error: 'fallback transport failed',
+        },
+        validReport,
+      ],
+      fallback: true,
+    });
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: harness.initialPhase1Response,
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: harness.rerunPhase1Fresh,
+      onProviderAttempt: harness.onProviderAttempt,
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect('publication' in result && result.publication.reportContent)
+      .toBe(validReport);
+    expect(harness.rerunPhase1Fresh).toHaveBeenCalledOnce();
+    expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(4);
+  });
+
+  it('fresh Phase 1がdone空ならterminal errorにしてfinal Phase 2へ進めずsessionを破棄する', async () => {
+    const malformedReport = malformedCanonicalFindingReport();
+    const harness = createFreeformPublicationRetryHarness({
+      reportResponses: [malformedReport, malformedReport],
+      fallback: false,
+    });
+    harness.rerunPhase1Fresh.mockResolvedValueOnce({
+      persona: 'reviewer',
+      status: 'done',
+      content: '   ',
+      sessionId: 'empty-fresh-phase1-session',
+      timestamp: new Date('2026-07-30T00:00:05.000Z'),
+    });
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: harness.initialPhase1Response,
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: harness.rerunPhase1Fresh,
+      onProviderAttempt: harness.onProviderAttempt,
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect('terminalResponse' in result).toBe(true);
+    if (!('terminalResponse' in result)) {
+      throw new Error('Expected terminal response');
+    }
+    expect(result.terminalResponse).toMatchObject({
+      status: 'error',
+      content: '',
+      error: PHASE1_EMPTY_OUTPUT_ERROR,
+    });
+    expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(2);
+    expect(harness.updatePersonaSession).toHaveBeenLastCalledWith(
+      'reviewer:mock',
+      undefined,
+    );
+  });
+
+  it('validatorがtrimした本文とbyte一致するresponseだけをnormalizerへ渡す', async () => {
+    const validReport = '## Result: APPROVE\n\nNo findings.';
+    const harness = createFreeformPublicationRetryHarness({
+      reportResponses: [`\n${validReport}\n`],
+      fallback: false,
+    });
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: harness.initialPhase1Response,
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: harness.rerunPhase1Fresh,
+      onProviderAttempt: harness.onProviderAttempt,
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect('publication' in result && result.publication.reportContent)
+      .toBe(validReport);
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledWith(
+      validReport,
+      expect.anything(),
+    );
+  });
+
+  it('production phase context経由でinvalid report usageを失敗として一度だけ記録する', async () => {
+    const invalidUsage = {
+      inputTokens: 11,
+      outputTokens: 3,
+      totalTokens: 14,
+      usageMissing: false,
+    };
+    const validUsage = {
+      inputTokens: 13,
+      outputTokens: 5,
+      totalTokens: 18,
+      usageMissing: false,
+    };
+    const harness = createFreeformPublicationRetryHarness({
+      reportResponses: [
+        {
+          status: 'done',
+          content: malformedCanonicalFindingReport(),
+          providerUsage: invalidUsage,
+        },
+        {
+          status: 'done',
+          content: '## Result: APPROVE\n\nNo findings.',
+          providerUsage: validUsage,
+        },
+      ],
+      fallback: false,
+    });
+
+    await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: harness.initialPhase1Response,
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: harness.rerunPhase1Fresh,
+      onProviderAttempt: harness.onProviderAttempt,
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect(
+      harness.recordSynthesizedAgentUsage.mock.calls
+        .filter(([stepName]) => stepName === 'review'),
+    ).toEqual([
+      ['review', { provider: 'mock' }, false, invalidUsage],
+      ['review', { provider: 'mock' }, true, validUsage],
+    ]);
+  });
+
+  it('empty outputでreport回復を使い切ったterminalはempty種別を固定文で示す', async () => {
+    const harness = createFreeformPublicationRetryHarness({
+      reportResponses: [' ', '', '\n'],
+      fallback: false,
+    });
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: harness.initialPhase1Response,
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: harness.rerunPhase1Fresh,
+      onProviderAttempt: harness.onProviderAttempt,
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect('terminalResponse' in result).toBe(true);
+    if (!('terminalResponse' in result)) {
+      throw new Error('Expected terminal response');
+    }
+    expect(result.terminalResponse.error).toBe(
+      'Finding contract reviewer "review" exhausted report recovery attempts; failure types: empty output',
+    );
+  });
+
+  it('terminal固定文は初回cycleとfinal attemptのfailure種別を集約する', async () => {
+    const harness = createFreeformPublicationRetryHarness({
+      reportResponses: [
+        malformedCanonicalFindingReport(),
+        malformedCanonicalFindingReport(),
+        {
+          status: 'error',
+          content: '',
+          error: 'fallback transport failed',
+        },
+        '',
+      ],
+      fallback: true,
+    });
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: harness.initialPhase1Response,
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: harness.rerunPhase1Fresh,
+      onProviderAttempt: harness.onProviderAttempt,
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect('terminalResponse' in result).toBe(true);
+    if (!('terminalResponse' in result)) {
+      throw new Error('Expected terminal response');
+    }
+    expect(result.terminalResponse.error).toBe(
+      'Finding contract reviewer "review" exhausted report recovery attempts; failure types: invalid output, provider error, empty output',
+    );
+    expect(result.terminalResponse.error).not.toContain('fallback transport failed');
+  });
+
+  it('tool callでreport回復を使い切ったterminalはtool種別を固定文で示す', async () => {
+    const toolAttempt = {
+      status: 'done' as const,
+      content: 'discarded model body',
+      streamEvents: [{
+        type: 'tool_use' as const,
+        data: {
+          tool: 'run',
+          input: { command: 'echo unsafe' },
+          id: 'tool-call',
+        },
+      }],
+    };
+    const harness = createFreeformPublicationRetryHarness({
+      reportResponses: [toolAttempt, toolAttempt, toolAttempt],
+      fallback: false,
+    });
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: harness.initialPhase1Response,
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: harness.rerunPhase1Fresh,
+      onProviderAttempt: harness.onProviderAttempt,
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect('terminalResponse' in result).toBe(true);
+    if (!('terminalResponse' in result)) {
+      throw new Error('Expected terminal response');
+    }
+    expect(result.terminalResponse.error).toBe(
+      'Finding contract reviewer "review" exhausted report recovery attempts; failure types: forbidden tool call',
+    );
+    expect(result.terminalResponse.error).not.toContain('discarded model body');
+  });
+
+  it.each([
+    { fallback: false, expectedAttempts: 3 },
+    { fallback: true, expectedAttempts: 4 },
+  ])(
+    'canonical grammar invalidを全report経路で拒否したらfresh Phase1を一度だけ使ってterminalにする: fallback=$fallback',
+    async ({ fallback, expectedAttempts }) => {
+      const malformedReport = [
+        '## Result: REJECT',
+        '',
+        FINDING_CLAIM_BEGIN_MARKER,
+        'Finding Claim',
+        'Raw Finding ID: missing-feature',
+        'Relation: new',
+        'Target Finding ID: none',
+        'Family Tag: architecture',
+        'Severity: high',
+        'Title: Feature is missing',
+        'Description: The feature is absent.',
+        'Suggestion: Implement it.',
+        'Target Kind: absence',
+        'Target Paths: none',
+        'Review Scope Roots: ["src"]',
+        'Manifest Targets: none',
+        'Absence Predicate: exact_literal_absent',
+        'Absence Path: none',
+        'Absence Literal: attachPullRequestImages',
+        'Evidence Requests:',
+        '  Authoritative Quote',
+        FINDING_CLAIM_END_MARKER,
+      ].join('\n');
+      const harness = createFreeformPublicationRetryHarness({
+        reportResponses: Array.from(
+          { length: expectedAttempts },
+          () => malformedReport,
+        ),
+        fallback,
+      });
+
+      const result = await harness.executor.prepareFindingReviewPublication({
+        step: harness.step,
+        executableStep: harness.step,
+        parentStepName: 'reviewers',
+        stepIteration: 1,
+        state: harness.state,
+        phase1Response: harness.initialPhase1Response,
+        agentOptions: { resolvedProvider: 'mock' },
+        rerunPhase1Fresh: harness.rerunPhase1Fresh,
+        onProviderAttempt: harness.onProviderAttempt,
+        updatePersonaSession: harness.updatePersonaSession,
+      });
+
+      expect('terminalResponse' in result).toBe(true);
+      if (!('terminalResponse' in result)) {
+        throw new Error('Expected terminal response');
+      }
+      expect(result.terminalResponse).toMatchObject({
+        persona: 'review',
+        status: 'error',
+        error: expect.stringContaining(
+          'exhausted report recovery attempts; failure types: invalid output',
+        ),
+      });
+      expect(harness.rerunPhase1Fresh).toHaveBeenCalledOnce();
+      expect(harness.normalizeFindingIntake).not.toHaveBeenCalled();
+      expect(harness.updatePersonaSession).toHaveBeenLastCalledWith(
+        'reviewer:mock',
+        undefined,
+      );
+      expect(
+        harness.onPhaseStart.mock.calls
+          .filter(([, phase]) => phase === 2)
+          .map((call) => call[5]),
+      ).toEqual(
+        Array.from(
+          { length: expectedAttempts },
+          (_, index) => `review:3:2:${index + 1}`,
+        ),
+      );
+    },
+  );
 
   it('normalizerがprompt callback前にfail-fastしても合成phaseのstart/error/usageを記録する', async () => {
     const onPhaseStart = vi.fn();

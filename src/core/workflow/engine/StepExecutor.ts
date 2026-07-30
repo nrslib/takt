@@ -37,6 +37,7 @@ import {
   generateReportPhase,
   runReportPhase,
   ReportPhaseGenerationError,
+  type ReportRetryFailureReason,
 } from '../phase-runner.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import type {
@@ -105,6 +106,7 @@ import {
   executeObservedPhase1Attempt,
   PHASE1_EMPTY_OUTPUT_ERROR,
   runPhase1WithEmptyRecovery,
+  runSingleFreshPhase1Retry,
 } from './phase1-empty-recovery.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import {
@@ -130,6 +132,39 @@ import type {
 } from '../findings/review-publication-correction.js';
 
 const log = createLogger('step-executor');
+
+const REPORT_FAILURE_LABELS: Record<ReportRetryFailureReason, string> = {
+  invalid_output: 'invalid output',
+  empty_output: 'empty output',
+  tool_call: 'forbidden tool call',
+  provider_error: 'provider error',
+};
+
+function replaceResponseProviderUsage(
+  response: AgentResponse,
+  providerUsage: ProviderUsageSnapshot | undefined,
+): AgentResponse {
+  const withoutProviderUsage = { ...response };
+  delete withoutProviderUsage.providerUsage;
+  return providerUsage === undefined
+    ? withoutProviderUsage
+    : { ...withoutProviderUsage, providerUsage };
+}
+
+function mergeReportFailureReasons(
+  first: readonly ReportRetryFailureReason[],
+  second: readonly ReportRetryFailureReason[],
+): readonly ReportRetryFailureReason[] {
+  return [...new Set([...first, ...second])];
+}
+
+function buildReportRecoveryExhaustedError(
+  stepName: string,
+  failureReasons: readonly ReportRetryFailureReason[],
+): string {
+  const labels = failureReasons.map((reason) => REPORT_FAILURE_LABELS[reason]);
+  return `Finding contract reviewer "${stepName}" exhausted report recovery attempts; failure types: ${labels.join(', ')}`;
+}
 
 export interface StepExecutorDeps {
   readonly optionsBuilder: OptionsBuilder;
@@ -772,6 +807,10 @@ export class StepExecutor {
     readonly state: WorkflowState;
     readonly phase1Response: AgentResponse;
     readonly agentOptions: RunAgentOptions;
+    readonly rerunPhase1Fresh: () => Promise<AgentResponse>;
+    readonly onProviderAttempt: NonNullable<
+      BasePhaseRunnerContext['onProviderAttempt']
+    >;
     readonly updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
     readonly runtime?: RuntimeStepResolution;
   }): Promise<
@@ -789,17 +828,21 @@ export class StepExecutor {
           ...input.executableStep,
           structuredOutput: createFindingReviewPublicationStructuredOutput(),
         };
-    const phaseContext = this.deps.optionsBuilder.buildPhaseRunnerContext(
-      reportStep,
-      input.state,
-      input.phase1Response.content,
-      input.updatePersonaSession,
-      this.deps.onPhaseStart,
-      this.deps.onPhaseComplete,
-      this.deps.onJudgeStage,
-      input.state.iteration,
-      input.runtime,
+    const buildPhaseContext = (phase1Response: AgentResponse) => (
+      this.deps.optionsBuilder.buildPhaseRunnerContext(
+        reportStep,
+        input.state,
+        phase1Response.content,
+        input.updatePersonaSession,
+        this.deps.onPhaseStart,
+        this.deps.onPhaseComplete,
+        this.deps.onJudgeStage,
+        input.state.iteration,
+        input.runtime,
+        input.onProviderAttempt,
+      )
     );
+    let phaseContext = buildPhaseContext(input.phase1Response);
     const reportFiles = input.step.outputContracts?.map((entry) => entry.name) ?? [];
     if (reportFiles.length !== 1) {
       throw new Error(
@@ -834,22 +877,135 @@ export class StepExecutor {
       };
     }
 
-    const generated = await generateReportPhase(
-      reportStep,
-      input.stepIteration,
-      phaseContext,
-      intakeNormalizeActive ? 'freeform' : 'structured',
-    );
+    let phaseSequence = 0;
+    const nextPhaseSequence = (): number => ++phaseSequence;
+    const validateReportContent = intakeNormalizeActive
+      ? (reportContent: string) => {
+          const parsed = parseCanonicalFindingClaimReport(reportContent);
+          return parsed.error === undefined
+            ? { valid: true } as const
+            : { valid: false } as const;
+        }
+      : undefined;
+    let activePhase1Response = input.phase1Response;
+    let usedFreshPhase1Cycle = false;
+    let recoveryFailureReasons: readonly ReportRetryFailureReason[] = [];
+    let generated;
+    try {
+      generated = await generateReportPhase(
+        reportStep,
+        input.stepIteration,
+        phaseContext,
+        {
+          reviewerMode: intakeNormalizeActive ? 'freeform' : 'structured',
+          validateReportContent,
+          nextPhaseSequence,
+        },
+      );
+    } catch (error) {
+      if (
+        !(error instanceof ReportPhaseGenerationError)
+        || !error.recovery.requiresFreshPhase1
+        || !intakeNormalizeActive
+      ) {
+        throw error;
+      }
+
+      recoveryFailureReasons = error.recovery.failureReasons;
+      input.updatePersonaSession(phaseContext.resolveSessionKey(reportStep), undefined);
+      activePhase1Response = await input.rerunPhase1Fresh();
+      usedFreshPhase1Cycle = true;
+      if (
+        activePhase1Response.status === 'done'
+        && activePhase1Response.structuredOutput === undefined
+        && activePhase1Response.content.trim().length === 0
+      ) {
+        input.updatePersonaSession(
+          phaseContext.resolveSessionKey(reportStep),
+          undefined,
+        );
+        return {
+          terminalResponse: {
+            ...activePhase1Response,
+            status: 'error',
+            content: '',
+            error: PHASE1_EMPTY_OUTPUT_ERROR,
+          },
+        };
+      }
+      if (activePhase1Response.status !== 'done') {
+        input.updatePersonaSession(
+          phaseContext.resolveSessionKey(reportStep),
+          undefined,
+        );
+        return {
+          terminalResponse: {
+            ...activePhase1Response,
+            persona: input.step.name,
+          },
+        };
+      }
+      phaseContext = buildPhaseContext(activePhase1Response);
+      try {
+        generated = await generateReportPhase(
+          reportStep,
+          input.stepIteration,
+          phaseContext,
+          {
+            reviewerMode: 'freeform',
+            validateReportContent,
+            retryMode: 'single-attempt',
+            nextPhaseSequence,
+          },
+        );
+      } catch (finalError) {
+        input.updatePersonaSession(
+          phaseContext.resolveSessionKey(reportStep),
+          undefined,
+        );
+        if (finalError instanceof ReportPhaseGenerationError) {
+          const failureReasons = mergeReportFailureReasons(
+            recoveryFailureReasons,
+            finalError.recovery.failureReasons,
+          );
+          return {
+            terminalResponse: {
+              persona: input.step.name,
+              status: 'error',
+              content: '',
+              error: buildReportRecoveryExhaustedError(
+                input.step.name,
+                failureReasons,
+              ),
+              timestamp: new Date(),
+            },
+          };
+        }
+        throw finalError;
+      }
+    }
     if ('blocked' in generated) {
+      if (usedFreshPhase1Cycle) {
+        input.updatePersonaSession(
+          phaseContext.resolveSessionKey(reportStep),
+          undefined,
+        );
+      }
       return {
         terminalResponse: {
-          ...input.phase1Response,
+          ...activePhase1Response,
           status: 'blocked',
           content: generated.response.content,
         },
       };
     }
     if ('rateLimited' in generated) {
+      if (usedFreshPhase1Cycle) {
+        input.updatePersonaSession(
+          phaseContext.resolveSessionKey(reportStep),
+          undefined,
+        );
+      }
       return {
         terminalResponse: {
           ...generated.response,
@@ -871,7 +1027,10 @@ export class StepExecutor {
     let normalized = intakeNormalizeActive
       ? await this.normalizeFindingIntakeReport(
           input.step,
-          reportResponse,
+          {
+            ...reportResponse,
+            content: report.reportContent,
+          },
           input.state.iteration,
         )
       : this.normalizeStructuredOutputWithDiagnostics(
@@ -1661,6 +1820,8 @@ export class StepExecutor {
     }
 
     if (findingContractIntakeStep && findingContractContext) {
+      const phase1ProviderUsage = response.providerUsage;
+      let publicationRetryPhase1Executed = false;
       const prepared = await this.prepareFindingReviewPublication({
         step: findingContractIntakeStep,
         executableStep,
@@ -1669,11 +1830,88 @@ export class StepExecutor {
         state,
         phase1Response: response,
         agentOptions,
+        rerunPhase1Fresh: async () => {
+          if (publicationRetryPhase1Executed) {
+            throw new Error(
+              `Finding contract reviewer "${step.name}" attempted more than one fresh Phase 1 retry`,
+            );
+          }
+          publicationRetryPhase1Executed = true;
+          let freshResponse: AgentResponse;
+          try {
+            freshResponse = await runSingleFreshPhase1Retry({
+              stepName: step.name,
+              sequence: phase1Result.finalAttempt.sequence + 1,
+              instruction: phase1Instruction,
+              discardSession: () => updatePersonaSession(sessionKey, undefined),
+              execute: (attempt) => executeObservedPhase1Attempt({
+                enabled: this.deps.observabilityEnabled?.() === true,
+                runId: this.deps.getObservabilityRunId?.(),
+                workflowName: this.deps.getWorkflowName(),
+                eventStep: step,
+                spanStep: executableStep,
+                iteration: state.iteration,
+                attempt,
+                workflowStack: this.deps.getCurrentWorkflowStack?.(),
+                sanitizeText: this.deps.sanitizeObservabilityText,
+                providerInfo,
+                execute: (attemptInstruction, sessionId, onPromptResolved) => (
+                  executeAgent(
+                    executableStep.persona,
+                    attemptInstruction,
+                    {
+                      ...agentOptions,
+                      sessionId,
+                      onPromptResolved,
+                    },
+                  )
+                ),
+                onPhaseStart: this.deps.onPhaseStart,
+              }),
+              complete: (completedResponse, attempt) => completeObservedPhase1Attempt({
+                eventStep: step,
+                iteration: state.iteration,
+                attempt,
+                response: completedResponse,
+                onPhaseComplete: this.deps.onPhaseComplete,
+              }),
+            });
+          } catch (error) {
+            this.deps.recordSynthesizedAgentUsage(
+              step.name,
+              providerInfo,
+              false,
+              undefined,
+            );
+            throw error;
+          }
+          this.deps.recordSynthesizedAgentUsage(
+            step.name,
+            providerInfo,
+            freshResponse.status === 'done',
+            freshResponse.providerUsage,
+          );
+          if (freshResponse.sessionId !== undefined) {
+            updatePersonaSession(sessionKey, freshResponse.sessionId);
+          }
+          return freshResponse;
+        },
+        onProviderAttempt: (providerInfo, success, usage) => {
+          this.deps.recordSynthesizedAgentUsage(
+            step.name,
+            providerInfo,
+            success,
+            usage,
+          );
+        },
         updatePersonaSession,
         runtime,
       });
       if ('terminalResponse' in prepared) {
-        response = prepared.terminalResponse;
+        response = replaceResponseProviderUsage(
+          prepared.terminalResponse,
+          phase1ProviderUsage,
+        );
         state.stepOutputs.set(step.name, response);
         state.lastOutput = response;
         if (response.status === 'blocked') {
@@ -1686,7 +1924,10 @@ export class StepExecutor {
         }
         return { response, instruction: phase1Instruction, providerInfo };
       }
-      response = prepared.response;
+      response = replaceResponseProviderUsage(
+        prepared.response,
+        phase1ProviderUsage,
+      );
       await this.ingestFindingContractForNormalStep({
         step: findingContractIntakeStep,
         stepIteration,

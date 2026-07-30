@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse } from '../core/models/types.js';
-import { runPhase1WithEmptyRecovery } from '../core/workflow/engine/phase1-empty-recovery.js';
+import {
+  PHASE1_EMPTY_OUTPUT_ERROR,
+  runPhase1WithEmptyRecovery,
+  runSingleFreshPhase1Retry,
+} from '../core/workflow/engine/phase1-empty-recovery.js';
 
 function response(overrides: Partial<AgentResponse>): AgentResponse {
   return {
@@ -13,6 +17,76 @@ function response(overrides: Partial<AgentResponse>): AgentResponse {
 }
 
 describe('Phase 1 empty response recovery', () => {
+  it('publication retryは指定sequenceでfresh Phase 1を一度だけ実行する', async () => {
+    const discardSession = vi.fn();
+    const complete = vi.fn();
+    const execute = vi.fn(async (attempt) => ({
+      response: response({
+        content: 'fresh review',
+        sessionId: 'fresh-session',
+      }),
+      promptResolved: true,
+      attempt,
+    }));
+
+    const result = await runSingleFreshPhase1Retry({
+      stepName: 'architecture-review',
+      sequence: 4,
+      instruction: 'Review the implementation.',
+      discardSession,
+      execute,
+      complete,
+    });
+
+    expect(discardSession).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith({
+      sequence: 4,
+      reason: 'publication_retry_fresh',
+      instruction: 'Review the implementation.',
+      sessionId: undefined,
+    });
+    expect(complete).toHaveBeenCalledWith(
+      result,
+      expect.objectContaining({
+        sequence: 4,
+        reason: 'publication_retry_fresh',
+      }),
+    );
+    expect(result.sessionId).toBe('fresh-session');
+  });
+
+  it('publication retryのfresh Phase 1が空なら再試行せず明示errorにする', async () => {
+    const complete = vi.fn();
+    const execute = vi.fn(async () => ({
+      response: response({
+        content: '   ',
+        sessionId: 'discarded-session',
+      }),
+      promptResolved: true,
+    }));
+
+    const result = await runSingleFreshPhase1Retry({
+      stepName: 'architecture-review',
+      sequence: 4,
+      instruction: 'Review the implementation.',
+      discardSession: vi.fn(),
+      execute,
+      complete,
+    });
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      status: 'error',
+      content: '',
+      error: PHASE1_EMPTY_OUTPUT_ERROR,
+    });
+    expect(result.sessionId).toBeUndefined();
+    expect(complete).toHaveBeenCalledWith(
+      result,
+      expect.objectContaining({ reason: 'publication_retry_fresh' }),
+    );
+  });
+
   it.each([
     ['structured output', response({ content: '', structuredOutput: { result: 'ok' } })],
     ['blocked response', response({ status: 'blocked', content: '' })],

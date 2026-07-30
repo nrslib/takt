@@ -21,6 +21,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import {
   generateReportPhase,
+  ReportPhaseGenerationError,
   runReportPhase,
   type ReportPhaseRunnerContext,
 } from '../core/workflow/phase-runner.js';
@@ -254,11 +255,359 @@ describe('runReportPhase retry with new session', () => {
       timestamp: new Date('2026-02-11T00:00:02Z'),
     }]);
 
-    await generateReportPhase(step, 1, ctx, 'freeform');
+    await generateReportPhase(step, 1, ctx, { reviewerMode: 'freeform' });
 
     const prompt = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
     expect(prompt).toContain('Respond with the report content directly as text.');
     expect(prompt).not.toContain('combined Finding Contract publication schema');
+  });
+
+  it('deterministic validatorが不正reportをfresh sessionで全文再生成する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(reportDir, 'Authoritative Phase 1 result', 'phase1-session');
+    ctx.iteration = 7;
+    ctx.onPhaseStart = vi.fn();
+    ctx.onPhaseComplete = vi.fn();
+    ctx.onProviderAttempt = vi.fn();
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'REJECTED_REPORT_BODY',
+        sessionId: 'invalid-report-session',
+        timestamp: new Date('2026-02-11T00:00:10Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'VALID_REPORT_BODY',
+        sessionId: 'valid-report-session',
+        timestamp: new Date('2026-02-11T00:00:11Z'),
+      },
+    ]);
+
+    const result = await generateReportPhase(step, 1, ctx, {
+      validateReportContent: (content) => (
+        content === 'VALID_REPORT_BODY'
+          ? { valid: true }
+          : { valid: false }
+      ),
+    });
+
+    expect('reports' in result && result.reports[0]?.reportContent)
+      .toBe('VALID_REPORT_BODY');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+    const retryPrompt = vi.mocked(runAgent).mock.calls[1]?.[1] as string;
+    expect(retryPrompt).toContain('Authoritative Phase 1 result');
+    expect(retryPrompt).toContain('rejected by deterministic output validation');
+    expect(retryPrompt).not.toContain('REJECTED_REPORT_BODY');
+    expect(ctx.onProviderAttempt).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      false,
+      undefined,
+    );
+    expect(ctx.onProviderAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      true,
+      undefined,
+    );
+    expect(vi.mocked(ctx.onPhaseComplete!).mock.calls[0]).toEqual([
+      step,
+      2,
+      'report',
+      '',
+      'error',
+      'Report output failed deterministic validation',
+      'implement:7:2:1',
+      7,
+    ]);
+    expect(vi.mocked(ctx.onPhaseStart!).mock.calls.map((call) => call[5]))
+      .toEqual(['implement:7:2:1', 'implement:7:2:2']);
+  });
+
+  it('provider response後のvalidator例外でもusageを失敗attemptへ一度だけ記録する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(reportDir, 'Authoritative Phase 1 result');
+    const usage = {
+      inputTokens: 19,
+      outputTokens: 5,
+      totalTokens: 24,
+      usageMissing: false,
+    };
+    ctx.observabilityEnabled = true;
+    ctx.onProviderAttempt = vi.fn();
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: 'Report body',
+      providerUsage: usage,
+      timestamp: new Date('2026-02-11T00:00:12Z'),
+    }]);
+
+    await expect(generateReportPhase(step, 1, ctx, {
+      validateReportContent: () => {
+        throw new Error('validator crashed');
+      },
+    })).rejects.toThrow('validator crashed');
+
+    expect(ctx.onProviderAttempt).toHaveBeenCalledOnce();
+    expect(ctx.onProviderAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'opencode' }),
+      false,
+      usage,
+    );
+  });
+
+  it('provider response取得前の例外はundefined usageで失敗attemptを一度だけ記録する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(reportDir, 'Authoritative Phase 1 result');
+    ctx.onProviderAttempt = vi.fn();
+    vi.mocked(runAgent).mockRejectedValueOnce(new Error('provider crashed'));
+
+    await expect(generateReportPhase(step, 1, ctx))
+      .rejects.toThrow('provider crashed');
+
+    expect(ctx.onProviderAttempt).toHaveBeenCalledOnce();
+    expect(ctx.onProviderAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'opencode' }),
+      false,
+      undefined,
+    );
+  });
+
+  it('fresh reportも不正なら設定済みfallbackを一度だけ使う', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(
+      reportDir,
+      'Authoritative Phase 1 result',
+      'phase1-session',
+      { primaryProvider: 'opencode', fallbackProvider: 'claude' },
+    );
+    ctx.iteration = 8;
+    ctx.onPhaseStart = vi.fn();
+    ctx.onProviderAttempt = vi.fn();
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'INVALID_ONE',
+        timestamp: new Date('2026-02-11T00:00:20Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'INVALID_TWO',
+        timestamp: new Date('2026-02-11T00:00:21Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'VALID_FALLBACK',
+        timestamp: new Date('2026-02-11T00:00:22Z'),
+      },
+    ]);
+
+    const result = await generateReportPhase(step, 1, ctx, {
+      validateReportContent: (content) => (
+        content === 'VALID_FALLBACK'
+          ? { valid: true }
+          : { valid: false }
+      ),
+    });
+
+    expect('reports' in result && result.reports[0]?.reportContent)
+      .toBe('VALID_FALLBACK');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(runAgent).mock.calls[2]?.[2]?.resolvedProvider).toBe('claude');
+    expect(ctx.onProviderAttempt).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ provider: 'claude' }),
+      true,
+      undefined,
+    );
+    expect(vi.mocked(ctx.onPhaseStart!).mock.calls.map((call) => call[5]))
+      .toEqual(['implement:8:2:1', 'implement:8:2:2', 'implement:8:2:3']);
+  });
+
+  it('single-attempt modeはvalidator失敗後に追加report retryを行わない', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(reportDir, 'Fresh Phase 1 result', 'fresh-phase1-session');
+    ctx.iteration = 9;
+    const sequences = [4];
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: 'INVALID_FINAL',
+      timestamp: new Date('2026-02-11T00:00:30Z'),
+    }]);
+
+    const error = await generateReportPhase(step, 1, ctx, {
+      validateReportContent: () => ({ valid: false }),
+      retryMode: 'single-attempt',
+      nextPhaseSequence: () => sequences.shift()!,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ReportPhaseGenerationError);
+    expect((error as ReportPhaseGenerationError).failureReason).toBe('invalid_output');
+    expect((error as ReportPhaseGenerationError).recovery).toEqual({
+      requiresFreshPhase1: true,
+      failureReasons: ['invalid_output'],
+    });
+    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
+  });
+
+  it('先行invalidの回復要否を最終fallback provider errorでも保持する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(
+      reportDir,
+      'Authoritative Phase 1 result',
+      'phase1-session',
+      { primaryProvider: 'opencode', fallbackProvider: 'claude' },
+    );
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'INVALID_ONE',
+        timestamp: new Date('2026-02-11T00:00:40Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'INVALID_TWO',
+        timestamp: new Date('2026-02-11T00:00:41Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'error',
+        content: '',
+        error: 'fallback transport failed',
+        timestamp: new Date('2026-02-11T00:00:42Z'),
+      },
+    ]);
+
+    const error = await generateReportPhase(step, 1, ctx, {
+      validateReportContent: () => ({ valid: false }),
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ReportPhaseGenerationError);
+    expect(error).toMatchObject({
+      failureReason: 'provider_error',
+      recovery: {
+        requiresFreshPhase1: true,
+        failureReasons: ['invalid_output', 'provider_error'],
+      },
+    });
+  });
+
+  it('pure provider error列だけならfresh Phase 1回復を要求しない', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(
+      reportDir,
+      'Authoritative Phase 1 result',
+      'phase1-session',
+      { primaryProvider: 'opencode', fallbackProvider: 'claude' },
+    );
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'error',
+        content: '',
+        error: 'primary transport failed',
+        timestamp: new Date('2026-02-11T00:00:50Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'error',
+        content: '',
+        error: 'retry transport failed',
+        timestamp: new Date('2026-02-11T00:00:51Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'error',
+        content: '',
+        error: 'fallback transport failed',
+        timestamp: new Date('2026-02-11T00:00:52Z'),
+      },
+    ]);
+
+    const error = await generateReportPhase(step, 1, ctx, {
+      validateReportContent: () => ({ valid: true }),
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ReportPhaseGenerationError);
+    expect(error).toMatchObject({
+      failureReason: 'provider_error',
+      recovery: {
+        requiresFreshPhase1: false,
+        failureReasons: ['provider_error'],
+      },
+    });
+  });
+
+  it('先行tool callの回復要否を後続provider errorでも保持する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(
+      reportDir,
+      'Authoritative Phase 1 result',
+      'phase1-session',
+      { primaryProvider: 'opencode', fallbackProvider: 'claude' },
+    );
+    queueRunAgentAttempts([
+      {
+        streamEvents: [{
+          type: 'tool_use',
+          data: { tool: 'run', input: {}, id: 'tool-run-recovery' },
+        }],
+        response: {
+          persona: 'reviewer',
+          status: 'done',
+          content: 'discarded',
+          timestamp: new Date('2026-02-11T00:01:00Z'),
+        },
+      },
+      {
+        response: {
+          persona: 'reviewer',
+          status: 'error',
+          content: '',
+          error: 'retry transport failed',
+          timestamp: new Date('2026-02-11T00:01:01Z'),
+        },
+      },
+      {
+        response: {
+          persona: 'reviewer',
+          status: 'error',
+          content: '',
+          error: 'fallback transport failed',
+          timestamp: new Date('2026-02-11T00:01:02Z'),
+        },
+      },
+    ]);
+
+    const error = await generateReportPhase(step, 1, ctx)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ReportPhaseGenerationError);
+    expect(error).toMatchObject({
+      failureReason: 'provider_error',
+      recovery: {
+        requiresFreshPhase1: true,
+        failureReasons: ['tool_call', 'provider_error'],
+      },
+    });
   });
 
   it('should start report phase with a new session when no existing session is available', async () => {
@@ -579,7 +928,7 @@ describe('runReportPhase retry with new session', () => {
       },
     ]);
 
-    const result = await generateReportPhase(step, 1, ctx, 'structured');
+    const result = await generateReportPhase(step, 1, ctx, { reviewerMode: 'structured' });
 
     expect('reports' in result).toBe(true);
     if (!('reports' in result)) {
@@ -646,7 +995,7 @@ describe('runReportPhase retry with new session', () => {
       timestamp: new Date('2026-02-11T00:01:22Z'),
     }]);
 
-    await generateReportPhase(step, 1, ctx, 'structured');
+    await generateReportPhase(step, 1, ctx, { reviewerMode: 'structured' });
 
     const prompt = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
     expect(prompt).toContain('結合 publication schema に一致する構造化オブジェクト');
@@ -670,7 +1019,7 @@ describe('runReportPhase retry with new session', () => {
       sessionId: 'opencode-review-session',
     }]);
 
-    const result = await generateReportPhase(step, 1, ctx, 'structured');
+    const result = await generateReportPhase(step, 1, ctx, { reviewerMode: 'structured' });
 
     expect('reports' in result).toBe(true);
     if (!('reports' in result)) {
@@ -691,7 +1040,7 @@ describe('runReportPhase retry with new session', () => {
       timestamp: new Date('2026-02-11T00:01:24Z'),
     }]);
 
-    await expect(generateReportPhase(step, 1, ctx, 'structured')).rejects.toThrow(
+    await expect(generateReportPhase(step, 1, ctx, { reviewerMode: 'structured' })).rejects.toThrow(
       'Finding review publication reportContent is missing',
     );
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);

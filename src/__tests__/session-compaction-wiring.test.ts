@@ -363,22 +363,73 @@ describe('session compaction Phase 1 wiring', () => {
       sessionId: 'session-old',
     };
     const reviewScopeSnapshotId = 'session-compaction-review-snapshot';
+    const findingContractInstructionContext = {
+      ledgerSummary: '{"findings":[]}',
+      reportLedgerSummary: '{"ids":[]}',
+      hasOpenFindings: false,
+      hasWaivedFindings: false,
+      hasDismissedFindings: false,
+      reviewer: {
+        mode: 'structured' as const,
+        rawFindingsStructuredOutput: createRawFindingsStructuredOutput(
+          reviewScopeSnapshotId,
+        ),
+        reviewScopeSnapshotId,
+      },
+    };
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue(phase1Options),
-        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
-        buildFindingContractInstructionContext: vi.fn().mockReturnValue({
-          ledgerSummary: '{"findings":[]}',
-          reportLedgerSummary: '{"ids":[]}',
-          hasOpenFindings: false,
-          hasWaivedFindings: false,
-          hasDismissedFindings: false,
-          reviewer: {
-            mode: 'structured',
-            rawFindingsStructuredOutput: createRawFindingsStructuredOutput(reviewScopeSnapshotId),
-            reviewScopeSnapshotId,
-          },
-        }),
+        buildPhaseRunnerContext: vi.fn((
+          reportStep,
+          workflowState,
+          lastResponse,
+          updatePersonaSession,
+          onPhaseStart,
+          onPhaseComplete,
+          _onJudgeStage,
+          iteration,
+          _runtime,
+          onProviderAttempt,
+        ) => ({
+          cwd,
+          reportDir: runPaths.reportsAbs,
+          lastResponse,
+          workflowName: 'test-workflow',
+          iteration,
+          getSessionId: (sessionKey: string) => (
+            workflowState.personaSessions.get(sessionKey)
+          ),
+          resolveSessionKey: () => '["reviewer","opencode","opencode/big-pickle"]',
+          buildResumeOptions: (_step, sessionId: string, overrides) => ({
+            ...phase1Options,
+            sessionId,
+            maxTurns: overrides.maxTurns,
+          }),
+          buildNewSessionReportOptions: (_step, overrides) => ({
+            ...phase1Options,
+            sessionId: undefined,
+            allowedTools: overrides.allowedTools,
+            maxTurns: overrides.maxTurns,
+            outputSchema: reportStep.structuredOutput?.schema,
+          }),
+          buildFallbackReportOptions: () => undefined,
+          resolveReportFallbackProviderModel: () => undefined,
+          updatePersonaSession,
+          resolveStepProviderModel: () => ({
+            provider: 'opencode' as const,
+            model: 'opencode/big-pickle',
+          }),
+          buildFindingContractInstructionContext: () => (
+            findingContractInstructionContext
+          ),
+          onPhaseStart,
+          onPhaseComplete,
+          onProviderAttempt,
+        })),
+        buildFindingContractInstructionContext: vi.fn().mockReturnValue(
+          findingContractInstructionContext,
+        ),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,
@@ -415,11 +466,22 @@ describe('session compaction Phase 1 wiring', () => {
       } as NonNullable<StepExecutorDeps['findingLedgerStore']>,
       refreshFindingsState: vi.fn(),
       emitEvent: vi.fn(),
+      recordSynthesizedAgentUsage: vi.fn(),
       getRunId: () => 'test-run',
       getFindingCallNamespace: () => '',
     };
     expect(() => parseFindingLedger(deps.findingLedgerStore!.loadLedger())).not.toThrow();
     const state = makeState();
+    const updatePersonaSession = vi.fn((
+      sessionKey: string,
+      sessionId: string | undefined,
+    ) => {
+      if (sessionId === undefined) {
+        state.personaSessions.delete(sessionKey);
+      } else {
+        state.personaSessions.set(sessionKey, sessionId);
+      }
+    });
     state.personaSessions.set(
       '["reviewer","opencode","opencode/big-pickle"]',
       'session-old',
@@ -439,7 +501,7 @@ describe('session compaction Phase 1 wiring', () => {
             title: 'A finding',
             description: 'A finding',
             relation: 'persists',
-            targetFindingId: 'F-9999',
+            targetFindingIds: ['F-9999'],
             suggestion: null,
             target: { kind: 'code', paths: ['src/a.ts'] },
             evidenceRequests: [],
@@ -449,7 +511,31 @@ describe('session compaction Phase 1 wiring', () => {
     }));
     queueAgentResponse(makeDoneResponse({
       sessionId: undefined,
+      content: '{"reportContent":"A finding","rawFindings":[]}',
       structuredOutput: {
+        reportContent: 'A finding',
+        rawFindings: [{
+          rawExcerpt: 'A finding',
+          candidate: {
+            rawFindingId: 'raw-1',
+            familyTag: 'bug',
+            severity: 'high',
+            title: 'A finding',
+            description: 'A finding',
+            relation: 'persists',
+            targetFindingIds: ['F-9999'],
+            suggestion: null,
+            target: { kind: 'code', paths: ['src/a.ts'] },
+            evidenceRequests: [],
+          },
+        }],
+      },
+    }));
+    queueAgentResponse(makeDoneResponse({
+      sessionId: undefined,
+      content: '{"reportContent":"A finding","rawFindings":[]}',
+      structuredOutput: {
+        reportContent: 'A finding',
         rawFindings: [{
           rawExcerpt: 'A finding',
           candidate: {
@@ -459,7 +545,7 @@ describe('session compaction Phase 1 wiring', () => {
             title: 'A finding',
             description: 'A finding',
             relation: 'new',
-            targetFindingId: null,
+            targetFindingIds: [],
             suggestion: null,
             target: { kind: 'code', paths: ['src/a.ts'] },
             evidenceRequests: [],
@@ -475,14 +561,16 @@ describe('session compaction Phase 1 wiring', () => {
       state,
       'task',
       5,
-      vi.fn(),
+      updatePersonaSession,
       undefined,
       undefined,
       preparedExecution,
     );
 
-    expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(executeAgent).mock.calls.map(([, , options]) => options.sessionId)).toEqual([undefined, undefined]);
+    expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(3);
+    expect(
+      vi.mocked(executeAgent).mock.calls.map(([, , options]) => options.sessionId),
+    ).toEqual([undefined, undefined, undefined]);
     expect(ingestFindingContractResultsMock).toHaveBeenCalledOnce();
   });
 

@@ -180,7 +180,16 @@ describe('ReportPhaseGenerationError soft error', () => {
     const executor = makeStepExecutor();
     const step = makeReportStep();
     const state = makeState();
-    vi.mocked(runReportPhase).mockRejectedValue(new ReportPhaseGenerationError('report failed'));
+    vi.mocked(runReportPhase).mockRejectedValue(
+      new ReportPhaseGenerationError(
+        'report failed',
+        'provider_error',
+        {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        },
+      ),
+    );
 
     const response = await executor.applyPostExecutionPhases(
       step,
@@ -217,7 +226,16 @@ describe('ReportPhaseGenerationError soft error', () => {
     const subStep = makeReportStep({ name: 'security-review', persona: 'security-review' });
     const state = makeState();
     queueAgentResponse(makeDoneResponse({ persona: 'security-review' }));
-    vi.mocked(runReportPhase).mockRejectedValue(new ReportPhaseGenerationError('report failed'));
+    vi.mocked(runReportPhase).mockRejectedValue(
+      new ReportPhaseGenerationError(
+        'report failed',
+        'provider_error',
+        {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        },
+      ),
+    );
 
     const result = await runner.runParallelStep(makeParallelStep(subStep), state, 'review task', 5, vi.fn());
 

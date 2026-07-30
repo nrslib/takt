@@ -55,6 +55,7 @@ import {
   executeObservedPhase1Attempt,
   PHASE1_EMPTY_OUTPUT_ERROR,
   runPhase1WithEmptyRecovery,
+  runSingleFreshPhase1Retry,
 } from './phase1-empty-recovery.js';
 
 const log = createLogger('parallel-runner');
@@ -540,6 +541,7 @@ export class ParallelRunner {
         let relationClarification: ReviewerRelationClarification | undefined;
         let finalResponse = subResponse;
         if (findingContractContext !== undefined) {
+          let publicationRetryPhase1Executed = false;
           const prepared = await this.deps.stepExecutor.prepareFindingReviewPublication({
             step: subStep,
             executableStep: executableSubStep,
@@ -548,6 +550,66 @@ export class ParallelRunner {
             state,
             phase1Response: subResponse,
             agentOptions,
+            rerunPhase1Fresh: async () => {
+              if (publicationRetryPhase1Executed) {
+                throw new Error(
+                  `Finding contract reviewer "${subStep.name}" attempted more than one fresh Phase 1 retry`,
+                );
+              }
+              publicationRetryPhase1Executed = true;
+              const response = await runSingleFreshPhase1Retry({
+                stepName: subStep.name,
+                sequence: phase1Result.finalAttempt.sequence + 1,
+                instruction: phase1Instruction,
+                discardSession: () => updatePersonaSession(subSessionKey, undefined),
+                execute: (attempt) => executeObservedPhase1Attempt({
+                  enabled: this.deps.observabilityEnabled,
+                  runId: this.deps.observabilityRunId,
+                  workflowName: this.deps.getWorkflowName(),
+                  eventStep: subStep,
+                  spanStep: executableSubStep,
+                  iteration: parentIteration,
+                  attempt,
+                  workflowStack: this.deps.getCurrentWorkflowStack?.(),
+                  sanitizeText: this.deps.sanitizeObservabilityText,
+                  providerInfo: subPm,
+                  execute: (attemptInstruction, sessionId, onPromptResolved) => (
+                    this.executeSubStepAgent(
+                      executableSubStep,
+                      subPm,
+                      attemptInstruction,
+                      {
+                        ...agentOptions,
+                        sessionId,
+                        onPromptResolved,
+                      },
+                    )
+                  ),
+                  onPhaseStart: this.deps.onPhaseStart,
+                }),
+                complete: (completedResponse, attempt) => completeObservedPhase1Attempt({
+                  eventStep: subStep,
+                  iteration: parentIteration,
+                  attempt,
+                  response: completedResponse,
+                  onPhaseComplete: this.deps.onPhaseComplete,
+                }),
+              });
+              if (response.sessionId !== undefined) {
+                updatePersonaSession(subSessionKey, response.sessionId);
+              }
+              return response;
+            },
+            onProviderAttempt: (attemptProviderInfo, success, usage) => {
+              recordAgentUsageEvent(
+                this.deps.engineOptions,
+                subStep.name,
+                'parallel',
+                attemptProviderInfo,
+                success,
+                usage,
+              );
+            },
             updatePersonaSession,
             runtime: subRuntime,
           });
