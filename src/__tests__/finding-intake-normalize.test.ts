@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,8 +9,8 @@ import {
   resolveFindingContractReviewerOutputStrategy,
 } from '../core/workflow/findings/reviewer-output-strategy.js';
 import {
+  buildFindingIntakeCorrectionPrompt,
   buildFindingIntakeExtractionPrompt,
-  FINDING_INTAKE_EXTRACTION_PROMPT_TEMPLATE,
 } from '../shared/prompts/finding-intake-extraction.js';
 import {
   denormalizeFindingIntakeNormalize,
@@ -36,6 +35,10 @@ const findingContract: FindingContractConfig = {
     instruction: 'findings-manager',
     outputContract: 'findings-manager',
   },
+};
+const plainTextFindingContract: FindingContractConfig = {
+  ...findingContract,
+  reviewerOutput: 'plain_text_normalized',
 };
 let taktEnv: TaktEnvSnapshot;
 
@@ -188,14 +191,41 @@ describe('intake normalizer policy', () => {
   it('is disabled without the block or an effective Finding Contract', () => {
     expect(resolveFindingIntakeNormalizeConfig(undefined, 'child', findingContract)).toBeUndefined();
     expect(resolveFindingIntakeNormalizeConfig(config, 'child', undefined)).toBeUndefined();
+    expect(resolveFindingIntakeNormalizeConfig(config, 'child', findingContract)).toBeUndefined();
   });
 
-  it('matches exact canonical workflow names, including workflow_call child names', () => {
-    expect(resolveFindingIntakeNormalizeConfig(config, 'child', findingContract)).toBe(config);
+  it('requires a config and matches exact workflow names, including workflow_call child names', () => {
+    expect(() => resolveFindingIntakeNormalizeConfig(
+      undefined,
+      'child',
+      plainTextFindingContract,
+    )).toThrow(/intake_normalize is not configured/);
+    expect(resolveFindingIntakeNormalizeConfig(
+      config,
+      'child',
+      plainTextFindingContract,
+    )).toBe(config);
     const targeted = { ...config, targets: ['child'] };
-    expect(resolveFindingIntakeNormalizeConfig(targeted, 'child', findingContract)).toBe(targeted);
-    expect(resolveFindingIntakeNormalizeConfig(targeted, 'Child', findingContract)).toBeUndefined();
-    expect(resolveFindingIntakeNormalizeConfig(targeted, 'parent', findingContract)).toBeUndefined();
+    expect(resolveFindingIntakeNormalizeConfig(
+      targeted,
+      'child',
+      plainTextFindingContract,
+    )).toBe(targeted);
+    expect(() => resolveFindingIntakeNormalizeConfig(
+      targeted,
+      'Child',
+      plainTextFindingContract,
+    )).toThrow(/not included in intake_normalize.targets/);
+    expect(() => resolveFindingIntakeNormalizeConfig(
+      targeted,
+      'parent',
+      plainTextFindingContract,
+    )).toThrow(/not included in intake_normalize.targets/);
+    expect(() => resolveFindingIntakeNormalizeConfig(
+      { provider: 'claude', model: 'sonnet' },
+      'child',
+      plainTextFindingContract,
+    )).toThrow(/does not support isolated structured execution/);
   });
 });
 
@@ -220,9 +250,13 @@ describe('finding contract reviewer output strategy', () => {
       normalizerConfig,
       'workflow',
       canonicalContract,
-    )).toBe(normalizerConfig);
+    )).toBeUndefined();
     expect(resolveFindingContractReviewerOutputStrategy(canonicalContract))
-      .toEqual({ kind: 'canonical_blocks' });
+      .toEqual({
+        kind: 'canonical_blocks',
+        reportGeneration: 'plain_text',
+        intake: 'canonical_parser',
+      });
     expect(resolveFindingContractReviewerOutputStrategy({
       ledgerPath: '.takt/findings/ledger.json',
       rawFindingsPath: '.takt/findings/raw',
@@ -232,17 +266,38 @@ describe('finding contract reviewer output strategy', () => {
         instruction: 'findings-manager',
         outputContract: 'findings-manager',
       },
-    })).toEqual({ kind: 'structured' });
+    })).toEqual({
+      kind: 'structured',
+      reportGeneration: 'structured',
+      intake: 'reviewer_structured',
+    });
+    expect(resolveFindingContractReviewerOutputStrategy({
+      ...canonicalContract,
+      reviewerOutput: 'plain_text_normalized',
+    })).toEqual({
+      kind: 'plain_text_normalized',
+      reportGeneration: 'plain_text',
+      intake: 'isolated_normalizer',
+    });
   });
 });
 
-describe('finding intake extraction prompt SSOT', () => {
-  it('preserves the evaluated template hash and substitutes only the report', () => {
-    expect(createHash('sha256').update(FINDING_INTAKE_EXTRACTION_PROMPT_TEMPLATE).digest('hex'))
-      .toBe('688f2777230baf23b298c87d0823391ef9c6b233697bd910aec0aa449a15fe29');
-    expect(FINDING_INTAKE_EXTRACTION_PROMPT_TEMPLATE.match(/\{\{REPORT\}\}/g)).toHaveLength(1);
-    const prompt = buildFindingIntakeExtractionPrompt('## Finding\nIssue: broken');
+describe('finding intake extraction prompt', () => {
+  it('uses only the report as source and preserves missing or ambiguous fields', () => {
+    const report = '## Finding\nIssue: broken';
+    const prompt = buildFindingIntakeExtractionPrompt(report, 'en');
     expect(prompt).toContain('## Finding\nIssue: broken');
-    expect(prompt).not.toContain('{{REPORT}}');
+    expect(prompt.match(/## Finding\nIssue: broken/g)).toHaveLength(1);
+    expect(prompt).toContain('report below is your only source');
+    expect(prompt).toContain('missing or ambiguous scalar fields as `null`');
+    expect(prompt).toMatch(/broad\s+architecture or repository-design issue/u);
+    expect(prompt).not.toContain('canonical block');
+  });
+
+  it('localizes the prompt and gives correction no previous output', () => {
+    const prompt = buildFindingIntakeCorrectionPrompt('唯一の報告', 'ja');
+    expect(prompt).toContain('下記のレビュー報告だけを情報源');
+    expect(prompt).toContain('前回出力の再利用、議論、修復は禁止');
+    expect(prompt.match(/唯一の報告/g)).toHaveLength(1);
   });
 });

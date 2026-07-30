@@ -50,20 +50,20 @@ interface RawWorkflow {
 
 const SHARED_CONTRACT_HASHES: Record<Locale, Record<string, string>> = {
   ja: {
-    architecture: 'cee57809603b1d17312929f1183b6657ab52153350af0c92787ea5de2b7afa63',
-    'ai-antipattern': '0709aab13d86b7d5f3bb527e00420fde033bea677b80036609d5768a3301efb5',
-    coding: '23d4894081921f2b21aacbf9badd6e2acf5b8c281ed9b6952c8cb28939293d2d',
-    'implementation-semantics': 'a93779cf922f6dc0f54d5dbb7944d54fec095c949c1140cc050243050837b4d3',
-    'contract-lifecycle': 'd5d630d06d360f11667ac20ee5d27f34f7bc525123b1d3f0ac79fe0805d5fc72',
-    robustness: '96d993ce895cd4e91b00a6155843dae79c39906387cfe4b82c43cfe26ce59c5d',
+    architecture: '7592c630133bba72719a02d17b77a574226166db84eb0dcdc46962e7e7c8ba8d',
+    'ai-antipattern': 'bddd468992cf70e4bcc9d3bd47a1b0484c19d80a7463fa4b104e22f83b8e9490',
+    coding: '5825a4381f70ea8ad59f9eedf4cdd5e9efb7f8b8e60c4176ca2ab805cca36dff',
+    'implementation-semantics': '06b0b984ede91cf844ea78692b8c2977b1b3e336e5d7f1545bc048c72c575646',
+    'contract-lifecycle': '307cba17d2670a730bbe9cfdeac982c8ccca441e771f71ababa19e7ec119286e',
+    robustness: 'cd2f96dcfc951e6a17a2150bd5d60876553ad081a8186bbc27bf7ed068086d29',
   },
   en: {
-    architecture: '4c08eb25037e6f5d30ee3e6151c1bff97174286a9918bcd77622c47748d95c76',
-    'ai-antipattern': 'f762ff39032a522d3e19853fc0ed0f648a07dbcd5a56cacfae994df1343bb93a',
-    coding: '07137afc9fe6d5de49785a56394cf6846880fe217ce20fd57179239acd2d9590',
-    'implementation-semantics': '8042bb926e3a2ad75b9737deebf39059ec6140c6f2867d62c8d6d6bd99d3e3c0',
-    'contract-lifecycle': '9f580fac8fcbbf9c15ecf12ea3968d9582dce4175b9b0e6cbf2eeab1f582d802',
-    robustness: '8189740da213954a3b8cd09580614aecfd03c645ec1eb1c7acd367582bfb9e11',
+    architecture: 'd4908d7daa0d4ee56d512e949f123ffd50991e8eb147554525b0fc1b93174141',
+    'ai-antipattern': 'fadaf3a587633f88a39550c01c4b0b43f4e9a5e104e2cac4f515ba3683e1aa29',
+    coding: '40d25ddbfa648c312502bf9c7a7b83454701627aac27984d9b9fa14b34c59e5c',
+    'implementation-semantics': '78a6158773e9c4992929fe8a60bdb69dae948e12fc015adfa4f24222f77b42e5',
+    'contract-lifecycle': 'e33d8f42ea909c0d14cf62aa6825c68cbadfd79956b37fb315625e5749b5be2a',
+    robustness: '3d0721063a91ff7854cccb79541ba05d6847cef3b1cbe057958cacf3fc8f10ca',
   },
 };
 
@@ -456,7 +456,7 @@ describe('takt-default-localllm boundary reviews', () => {
     const finalGate = getRawStep(rawWorkflow, 'final-gate');
 
     expect(loadedWorkflow.findingContract?.reviewerOutput)
-      .toBe('canonical_blocks');
+      .toBe('plain_text_normalized');
     expect(transitionFor(reviewers, 'all(')).toBe('boundary-reviewers');
     expect(transitionFor(reviewers, 'reviewerAnomalies.count > 0')).toBe('local-review-integrity-gate');
     expect(reviewers.rules?.find((rule) => rule.condition.includes('all('))?.condition)
@@ -544,6 +544,7 @@ describe('takt-default-localllm boundary reviews', () => {
       expect(outputContract.match(/^## Finding Contract Claims$/gmu)).toHaveLength(1);
       expect(outputContract).toContain('canonical block protocol');
       expect(outputContract).toContain('structured');
+      expect(outputContract).not.toContain('structured-output schema is the sole machine claim format');
       expect(outputContract).not.toMatch(/^## (?:Observed Findings|Resolution Confirmations|観測した指摘|解消確認)/mu);
       expect(outputContract).not.toContain('| # | family_tag');
       expect(outputContract).not.toMatch(/(?:20|30|40) lines|(?:20|30|40)行/u);

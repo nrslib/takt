@@ -12,6 +12,7 @@ import type {
   WorkflowResumePointEntry,
   RateLimitFallbackConfig,
   FallbackContext,
+  FallbackOperationOrigin,
   McpServerConfig,
 } from '../models/types.js';
 import type { FindingManagerAuthority } from '../models/finding-types.js';
@@ -146,6 +147,10 @@ export interface StepRunResult {
   response: AgentResponse;
   instruction: string;
   providerInfo?: StepProviderInfo;
+  terminalOperation?: {
+    readonly origin: FallbackOperationOrigin;
+    readonly providerInfo: StepProviderInfo;
+  };
   consumedStepIterations?: readonly string[];
   qualityGateFailure?: {
     response: AgentResponse;
@@ -165,6 +170,7 @@ export interface TeamLeaderPartRuntimeResolution {
 
 export interface RuntimeStepResolution {
   providerInfo?: StepProviderInfo;
+  providerInfoResolution?: 'fully_resolved';
   fallback?: FallbackContext;
   teamLeaderPart?: TeamLeaderPartRuntimeResolution;
 }

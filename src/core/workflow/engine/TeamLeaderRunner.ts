@@ -179,7 +179,7 @@ export class TeamLeaderRunner {
       state,
       task,
       maxSteps,
-      undefined,
+      runtime?.fallback,
       findingContractMode ? { mode: 'omit' } : undefined,
       instructionTransaction,
     );
@@ -811,6 +811,7 @@ export class TeamLeaderRunner {
         : {}),
     };
 
+    let terminalOperation: StepRunResult['terminalOperation'];
     aggregatedResponse = await this.deps.stepExecutor.applyPostExecutionPhases(
       step,
       state,
@@ -820,6 +821,9 @@ export class TeamLeaderRunner {
       leaderRuntime,
       (providerInfo, success, usage) => {
         this.recordUsage(step.name, providerInfo, success, usage);
+      },
+      (operation) => {
+        terminalOperation = operation;
       },
     );
 
@@ -831,6 +835,7 @@ export class TeamLeaderRunner {
         response: aggregatedResponse,
         instruction,
         providerInfo: leaderProviderInfo,
+        ...(terminalOperation !== undefined ? { terminalOperation } : {}),
         consumedStepIterations: [],
       };
     }
@@ -850,7 +855,12 @@ export class TeamLeaderRunner {
       },
     );
 
-    const result = { response: aggregatedResponse, instruction, providerInfo: leaderProviderInfo };
+    const result: StepRunResult = {
+      response: aggregatedResponse,
+      instruction,
+      providerInfo: leaderProviderInfo,
+      ...(terminalOperation !== undefined ? { terminalOperation } : {}),
+    };
     return findingContractCoordinator?.prepareStepResult(result) ?? result;
   }
 
@@ -1285,6 +1295,7 @@ interface TeamLeaderAttemptState {
   readonly lastOutput: WorkflowState['lastOutput'];
   readonly previousResponseSourcePath: WorkflowState['previousResponseSourcePath'];
   readonly pendingFallback: WorkflowState['pendingFallback'];
+  readonly rateLimitFallbackState: WorkflowState['rateLimitFallbackState'];
   readonly stepOutputs: Map<string, AgentResponse>;
   readonly personaSessions: Map<string, string>;
   readonly stepIterations: Map<string, number>;
@@ -1313,6 +1324,7 @@ function captureTeamLeaderAttemptState(
     lastOutput: state.lastOutput,
     previousResponseSourcePath: state.previousResponseSourcePath,
     pendingFallback: state.pendingFallback,
+    rateLimitFallbackState: state.rateLimitFallbackState,
     stepOutputs: new Map(state.stepOutputs),
     personaSessions: new Map(state.personaSessions),
     stepIterations,
@@ -1346,6 +1358,7 @@ function restoreNonSessionAttemptState(
   state.lastOutput = snapshot.lastOutput;
   state.previousResponseSourcePath = snapshot.previousResponseSourcePath;
   state.pendingFallback = snapshot.pendingFallback;
+  state.rateLimitFallbackState = snapshot.rateLimitFallbackState;
   state.stepOutputs.clear();
   for (const [name, response] of snapshot.stepOutputs) {
     state.stepOutputs.set(name, response);

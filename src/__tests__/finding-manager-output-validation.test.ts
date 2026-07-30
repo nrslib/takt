@@ -973,7 +973,7 @@ describe('finding raw schemas', () => {
     ])).toThrow();
   });
 
-  it('should accept an explicit null targetFindingId for a new finding', () => {
+  it('should accept an empty targetFindingIds set for a new finding', () => {
     const parsed = parseReviewerRawFindings([
       reviewerRawExtractionFixture({
         rawFindingId: 'raw-1',
@@ -989,6 +989,6 @@ describe('finding raw schemas', () => {
     ]);
 
     expect(parsed[0]?.candidate.relation).toBe('new');
-    expect(parsed[0]?.candidate.targetFindingId).toBeNull();
+    expect(parsed[0]?.candidate.targetFindingIds).toEqual([]);
   });
 });

@@ -1,12 +1,22 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   createFindingReviewPublication,
+  createPendingFindingReviewNormalization,
   loadFindingReviewPublication,
+  loadPendingFindingReviewNormalization,
   persistFindingReviewPublication,
+  persistPendingFindingReviewNormalization,
+  PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   publishFindingReviewPublication,
   STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   type FindingReviewPublicationIdentity,
@@ -17,8 +27,19 @@ import {
   FINDING_CLAIM_END_MARKER,
   parseCanonicalFindingClaimReport,
 } from '../shared/prompts/finding-canonical-claim.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
 
 const temporaryDirectories: string[] = [];
+const reviewerExecutionIdentity = Object.freeze({
+  provider: 'codex' as const,
+  model: 'gpt-5',
+  providerOptions: {
+    codex: {
+      reasoningEffort: 'high' as const,
+    },
+  },
+});
 
 function createReportDirectory(): string {
   const directory = mkdtempSync(join(tmpdir(), 'takt-finding-publication-'));
@@ -89,7 +110,10 @@ describe('Finding review publication', () => {
       reportContent: '## Result: NEED_REPLAN\n\nReview scope must be replanned.',
       rawFindings: [],
     });
-    persistFindingReviewPublication(reportDir, { publication });
+    persistFindingReviewPublication(reportDir, {
+      publication,
+      reviewerExecutionIdentity,
+    });
 
     const loaded = loadFindingReviewPublication(
       reportDir,
@@ -135,7 +159,10 @@ describe('Finding review publication', () => {
       reportContent,
       rawFindings: [changed],
     });
-    persistFindingReviewPublication(reportDir, { publication });
+    persistFindingReviewPublication(reportDir, {
+      publication,
+      reviewerExecutionIdentity,
+    });
 
     expect(() => loadFindingReviewPublication(
       reportDir,
@@ -160,6 +187,154 @@ describe('Finding review publication', () => {
       identity(),
       STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
     )?.publication.reportContent).toBe(reportContent);
+  });
+
+  it('persists normalized plain-text publications without applying the canonical parser', () => {
+    const reportDir = createReportDirectory();
+    const reportContent = '## Result: REJECT\n\nOrdinary prose issue without a canonical block.';
+    const publication = createFindingReviewPublication({
+      identity: identity(),
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent,
+      rawFindings: [{
+        rawExcerpt: 'Ordinary prose issue without a canonical block.',
+        candidate: null,
+      }],
+    });
+    persistFindingReviewPublication(reportDir, {
+      publication,
+      reviewerExecutionIdentity,
+    });
+
+    expect(loadFindingReviewPublication(
+      reportDir,
+      identity(),
+      PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+    )?.publication).toMatchObject({
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent,
+    });
+  });
+
+  it('persists an identity-bound pending plain report outside the public report path', () => {
+    const reportDir = createReportDirectory();
+    const reportContent = '## Result: REJECT\n\nBroad architecture concern.';
+    const pending = persistPendingFindingReviewNormalization(
+      reportDir,
+      createPendingFindingReviewNormalization({
+        identity: identity(),
+        workflowName: 'peer-review',
+        reportContent,
+        reviewerExecutionIdentity,
+      }),
+    );
+
+    expect(loadPendingFindingReviewNormalization(
+      reportDir,
+      identity(),
+      'peer-review',
+    )).toEqual(pending);
+    expect(() => persistPendingFindingReviewNormalization(
+      reportDir,
+      createPendingFindingReviewNormalization({
+        identity: identity(),
+        workflowName: 'peer-review',
+        reportContent: `${reportContent}\nchanged`,
+        reviewerExecutionIdentity,
+      }),
+    )).toThrow(/conflict/);
+  });
+
+  it('cross-run resumeでcompleted publicationをtarget scopeへ非公開再束縛する', () => {
+    const cwd = createReportDirectory();
+    const sourcePaths = buildRunPaths(cwd, 'source-run');
+    const targetPaths = buildRunPaths(cwd, 'target-run');
+    mkdirSync(sourcePaths.runRootAbs, { recursive: true });
+    const sourceIdentity = identity({ scopeIdentity: 'sqlite-source-scope' });
+    const targetIdentity = identity({ scopeIdentity: 'sqlite-target-scope' });
+    const reportContent = '## Result: REJECT\n\nBroad architecture concern.';
+    const sourcePublication = createFindingReviewPublication({
+      identity: sourceIdentity,
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent,
+      rawFindings: [{
+        rawExcerpt: 'Broad architecture concern.',
+        candidate: null,
+      }],
+    });
+    persistFindingReviewPublication(sourcePaths.reportsAbs, {
+      publication: sourcePublication,
+      reviewerExecutionIdentity,
+    });
+    const manifest = inheritResumeReportSnapshot({
+      cwd,
+      sourceRunSlug: 'source-run',
+      targetRunSlug: 'target-run',
+    });
+
+    const loadedPreparation = loadFindingReviewPublication(
+      targetPaths.reportsAbs,
+      targetIdentity,
+      PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+    )!;
+    const loaded = loadedPreparation.publication;
+
+    expect(manifest.files).toEqual([]);
+    expect(loaded).toMatchObject({
+      scopeIdentity: 'sqlite-target-scope',
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent,
+      reportDigest: sourcePublication.reportDigest,
+      rawFindings: sourcePublication.rawFindings,
+    });
+    expect(loaded.publicationId).not.toBe(sourcePublication.publicationId);
+    expect(loadedPreparation.reviewerExecutionIdentity)
+      .toEqual(reviewerExecutionIdentity);
+    expect(existsSync(join(targetPaths.reportsAbs, 'architecture-review.md')))
+      .toBe(false);
+  });
+
+  it('cross-run resumeでpending normalizationをtarget scopeへ非公開再束縛する', () => {
+    const cwd = createReportDirectory();
+    const sourcePaths = buildRunPaths(cwd, 'source-run');
+    const targetPaths = buildRunPaths(cwd, 'target-run');
+    mkdirSync(sourcePaths.runRootAbs, { recursive: true });
+    const sourceIdentity = identity({ scopeIdentity: 'sqlite-source-scope' });
+    const targetIdentity = identity({ scopeIdentity: 'sqlite-target-scope' });
+    const reportContent = '## Result: REJECT\n\nBroad architecture concern.';
+    const sourcePending = persistPendingFindingReviewNormalization(
+      sourcePaths.reportsAbs,
+      createPendingFindingReviewNormalization({
+        identity: sourceIdentity,
+        workflowName: 'peer-review',
+        reportContent,
+        reviewerExecutionIdentity,
+      }),
+    );
+    const manifest = inheritResumeReportSnapshot({
+      cwd,
+      sourceRunSlug: 'source-run',
+      targetRunSlug: 'target-run',
+    });
+
+    const loaded = loadPendingFindingReviewNormalization(
+      targetPaths.reportsAbs,
+      targetIdentity,
+      'peer-review',
+    )!;
+
+    expect(manifest.files).toEqual([]);
+    expect(loaded).toMatchObject({
+      scopeIdentity: 'sqlite-target-scope',
+      workflowName: 'peer-review',
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent,
+      reportDigest: sourcePending.reportDigest,
+    });
+    expect(loaded.publicationId).not.toBe(sourcePending.publicationId);
+    expect(loaded.reviewerExecutionIdentity).toEqual(reviewerExecutionIdentity);
+    expect(existsSync(join(targetPaths.reportsAbs, 'architecture-review.md')))
+      .toBe(false);
   });
 
   it('defensive clone後にpublication全体を再帰freezeする', () => {

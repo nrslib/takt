@@ -8,12 +8,12 @@
 |------|-------------|------|---------------|----------|------|------|
 | {資源} | {取得元と所有者} | {移譲先またはなし} | {最終利用者} | {解放処理} | {成功・早期終了・失敗・中断・再試行} | `file:line` |
 ## Finding Contract Claims
-{注入された Finding Contract 指示に canonical block protocol がある場合は、観測した欠陥または明示的な台帳 lifecycle claim ごとに正確に1つの block を出力する。protocol がない場合は、claim を通常の文章で記載し、必須 structured output だけを機械形式とする。指摘表は使わない。claim がなければ `None` と記載する。}
+{注入された Finding Contract 指示に canonical block protocol がある場合は、観測した欠陥または明示的な台帳 lifecycle claim ごとに正確に1つの block を出力する。protocol がない場合は、claim を通常の文章で記載する。注入された指示が structured output を要求するときだけ、その schema を機械形式として使い、要求がなければ Markdown report だけを返す。指摘表は使わない。claim がなければ `None` と記載する。}
 
 ## 出力整合性
 - 証跡・場所・確認証跡は、実在する1行だけを指す正確な `file:line` とする。`file:line-line` の行範囲は禁止し、複数行が必要なら行ごとに別の表行へ分ける。
 - 所有権証跡の証跡列は、取得または解放範囲を直接示す行を指す。APPROVE では入口ごとの解放行、REJECT では解放範囲から外れる取得行を示す。
-- canonical block protocol がある場合は、block と normalized item を同じ順序集合とし、rawExcerpt を byte-exact に一致させる。protocol がない場合は structured-output schema だけを機械 claim 形式とする。最終 finding ID は採番しない。
+- canonical block protocol がある場合は、block と normalized item を同じ順序集合とし、rawExcerpt を byte-exact に一致させる。protocol がない場合は、注入された structured-output schema があるときだけそれを機械 claim 形式とし、なければ通常の report 本文だけを使う。最終 finding ID は採番しない。
 - サマリーまたは所有権証跡で未解消の欠陥を認識した場合は issue に含めて REJECT とする。欠陥を記述したまま APPROVE しない。
 - APPROVE は issue 0 件、REJECT は issue 1 件以上。すべての issue の family_tag を `resource-ownership` とし、資源所有権以外の欠陥は除外する。別領域の欠陥を付け替えない。
 ```

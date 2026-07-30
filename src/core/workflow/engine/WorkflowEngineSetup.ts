@@ -47,6 +47,7 @@ import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 import {
   resolveFindingContractReviewerOutputStrategy,
 } from '../findings/reviewer-output-strategy.js';
+import { resolveFindingIntakeNormalizeConfig } from '../findings/intake-normalize-policy.js';
 
 const log = createLogger('workflow-engine');
 
@@ -172,6 +173,11 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   const reviewerOutputStrategy = resolveFindingContractReviewerOutputStrategy(
     params.findingContract,
   );
+  const intakeNormalize = resolveFindingIntakeNormalizeConfig(
+    params.options.intakeNormalize,
+    params.config.name,
+    params.findingContract,
+  );
   const buildFindingContractInstructionContext = (
     _step: WorkflowStep,
     strategy: FindingContractReviewerOutputStrategy | undefined,
@@ -187,13 +193,16 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     let reviewer: FindingContractInstructionContext['reviewer'];
     if (strategy !== undefined) {
       const reviewScopeSnapshotId = computeReviewScopeSnapshotId(params.getCwd());
-      reviewer = strategy.kind === 'structured'
+      reviewer = strategy.reportGeneration === 'structured'
         ? {
             mode: 'structured',
             rawFindingsStructuredOutput: createRawFindingsStructuredOutput(),
             reviewScopeSnapshotId,
           }
-        : { mode: 'canonical_blocks', reviewScopeSnapshotId };
+        : {
+            mode: strategy.kind,
+            reviewScopeSnapshotId,
+          };
     }
     return {
       ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
@@ -239,6 +248,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getCurrentWorkflowStack: params.getCurrentWorkflowStack,
     structuredOutputNormalizers: params.options.structuredOutputNormalizers,
     reviewerOutputStrategy,
+    structuredCaller: params.structuredCaller,
+    intakeNormalize,
     abortSignal: params.options.abortSignal,
     findingContract: params.findingContract,
     findingManagerAuthority: params.findingManagerAuthority,

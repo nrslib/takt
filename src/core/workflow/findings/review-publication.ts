@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
+import { readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { REPORT_INTERNAL_NAMESPACE } from '../../models/reserved-report-names.js';
+import {
+  FINDING_REVIEW_PUBLICATIONS_INTERNAL_DIRECTORY,
+  REPORT_INTERNAL_NAMESPACE,
+  RESUME_ARTIFACTS_FILE_NAME,
+} from '../../models/reserved-report-names.js';
 import {
   ensurePrivateDirectory,
   readPrivateFileState,
@@ -23,8 +28,11 @@ import {
   FINDING_CLAIM_PROTOCOL_REVISION,
 } from '../../../shared/prompts/finding-canonical-claim.js';
 import { inspectCanonicalClaimPublication } from './canonical-claim-publication.js';
+import { isProviderType, type ProviderType } from '../../../shared/types/provider.js';
+import type { StepProviderOptions } from '../../models/workflow-types.js';
 
 const PRIVATE_FILE_MODE = 0o600;
+const STORED_PUBLICATION_FILE_PATTERN = /^([a-f0-9]{64})\.json$/;
 
 export const STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
   generationMode: 'structured',
@@ -38,9 +46,16 @@ export const CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freez
   protocolRevision: FINDING_CLAIM_PROTOCOL_REVISION,
 } as const);
 
+export const PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
+  generationMode: 'freeform',
+  format: 'normalized-plain-text',
+  protocolRevision: 1,
+} as const);
+
 export type FindingReviewPublicationProtocol =
   | typeof STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL
-  | typeof CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  | typeof CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL
+  | typeof PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
 
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
   if (typeof value !== 'object' || value === null || seen.has(value)) {
@@ -79,6 +94,23 @@ export interface CanonicalFindingReviewPublication extends FindingReviewPublicat
 export interface FindingReviewPublicationPreparation {
   readonly publication: CanonicalFindingReviewPublication;
   readonly relationClarification?: ReviewerRelationClarification;
+  readonly reviewerExecutionIdentity?: ReviewerExecutionIdentity;
+}
+
+export interface ReviewerExecutionIdentity {
+  readonly provider: ProviderType;
+  readonly model?: string;
+  readonly providerOptions?: StepProviderOptions;
+}
+
+export interface PendingFindingReviewNormalization
+  extends FindingReviewPublicationIdentity {
+  readonly workflowName: string;
+  readonly publicationId: string;
+  readonly protocol: typeof PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  readonly reportContent: string;
+  readonly reportDigest: string;
+  readonly reviewerExecutionIdentity: ReviewerExecutionIdentity;
 }
 
 function sha256(value: string | Buffer): string {
@@ -106,9 +138,228 @@ function publicationRecordPath(
   return resolve(
     reportDir,
     REPORT_INTERNAL_NAMESPACE,
-    'finding-review-publications',
+    FINDING_REVIEW_PUBLICATIONS_INTERNAL_DIRECTORY,
     `${publicationId}.json`,
   );
+}
+
+function pendingNormalizationRecordPath(
+  reportDir: string,
+  publicationId: string,
+): string {
+  return resolve(
+    reportDir,
+    REPORT_INTERNAL_NAMESPACE,
+    FINDING_REVIEW_PUBLICATIONS_INTERNAL_DIRECTORY,
+    'pending',
+    `${publicationId}.json`,
+  );
+}
+
+function inheritedSnapshotExists(reportDir: string): boolean {
+  return readPrivateFileState(
+    resolve(reportDir, RESUME_ARTIFACTS_FILE_NAME),
+  ).state.exists;
+}
+
+function readStoredRecordContents(
+  directory: string,
+): Array<{ publicationId: string; content: Buffer }> {
+  let names: string[];
+  try {
+    names = readdirSync(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+  return names.flatMap((name) => {
+    const match = STORED_PUBLICATION_FILE_PATTERN.exec(name);
+    if (match === null) {
+      return [];
+    }
+    const snapshot = readPrivateFileState(resolve(directory, name));
+    if (!snapshot.state.exists) {
+      return [];
+    }
+    if (!('content' in snapshot)) {
+      throw new Error(`Finding review publication content is missing: ${directory}/${name}`);
+    }
+    return [{
+      publicationId: match[1]!,
+      content: snapshot.content,
+    }];
+  });
+}
+
+function samePublicationIdentityExceptScope(
+  left: FindingReviewPublicationIdentity,
+  right: FindingReviewPublicationIdentity,
+): boolean {
+  return left.callNamespace === right.callNamespace
+    && left.parentStepName === right.parentStepName
+    && left.stepIteration === right.stepIteration
+    && left.reviewerStepName === right.reviewerStepName
+    && left.reportName === right.reportName;
+}
+
+function preparationContentIdentity(
+  preparation: FindingReviewPublicationPreparation,
+): string {
+  return sha256(JSON.stringify({
+    protocol: preparation.publication.protocol,
+    reportDigest: preparation.publication.reportDigest,
+    rawFindings: preparation.publication.rawFindings,
+    relationClarification: preparation.relationClarification ?? null,
+    reviewerExecutionIdentity: preparation.reviewerExecutionIdentity ?? null,
+  }));
+}
+
+function rebindInheritedFindingReviewPublication(
+  reportDir: string,
+  identity: FindingReviewPublicationIdentity,
+  expectedProtocol: FindingReviewPublicationProtocol,
+): FindingReviewPublicationPreparation | undefined {
+  if (!inheritedSnapshotExists(reportDir)) {
+    return undefined;
+  }
+  const directory = resolve(
+    reportDir,
+    REPORT_INTERNAL_NAMESPACE,
+    FINDING_REVIEW_PUBLICATIONS_INTERNAL_DIRECTORY,
+  );
+  const candidates = readStoredRecordContents(directory)
+    .map(({ publicationId, content }) => (
+      parseStoredPreparation(content, publicationId)
+    ))
+    .filter(({ publication }) => (
+      samePublicationIdentityExceptScope(publication, identity)
+    ));
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  const first = candidates[0]!;
+  const contentIdentity = preparationContentIdentity(first);
+  if (
+    candidates.some((candidate) => (
+      preparationContentIdentity(candidate) !== contentIdentity
+    ))
+  ) {
+    throw new Error(
+      `Inherited finding review publication is ambiguous for "${identity.reviewerStepName}"`,
+    );
+  }
+  if (!samePublicationProtocol(first.publication.protocol, expectedProtocol)) {
+    throw new Error(
+      `Inherited finding review publication protocol mismatch for "${identity.reviewerStepName}"`,
+    );
+  }
+  const rebound: FindingReviewPublicationPreparation = {
+    publication: createFindingReviewPublication({
+      identity,
+      protocol: first.publication.protocol,
+      reportContent: first.publication.reportContent,
+      rawFindings: first.publication.rawFindings,
+    }),
+    ...(first.relationClarification === undefined
+      ? {}
+      : { relationClarification: first.relationClarification }),
+    ...(first.reviewerExecutionIdentity === undefined
+      ? {}
+      : { reviewerExecutionIdentity: first.reviewerExecutionIdentity }),
+  };
+  return persistFindingReviewPublication(reportDir, rebound);
+}
+
+function pendingContentIdentity(
+  pending: PendingFindingReviewNormalization,
+): string {
+  return sha256(JSON.stringify({
+    workflowName: pending.workflowName,
+    protocol: pending.protocol,
+    reportDigest: pending.reportDigest,
+    reviewerExecutionIdentity: pending.reviewerExecutionIdentity,
+  }));
+}
+
+function rebindInheritedPendingFindingReviewNormalization(
+  reportDir: string,
+  identity: FindingReviewPublicationIdentity,
+  expectedWorkflowName: string,
+): PendingFindingReviewNormalization | undefined {
+  if (!inheritedSnapshotExists(reportDir)) {
+    return undefined;
+  }
+  const directory = resolve(
+    reportDir,
+    REPORT_INTERNAL_NAMESPACE,
+    FINDING_REVIEW_PUBLICATIONS_INTERNAL_DIRECTORY,
+    'pending',
+  );
+  const candidates = readStoredRecordContents(directory)
+    .map(({ publicationId, content }) => (
+      parseStoredPendingNormalization(content, publicationId)
+    ))
+    .filter((pending) => samePublicationIdentityExceptScope(pending, identity));
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  const first = candidates[0]!;
+  const contentIdentity = pendingContentIdentity(first);
+  if (
+    candidates.some((candidate) => pendingContentIdentity(candidate) !== contentIdentity)
+  ) {
+    throw new Error(
+      `Inherited pending finding review normalization is ambiguous for "${identity.reviewerStepName}"`,
+    );
+  }
+  if (first.workflowName !== expectedWorkflowName) {
+    throw new Error(
+      `Inherited pending finding review normalization workflow mismatch for "${identity.reviewerStepName}"`,
+    );
+  }
+  return persistPendingFindingReviewNormalization(
+    reportDir,
+    createPendingFindingReviewNormalization({
+      identity,
+      workflowName: expectedWorkflowName,
+      reportContent: first.reportContent,
+      reviewerExecutionIdentity: first.reviewerExecutionIdentity,
+    }),
+  );
+}
+
+function parseReviewerExecutionIdentity(value: unknown): ReviewerExecutionIdentity {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Finding review publication requires reviewerExecutionIdentity');
+  }
+  const record = value as Record<string, unknown>;
+  if (!isProviderType(record.provider)) {
+    throw new Error('Finding review publication reviewerExecutionIdentity requires provider');
+  }
+  if (record.model !== undefined && typeof record.model !== 'string') {
+    throw new Error('Finding review publication reviewerExecutionIdentity model is not a string');
+  }
+  if (
+    record.providerOptions !== undefined
+    && (
+      typeof record.providerOptions !== 'object'
+      || record.providerOptions === null
+      || Array.isArray(record.providerOptions)
+    )
+  ) {
+    throw new Error(
+      'Finding review publication reviewerExecutionIdentity providerOptions is not an object',
+    );
+  }
+  return deepFreeze({
+    provider: record.provider,
+    ...(record.model !== undefined ? { model: record.model } : {}),
+    ...(record.providerOptions !== undefined
+      ? { providerOptions: structuredClone(record.providerOptions) as StepProviderOptions }
+      : {}),
+  });
 }
 
 function assertIdentityField(value: unknown, field: string): asserts value is string {
@@ -137,6 +388,14 @@ function parsePublicationProtocol(value: unknown): FindingReviewPublicationProto
     && record.protocolRevision === canonicalBlocks.protocolRevision
   ) {
     return canonicalBlocks;
+  }
+  const plainTextNormalized = PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  if (
+    record.generationMode === plainTextNormalized.generationMode
+    && record.format === plainTextNormalized.format
+    && record.protocolRevision === plainTextNormalized.protocolRevision
+  ) {
+    return plainTextNormalized;
   }
   throw new Error('Finding review publication has an unsupported protocol descriptor');
 }
@@ -255,10 +514,107 @@ function parseStoredPreparation(
   const relationClarification = parseStoredRelationClarification(
     record.relationClarification,
   );
+  const reviewerExecutionIdentity = record.reviewerExecutionIdentity === undefined
+    ? undefined
+    : parseReviewerExecutionIdentity(record.reviewerExecutionIdentity);
+  if (
+    publication.protocol.format === 'normalized-plain-text'
+    && reviewerExecutionIdentity === undefined
+  ) {
+    throw new Error(
+      `Finding review publication "${expectedPublicationId}" requires reviewerExecutionIdentity`,
+    );
+  }
   return {
     publication: freezeCanonicalFindingReviewPublication(publication),
     ...(relationClarification !== undefined ? { relationClarification } : {}),
+    ...(reviewerExecutionIdentity !== undefined ? { reviewerExecutionIdentity } : {}),
   };
+}
+
+function assertPendingFindingReviewNormalization(
+  pending: PendingFindingReviewNormalization,
+): void {
+  assertIdentityField(pending.workflowName, 'workflowName');
+  const expectedId = computeFindingReviewPublicationId(pending);
+  if (pending.publicationId !== expectedId) {
+    throw new Error(
+      `Pending finding review normalization identity mismatch for "${pending.publicationId}"`,
+    );
+  }
+  if (!samePublicationProtocol(
+    pending.protocol,
+    PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+  )) {
+    throw new Error(
+      `Pending finding review normalization protocol mismatch for "${pending.publicationId}"`,
+    );
+  }
+  const reportDigest = sha256(Buffer.from(pending.reportContent, 'utf8'));
+  if (pending.reportDigest !== reportDigest) {
+    throw new Error(
+      `Pending finding review normalization digest mismatch for "${pending.publicationId}"`,
+    );
+  }
+  parseReviewerExecutionIdentity(pending.reviewerExecutionIdentity);
+}
+
+function parseStoredPendingNormalization(
+  content: Buffer,
+  expectedPublicationId: string,
+): PendingFindingReviewNormalization {
+  const parsed: unknown = JSON.parse(content.toString('utf8'));
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(
+      `Pending finding review normalization "${expectedPublicationId}" is not an object`,
+    );
+  }
+  const record = parsed as Record<string, unknown>;
+  assertIdentityField(record.publicationId, 'publicationId');
+  assertIdentityField(record.workflowName, 'workflowName');
+  assertIdentityField(record.scopeIdentity, 'scopeIdentity');
+  if (typeof record.callNamespace !== 'string') {
+    throw new Error('Pending finding review normalization requires callNamespace');
+  }
+  assertIdentityField(record.parentStepName, 'parentStepName');
+  if (!Number.isSafeInteger(record.stepIteration) || Number(record.stepIteration) <= 0) {
+    throw new Error(
+      'Pending finding review normalization requires a positive stepIteration',
+    );
+  }
+  assertIdentityField(record.reviewerStepName, 'reviewerStepName');
+  assertIdentityField(record.reportName, 'reportName');
+  assertIdentityField(record.reportContent, 'reportContent');
+  assertIdentityField(record.reportDigest, 'reportDigest');
+  const protocol = parsePublicationProtocol(record.protocol);
+  if (protocol.format !== 'normalized-plain-text') {
+    throw new Error(
+      `Pending finding review normalization "${expectedPublicationId}" has an unsupported protocol`,
+    );
+  }
+  const pending: PendingFindingReviewNormalization = {
+    publicationId: record.publicationId,
+    workflowName: record.workflowName,
+    scopeIdentity: record.scopeIdentity,
+    callNamespace: record.callNamespace,
+    parentStepName: record.parentStepName,
+    stepIteration: Number(record.stepIteration),
+    reviewerStepName: record.reviewerStepName,
+    reportName: record.reportName,
+    protocol,
+    reportContent: record.reportContent,
+    reportDigest: record.reportDigest,
+    reviewerExecutionIdentity: parseReviewerExecutionIdentity(
+      record.reviewerExecutionIdentity,
+    ),
+  };
+  assertPendingFindingReviewNormalization(pending);
+  if (pending.publicationId !== expectedPublicationId) {
+    throw new Error(
+      `Pending finding review normalization identity mismatch for "${expectedPublicationId}"`,
+    );
+  }
+  return deepFreeze(pending);
 }
 
 function assertPublicationRawFindings(
@@ -339,6 +695,90 @@ export function createFindingReviewPublication(input: {
   return freezeCanonicalFindingReviewPublication(publication);
 }
 
+export function createPendingFindingReviewNormalization(input: {
+  readonly identity: FindingReviewPublicationIdentity;
+  readonly workflowName: string;
+  readonly reportContent: string;
+  readonly reviewerExecutionIdentity: ReviewerExecutionIdentity;
+}): PendingFindingReviewNormalization {
+  const pending: PendingFindingReviewNormalization = {
+    ...input.identity,
+    workflowName: input.workflowName,
+    publicationId: computeFindingReviewPublicationId(input.identity),
+    protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+    reportContent: input.reportContent,
+    reportDigest: sha256(Buffer.from(input.reportContent, 'utf8')),
+    reviewerExecutionIdentity: parseReviewerExecutionIdentity(
+      input.reviewerExecutionIdentity,
+    ),
+  };
+  assertPendingFindingReviewNormalization(pending);
+  return deepFreeze(pending);
+}
+
+export function loadPendingFindingReviewNormalization(
+  reportDir: string,
+  identity: FindingReviewPublicationIdentity,
+  expectedWorkflowName: string,
+): PendingFindingReviewNormalization | undefined {
+  const publicationId = computeFindingReviewPublicationId(identity);
+  const path = pendingNormalizationRecordPath(reportDir, publicationId);
+  ensurePrivateDirectory(dirname(path));
+  const snapshot = readPrivateFileState(path);
+  if (!snapshot.state.exists) {
+    return rebindInheritedPendingFindingReviewNormalization(
+      reportDir,
+      identity,
+      expectedWorkflowName,
+    );
+  }
+  if (!('content' in snapshot)) {
+    throw new Error(`Pending finding review normalization content is missing: ${path}`);
+  }
+  const pending = parseStoredPendingNormalization(snapshot.content, publicationId);
+  if (pending.workflowName !== expectedWorkflowName) {
+    throw new Error(
+      `Pending finding review normalization workflow mismatch for "${publicationId}"`,
+    );
+  }
+  return pending;
+}
+
+export function persistPendingFindingReviewNormalization(
+  reportDir: string,
+  pending: PendingFindingReviewNormalization,
+): PendingFindingReviewNormalization {
+  assertPendingFindingReviewNormalization(pending);
+  const path = pendingNormalizationRecordPath(reportDir, pending.publicationId);
+  ensurePrivateDirectory(dirname(path));
+  return runPrivateFileExclusive(`${path}.lock`, () => {
+    const snapshot = readPrivateFileState(path);
+    if (snapshot.state.exists) {
+      if (!('content' in snapshot)) {
+        throw new Error(`Pending finding review normalization content is missing: ${path}`);
+      }
+      const existing = parseStoredPendingNormalization(
+        snapshot.content,
+        pending.publicationId,
+      );
+      if (
+        existing.reportDigest !== pending.reportDigest
+        || existing.workflowName !== pending.workflowName
+        || !samePublicationProtocol(existing.protocol, pending.protocol)
+        || JSON.stringify(existing.reviewerExecutionIdentity)
+          !== JSON.stringify(pending.reviewerExecutionIdentity)
+      ) {
+        throw new Error(
+          `Pending finding review normalization conflict for "${pending.publicationId}"`,
+        );
+      }
+      return existing;
+    }
+    writeNewPrivateFileWithMode(path, JSON.stringify(pending), PRIVATE_FILE_MODE);
+    return pending;
+  });
+}
+
 export function loadFindingReviewPublication(
   reportDir: string,
   identity: FindingReviewPublicationIdentity,
@@ -349,7 +789,11 @@ export function loadFindingReviewPublication(
   ensurePrivateDirectory(dirname(path));
   const snapshot = readPrivateFileState(path);
   if (!snapshot.state.exists) {
-    return undefined;
+    return rebindInheritedFindingReviewPublication(
+      reportDir,
+      identity,
+      expectedProtocol,
+    );
   }
   if (!('content' in snapshot)) {
     throw new Error(`Finding review publication content is missing: ${path}`);
@@ -369,6 +813,14 @@ export function persistFindingReviewPublication(
 ): FindingReviewPublicationPreparation {
   const { publication } = preparation;
   assertCanonicalFindingReviewPublication(publication);
+  if (
+    publication.protocol.format === 'normalized-plain-text'
+    && preparation.reviewerExecutionIdentity === undefined
+  ) {
+    throw new Error(
+      `Finding review publication "${publication.publicationId}" requires reviewerExecutionIdentity`,
+    );
+  }
   const path = publicationRecordPath(reportDir, publication.publicationId);
   ensurePrivateDirectory(dirname(path));
   return runPrivateFileExclusive(`${path}.lock`, () => {
@@ -381,6 +833,8 @@ export function persistFindingReviewPublication(
       if (
         existing.publication.reportDigest !== publication.reportDigest
         || !samePublicationProtocol(existing.publication.protocol, publication.protocol)
+        || JSON.stringify(existing.reviewerExecutionIdentity ?? null)
+          !== JSON.stringify(preparation.reviewerExecutionIdentity ?? null)
       ) {
         throw new Error(
           `Finding review publication conflict for "${publication.publicationId}"`,

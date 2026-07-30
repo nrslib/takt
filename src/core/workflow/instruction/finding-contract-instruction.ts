@@ -37,6 +37,7 @@ function renderFindingContractInstruction(input: {
   const isReviewer = reviewer !== undefined;
   const structuredReviewer = reviewer?.mode === 'structured';
   const canonicalBlocksReviewer = reviewer?.mode === 'canonical_blocks';
+  const plainTextNormalizedReviewer = reviewer?.mode === 'plain_text_normalized';
   const rawFindingsStructuredOutput = structuredReviewer
     ? reviewer.rawFindingsStructuredOutput
     : undefined;
@@ -79,10 +80,13 @@ function renderFindingContractInstruction(input: {
     isReviewer,
     structuredReviewer,
     canonicalBlocksReviewer,
+    plainTextNormalizedReviewer,
     reviewerHasOpenFindings: isReviewer && contract.hasOpenFindings,
     structuredReviewerHasOpenFindings: structuredReviewer && contract.hasOpenFindings,
     canonicalBlocksReviewerHasOpenFindings:
       canonicalBlocksReviewer && contract.hasOpenFindings,
+    plainTextNormalizedReviewerHasOpenFindings:
+      plainTextNormalizedReviewer && contract.hasOpenFindings,
     reviewerHasWaivedFindings: isReviewer && contract.hasWaivedFindings,
     reviewerHasDismissedFindings: isReviewer && contract.hasDismissedFindings,
     rawFindingsJsonSchema: rawFindingsStructuredOutput

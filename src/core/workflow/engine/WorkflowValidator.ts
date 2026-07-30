@@ -31,6 +31,7 @@ import { findDuplicateWorkflowStepName } from '../../../shared/workflowStepNameV
 import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { getProviderValidationErrorSource, withProviderValidationErrorSource } from '../provider-validation-error.js';
+import { resolveFindingIntakeNormalizeConfig } from '../findings/intake-normalize-policy.js';
 
 type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
 const withWorkflowStepErrorPath = withWorkflowConfigErrorPath;
@@ -637,6 +638,11 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   // ここでの検証もランタイムと同じ判定基準を使わないと validate 時は素通り
   // したのに実行時に落ちる、という食い違いが生まれる。
   const findingContractEnabled = config.findingContract !== undefined || options.inheritedFindingContract !== undefined;
+  resolveFindingIntakeNormalizeConfig(
+    options.intakeNormalize,
+    config.name,
+    config.findingContract ?? options.inheritedFindingContract?.contract,
+  );
   validateFindingContractStructuredOutput(config, findingContractEnabled);
   validateFindingContractManagerProviderModel(config, options);
   validateFindingConflictAdjudicationReservedName(config);

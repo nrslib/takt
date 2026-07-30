@@ -4,6 +4,7 @@ export const FINDING_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const
 export const FINDING_CONTRACT_REVIEWER_OUTPUTS = [
   'structured',
   'canonical_blocks',
+  'plain_text_normalized',
 ] as const;
 // 'invalidated': the finding's premise does not hold (deterministically verified:
 // its location does not exist / is out of range). Distinct from 'waived' (the
@@ -675,6 +676,14 @@ export type RawFindingEvidenceKind = typeof RAW_FINDING_EVIDENCE_KINDS[number];
  * kind が対象と検証方式の唯一の識別子になる。
  */
 export type FindingTarget =
+  | {
+      /**
+       * Reviewer が具体的な code / structure / absence target を示さなかった
+       * review-scope 全体の主張。エンジンだけが target:null から生成し、
+       * typed evidence による clean 昇格は許可しない。
+       */
+      kind: 'review_scope';
+    }
   | {
       kind: 'code';
       /** バイナリ順にソートし、重複を除いた review scope 内の相対パス。 */

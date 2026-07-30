@@ -7,7 +7,10 @@ import {
 } from '../core/workflow/findings/manager-plan-normalization.js';
 import { validateFindingManagerOutput } from '../core/workflow/findings/manager-output-validation.js';
 import { reconcileCommitPlan } from '../core/workflow/findings/manager-commit-finalization.js';
-import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
+import {
+  applyProvisionalFindingSpecsToLedger,
+  reconcileFindingLedger,
+} from '../core/workflow/findings/reconciler.js';
 import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
 import {
   canonicalizeReviewerRawFinding,
@@ -43,6 +46,7 @@ import { applyRejectedObservationAttachments } from '../core/workflow/findings/m
 import { resolveStopBudgetLimits } from '../core/workflow/findings/stop-budget.js';
 import { resolveReviewIntegrityLimits } from '../core/workflow/findings/review-integrity.js';
 import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
+import { provisionalSpecForRawKind } from '../core/workflow/findings/manager-provisional.js';
 
 function makeFinding(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
@@ -921,6 +925,164 @@ describe('detectClarifiableRawMismatches の重複 ID 除外', () => {
 
     expect(unique.length).toBeGreaterThan(0);
     expect(duplicated).toEqual([]);
+  });
+});
+
+describe('不完全な review_scope finding の lineage', () => {
+  function canonicalReviewScope(input: {
+    excerpt: string;
+    reviewer?: string;
+    stepIteration?: number;
+    title?: string | null;
+    description?: string | null;
+    target?: { kind: 'review_scope' } | { kind: 'code'; paths: string[] };
+  }) {
+    const reviewer = input.reviewer ?? 'architecture-review';
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: null,
+      familyTag: 'architecture',
+      severity: 'medium',
+      title: input.title ?? null,
+      description: input.description ?? null,
+      suggestion: null,
+      relation: 'new',
+      target: input.target ?? { kind: 'review_scope' },
+      evidenceRequests: [],
+      rawExcerpt: input.excerpt,
+    });
+    const candidate = createReviewerRawFindingCandidates([extraction], {
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration: input.stepIteration ?? 1,
+      runId: `run-${input.stepIteration ?? 1}`,
+      reviewerStepName: reviewer,
+      reviewerPersonaKey: reviewer,
+      reviewReport: input.excerpt,
+      ledger: makeLedger([]),
+      issueEvidenceRequests: () => ({
+        evidence: [],
+        engineProofRecords: [],
+        coverageGaps: [],
+      }),
+    }).candidates[0]!;
+    return canonicalizeReviewerRawFinding(candidate, {
+      ledger: makeLedger([]),
+    }).canonical;
+  }
+
+  it('不完全な広域指摘だけexcerptで分離し、完全な広域指摘とcode指摘の収束性は変えない', () => {
+    const broadFirst = canonicalReviewScope({ excerpt: 'The dependency direction is inverted.' });
+    const broadSecond = canonicalReviewScope({ excerpt: 'The module boundary is too broad.' });
+    expect(broadFirst.claimIdentityHash).toBe(broadSecond.claimIdentityHash);
+    expect(broadFirst.semanticClaimIdentityHash).toBe(broadSecond.semanticClaimIdentityHash);
+    expect(broadFirst.lineageKey).not.toBe(broadSecond.lineageKey);
+
+    const completeFirst = canonicalReviewScope({
+      excerpt: 'First wording.',
+      title: 'Boundary problem',
+      description: 'The module boundary couples unrelated responsibilities.',
+    });
+    const completeSecond = canonicalReviewScope({
+      excerpt: 'Second wording.',
+      title: 'Boundary problem',
+      description: 'The module boundary couples unrelated responsibilities.',
+    });
+    expect(completeFirst.lineageKey).toBe(completeSecond.lineageKey);
+
+    const codeFirst = canonicalReviewScope({
+      excerpt: 'First code wording.',
+      target: { kind: 'code', paths: ['src/example.ts'] },
+    });
+    const codeSecond = canonicalReviewScope({
+      excerpt: 'Second code wording.',
+      target: { kind: 'code', paths: ['src/example.ts'] },
+    });
+    expect(codeFirst.lineageKey).toBe(codeSecond.lineageKey);
+  });
+
+  it('同じexcerptはreviewerとroundをまたいで同じlineageになり、reconcilerは同一reviewerの再観測だけをupsertする', () => {
+    const excerpt = 'The dependency direction is inverted.';
+    const first = canonicalReviewScope({
+      excerpt,
+      reviewer: 'architecture-review',
+      stepIteration: 1,
+    });
+    const nextRound = canonicalReviewScope({
+      excerpt,
+      reviewer: 'architecture-review',
+      stepIteration: 2,
+    });
+    const peerReviewer = canonicalReviewScope({
+      excerpt,
+      reviewer: 'ai-antipattern-review',
+      stepIteration: 2,
+    });
+    expect(nextRound.lineageKey).toBe(first.lineageKey);
+    expect(peerReviewer.lineageKey).toBe(first.lineageKey);
+    expect(nextRound.reviewerStableKey).toBe(first.reviewerStableKey);
+    expect(peerReviewer.reviewerStableKey).not.toBe(first.reviewerStableKey);
+
+    const firstWire = toLedgerRawFinding(first);
+    const nextWire = toLedgerRawFinding(nextRound);
+    const reason = 'Review-scope finding has no concrete target for typed evidence verification.';
+    const firstSpec = provisionalSpecForRawKind({
+      wire: firstWire,
+      canonical: first,
+      reason,
+    }, 'raw-meaning-ambiguous');
+    const nextSpec = provisionalSpecForRawKind({
+      wire: nextWire,
+      canonical: nextRound,
+      reason,
+    }, 'raw-meaning-ambiguous');
+    const firstLedger = applyProvisionalFindingSpecsToLedger(
+      makeLedger([]),
+      [firstSpec],
+      {
+        workflowName: 'peer-review',
+        stepName: 'reviewers',
+        runId: 'run-1',
+        timestamp: '2026-07-31T00:00:00.000Z',
+      },
+    );
+    const secondLedger = applyProvisionalFindingSpecsToLedger(
+      firstLedger,
+      [nextSpec],
+      {
+        workflowName: 'peer-review',
+        stepName: 'reviewers',
+        runId: 'run-2',
+        timestamp: '2026-07-31T00:01:00.000Z',
+      },
+    );
+    expect(secondLedger.findings).toHaveLength(1);
+    expect(secondLedger.findings[0]).toMatchObject({
+      lifecycle: 'persists',
+      revision: 2,
+      rawFindingIds: [firstWire.rawFindingId, nextWire.rawFindingId],
+    });
+
+    const distinct = canonicalReviewScope({
+      excerpt: 'The module boundary is too broad.',
+      reviewer: 'architecture-review',
+      stepIteration: 3,
+    });
+    const distinctLedger = applyProvisionalFindingSpecsToLedger(
+      secondLedger,
+      [provisionalSpecForRawKind({
+        wire: toLedgerRawFinding(distinct),
+        canonical: distinct,
+        reason,
+      }, 'raw-meaning-ambiguous')],
+      {
+        workflowName: 'peer-review',
+        stepName: 'reviewers',
+        runId: 'run-3',
+        timestamp: '2026-07-31T00:02:00.000Z',
+      },
+    );
+    expect(distinctLedger.findings).toHaveLength(2);
   });
 });
 

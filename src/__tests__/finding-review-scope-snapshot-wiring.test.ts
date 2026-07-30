@@ -26,8 +26,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
+import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
+import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import type { AgentResponse, FindingContractConfig, WorkflowState, WorkflowStep } from '../core/models/types.js';
 import type { ProviderUsageSnapshot } from '../core/models/response.js';
+import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import type { StepProviderInfo } from '../core/workflow/types.js';
 import type {
   FindingContractInstructionContext,
@@ -46,6 +49,12 @@ import {
   reviewerRawExtractionFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
+import {
+  createPendingFindingReviewNormalization,
+  persistPendingFindingReviewNormalization,
+} from '../core/workflow/findings/review-publication.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -157,6 +166,32 @@ const FINDING_CONTRACT: FindingContractConfig = {
   },
 };
 
+function makeReviewerAutoRouting(): AutoRoutingConfig {
+  return {
+    strategy: 'balanced',
+    router: { provider: 'mock', model: 'router-model' },
+    candidates: [{
+      name: 'routed-reviewer',
+      provider: 'opencode',
+      model: 'openrouter/routed-reviewer-model',
+      routingTier: 'medium',
+    }],
+    defaultPool: 'reviewers',
+    candidatePools: {
+      reviewers: {
+        candidates: ['routed-reviewer'],
+        fallback: 'routed-reviewer',
+      },
+    },
+    rules: {
+      steps: {
+        'ai-antipattern-review': 'routed-reviewer',
+        'security-review': 'routed-reviewer',
+      },
+    },
+  };
+}
+
 function makeFindingContractContext(
   overrides: Partial<FindingContractInstructionContext> = {},
 ): FindingContractInstructionContext {
@@ -222,6 +257,7 @@ function makeRunner(options: {
     readonly success: boolean;
     readonly usage?: ProviderUsageSnapshot;
   };
+  autoRouting?: AutoRoutingConfig;
 } = {}): {
   runner: ParallelRunner;
   deps: ParallelRunnerDeps;
@@ -331,9 +367,21 @@ function makeRunner(options: {
   });
   const deps: ParallelRunnerDeps = {
     optionsBuilder: {
-      buildAgentOptions: vi.fn().mockReturnValue({}),
+      buildAgentOptions: vi.fn((_step, runtime) => ({
+        resolvedProvider: runtime?.providerInfo?.provider,
+        resolvedModel: runtime?.providerInfo?.model,
+      })),
       buildPhaseRunnerContext: vi.fn().mockReturnValue({}),
-      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
+      resolveStepProviderModel: vi.fn((_step, runtime) => (
+        runtime?.providerInfo ?? { provider: 'claude', model: 'claude-sonnet' }
+      )),
+      resolveStepProviderModelBeforeAutoRouting: vi.fn((_step, runtime) => (
+        runtime?.providerInfo ?? (
+          options.autoRouting === undefined
+            ? { provider: 'claude', model: 'claude-sonnet' }
+            : { provider: undefined, model: undefined }
+        )
+      )),
       buildFindingContractInstructionContext: vi.fn().mockReturnValue(
         options.findingContractContext ?? makeFindingContractContext(),
       ),
@@ -341,6 +389,9 @@ function makeRunner(options: {
     stepExecutor: stepExecutor as unknown as ParallelRunnerDeps['stepExecutor'],
     engineOptions: {
       projectCwd,
+      ...(options.autoRouting !== undefined
+        ? { autoRouting: options.autoRouting }
+        : {}),
     },
     getCwd: () => projectCwd,
     getReportDir: () => reportDir,
@@ -361,7 +412,7 @@ function makeRunner(options: {
     ...(withFindingContract
       ? {
           reviewerOutputStrategy: options.reviewerOutputStrategy
-            ?? { kind: 'structured' },
+            ?? { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
         }
       : {}),
     findingLedgerStore,
@@ -405,7 +456,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     // 直列化時に特に問題になる）。
     expect(deps.optionsBuilder.buildFindingContractInstructionContext).toHaveBeenCalledTimes(1);
     expect(deps.optionsBuilder.buildFindingContractInstructionContext)
-      .toHaveBeenCalledWith(step, { kind: 'structured' });
+      .toHaveBeenCalledWith(step, { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' });
 
     const builtContext = vi.mocked(deps.optionsBuilder.buildFindingContractInstructionContext).mock.results[0]?.value;
     expect(builtContext).toBeDefined();
@@ -448,7 +499,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     });
     const { runner, deps } = makeRunner({
       findingContractContext: canonicalBlocksContext,
-      reviewerOutputStrategy: { kind: 'canonical_blocks' },
+      reviewerOutputStrategy: { kind: 'canonical_blocks', reportGeneration: 'plain_text', intake: 'canonical_parser' },
     });
     const updatePersonaSession = vi.fn();
     const step = makeParallelStep();
@@ -467,7 +518,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     await runner.runParallelStep(step, state, 'test task', 5, updatePersonaSession);
 
     expect(deps.optionsBuilder.buildFindingContractInstructionContext)
-      .toHaveBeenCalledWith(step, { kind: 'canonical_blocks' });
+      .toHaveBeenCalledWith(step, { kind: 'canonical_blocks', reportGeneration: 'plain_text', intake: 'canonical_parser' });
     for (const call of vi.mocked(deps.optionsBuilder.buildAgentOptions).mock.calls) {
       expect((call[0] as WorkflowStep).structuredOutput).toBeUndefined();
     }
@@ -572,7 +623,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     });
     const { runner, deps } = makeRunner({
       findingContractContext: canonicalBlocksContext,
-      reviewerOutputStrategy: { kind: 'canonical_blocks' },
+      reviewerOutputStrategy: { kind: 'canonical_blocks', reportGeneration: 'plain_text', intake: 'canonical_parser' },
     });
     vi.mocked(deps.stepExecutor.prepareFindingReviewPublication)
       .mockRejectedValueOnce(new Error('invalid canonical report'));
@@ -640,6 +691,215 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
   });
 
+  it('parallel正式resumeはpending本文をnormalizerだけで再開する', async () => {
+    const projectCwd = mkdtempSync(join(tmpdir(), 'takt-parallel-pending-project-'));
+    const sourcePaths = buildRunPaths(projectCwd, 'source-run');
+    const targetPaths = buildRunPaths(projectCwd, 'target-run');
+    const reportDir = targetPaths.reportsAbs;
+    try {
+      mkdirSync(sourcePaths.runRootAbs, { recursive: true });
+      const plainContext = makeFindingContractContext({
+        reviewer: {
+          mode: 'plain_text_normalized',
+          reviewScopeSnapshotId: 'round-snapshot-abc123',
+        },
+      });
+      const { runner, deps } = makeRunner({
+        projectCwd,
+        reportDir,
+        findingContractContext: plainContext,
+        reviewerOutputStrategy: {
+          kind: 'plain_text_normalized',
+          reportGeneration: 'plain_text',
+          intake: 'isolated_normalizer',
+        },
+        autoRouting: makeReviewerAutoRouting(),
+      });
+      const reportContent = [
+        '# AI Antipattern Review',
+        '',
+        'Issue: the module boundary couples unrelated responsibilities.',
+      ].join('\n');
+      const rawFinding = {
+        rawExcerpt: 'Issue: the module boundary couples unrelated responsibilities.',
+        candidate: {
+          rawFindingId: null,
+          familyTag: 'architecture',
+          severity: 'high',
+          title: 'Module boundary is too broad',
+          description: 'The module boundary couples unrelated responsibilities.',
+          suggestion: null,
+          relation: 'new',
+          targetFindingIds: [],
+          target: null,
+          evidenceRequests: [],
+        },
+      };
+      persistPendingFindingReviewNormalization(
+        sourcePaths.reportsAbs,
+        createPendingFindingReviewNormalization({
+          identity: {
+            scopeIdentity: 'source-sqlite-scope',
+            callNamespace: '',
+            parentStepName: 'reviewers',
+            stepIteration: 1,
+            reviewerStepName: 'ai-antipattern-review',
+            reportName: 'ai-antipattern-review.md',
+          },
+          workflowName: 'test-workflow',
+          reportContent,
+          reviewerExecutionIdentity: {
+            provider: 'mock',
+            model: 'reviewer-model',
+          },
+        }),
+      );
+      inheritResumeReportSnapshot({
+        cwd: projectCwd,
+        sourceRunSlug: 'source-run',
+        targetRunSlug: 'target-run',
+      });
+      const normalizeFindingIntake = vi.fn().mockResolvedValue(
+        makeAgentResponse({
+          persona: 'finding-intake-normalizer',
+          content: '{"rawFindings":[]}',
+          structuredOutput: { rawFindings: [rawFinding] },
+        }),
+      );
+      const resumeExecutor = new StepExecutor({
+        optionsBuilder: {
+          ...deps.optionsBuilder,
+          resolveStepProviderModel: vi.fn((resolvedStep, runtime) => (
+            runtime?.providerInfo ?? {
+              provider: resolvedStep.provider,
+              model: resolvedStep.model,
+              providerOptions: resolvedStep.providerOptions,
+            }
+          )),
+        } as unknown as StepExecutorDeps['optionsBuilder'],
+        structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+        reviewerOutputStrategy: {
+          kind: 'plain_text_normalized',
+          reportGeneration: 'plain_text',
+          intake: 'isolated_normalizer',
+        },
+        structuredCaller: { normalizeFindingIntake },
+        intakeNormalize: {
+          provider: 'mock',
+          model: 'normalizer-model',
+        },
+        getRunPaths: () => ({ reportsAbs: reportDir }),
+        getFindingCallNamespace: () => '',
+        getLanguage: () => 'en',
+        getWorkflowName: () => 'test-workflow',
+        recordSynthesizedAgentUsage: vi.fn(),
+        findingLedgerStore: deps.findingLedgerStore,
+      } as unknown as StepExecutorDeps);
+      vi.mocked(deps.stepExecutor.resumeFindingReviewPublication)
+        .mockImplementation((input) => (
+          resumeExecutor.resumeFindingReviewPublication(input)
+        ));
+      queueAgentResponse(makeAgentResponse({
+        persona: 'security-review',
+        content: '**APPROVE**',
+      }));
+
+      const result = await runner.runParallelStep(
+        makeParallelStep(),
+        makeState(),
+        'test task',
+        5,
+        vi.fn(),
+        {
+          fallback: {
+            reason: 'rate_limited',
+            reasonDetail: 'normalizer rate limited',
+            originalIteration: 1,
+            previousProvider: 'mock',
+            previousModel: 'normalizer-model',
+            currentProvider: 'mock',
+            currentModel: 'fallback-normalizer-model',
+            stepName: 'reviewers',
+            reportDir,
+            origin: {
+              stage: 'finding_intake_normalizer',
+              reviewerStepName: 'ai-antipattern-review',
+            },
+          },
+        },
+      );
+
+      expect(result.response.status, result.response.content).toBe('done');
+      expect(executeAgent).toHaveBeenCalledOnce();
+      expect(vi.mocked(executeAgent).mock.calls[0]?.[2]).toMatchObject({
+        resolvedProvider: 'opencode',
+        resolvedModel: 'openrouter/routed-reviewer-model',
+      });
+      expect(normalizeFindingIntake).toHaveBeenCalledOnce();
+      expect(normalizeFindingIntake.mock.calls[0]?.[0]).toBe(reportContent);
+      expect(normalizeFindingIntake.mock.calls[0]?.[1]).toMatchObject({
+        provider: 'mock',
+        model: 'fallback-normalizer-model',
+      });
+      expect(deps.stepExecutor.prepareFindingReviewPublication)
+        .toHaveBeenCalledOnce();
+      expect(vi.mocked(deps.stepExecutor.prepareFindingReviewPublication)
+        .mock.calls[0]?.[0].step.name).toBe('security-review');
+      expect(vi.mocked(deps.stepExecutor.applyPostExecutionRulesOnly).mock.calls)
+        .toHaveLength(2);
+      expect(vi.mocked(deps.stepExecutor.applyPostExecutionRulesOnly).mock.calls
+        .map((call) => call[4]?.providerInfo?.model)).toEqual([
+        'reviewer-model',
+        'openrouter/routed-reviewer-model',
+      ]);
+      expect(vi.mocked(deps.stepExecutor.buildInstruction).mock.calls
+        .map((call) => call[5])).toEqual([undefined, undefined]);
+      expect(ingestFindingContractResults).toHaveBeenCalledOnce();
+      expect(vi.mocked(ingestFindingContractResults).mock.calls[0]?.[0]
+        .subResults.find(({ subStep }) => subStep.name === 'ai-antipattern-review')
+        ?.publication.reportContent).toBe(reportContent);
+    } finally {
+      rmSync(projectCwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['blocked', 'rate_limited'] as const)(
+    'pending publication resumeが%sならそのreviewerを再実行せずmanager intakeへ進まない',
+    async (status) => {
+      const { runner, deps } = makeRunner();
+      vi.mocked(deps.stepExecutor.resumeFindingReviewPublication)
+        .mockImplementation(({ step: reviewerStep }) => (
+          reviewerStep.name === 'ai-antipattern-review'
+            ? {
+                terminalResponse: makeAgentResponse({
+                  persona: reviewerStep.name,
+                  status,
+                  content: `normalizer ${status}`,
+                }),
+              }
+            : undefined
+        ));
+      queueAgentResponse(makeAgentResponse({
+        persona: 'security-review',
+        content: '**APPROVE**',
+      }));
+
+      const result = await runner.runParallelStep(
+        makeParallelStep(),
+        makeState(),
+        'test task',
+        5,
+        vi.fn(),
+      );
+
+      expect(result.response.status).toBe(status);
+      expect(executeAgent).toHaveBeenCalledOnce();
+      expect(deps.stepExecutor.prepareFindingReviewPublication)
+        .toHaveBeenCalledOnce();
+      expect(ingestFindingContractResults).not.toHaveBeenCalled();
+    },
+  );
+
   it('resolves an open finding from a canonical parallel lifecycle confirmation', async () => {
     const projectCwd = mkdtempSync(join(tmpdir(), 'takt-parallel-normalized-confirmation-'));
     const reportDir = mkdtempSync(join(tmpdir(), 'takt-parallel-normalized-reports-'));
@@ -670,7 +930,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         projectCwd,
         reportDir,
         findingContractContext: canonicalBlocksContext,
-        reviewerOutputStrategy: { kind: 'canonical_blocks' },
+        reviewerOutputStrategy: { kind: 'canonical_blocks', reportGeneration: 'plain_text', intake: 'canonical_parser' },
       });
       const ledgerStore = deps.findingLedgerStore!;
       await ledgerStore.updateLedger(() => ({

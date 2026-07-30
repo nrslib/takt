@@ -450,7 +450,7 @@ describe('session compaction Phase 1 wiring', () => {
         evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
       },
       structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-      reviewerOutputStrategy: { kind: 'structured' },
+      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',

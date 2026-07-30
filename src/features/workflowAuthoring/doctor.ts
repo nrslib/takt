@@ -68,7 +68,7 @@ function validateWorkflowRuntimeContract(
     workflow = loadWorkflowForRuntimeValidation(target, projectDir);
     const config = resolveWorkflowConfigValues(
       projectDir,
-      ['provider', 'model', 'personaProviders', 'providerRouting', 'autoRouting'],
+      ['provider', 'model', 'personaProviders', 'providerRouting', 'autoRouting', 'intakeNormalize'],
     );
     validateWorkflowConfig(workflow, {
       projectCwd: projectDir,
@@ -77,6 +77,7 @@ function validateWorkflowRuntimeContract(
       personaProviders: config.personaProviders,
       providerRouting: config.providerRouting,
       autoRouting: workflow.autoRouting ?? config.autoRouting,
+      intakeNormalize: config.intakeNormalize,
       workflowCallResolver: () => null,
     });
     warnOnMissingProvisionalRouting(report, workflow);

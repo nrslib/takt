@@ -12,7 +12,7 @@ import { runAgent } from './runner.js';
 
 export interface NormalizeFindingIntakeOptions {
   provider: ProviderType;
-  model: string;
+  model?: string;
   providerOptions?: StepProviderOptions;
   language?: Language;
   abortSignal?: AbortSignal;
@@ -30,8 +30,8 @@ export async function normalizeFindingIntake(
   const isolatedCwd = mkdtempSync(join(tmpdir(), 'takt-finding-intake-'));
   try {
     const instruction = options.mode === 'correction'
-      ? buildFindingIntakeCorrectionPrompt(report)
-      : buildFindingIntakeExtractionPrompt(report);
+      ? buildFindingIntakeCorrectionPrompt(report, options.language ?? 'en')
+      : buildFindingIntakeExtractionPrompt(report, options.language ?? 'en');
     return await runAgent(undefined, instruction, {
       cwd: isolatedCwd,
       executionProfile: 'isolated-structured',

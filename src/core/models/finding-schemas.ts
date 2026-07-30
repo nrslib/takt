@@ -356,6 +356,9 @@ export const RawFindingEvidenceSchema = z.discriminatedUnion('kind', [
 
 export const FindingTargetSchema = z.discriminatedUnion('kind', [
   z.object({
+    kind: z.literal('review_scope'),
+  }).strict(),
+  z.object({
     kind: z.literal('code'),
     paths: BinarySortedUniqueStringSetSchema.min(1),
   }).strict(),

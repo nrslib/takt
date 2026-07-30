@@ -9,8 +9,21 @@ import type {
 const STRATEGIES: Readonly<
   Record<FindingContractReviewerOutput, FindingContractReviewerOutputStrategy>
 > = Object.freeze({
-  structured: Object.freeze({ kind: 'structured' }),
-  canonical_blocks: Object.freeze({ kind: 'canonical_blocks' }),
+  structured: Object.freeze({
+    kind: 'structured',
+    reportGeneration: 'structured',
+    intake: 'reviewer_structured',
+  }),
+  canonical_blocks: Object.freeze({
+    kind: 'canonical_blocks',
+    reportGeneration: 'plain_text',
+    intake: 'canonical_parser',
+  }),
+  plain_text_normalized: Object.freeze({
+    kind: 'plain_text_normalized',
+    reportGeneration: 'plain_text',
+    intake: 'isolated_normalizer',
+  }),
 });
 
 export function resolveFindingContractReviewerOutputStrategy(

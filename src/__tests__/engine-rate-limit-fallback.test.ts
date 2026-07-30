@@ -224,6 +224,256 @@ describe('WorkflowEngine rate limit fallback', () => {
     ]);
   });
 
+  it.each(['blocked', 'error'] as const)(
+    'fallback試行が%sで終端したら消費済みfallback状態を残さない',
+    async (status) => {
+      const engine = new WorkflowEngine(
+        singleStepConfig(),
+        tmpDir,
+        'test task',
+        createEngineOptions(tmpDir, {
+          rateLimitFallback: {
+            switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+          },
+        }),
+      );
+      mockRunAgentSequence([
+        makeRateLimitedResponse('claude'),
+        makeResponse({
+          persona: 'plan',
+          status,
+          content: `${status} on fallback`,
+          ...(status === 'error' ? { error: 'fallback failed' } : {}),
+        }),
+      ]);
+
+      const rateLimited = await engine.runSingleIteration();
+      const terminal = await engine.runSingleIteration();
+
+      expect(rateLimited.nextStep).toBe('plan');
+      expect(terminal.nextStep).toBe('ABORT');
+      expect(engine.getState().pendingFallback).toBeUndefined();
+      expect(engine.getState().rateLimitFallbackState).toBeUndefined();
+    },
+  );
+
+  it('reviewer fallback後のnormalizer rate-limitは別originとして同じ候補を再利用する', async () => {
+    const engine = new WorkflowEngine(
+      singleStepConfig(),
+      tmpDir,
+      'test task',
+      createEngineOptions(tmpDir, {
+        rateLimitFallback: {
+          switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+        },
+      }),
+    );
+    const capturedFallbacks: Array<{
+      stage: string;
+      currentProvider: string;
+      attempts: Array<{ provider: string; model?: string }>;
+    }> = [];
+    const stepExecutor = (
+      engine as unknown as {
+        stepExecutor: {
+          runNormalStep: (
+            ...args: unknown[]
+          ) => Promise<import('../core/workflow/types.js').StepRunResult>;
+        };
+      }
+    ).stepExecutor;
+    vi.spyOn(stepExecutor, 'runNormalStep')
+      .mockImplementationOnce(async () => ({
+        response: makeRateLimitedResponse('claude'),
+        instruction: 'reviewer attempt',
+        providerInfo: {
+          provider: 'claude',
+          model: 'claude-sonnet',
+        },
+      }))
+      .mockImplementationOnce(async () => {
+        const state = engine.getState();
+        const fallback = state.pendingFallback!;
+        capturedFallbacks.push({
+          stage: fallback.origin.stage,
+          currentProvider: fallback.currentProvider,
+          attempts: [...state.rateLimitFallbackState!.attempts],
+        });
+        return {
+          response: makeRateLimitedResponse('claude', {
+            persona: 'finding-intake-normalizer',
+          }),
+          instruction: 'normalizer attempt',
+          providerInfo: {
+            provider: 'codex',
+            model: 'gpt-5',
+          },
+          terminalOperation: {
+            origin: {
+              stage: 'finding_intake_normalizer',
+              reviewerStepName: 'plan',
+            },
+            providerInfo: {
+              provider: 'claude',
+              model: 'normalizer-model',
+            },
+          },
+        };
+      })
+      .mockImplementationOnce(async () => {
+        const state = engine.getState();
+        const fallback = state.pendingFallback!;
+        capturedFallbacks.push({
+          stage: fallback.origin.stage,
+          currentProvider: fallback.currentProvider,
+          attempts: [...state.rateLimitFallbackState!.attempts],
+        });
+        return {
+          response: makeResponse({
+            persona: 'plan',
+            content: '[STEP:1] continue',
+            matchedRuleIndex: 0,
+            matchedRuleMethod: 'phase3_tag',
+          }),
+          instruction: 'normalizer fallback attempt',
+          providerInfo: {
+            provider: 'codex',
+            model: 'gpt-5',
+          },
+        };
+      });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(capturedFallbacks).toEqual([
+      {
+        stage: 'reviewer',
+        currentProvider: 'codex',
+        attempts: [
+          { provider: 'claude', model: 'claude-sonnet' },
+          { provider: 'codex', model: 'gpt-5' },
+        ],
+      },
+      {
+        stage: 'finding_intake_normalizer',
+        currentProvider: 'codex',
+        attempts: [
+          { provider: 'claude', model: 'normalizer-model' },
+          { provider: 'codex', model: 'gpt-5' },
+        ],
+      },
+    ]);
+    expect(state.pendingFallback).toBeUndefined();
+    expect(state.rateLimitFallbackState).toBeUndefined();
+  });
+
+  it('normalizerのblockedはfallback chainを使わず帰属を保持してabortする', async () => {
+    const engine = new WorkflowEngine(
+      singleStepConfig(),
+      tmpDir,
+      'test task',
+      createEngineOptions(tmpDir, {
+        rateLimitFallback: {
+          switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+        },
+      }),
+    );
+    const stepExecutor = (
+      engine as unknown as {
+        stepExecutor: {
+          runNormalStep: (
+            ...args: unknown[]
+          ) => Promise<import('../core/workflow/types.js').StepRunResult>;
+        };
+      }
+    ).stepExecutor;
+    const terminalOperation = {
+      origin: {
+        stage: 'finding_intake_normalizer' as const,
+        reviewerStepName: 'plan',
+      },
+      providerInfo: {
+        provider: 'claude' as const,
+        model: 'normalizer-model',
+      },
+    };
+    vi.spyOn(stepExecutor, 'runNormalStep').mockResolvedValue({
+      response: makeResponse({
+        persona: 'finding-intake-normalizer',
+        status: 'blocked',
+        content: 'normalizer blocked',
+      }),
+      instruction: 'normalizer attempt',
+      providerInfo: {
+        provider: 'codex',
+        model: 'reviewer-model',
+      },
+      terminalOperation,
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(stepExecutor.runNormalStep).toHaveBeenCalledOnce();
+    expect(state.pendingFallback).toBeUndefined();
+    expect(state.rateLimitFallbackState).toBeUndefined();
+    expect(terminalOperation.origin).toEqual({
+      stage: 'finding_intake_normalizer',
+      reviewerStepName: 'plan',
+    });
+  });
+
+  it('fallback未設定のnormalizer rate-limitはnormalizer帰属のままabortする', async () => {
+    const engine = new WorkflowEngine(
+      singleStepConfig(),
+      tmpDir,
+      'test task',
+      createEngineOptions(tmpDir),
+    );
+    const stepExecutor = (
+      engine as unknown as {
+        stepExecutor: {
+          runNormalStep: (
+            ...args: unknown[]
+          ) => Promise<import('../core/workflow/types.js').StepRunResult>;
+        };
+      }
+    ).stepExecutor;
+    const terminalOperation = {
+      origin: {
+        stage: 'finding_intake_normalizer' as const,
+        reviewerStepName: 'plan',
+      },
+      providerInfo: {
+        provider: 'claude' as const,
+        model: 'normalizer-model',
+      },
+    };
+    vi.spyOn(stepExecutor, 'runNormalStep').mockResolvedValue({
+      response: makeRateLimitedResponse('claude', {
+        persona: 'finding-intake-normalizer',
+      }),
+      instruction: 'normalizer attempt',
+      providerInfo: {
+        provider: 'codex',
+        model: 'reviewer-model',
+      },
+      terminalOperation,
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(stepExecutor.runNormalStep).toHaveBeenCalledOnce();
+    expect(state.pendingFallback).toBeUndefined();
+    expect(state.rateLimitFallbackState).toBeUndefined();
+    expect(terminalOperation.providerInfo).toEqual({
+      provider: 'claude',
+      model: 'normalizer-model',
+    });
+  });
+
   it('fallback provider も rate_limited の場合は switch_chain の次 provider を試す', async () => {
     // Given
     const engine = new WorkflowEngine(singleStepConfig(), tmpDir, 'test task', createEngineOptions(tmpDir, {
@@ -509,17 +759,24 @@ describe('WorkflowEngine rate limit fallback', () => {
     });
     const engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir, {
       rateLimitFallback: {
-        switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+        switchChain: [
+          { provider: 'codex', model: 'gpt-5' },
+          { provider: 'opencode', model: 'openrouter/fallback-model' },
+        ],
       },
     }));
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: '[STEP:1] continue', sessionId: 'claude-session' }),
-      makeResponse({ persona: 'plan', content: '[STEP:1] continue', sessionId: 'codex-session' }),
+      makeResponse({ persona: 'plan', content: '[STEP:1] continue', sessionId: 'opencode-session' }),
     ]);
     vi.mocked(runReportPhase)
       .mockResolvedValueOnce({
         rateLimited: true,
-        response: makeRateLimitedResponse('claude', { persona: 'plan' }),
+        response: makeRateLimitedResponse('codex', { persona: 'plan' }),
+        providerInfo: {
+          provider: 'codex',
+          model: 'gpt-5',
+        },
       })
       .mockResolvedValueOnce(undefined);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
@@ -531,7 +788,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(state.status).toBe('completed');
     expect(state.iteration).toBe(1);
     expect(state.stepIterations.get('plan')).toBe(1);
-    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'codex']);
+    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'opencode']);
     expect(runReportPhase).toHaveBeenCalledTimes(2);
     expect(mockRuleEvaluation).toHaveBeenCalledOnce();
   });
@@ -561,6 +818,10 @@ describe('WorkflowEngine rate limit fallback', () => {
       .mockResolvedValueOnce({
         rateLimited: true,
         response: makeRateLimitedResponse('claude', { persona: 'plan' }),
+        providerInfo: {
+          provider: 'claude',
+          model: 'claude-sonnet',
+        },
       })
       .mockResolvedValueOnce(undefined);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
@@ -671,7 +932,15 @@ describe('WorkflowEngine rate limit fallback', () => {
     )).toBe(1);
     expect(state.stepIterations.has('arch-review')).toBe(false);
     expect(state.stepIterations.has('security-review')).toBe(false);
-    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'claude', 'codex', 'codex']);
+    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual([
+      'claude',
+      'claude',
+      'codex',
+      'claude',
+    ]);
+    const calls = providerCalls();
+    expect(calls[1]?.sessionId).toBeUndefined();
+    expect(calls[3]?.sessionId).toEqual(expect.any(String));
     const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
     expect(prompts[0]).not.toContain('Fallback Execution');
     expect(prompts[1]).not.toContain('Fallback Execution');
@@ -682,11 +951,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(prompts[2]).toContain('security-review');
     expect(prompts[2]).toContain('Aggregate rules were not evaluated');
     expect(prompts[2]).toContain('Rate limit exceeded. Please try again later.');
-    expect(prompts[3]).toContain('Fallback Execution');
-    expect(prompts[3]).toContain('claude');
-    expect(prompts[3]).toContain('codex');
-    expect(prompts[3]).toContain('arch-review');
-    expect(prompts[3]).toContain('security-review');
+    expect(prompts[3]).not.toContain('Fallback Execution');
     expect(prompts[3]).toContain('Aggregate rules were not evaluated');
     expect(prompts[3]).toContain('Rate limit exceeded. Please try again later.');
     expect(runAgent).toHaveBeenCalledTimes(4);
@@ -746,10 +1011,15 @@ describe('WorkflowEngine rate limit fallback', () => {
     // Then
     expect(state.status).toBe('completed');
     expect(existsSync(gateMarkerPath)).toBe(true);
-    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'claude', 'codex', 'codex']);
+    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual([
+      'claude',
+      'claude',
+      'codex',
+      'claude',
+    ]);
     const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
     expect(prompts[2]).toContain('Fallback Execution');
-    expect(prompts[3]).toContain('Fallback Execution');
+    expect(prompts[3]).not.toContain('Fallback Execution');
     expect(prompts[2]).not.toContain('Quality gate failed');
     expect(prompts[3]).not.toContain('Quality gate failed');
   });
@@ -792,6 +1062,10 @@ describe('WorkflowEngine rate limit fallback', () => {
       .mockResolvedValueOnce({
         rateLimited: true,
         response: makeRateLimitedResponse('claude', { persona: 'arch-review' }),
+        providerInfo: {
+          provider: 'claude',
+          model: 'claude-sonnet',
+        },
       })
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(undefined)
@@ -818,7 +1092,12 @@ describe('WorkflowEngine rate limit fallback', () => {
     )).toBe(1);
     expect(state.stepIterations.has('arch-review')).toBe(false);
     expect(state.stepIterations.has('security-review')).toBe(false);
-    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'claude', 'codex', 'codex']);
+    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual([
+      'claude',
+      'claude',
+      'codex',
+      'claude',
+    ]);
     expect(runReportPhase).toHaveBeenCalledTimes(4);
     expect(mockRuleEvaluation).toHaveBeenCalledTimes(4);
   });
@@ -872,7 +1151,12 @@ describe('WorkflowEngine rate limit fallback', () => {
 
     // Then
     expect(state.status).toBe('completed');
-    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['codex', 'claude', 'opencode', 'opencode']);
+    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual([
+      'codex',
+      'claude',
+      'opencode',
+      'claude',
+    ]);
     const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
     expect(prompts[2]).toContain('Previous provider/model: codex / gpt-5');
     expect(prompts[2]).toContain('Current provider/model: opencode / opencode/big-pickle');
@@ -905,7 +1189,10 @@ describe('WorkflowEngine rate limit fallback', () => {
     const onSessionUpdate = vi.fn();
     const engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir, {
       rateLimitFallback: {
-        switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+        switchChain: [
+          { provider: 'codex', model: 'gpt-5' },
+          { provider: 'opencode', model: 'openrouter/fallback-model' },
+        ],
       },
       onSessionUpdate,
     }));
@@ -922,7 +1209,11 @@ describe('WorkflowEngine rate limit fallback', () => {
     vi.mocked(runReportPhase)
       .mockResolvedValueOnce({
         rateLimited: true,
-        response: makeRateLimitedResponse('claude', { persona: 'implement' }),
+        response: makeRateLimitedResponse('codex', { persona: 'implement' }),
+        providerInfo: {
+          provider: 'codex',
+          model: 'gpt-5',
+        },
       })
       .mockResolvedValueOnce(undefined);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
@@ -941,9 +1232,9 @@ describe('WorkflowEngine rate limit fallback', () => {
       'claude',
       'claude',
       'claude',
-      'codex',
-      'codex',
-      'codex',
+      'opencode',
+      'opencode',
+      'opencode',
     ]);
     expect(engine.getState().previousResponseSourcePath).toMatch(
       /^\.takt\/runs\/test-report-dir\/context\/previous_responses\/implement\.1\.\d{8}T\d{6}Z\.md$/,

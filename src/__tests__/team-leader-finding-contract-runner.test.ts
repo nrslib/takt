@@ -693,12 +693,37 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
         readPaths: [],
       },
     };
+    const state = makeState();
+    state.stepIterations.set('fix', 1);
+    const originalFallbackState = {
+      origin: {
+        stage: 'reviewer' as const,
+        reviewerStepName: 'fix',
+      },
+      attempts: [{
+        provider: 'codex' as const,
+        model: 'gpt-5',
+      }],
+    };
+    state.rateLimitFallbackState = originalFallbackState;
     executeAgentMock
-      .mockResolvedValueOnce({
-        persona: 'coder',
-        status: 'rate_limited',
-        content: 'rate limited',
-        timestamp: new Date(),
+      .mockImplementationOnce(async () => {
+        state.rateLimitFallbackState = {
+          origin: {
+            stage: 'reviewer',
+            reviewerStepName: 'fix.part',
+          },
+          attempts: [{
+            provider: 'claude-sdk',
+            model: 'claude-sonnet',
+          }],
+        };
+        return {
+          persona: 'coder',
+          status: 'rate_limited',
+          content: 'rate limited',
+          timestamp: new Date(),
+        };
       })
       .mockResolvedValueOnce({
         persona: 'coder',
@@ -828,9 +853,6 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
         partEdit: true,
       },
     };
-    const state = makeState();
-    state.stepIterations.set('fix', 1);
-
     const rateLimited = await runner.runTeamLeaderStep(
       step,
       state,
@@ -841,6 +863,7 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
       1,
     );
     expect(rateLimited.response.status).toBe('rate_limited');
+    expect(state.rateLimitFallbackState).toBe(originalFallbackState);
     const [rateLimitedOperation] = operationStore.listParents();
     if (rateLimitedOperation === undefined) {
       throw new Error('Missing rate-limited Team Leader operation');
@@ -868,6 +891,10 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
         currentModel: 'claude-sonnet',
         stepName: 'fix',
         reportDir: runPaths.reportsAbs,
+        origin: {
+          stage: 'reviewer',
+          reviewerStepName: 'fix',
+        },
       },
     };
     const completed = await runner.runTeamLeaderStep(

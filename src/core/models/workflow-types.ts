@@ -409,6 +409,15 @@ export interface RateLimitFallbackConfig {
   switchChain: RateLimitFallbackProvider[];
 }
 
+export type FallbackOperationStage =
+  | 'reviewer'
+  | 'finding_intake_normalizer';
+
+export interface FallbackOperationOrigin {
+  readonly stage: FallbackOperationStage;
+  readonly reviewerStepName: string;
+}
+
 export interface FallbackContext {
   reason: 'rate_limited';
   reasonDetail: string;
@@ -419,6 +428,12 @@ export interface FallbackContext {
   currentModel?: string;
   stepName: string;
   reportDir: string;
+  origin: FallbackOperationOrigin;
+}
+
+export interface RateLimitFallbackState {
+  readonly origin: FallbackOperationOrigin;
+  readonly attempts: readonly RateLimitFallbackProvider[];
 }
 
 export interface WorkflowState {
@@ -444,6 +459,6 @@ export interface WorkflowState {
   personaSessions: Map<string, string>;
   stepIterations: Map<string, number>;
   pendingFallback?: FallbackContext;
-  rateLimitFallbackAttempts?: RateLimitFallbackProvider[];
+  rateLimitFallbackState?: RateLimitFallbackState;
   status: 'running' | 'completed' | 'aborted';
 }

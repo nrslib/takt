@@ -170,6 +170,54 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     });
   });
 
+  it('keeps fully resolved persisted runtime options without merging current config layers', () => {
+    const step = createStep({
+      provider: 'codex',
+      model: 'current-model',
+      providerOptions: {
+        codex: {
+          reasoningEffort: 'low',
+          networkAccess: false,
+        },
+      },
+    });
+    const builder = createBuilder(step, {
+      providerOptions: {
+        codex: {
+          reasoningEffort: 'medium',
+          networkAccess: true,
+        },
+      },
+    });
+    const persistedRuntime = {
+      providerInfoResolution: 'fully_resolved' as const,
+      providerInfo: {
+        provider: 'codex' as const,
+        model: 'persisted-model',
+        providerOptions: {
+          codex: {
+            reasoningEffort: 'high' as const,
+          },
+        },
+      },
+    };
+
+    expect(builder.resolveStepProviderModel(step, persistedRuntime)).toEqual(
+      persistedRuntime.providerInfo,
+    );
+    expect(builder.buildAgentOptions(step, persistedRuntime)).toMatchObject({
+      resolvedProvider: 'codex',
+      resolvedModel: 'persisted-model',
+      providerOptions: {
+        codex: {
+          reasoningEffort: 'high',
+        },
+      },
+    });
+    expect(builder.buildAgentOptions(step, persistedRuntime).providerOptions)
+      .not.toHaveProperty('codex.networkAccess');
+  });
+
   it('lets persona provider_options override project provider options when step has none', () => {
     const step = createStep({ personaDisplayName: 'reviewer' });
     const builder = createBuilder(step, {

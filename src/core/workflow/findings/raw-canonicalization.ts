@@ -141,8 +141,9 @@ export function computeCanonicalLineageKey(input: {
   claimIdentityHash: string;
   targetFindingId?: string;
   ambiguity: Pick<RawAmbiguityDetection, 'collidingFindingId'>;
+  provisionalDiscriminator?: string;
 }): string {
-  return computeLineageKey({
+  const lineageKey = computeLineageKey({
     claimIdentityHash: input.claimIdentityHash,
     ...(input.targetFindingId !== undefined
       ? { targetFindingId: input.targetFindingId }
@@ -151,6 +152,13 @@ export function computeCanonicalLineageKey(input: {
       ? { collidingFindingId: input.ambiguity.collidingFindingId }
       : {}),
   });
+  return input.provisionalDiscriminator === undefined
+    ? lineageKey
+    : sha256Of(
+        'provisional-lineage-discriminator',
+        lineageKey,
+        input.provisionalDiscriminator,
+      );
 }
 
 /**
@@ -390,6 +398,9 @@ function projectFindingTarget(value: unknown): FindingTarget | undefined {
     return undefined;
   }
   const target = value as Record<string, unknown>;
+  if (target.kind === 'review_scope') {
+    return { kind: 'review_scope' };
+  }
   if (target.kind === 'code') {
     const paths = canonicalStringSet(target.paths);
     return paths !== undefined && paths.length > 0
@@ -457,6 +468,9 @@ export function bindReviewerReportExcerpt(
   report: string,
   rawExcerpt: string,
 ): ReviewerRawFindingCandidate['sourceBinding'] {
+  if (rawExcerpt !== rawExcerpt.trim()) {
+    throw new Error('rawExcerpt must not have leading or trailing whitespace');
+  }
   const reportBytes = Buffer.from(report, 'utf8');
   const excerptBytes = Buffer.from(rawExcerpt, 'utf8');
   if (excerptBytes.length === 0) {
@@ -1080,8 +1094,7 @@ export function createReviewerRawFindingCandidates(
     const rawExcerpt = pickString(record.rawExcerpt);
     const relation = pickRelation(record.relation);
     const targetFindingId = pickString(record.targetFindingId);
-    const target = projectFindingTarget(record.target)
-      ?? (
+    const authoritativeTarget = (
         record.target === null
         && relation !== undefined
         && relation !== 'new'
@@ -1089,6 +1102,9 @@ export function createReviewerRawFindingCandidates(
           ? context.authoritativeTargetByFindingId?.get(targetFindingId)
           : undefined
       );
+    const target = projectFindingTarget(record.target)
+      ?? authoritativeTarget
+      ?? (record.target === null ? { kind: 'review_scope' as const } : undefined);
     if (rawExcerpt === undefined) {
       const claimIdentityHash = target === undefined
         ? undefined
@@ -1525,10 +1541,15 @@ export function canonicalizeReviewerRawFinding(
     description: candidate.description ?? null,
   });
   const displayLocation = evidenceLocation(candidate.evidence);
+  const provisionalDiscriminator = candidate.target.kind === 'review_scope'
+    && (candidate.title === undefined || candidate.description === undefined)
+    ? candidate.sourceBinding.excerptDigest
+    : undefined;
   const lineageKey = computeCanonicalLineageKey({
     claimIdentityHash,
     ...(candidate.targetFindingId !== undefined ? { targetFindingId: candidate.targetFindingId } : {}),
     ambiguity: detection,
+    ...(provisionalDiscriminator !== undefined ? { provisionalDiscriminator } : {}),
   });
   const evidenceSetHash = computeRawEvidenceHash({ evidence: candidate.evidence });
 

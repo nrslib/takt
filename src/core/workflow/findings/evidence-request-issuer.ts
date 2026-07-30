@@ -147,6 +147,15 @@ export function issueFindingEvidenceRequests(
     requests: readonly FindingEvidenceRequest[];
   },
 ): IssuedEvidenceRequests {
+  if (input.target.kind === 'review_scope') {
+    return {
+      evidence: [],
+      engineProofRecords: [],
+      coverageGaps: [
+        'Review-scope finding has no concrete target for typed evidence verification',
+      ],
+    };
+  }
   const evidence: RawFindingEvidence[] = [];
   const engineProofRecords: EngineProofRecord[] = [];
   const coverageGaps: string[] = [];

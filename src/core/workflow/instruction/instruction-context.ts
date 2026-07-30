@@ -16,8 +16,21 @@ import { loadTemplate } from '../../../shared/prompts/index.js';
 import type { PullRequestContext } from '../pr-context.js';
 
 export type FindingContractReviewerOutputStrategy =
-  | { readonly kind: 'structured' }
-  | { readonly kind: 'canonical_blocks' };
+  | {
+      readonly kind: 'structured';
+      readonly reportGeneration: 'structured';
+      readonly intake: 'reviewer_structured';
+    }
+  | {
+      readonly kind: 'canonical_blocks';
+      readonly reportGeneration: 'plain_text';
+      readonly intake: 'canonical_parser';
+    }
+  | {
+      readonly kind: 'plain_text_normalized';
+      readonly reportGeneration: 'plain_text';
+      readonly intake: 'isolated_normalizer';
+    };
 
 export type FindingContractReviewerContext =
   | {
@@ -27,6 +40,10 @@ export type FindingContractReviewerContext =
     }
   | {
       mode: 'canonical_blocks';
+      reviewScopeSnapshotId: string;
+    }
+  | {
+      mode: 'plain_text_normalized';
       reviewScopeSnapshotId: string;
     };
 

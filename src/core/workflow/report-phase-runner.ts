@@ -25,8 +25,16 @@ const log = createLogger('phase-runner');
 const REPORT_PHASE_MAX_TURNS = 3;
 
 /** Result when Phase 2 encounters a blocked status */
-export type ReportPhaseBlockedResult = { blocked: true; response: AgentResponse };
-export type ReportPhaseRateLimitedResult = { rateLimited: true; response: AgentResponse };
+export type ReportPhaseBlockedResult = {
+  blocked: true;
+  response: AgentResponse;
+  providerInfo: StepProviderInfo;
+};
+export type ReportPhaseRateLimitedResult = {
+  rateLimited: true;
+  response: AgentResponse;
+  providerInfo: StepProviderInfo;
+};
 export interface GeneratedReport {
   readonly reportName: string;
   readonly reportContent: string;
@@ -123,7 +131,7 @@ function buildReportFindingContractContext(
     reviewerOutputStrategy,
   );
   if (
-    reviewerOutputStrategy?.kind !== 'structured'
+    reviewerOutputStrategy?.reportGeneration !== 'structured'
     || context?.reviewer?.mode !== 'structured'
     || step.structuredOutput === undefined
   ) {
@@ -213,10 +221,18 @@ async function executeReportPhase(
       options.validateReportContent,
     );
     if (firstAttempt.kind === 'blocked') {
-      return { blocked: true, response: firstAttempt.response };
+      return {
+        blocked: true,
+        response: firstAttempt.response,
+        providerInfo: firstAttempt.providerInfo,
+      };
     }
     if (firstAttempt.kind === 'rate_limited') {
-      return { rateLimited: true, response: firstAttempt.response };
+      return {
+        rateLimited: true,
+        response: firstAttempt.response,
+        providerInfo: firstAttempt.providerInfo,
+      };
     }
     if (firstAttempt.kind === 'success') {
       acceptReport({
@@ -288,10 +304,18 @@ async function executeReportPhase(
         options.validateReportContent,
       );
       if (retryAttempt.kind === 'blocked') {
-        return { blocked: true, response: retryAttempt.response };
+        return {
+          blocked: true,
+          response: retryAttempt.response,
+          providerInfo: retryAttempt.providerInfo,
+        };
       }
       if (retryAttempt.kind === 'rate_limited') {
-        return { rateLimited: true, response: retryAttempt.response };
+        return {
+          rateLimited: true,
+          response: retryAttempt.response,
+          providerInfo: retryAttempt.providerInfo,
+        };
       }
       if (retryAttempt.kind === 'success') {
         acceptReport({
@@ -341,10 +365,18 @@ async function executeReportPhase(
       options.validateReportContent,
     );
     if (fallbackAttempt.kind === 'blocked') {
-      return { blocked: true, response: fallbackAttempt.response };
+      return {
+        blocked: true,
+        response: fallbackAttempt.response,
+        providerInfo: fallbackAttempt.providerInfo,
+      };
     }
     if (fallbackAttempt.kind === 'rate_limited') {
-      return { rateLimited: true, response: fallbackAttempt.response };
+      return {
+        rateLimited: true,
+        response: fallbackAttempt.response,
+        providerInfo: fallbackAttempt.providerInfo,
+      };
     }
     if (fallbackAttempt.kind === 'retryable_failure') {
       failureReasons.add(fallbackAttempt.failureReason);
@@ -430,8 +462,8 @@ type ReportAttemptResult =
     response: AgentResponse;
     attemptIdentity: ReportAttemptIdentity;
   }
-  | { kind: 'blocked'; response: AgentResponse }
-  | { kind: 'rate_limited'; response: AgentResponse }
+  | { kind: 'blocked'; response: AgentResponse; providerInfo: StepProviderInfo }
+  | { kind: 'rate_limited'; response: AgentResponse; providerInfo: StepProviderInfo }
   | {
     kind: 'retryable_failure';
     errorMessage: string;
@@ -583,7 +615,7 @@ async function runSingleReportAttempt(
 
   if (response.status === 'blocked') {
     ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, undefined, phaseExecutionId, ctx.iteration);
-    return { kind: 'blocked', response };
+    return { kind: 'blocked', response, providerInfo: attemptProviderInfo };
   }
 
   if (response.status === 'rate_limited' || response.errorKind === 'rate_limit') {
@@ -591,6 +623,7 @@ async function runSingleReportAttempt(
     ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, errorMessage, phaseExecutionId, ctx.iteration);
     return {
       kind: 'rate_limited',
+      providerInfo: attemptProviderInfo,
       response: {
         ...response,
         status: 'rate_limited',
@@ -787,6 +820,9 @@ function resolveReportAttemptProviderInfo(
     return {
       ...fallbackProviderInfo,
       model: options.resolvedModel ?? fallbackProviderInfo.model,
+      ...(options.resolvedProviderOptions != null
+        ? { providerOptions: options.resolvedProviderOptions }
+        : {}),
     };
   }
   if (options.resolvedProvider !== undefined || options.resolvedModel !== undefined) {
@@ -794,6 +830,9 @@ function resolveReportAttemptProviderInfo(
       ...providerInfo,
       provider: options.resolvedProvider ?? providerInfo.provider,
       model: options.resolvedModel ?? providerInfo.model,
+      ...(options.resolvedProviderOptions != null
+        ? { providerOptions: options.resolvedProviderOptions }
+        : {}),
     };
   }
 

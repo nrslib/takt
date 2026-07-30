@@ -93,6 +93,9 @@ export type {
   RateLimitFallbackConfig,
   RateLimitFallbackProvider,
   FallbackContext,
+  FallbackOperationStage,
+  FallbackOperationOrigin,
+  RateLimitFallbackState,
   WorkflowConfig,
   WorkflowState,
 } from './workflow-types.js';

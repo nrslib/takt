@@ -89,6 +89,29 @@ describe('workflow finding_contract schema', () => {
     expect(workflow.findingContract?.reviewerOutput).toBe('canonical_blocks');
   });
 
+  it('should normalize an explicit plain_text_normalized reviewer output strategy', () => {
+    const workflow = normalizeWorkflowConfig({
+      ...makeWorkflowWithFindingContract({
+        ledger_path: '.takt/findings/peer-review.json',
+        raw_findings_path: '.takt/findings/raw',
+        reviewer_output: 'plain_text_normalized',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          output_contract: 'findings-manager',
+        },
+      }),
+      steps: [{
+        name: 'peer-review',
+        persona: 'reviewer',
+        instruction: 'Review the change.',
+        rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
+      }],
+    }, '/tmp/project');
+
+    expect(workflow.findingContract?.reviewerOutput).toBe('plain_text_normalized');
+  });
+
   it('should reject an unknown reviewer output strategy', () => {
     expect(() => normalizeWorkflowConfig(
       makeWorkflowWithFindingContract({

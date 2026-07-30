@@ -222,7 +222,7 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 
 ### Finding Contract reviewer output and manager provider/model
 
-`finding_contract.reviewer_output` explicitly selects the reviewer intake format. It defaults to `structured`. Set `canonical_blocks` only for workflows whose reviewers emit the canonical claim-block protocol; TAKT parses those blocks deterministically and does not infer the format from a provider or global normalizer configuration.
+`finding_contract.reviewer_output` explicitly selects the reviewer intake format. It defaults to `structured`. Set `canonical_blocks` for workflows whose reviewers emit the canonical claim-block protocol; TAKT parses those blocks deterministically. Set `plain_text_normalized` when reviewers should write ordinary Markdown and an isolated `intake_normalize` model should extract raw findings afterward. TAKT never infers the strategy from a provider or global normalizer configuration.
 
 `finding_contract.manager` can set a dedicated provider and model for the synthetic Finding Manager step:
 
@@ -238,6 +238,11 @@ finding_contract:
     provider: codex
     model: gpt-5.5
 ```
+
+`plain_text_normalized` requires `intake_normalize.provider` and
+`intake_normalize.model` in configuration. If `targets` is present, the exact
+workflow name must be included. The report is saved before normalization, and
+the normalizer receives only that single report in a fresh, tool-free session.
 
 When set, these values are applied as step-level `provider` / `model` for the Finding Manager. Explicit CLI and environment overrides remain higher priority. The manager values take priority over `provider_routing`, deprecated `persona_providers.findings-manager`, effective auto routing, and workflow/project/global fallbacks. When neither field is set, the manager keeps the normal workflow step provider/model resolution behavior. Setting only `provider` stops lower-priority model fallback, so the selected provider uses its own default; providers that require an explicit model fail validation.
 

@@ -154,7 +154,7 @@ Team Leader はタスクを独立 part に分解する。`initial_max_parts` を
 finding_contract:
   ledger_path: .takt/findings/review.json
   raw_findings_path: .takt/findings/review/raw
-  reviewer_output: structured # structured（既定）| canonical_blocks
+  reviewer_output: structured # structured（既定）| canonical_blocks | plain_text_normalized
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -163,7 +163,7 @@ finding_contract:
     model: gpt-5.5
 ```
 
-`reviewer_output` は reviewer intake の形式を明示する。`canonical_blocks` は canonical claim block をエンジンが決定的に parse する workflow 専用で、provider や global normalizer 設定から推論されない。
+`reviewer_output` は reviewer intake の形式を明示する。`canonical_blocks` は canonical claim block をエンジンが決定的に parse する workflow 専用、`plain_text_normalized` は通常の Markdown レビューを `intake_normalize` で指定した隔離 normalizer が抽出する workflow 専用である。provider や global normalizer 設定から形式は推論されない。
 
 指定値は step レベル provider/model として扱われ、`provider_routing`、deprecated の `persona_providers.findings-manager`、workflow 既定値、解決済み入力より優先される。両方とも未指定の場合は通常の workflow step provider/model 解決を使う。`provider` だけを指定すると下位優先度の model fallback は停止し、明示 model が必須の provider では検証エラーになる。
 

@@ -13,7 +13,8 @@ vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
   return { ...actual, RuleEvaluator: MockRuleEvaluator };
 });
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
@@ -23,7 +24,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
 }));
 
-import { WorkflowEngine } from '../core/workflow/index.js';
+import { WorkflowEngine } from './helpers/workflow-engine.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { runAgent } from '../agents/runner.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
@@ -43,6 +44,17 @@ function writeFile(root: string, relativePath: string, content: string): string 
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, content, 'utf-8');
   return filePath;
+}
+
+function schemaHasProperty(schema: unknown, property: string): boolean {
+  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+    return false;
+  }
+  const properties = Reflect.get(schema, 'properties');
+  return typeof properties === 'object'
+    && properties !== null
+    && !Array.isArray(properties)
+    && property in properties;
 }
 
 function workflowSteps(fragmentName?: string): string {
@@ -176,41 +188,57 @@ describe('workflow step fragment runtime contract', () => {
       engine.on('step:cycle_detected', (_monitor, count) => cycleCounts.push(count));
       engine.on('findings:ledger', (ledger) => ledgers.push(ledger));
       vi.mocked(runAgent).mockReset();
-      mockRunAgentSequence([
-        makeResponse({
-          persona: 'review',
-          content: 'issue',
-          structuredOutput: {
-            rawFindings: [{
-              rawFindingId: 'review-issue',
-              familyTag: 'test',
-              severity: 'high',
-              title: 'Test finding',
-              location: '',
-              evidenceKind: 'locationless',
-              verbatimExcerpt: '',
-              snapshotId: '',
-              description: 'A finding emitted by the reviewer.',
-              suggestion: '',
-              relation: 'new',
-              targetFindingId: '',
-            }],
-          },
-        }),
-        makeResponse({
-          persona: 'findings-manager',
-          structuredOutput: {
-            rawDecisions: [],
-            disputeDecisions: [],
-            conflictDecisions: [],
-            invalidateDecisions: [],
-            duplicateDecisions: [],
-            dismissDecisions: [],
-          },
-        }),
-        makeResponse({ persona: 'fix', content: 'fixed' }),
-        makeResponse({ persona: 'supervisor', content: 'stop' }),
-      ]);
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'test system prompt',
+          userInstruction: instruction,
+        });
+        if (schemaHasProperty(options?.outputSchema, 'rawFindings')) {
+          const reportContent = 'A finding emitted by the reviewer.';
+          return makeResponse({
+            persona,
+            content: reportContent,
+            structuredOutput: {
+              ...(schemaHasProperty(options?.outputSchema, 'reportContent')
+                ? { reportContent }
+                : {}),
+              rawFindings: [{
+                rawExcerpt: reportContent,
+                candidate: {
+                  rawFindingId: 'review-issue',
+                  familyTag: 'test',
+                  severity: 'high',
+                  title: 'Test finding',
+                  description: reportContent,
+                  suggestion: null,
+                  relation: 'new',
+                  targetFindingIds: [],
+                  target: null,
+                  evidenceRequests: [],
+                },
+              }],
+            },
+          });
+        }
+        if (schemaHasProperty(options?.outputSchema, 'rawDecisions')) {
+          return makeResponse({
+            persona,
+            content: 'manager complete',
+            structuredOutput: {
+              rawDecisions: [],
+              disputeDecisions: [],
+              conflictDecisions: [],
+              invalidateDecisions: [],
+              duplicateDecisions: [],
+              dismissDecisions: [],
+            },
+          });
+        }
+        return makeResponse({
+          persona,
+          content: persona === 'supervisor' ? 'stop' : 'fixed',
+        });
+      });
       mockRuleEvaluationSequence([
         { index: 0, method: 'phase3_tag' },
         { index: 0, method: 'phase3_tag' },
@@ -252,11 +280,12 @@ describe('workflow step fragment runtime contract', () => {
           severity: 'high',
           title: 'Test finding',
           relation: 'new',
+          target: { kind: 'review_scope' },
         }],
         findings: [{
           severity: 'high',
           title: 'Test finding',
-          provisional: { kind: 'unverified-locationless' },
+          provisional: { gateEffect: 'block' },
         }],
       });
     }

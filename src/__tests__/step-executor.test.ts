@@ -7,6 +7,8 @@ import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engin
 import type { AgentResponse, WorkflowState } from '../core/models/types.js';
 import type { StreamEvent } from '../shared/types/provider.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
 import {
   makeStep,
   makeWorkflowResumePointEntry,
@@ -39,9 +41,14 @@ import {
   FINDING_CLAIM_END_MARKER,
 } from '../shared/prompts/finding-canonical-claim.js';
 import {
+  createPendingFindingReviewNormalization,
   createFindingReviewPublication,
   CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+  loadPendingFindingReviewNormalization,
+  PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+  persistPendingFindingReviewNormalization,
   persistFindingReviewPublication,
+  publishFindingReviewPublication,
 } from '../core/workflow/findings/review-publication.js';
 
 function makeState(): WorkflowState {
@@ -232,7 +239,7 @@ describe('StepExecutor', () => {
         }),
       },
       structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-      reviewerOutputStrategy: { kind: 'canonical_blocks' },
+      reviewerOutputStrategy: { kind: 'canonical_blocks', reportGeneration: 'plain_text', intake: 'canonical_parser' },
       getRunPaths: () => runPaths,
       getFindingCallNamespace: () => '',
       getLanguage: () => 'en',
@@ -283,6 +290,1054 @@ describe('StepExecutor', () => {
       recordSynthesizedAgentUsage,
     };
   }
+
+  function createPlainTextPublicationHarness(
+    normalizerResponses: readonly AgentResponse[],
+    reportContentOverride?: string,
+  ) {
+    const reportContent = reportContentOverride ?? [
+      '# Architecture Review',
+      '',
+      '## Result: REJECT',
+      '',
+      'Issue: src/example.ts still bypasses the required boundary.',
+    ].join('\n');
+    vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: 'reviewer system',
+        userInstruction: prompt,
+      });
+      return {
+        persona: 'reviewer',
+        status: 'done',
+        content: reportContent,
+        sessionId: 'reviewer-report-session',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      };
+    });
+    const remainingNormalizerResponses = [...normalizerResponses];
+    const normalizeFindingIntake = vi.fn(async (
+      _report: string,
+      _options: unknown,
+    ) => {
+      const response = remainingNormalizerResponses.shift();
+      if (response === undefined) {
+        throw new Error('Unexpected normalizer call');
+      }
+      return response;
+    });
+    const updatePersonaSession = vi.fn();
+    const recordSynthesizedAgentUsage = vi.fn();
+    const step = makeStep({
+      name: 'review',
+      persona: 'reviewer',
+      instruction: 'Review.',
+      outputContracts: [
+        { name: 'review.md', format: 'review', formatRef: 'review-finding-contract' },
+      ],
+    });
+    const state = makeState();
+    const findingContractContext = {
+      ledgerSummary: '{"findings":[]}',
+      reportLedgerSummary: '{"ids":[]}',
+      hasOpenFindings: false,
+      hasWaivedFindings: false,
+      hasDismissedFindings: false,
+      reviewer: {
+        mode: 'plain_text_normalized' as const,
+        reviewScopeSnapshotId: 'snapshot-plain-text',
+      },
+    };
+    const executor = new StepExecutor({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({}),
+        buildPhaseRunnerContext: vi.fn((
+          _step,
+          workflowState: WorkflowState,
+          lastResponse: string,
+          _updatePersonaSession,
+          onPhaseStart,
+          onPhaseComplete,
+          _onJudgeStage,
+          _iteration,
+          _runtime,
+          onProviderAttempt,
+        ) => ({
+          cwd,
+          reportDir: runPaths.reportsAbs,
+          language: 'en' as const,
+          lastResponse,
+          workflowName: 'test-workflow',
+          iteration: workflowState.iteration,
+          getSessionId: () => 'reviewer-phase1-session',
+          resolveSessionKey: () => 'reviewer:mock',
+          buildResumeOptions: () => ({ resolvedProvider: 'mock' as const }),
+          buildNewSessionReportOptions: () => ({ resolvedProvider: 'mock' as const }),
+          buildFallbackReportOptions: () => undefined,
+          resolveReportFallbackProviderModel: () => undefined,
+          updatePersonaSession,
+          resolveStepProviderModel: () => ({
+            provider: 'mock' as const,
+            model: 'reviewer-model',
+          }),
+          onPhaseStart,
+          onPhaseComplete,
+          onProviderAttempt,
+        })),
+        resolveStepProviderModel: vi.fn().mockImplementation((resolvedStep, runtime) => (
+          runtime?.providerInfo ?? {
+            provider: resolvedStep.provider ?? 'mock',
+            model: resolvedStep.model ?? 'reviewer-model',
+            providerOptions: resolvedStep.providerOptions,
+          }
+        )),
+        buildFindingContractInstructionContext: vi.fn().mockReturnValue(
+          findingContractContext,
+        ),
+      },
+      getCwd: () => cwd,
+      getProjectCwd: () => cwd,
+      getReportDir: () => runPaths.reportsRel,
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+      reviewerOutputStrategy: {
+        kind: 'plain_text_normalized',
+        reportGeneration: 'plain_text',
+        intake: 'isolated_normalizer',
+      },
+      structuredCaller: { normalizeFindingIntake },
+      intakeNormalize: {
+        provider: 'mock',
+        model: 'normalizer-model',
+      },
+      getRunPaths: () => runPaths,
+      getFindingCallNamespace: () => '',
+      getLanguage: () => 'en',
+      getInteractive: () => false,
+      getWorkflowSteps: () => [step],
+      getWorkflowName: () => 'test-workflow',
+      getTask: () => 'test task',
+      getRunId: () => 'test-run',
+      getCurrentWorkflowStack: () => [
+        makeWorkflowResumePointEntry({ step: 'review' }),
+      ],
+      observabilityEnabled: () => false,
+      recordSynthesizedAgentUsage,
+      findingContract: {
+        ledgerPath: '.takt/findings/ledger.json',
+        rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'plain_text_normalized',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'Reconcile.',
+          outputContract: 'Return JSON.',
+        },
+      },
+      findingLedgerStore: {
+        ledgerIdentity: 'scope-plain-text',
+        workflowName: 'test-workflow',
+        loadLedger: () => ({ findings: [] }),
+      },
+      findingManagerAuthority: 'standard',
+      refreshFindingsState: vi.fn(),
+      emitEvent: vi.fn(),
+      onPhaseStart: vi.fn(),
+      onPhaseComplete: vi.fn(),
+      abortSignal: undefined,
+    } as unknown as StepExecutorDeps);
+
+    return {
+      executor,
+      normalizeFindingIntake,
+      recordSynthesizedAgentUsage,
+      reportContent,
+      state,
+      step,
+      updatePersonaSession,
+      findingContractContext,
+    };
+  }
+
+  it('plain-text reviewer reportを保存してから隔離normalizerの結果をpublicationする', async () => {
+    const rawFinding = {
+      rawExcerpt: 'Issue: src/example.ts still bypasses the required boundary.',
+      candidate: {
+        rawFindingId: null,
+        familyTag: null,
+        severity: null,
+        title: null,
+        description: 'src/example.ts still bypasses the required boundary.',
+        suggestion: null,
+        relation: null,
+        targetFindingIds: [],
+        target: null,
+        evidenceRequests: [],
+      },
+    };
+    const normalizerUsage = {
+      inputTokens: 15,
+      outputTokens: 5,
+      totalTokens: 20,
+      usageMissing: false,
+    };
+    const harness = createPlainTextPublicationHarness([{
+      persona: 'default',
+      status: 'done',
+      content: '{"rawFindings":[]}',
+      sessionId: 'isolated-normalizer-session',
+      structuredOutput: { rawFindings: [rawFinding] },
+      providerUsage: normalizerUsage,
+      timestamp: new Date('2026-07-31T00:00:01.000Z'),
+    }]);
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        sessionId: 'reviewer-phase1-session',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: vi.fn(),
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect('publication' in result).toBe(true);
+    if (!('publication' in result)) {
+      throw new Error('Expected publication');
+    }
+    expect(result.publication.protocol).toMatchObject({
+      format: 'normalized-plain-text',
+      generationMode: 'freeform',
+    });
+    expect(result.publication.rawFindings).toEqual([rawFinding]);
+    expect(result.response).toMatchObject({
+      content: harness.reportContent,
+      sessionId: 'reviewer-report-session',
+      structuredOutput: { rawFindings: [rawFinding] },
+    });
+    expect(result.response.sessionId).not.toBe('isolated-normalizer-session');
+    expect(readFileSync(join(runPaths.reportsAbs, 'review.md'), 'utf8'))
+      .toBe(harness.reportContent);
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledOnce();
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledWith(
+      harness.reportContent,
+      expect.objectContaining({
+        provider: 'mock',
+        model: 'normalizer-model',
+        mode: 'initial',
+        language: 'en',
+      }),
+    );
+    expect(harness.recordSynthesizedAgentUsage).toHaveBeenCalledWith(
+      'review:intake-normalize',
+      {
+        provider: 'mock',
+        model: 'normalizer-model',
+        providerOptions: undefined,
+      },
+      true,
+      normalizerUsage,
+    );
+  });
+
+  it('plain-text normalizerはmodel output不正時だけ新規抽出を1回訂正する', async () => {
+    const rawFinding = {
+      rawExcerpt: 'Issue: src/example.ts still bypasses the required boundary.',
+      candidate: {
+        rawFindingId: null,
+        familyTag: null,
+        severity: null,
+        title: null,
+        description: 'src/example.ts still bypasses the required boundary.',
+        suggestion: null,
+        relation: null,
+        targetFindingIds: [],
+        target: null,
+        evidenceRequests: [],
+      },
+    };
+    const harness = createPlainTextPublicationHarness([
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":"invalid"}',
+        structuredOutput: { rawFindings: 'invalid' },
+        timestamp: new Date('2026-07-31T00:00:01.000Z'),
+      },
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":[]}',
+        structuredOutput: { rawFindings: [rawFinding] },
+        timestamp: new Date('2026-07-31T00:00:02.000Z'),
+      },
+    ]);
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: vi.fn(),
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect('publication' in result).toBe(true);
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledTimes(2);
+    expect(harness.normalizeFindingIntake.mock.calls.map(([, options]) => (
+      (options as { mode: string }).mode
+    ))).toEqual(['initial', 'correction']);
+  });
+
+  it('plain-text normalizerの訂正失敗はreport recoveryと混同せずreportを保持する', async () => {
+    const harness = createPlainTextPublicationHarness([
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":"invalid"}',
+        structuredOutput: { rawFindings: 'invalid' },
+        timestamp: new Date('2026-07-31T00:00:01.000Z'),
+      },
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":"still-invalid"}',
+        structuredOutput: { rawFindings: 'still-invalid' },
+        timestamp: new Date('2026-07-31T00:00:02.000Z'),
+      },
+    ]);
+
+    await expect(harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: vi.fn(),
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: harness.updatePersonaSession,
+    })).rejects.toThrow(/Finding intake normalizer.*remained invalid after one correction/u);
+
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledTimes(2);
+    expect(executeAgent).toHaveBeenCalledOnce();
+    expect(() => readFileSync(join(runPaths.reportsAbs, 'review.md'), 'utf8'))
+      .toThrow();
+    expect(loadPendingFindingReviewNormalization(
+      runPaths.reportsAbs,
+      {
+        scopeIdentity: 'scope-plain-text',
+        callNamespace: '',
+        parentStepName: 'reviewers',
+        stepIteration: 1,
+        reviewerStepName: 'review',
+        reportName: 'review.md',
+      },
+      'test-workflow',
+    )?.reportContent).toBe(harness.reportContent);
+  });
+
+  it('resume helperは保存済みplain reportからnormalizerだけを再実行する', async () => {
+    const invalidHarness = createPlainTextPublicationHarness([
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":"invalid"}',
+        structuredOutput: { rawFindings: 'invalid' },
+        timestamp: new Date('2026-07-31T00:00:01.000Z'),
+      },
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":"still-invalid"}',
+        structuredOutput: { rawFindings: 'still-invalid' },
+        timestamp: new Date('2026-07-31T00:00:02.000Z'),
+      },
+    ]);
+    await expect(invalidHarness.executor.prepareFindingReviewPublication({
+      step: invalidHarness.step,
+      executableStep: invalidHarness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: invalidHarness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: vi.fn(),
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: invalidHarness.updatePersonaSession,
+    })).rejects.toThrow(/remained invalid after one correction/u);
+    expect(executeAgent).toHaveBeenCalledOnce();
+
+    const rawFinding = {
+      rawExcerpt: 'Issue: src/example.ts still bypasses the required boundary.',
+      candidate: {
+        rawFindingId: null,
+        familyTag: null,
+        severity: null,
+        title: null,
+        description: 'src/example.ts still bypasses the required boundary.',
+        suggestion: null,
+        relation: null,
+        targetFindingIds: [],
+        target: null,
+        evidenceRequests: [],
+      },
+    };
+    const resumedHarness = createPlainTextPublicationHarness([{
+      persona: 'default',
+      status: 'done',
+      content: '{"rawFindings":[]}',
+      structuredOutput: { rawFindings: [rawFinding] },
+      timestamp: new Date('2026-07-31T00:01:00.000Z'),
+    }]);
+    const resumed = await resumedHarness.executor.resumeFindingReviewPublication({
+      step: resumedHarness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: resumedHarness.state,
+    });
+
+    expect(resumed?.publication.rawFindings).toEqual([rawFinding]);
+    expect(executeAgent).toHaveBeenCalledOnce();
+    expect(resumedHarness.normalizeFindingIntake).toHaveBeenCalledOnce();
+    expect(resumedHarness.normalizeFindingIntake.mock.calls[0]?.[0])
+      .toBe(invalidHarness.reportContent);
+
+    const completedHarness = createPlainTextPublicationHarness([]);
+    const completed = await completedHarness.executor.resumeFindingReviewPublication({
+      step: completedHarness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: completedHarness.state,
+    });
+    expect(completed?.publication.publicationId).toBe(resumed?.publication.publicationId);
+    expect(completedHarness.normalizeFindingIntake).not.toHaveBeenCalled();
+  });
+
+  it.each(['blocked', 'rate_limited'] as const)(
+    'pending plain reportのnormalizerが%sならresumeを終端応答として返す',
+    async (status) => {
+      const harness = createPlainTextPublicationHarness([{
+        persona: 'default',
+        status,
+        content: `normalizer ${status}`,
+        timestamp: new Date('2026-07-31T00:01:00.000Z'),
+      }]);
+      persistPendingFindingReviewNormalization(
+        runPaths.reportsAbs,
+        createPendingFindingReviewNormalization({
+          identity: {
+            scopeIdentity: 'scope-plain-text',
+            callNamespace: '',
+            parentStepName: 'reviewers',
+            stepIteration: 1,
+            reviewerStepName: 'review',
+            reportName: 'review.md',
+          },
+          workflowName: 'test-workflow',
+          reportContent: harness.reportContent,
+          reviewerExecutionIdentity: {
+            provider: 'mock',
+            model: 'reviewer-model',
+          },
+        }),
+      );
+
+      const resumed = await harness.executor.resumeFindingReviewPublication({
+        step: harness.step,
+        parentStepName: 'reviewers',
+        stepIteration: 1,
+        state: harness.state,
+      });
+
+      expect(resumed).toMatchObject({
+        terminalResponse: expect.objectContaining({
+          status,
+          content: `normalizer ${status}`,
+        }),
+        reviewerProviderInfo: {
+          provider: 'mock',
+          model: 'reviewer-model',
+        },
+        terminalOperation: {
+          origin: {
+            stage: 'finding_intake_normalizer',
+            reviewerStepName: 'review',
+          },
+          providerInfo: {
+            provider: 'mock',
+            model: 'normalizer-model',
+          },
+        },
+      });
+      expect(harness.normalizeFindingIntake).toHaveBeenCalledOnce();
+      expect(executeAgent).not.toHaveBeenCalled();
+    },
+  );
+
+  it('normalizerのrate-limit後はpending reportからfallback normalizerだけを実行する', async () => {
+    const harness = createPlainTextPublicationHarness([
+      {
+        persona: 'finding-intake-normalizer',
+        status: 'rate_limited',
+        content: '',
+        error: 'normalizer rate limited',
+        timestamp: new Date('2026-07-31T00:01:00.000Z'),
+      },
+      {
+        persona: 'finding-intake-normalizer',
+        status: 'done',
+        content: '{"rawFindings":[]}',
+        structuredOutput: { rawFindings: [] },
+        timestamp: new Date('2026-07-31T00:02:00.000Z'),
+      },
+    ]);
+    const preparedExecution = {
+      executableStep: harness.step,
+      findingContractContext: harness.findingContractContext,
+      phase1Instruction: 'Review.',
+      stepIteration: 1,
+    };
+    const applyPostExecutionRulesOnly = vi.spyOn(
+      harness.executor,
+      'applyPostExecutionRulesOnly',
+    );
+
+    const rateLimited = await harness.executor.runNormalStep(
+      harness.step,
+      harness.state,
+      'test task',
+      5,
+      harness.updatePersonaSession,
+      undefined,
+      undefined,
+      preparedExecution,
+    );
+    expect(rateLimited.response.status).toBe('rate_limited');
+    expect(rateLimited.providerInfo).toMatchObject({
+      provider: 'mock',
+      model: 'reviewer-model',
+    });
+    expect(rateLimited.terminalOperation).toMatchObject({
+      origin: {
+        stage: 'finding_intake_normalizer',
+        reviewerStepName: 'review',
+      },
+      providerInfo: {
+        provider: 'mock',
+        model: 'normalizer-model',
+      },
+    });
+    expect(loadPendingFindingReviewNormalization(
+      runPaths.reportsAbs,
+      {
+        scopeIdentity: 'scope-plain-text',
+        callNamespace: '',
+        parentStepName: 'review',
+        stepIteration: 1,
+        reviewerStepName: 'review',
+        reportName: 'review.md',
+      },
+      'test-workflow',
+    )).toBeDefined();
+    const reviewerCalls = vi.mocked(executeAgent).mock.calls.length;
+
+    const fallbackRuntime = {
+      providerInfo: {
+        provider: 'mock' as const,
+        model: 'fallback-normalizer-model',
+      },
+      fallback: {
+        reason: 'rate_limited' as const,
+        reasonDetail: 'normalizer rate limited',
+        originalIteration: 3,
+        previousProvider: 'mock' as const,
+        previousModel: 'normalizer-model',
+        currentProvider: 'mock' as const,
+        currentModel: 'fallback-normalizer-model',
+        stepName: 'review',
+        reportDir: runPaths.reportsRel,
+        origin: {
+          stage: 'finding_intake_normalizer' as const,
+          reviewerStepName: 'review',
+        },
+      },
+    };
+    const resumed = await harness.executor.runNormalStep(
+      harness.step,
+      harness.state,
+      'test task',
+      5,
+      harness.updatePersonaSession,
+      undefined,
+      fallbackRuntime,
+      preparedExecution,
+    );
+
+    expect(resumed.response.status).toBe('done');
+    expect(resumed.providerInfo).toMatchObject({
+      provider: 'mock',
+      model: 'reviewer-model',
+    });
+    expect(executeAgent).toHaveBeenCalledTimes(reviewerCalls);
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledTimes(2);
+    expect(harness.normalizeFindingIntake.mock.calls.map(([, options]) => ({
+      provider: (options as { provider: string }).provider,
+      model: (options as { model?: string }).model,
+    }))).toEqual([
+      { provider: 'mock', model: 'normalizer-model' },
+      { provider: 'mock', model: 'fallback-normalizer-model' },
+    ]);
+    expect(applyPostExecutionRulesOnly).toHaveBeenCalledOnce();
+    expect(applyPostExecutionRulesOnly.mock.calls[0]?.[4]).toMatchObject({
+      providerInfo: {
+        provider: 'mock',
+        model: 'reviewer-model',
+      },
+    });
+  });
+
+  it('pending normalizerのfallback providerが隔離structured実行に非対応ならreviewerを再実行せず拒否する', async () => {
+    const harness = createPlainTextPublicationHarness([]);
+    persistPendingFindingReviewNormalization(
+      runPaths.reportsAbs,
+      createPendingFindingReviewNormalization({
+        identity: {
+          scopeIdentity: 'scope-plain-text',
+          callNamespace: '',
+          parentStepName: 'review',
+          stepIteration: 1,
+          reviewerStepName: 'review',
+          reportName: 'review.md',
+        },
+        workflowName: 'test-workflow',
+        reportContent: harness.reportContent,
+        reviewerExecutionIdentity: {
+          provider: 'mock',
+          model: 'reviewer-model',
+        },
+      }),
+    );
+    const fallbackRuntime = {
+      providerInfo: {
+        provider: 'opencode' as const,
+        model: 'unsupported-normalizer-model',
+      },
+      fallback: {
+        reason: 'rate_limited' as const,
+        reasonDetail: 'normalizer rate limited',
+        originalIteration: 3,
+        previousProvider: 'mock' as const,
+        previousModel: 'normalizer-model',
+        currentProvider: 'opencode' as const,
+        currentModel: 'unsupported-normalizer-model',
+        stepName: 'review',
+        reportDir: runPaths.reportsRel,
+        origin: {
+          stage: 'finding_intake_normalizer' as const,
+          reviewerStepName: 'review',
+        },
+      },
+    };
+
+    await expect(harness.executor.runNormalStep(
+      harness.step,
+      harness.state,
+      'test task',
+      5,
+      harness.updatePersonaSession,
+      undefined,
+      fallbackRuntime,
+      {
+        executableStep: harness.step,
+        findingContractContext: harness.findingContractContext,
+        phase1Instruction: 'Review.',
+        stepIteration: 1,
+      },
+    )).rejects.toThrow(/does not support isolated structured execution/u);
+    expect(executeAgent).not.toHaveBeenCalled();
+    expect(harness.normalizeFindingIntake).not.toHaveBeenCalled();
+  });
+
+  it('runNormalStepの正式resumeはpending本文をnormalizerだけで再開する', async () => {
+    const rawFinding = {
+      rawExcerpt: 'Issue: src/example.ts still bypasses the required boundary.',
+      candidate: {
+        rawFindingId: null,
+        familyTag: null,
+        severity: null,
+        title: null,
+        description: 'src/example.ts still bypasses the required boundary.',
+        suggestion: null,
+        relation: null,
+        targetFindingIds: [],
+        target: null,
+        evidenceRequests: [],
+      },
+    };
+    const harness = createPlainTextPublicationHarness([{
+      persona: 'default',
+      status: 'done',
+      content: '{"rawFindings":[]}',
+      structuredOutput: { rawFindings: [rawFinding] },
+      timestamp: new Date('2026-07-31T00:01:00.000Z'),
+    }]);
+    const sourcePaths = buildRunPaths(cwd, 'source-run');
+    mkdirSync(sourcePaths.runRootAbs, { recursive: true });
+    persistPendingFindingReviewNormalization(
+      sourcePaths.reportsAbs,
+      createPendingFindingReviewNormalization({
+        identity: {
+          scopeIdentity: 'source-sqlite-scope',
+          callNamespace: '',
+          parentStepName: 'review',
+          stepIteration: 1,
+          reviewerStepName: 'review',
+          reportName: 'review.md',
+        },
+        workflowName: 'test-workflow',
+        reportContent: harness.reportContent,
+        reviewerExecutionIdentity: {
+          provider: 'mock',
+          model: 'reviewer-model',
+        },
+      }),
+    );
+    inheritResumeReportSnapshot({
+      cwd,
+      sourceRunSlug: 'source-run',
+      targetRunSlug: runPaths.slug,
+    });
+
+    const result = await harness.executor.runNormalStep(
+      harness.step,
+      harness.state,
+      'test task',
+      5,
+      harness.updatePersonaSession,
+      undefined,
+      undefined,
+      {
+        executableStep: harness.step,
+        findingContractContext: harness.findingContractContext,
+        phase1Instruction: 'Review.',
+        stepIteration: 1,
+      },
+    );
+
+    expect(result.response).toMatchObject({
+      status: 'done',
+      content: harness.reportContent,
+      structuredOutput: { rawFindings: [rawFinding] },
+    });
+    expect(executeAgent).not.toHaveBeenCalled();
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledOnce();
+    expect(harness.normalizeFindingIntake.mock.calls[0]?.[0])
+      .toBe(harness.reportContent);
+    expect(ingestFindingContractResults).toHaveBeenCalledOnce();
+  });
+
+  it('runNormalStepのcross-run正式resumeはcompleted publicationを再利用する', async () => {
+    const reportContent = '## Result: APPROVE\n\nNo findings.';
+    const sourcePaths = buildRunPaths(cwd, 'source-run');
+    mkdirSync(sourcePaths.runRootAbs, { recursive: true });
+    const sourcePublication = createFindingReviewPublication({
+      identity: {
+        scopeIdentity: 'source-sqlite-scope',
+        callNamespace: '',
+        parentStepName: 'review',
+        stepIteration: 1,
+        reviewerStepName: 'review',
+        reportName: 'review.md',
+      },
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent,
+      rawFindings: [],
+    });
+    persistFindingReviewPublication(sourcePaths.reportsAbs, {
+      publication: sourcePublication,
+      reviewerExecutionIdentity: {
+        provider: 'codex',
+        model: 'persisted-reviewer-model',
+        providerOptions: {
+          codex: {
+            reasoningEffort: 'high',
+          },
+        },
+      },
+    });
+    publishFindingReviewPublication(sourcePaths.reportsAbs, sourcePublication);
+    inheritResumeReportSnapshot({
+      cwd,
+      sourceRunSlug: 'source-run',
+      targetRunSlug: runPaths.slug,
+    });
+    const harness = createPlainTextPublicationHarness([]);
+    const applyPostExecutionRulesOnly = vi.spyOn(
+      harness.executor,
+      'applyPostExecutionRulesOnly',
+    ).mockImplementation(async (_step, _state, response) => response);
+    const emitStepReports = vi.spyOn(harness.executor, 'emitStepReports');
+
+    const result = await harness.executor.runNormalStep(
+      harness.step,
+      harness.state,
+      'test task',
+      5,
+      harness.updatePersonaSession,
+      undefined,
+      undefined,
+      {
+        executableStep: harness.step,
+        findingContractContext: harness.findingContractContext,
+        phase1Instruction: 'Review.',
+        stepIteration: 1,
+      },
+    );
+
+    expect(result.response).toMatchObject({
+      status: 'done',
+      content: reportContent,
+      structuredOutput: { rawFindings: [] },
+    });
+    expect(executeAgent).not.toHaveBeenCalled();
+    expect(harness.normalizeFindingIntake).not.toHaveBeenCalled();
+    expect(ingestFindingContractResults).toHaveBeenCalledOnce();
+    expect(applyPostExecutionRulesOnly.mock.calls[0]?.[4]).toEqual({
+      providerInfoResolution: 'fully_resolved',
+      providerInfo: {
+        provider: 'codex',
+        model: 'persisted-reviewer-model',
+        providerSource: 'step',
+        modelSource: 'step',
+        providerOptions: {
+          codex: {
+            reasoningEffort: 'high',
+          },
+        },
+      },
+    });
+    expect(emitStepReports.mock.calls[0]?.[1].providerInfo).toMatchObject({
+      provider: 'codex',
+      model: 'persisted-reviewer-model',
+      providerOptions: {
+        codex: {
+          reasoningEffort: 'high',
+        },
+      },
+    });
+    expect(vi.mocked(ingestFindingContractResults).mock.calls[0]?.[0]
+      .subResults[0]?.publication).toMatchObject({
+      scopeIdentity: 'scope-plain-text',
+      reportContent,
+      reportDigest: sourcePublication.reportDigest,
+    });
+  });
+
+  it.each([
+    {
+      label: 'zero occurrence',
+      rawFindings: [{
+        rawExcerpt: 'Issue not present in the report.',
+        candidate: null,
+      }],
+    },
+    {
+      label: 'multiple occurrences',
+      rawFindings: [{
+        rawExcerpt: '#',
+        candidate: null,
+      }],
+    },
+    {
+      label: 'trimmed excerpt',
+      rawFindings: [{
+        rawExcerpt: ' Issue: src/example.ts still bypasses the required boundary.',
+        candidate: null,
+      }],
+    },
+    {
+      label: 'resource overflow',
+      rawFindings: Array.from({ length: 65 }, () => ({
+        rawExcerpt: 'Issue: src/example.ts still bypasses the required boundary.',
+        candidate: null,
+      })),
+    },
+  ])('plain-text normalizerのpublication違反($label)は1回だけ訂正する', async ({
+    rawFindings,
+  }) => {
+    const corrected = {
+      rawExcerpt: 'Issue: src/example.ts still bypasses the required boundary.',
+      candidate: null,
+    };
+    const harness = createPlainTextPublicationHarness([
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":[]}',
+        structuredOutput: { rawFindings },
+        timestamp: new Date('2026-07-31T00:00:01.000Z'),
+      },
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":[]}',
+        structuredOutput: { rawFindings: [corrected] },
+        timestamp: new Date('2026-07-31T00:00:02.000Z'),
+      },
+    ]);
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: vi.fn(),
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect('publication' in result).toBe(true);
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledTimes(2);
+    expect(harness.normalizeFindingIntake.mock.calls.map(([, options]) => (
+      (options as { mode: string }).mode
+    ))).toEqual(['initial', 'correction']);
+  });
+
+  it('rawExcerptがreport内に完全一致しても前後空白を含めば1回だけ訂正する', async () => {
+    const reportContent = [
+      '# Architecture Review',
+      '',
+      ' Issue: src/example.ts still bypasses the required boundary.',
+    ].join('\n');
+    const harness = createPlainTextPublicationHarness([
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":[]}',
+        structuredOutput: {
+          rawFindings: [{
+            rawExcerpt: ' Issue: src/example.ts still bypasses the required boundary.',
+            candidate: null,
+          }],
+        },
+        timestamp: new Date('2026-07-31T00:00:01.000Z'),
+      },
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":[]}',
+        structuredOutput: {
+          rawFindings: [{
+            rawExcerpt: 'Issue: src/example.ts still bypasses the required boundary.',
+            candidate: null,
+          }],
+        },
+        timestamp: new Date('2026-07-31T00:00:02.000Z'),
+      },
+    ], reportContent);
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: vi.fn(),
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect('publication' in result).toBe(true);
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledTimes(2);
+    expect(harness.normalizeFindingIntake.mock.calls.map(([, options]) => (
+      (options as { mode: string }).mode
+    ))).toEqual(['initial', 'correction']);
+  });
+
+  it('plain-text normalizerのpublication違反が訂正後も残れば有限に失敗する', async () => {
+    const invalid = {
+      rawExcerpt: 'Issue not present in the report.',
+      candidate: null,
+    };
+    const harness = createPlainTextPublicationHarness([
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":[]}',
+        structuredOutput: { rawFindings: [invalid] },
+        timestamp: new Date('2026-07-31T00:00:01.000Z'),
+      },
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":[]}',
+        structuredOutput: { rawFindings: [invalid] },
+        timestamp: new Date('2026-07-31T00:00:02.000Z'),
+      },
+    ]);
+
+    await expect(harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      rerunPhase1Fresh: vi.fn(),
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: harness.updatePersonaSession,
+    })).rejects.toThrow(/remained invalid after one correction/u);
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledTimes(2);
+  });
 
   it('phase:start には structured_output 用に差し替えた実 instruction を渡す', async () => {
     vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
@@ -549,7 +1604,7 @@ describe('StepExecutor', () => {
         supports: () => true,
         normalize: customStructuredOutputNormalize,
       }]),
-      reviewerOutputStrategy: { kind: 'canonical_blocks' },
+      reviewerOutputStrategy: { kind: 'canonical_blocks', reportGeneration: 'plain_text', intake: 'canonical_parser' },
       findingContract: {
         ledgerPath: '.takt/findings/ledger.json',
         rawFindingsPath: '.takt/findings/raw',
@@ -709,7 +1764,7 @@ describe('StepExecutor', () => {
         getWorkflowDescription: () => undefined,
         getRetryNote: () => undefined,
         structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-        reviewerOutputStrategy: { kind: 'canonical_blocks' },
+        reviewerOutputStrategy: { kind: 'canonical_blocks', reportGeneration: 'plain_text', intake: 'canonical_parser' },
         findingContract: {
           ledgerPath: '.takt/findings/ledger.json',
           rawFindingsPath: '.takt/findings/raw',
@@ -1199,7 +2254,7 @@ describe('StepExecutor', () => {
     },
   );
 
-  it('canonical publicationをresumeすると同じpublicationを再利用する', () => {
+  it('canonical publicationをresumeすると同じpublicationを再利用する', async () => {
     const reportContent = '## Result: APPROVE\n\nNo findings.';
     const identity = {
       scopeIdentity: 'scope-1',
@@ -1218,7 +2273,7 @@ describe('StepExecutor', () => {
     persistFindingReviewPublication(runPaths.reportsAbs, { publication });
     const executor = new StepExecutor({
       structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-      reviewerOutputStrategy: { kind: 'canonical_blocks' },
+      reviewerOutputStrategy: { kind: 'canonical_blocks', reportGeneration: 'plain_text', intake: 'canonical_parser' },
       getRunPaths: () => runPaths,
       getFindingCallNamespace: () => '',
       findingLedgerStore: {
@@ -1234,15 +2289,17 @@ describe('StepExecutor', () => {
       ],
     });
 
-    const first = executor.resumeFindingReviewPublication({
+    const first = await executor.resumeFindingReviewPublication({
       step,
       parentStepName: 'reviewers',
       stepIteration: 2,
+      state: makeState(),
     });
-    const second = executor.resumeFindingReviewPublication({
+    const second = await executor.resumeFindingReviewPublication({
       step,
       parentStepName: 'reviewers',
       stepIteration: 2,
+      state: makeState(),
     });
 
     expect(first?.publication.publicationId).toBe(publication.publicationId);
@@ -1441,7 +2498,7 @@ describe('StepExecutor', () => {
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
       structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-      reviewerOutputStrategy: { kind: 'structured' },
+      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
       findingContract: {
         ledgerPath: '.takt/findings/ledger.json',
         rawFindingsPath: '.takt/findings/raw',
@@ -1559,7 +2616,7 @@ describe('StepExecutor', () => {
     );
 
     expect(buildFindingContractInstructionContext)
-      .toHaveBeenCalledWith(step, { kind: 'structured' });
+      .toHaveBeenCalledWith(step, { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' });
     expect(buildAgentOptions).toHaveBeenCalledWith(expect.objectContaining({
       structuredOutput,
     }), undefined);

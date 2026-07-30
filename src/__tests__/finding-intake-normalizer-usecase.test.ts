@@ -74,8 +74,8 @@ describe('normalizeFindingIntake', () => {
     });
 
     const prompt = runAgent.mock.calls[0]?.[1];
-    expect(prompt).toContain('previous extraction violated');
-    expect(prompt).toContain('## Candidate report\n\nauthoritative report');
+    expect(prompt).toContain('previous extraction failed');
+    expect(prompt).toContain('## Review report\n\nauthoritative report');
     expect(prompt.match(/authoritative report/g)).toHaveLength(1);
     expect(runAgent.mock.calls[0]?.[2]).toMatchObject({
       executionProfile: 'isolated-structured',

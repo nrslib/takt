@@ -5907,7 +5907,7 @@ steps:
     expect(state.iteration).toBe(4);
   });
 
-  it('parallel fallback retry 中の workflow_call は fallback provider を child workflow へ渡す', async () => {
+  it('parallel fallback retry は非対象 workflow_call の child 固有 provider 解決を維持する', async () => {
     writeWorkflow(tmpDir, 'shared/review.yaml', `name: shared/review
 subworkflow:
   callable: true
@@ -6002,7 +6002,7 @@ steps:
     expect(localAttempts).toBe(2);
     expect(childProviderCalls).toEqual([
       { resolvedProvider: 'mock', resolvedModel: 'parent-model' },
-      { resolvedProvider: 'codex', resolvedModel: 'gpt-5' },
+      { resolvedProvider: 'mock', resolvedModel: 'parent-model' },
     ]);
   });
 

@@ -60,6 +60,12 @@ import {
 import type {
   FindingContractReviewerOutputStrategy,
 } from '../instruction/instruction-context.js';
+import {
+  fallbackContextForOperation,
+  findingIntakeNormalizerOperationOrigin,
+  reviewerOperationOrigin,
+  runtimeForOperation,
+} from './fallback-operation.js';
 
 const log = createLogger('parallel-runner');
 
@@ -75,6 +81,8 @@ type ParallelSubStepResult = {
   workflowCallSessionUpdates?: WorkflowCallSessionUpdates;
   workflowCallStateSync?: WorkflowCallIsolatedStateSync;
   workflowCallExecutionRejected?: boolean;
+  terminalOperation?: StepRunResult['terminalOperation'];
+  reviewerRuntime?: RuntimeStepResolution;
 };
 
 type ParallelTerminalStatus = 'error' | 'blocked' | 'rate_limited';
@@ -342,12 +350,22 @@ export class ParallelRunner {
           const executableSubStep = findingContractContext?.reviewer?.mode === 'structured'
             ? withFindingContractStructuredOutput(subStep, findingContractContext)
             : subStep;
-          const subRuntime = routedProviderInfoByStep.has(subStep.name)
+          const routedRuntime = routedProviderInfoByStep.has(subStep.name)
             ? {
                 ...runtime,
                 providerInfo: routedProviderInfoByStep.get(subStep.name)!,
               }
             : runtime;
+          const subRuntime = runtimeForOperation(
+            routedRuntime,
+            reviewerOperationOrigin(subStep.name),
+            routedRuntime?.providerInfo,
+          );
+          const publicationResumeRuntime = runtimeForOperation(
+            routedRuntime,
+            findingIntakeNormalizerOperationOrigin(subStep.name),
+            routedRuntime?.providerInfo,
+          );
           const subIteration = incrementStepIteration(
             state,
             buildScopedStepIterationIdentity(subStep.name, [step.name]),
@@ -358,7 +376,10 @@ export class ParallelRunner {
             state,
             task,
             maxSteps,
-            subRuntime?.fallback,
+            fallbackContextForOperation(
+              subRuntime,
+              reviewerOperationOrigin(subStep.name),
+            ),
             findingContractContext === undefined
               ? undefined
               : { mode: 'explicit', context: findingContractContext },
@@ -377,13 +398,33 @@ export class ParallelRunner {
           };
 
         if (findingContractContext !== undefined) {
-          const resumedPublication = this.deps.stepExecutor
+          const resumedPublication = await this.deps.stepExecutor
             .resumeFindingReviewPublication({
               step: subStep,
               parentStepName: step.name,
               stepIteration,
+              state,
+              runtime: publicationResumeRuntime,
             });
           if (resumedPublication !== undefined) {
+            if ('terminalResponse' in resumedPublication) {
+              state.stepOutputs.set(
+                subStep.name,
+                resumedPublication.terminalResponse,
+              );
+              return {
+                subStep,
+                response: resumedPublication.terminalResponse,
+                instruction: phase1Instruction,
+                providerInfo: resumedPublication.reviewerProviderInfo ?? subPm,
+                reviewerRuntime: resumedPublication.reviewerRuntime,
+                terminalOperation: resumedPublication.terminalOperation,
+                durationMs: Math.max(
+                  0,
+                  resumedPublication.terminalResponse.timestamp.getTime() - startedAt,
+                ),
+              };
+            }
             const qualityGateResult = await this.deps.runQualityGates({
               qualityGates: subStep.qualityGates,
               projectRoot: this.deps.getCwd(),
@@ -411,7 +452,7 @@ export class ParallelRunner {
                 iteration: parentIteration,
                 resumeStepName: step.name,
                 stepIteration: subIteration,
-                providerInfo: subPm,
+                providerInfo: resumedPublication.reviewerProviderInfo ?? subPm,
               },
             );
             return {
@@ -422,7 +463,8 @@ export class ParallelRunner {
                 : {}),
               response: resumedPublication.response,
               instruction: phase1Instruction,
-              providerInfo: subPm,
+              providerInfo: resumedPublication.reviewerProviderInfo ?? subPm,
+              reviewerRuntime: resumedPublication.reviewerRuntime,
               durationMs: Math.max(
                 0,
                 resumedPublication.response.timestamp.getTime() - startedAt,
@@ -541,6 +583,14 @@ export class ParallelRunner {
             response: subResponse,
             instruction: phase1Instruction,
             providerInfo: subPm,
+            ...(subResponse.status === 'blocked' || subResponse.status === 'rate_limited'
+              ? {
+                  terminalOperation: {
+                    origin: reviewerOperationOrigin(subStep.name),
+                    providerInfo: subPm,
+                  },
+                }
+              : {}),
             durationMs: Math.max(0, subResponse.timestamp.getTime() - startedAt),
           };
         }
@@ -548,6 +598,10 @@ export class ParallelRunner {
         let publication: CanonicalFindingReviewPublication | undefined;
         let relationClarification: ReviewerRelationClarification | undefined;
         let finalResponse = subResponse;
+        let completedReviewerProviderInfo = subPm;
+        let completedReviewerRuntime: RuntimeStepResolution = {
+          providerInfo: subPm,
+        };
         if (findingContractContext !== undefined) {
           let publicationRetryPhase1Executed = false;
           const prepared = await this.deps.stepExecutor.prepareFindingReviewPublication({
@@ -627,7 +681,11 @@ export class ParallelRunner {
               subStep,
               response: prepared.terminalResponse,
               instruction: phase1Instruction,
-              providerInfo: subPm,
+              providerInfo: prepared.reviewerProviderInfo ?? subPm,
+              reviewerRuntime: prepared.reviewerRuntime,
+              ...(prepared.terminalOperation !== undefined
+                ? { terminalOperation: prepared.terminalOperation }
+                : {}),
               durationMs: Math.max(
                 0,
                 prepared.terminalResponse.timestamp.getTime() - startedAt,
@@ -637,6 +695,10 @@ export class ParallelRunner {
           publication = prepared.publication;
           relationClarification = prepared.relationClarification;
           finalResponse = prepared.response;
+          completedReviewerProviderInfo = prepared.reviewerProviderInfo ?? subPm;
+          completedReviewerRuntime = prepared.reviewerRuntime ?? {
+            providerInfo: completedReviewerProviderInfo,
+          };
         } else {
           const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(
             subStep,
@@ -678,6 +740,10 @@ export class ParallelRunner {
                   response: blockedResponse,
                   instruction: phase1Instruction,
                   providerInfo: subPm,
+                  terminalOperation: {
+                    origin: reviewerOperationOrigin(subStep.name),
+                    providerInfo: reportResult.providerInfo,
+                  },
                   durationMs: Math.max(
                     0,
                     blockedResponse.timestamp.getTime() - startedAt,
@@ -695,6 +761,10 @@ export class ParallelRunner {
                   response: rateLimitedResponse,
                   instruction: phase1Instruction,
                   providerInfo: subPm,
+                  terminalOperation: {
+                    origin: reviewerOperationOrigin(subStep.name),
+                    providerInfo: reportResult.providerInfo,
+                  },
                   durationMs: Math.max(
                     0,
                     rateLimitedResponse.timestamp.getTime() - startedAt,
@@ -768,7 +838,7 @@ export class ParallelRunner {
             iteration: parentIteration,
             resumeStepName: step.name,
             stepIteration: subIteration,
-            providerInfo: subPm,
+            providerInfo: completedReviewerProviderInfo,
           },
         );
 
@@ -778,7 +848,8 @@ export class ParallelRunner {
           ...(publication !== undefined ? { publication } : {}),
           ...(relationClarification !== undefined ? { relationClarification } : {}),
           instruction: phase1Instruction,
-          providerInfo: subPm,
+          providerInfo: completedReviewerProviderInfo,
+          reviewerRuntime: completedReviewerRuntime,
           durationMs: Math.max(0, finalResponse.timestamp.getTime() - startedAt),
         };
         } finally {
@@ -841,6 +912,7 @@ export class ParallelRunner {
         terminalResults,
         status: 'rate_limited',
         providerInfo: rateLimitedResult.providerInfo ?? parentPm,
+        terminalOperation: rateLimitedResult.terminalOperation,
       });
     }
 
@@ -867,6 +939,7 @@ export class ParallelRunner {
         terminalResults: blockedResults,
         status: 'blocked',
         providerInfo: blockedResults[0]?.providerInfo ?? parentPm,
+        terminalOperation: blockedResults[0]?.terminalOperation,
       });
     }
 
@@ -905,6 +978,9 @@ export class ParallelRunner {
       priorStepResponseText,
     );
 
+    const postExecutionRuntime = runtime?.fallback === undefined
+      ? runtime
+      : { ...runtime, fallback: undefined };
     if (findingContractContext !== undefined) {
       for (const result of subResults) {
         if (!isAgentParallelSubStep(result.subStep)) {
@@ -915,12 +991,15 @@ export class ParallelRunner {
             `Finding contract reviewer "${result.subStep.name}" has no canonical publication`,
           );
         }
-        const subRuntime = routedProviderInfoByStep.has(result.subStep.name)
-          ? {
-              ...runtime,
-              providerInfo: routedProviderInfoByStep.get(result.subStep.name)!,
-            }
-          : runtime;
+        const subRuntime = result.reviewerRuntime
+          ?? (
+            result.providerInfo === undefined
+              ? postExecutionRuntime
+              : {
+                  ...postExecutionRuntime,
+                  providerInfo: result.providerInfo,
+                }
+          );
         result.response = await this.deps.stepExecutor.applyPostExecutionRulesOnly(
           result.subStep,
           state,
@@ -967,7 +1046,7 @@ export class ParallelRunner {
         this.deps.onPhaseComplete,
         this.deps.onJudgeStage,
         state.iteration,
-        runtime,
+        postExecutionRuntime,
       ),
       parentRuleCtx,
     );
@@ -1026,8 +1105,12 @@ export class ParallelRunner {
     if (!workflowCallRunner) {
       throw new Error(`Parallel workflow_call sub-step "${subStep.name}" requires workflowCallRunner`);
     }
-    const subRuntime = runtime?.fallback
-      ? runtime
+    const operationRuntime = runtimeForOperation(
+      runtime,
+      reviewerOperationOrigin(subStep.name),
+    );
+    const subRuntime = operationRuntime?.fallback
+      ? operationRuntime
       : workflowCallRunner.resolveRuntime(subStep);
     const result = await workflowCallRunner.runIsolated(
       subStep,
@@ -1039,6 +1122,9 @@ export class ParallelRunner {
       response: result.result.response,
       instruction: result.result.instruction,
       providerInfo: result.result.providerInfo,
+      ...(result.result.terminalOperation !== undefined
+        ? { terminalOperation: result.result.terminalOperation }
+        : {}),
       durationMs: Math.max(0, result.result.response.timestamp.getTime() - startedAt),
       workflowCallSessionUpdates: result.sessionUpdates,
       workflowCallStateSync: result.stateSync,
@@ -1304,6 +1390,7 @@ export class ParallelRunner {
     terminalResults: ParallelSubStepResult[];
     status: ParallelTerminalStatus;
     providerInfo: StepRunResult['providerInfo'];
+    terminalOperation?: StepRunResult['terminalOperation'];
   }): StepRunResult {
     const content = this.buildTerminalDiagnostic(
       options.step,
@@ -1336,6 +1423,9 @@ export class ParallelRunner {
       response,
       instruction: options.subResults.map((result) => result.instruction).join('\n\n'),
       providerInfo: options.providerInfo,
+      ...(options.terminalOperation !== undefined
+        ? { terminalOperation: options.terminalOperation }
+        : {}),
       consumedStepIterations: [
         options.step.name,
         ...options.subResults.map((result) => (

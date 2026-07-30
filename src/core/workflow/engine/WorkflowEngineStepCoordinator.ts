@@ -1,4 +1,11 @@
-import type { AgentResponse, LoopMonitorConfig, WorkflowMaxSteps, WorkflowState, WorkflowStep } from '../../models/types.js';
+import type {
+  AgentResponse,
+  FallbackContext,
+  LoopMonitorConfig,
+  WorkflowMaxSteps,
+  WorkflowState,
+  WorkflowStep,
+} from '../../models/types.js';
 import { ABORT_STEP, FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
 import { FINDING_CONFLICT_ADJUDICATION_RULE_INDEX } from '../findings/adjudication-step.js';
 import { isDelegatedWorkflowStep, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
@@ -45,6 +52,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       state: WorkflowState,
       task: string,
       maxSteps: WorkflowMaxSteps,
+      fallbackContext?: FallbackContext,
     ) => string;
     buildPhase1Instruction: (instruction: string, step: WorkflowStep, runtime?: RuntimeStepResolution) => string;
     drainReportFiles: () => Array<{
@@ -312,13 +320,18 @@ export class WorkflowEngineStepCoordinator {
     return wiringSteps.length === 1 ? wiringSteps[0]!.name : undefined;
   }
 
-  buildInstruction(step: WorkflowStep, stepIteration: number): string {
+  buildInstruction(
+    step: WorkflowStep,
+    stepIteration: number,
+    fallbackContext?: FallbackContext,
+  ): string {
     return this.deps.stepExecutor.buildInstruction(
       step,
       stepIteration,
       this.deps.state,
       this.deps.task,
       this.deps.getMaxSteps(),
+      fallbackContext,
     );
   }
 

@@ -256,7 +256,7 @@ describe('runReportPhase retry with new session', () => {
     }]);
 
     await generateReportPhase(step, 1, ctx, {
-      reviewerOutputStrategy: { kind: 'canonical_blocks' },
+      reviewerOutputStrategy: { kind: 'canonical_blocks', reportGeneration: 'plain_text', intake: 'canonical_parser' },
     });
 
     const prompt = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
@@ -931,7 +931,7 @@ describe('runReportPhase retry with new session', () => {
     ]);
 
     const result = await generateReportPhase(step, 1, ctx, {
-      reviewerOutputStrategy: { kind: 'structured' },
+      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
     });
 
     expect('reports' in result).toBe(true);
@@ -1000,7 +1000,7 @@ describe('runReportPhase retry with new session', () => {
     }]);
 
     await generateReportPhase(step, 1, ctx, {
-      reviewerOutputStrategy: { kind: 'structured' },
+      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
     });
 
     const prompt = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
@@ -1026,7 +1026,7 @@ describe('runReportPhase retry with new session', () => {
     }]);
 
     const result = await generateReportPhase(step, 1, ctx, {
-      reviewerOutputStrategy: { kind: 'structured' },
+      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
     });
 
     expect('reports' in result).toBe(true);
@@ -1049,7 +1049,7 @@ describe('runReportPhase retry with new session', () => {
     }]);
 
     await expect(generateReportPhase(step, 1, ctx, {
-      reviewerOutputStrategy: { kind: 'structured' },
+      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
     })).rejects.toThrow(
       'Finding review publication reportContent is missing',
     );
@@ -1266,7 +1266,14 @@ describe('runReportPhase retry with new session', () => {
     const result = await runReportPhase(step, 1, ctx);
 
     // Then
-    expect(result).toEqual({ blocked: true, response: blockedResponse });
+    expect(result).toEqual({
+      blocked: true,
+      response: blockedResponse,
+      providerInfo: {
+        provider: 'claude',
+        model: undefined,
+      },
+    });
     expect(runAgentMock).toHaveBeenCalledTimes(3);
     expect(existsSync(join(reportDir, '03-fallback-blocked.md'))).toBe(false);
     expect(sessionUpdates).toEqual([]);
@@ -1317,7 +1324,14 @@ describe('runReportPhase retry with new session', () => {
     const result = await runReportPhase(step, 1, ctx);
 
     // Then
-    expect(result).toEqual({ rateLimited: true, response: rateLimitedResponse });
+    expect(result).toEqual({
+      rateLimited: true,
+      response: rateLimitedResponse,
+      providerInfo: {
+        provider: 'claude',
+        model: undefined,
+      },
+    });
     expect(runAgentMock).toHaveBeenCalledTimes(3);
     expect(existsSync(join(reportDir, '03-fallback-rate-limited.md'))).toBe(false);
     expect(sessionUpdates).toEqual([]);
@@ -2022,6 +2036,10 @@ describe('runReportPhase retry with new session', () => {
     // Then
     expect(result).toEqual({
       blocked: true,
+      providerInfo: {
+        provider: 'opencode',
+        model: undefined,
+      },
       response: {
         persona: 'coder',
         status: 'blocked',
@@ -2059,6 +2077,10 @@ describe('runReportPhase retry with new session', () => {
     // Then
     expect(result).toEqual({
       rateLimited: true,
+      providerInfo: {
+        provider: 'opencode',
+        model: undefined,
+      },
       response,
     });
     expect(runAgentMock).toHaveBeenCalledTimes(1);

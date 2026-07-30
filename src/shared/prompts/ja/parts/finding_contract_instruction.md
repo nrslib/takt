@@ -13,6 +13,10 @@
 - 観測した各問題と明示的な台帳 lifecycle claim は、下記の共通プロトコルを使い、必ず1件につき1つの canonical block にしてください。block 外の本文は説明専用であり、機械 intake の対象になりません。
 
 {{canonicalClaimBlockProtocol}}
+{{/if}}{{#if plainTextNormalizedReviewer}}- 通常の Markdown レビュー報告を書いてください。JSON、structured output、canonical claim block は返さないでください。
+- 観測した各問題と明示的な台帳 lifecycle claim を、通常の文章で1件ずつ分けて明確に記述してください。隔離された抽出器が見るのはこの最終報告だけであり、リポジトリ調査や暗黙の主張の推論は行いません。
+- 利用できる場合は path・行範囲・コードの完全一致引用を記載してください。欠けている location や quote を捏造しないでください。対象構造を明確に特定できるリポジトリ全体またはアーキテクチャ上の問題は、行範囲がなくても有効です。
+- 承認、要約、検証表、スコープ説明を問題として記述しないでください。
 {{/if}}{{#if reviewerHasOpenFindings}}- 毎ラウンド、自分のレビュー範囲に入る open な台帳の指摘を検証してください。
 {{/if}}{{#if structuredReviewerHasOpenFindings}}- open な指摘が修正済みだと確認できたら、relation を `resolution_confirmation`、`targetFindingIds` にその台帳 ID だけを入れた structured raw finding を1件出力してください。指摘が resolved になる経路はこの確認だけです。
 - structured raw finding のフィールドから evidence をリクエストしてください。code の確認は `file_quote`、structure の確認は `repository_manifest`、absence の確認は `repository_query` と `authoritative_quote` を使います。snapshotId・runId・proofId・file hash・query 結果などの検証結果は出力しないでください。これらの束縛と検証はエンジンが行います。
@@ -20,6 +24,8 @@
 {{/if}}{{#if canonicalBlocksReviewerHasOpenFindings}}- open な指摘が修正済みだと確認できたら、Relation を `resolution_confirmation`、Target Finding ID をその台帳 ID にした canonical block を1件報告してください。指摘が resolved になる経路はこの確認だけです。
 - block の Target Kind に対応する typed evidence matrix を使ってください。code の確認は File Quote、structure の確認は Repository Manifest、absence の確認は Repository Query と Authoritative Quote を使います。snapshotId・runId・proofId・file hash・query 結果などの検証結果は出力しないでください。これらの束縛と検証はエンジンが行います。
 - 同じ場所で未修正のまま残っている open な指摘を再報告しないでください。まだ発生しているがそれを明示的に確認したい場合は、relation を "persists"、Target Finding ID にその台帳 finding ID を設定して報告してください。実際に別問題へ退行した場合にだけ、新しい "new" の issue として報告してください。
+{{/if}}{{#if plainTextNormalizedReviewerHasOpenFindings}}- open な指摘の lifecycle を明示的に報告するときは、台帳 finding ID と、継続中（`persists`）・修正済み（`resolution_confirmation`）・再発（`reopened`）のどれかを文章中に記載してください。最終 lifecycle 判定は findings-manager とエンジンが行います。
+- 変化のない open finding を新規問題として再登録しないでください。残存なら `persists`、修正済みなら `resolution_confirmation`、閉じた前提が再び成立したなら `reopened` と明記してください。
 {{/if}}{{#if reviewerHasWaivedFindings}}- 台帳サマリで waived になっている指摘を再報告しないでください。waive の前提が崩れていると観測した場合は、relation を "reopened"、targetFindingId にその waived finding ID を設定して報告してください。
 {{/if}}{{#if reviewerHasDismissedFindings}}- 台帳サマリで dismissed になっている指摘を new として再報告しないでください。dismiss の前提が成立しなくなったと観測した場合は、relation を "reopened"、targetFindingId にその dismissed finding ID を設定して報告してください。
 {{/if}}{{#if structuredReviewer}}- rawFindingId はこの応答の中で一意にしてください。
@@ -37,6 +43,8 @@
 {{/if}}{{#if canonicalBlocksReviewer}}- レビュー固有のサマリー・検証表・説明本文は canonical block の外へ置いてください。それらは Finding Contract input ではありません。
 - 証拠は canonical block の matrix を通じてリクエストするだけで、発行済みとはしないでください。proofId・snapshotId・runId・offset・digest・query 結果・検証結果は出力しないでください。
 - claim は現在存在し修正アクションを要する観測欠陥、または明示的な lifecycle claim だけにしてください。承認・要約・正常確認・スコープ説明を claim にしないでください。APPROVE は `new` / `persists` / `reopened` の欠陥 block が0件であることを意味し、明示的な `resolution_confirmation` block は含められます。
+{{/if}}{{#if plainTextNormalizedReviewer}}- normalizer が抽出するのは、この報告で明示した claim だけです。証拠・location・severity・lifecycle relation を補作せず、不確実性は文章中にそのまま残してください。
+- 修正アクションを要する現在の欠陥は、アーキテクチャ上・リポジトリ全体・単一行に対応しない問題でもレビュー issue です。
 {{/if}}- 台帳で `provisional` が付いたエントリは system finding です: 意味を確定できなかった観測（ラベリングの矛盾、reviewer 出力の上限超過、解釈の中断など）を表し、コード変更では修正できず、異議申告の対象にもなりません。後続ラウンドの clean なレビュー証拠が確定・解消するまで final gate を塞ぎ続けます。provisional finding を「修正」しようとしないでください。
 {{#if canDispute}}- 指摘に取りかかる前に、現在のコードと照らして事実確認してください。妥当で、かつ許可された操作で直せる指摘は修正してください。指摘が現実と合わない（すでに修正済み、または存在しない構造を指している）場合、あるいは妥当だが許可された操作では修正できない（凍結された公開契約、外部制約、意図的なトレードオフ、実行を禁じられている操作を修正案が要求している）場合は、同じ修正を繰り返さないでください。応答の中に「## Disputed Findings」という見出しを立て、finding ごとに1エントリで異議を申し立ててください。見出しとフィールド名は英語のまま書いてください:
   - findingId: 台帳の finding ID

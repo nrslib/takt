@@ -1,5 +1,14 @@
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import type { AgentResponse, FallbackContext, LoopMonitorConfig, RateLimitFallbackProvider, WorkflowMaxSteps, WorkflowState, WorkflowStep } from '../../models/types.js';
+import type {
+  AgentResponse,
+  FallbackContext,
+  FallbackOperationOrigin,
+  LoopMonitorConfig,
+  RateLimitFallbackProvider,
+  WorkflowMaxSteps,
+  WorkflowState,
+  WorkflowStep,
+} from '../../models/types.js';
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type {
   RuntimeStepResolution,
@@ -22,6 +31,10 @@ import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
+import {
+  reviewerOperationOrigin,
+  sameFallbackOperationOrigin,
+} from './fallback-operation.js';
 
 const log = createLogger('workflow-run-loop');
 
@@ -78,7 +91,11 @@ interface WorkflowRunLoopDeps {
     stepIteration: number,
     content: string,
   ) => void;
-  buildInstruction: (step: WorkflowStep, stepIteration: number) => string;
+  buildInstruction: (
+    step: WorkflowStep,
+    stepIteration: number,
+    fallbackContext?: FallbackContext,
+  ) => string;
   buildPhase1Instruction: (step: WorkflowStep, instruction: string, runtime?: RuntimeStepResolution) => string;
   /** Engine が通常 agent ステップに渡す、実行前に一度だけ確定した入力。 */
   prepareNormalStepExecution: (
@@ -297,6 +314,7 @@ function buildFallbackContext(
   current: StepProviderInfo,
   fallback: RateLimitFallbackProvider,
   originalIteration: number,
+  origin: FallbackOperationOrigin,
 ): FallbackContext {
   if (!current.provider) {
     throw new Error(`Step "${step.name}" has no resolved provider for rate limit fallback`);
@@ -311,26 +329,52 @@ function buildFallbackContext(
     ...(fallback.model !== undefined ? { currentModel: fallback.model } : {}),
     stepName: step.name,
     reportDir: deps.getReportDir(),
+    origin,
   };
 }
 
 function withFallbackRuntime(
   state: WorkflowState,
+  step: WorkflowStep,
   runtime: RuntimeStepResolution | undefined,
 ): RuntimeStepResolution | undefined {
   if (!state.pendingFallback) {
     return runtime;
   }
+  const fallback = state.pendingFallback;
+  if (
+    fallback.origin.stage === 'reviewer'
+    && fallback.origin.reviewerStepName === step.name
+  ) {
+    return {
+      ...runtime,
+      providerInfo: {
+        provider: fallback.currentProvider,
+        model: fallback.currentModel,
+        providerSource: 'step',
+        modelSource: fallback.currentModel !== undefined ? 'step' : undefined,
+      },
+      fallback,
+    };
+  }
   return {
     ...runtime,
-    providerInfo: {
-      provider: state.pendingFallback.currentProvider,
-      model: state.pendingFallback.currentModel,
-      providerSource: 'step',
-      modelSource: state.pendingFallback.currentModel !== undefined ? 'step' : undefined,
-    },
-    fallback: state.pendingFallback,
+    fallback,
   };
+}
+
+function settleFallbackAttempt(
+  state: WorkflowState,
+  runtime: RuntimeStepResolution | undefined,
+  status: AgentResponse['status'],
+): void {
+  if (runtime?.fallback === undefined) {
+    return;
+  }
+  state.pendingFallback = undefined;
+  if (status !== 'rate_limited') {
+    state.rateLimitFallbackState = undefined;
+  }
 }
 
 function advanceActiveStep(deps: WorkflowRunLoopDeps, nextStep: string, iteration: number): void {
@@ -512,11 +556,15 @@ function prepareRateLimitFallback(
   step: WorkflowStep,
   response: AgentResponse,
   currentProvider: StepProviderInfo,
+  origin: FallbackOperationOrigin,
   activeIteration: number,
   consumedStepIterations: readonly string[],
 ): { queued: true } | { queued: false; abort: WorkflowAbortResult } {
   deps.emit('step:rate_limited', step, response, response.rateLimitInfo);
-  const previousAttempts = deps.state.rateLimitFallbackAttempts ?? [];
+  const previousAttempts = deps.state.rateLimitFallbackState !== undefined
+    && sameFallbackOperationOrigin(deps.state.rateLimitFallbackState.origin, origin)
+    ? deps.state.rateLimitFallbackState.attempts
+    : [];
   const currentAttempts = appendFallbackAttempt(previousAttempts, currentProvider);
   const fallback = pickNextFallbackProvider(
     deps.options.rateLimitFallback?.switchChain,
@@ -524,15 +572,26 @@ function prepareRateLimitFallback(
     currentAttempts,
   );
   if (!fallback) {
-    deps.state.rateLimitFallbackAttempts = undefined;
+    deps.state.rateLimitFallbackState = undefined;
     return {
       queued: false,
       abort: abortWorkflow(deps, 'rate_limited', `Step "${step.name}" hit a rate limit and no fallback provider is configured`),
     };
   }
 
-  deps.state.rateLimitFallbackAttempts = [...currentAttempts, fallback];
-  deps.state.pendingFallback = buildFallbackContext(deps, step, response, currentProvider, fallback, activeIteration);
+  deps.state.rateLimitFallbackState = {
+    origin,
+    attempts: [...currentAttempts, fallback],
+  };
+  deps.state.pendingFallback = buildFallbackContext(
+    deps,
+    step,
+    response,
+    currentProvider,
+    fallback,
+    activeIteration,
+    origin,
+  );
   deps.state.iteration--;
   for (const stepName of new Set(consumedStepIterations)) {
     decrementStepIteration(deps.state, stepName);
@@ -636,7 +695,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       isDelegated ? undefined : stepIteration,
       baseStepRuntime,
     );
-    const fallbackRuntime = withFallbackRuntime(deps.state, promotedRuntime);
+    const fallbackRuntime = withFallbackRuntime(deps.state, step, promotedRuntime);
     let stepRuntime: RuntimeStepResolution | undefined;
     try {
       stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
@@ -654,7 +713,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     const preparedExecution = deps.prepareNormalStepExecution(step, stepIteration, stepRuntime);
     const executionStep = preparedExecution?.executableStep ?? step;
     const prebuiltInstruction = preparedExecution === undefined && !isDelegated
-      ? deps.buildInstruction(step, stepIteration)
+      ? deps.buildInstruction(step, stepIteration, stepRuntime?.fallback)
       : undefined;
     const stepInstruction = preparedExecution?.phase1Instruction
       ?? (prebuiltInstruction
@@ -711,9 +770,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         Math.max(0, Date.now() - startedAt),
         activeIteration,
       );
-      if (stepRuntime?.fallback) {
-        deps.state.pendingFallback = undefined;
-      }
+      settleFallbackAttempt(deps.state, stepRuntime, response.status);
       deps.emit(
         'step:complete',
         executionStep,
@@ -724,13 +781,17 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       );
 
       if (response.status === 'rate_limited') {
-        const currentProvider = completedProviderInfo;
+        const terminalOperation = result.terminalOperation ?? {
+          origin: reviewerOperationOrigin(step.name),
+          providerInfo: completedProviderInfo,
+        };
         const consumedStepIterations = result.consumedStepIterations ?? [step.name];
         const fallbackResult = prepareRateLimitFallback(
           deps,
           step,
           response,
-          currentProvider,
+          terminalOperation.providerInfo,
+          terminalOperation.origin,
           activeIteration,
           consumedStepIterations,
         );
@@ -739,10 +800,6 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
           break;
         }
         continue;
-      }
-
-      if (stepRuntime?.fallback) {
-        deps.state.rateLimitFallbackAttempts = undefined;
       }
 
       if (result.qualityGateFailure) {
@@ -952,7 +1009,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     isDelegated ? undefined : stepIteration,
     baseStepRuntime,
   );
-  const fallbackRuntime = withFallbackRuntime(deps.state, promotedRuntime);
+  const fallbackRuntime = withFallbackRuntime(deps.state, step, promotedRuntime);
   let stepRuntime: RuntimeStepResolution | undefined;
   try {
     stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
@@ -968,7 +1025,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   const preparedExecution = deps.prepareNormalStepExecution(step, stepIteration, stepRuntime);
   const executionStep = preparedExecution?.executableStep ?? step;
   const prebuiltInstruction = preparedExecution === undefined && !isDelegated
-    ? deps.buildInstruction(step, stepIteration)
+    ? deps.buildInstruction(step, stepIteration, stepRuntime?.fallback)
     : undefined;
   const stepInstruction = preparedExecution?.phase1Instruction
     ?? (deps.options.observability?.enabled === true && prebuiltInstruction
@@ -1005,22 +1062,24 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     Math.max(0, Date.now() - startedAt),
     activeIteration,
   );
-  if (stepRuntime?.fallback) {
-    deps.state.pendingFallback = undefined;
-  }
+  settleFallbackAttempt(deps.state, stepRuntime, response.status);
 
   if (response.status === 'blocked') {
     const abort = abortWorkflow(deps, 'blocked', 'Workflow blocked and no user input provided');
     return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
   }
   if (response.status === 'rate_limited') {
-    const currentProvider = completedProviderInfo;
+    const terminalOperation = result.terminalOperation ?? {
+      origin: reviewerOperationOrigin(step.name),
+      providerInfo: completedProviderInfo,
+    };
     const consumedStepIterations = result.consumedStepIterations ?? [step.name];
     const fallbackResult = prepareRateLimitFallback(
       deps,
       step,
       response,
-      currentProvider,
+      terminalOperation.providerInfo,
+      terminalOperation.origin,
       activeIteration,
       consumedStepIterations,
     );
@@ -1042,10 +1101,6 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
       `Step "${step.name}" failed: ${response.error ?? response.content}`,
     );
     return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
-  }
-
-  if (stepRuntime?.fallback) {
-    deps.state.rateLimitFallbackAttempts = undefined;
   }
 
   if (result.qualityGateFailure) {

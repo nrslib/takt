@@ -54,6 +54,10 @@ const CANONICAL_BLOCKS_REVIEWER = {
   mode: 'canonical_blocks' as const,
   reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
 };
+const PLAIN_TEXT_NORMALIZED_REVIEWER = {
+  mode: 'plain_text_normalized' as const,
+  reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+};
 
 describe('buildFindingContractInstruction', () => {
   it('never emits blank-line runs left behind by unused conditional blocks', () => {
@@ -62,6 +66,7 @@ describe('buildFindingContractInstruction', () => {
         {},
         { hasOpenFindings: true },
         { reviewer: REVIEWER },
+        { reviewer: PLAIN_TEXT_NORMALIZED_REVIEWER },
         {
           reviewer: REVIEWER,
           hasOpenFindings: true,
@@ -111,6 +116,27 @@ describe('buildFindingContractInstruction', () => {
           expect(structured).toContain('resolution_confirmation');
           expect(structured).toContain('targetFindingIds');
           expect(structured).toMatch(/one-to-one|1対1/u);
+        }
+      }
+    });
+
+    it('asks plain-text-normalized reviewers for ordinary explicit prose without output schemas', () => {
+      for (const language of ['en', 'ja'] as const) {
+        for (const render of [build, buildReport]) {
+          const rendered = render({
+            contract: {
+              reviewer: PLAIN_TEXT_NORMALIZED_REVIEWER,
+              hasOpenFindings: true,
+            },
+            language,
+          });
+          expect(rendered).toMatch(/ordinary Markdown|通常の Markdown/u);
+          expect(rendered).toMatch(/isolated extractor|隔離された抽出器/u);
+          expect(rendered).toContain('resolution_confirmation');
+          expect(rendered).toMatch(/architectural|アーキテクチャ上/u);
+          expect(rendered).not.toContain('<!-- TAKT_FINDING_CLAIM_BEGIN -->');
+          expect(rendered).not.toContain('raw findings schema');
+          expect(rendered).not.toContain('structured output matching');
         }
       }
     });

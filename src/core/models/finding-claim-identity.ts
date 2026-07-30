@@ -24,6 +24,8 @@ function assertBinarySortedUnique(values: readonly string[], field: string): voi
 /** identity 計算前に FindingTarget の canonical set 制約を強制する。 */
 export function assertCanonicalFindingTarget(target: FindingTarget): void {
   switch (target.kind) {
+    case 'review_scope':
+      return;
     case 'code':
       assertBinarySortedUnique(target.paths, 'FindingTarget.code.paths');
       return;

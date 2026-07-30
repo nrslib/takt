@@ -152,6 +152,38 @@ function createPoolScopedValidatorAutoRouting(): AutoRoutingConfig {
 }
 
 describe('validateWorkflowConfig', () => {
+  describe('plain-text Finding Contract intake normalization', () => {
+    const plainTextWorkflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        reviewerOutput: 'plain_text_normalized',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+    });
+
+    it('fails before step validation when intake_normalize is missing', () => {
+      expect(() => validateWorkflowConfig(plainTextWorkflow, {
+        projectCwd: process.cwd(),
+      })).toThrow(/intake_normalize is not configured/);
+    });
+
+    it('fails when intake_normalize.targets does not include the exact workflow name', () => {
+      expect(() => validateWorkflowConfig(plainTextWorkflow, {
+        projectCwd: process.cwd(),
+        intakeNormalize: {
+          provider: 'mock',
+          model: 'normalizer',
+          targets: ['other-workflow'],
+        },
+      })).toThrow(/not included in intake_normalize.targets/);
+    });
+  });
+
   it('accepts canonical workflow transitions', () => {
     expect(() => validateWorkflowConfig(createWorkflow(), { projectCwd: process.cwd() })).not.toThrow();
   });

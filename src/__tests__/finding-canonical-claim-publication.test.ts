@@ -9,10 +9,6 @@ import {
 import {
   inspectCanonicalClaimPublication,
 } from '../core/workflow/findings/canonical-claim-publication.js';
-import {
-  buildFindingIntakeCorrectionPrompt,
-  buildFindingIntakeExtractionPrompt,
-} from '../shared/prompts/finding-intake-extraction.js';
 import { ReviewerRawFindingSchema } from '../core/models/finding-schemas.js';
 
 function claimBlock(lines: readonly string[], eol = '\n'): string {
@@ -178,21 +174,13 @@ function parsedItems(report: string): readonly unknown[] {
 }
 
 describe('canonical Finding Contract claim publication', () => {
-  it('uses one shared protocol in initial and correction extraction prompts', () => {
+  it('defines the canonical protocol independently from plain-text normalization', () => {
     expect(FINDING_CLAIM_BLOCK_PROTOCOL).toContain(
       'Relation: <new | persists | resolution_confirmation | reopened>',
     );
     expect(FINDING_CLAIM_BLOCK_PROTOCOL).toContain(
       'absence/path_state: Absence Path, Repository Query, and Authoritative Quote.',
     );
-    for (const prompt of [
-      buildFindingIntakeExtractionPrompt('report'),
-      buildFindingIntakeCorrectionPrompt('report'),
-    ]) {
-      expect(prompt).toContain(FINDING_CLAIM_BLOCK_PROTOCOL);
-      expect(prompt).toContain('## Candidate report\n\nreport');
-      expect(prompt).toContain('Do not call tools, inspect a repository');
-    }
   });
 
   it('preserves CRLF blocks byte-for-byte while parsing every protocol value', () => {

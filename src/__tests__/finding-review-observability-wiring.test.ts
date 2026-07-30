@@ -137,12 +137,26 @@ function makeParallelReviewerConfig(): WorkflowConfig {
           name: 'architecture-review',
           persona: 'architecture-reviewer',
           instruction: 'Review architecture.',
+          outputContracts: [
+            {
+              name: 'architecture-review.md',
+              format: 'resolved facet body',
+              formatRef: 'review-finding-contract',
+            },
+          ],
           rules: [makeRule('when(true)', 'COMPLETE')],
         }),
         makeStep({
           name: 'security-review',
           persona: 'security-reviewer',
           instruction: 'Review security.',
+          outputContracts: [
+            {
+              name: 'security-review.md',
+              format: 'resolved facet body',
+              formatRef: 'review-finding-contract',
+            },
+          ],
           rules: [makeRule('when(true)', 'COMPLETE')],
         }),
       ],
@@ -209,12 +223,17 @@ describe('finding reviewer observability wiring', () => {
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       if (hasSchemaProperty(options?.outputSchema, 'rawFindings')) {
+        const finding = makeSourceQuoteFinding(persona, options?.outputSchema);
+        const reportContent = String(finding.rawExcerpt);
         return {
           persona,
           status: 'done',
-          content: 'One finding.',
+          content: reportContent,
           structuredOutput: {
-            rawFindings: [makeSourceQuoteFinding(persona, options?.outputSchema)],
+            ...(hasSchemaProperty(options?.outputSchema, 'reportContent')
+              ? { reportContent }
+              : {}),
+            rawFindings: [finding],
           },
           timestamp: new Date('2026-07-22T00:00:00.000Z'),
         };
@@ -292,7 +311,8 @@ describe('finding reviewer observability wiring', () => {
     }
 
     const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) =>
-      hasSchemaProperty(options?.outputSchema, 'rawFindings'),
+      hasSchemaProperty(options?.outputSchema, 'rawFindings')
+      && !hasSchemaProperty(options?.outputSchema, 'reportContent'),
     );
     expect(reviewerCalls).toHaveLength(1);
     const [, providerPrompt, providerOptions] = reviewerCalls[0]!;
@@ -335,7 +355,8 @@ describe('finding reviewer observability wiring', () => {
     }).run();
 
     const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) =>
-      hasSchemaProperty(options?.outputSchema, 'rawFindings'),
+      hasSchemaProperty(options?.outputSchema, 'rawFindings')
+      && !hasSchemaProperty(options?.outputSchema, 'reportContent'),
     );
     expect(reviewerCalls).toHaveLength(2);
     const sharedProviderSchema = reviewerCalls[0]?.[2]?.outputSchema;
@@ -372,12 +393,20 @@ describe('finding reviewer observability wiring', () => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       if (hasSchemaProperty(options?.outputSchema, 'rawFindings')) {
         const finding = makeSourceQuoteFinding(persona, options?.outputSchema);
-        writeFileSync(join(cwd, 'src/reviewed.ts'), 'export const reviewed = false;\n');
+        const reportContent = String(finding.rawExcerpt);
+        if (hasSchemaProperty(options?.outputSchema, 'reportContent')) {
+          writeFileSync(join(cwd, 'src/reviewed.ts'), 'export const reviewed = false;\n');
+        }
         return {
           persona,
           status: 'done',
-          content: String(finding.rawExcerpt),
-          structuredOutput: { rawFindings: [finding] },
+          content: reportContent,
+          structuredOutput: {
+            ...(hasSchemaProperty(options?.outputSchema, 'reportContent')
+              ? { reportContent }
+              : {}),
+            rawFindings: [finding],
+          },
           timestamp: new Date('2026-07-22T00:00:00.000Z'),
         };
       }

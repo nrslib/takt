@@ -123,6 +123,9 @@ export class OptionsBuilder {
    */
   resolveStepProviderModelBeforeAutoRouting(step: WorkflowStep, runtime?: RuntimeStepResolution): StepProviderInfo {
     if (runtime?.providerInfo) {
+      if (runtime.providerInfoResolution === 'fully_resolved') {
+        return runtime.providerInfo;
+      }
       const providerOptions = this.resolveMergedProviderOptions(step, runtime.providerInfo.provider, runtime);
       const providerOptionsSources = this.resolveProviderOptionsSourcesForRuntime(step, runtime)
         ?? runtime.providerInfo.providerOptionsSources
@@ -226,6 +229,9 @@ export class OptionsBuilder {
     resolvedProvider: StepProviderInfo['provider'],
     runtime?: RuntimeStepResolution,
   ): StepProviderOptions | undefined {
+    if (runtime?.providerInfoResolution === 'fully_resolved') {
+      return runtime.providerInfo?.providerOptions;
+    }
     const middleProviderOptions = mergeStepProviderOptionsLayers(step, {
       providerRouting: this.engineOptions.providerRouting,
       personaProviders: this.engineOptions.personaProviders,
