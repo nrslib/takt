@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
+import { OPENCODE_STREAM_TEXT_BYTE_LIMIT } from '../infra/opencode/OpenCodeStreamHandler.js';
 
 type MockStreamEvent = Record<string, unknown>;
 type RunPlan =
@@ -42,6 +43,67 @@ function waitForAbort(signal?: AbortSignal): Promise<never> {
 
     signal?.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+function textPartUpdated(sessionID: string, id: string, text: string): MockStreamEvent {
+  return {
+    type: 'message.part.updated',
+    properties: {
+      sessionID,
+      part: { id, sessionID, type: 'text', text },
+    },
+  };
+}
+
+function reasoningPartUpdated(sessionID: string, id: string, thinking: string): MockStreamEvent {
+  return {
+    type: 'message.part.updated',
+    properties: {
+      sessionID,
+      part: { id, sessionID, type: 'reasoning', text: thinking },
+    },
+  };
+}
+
+class MockEventStream implements AsyncGenerator<MockStreamEvent, void, unknown> {
+  private index = 0;
+  readonly returnSpy = vi.fn(async () => ({ done: true as const, value: undefined }));
+
+  constructor(private readonly events: MockStreamEvent[], private readonly sessionID: string) {}
+
+  [Symbol.asyncIterator](): AsyncGenerator<MockStreamEvent, void, unknown> {
+    return this;
+  }
+
+  async next(): Promise<IteratorResult<MockStreamEvent, void>> {
+    if (this.index >= this.events.length) {
+      return { done: true, value: undefined };
+    }
+    const event = this.events[this.index];
+    this.index += 1;
+    return {
+      done: false,
+      value: {
+        ...event,
+        properties: {
+          ...(event.properties as Record<string, unknown>),
+          sessionID: this.sessionID,
+        },
+      },
+    };
+  }
+
+  async return(): Promise<IteratorResult<MockStreamEvent, void>> {
+    return this.returnSpy();
+  }
+
+  async throw(error?: unknown): Promise<IteratorResult<MockStreamEvent, void>> {
+    throw error;
+  }
+}
+
+function successfulSessionAbort() {
+  return vi.fn().mockResolvedValue({ data: true });
 }
 
 const { createOpencodeMock } = vi.hoisted(() => ({
@@ -463,6 +525,440 @@ describe('OpenCodeClient retry', () => {
     expect(promptAsync.mock.calls[1][0].sessionID).not.toBe(promptAsync.mock.calls[2][0].sessionID);
     expect(result.status).toBe('error');
     expect(result.content).toBe('OpenCode stream timed out after 10 minutes of inactivity');
+  });
+
+  it('replays the OpenCode event order from issue #1130 without mixing reasoning and text', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const reasoningPartOne = 'Reasoning '.repeat(6_600);
+    const reasoningPartTwo = 'tail';
+    const textPartOne = 'text delta one ';
+    const textPartTwo = 'text delta two';
+    const reasoning = `${reasoningPartOne}${reasoningPartTwo}`;
+    const content = `${textPartOne}${textPartTwo}`;
+    const stream = new MockEventStream([
+      reasoningPartUpdated('session-reasoning-delta', 'reasoning-1', ''),
+      textPartUpdated('session-reasoning-delta', 'text-1', ''),
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: 'session-reasoning-delta',
+          partID: 'reasoning-1',
+          field: 'text',
+          delta: reasoningPartOne,
+        },
+      },
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: 'session-reasoning-delta',
+          partID: 'text-1',
+          field: 'text',
+          delta: textPartOne,
+        },
+      },
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: 'session-reasoning-delta',
+          partID: 'reasoning-1',
+          field: 'text',
+          delta: reasoningPartTwo,
+        },
+      },
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: 'session-reasoning-delta',
+          partID: 'text-1',
+          field: 'text',
+          delta: textPartTwo,
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          sessionID: 'session-reasoning-delta',
+          part: {
+            id: 'reasoning-1',
+            sessionID: 'session-reasoning-delta',
+            type: 'reasoning',
+            text: reasoning,
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          sessionID: 'session-reasoning-delta',
+          part: {
+            id: 'text-1',
+            sessionID: 'session-reasoning-delta',
+            type: 'text',
+            text: content,
+          },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-reasoning-delta' } },
+    ], 'session-reasoning-delta');
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-reasoning-delta' } });
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+    const onStream = vi.fn();
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      onStream,
+    });
+
+    expect(result.status, JSON.stringify(result)).toBe('done');
+    expect(result.content).toBe(content);
+    const streamEvents = onStream.mock.calls
+      .map(([event]) => event as { type: string; data?: { thinking?: string; text?: string } })
+      .filter((event) => event.type === 'thinking' || event.type === 'text');
+    expect(streamEvents).toHaveLength(4);
+    const thinkingOutput = streamEvents
+      .filter((event) => event.type === 'thinking')
+      .map((event) => event.data?.thinking ?? '')
+      .join('');
+    expect(thinkingOutput).toBe(reasoning);
+    const textOutput = streamEvents
+      .filter((event) => event.type === 'text')
+      .map((event) => event.data?.text ?? '')
+      .join('');
+    expect(textOutput).toBe(content);
+    expect(thinkingOutput).not.toContain(content);
+    expect(textOutput).not.toContain(reasoning);
+    expect(streamEvents.filter((event) => event.type === 'thinking')).toHaveLength(2);
+    expect(streamEvents.filter((event) => event.type === 'text')).toHaveLength(2);
+  });
+
+  it('handles large reasoning delta after the part type is known without applying the text byte limit', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const reasoningPartOne = 'Reasoning '.repeat(6_600);
+    const reasoningPartTwo = 'tail';
+    const textPart = 'short body';
+    const reasoning = `${reasoningPartOne}${reasoningPartTwo}`;
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          sessionID: 'session-reasoning-delta-first',
+          part: {
+            id: 'reasoning-1',
+            sessionID: 'session-reasoning-delta-first',
+            type: 'reasoning',
+            text: '',
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          sessionID: 'session-reasoning-delta-first',
+          part: {
+            id: 'text-1',
+            sessionID: 'session-reasoning-delta-first',
+            type: 'text',
+            text: '',
+          },
+        },
+      },
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: 'session-reasoning-delta-first',
+          partID: 'reasoning-1',
+          field: 'text',
+          delta: reasoningPartOne,
+        },
+      },
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: 'session-reasoning-delta-first',
+          partID: 'text-1',
+          field: 'text',
+          delta: textPart,
+        },
+      },
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: 'session-reasoning-delta-first',
+          partID: 'reasoning-1',
+          field: 'text',
+          delta: reasoningPartTwo,
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          sessionID: 'session-reasoning-delta-first',
+          part: {
+            id: 'text-1',
+            sessionID: 'session-reasoning-delta-first',
+            type: 'text',
+            text: textPart,
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          sessionID: 'session-reasoning-delta-first',
+          part: {
+            id: 'reasoning-1',
+            sessionID: 'session-reasoning-delta-first',
+            type: 'reasoning',
+            text: reasoning,
+          },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-reasoning-delta-first' } },
+    ], 'session-reasoning-delta-first');
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-reasoning-delta-first' } });
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+    const onStream = vi.fn();
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      onStream,
+    });
+
+    expect(result.status, JSON.stringify(result)).toBe('done');
+    expect(result.content).toBe(textPart);
+    expect(result.content).not.toContain(reasoningPartOne.slice(0, 16));
+    const thinkingOutput = onStream.mock.calls
+      .map(([event]) => event as { type: string; data?: { thinking?: string; text?: string } })
+      .filter((event) => event.type === 'thinking')
+      .map((event) => event.data?.thinking ?? '')
+      .join('');
+    expect(thinkingOutput).toBe(reasoning);
+    expect(thinkingOutput).not.toContain(textPart);
+  });
+  it('ignores empty reasoning and text parts without emitting stream content', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const stream = new MockEventStream([
+      textPartUpdated('session-empty-parts', 'text-1', ''),
+      reasoningPartUpdated('session-empty-parts', 'reasoning-1', ''),
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: 'session-empty-parts',
+          partID: 'text-1',
+          field: 'text',
+          delta: '',
+        },
+      },
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: 'session-empty-parts',
+          partID: 'reasoning-1',
+          field: 'text',
+          delta: '',
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-empty-parts' } },
+    ], 'session-empty-parts');
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-empty-parts' } });
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+    const onStream = vi.fn();
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      onStream,
+    });
+
+    expect(result.status, JSON.stringify(result)).toBe('done');
+    expect(result.content).toBe('');
+    expect(onStream.mock.calls
+      .map(([event]) => event as { type: string })
+      .filter((event) => event.type === 'text' || event.type === 'thinking'))
+      .toHaveLength(0);
+  });
+
+  it('routes an undefined part type delta through text processing', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = 'session-undefined-part-type';
+    const delta = 'plain delta text';
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: sessionId,
+          partID: 'text-undefined',
+          field: 'text',
+          delta,
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: sessionId } },
+    ], sessionId);
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: sessionId } });
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+    const onStream = vi.fn();
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      onStream,
+    });
+
+    expect(result.status, JSON.stringify(result)).toBe('done');
+    expect(result.content).toBe(delta);
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'text')).toEqual([
+      [{ type: 'text', data: { text: delta } }],
+    ]);
+  });
+
+  it('keeps reasoning offsets in sync when an unknown delta is later identified as reasoning', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = 'session-unknown-delta-reasoning';
+    const reasoningPrefix = 'x'.repeat(40_000);
+    const reasoningSuffix = 'tail';
+    const fallbackDelta = reasoningPrefix;
+    const reasoningText = `${reasoningPrefix}${reasoningSuffix}`;
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: sessionId,
+          partID: 'reasoning-1',
+          field: 'text',
+          delta: fallbackDelta,
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          sessionID: sessionId,
+          part: {
+            id: 'reasoning-1',
+            sessionID: sessionId,
+            type: 'reasoning',
+            text: reasoningText,
+          },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: sessionId } },
+    ], sessionId);
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: sessionId } });
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+    const onStream = vi.fn();
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      onStream,
+    });
+
+    expect(result.status, JSON.stringify(result)).toBe('done');
+    expect(result.content).toBe(fallbackDelta);
+    const textOutput = onStream.mock.calls
+      .map(([event]) => event as { type: string; data?: { text?: string; thinking?: string } })
+      .filter((event) => event.type === 'text')
+      .map((event) => event.data?.text ?? '')
+      .join('');
+    const thinkingOutput = onStream.mock.calls
+      .map(([event]) => event as { type: string; data?: { text?: string; thinking?: string } })
+      .filter((event) => event.type === 'thinking')
+      .map((event) => event.data?.thinking ?? '')
+      .join('');
+    expect(textOutput).toBe(fallbackDelta);
+    expect(thinkingOutput).toBe(reasoningSuffix);
+  });
+
+  it('fails text byte tracking with a reason that identifies text_bytes', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const stream = new MockEventStream([
+      textPartUpdated('session-text-bytes', 'text-1', 'x'.repeat(OPENCODE_STREAM_TEXT_BYTE_LIMIT + 1)),
+      { type: 'session.idle', properties: { sessionID: 'session-text-bytes' } },
+    ], 'session-text-bytes');
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-text-bytes' } });
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('text_bytes');
+    expect(result.content).toContain('text_bytes');
   });
 
   it('external abort は retry せずに停止する', async () => {

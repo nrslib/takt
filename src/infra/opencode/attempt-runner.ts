@@ -25,8 +25,10 @@ import {
   type OpenCodeTextPart,
   type OpenCodeToolPart,
   createStreamTrackingState,
+  describeOpenCodeStreamTrackingLimitFailure,
   emitInit,
   emitText,
+  emitThinking,
   emitPermissionAsked,
   emitPermissionSummary,
   emitResult,
@@ -743,8 +745,16 @@ export class OpenCodeAttemptRunner {
   for (const source of attemptSensitiveSources) {
     state.sensitiveSources.add(source);
   }
-  const sanitizeAttemptError = (message: string): string => (
+  const isTrackingLimitFailureMessage = (message: string): boolean => (
     message === OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE
+    || message === describeOpenCodeStreamTrackingLimitFailure('event_count')
+    || message === describeOpenCodeStreamTrackingLimitFailure('tracked_id_count')
+    || message === describeOpenCodeStreamTrackingLimitFailure('text_bytes')
+    || message === describeOpenCodeStreamTrackingLimitFailure('sensitive_sources')
+  );
+
+  const sanitizeAttemptError = (message: string): string => (
+    isTrackingLimitFailureMessage(message)
       ? message
       : sanitizeSensitiveTextWithKnownValues(message, state.sensitiveSources)
   );
@@ -1055,7 +1065,7 @@ export class OpenCodeAttemptRunner {
         textContentParts.clear();
         textOffsets.clear();
         success = false;
-        failureMessage = OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE;
+        failureMessage = describeOpenCodeStreamTrackingLimitFailure(state.trackingLimitReason);
         return;
       }
       const visibleDelta = stripPromptEcho(rawDelta, echoState);
@@ -1071,6 +1081,26 @@ export class OpenCodeAttemptRunner {
       }
       const prevOffset = textOffsets.get(partId) ?? 0;
       textOffsets.set(partId, prevOffset + rawDelta.length);
+    };
+
+    const consumeReasoningDelta = (partId: string, rawDelta: string): void => {
+      if (!rawDelta) return;
+      const fallbackRedactor = state.textRedactors.get(partId);
+      if (fallbackRedactor !== undefined) {
+        state.textRedactors.delete(partId);
+        if (!state.thinkingRedactors.has(partId)) {
+          state.thinkingRedactors.set(partId, fallbackRedactor);
+        }
+      }
+      const redactor = state.thinkingRedactors.get(partId) ?? createSensitiveTextStreamRedactor();
+      state.thinkingRedactors.set(partId, redactor);
+      emitThinking(
+        options.onStream,
+        redactor.write(rawDelta, state.sensitiveSources),
+      );
+      const prevOffset = state.thinkingOffsets.get(partId) ?? 0;
+      const nextOffset = prevOffset + rawDelta.length;
+      state.thinkingOffsets.set(partId, nextOffset);
     };
 
     // for-await 単体だと、タイマーが abort してもイベントが来るまで
@@ -1125,7 +1155,7 @@ export class OpenCodeAttemptRunner {
       }
       if (!trackOpenCodeStreamEvent(state, sseEvent)) {
         success = false;
-        failureMessage = OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE;
+        failureMessage = describeOpenCodeStreamTrackingLimitFailure(state.trackingLimitReason);
         diag.onStreamError(sseEvent.type, failureMessage);
         break;
       }
@@ -1144,6 +1174,23 @@ export class OpenCodeAttemptRunner {
           const rawDelta = delta
             ?? (textPart.text.length > prev ? textPart.text.slice(prev) : '');
           consumeTextDelta(textPart.id, rawDelta);
+          if (!success) {
+            diag.onStreamError(sseEvent.type, failureMessage);
+            break;
+          }
+          continue;
+        }
+
+        if (part.type === 'reasoning') {
+          toolGuard.noteTextActivity();
+          const reasoningPart = part as {
+            id: string;
+            text: string;
+          };
+          const prev = state.thinkingOffsets.get(reasoningPart.id) ?? 0;
+          const rawDelta = delta
+            ?? (reasoningPart.text.length > prev ? reasoningPart.text.slice(prev) : '');
+          consumeReasoningDelta(reasoningPart.id, rawDelta);
           if (!success) {
             diag.onStreamError(sseEvent.type, failureMessage);
             break;
@@ -1236,7 +1283,7 @@ export class OpenCodeAttemptRunner {
           }
           if (!handlePartUpdated(partForDownstream, delta, options.onStream, state)) {
             success = false;
-            failureMessage = OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE;
+            failureMessage = describeOpenCodeStreamTrackingLimitFailure(state.trackingLimitReason);
             diag.onStreamError(sseEvent.type, failureMessage);
             break;
           }
@@ -1251,7 +1298,7 @@ export class OpenCodeAttemptRunner {
 
         if (!handlePartUpdated(part, delta, options.onStream, state)) {
           success = false;
-          failureMessage = OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE;
+          failureMessage = describeOpenCodeStreamTrackingLimitFailure(state.trackingLimitReason);
           diag.onStreamError(sseEvent.type, failureMessage);
           break;
         }
@@ -1267,7 +1314,16 @@ export class OpenCodeAttemptRunner {
         };
         if (deltaProps.field === 'text' && deltaProps.delta) {
           toolGuard.noteTextActivity();
-          consumeTextDelta(deltaProps.partID, deltaProps.delta);
+          const partType = state.partTypes.get(deltaProps.partID);
+          if (partType === 'reasoning') {
+            consumeReasoningDelta(deltaProps.partID, deltaProps.delta);
+          } else if (partType === 'text' || partType === undefined) {
+            consumeTextDelta(deltaProps.partID, deltaProps.delta);
+            if (partType === undefined) {
+              const prevOffset = state.thinkingOffsets.get(deltaProps.partID) ?? 0;
+              state.thinkingOffsets.set(deltaProps.partID, prevOffset + deltaProps.delta.length);
+            }
+          }
           if (!success) {
             diag.onStreamError(sseEvent.type, failureMessage);
             break;

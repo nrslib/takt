@@ -14,8 +14,8 @@ import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-e
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/index.js';
 import {
   OPENCODE_STREAM_EVENT_LIMIT,
+  OPENCODE_STREAM_ID_LIMIT,
   OPENCODE_STREAM_TEXT_BYTE_LIMIT,
-  OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE,
 } from '../infra/opencode/OpenCodeStreamHandler.js';
 
 /**
@@ -563,7 +563,38 @@ describe('OpenCodeClient stream cleanup', () => {
     });
 
     expect(result.status).toBe('error');
-    expect(result.error).toBe(OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE);
+    expect(result.error).toContain('event_count');
+    expect(stream.returnSpy).toHaveBeenCalled();
+  });
+
+  it('fails an attempt when tracked ids exceed the limit and reports tracked_id_count', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = 'session-tracked-id-limit';
+    const events = Array.from({ length: OPENCODE_STREAM_ID_LIMIT + 1 }, (_, index) => (
+      textPartUpdated(sessionId, `text-${index}`, 'x')
+    ));
+    const stream = new MockEventStream(events, sessionId);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: sessionId } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('tracked_id_count');
     expect(stream.returnSpy).toHaveBeenCalled();
   });
 
@@ -632,8 +663,113 @@ describe('OpenCodeClient stream cleanup', () => {
     });
 
     expect(result.status).toBe('error');
-    expect(result.error).toBe(OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE);
-    expect(result.content).toBe(OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE);
+    expect(result.error).toContain('text_bytes');
+    expect(result.content).toContain('text_bytes');
+    expect(result.error).not.toContain('event_count');
+    expect(result.error).not.toContain('tracked_id_count');
+    expect(stream.returnSpy).toHaveBeenCalled();
+  });
+
+  it('ignores unsupported part type delta while continuing with later text output', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = 'session-unsupported-part-type';
+    const unsupportedDelta = 'ignored unsupported delta';
+    const supportedText = 'kept text output';
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          sessionID: sessionId,
+          part: {
+            id: 'unsupported-part',
+            sessionID: sessionId,
+            type: 'image',
+            text: 'unsupported snapshot',
+          },
+        },
+      },
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: sessionId,
+          partID: 'unsupported-part',
+          field: 'text',
+          delta: unsupportedDelta,
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          sessionID: sessionId,
+          part: {
+            id: 'text-1',
+            sessionID: sessionId,
+            type: 'text',
+            text: supportedText,
+          },
+          delta: supportedText,
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: sessionId } },
+    ], sessionId);
+    const onStream = vi.fn();
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: sessionId } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      onStream,
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe(supportedText);
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'text')).toEqual([
+      [{ type: 'text', data: { text: supportedText } }],
+    ]);
+    expect(JSON.stringify(onStream.mock.calls)).not.toContain(unsupportedDelta);
+  });
+
+  it('fails an attempt when sensitive source tracking is exhausted and reports sensitive_sources', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = 'session-sensitive-source-limit';
+    const events = Array.from({ length: 260 }, (_, index) => (
+      sensitiveToolPartUpdated(sessionId, `tool-${index}`, `secret-${index}`)
+    ));
+    const stream = new MockEventStream(events, sessionId);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: sessionId } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('sensitive_sources');
     expect(stream.returnSpy).toHaveBeenCalled();
   });
 
