@@ -26,6 +26,39 @@ function writeWorkflow(projectDir: string, relativePath: string, content: string
   return filePath;
 }
 
+function writeWorkflowRefComposer(projectDir: string): void {
+  writeWorkflow(projectDir, '.takt/workflows/composer.yaml', `name: composer
+subworkflow:
+  callable: true
+  params:
+    target:
+      type: workflow_ref
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call:
+      $param: target
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+}
+
+function writeRequiredFindingContractReview(projectDir: string): void {
+  writeWorkflow(projectDir, '.takt/workflows/required-review.yaml', `name: required-review
+subworkflow:
+  callable: true
+  requires_finding_contract: true
+initial_step: review
+steps:
+  - name: review
+    rules:
+      - condition: when(findings.open.count == 0)
+        next: COMPLETE
+`);
+}
+
 interface WorktreeRootCase {
   name: string;
   rootDirRelativePath: string;
@@ -381,6 +414,84 @@ steps:
 
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('invalid-finding-manager-provider.yaml'));
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining("provider 'opencode' requires model"));
+  });
+
+  it('propagates a root finding contract through an expanded workflow_ref invocation', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/root.yaml', `name: root
+finding_contract:
+  ledger_path: .takt/findings/root.json
+  raw_findings_path: .takt/findings/root/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+initial_step: compose
+steps:
+  - name: compose
+    kind: workflow_call
+    call: composer
+    args:
+      target: required-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeWorkflowRefComposer(projectDir);
+    writeRequiredFindingContractReview(projectDir);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+  });
+
+  it('rejects an expanded Finding Contract workflow_ref when the root has no contract', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/root.yaml', `name: root
+initial_step: compose
+steps:
+  - name: compose
+    kind: workflow_call
+    call: composer
+    args:
+      target: required-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeWorkflowRefComposer(projectDir);
+    writeRequiredFindingContractReview(projectDir);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow(
+      'Workflow validation failed',
+    );
+    expect(mockError).toHaveBeenCalledWith(
+      expect.stringContaining('requires a finding_contract inherited from its caller'),
+    );
+  });
+
+  it('keeps expanded workflow_ref composition valid without a Finding Contract requirement', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/root.yaml', `name: root
+initial_step: compose
+steps:
+  - name: compose
+    kind: workflow_call
+    call: composer
+    args:
+      target: regular-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeWorkflowRefComposer(projectDir);
+    writeWorkflow(projectDir, '.takt/workflows/regular-review.yaml', `name: regular-review
+subworkflow:
+  callable: true
+initial_step: review
+steps:
+  - name: review
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
   });
 
   it('attributes runtime validation errors to the referenced step fragment', async () => {

@@ -58,6 +58,7 @@ export function resolveWorkflowCallTarget(
     lookupCwd,
     callableArgs: parentStep.args,
     parentTrustInfo,
+    skipWorkflowCallContractValidation: true,
   });
 
   if (!childWorkflow) return null;
