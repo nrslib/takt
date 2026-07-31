@@ -65,6 +65,7 @@ export interface RunAgentOptions {
   onStream?: StreamCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;
+  onDispatch?: (permissionMode: PermissionMode | undefined) => void;
   bypassPermissions?: boolean;
   language?: Language;
   workflowMeta?: WorkflowMeta;

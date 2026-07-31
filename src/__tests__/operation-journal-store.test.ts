@@ -670,6 +670,64 @@ describe('operation journal store', () => {
     expect(store.getParent('parent-1')).toEqual(terminated);
   });
 
+  it('creates one fenced successor without mutating its terminal predecessor', () => {
+    const owner = createParent();
+    const worker = store.createChild({
+      parentId: 'parent-1',
+      owner,
+      expectedParentRevision: 0,
+      expectedParentStage: 'reserved',
+      id: 'worker',
+      kind: 'part',
+      stage: 'worker_started',
+      payload: { requestDigest: 'a'.repeat(64) },
+    });
+    const predecessor = store.compareAndSetParent({
+      parentId: 'parent-1',
+      owner,
+      expectedRevision: 1,
+      expectedStage: 'reserved',
+      nextStage: 'terminated',
+      payload: { error: { name: 'ManualRestartRequiredError' } },
+    });
+    const successorInput = {
+      predecessorParentId: predecessor.id,
+      expectedPredecessorOwner: predecessor.owner,
+      expectedPredecessorRevision: predecessor.revision,
+      successorParentId: 'parent-1:attempt:2',
+      successorClaimToken: 'claim-b',
+      successorPayload: { predecessorParentId: predecessor.id },
+      children: [{
+        id: worker.id,
+        expectedRevision: worker.revision,
+        expectedStage: worker.stage,
+        nextStage: 'reserved' as const,
+        payload: worker.payload,
+      }],
+    };
+
+    const successor = store.createParentSuccessor(successorInput);
+
+    expect(store.getParent(predecessor.id)).toEqual(predecessor);
+    expect(successor).toMatchObject({
+      stage: 'running',
+      owner: { generation: 1, claimToken: 'claim-b' },
+      children: [{ id: 'worker', stage: 'reserved' }],
+    });
+    expect(() => store.createParentSuccessor(successorInput)).toThrow(/already exists/);
+    expect(() => store.compareAndSetChild({
+      parentId: successor.id,
+      owner,
+      expectedParentRevision: successor.revision,
+      expectedParentStage: successor.stage,
+      childId: 'worker',
+      expectedRevision: worker.revision,
+      expectedStage: 'reserved',
+      nextStage: 'worker_started',
+      payload: worker.payload,
+    })).toThrow(/owner changed/);
+  });
+
   it('allows exactly one concurrent process to claim the same parent revision', async () => {
     const owner = createParent();
     const baseInput = {

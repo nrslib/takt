@@ -34,6 +34,7 @@ import {
   type CompareAndSetOperationParentInput,
   type CreateOperationChildInput,
   type CreateOperationParentInput,
+  type CreateOperationParentSuccessorInput,
   type OperationJournalChild,
   type OperationJournalDocument,
   type OperationJournalParent,
@@ -555,6 +556,100 @@ class FileOperationJournalStore implements OperationJournalStore {
       return {
         document: replaceParent(document, index, updated),
         result: updated,
+      };
+    });
+  }
+
+  createParentSuccessor(input: CreateOperationParentSuccessorInput): OperationJournalParent {
+    return this.mutate((document) => {
+      const { parent: predecessor } = requireParent(document, input.predecessorParentId);
+      assertOwner(predecessor, input.expectedPredecessorOwner);
+      this.assertRevisionAndStage(
+        predecessor.id,
+        predecessor.revision,
+        predecessor.stage,
+        input.expectedPredecessorRevision,
+        'terminated',
+      );
+      if (predecessor.stage !== 'terminated') {
+        throw new OperationJournalConflictError(
+          `Operation parent "${predecessor.id}" is not a terminated predecessor`,
+        );
+      }
+      if (document.parents.some((parent) => parent.id === input.successorParentId)) {
+        throw new OperationJournalConflictError(
+          `Operation parent successor "${input.successorParentId}" already exists`,
+        );
+      }
+      if (input.successorClaimToken === predecessor.owner.claimToken) {
+        throw new OperationJournalConflictError(
+          `Operation parent successor "${input.successorParentId}" must change claim token`,
+        );
+      }
+      if (input.children.length !== predecessor.children.length) {
+        throw new OperationJournalConflictError(
+          `Operation parent successor "${input.successorParentId}" must materialize every predecessor child`,
+        );
+      }
+      const materializations = new Map(input.children.map((child) => [child.id, child]));
+      if (materializations.size !== input.children.length) {
+        throw new OperationJournalConflictError(
+          `Operation parent successor "${input.successorParentId}" has duplicate child materializations`,
+        );
+      }
+      const children = predecessor.children.map((child) => {
+        const materialization = materializations.get(child.id);
+        if (
+          materialization === undefined
+          || materialization.expectedRevision !== child.revision
+          || materialization.expectedStage !== child.stage
+        ) {
+          throw new OperationJournalConflictError(
+            `Operation child "${child.id}" changed before successor materialization`,
+          );
+        }
+        const isOrphanReservation = materialization.nextStage === 'reserved'
+          && (child.stage === 'worker_started' || child.stage === 'running');
+        if (materialization.nextStage !== child.stage && !isOrphanReservation) {
+          throw new OperationJournalConflictError(
+            `Operation child "${child.id}" cannot materialize from stage `
+            + `"${child.stage}" to "${materialization.nextStage}"`,
+          );
+        }
+        return {
+          ...child,
+          stage: materialization.nextStage,
+          payload: materialization.payload,
+        };
+      });
+      const generation = predecessor.owner.generation + 1;
+      if (!Number.isSafeInteger(generation)) {
+        throw new OperationJournalConflictError(
+          `Operation parent "${predecessor.id}" owner generation is exhausted`,
+        );
+      }
+      const revision = children.reduce(
+        (total, child) => total + 1 + child.revision,
+        generation,
+      );
+      const successor: OperationJournalParent = {
+        id: input.successorParentId,
+        kind: predecessor.kind,
+        revision,
+        stage: 'running',
+        payload: input.successorPayload,
+        owner: {
+          generation,
+          claimToken: input.successorClaimToken,
+        },
+        children,
+      };
+      return {
+        document: {
+          ...document,
+          parents: [...document.parents, successor],
+        },
+        result: successor,
       };
     });
   }

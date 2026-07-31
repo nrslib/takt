@@ -3,6 +3,7 @@ import { compareBinaryStrings } from '../../../shared/utils/binary-string-compar
 import type {
   WorkflowOperationJournalContext,
 } from '../types.js';
+import type { PermissionMode } from '../../models/types.js';
 import {
   OPERATION_JOURNAL_STAGE_ORDER,
   type OperationJournalChild,
@@ -13,7 +14,9 @@ import {
 } from '../operations/operation-journal-types.js';
 import {
   ManualRestartRequiredError,
+  ORPHAN_WORKER_AFTER_DISPATCH_RECOVERY_CODE,
   OperationJournalConflictError,
+  OperationRecoveryBlockedError,
   OperationRecoveryError,
 } from '../operations/operation-recovery-error.js';
 import type {
@@ -24,6 +27,18 @@ import type {
 import type {
   FindingContractRejectedOutputDigest,
 } from '../team-leader-finding-contract-control-validation.js';
+import {
+  assertOrphanRecoveryCanDispatch,
+  bindLegacyBoundaryRequestDigest,
+  createOrphanRecoverySuccessor,
+  createWorkerBoundaryPayload,
+  findLatestOperationAttempt,
+  readOrphanRecoveryInstruction,
+  type FindingContractWorkerBoundaryRequest,
+} from './team-leader-finding-contract-orphan-recovery.js';
+export type {
+  FindingContractWorkerBoundaryRequest,
+} from './team-leader-finding-contract-orphan-recovery.js';
 
 const PARENT_KIND = 'team_leader_finding_contract';
 
@@ -51,8 +66,7 @@ export class FindingContractOperationJournal {
       input.stepName,
       String(input.stepIteration),
     ].map(encodeURIComponent).join(':');
-    const existing = input.context.store.listParents()
-      .find((parent) => parent.id === parentId);
+    const existing = findLatestOperationAttempt(input.context.store.listParents(), parentId);
     if (existing === undefined) {
       const created = input.context.store.createParent({
         id: parentId,
@@ -64,6 +78,8 @@ export class FindingContractOperationJournal {
           stepName: input.stepName,
           stepIteration: input.stepIteration,
           executionScope: input.executionScope ?? null,
+          logicalOperationId: parentId,
+          operationAttempt: 1,
         }),
       });
       return new FindingContractOperationJournal(input.context, parentId, created.owner);
@@ -73,13 +89,29 @@ export class FindingContractOperationJournal {
         `Operation "${parentId}" has unexpected kind "${existing.kind}"`,
       );
     }
+    if (existing.stage === 'terminated') {
+      const successor = createOrphanRecoverySuccessor({
+        context: input.context,
+        logicalParentId: parentId,
+        predecessor: existing,
+        workflowName: input.workflowName,
+        stepName: input.stepName,
+        stepIteration: input.stepIteration,
+        executionScope: input.executionScope ?? null,
+      });
+      return new FindingContractOperationJournal(
+        input.context,
+        successor.id,
+        successor.owner,
+      );
+    }
     if (existing.stage === 'terminating') {
       throw new OperationRecoveryError(
         `Operation "${parentId}" stopped while terminal settlement was in progress`,
       );
     }
     if (existing.owner.claimToken === input.context.claimToken) {
-      return new FindingContractOperationJournal(input.context, parentId, existing.owner);
+      return new FindingContractOperationJournal(input.context, existing.id, existing.owner);
     }
     if (
       input.context.sourceClaimToken === undefined
@@ -90,19 +122,23 @@ export class FindingContractOperationJournal {
       );
     }
     if (existing.stage === 'completed') {
-      return new FindingContractOperationJournal(input.context, parentId, existing.owner);
+      return new FindingContractOperationJournal(input.context, existing.id, existing.owner);
     }
     const claimed = input.context.store.claimParent({
-      parentId,
+      parentId: existing.id,
       expectedOwner: existing.owner,
       expectedRevision: existing.revision,
       expectedStage: existing.stage,
       nextClaimToken: input.context.claimToken,
     });
-    return new FindingContractOperationJournal(input.context, parentId, claimed.owner);
+    return new FindingContractOperationJournal(input.context, existing.id, claimed.owner);
   }
 
-  boundary(id: string, kind: string): FindingContractOperationBoundary {
+  boundary(
+    id: string,
+    kind: string,
+    request?: FindingContractWorkerBoundaryRequest,
+  ): FindingContractOperationBoundary {
     const existing = this.context.store.listChildren(this.parentId)
       .find((child) => child.id === id);
     if (existing !== undefined) {
@@ -110,6 +146,10 @@ export class FindingContractOperationJournal {
         throw new OperationRecoveryError(
           `Operation boundary "${id}" has unexpected kind "${existing.kind}"`,
         );
+      }
+      const boundPayload = bindLegacyBoundaryRequestDigest(id, existing.payload, request);
+      if (boundPayload !== undefined) {
+        this.updateChild(id, existing.stage, boundPayload, existing);
       }
       return new FindingContractOperationBoundary(this, id);
     }
@@ -122,7 +162,7 @@ export class FindingContractOperationJournal {
       id,
       kind,
       stage: 'reserved',
-      payload: {},
+      payload: request === undefined ? {} : createWorkerBoundaryPayload(request),
     });
     return new FindingContractOperationBoundary(this, id);
   }
@@ -306,32 +346,37 @@ export class FindingContractOperationBoundary {
     return readPayloadValue<T>(child.payload, 'applied');
   }
 
-  assertWorkerCanStart(): void {
-    const child = this.journal.getChild(this.id);
-    const providerFallbackPending = payloadRecord(child.payload).providerFallbackPending === true;
-    if (child.stage === 'reserved' || (child.stage === 'running' && providerFallbackPending)) {
-      return;
-    }
-    if (child.stage === 'worker_started' || child.stage === 'running') {
-      throw new ManualRestartRequiredError(
-        `Worker boundary "${this.id}" stopped after dispatch and before its result was journaled`,
-      );
-    }
-    throw new OperationRecoveryError(
-      `Worker boundary "${this.id}" cannot start from stage "${child.stage}"`,
-    );
+  orphanRecoveryInstruction(language: 'en' | 'ja' | undefined): string | undefined {
+    return readOrphanRecoveryInstruction(this.journal.getChild(this.id), language);
   }
 
-  markWorkerStarted(): void {
+  assertWorkerCanStart(): void {
+    assertWorkerCanStartFromChild(this.journal.getChild(this.id));
+  }
+
+  markWorkerStarted(permissionMode: PermissionMode | undefined): void {
     const child = this.journal.getChild(this.id);
-    const providerFallbackPending = payloadRecord(child.payload).providerFallbackPending === true;
+    const providerFallbackPending = assertWorkerCanStartFromChild(child);
+    const dispatchPayload = prepareOrphanRecoveryDispatch(child, permissionMode);
+    if (permissionMode === undefined) {
+      throw new OperationRecoveryError(
+        `Worker boundary "${this.id}" dispatch is missing its effective permission mode`,
+      );
+    }
     const nextStage = child.stage === 'running' && providerFallbackPending
       ? 'running'
       : 'worker_started';
-    this.mergePayload(nextStage, {
-      providerFallbackPending: false,
-      workerStartedAt: new Date().toISOString(),
-    });
+    this.journal.updateChild(
+      this.id,
+      nextStage,
+      toJournalJson({
+        ...dispatchPayload,
+        providerFallbackPending: false,
+        workerPermissionMode: permissionMode,
+        workerStartedAt: new Date().toISOString(),
+      }),
+      child,
+    );
   }
 
   markProviderFallbackPending(value: unknown): void {
@@ -492,6 +537,55 @@ export class FindingContractOperationBoundary {
   }
 }
 
+function assertWorkerCanStartFromChild(child: OperationJournalChild): boolean {
+  assertOrphanRecoveryCanDispatch(child);
+  const providerFallbackPending = payloadRecord(child.payload).providerFallbackPending === true;
+  if (child.stage === 'reserved' || (child.stage === 'running' && providerFallbackPending)) {
+    return providerFallbackPending;
+  }
+  if (child.stage === 'worker_started' || child.stage === 'running') {
+    throw new ManualRestartRequiredError(
+      `Worker boundary "${child.id}" stopped after dispatch and before its result was journaled`,
+      { boundaryId: child.id },
+    );
+  }
+  throw new OperationRecoveryError(
+    `Worker boundary "${child.id}" cannot start from stage "${child.stage}"`,
+  );
+}
+
+function prepareOrphanRecoveryDispatch(
+  child: OperationJournalChild,
+  permissionMode: PermissionMode | undefined,
+): Record<string, OperationJournalJsonValue> {
+  const payload = payloadRecord(child.payload);
+  const recovery = payloadRecord(payload.orphanRecovery ?? {});
+  if (
+    recovery.disposition !== 'workspace_reconciliation'
+    && recovery.disposition !== 'legacy_permission_recheck'
+  ) {
+    return payload;
+  }
+  if (permissionMode !== 'edit') {
+    throw new OperationRecoveryBlockedError(
+      `Worker boundary "${child.id}" cannot be redispatched without effective edit permission`,
+    );
+  }
+  if (recovery.disposition === 'workspace_reconciliation') return payload;
+  if (typeof payload.requestDigest !== 'string') {
+    throw new OperationRecoveryBlockedError(
+      `Worker boundary "${child.id}" cannot dispatch before its legacy request is bound`,
+    );
+  }
+  return {
+    ...payload,
+    orphanRecovery: {
+      ...recovery,
+      disposition: 'workspace_reconciliation',
+    },
+  };
+}
+
 function parentIsTerminal(parent: OperationJournalParent): boolean {
   return (
     parent.stage === 'terminating'
@@ -574,7 +668,15 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? 'undefined';
 }
 
-function describeError(error: unknown): { readonly name: string; readonly message: string } {
+function describeError(error: unknown): Record<string, string> {
+  if (error instanceof ManualRestartRequiredError) {
+    return {
+      name: error.name,
+      message: error.message,
+      recoveryCode: ORPHAN_WORKER_AFTER_DISPATCH_RECOVERY_CODE,
+      boundaryId: error.boundaryId,
+    };
+  }
   return error instanceof Error
     ? { name: error.name, message: error.message }
     : { name: 'Error', message: String(error) };

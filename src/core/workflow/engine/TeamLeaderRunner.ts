@@ -700,10 +700,7 @@ export class TeamLeaderRunner {
         findingContractExecution === undefined
           ? undefined
           : findingContractCoordinator?.partSummary(part),
-        findingContractCoordinator?.boundary(
-          `part:${part.id}:completion`,
-          'finding_contract_part_completion',
-        ),
+        findingContractCoordinator?.partBoundary(part),
         findingContractExecution === undefined
           ? undefined
           : (event) => {
@@ -941,6 +938,9 @@ export class TeamLeaderRunner {
     publicationFence?: TeamLeaderExecutionPublicationFence,
   ): Promise<PartResult> {
     const startedAt = Date.now();
+    const orphanRecoveryInstruction = operationBoundary?.orphanRecoveryInstruction(
+      this.deps.engineOptions.language,
+    );
     let pendingSessionPublication: {
       readonly key: string;
       readonly sessionId: string;
@@ -972,7 +972,6 @@ export class TeamLeaderRunner {
     } else {
       publicationFence?.assertRunning('part.worker_start');
       operationBoundary?.assertWorkerCanStart();
-      operationBoundary?.markWorkerStarted();
       publicationFence?.assertRunning('part.provider_call');
       result = await runTeamLeaderPart(
         this.deps.optionsBuilder,
@@ -1014,10 +1013,24 @@ export class TeamLeaderRunner {
             this.deps.engineOptions.language,
             findingContractSummary,
           );
-          return this.deps.stepExecutor.buildPhase1Instruction(assignedInstruction, partStep, runtime);
+          const recoveryInstruction = orphanRecoveryInstruction === undefined
+            ? assignedInstruction
+            : `${assignedInstruction}\n\n${orphanRecoveryInstruction}`;
+          return this.deps.stepExecutor.buildPhase1Instruction(recoveryInstruction, partStep, runtime);
         },
         runtime,
         executionAbortSignal,
+        {
+          forceNewSession: orphanRecoveryInstruction !== undefined,
+          ...(operationBoundary === undefined
+            ? {}
+            : {
+                onDispatch: (permissionMode) => {
+                  publicationFence?.assertRunning('part.provider_dispatch');
+                  operationBoundary.markWorkerStarted(permissionMode);
+                },
+              }),
+        },
       );
       result = {
         ...result,

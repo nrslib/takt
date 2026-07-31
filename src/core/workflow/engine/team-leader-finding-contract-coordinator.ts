@@ -128,6 +128,22 @@ export class FindingContractTeamLeaderCoordinator {
     return this.journal.boundary(id, kind);
   }
 
+  partBoundary(part: PartDefinition): FindingContractOperationBoundary {
+    if (part.findingContract === undefined) {
+      throw new Error(`Finding Contract part "${part.id}" is missing its assignment`);
+    }
+    return this.journal.boundary(
+      `part:${part.id}:completion`,
+      'finding_contract_part_completion',
+      {
+        partId: part.id,
+        title: part.title,
+        instruction: part.instruction,
+        findingAssignment: part.findingContract,
+      },
+    );
+  }
+
   async recoverDecomposition(input: {
     readonly maxInitialParts: number | undefined;
     readonly abortSignal?: AbortSignal;

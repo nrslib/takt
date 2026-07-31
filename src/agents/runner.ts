@@ -248,6 +248,7 @@ export class AgentRunner {
       systemPrompt,
     });
 
+    options.onDispatch?.(resolution.permissionMode);
     return agent.call(task, callOptions);
   }
 
@@ -291,6 +292,7 @@ export class AgentRunner {
         userInstruction: task,
       });
       const agent = provider.setup({ name: 'takt-internal', systemPrompt });
+      options.onDispatch?.(resolution.permissionMode);
       return agent.call(task, callOptions);
     }
 
@@ -308,6 +310,7 @@ export class AgentRunner {
         userInstruction: task,
       });
       const agent = provider.setup({ name: personaName, systemPrompt });
+      options.onDispatch?.(resolution.permissionMode);
       return agent.call(task, callOptions);
     }
 
@@ -328,6 +331,7 @@ export class AgentRunner {
         userInstruction: task,
       });
       const agent = provider.setup({ name: personaName, systemPrompt });
+      options.onDispatch?.(resolution.permissionMode);
       return agent.call(task, callOptions);
     }
 
@@ -343,6 +347,7 @@ export class AgentRunner {
       ? { name: personaName, systemPrompt }
       : { name: personaName };
     const agent = provider.setup(agentSetup);
+    options.onDispatch?.(resolution.permissionMode);
     return agent.call(task, callOptions);
   }
 }
