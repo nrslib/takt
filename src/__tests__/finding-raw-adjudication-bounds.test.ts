@@ -60,6 +60,9 @@ import {
 } from '../core/workflow/findings/lifecycle-mutation.js';
 import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
 import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
+import {
+  PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION,
+} from '../core/workflow/findings/manager-raw-decision-adapter.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
 vi.mock('../core/workflow/findings/snapshot.js', async (importOriginal) => {
@@ -225,7 +228,7 @@ function provisionalFinding(input: {
     provisional: {
       kind: 'raw-adjudication-unresolved',
       stableKey: `stable-${input.index}`,
-      lineageKey: `lineage-${input.index}`,
+      lineageKey: sha256(`lineage-${input.index}`),
       sourceRawFindingIds: [input.source.rawFindingId],
       reason: 'pending raw adjudication',
       firstObservedAt: { ...firstObservedAt },
@@ -799,6 +802,7 @@ function makeHarness(
     stepIteration: 2,
     subResults: [],
     workflowName: initialLedger.workflowName,
+    workflowTask: 'Review the supplied implementation.',
     runId: observation.runId,
     callNamespace: '',
     timestamp: observation.timestamp,
@@ -845,7 +849,6 @@ function managerResponse(instruction: string, evidence = 'Independent issue.'): 
         rawFindingId: raw.rawFindingId,
         decision: 'new',
         findingId: '',
-        anchorRelevance: 'not_applicable',
         evidence,
       })),
       disputeDecisions: [],
@@ -1160,7 +1163,7 @@ describe('bounded raw adjudication recovery', () => {
 
   it('uses a dedicated schema whose worst-case structured output stays within budget', () => {
     const properties = RawAdjudicationDecisionsJsonSchema.properties;
-    const rawProperties = properties.rawDecisions.items.properties;
+    const rawProperties = properties.rawDecisions.items.anyOf[0].properties;
     const disabledDecisionKeys = [
       'disputeDecisions',
       'conflictDecisions',
@@ -1175,7 +1178,6 @@ describe('bounded raw adjudication recovery', () => {
           rawFindingId: `replay-${index.toString(16).padStart(64, '0')}`,
           decision: 'unsupported',
           findingId: 'F-9999',
-          anchorRelevance: 'not_applicable',
           evidence: '\u0000'.repeat(rawProperties.evidence.maxLength),
         }),
       ),
@@ -1202,7 +1204,7 @@ describe('bounded raw adjudication recovery', () => {
 
   it('keeps the replay rationale limit independent from reviewer finding payload limits', () => {
     const replayEvidenceLimit = RawAdjudicationDecisionsJsonSchema
-      .properties.rawDecisions.items.properties.evidence.maxLength;
+      .properties.rawDecisions.items.anyOf[0].properties.evidence.maxLength;
 
     expect(replayEvidenceLimit).toBe(52);
     expect(RAW_FINDING_LIMITS.maxDescriptionChars).toBeGreaterThan(replayEvidenceLimit);
@@ -1306,7 +1308,7 @@ describe('bounded raw adjudication recovery', () => {
     expect(rawRecoveryResultsFor(duplicateCommit, findingId(1))).toHaveLength(1);
     expect(duplicateCommit.findings[0]?.revision).toBe(1);
     expect(duplicateResult.rawFindingDispositions).toEqual([
-      expect.objectContaining({ outcome: 'audit_only' }),
+      expect.objectContaining({ outcome: 'stale' }),
     ]);
   });
 
@@ -1406,12 +1408,17 @@ describe('bounded raw adjudication recovery', () => {
     );
     expect(instructions.reduce((total, instruction) => total + estimateTokens(instruction), 0))
       .toBeLessThanOrEqual(RAW_ADJUDICATION_RECOVERY_LIMITS.maxInputTokensPerStep);
+    expect(instructions.every(
+      (instruction) => instruction.includes(PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION),
+    )).toBe(true);
     expect(recovery.origins.size).toBe(64);
     expect(pendingRawRecoveryAttempts(committed)).toHaveLength(64 - recovery.origins.size);
     expect(completedAttempts).toHaveLength(recovery.origins.size);
-    expect(committed.findings.filter((finding) => finding.provisional !== undefined)).toHaveLength(
-      64,
-    );
+    expect(committed.findings.filter(
+      (finding) => (
+        finding.status === 'open' && finding.provisional !== undefined
+      ),
+    )).toHaveLength(0);
   });
 
   it('stops after the first provider exception and records only the sent batch', async () => {
@@ -1474,7 +1481,7 @@ describe('bounded raw adjudication recovery', () => {
     const residualOrigin = committed.findings.find((finding) => finding.id === findingId(2));
 
     expect(recovery.output.matches.some((match) => match.findingId === target.id)).toBe(true);
-    expect(mechanicalOrigin?.status).toBe('open');
+    expect(mechanicalOrigin?.status).toBe('resolved');
     expect(mechanicalOrigin?.provisional).toBeDefined();
     expect(rawRecoveryResultsFor(committed, mechanicalOrigin!.id)).toEqual([
       expect.objectContaining({ outcome: 'failed', mutationIds: [] }),
@@ -1526,7 +1533,6 @@ describe('bounded raw adjudication recovery', () => {
             rawFindingId: replayRaw!.rawFindingId,
             decision: 'unsupported',
             findingId: '',
-            anchorRelevance: 'not_applicable',
             evidence,
           }],
           disputeDecisions: [],
@@ -1703,8 +1709,6 @@ describe('bounded raw adjudication recovery', () => {
             source,
             firstObservedRound: index === 15 ? 2 : 1,
           }),
-          title: `Provisional origin ${index + 1}`,
-          description: `Distinct provisional origin ${index + 1}`,
         };
       }),
     });
@@ -1722,18 +1726,25 @@ describe('bounded raw adjudication recovery', () => {
 
     expect(executeAgentMock).toHaveBeenCalledTimes(2);
     expect(grouped?.rawFindingIds).toEqual(expect.arrayContaining([...duplicateReplayIds]));
-    const canonicalOrigin = committed.findings.find((finding) => finding.id === findingId(16));
-    const settledOrigin = committed.findings.find((finding) => finding.id === findingId(17));
+    const canonicalOrigin = committed.findings.find((finding) => finding.id === grouped?.findingId);
+    const replayOriginIds = [...recovery.origins]
+      .filter(([rawFindingId]) => duplicateReplayIds.has(rawFindingId))
+      .map(([, origin]) => origin.provisionalFindingId);
+    const settledOrigin = committed.findings.find((finding) => (
+      replayOriginIds.includes(finding.id) && finding.id !== canonicalOrigin?.id
+    ));
     const normalFindingsForIdentity = committed.findings.filter((finding) => (
       finding.provisional === undefined
       && finding.rawFindingIds.some((rawFindingId) => duplicateReplayIds.has(rawFindingId))
     ));
 
-    expect(normalFindingsForIdentity).toEqual([]);
+    expect(normalFindingsForIdentity).toEqual([
+      expect.objectContaining({ id: canonicalOrigin?.id }),
+    ]);
     expect(canonicalOrigin?.status).toBe('open');
     expect(canonicalOrigin?.rawFindingIds).toEqual(expect.arrayContaining([...duplicateReplayIds]));
-    expect(canonicalOrigin?.provisional).toBeDefined();
-    expect(settledOrigin?.status).toBe('open');
+    expect(canonicalOrigin?.provisional).toBeUndefined();
+    expect(settledOrigin?.status).toBe('resolved');
     expect(settledOrigin?.provisional).toBeDefined();
     expect(rawRecoveryResultsFor(committed, settledOrigin!.id)).toEqual([
       expect.objectContaining({ outcome: 'failed', mutationIds: [] }),
@@ -1802,6 +1813,71 @@ describe('bounded raw adjudication recovery', () => {
     );
   });
 
+  it('commits a relation:new replay-origin promotion through a proof-only lifecycle event', async () => {
+    const harness = makeHarness(makeBacklog({
+      count: 1,
+      firstObservedRound: 1,
+    }));
+    executeAgentMock.mockImplementation(async (_persona, instruction) => (
+      managerResponse(instruction as string)
+    ));
+
+    const result = await runFindingManagerForStep(harness.runInput);
+    const committed = result.ledger;
+    const promoted = committed.findings.find(
+      (finding) => finding.id === findingId(1),
+    );
+    const promotionEvent = committed.lifecycleEvents.find((event) => (
+      event.operation === 'promote_provisional'
+      && event.transitions.some(
+        (transition) => transition.after.entityId === findingId(1),
+      )
+    ));
+
+    expect(result.status).toBe('updated');
+    expect(promoted).toMatchObject({
+      id: findingId(1),
+      status: 'open',
+      lifecycle: 'persists',
+    });
+    expect(promoted?.provisional).toBeUndefined();
+    expect(promotionEvent).toBeDefined();
+    const bindings = promotionEvent!.evidenceBindingIds.map((bindingId) => (
+      committed.evidenceBindings.find((binding) => binding.bindingId === bindingId)!
+    ));
+    const records = bindings.map((binding) => (
+      committed.evidenceRecords.find(
+        (record) => record.evidenceId === binding.evidenceId,
+      )!
+    ));
+    expect(bindings.length).toBeGreaterThan(0);
+    expect(bindings.every((binding) => binding.sourceRawFindingId === null)).toBe(true);
+    expect(records.every((record) => record.kind === 'engine_proof')).toBe(true);
+    const transitionProof = records.find((record) => (
+      record.kind === 'engine_proof'
+      && record.subject.kind === 'finding_provisional_product_transition'
+    ));
+    expect(transitionProof).toBeDefined();
+    if (
+      transitionProof?.kind !== 'engine_proof'
+      || transitionProof.subject.kind !== 'finding_provisional_product_transition'
+    ) {
+      throw new Error('Missing replay-origin transition proof');
+    }
+    expect(transitionProof.subject.sourceRawFindings).toHaveLength(1);
+    expect(transitionProof.subject.sourceRawFindings.every((source) => (
+      committed.rawFindings.find(
+        (rawFinding) => rawFinding.rawFindingId === source.rawFindingId,
+      )?.relation === 'new'
+    ))).toBe(true);
+    expect(rawRecoveryResultsFor(committed, findingId(1))).toEqual([
+      expect.objectContaining({
+        outcome: 'applied',
+        mutationIds: expect.arrayContaining([promotionEvent!.mutationId]),
+      }),
+    ]);
+  });
+
   it('rejects a stale full lifecycle head at commit and closes its durable attempt', async () => {
     const harness = makeHarness(makeBacklog({ count: 1, firstObservedRound: 1 }));
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
@@ -1817,6 +1893,116 @@ describe('bounded raw adjudication recovery', () => {
     expect(rawRecoveryResultsFor(result.ledger, findingId(1))).toEqual([
       expect.objectContaining({ outcome: 'stale' }),
     ]);
+  });
+
+  it('rejects replay authority after the same durable attempt already completed as failed', async () => {
+    const harness = makeHarness(makeBacklog({ count: 1, firstObservedRound: 1 }));
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      await harness.replaceLedger((ledger) => appendFailedRawRecoveryResults(
+        ledger,
+        new Set(ledger.rawRecoveryAttempts.map((attempt) => attempt.attemptId)),
+      ));
+      return managerResponse(instruction as string);
+    });
+
+    const result = await runFindingManagerForStep(harness.runInput);
+    const origin = result.ledger.findings.find((finding) => finding.id === findingId(1));
+
+    expect(origin).toMatchObject({
+      id: findingId(1),
+      status: 'open',
+      revision: 1,
+      provisional: { gateEffect: 'block' },
+    });
+    expect(rawRecoveryResultsFor(result.ledger, findingId(1))).toEqual([
+      expect.objectContaining({ outcome: 'failed', mutationIds: [] }),
+    ]);
+  });
+
+  it('promotes every semantically distinct replay origin in a conflict without closing any participant', async () => {
+    const targetRaw = sourceRaw(9000);
+    const target: FindingLedgerEntry = {
+      ...provisionalFinding({ index: 9000, source: targetRaw, firstObservedRound: 1 }),
+      provisional: undefined,
+    };
+    const backlog = makeBacklog({ count: 2, firstObservedRound: 1 });
+    const harness = makeHarness({
+      ...backlog,
+      nextId: 9001,
+      rawFindings: [targetRaw, ...backlog.rawFindings],
+      findings: [target, ...backlog.findings],
+    });
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      const batch = rawBatchFromInstruction(instruction as string);
+      return {
+        status: 'done',
+        content: '',
+        structuredOutput: {
+          rawDecisions: batch.map((raw) => ({
+            rawFindingId: raw.rawFindingId,
+            decision: 'conflict',
+            findingId: target.id,
+            evidence: 'The replay contradicts the existing finding.',
+          })),
+          disputeDecisions: [],
+          conflictDecisions: [],
+          invalidateDecisions: [],
+          duplicateDecisions: [],
+          dismissDecisions: [],
+        },
+      };
+    });
+
+    const result = await runFindingManagerForStep(harness.runInput);
+    const committed = result.ledger;
+    const originIds = new Set([findingId(1), findingId(2)]);
+    const activeConflict = committed.conflicts.find((conflict) => (
+      conflict.status === 'active'
+      && [...originIds].every((findingId) => conflict.findingIds.includes(findingId))
+    ));
+
+    expect(originIds).toEqual(new Set([findingId(1), findingId(2)]));
+    expect(activeConflict).toBeDefined();
+    const originFindings = committed.findings.filter(
+      (finding) => originIds.has(finding.id),
+    );
+    expect(originFindings).toEqual([
+      expect.objectContaining({ id: findingId(1), status: 'open' }),
+      expect.objectContaining({ id: findingId(2), status: 'open' }),
+    ]);
+    expect(originFindings.every((finding) => finding.provisional === undefined)).toBe(true);
+    expect(activeConflict?.findingIds.every((findingId) => (
+      committed.findings.find((finding) => finding.id === findingId)?.status === 'open'
+    ))).toBe(true);
+    const promotionEvents = committed.lifecycleEvents.filter((event) => (
+      event.operation === 'promote_provisional'
+      && event.transitions.some(
+        (transition) => originIds.has(transition.after.entityId),
+      )
+    ));
+    expect(promotionEvents).toHaveLength(2);
+    for (const event of promotionEvents) {
+      const bindings = event.evidenceBindingIds.map((bindingId) => (
+        committed.evidenceBindings.find((binding) => binding.bindingId === bindingId)!
+      ));
+      const records = bindings.map((binding) => (
+        committed.evidenceRecords.find(
+          (record) => record.evidenceId === binding.evidenceId,
+        )!
+      ));
+      expect(bindings.length).toBeGreaterThan(0);
+      expect(bindings.every((binding) => binding.sourceRawFindingId === null)).toBe(true);
+      expect(records.every((record) => record.kind === 'engine_proof')).toBe(true);
+      const transition = event.transitions.find(
+        (candidate) => originIds.has(candidate.after.entityId),
+      )!;
+      expect(rawRecoveryResultsFor(committed, transition.after.entityId)).toEqual([
+        expect.objectContaining({
+          outcome: 'applied',
+          mutationIds: [event.mutationId],
+        }),
+      ]);
+    }
   });
 
   it('rejects every replay entry that mixes a stale raw with a fresh raw across all landing arrays', async () => {

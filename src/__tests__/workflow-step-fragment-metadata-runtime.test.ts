@@ -174,7 +174,7 @@ describe('workflow step fragment metadata runtime contract', () => {
     expect(savedResumePoint.stack[1]?.step).toBe('done');
     expect(savedResumePoint.stack[1]?.step_iterations).toMatchObject({ done: 1 });
     expect(resumedState.status).toBe('completed');
-    expect(resumedChildStepIterations).toEqual([2]);
+    expect(resumedChildStepIterations).toEqual([1]);
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
   });
 

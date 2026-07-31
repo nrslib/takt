@@ -39,6 +39,10 @@ import {
   rawFindingFileQuoteLocations,
 } from './evidence-location.js';
 import { hasDisputeClaimFor } from './manager-output-validation.js';
+import {
+  adaptProviderRawDecisions,
+  PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION,
+} from './manager-raw-decision-adapter.js';
 import { computeConflictEvidenceHash } from './adjudication-evidence.js';
 import type {
   FindingEvidenceRecord,
@@ -70,6 +74,9 @@ interface RawTaskQueueItem {
   task: MainManagerRawTask;
   rawFindings: RawFinding[];
 }
+
+type AdaptedMainManagerRawTaskDecision =
+  MainManagerRawTaskDecision & FindingManagerDecisions['rawDecisions'][number];
 
 interface RawTaskContext {
   ledger: FindingLedger;
@@ -444,7 +451,8 @@ function buildRawTaskInstruction(input: {
     '',
     'This is one engine-owned raw adjudication task. Decide only the exact owned raw finding ids in the manifest.',
     'Return the manifest taskId and exactly one decision for every owned raw finding id. Do not add, omit, or duplicate ids.',
-    'Copy each engine-issued componentId exactly. The engine, not this response, regenerates anchor adjudication authority.',
+    'Copy each engine-issued componentId exactly.',
+    PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION,
     'Use findingId="" when the decision has no finding target (for example "new").',
     'Do not emit dispute, conflict-control, invalidate, duplicate, or dismiss actions in this task.',
     ...(input.mechanicallyClassifiedCount === 0
@@ -488,8 +496,9 @@ function responseStructuredOutput(response: AgentResponse, label: string): unkno
 
 function validateRawTaskOutput(
   task: MainManagerRawTask,
+  rawFindings: readonly RawFinding[],
   output: ReturnType<typeof parseMainManagerRawTaskOutput>,
-): MainManagerRawTaskDecision[] {
+): AdaptedMainManagerRawTaskDecision[] {
   if (output.taskId !== task.taskId) {
     throw new Error(`Raw task "${task.taskId}" returned mismatched taskId "${output.taskId}"`);
   }
@@ -512,7 +521,7 @@ function validateRawTaskOutput(
   if (missing.length > 0) {
     throw new Error(`Raw task "${task.taskId}" omitted owned raw ids: ${missing.join(', ')}`);
   }
-  return output.decisions;
+  return adaptProviderRawDecisions(output.decisions, rawFindings);
 }
 
 function splitRawTask(
@@ -571,7 +580,9 @@ function splitRawTask(
   ];
 }
 
-function normalizeRawDecision(decision: MainManagerRawTaskDecision): FindingManagerDecisions['rawDecisions'][number] {
+function normalizeRawDecision(
+  decision: AdaptedMainManagerRawTaskDecision,
+): FindingManagerDecisions['rawDecisions'][number] {
   return {
     rawFindingId: decision.rawFindingId,
     decision: decision.decision,
@@ -583,7 +594,9 @@ function normalizeRawDecision(decision: MainManagerRawTaskDecision): FindingMana
   };
 }
 
-function componentCompatibilityKey(decision: MainManagerRawTaskDecision): string {
+function componentCompatibilityKey(
+  decision: AdaptedMainManagerRawTaskDecision,
+): string {
   return canonicalJson({
     decision: decision.decision,
     findingId: decision.findingId,
@@ -619,7 +632,7 @@ async function executeRawTasks(input: {
     }
   }
   const queue = [...initialManifest];
-  const accepted: MainManagerRawTaskDecision[] = [];
+  const accepted: AdaptedMainManagerRawTaskDecision[] = [];
   const failures = new Map<string, MainManagerRawFailure>();
   const invalidAttemptMessages: string[] = [];
   const audits: FindingManagerTaskAudit[] = [];
@@ -693,7 +706,11 @@ async function executeRawTasks(input: {
       const output = parseMainManagerRawTaskOutput(
         responseStructuredOutput(response, `Raw task "${item.task.taskId}"`),
       );
-      accepted.push(...validateRawTaskOutput(item.task, output));
+      accepted.push(...validateRawTaskOutput(
+        item.task,
+        item.rawFindings,
+        output,
+      ));
       audits.push({
         taskId: item.task.taskId,
         taskKind: 'raw',
@@ -722,7 +739,10 @@ async function executeRawTasks(input: {
     }
   }
 
-  const decisionsByComponent = new Map<string, MainManagerRawTaskDecision[]>();
+  const decisionsByComponent = new Map<
+    string,
+    AdaptedMainManagerRawTaskDecision[]
+  >();
   for (const decision of accepted) {
     decisionsByComponent.set(
       decision.componentId,

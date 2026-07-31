@@ -13,6 +13,10 @@ import type {
   FindingManagerDecisions,
   RawFinding,
 } from './types.js';
+import {
+  adaptProviderRawDecisions,
+  PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION,
+} from './manager-raw-decision-adapter.js';
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
 import {
@@ -431,6 +435,7 @@ export function buildManagerInstruction(input: {
   return loadTemplate('finding_manager_instruction', 'en', {
     managerInstruction: mechanicalNote,
     outputContract: input.contract.manager.outputContract,
+    anchorRelevanceInstruction: PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION,
     managerInputLedger: renderFencedJsonBlock(managerInputLedger),
     rawFindings: renderFencedJsonBlock(input.residualRawFindings.map((rawFinding) => (
       managerRawFindingView(
@@ -448,7 +453,10 @@ export function buildManagerInstruction(input: {
   });
 }
 
-export function parseManagerDecisions(response: AgentResponse): FindingManagerDecisions {
+export function parseManagerDecisions(
+  response: AgentResponse,
+  rawFindings: readonly RawFinding[],
+): FindingManagerDecisions {
   if (response.status !== 'done') {
     const detail = response.error ?? response.content;
     throw new Error(`Finding manager failed with status "${response.status}": ${detail}`);
@@ -457,7 +465,14 @@ export function parseManagerDecisions(response: AgentResponse): FindingManagerDe
   if (typeof output !== 'object' || output == null || Array.isArray(output)) {
     throw new Error('Finding manager output must be an object');
   }
-  return parseFindingManagerDecisions(output);
+  const providerDecisions = parseFindingManagerDecisions(output);
+  return {
+    ...providerDecisions,
+    rawDecisions: adaptProviderRawDecisions(
+      providerDecisions.rawDecisions,
+      rawFindings,
+    ),
+  };
 }
 
 function buildManagerAgentOptions(

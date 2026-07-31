@@ -280,6 +280,7 @@ async function runEmptyManagerRound(
         rawFindings: [],
       }),
     }],
+    workflowTask: 'Review the implementation.',
     workflowName: store.workflowName,
     runId: store.runId,
     callNamespace,

@@ -595,6 +595,27 @@ function transitionRawFindings(input: {
       transitionRawIds.add(binding.sourceRawFindingId);
     }
   }
+  if (transitionRawIds.size === 0) {
+    for (const binding of input.ledger.evidenceBindings) {
+      if (
+        !bindingIds.has(binding.bindingId)
+        || !sameValue(binding.target, input.target)
+      ) {
+        continue;
+      }
+      const record = input.ledger.evidenceRecords.find(
+        (candidate) => candidate.evidenceId === binding.evidenceId,
+      );
+      if (
+        record?.kind === 'engine_proof'
+        && record.subject.kind === 'finding_provisional_product_transition'
+      ) {
+        for (const source of record.subject.sourceRawFindings) {
+          transitionRawIds.add(source.rawFindingId);
+        }
+      }
+    }
+  }
   return [...transitionRawIds]
     .sort(compareBinaryStrings)
     .map((rawFindingId) => {

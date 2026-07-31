@@ -94,6 +94,7 @@ function buildReplayIntake(input: {
       attemptId: reservation.attemptId,
       provisionalFindingId: finding.id,
       sourceRawFindingId: sourceResult.sourceRawFindingId,
+      sourceRawIntegrityDigest: reservation.sourceRawIntegrityDigest,
       expectedHead: reservation.expectedHead,
       expectedProvisionalRevision: reservation.expectedRevision,
       expectedTargetIdentityHash: reservation.recoveryOrigin.expectedTargetIdentityHash,

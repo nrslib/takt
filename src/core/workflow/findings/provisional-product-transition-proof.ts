@@ -7,6 +7,7 @@ import { computeRawFindingIntegrityDigest } from '../../models/finding-raw-integ
 import type {
   EngineProofRecord,
   FindingLedger,
+  FindingLifecycleEntityHead,
   FindingLifecycleOperation,
   FindingObservation,
   ProductFindingEntry,
@@ -20,6 +21,11 @@ import {
   productFindingClaimProjection,
 } from './finding-entry.js';
 import { findingMatchesMutationPrecondition } from './finding-preconditions.js';
+import {
+  matchesProvisionalRecoveryOrigin,
+  type VerifiedReplayOriginAuthority,
+} from './provisional-recovery-origin.js';
+import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
 
 export type ProvisionalProductTransitionOperation =
   Extract<FindingLifecycleOperation, 'promote_provisional' | 'reopen_finding'>;
@@ -119,6 +125,109 @@ function assertObservedTransitionSource(input: {
   }
 }
 
+function sameLifecycleHead(
+  left: FindingLifecycleEntityHead,
+  right: FindingLifecycleEntityHead,
+): boolean {
+  return left.entityKind === right.entityKind
+    && left.entityId === right.entityId
+    && left.revision === right.revision
+    && left.eventId === right.eventId
+    && left.projectionDigest === right.projectionDigest;
+}
+
+function assertReplayOriginTransitionSources(input: {
+  ledger: FindingLedger;
+  provisional: ProvisionalFindingEntry;
+  transitionRawFindings: readonly RawFinding[];
+  authorities: readonly VerifiedReplayOriginAuthority[];
+}): void {
+  if (input.authorities.length === 0) {
+    throw new Error('Replay-origin provisional transition has no authority');
+  }
+  const rawsById = new Map(
+    input.transitionRawFindings.map((rawFinding) => [
+      rawFinding.rawFindingId,
+      rawFinding,
+    ]),
+  );
+  const currentHead = captureFindingLifecycleHead(
+    input.ledger,
+    'finding',
+    input.provisional.id,
+  );
+  const observed = input.ledger.findings.find(
+    (finding) => finding.id === input.provisional.id,
+  );
+  for (const authority of input.authorities) {
+    const source = input.ledger.rawFindings.find(
+      (rawFinding) => (
+        rawFinding.rawFindingId === authority.sourceRawFindingId
+      ),
+    );
+    const attempt = input.ledger.rawRecoveryAttempts.find(
+      (candidate) => candidate.attemptId === authority.attemptId,
+    );
+    const completedResult = input.ledger.rawRecoveryResults.find(
+      (result) => result.attemptId === authority.attemptId,
+    );
+    const replay = rawsById.get(authority.replayRawFindingId);
+    if (
+      source === undefined
+      || attempt === undefined
+      || completedResult !== undefined
+      || replay === undefined
+      || currentHead === undefined
+      || observed === undefined
+      || !matchesProvisionalRecoveryOrigin(
+        observed,
+        authority.recoveryOrigin,
+      )
+      || authority.recoveryOrigin.provisionalFindingId
+        !== input.provisional.id
+      || !sameLifecycleHead(currentHead, authority.expectedHead)
+      || source.relation !== 'new'
+      || !observed.provisional.sourceRawFindingIds.includes(
+        authority.sourceRawFindingId,
+      )
+      || computeRawFindingIntegrityDigest(source)
+        !== authority.sourceRawIntegrityDigest
+      || replay.relation !== 'new'
+      || computeRawFindingIntegrityDigest({
+        ...source,
+        rawFindingId: replay.rawFindingId,
+      }) !== computeRawFindingIntegrityDigest(replay)
+      || attempt.provisionalFindingId !== input.provisional.id
+      || attempt.sourceRawFindingId !== authority.sourceRawFindingId
+      || attempt.sourceRawIntegrityDigest
+        !== authority.sourceRawIntegrityDigest
+      || attempt.attempt !== authority.attempt
+      || !sameLifecycleHead(attempt.expectedHead, authority.expectedHead)
+    ) {
+      throw new Error(
+        `Replay-origin authority for "${authority.replayRawFindingId}" is stale`,
+      );
+    }
+  }
+  const authorityRawFindingIds = [
+    ...new Set(
+      input.authorities.map((authority) => authority.replayRawFindingId),
+    ),
+  ].sort(compareBinaryStrings);
+  const transitionRawFindingIds = [
+    ...new Set(
+      input.transitionRawFindings.map(
+        (rawFinding) => rawFinding.rawFindingId,
+      ),
+    ),
+  ].sort(compareBinaryStrings);
+  if (canonicalJson(authorityRawFindingIds) !== canonicalJson(transitionRawFindingIds)) {
+    throw new Error(
+      'Replay-origin authority does not exactly cover transition raw findings',
+    );
+  }
+}
+
 export interface ObservedProvisionalProductTransitionAssessment {
   provisional: ProvisionalFindingEntry;
   materializedProduct: ProductFindingEntry;
@@ -131,6 +240,7 @@ export function assessObservedProvisionalProductTransition(input: {
   operation: ProvisionalProductTransitionOperation;
   findingId: string;
   transitionRawFindings: readonly RawFinding[];
+  replayOriginAuthorities?: readonly VerifiedReplayOriginAuthority[];
   product: ProductFindingEntry;
 }): ObservedProvisionalProductTransitionAssessment {
   const intermediate = input.intermediateLedger.findings.find(
@@ -146,12 +256,24 @@ export function assessObservedProvisionalProductTransition(input: {
       `Lifecycle operation "${input.operation}" has no provisional transition source`,
     );
   }
-  for (const rawFinding of input.transitionRawFindings) {
-    assertObservedTransitionSource({
-      observationLedger: input.observationLedger,
-      intermediate,
-      operation: input.operation,
-      rawFinding,
+  if (input.replayOriginAuthorities === undefined) {
+    for (const rawFinding of input.transitionRawFindings) {
+      assertObservedTransitionSource({
+        observationLedger: input.observationLedger,
+        intermediate,
+        operation: input.operation,
+        rawFinding,
+      });
+    }
+  } else {
+    if (input.operation !== 'promote_provisional') {
+      throw new Error('Replay-origin authority can only promote a provisional');
+    }
+    assertReplayOriginTransitionSources({
+      ledger: input.observationLedger,
+      provisional: intermediate,
+      transitionRawFindings: input.transitionRawFindings,
+      authorities: input.replayOriginAuthorities,
     });
   }
   if (intermediate.targetIdentityHash === null) {
@@ -224,6 +346,7 @@ export function issueProvisionalProductTransitionAuthorityProof(input: {
   operation: ProvisionalProductTransitionOperation;
   findingId: string;
   transitionRawFindings: readonly RawFinding[];
+  replayOriginAuthorities?: readonly VerifiedReplayOriginAuthority[];
   product: ProductFindingEntry;
   workflowName: string;
   runId: string;

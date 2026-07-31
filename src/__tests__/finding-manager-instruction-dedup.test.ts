@@ -4,6 +4,9 @@ import {
   collectDuplicateLocusGroups,
 } from '../core/workflow/findings/manager-agent.js';
 import type { FindingLedger, FindingLedgerEntry } from '../core/workflow/findings/types.js';
+import {
+  PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION,
+} from '../core/workflow/findings/manager-raw-decision-adapter.js';
 
 const locationsByFindingId = new Map<string, string>();
 
@@ -115,6 +118,7 @@ describe('buildManagerInstruction', () => {
 
     expect(instruction).toContain('Previous ledger metadata:');
     expect(instruction).toContain('Raw findings:');
+    expect(instruction).toContain(PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION);
     expect(instruction).not.toContain('ledger copy path');
     expect(instruction).not.toContain('Raw findings path');
     expect(instruction).not.toContain('sqlite-run://');

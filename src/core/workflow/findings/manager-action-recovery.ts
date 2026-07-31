@@ -281,6 +281,7 @@ export function planManagerActionRecovery(input: {
     output: plan.output,
     promotedFindingIds: new Set(),
     promotionSourceRawFindingIds: new Map(),
+    replayPromotionAuthoritiesByFindingId: new Map(),
     resolvedByMapping: plan.settlements,
     resolvedByEvidence: new Map(),
     settledReplayRawIds: new Set(),

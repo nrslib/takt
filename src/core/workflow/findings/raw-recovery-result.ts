@@ -1,5 +1,8 @@
 import { createRawRecoveryResult } from '../../models/finding-raw-recovery.js';
-import { assertRawRecoveryResultEvents } from '../../models/finding-raw-recovery-validation.js';
+import {
+  assertRawRecoveryResultEvents,
+  lifecycleEventAuthorizesReplayRawFinding,
+} from '../../models/finding-raw-recovery-validation.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
 import type { FindingLedger, FindingObservation } from './types.js';
 
@@ -28,10 +31,12 @@ export function completeRawRecoveryAttempts(
     const replayRawFindingId = replayRawFindingIdByAttemptId.get(attemptId);
     const mutationIds = newEvents.flatMap((event) => {
       const bindsReplay = replayRawFindingId !== undefined
-        && event.evidenceBindingIds.some((bindingId) => (
-          after.evidenceBindings.find((binding) => binding.bindingId === bindingId)
-            ?.sourceRawFindingId === replayRawFindingId
-        ));
+        && lifecycleEventAuthorizesReplayRawFinding({
+          event,
+          replayRawFindingId,
+          evidenceBindings: after.evidenceBindings,
+          evidenceRecords: after.evidenceRecords,
+        });
       return bindsReplay && event.transitions.some((transition) => (
         transition.after.entityKind === 'finding'
         && transition.after.entityId === attempt.provisionalFindingId
@@ -61,6 +66,7 @@ export function completeRawRecoveryAttempts(
       result,
       lifecycleEvents: after.lifecycleEvents,
       evidenceBindings: after.evidenceBindings,
+      evidenceRecords: after.evidenceRecords,
     });
     return [result];
   });

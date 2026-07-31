@@ -142,6 +142,7 @@ export async function runRawAdjudicationBatches(input: {
         optionsBuilder: input.runInput.optionsBuilder,
         stepExecutor: input.runInput.stepExecutor,
         consumedOutputTokens: outputTokens,
+        rawFindings: batch.batch,
       });
       outputTokens += response.outputTokens;
       const clean = assembleCleanManagerDecision({

@@ -147,6 +147,7 @@ export interface RawAdjudicationReplayOrigin {
   attemptId: string;
   provisionalFindingId: string;
   sourceRawFindingId: string;
+  sourceRawIntegrityDigest: string | null;
   expectedHead: FindingLifecycleEntityHead;
   expectedProvisionalRevision: number;
   expectedTargetIdentityHash: string | null;

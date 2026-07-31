@@ -506,6 +506,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
             rawFindings: input.reviewerRawFindings,
           }),
         }],
+        workflowTask: 'Review the implementation.',
         workflowName: 'peer-review',
         runId: 'run-1',
         callNamespace: '',

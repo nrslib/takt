@@ -1,4 +1,5 @@
 import type {
+  FindingLifecycleEntityHead,
   FindingLedgerEntry,
   FindingProvisionalMetadata,
 } from './types.js';
@@ -10,6 +11,16 @@ export interface ProvisionalRecoveryOrigin {
   expectedProvisionalStableKey: string;
   expectedProvisionalLineageKey: string;
   expectedRecoveryReviewerStableKey?: string;
+}
+
+export interface VerifiedReplayOriginAuthority {
+  replayRawFindingId: string;
+  attemptId: string;
+  sourceRawFindingId: string;
+  sourceRawIntegrityDigest: string;
+  expectedHead: FindingLifecycleEntityHead;
+  attempt: number;
+  recoveryOrigin: ProvisionalRecoveryOrigin;
 }
 
 export function snapshotProvisionalRecoveryOrigin(

@@ -72,6 +72,7 @@ import { resolveReviewIntegrityLimits } from '../core/workflow/findings/review-i
 import { resolveStopBudgetLimits } from '../core/workflow/findings/stop-budget.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { createRawRecoveryAttempt } from '../core/models/finding-raw-recovery.js';
+import { computeRawFindingIntegrityDigest } from '../core/models/finding-raw-integrity.js';
 import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
 import { buildManagerCommitReport } from '../core/workflow/findings/manager-report.js';
 import {
@@ -260,19 +261,27 @@ function rawRecoveryOrigin(
   if (expectedHead === undefined) {
     throw new Error(`Missing lifecycle head for ${finding.id}`);
   }
+  const sourceRawFinding = current.rawFindings.find(
+    (rawFinding) => rawFinding.rawFindingId === sourceRawFindingId,
+  );
+  const sourceRawIntegrityDigest = sourceRawFinding === undefined
+    ? null
+    : computeRawFindingIntegrityDigest(sourceRawFinding);
   const durableAttempt = createRawRecoveryAttempt({
     provisionalFindingId: finding.id,
     expectedHead,
     sourceRawFindingId,
-    sourceRawIntegrityDigest: null,
+    sourceRawIntegrityDigest,
     promptSnapshotDigest: '1'.repeat(64),
     attempt,
     startedAt: observation,
   });
+  current.rawRecoveryAttempts.push(durableAttempt);
   return {
     attemptId: durableAttempt.attemptId,
     provisionalFindingId: finding.id,
     sourceRawFindingId,
+    sourceRawIntegrityDigest,
     expectedHead,
     expectedProvisionalRevision: expectedHead.revision,
     expectedTargetIdentityHash: finding.targetIdentityHash,
@@ -1350,9 +1359,16 @@ describe('provisional recovery', () => {
     ]);
   });
 
-  it('keeps a relation=new replay as a new decision without promoting its provisional origin', () => {
+  it('promotes a relation=new replay through its verified provisional origin', () => {
     const process = provisional('F-0001', 'raw-adjudication-unresolved');
-    const replay = raw('replay-1');
+    const source = raw('source-1');
+    const freshLedger = ledger([process], [source]);
+    const replay = { ...source, rawFindingId: 'replay-1' };
+    const origin = rawRecoveryOrigin(
+      freshLedger,
+      process,
+      source.rawFindingId,
+    );
     const settlement = settleProvisionalsWithCleanEvidence({
       output: {
         ...emptyOutput(),
@@ -1364,23 +1380,32 @@ describe('provisional recovery', () => {
       },
       cleanRawIds: new Set([replay.rawFindingId]),
       wireById: new Map([[replay.rawFindingId, replay]]),
-      freshLedger: ledger([process], [raw('source-1')]),
+      freshLedger,
       explicitResolvedByMapping: new Map(),
       explicitPromotedFindingIds: new Set(),
       healthyReviewerStableKeys: new Set(),
       replayOrigins: new Map([[replay.rawFindingId, {
-        provisionalFindingId: process.id,
-        expectedProvisionalRevision: 1,
-        expectedTargetIdentityHash: process.targetIdentityHash,
+        replayRawFindingId: replay.rawFindingId,
+        attemptId: origin.attemptId,
+        sourceRawFindingId: origin.sourceRawFindingId,
+        sourceRawIntegrityDigest: origin.sourceRawIntegrityDigest!,
+        expectedHead: origin.expectedHead,
+        attempt: origin.attempt,
+        recoveryOrigin: origin.recoveryOrigin,
       }]]),
     });
 
-    expect(settlement.output.newFindings).toEqual([
-      expect.objectContaining({ rawFindingIds: [replay.rawFindingId] }),
+    expect(settlement.output.newFindings).toEqual([]);
+    expect(settlement.output.matches).toEqual([
+      expect.objectContaining({
+        findingId: process.id,
+        rawFindingIds: [replay.rawFindingId],
+      }),
     ]);
-    expect(settlement.output.matches).toEqual([]);
-    expect(settlement.promotedFindingIds).toEqual(new Set());
-    expect(settlement.settledReplayRawIds).toEqual(new Set());
+    expect(settlement.promotedFindingIds).toEqual(new Set([process.id]));
+    expect(settlement.settledReplayRawIds).toEqual(
+      new Set([replay.rawFindingId]),
+    );
   });
 
   it('recognizes a clean resolution confirmation as direct provisional settlement', () => {
@@ -1427,7 +1452,7 @@ describe('provisional recovery', () => {
     expect(settlement.output.resolvedFindings).toEqual(output.resolvedFindings);
   });
 
-  it('promotes a replay origin only from clean targeted persists with a fresh precondition', () => {
+  it('keeps normal targeted persists promotion authority unchanged', () => {
     const process = provisional('F-0001', 'raw-adjudication-unresolved');
     process.severity = null;
     process.title = null;
@@ -1463,10 +1488,10 @@ describe('provisional recovery', () => {
     const settlement = settleProvisionalsWithCleanEvidence({
       output: {
         ...emptyOutput(),
-        newFindings: [{
+        matches: [{
+          findingId: process.id,
           rawFindingIds: [replay.rawFindingId],
-          title: replay.title,
-          severity: replay.severity,
+          evidence: 'The clean observation confirms the provisional target.',
         }],
       },
       cleanRawIds: new Set([replay.rawFindingId]),
@@ -1475,11 +1500,7 @@ describe('provisional recovery', () => {
       explicitResolvedByMapping: new Map(),
       explicitPromotedFindingIds: new Set(),
       healthyReviewerStableKeys: new Set(),
-      replayOrigins: new Map([[replay.rawFindingId, {
-        provisionalFindingId: process.id,
-        expectedProvisionalRevision: process.revision,
-        expectedTargetIdentityHash: process.targetIdentityHash,
-      }]]),
+      replayOrigins: new Map(),
     });
 
     expect(settlement.output.newFindings).toEqual([]);
@@ -1490,7 +1511,7 @@ describe('provisional recovery', () => {
     expect(settlement.promotionSourceRawFindingIds).toEqual(new Map([
       [process.id, [replay.rawFindingId]],
     ]));
-    expect(settlement.settledReplayRawIds).toEqual(new Set([replay.rawFindingId]));
+    expect(settlement.settledReplayRawIds).toEqual(new Set());
 
     const applied = applyProvisionalSettlement({
       ...freshLedger,

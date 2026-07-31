@@ -11,6 +11,24 @@ const disabledDecisionItemsSchema = {
   properties: {},
 } as const;
 
+const rawAdjudicationDecisionJsonProperties = {
+  rawFindingId: {
+    type: 'string',
+    minLength: 71,
+    maxLength: 71,
+    pattern: '^replay-[0-9a-f]{64}$',
+  },
+  decision: { type: 'string', enum: RAW_DECISION_KINDS },
+  findingId: {
+    type: 'string',
+    maxLength: 6,
+    pattern: '^(|F-[0-9]{4})$',
+  },
+  // absence の anchorRelevance を含め、制御文字が JSON 上で6 bytesへ
+  // 膨張しても4回分の応答が step 予算内に収まる上限。
+  evidence: { type: 'string', minLength: 1, maxLength: 52 },
+} as const;
+
 export const RawAdjudicationDecisionsJsonSchema = {
   type: 'object',
   additionalProperties: false,
@@ -20,29 +38,30 @@ export const RawAdjudicationDecisionsJsonSchema = {
       type: 'array',
       maxItems: RAW_ADJUDICATION_RECOVERY_LIMITS.maxReplayCandidatesPerBatch,
       items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['rawFindingId', 'decision', 'findingId', 'anchorRelevance', 'evidence'],
-        properties: {
-          rawFindingId: {
-            type: 'string',
-            minLength: 71,
-            maxLength: 71,
-            pattern: '^replay-[0-9a-f]{64}$',
+        anyOf: [
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: Object.keys(rawAdjudicationDecisionJsonProperties),
+            properties: rawAdjudicationDecisionJsonProperties,
           },
-          decision: { enum: RAW_DECISION_KINDS },
-          findingId: {
-            type: 'string',
-            maxLength: 6,
-            pattern: '^(|F-[0-9]{4})$',
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: [
+              ...Object.keys(rawAdjudicationDecisionJsonProperties),
+              'anchorRelevance',
+            ],
+            properties: {
+              ...rawAdjudicationDecisionJsonProperties,
+              anchorRelevance: {
+                type: 'string',
+                enum: ['relevant', 'not_relevant'],
+                description: 'Required only for absence targets.',
+              },
+            },
           },
-          anchorRelevance: {
-            enum: ['relevant', 'not_relevant', 'not_applicable'],
-          },
-          // anchorRelevance を含め、制御文字が JSON 上で6 bytesへ膨張しても
-          // 4回分の応答が step 予算内に収まる上限。
-          evidence: { type: 'string', minLength: 1, maxLength: 52 },
-        },
+        ],
       },
     },
     disputeDecisions: {

@@ -901,7 +901,12 @@ describe('finding schemas', () => {
   it('keeps strict JSON Schema object properties listed in required for the manager decisions schema', () => {
     const decisionsProperties = FindingManagerDecisionsJsonSchema.properties;
     expect(FindingManagerDecisionsJsonSchema.required).toEqual(Object.keys(decisionsProperties));
-    expect(decisionsProperties.rawDecisions.items.required).toEqual(Object.keys(decisionsProperties.rawDecisions.items.properties));
+    for (const alternative of decisionsProperties.rawDecisions.items.anyOf) {
+      expect(alternative.required).toEqual(Object.keys(alternative.properties));
+    }
+    expect(decisionsProperties.rawDecisions.items.anyOf.map(
+      (alternative) => Object.hasOwn(alternative.properties, 'anchorRelevance'),
+    )).toEqual([false, true]);
     expect(decisionsProperties.disputeDecisions.items.required).toEqual(Object.keys(decisionsProperties.disputeDecisions.items.properties));
     expect(decisionsProperties.conflictDecisions.items.required).toEqual(Object.keys(decisionsProperties.conflictDecisions.items.properties));
     expect(decisionsProperties.invalidateDecisions.items.required).toEqual(Object.keys(decisionsProperties.invalidateDecisions.items.properties));
@@ -913,7 +918,6 @@ describe('finding schemas', () => {
       rawDecisions: [{
         rawFindingId: 'raw-1',
         decision: 'new',
-        anchorRelevance: 'not_applicable',
         findingId: '',
         evidence: 'No related open finding.',
       }],
@@ -925,6 +929,21 @@ describe('finding schemas', () => {
     });
 
     expect(decisions.rawDecisions[0]).not.toHaveProperty('findingId');
+    expect(decisions.rawDecisions[0]).not.toHaveProperty('anchorRelevance');
+    expect(() => parseFindingManagerDecisions({
+      rawDecisions: [{
+        rawFindingId: 'raw-1',
+        decision: 'new',
+        anchorRelevance: 'not_applicable',
+        findingId: '',
+        evidence: 'Legacy external sentinel.',
+      }],
+      disputeDecisions: [],
+      conflictDecisions: [],
+      invalidateDecisions: [],
+      duplicateDecisions: [],
+      dismissDecisions: [],
+    })).toThrow();
   });
 
   it('post-hoc 検証用 schema は item 欠損を per-item ambiguity へ渡す', () => {

@@ -35,6 +35,7 @@ import {
 } from './lifecycle-mutation.js';
 import { computeConflictEvidenceHash } from './adjudication-evidence.js';
 import { captureReviewScopeSnapshot } from './snapshot.js';
+import type { VerifiedReplayOriginAuthority } from './provisional-recovery-origin.js';
 
 function targetKey(target: { entityKind: string; entityId: string }): string {
   return `${target.entityKind}\0${target.entityId}`;
@@ -147,6 +148,13 @@ function rawSourceForRecord(input: {
   preferredRawFindingIds: ReadonlySet<string>;
   record: FindingEvidenceRecord;
 }): RawFinding | undefined {
+  if (
+    input.preferredRawFindingIds.size === 0
+    && input.record.kind === 'engine_proof'
+    && input.record.subject.kind === 'finding_provisional_product_transition'
+  ) {
+    return undefined;
+  }
   const candidates = [
     ...input.rawFindings.filter((raw) => input.preferredRawFindingIds.has(raw.rawFindingId)),
     ...input.rawFindings.filter((raw) => !input.preferredRawFindingIds.has(raw.rawFindingId)),
@@ -177,6 +185,7 @@ export interface FindingLifecycleCommand {
   };
   authority: LifecycleAuthorityInput;
   evidenceSourcesByTarget: ReadonlyMap<string, LifecycleEvidenceSource>;
+  replayOriginAuthorities?: readonly VerifiedReplayOriginAuthority[];
   expectedHeadsByTarget?: ReadonlyMap<string, FindingLifecycleEntityHead | null>;
   conflictEvidencePrecondition?: {
     conflictId: string;

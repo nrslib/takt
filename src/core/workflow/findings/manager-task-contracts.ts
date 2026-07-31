@@ -3,9 +3,12 @@ import { FINDING_DISMISSAL_BASES } from '../../models/finding-types.js';
 import {
   RAW_DECISION_KINDS,
   type FindingLifecycleEntityHead,
-  type FindingManagerRawDecision,
   type FindingMutationPrecondition,
+  type RawDecisionKind,
 } from './types.js';
+import type {
+  FindingAnchorRelevanceDecision,
+} from '../../models/finding-types.js';
 
 export const MAIN_MANAGER_RAW_TASK_MAX_ITEMS = 16;
 export const ENTITY_BINDING_TASK_MAX_ITEMS = 128;
@@ -29,8 +32,13 @@ export interface FindingManagerRawTaskInput {
   targetPrecondition: FindingMutationPrecondition | null;
 }
 
-export interface MainManagerRawTaskDecision extends FindingManagerRawDecision {
+export interface MainManagerRawTaskDecision {
   componentId: string;
+  rawFindingId: string;
+  decision: RawDecisionKind;
+  anchorRelevance?: FindingAnchorRelevanceDecision;
+  findingId: string;
+  evidence: string;
 }
 
 export interface MainManagerRawTaskOutput {
@@ -42,7 +50,7 @@ const mainManagerRawTaskDecisionSchema = z.object({
   componentId: componentIdSchema,
   rawFindingId: z.string().min(1),
   decision: z.enum(RAW_DECISION_KINDS),
-  anchorRelevance: z.enum(['relevant', 'not_relevant', 'not_applicable']),
+  anchorRelevance: z.enum(['relevant', 'not_relevant']).optional(),
   findingId: z.string(),
   evidence: z.string().min(1).max(2_048),
 }).strict();
@@ -52,6 +60,17 @@ const mainManagerRawTaskOutputSchema = z.object({
   decisions: z.array(mainManagerRawTaskDecisionSchema)
     .max(MAIN_MANAGER_RAW_TASK_MAX_ITEMS),
 }).strict();
+
+const mainManagerRawDecisionJsonProperties = {
+  componentId: {
+    type: 'string',
+    pattern: '^[0-9a-f]{64}$',
+  },
+  rawFindingId: { type: 'string', minLength: 1 },
+  decision: { type: 'string', enum: RAW_DECISION_KINDS },
+  findingId: { type: 'string' },
+  evidence: { type: 'string', minLength: 1, maxLength: 2_048 },
+} as const;
 
 export const MainManagerRawTaskOutputJsonSchema = {
   type: 'object',
@@ -66,30 +85,30 @@ export const MainManagerRawTaskOutputJsonSchema = {
       type: 'array',
       maxItems: MAIN_MANAGER_RAW_TASK_MAX_ITEMS,
       items: {
-        type: 'object',
-        additionalProperties: false,
-        required: [
-          'componentId',
-          'rawFindingId',
-          'decision',
-          'anchorRelevance',
-          'findingId',
-          'evidence',
+        anyOf: [
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: Object.keys(mainManagerRawDecisionJsonProperties),
+            properties: mainManagerRawDecisionJsonProperties,
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: [
+              ...Object.keys(mainManagerRawDecisionJsonProperties),
+              'anchorRelevance',
+            ],
+            properties: {
+              ...mainManagerRawDecisionJsonProperties,
+              anchorRelevance: {
+                type: 'string',
+                enum: ['relevant', 'not_relevant'],
+                description: 'Required only for absence targets. Omit for code and structure targets.',
+              },
+            },
+          },
         ],
-        properties: {
-          componentId: {
-            type: 'string',
-            pattern: '^[0-9a-f]{64}$',
-          },
-          rawFindingId: { type: 'string', minLength: 1 },
-          decision: { type: 'string', enum: RAW_DECISION_KINDS },
-          anchorRelevance: {
-            type: 'string',
-            enum: ['relevant', 'not_relevant', 'not_applicable'],
-          },
-          findingId: { type: 'string' },
-          evidence: { type: 'string', minLength: 1, maxLength: 2_048 },
-        },
       },
     },
   },

@@ -27,6 +27,9 @@ import {
 } from '../core/workflow/findings/raw-canonicalization.js';
 import { buildLadderCommitPlan } from '../core/workflow/findings/manager-ladder-commit-plan.js';
 import type { LadderResult } from '../core/workflow/findings/manager-contracts.js';
+import {
+  adaptProviderRawDecision,
+} from '../core/workflow/findings/manager-raw-decision-adapter.js';
 
 const target: FindingTarget = {
   kind: 'absence',
@@ -111,6 +114,52 @@ function decisions(
 }
 
 describe('absence anchor relevance adjudication', () => {
+  it('derives the internal sentinel only for non-absence decisions', () => {
+    const codeRaw = {
+      ...raw,
+      target: { kind: 'code' as const, paths: ['src/required.ts'] },
+    };
+    const adapted = adaptProviderRawDecision({
+      rawFindingId: codeRaw.rawFindingId,
+      decision: 'new',
+      evidence: 'Independent code issue.',
+    }, codeRaw);
+
+    expect(adapted.anchorRelevance).toBe('not_applicable');
+    expect(() => adaptProviderRawDecision({
+      rawFindingId: codeRaw.rawFindingId,
+      decision: 'new',
+      anchorRelevance: 'not_applicable',
+      evidence: 'Legacy external sentinel.',
+    }, codeRaw)).toThrow(/must omit anchorRelevance/);
+  });
+
+  it('requires an explicit binary anchor decision for absence targets', () => {
+    expect(adaptProviderRawDecision({
+      rawFindingId: raw.rawFindingId,
+      decision: 'new',
+      anchorRelevance: 'relevant',
+      evidence: 'The task quote establishes the obligation.',
+    }, raw).anchorRelevance).toBe('relevant');
+    expect(adaptProviderRawDecision({
+      rawFindingId: raw.rawFindingId,
+      decision: 'new',
+      anchorRelevance: 'not_relevant',
+      evidence: 'The quote does not establish the obligation.',
+    }, raw).anchorRelevance).toBe('not_relevant');
+    expect(() => adaptProviderRawDecision({
+      rawFindingId: raw.rawFindingId,
+      decision: 'new',
+      evidence: 'No explicit anchor decision.',
+    }, raw)).toThrow(/requires anchorRelevance/);
+    expect(() => adaptProviderRawDecision({
+      rawFindingId: raw.rawFindingId,
+      decision: 'new',
+      anchorRelevance: 'not_applicable',
+      evidence: 'Legacy external sentinel.',
+    }, raw)).toThrow(/requires anchorRelevance/);
+  });
+
   it.each([
     ['missing', undefined],
     ['not relevant', 'not_relevant' as const],

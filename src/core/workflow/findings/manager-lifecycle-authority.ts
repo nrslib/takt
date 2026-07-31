@@ -50,13 +50,28 @@ export function managerProvisionalTransitionLifecycleCommandKey(
     throw new Error('Provisional product transition requires exactly one finding');
   }
   const findingId = command.changes.findings[0]!.id;
-  const sourceRawFindingIds = command.evidenceSourcesByTarget
-    .get(`finding\0${findingId}`)?.sourceRawFindingIds ?? [];
+  const sourceRawFindingIds = provisionalTransitionRawFindingIds(
+    command,
+    findingId,
+  );
   return sha256({
     operation: command.operation,
     findingId,
-    sourceRawFindingIds: [...sourceRawFindingIds].sort(compareBinaryStrings),
+    sourceRawFindingIds,
   });
+}
+
+function provisionalTransitionRawFindingIds(
+  command: FindingLifecycleCommand,
+  findingId: string,
+): string[] {
+  const sourceRawFindingIds = command.replayOriginAuthorities === undefined
+    ? command.evidenceSourcesByTarget
+        .get(`finding\0${findingId}`)?.sourceRawFindingIds ?? []
+    : command.replayOriginAuthorities.map(
+        (authority) => authority.replayRawFindingId,
+      );
+  return [...new Set(sourceRawFindingIds)].sort(compareBinaryStrings);
 }
 
 function findingClaimIdentitySet(
@@ -416,8 +431,10 @@ export function issueManagerLifecycleAuthority(input: {
       ) {
         continue;
       }
-      const sourceRawFindingIds = command.evidenceSourcesByTarget
-        .get(`finding\0${change.id}`)?.sourceRawFindingIds ?? [];
+      const sourceRawFindingIds = provisionalTransitionRawFindingIds(
+        command,
+        change.id,
+      );
       const transitionRawFindings = [...sourceRawFindingIds]
         .sort(compareBinaryStrings)
         .map((rawFindingId) => {
@@ -441,6 +458,11 @@ export function issueManagerLifecycleAuthority(input: {
         operation: command.operation,
         findingId: change.id,
         transitionRawFindings,
+        ...(command.replayOriginAuthorities === undefined
+          ? {}
+          : {
+              replayOriginAuthorities: command.replayOriginAuthorities,
+            }),
         product,
         workflowName: input.workflowName,
         runId: input.runId,

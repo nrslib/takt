@@ -3,13 +3,8 @@ import {
   compareRawAdjudicationCandidates,
   type RawAdjudicationCandidate,
 } from './raw-adjudication-priority.js';
-import { isProvisionalPromotionSource } from './provisional-promotion-eligibility.js';
-
-export interface ProvisionalReplayOrigin {
-  provisionalFindingId: string;
-  expectedProvisionalRevision: number;
-  expectedTargetIdentityHash: string | null;
-}
+import { isReplayOriginPromotionSource } from './provisional-promotion-eligibility.js';
+import type { VerifiedReplayOriginAuthority } from './provisional-recovery-origin.js';
 
 function mergeMatch(
   matches: FindingManagerOutput['matches'],
@@ -26,20 +21,46 @@ function mergeMatch(
   }
   return matches.map((match) => (
     match.findingId === findingId
-      ? { ...match, rawFindingIds: [...new Set([...match.rawFindingIds, ...rawFindingIds])] }
+      ? {
+          ...match,
+          rawFindingIds: [
+            ...new Set([...match.rawFindingIds, ...rawFindingIds]),
+          ],
+        }
       : match
   ));
 }
 
+function addPromotionAuthorities(
+  current: ReadonlyMap<string, readonly VerifiedReplayOriginAuthority[]>,
+  findingId: string,
+  authorities: readonly VerifiedReplayOriginAuthority[],
+): Map<string, readonly VerifiedReplayOriginAuthority[]> {
+  return new Map([
+    ...current,
+    [
+      findingId,
+      [
+        ...(current.get(findingId) ?? []),
+        ...authorities,
+      ],
+    ],
+  ]);
+}
+
 export function applyReplayOriginSettlement(input: {
   output: FindingManagerOutput;
-  origins: ReadonlyMap<string, ProvisionalReplayOrigin>;
+  origins: ReadonlyMap<string, VerifiedReplayOriginAuthority>;
   freshLedger: FindingLedger;
   cleanRawIds: ReadonlySet<string>;
   wireById: ReadonlyMap<string, RawFinding>;
 }): {
   output: FindingManagerOutput;
   promotedFindingIds: Set<string>;
+  promotionAuthoritiesByFindingId: ReadonlyMap<
+    string,
+    readonly VerifiedReplayOriginAuthority[]
+  >;
   resolvedByMapping: Map<string, string>;
   settledReplayRawIds: Set<string>;
 } {
@@ -50,100 +71,172 @@ export function applyReplayOriginSettlement(input: {
       ))
       .map((finding) => [finding.id, finding]),
   );
-  const eligibleOrigins = new Map([...input.origins].filter(([rawFindingId, origin]) => {
-    const process = eligibleProcessesById.get(origin.provisionalFindingId);
-    const wire = input.wireById.get(rawFindingId);
-    return process !== undefined
-      && process.revision === origin.expectedProvisionalRevision
-      && process.targetIdentityHash === origin.expectedTargetIdentityHash
+  const eligibleOrigins = new Map([...input.origins].filter(
+    ([rawFindingId, authority]) => (
+      eligibleProcessesById.has(
+        authority.recoveryOrigin.provisionalFindingId,
+      )
+      && authority.replayRawFindingId === rawFindingId
       && input.cleanRawIds.has(rawFindingId)
-      && wire !== undefined
-      && isProvisionalPromotionSource({
-        ledger: input.freshLedger,
-        provisional: process,
-        wire,
-      });
+      && input.wireById.has(rawFindingId)
+    ),
+  ));
+  const promotionEligibleOrigins = new Map([...eligibleOrigins].filter(
+    ([rawFindingId, authority]) => {
+      const provisional = eligibleProcessesById.get(
+        authority.recoveryOrigin.provisionalFindingId,
+      );
+      const wire = input.wireById.get(rawFindingId);
+      return provisional !== undefined
+        && wire !== undefined
+        && isReplayOriginPromotionSource({
+          ledger: input.freshLedger,
+          provisional,
+          wire,
+          authority,
+        });
+    },
+  ));
+
+  let matches = input.output.matches.map((match) => ({
+    ...match,
+    rawFindingIds: [...match.rawFindingIds],
   }));
-  let matches = input.output.matches.map((match) => ({ ...match, rawFindingIds: [...match.rawFindingIds] }));
   let promotedFindingIds = new Set<string>();
+  let promotionAuthoritiesByFindingId = new Map<
+    string,
+    readonly VerifiedReplayOriginAuthority[]
+  >();
   let resolvedByMapping = new Map<string, string>();
   let settledReplayRawIds = new Set<string>();
   const newFindings = input.output.newFindings.flatMap((group) => {
     const replayOrigins = group.rawFindingIds.flatMap((rawFindingId) => {
-      const origin = eligibleOrigins.get(rawFindingId);
+      const origin = promotionEligibleOrigins.get(rawFindingId);
       return origin === undefined ? [] : [[rawFindingId, origin] as const];
     });
     if (replayOrigins.length === 0) {
       return [group];
     }
-    const processIds = new Set(replayOrigins.map(([, origin]) => origin.provisionalFindingId));
-    const canonicalProcess = [...processIds]
-      .map((processId) => eligibleProcessesById.get(processId)!)
+    const canonicalProcess = replayOrigins
+      .map(([, authority]) => eligibleProcessesById.get(
+        authority.recoveryOrigin.provisionalFindingId,
+      )!)
       .sort(compareRawAdjudicationCandidates)[0]!;
-    matches = mergeMatch(
-      matches,
-      canonicalProcess.id,
-      replayOrigins.map(([rawFindingId]) => rawFindingId),
+    const promotedRawFindingIds = replayOrigins.map(
+      ([rawFindingId]) => rawFindingId,
     );
-    const promotedRawFindingIds = new Set(
-      replayOrigins.map(([rawFindingId]) => rawFindingId),
-    );
+    matches = mergeMatch(matches, canonicalProcess.id, promotedRawFindingIds);
     const retainedRawFindingIds = group.rawFindingIds.filter(
-      (rawFindingId) => !promotedRawFindingIds.has(rawFindingId),
+      (rawFindingId) => !promotionEligibleOrigins.has(rawFindingId),
     );
     return retainedRawFindingIds.length === 0
       ? []
       : [{ ...group, rawFindingIds: retainedRawFindingIds }];
   });
+
   for (const match of matches) {
     for (const rawFindingId of match.rawFindingIds) {
-      const origin = eligibleOrigins.get(rawFindingId);
-      if (origin === undefined) {
+      const authority = eligibleOrigins.get(rawFindingId);
+      if (authority === undefined) {
         continue;
       }
+      const originFindingId = authority.recoveryOrigin.provisionalFindingId;
       settledReplayRawIds = new Set([...settledReplayRawIds, rawFindingId]);
-      if (match.findingId === origin.provisionalFindingId) {
-        promotedFindingIds = new Set([...promotedFindingIds, origin.provisionalFindingId]);
-      } else {
+      if (
+        match.findingId === originFindingId
+        && promotionEligibleOrigins.has(rawFindingId)
+      ) {
+        promotedFindingIds = new Set([
+          ...promotedFindingIds,
+          originFindingId,
+        ]);
+        promotionAuthoritiesByFindingId = addPromotionAuthorities(
+          promotionAuthoritiesByFindingId,
+          originFindingId,
+          [authority],
+        );
+      } else if (match.findingId !== originFindingId) {
         resolvedByMapping = new Map([
           ...resolvedByMapping,
-          [origin.provisionalFindingId, match.findingId],
+          [originFindingId, match.findingId],
         ]);
       }
     }
   }
-  for (const landing of [...input.output.reopenedFindings, ...input.output.resolvedFindings]) {
+
+  for (
+    const landing of [
+      ...input.output.reopenedFindings,
+      ...input.output.resolvedFindings,
+    ]
+  ) {
     for (const rawFindingId of landing.rawFindingIds) {
-      const origin = eligibleOrigins.get(rawFindingId);
-      if (origin === undefined) {
+      const authority = eligibleOrigins.get(rawFindingId);
+      if (authority === undefined) {
         continue;
       }
       settledReplayRawIds = new Set([...settledReplayRawIds, rawFindingId]);
       resolvedByMapping = new Map([
         ...resolvedByMapping,
-        [origin.provisionalFindingId, landing.findingId],
+        [authority.recoveryOrigin.provisionalFindingId, landing.findingId],
       ]);
     }
   }
+
   const conflicts = input.output.conflicts.map((conflict) => {
     const replayOrigins = conflict.rawFindingIds.flatMap((rawFindingId) => {
-      const origin = eligibleOrigins.get(rawFindingId);
-      return origin === undefined ? [] : [[rawFindingId, origin] as const];
+      const authority = promotionEligibleOrigins.get(rawFindingId);
+      return authority === undefined
+        ? []
+        : [[rawFindingId, authority] as const];
     });
     if (replayOrigins.length === 0) {
       return conflict;
     }
-    const processIds = replayOrigins.map(([, origin]) => origin.provisionalFindingId);
-    promotedFindingIds = new Set([...promotedFindingIds, ...processIds]);
+    const authoritiesByOriginFindingId = new Map<
+      string,
+      VerifiedReplayOriginAuthority[]
+    >();
+    for (const [, authority] of replayOrigins) {
+      const originFindingId = authority.recoveryOrigin.provisionalFindingId;
+      authoritiesByOriginFindingId.set(
+        originFindingId,
+        [
+          ...(authoritiesByOriginFindingId.get(originFindingId) ?? []),
+          authority,
+        ],
+      );
+    }
+    promotedFindingIds = new Set([
+      ...promotedFindingIds,
+      ...authoritiesByOriginFindingId.keys(),
+    ]);
+    for (const [originFindingId, authorities] of authoritiesByOriginFindingId) {
+      promotionAuthoritiesByFindingId = addPromotionAuthorities(
+        promotionAuthoritiesByFindingId,
+        originFindingId,
+        authorities,
+      );
+    }
     settledReplayRawIds = new Set([
       ...settledReplayRawIds,
       ...replayOrigins.map(([rawFindingId]) => rawFindingId),
     ]);
-    return { ...conflict, findingIds: [...new Set([...conflict.findingIds, ...processIds])] };
+    return {
+      ...conflict,
+      findingIds: [
+        ...new Set([
+          ...conflict.findingIds,
+          ...authoritiesByOriginFindingId.keys(),
+        ]),
+      ],
+    };
   });
+
   return {
     output: { ...input.output, matches, newFindings, conflicts },
     promotedFindingIds,
+    promotionAuthoritiesByFindingId,
     resolvedByMapping,
     settledReplayRawIds,
   };

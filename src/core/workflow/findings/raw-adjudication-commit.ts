@@ -25,6 +25,8 @@ import { canonicalRawIntegrityDigestOf } from './raw-canonicalization.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
 import type { FindingLifecycleCommand } from './lifecycle-transaction.js';
 import type { ReviewScopeProofSnapshot } from './snapshot.js';
+import { computeRawFindingIntegrityDigest } from '../../models/finding-raw-integrity.js';
+import type { VerifiedReplayOriginAuthority } from './provisional-recovery-origin.js';
 
 function filterReplayOutput(input: {
   output: FindingManagerOutput;
@@ -69,26 +71,62 @@ function filterReplayOutput(input: {
 
 function collectFreshOrigins(input: {
   freshLedger: FindingLedger;
-  origins: ReadonlyMap<string, RawAdjudicationReplayOrigin>;
-  failures: ReadonlyMap<string, RawAdjudicationFailure>;
+  recovery: RawAdjudicationRecoveryResult;
 }): {
   origins: Map<string, RawAdjudicationReplayOrigin>;
   failures: Map<string, RawAdjudicationFailure>;
 } {
   const origins = new Map<string, RawAdjudicationReplayOrigin>();
-  const failures = new Map(input.failures);
-  for (const [rawFindingId, origin] of input.origins) {
+  const failures = new Map(input.recovery.failures);
+  for (const [rawFindingId, origin] of input.recovery.origins) {
     const process = input.freshLedger.findings.find((finding) => finding.id === origin.provisionalFindingId);
     const currentHead = captureFindingLifecycleHead(
       input.freshLedger,
       'finding',
       origin.provisionalFindingId,
     );
+    const attempt = input.freshLedger.rawRecoveryAttempts.find(
+      (candidate) => candidate.attemptId === origin.attemptId,
+    );
+    const completedResult = input.freshLedger.rawRecoveryResults.find(
+      (result) => result.attemptId === origin.attemptId,
+    );
+    const source = input.freshLedger.rawFindings.find(
+      (rawFinding) => (
+        rawFinding.rawFindingId === origin.sourceRawFindingId
+      ),
+    );
+    const sourceDigest = source === undefined
+      ? null
+      : computeRawFindingIntegrityDigest(source);
+    const sourceIsFresh = origin.sourceRawIntegrityDigest === null
+      ? source === undefined
+        && attempt?.sourceRawIntegrityDigest === null
+      : sourceDigest === origin.sourceRawIntegrityDigest
+        && attempt?.sourceRawIntegrityDigest
+          === origin.sourceRawIntegrityDigest
+        && process?.provisional?.sourceRawFindingIds.includes(
+          origin.sourceRawFindingId,
+        ) === true;
     const isFresh = process !== undefined
       && matchesProvisionalRecoveryOrigin(process, origin.recoveryOrigin)
       && currentHead?.revision === origin.expectedHead.revision
       && currentHead.eventId === origin.expectedHead.eventId
-      && currentHead.projectionDigest === origin.expectedHead.projectionDigest;
+      && currentHead.projectionDigest === origin.expectedHead.projectionDigest
+      && origin.expectedProvisionalRevision
+        === origin.recoveryOrigin.expectedProvisionalRevision
+      && origin.expectedTargetIdentityHash
+        === origin.recoveryOrigin.expectedTargetIdentityHash
+      && sourceIsFresh
+      && attempt !== undefined
+      && completedResult === undefined
+      && attempt.provisionalFindingId === origin.provisionalFindingId
+      && attempt.sourceRawFindingId === origin.sourceRawFindingId
+      && attempt.attempt === origin.attempt
+      && attempt.expectedHead.revision === origin.expectedHead.revision
+      && attempt.expectedHead.eventId === origin.expectedHead.eventId
+      && attempt.expectedHead.projectionDigest
+        === origin.expectedHead.projectionDigest;
     if (isFresh) {
       origins.set(rawFindingId, origin);
       continue;
@@ -191,8 +229,7 @@ export function applyRawAdjudicationRecovery(input: {
   }
   const fresh = collectFreshOrigins({
     freshLedger: input.freshLedger,
-    origins: input.recovery.origins,
-    failures: input.recovery.failures,
+    recovery: input.recovery,
   });
   const eligible = collectEligibleOrigins({
     freshOrigins: fresh.origins,
@@ -237,6 +274,22 @@ export function applyRawAdjudicationRecovery(input: {
   const adjudicableRawIds = new Set(
     [...origins.keys()].filter((rawFindingId) => (
       admittedRawIds.has(rawFindingId) && !failures.has(rawFindingId)
+    )),
+  );
+  const replayAuthorities = new Map<string, VerifiedReplayOriginAuthority>(
+    [...origins].flatMap(([replayRawFindingId, origin]) => (
+      adjudicableRawIds.has(replayRawFindingId)
+      && origin.sourceRawIntegrityDigest !== null
+        ? [[replayRawFindingId, {
+            replayRawFindingId,
+            attemptId: origin.attemptId,
+            sourceRawFindingId: origin.sourceRawFindingId,
+            sourceRawIntegrityDigest: origin.sourceRawIntegrityDigest,
+            expectedHead: origin.expectedHead,
+            attempt: origin.attempt,
+            recoveryOrigin: origin.recoveryOrigin,
+          }]]
+        : []
     )),
   );
   for (const rawFindingId of origins.keys()) {
@@ -286,9 +339,7 @@ export function applyRawAdjudicationRecovery(input: {
     explicitResolvedByMapping: new Map(),
     explicitPromotedFindingIds: new Set(),
     healthyReviewerStableKeys: new Set(),
-    replayOrigins: new Map(
-      [...origins].filter(([rawFindingId]) => adjudicableRawIds.has(rawFindingId)),
-    ),
+    replayOrigins: replayAuthorities,
   });
   for (const rawFindingId of origins.keys()) {
     if (!settlement.settledReplayRawIds.has(rawFindingId) && !failures.has(rawFindingId)) {

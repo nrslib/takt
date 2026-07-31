@@ -31,6 +31,7 @@ export interface RawAdjudicationReservation {
   expectedRevision: number;
   attempt: number;
   sourceRawFindingId: string;
+  sourceRawIntegrityDigest: string | null;
   reservationToken: string;
   recoveryOrigin: ProvisionalRecoveryOrigin;
 }
@@ -183,6 +184,7 @@ export async function reserveRawAdjudicationRecovery(
           expectedRevision,
           attempt,
           sourceRawFindingId,
+          sourceRawIntegrityDigest: durableAttempt.sourceRawIntegrityDigest,
           reservationToken: durableAttempt.attemptId,
           recoveryOrigin,
         });

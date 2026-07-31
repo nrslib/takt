@@ -1,7 +1,6 @@
 import { computeOverflowStableKey } from './raw-canonicalization.js';
 import {
   applyReplayOriginSettlement,
-  type ProvisionalReplayOrigin,
 } from './manager-replay-settlement.js';
 import type {
   FindingLedger,
@@ -25,17 +24,26 @@ import {
   authorityAnchorAdjudications,
   computeAnchorRelevanceDecisionDigest,
 } from '../../models/finding-anchor-relevance.js';
-import { isProvisionalPromotionSource } from './provisional-promotion-eligibility.js';
+import {
+  isProvisionalPromotionSource,
+  isReplayOriginPromotionSource,
+} from './provisional-promotion-eligibility.js';
+import type { VerifiedReplayOriginAuthority } from './provisional-recovery-origin.js';
 import {
   isProvisionalFindingEntry,
   materializeProvisionalFinding,
 } from './finding-entry.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 
 export interface ProvisionalSettlement {
   output: FindingManagerOutput;
   /** clean new 証拠で confirmed へ昇格させる provisional finding id。 */
   promotedFindingIds: Set<string>;
   promotionSourceRawFindingIds: Map<string, string[]>;
+  replayPromotionAuthoritiesByFindingId: ReadonlyMap<
+    string,
+    readonly VerifiedReplayOriginAuthority[]
+  >;
   /** clean な決定的 same により解消する provisional finding id → 対応 target。 */
   resolvedByMapping: Map<string, string>;
   resolvedByEvidence: Map<string, string>;
@@ -92,7 +100,7 @@ export function settleProvisionalsWithCleanEvidence(input: {
   explicitResolvedByMapping: ReadonlyMap<string, string>;
   explicitPromotedFindingIds: ReadonlySet<string>;
   healthyReviewerStableKeys: ReadonlySet<string>;
-  replayOrigins: ReadonlyMap<string, ProvisionalReplayOrigin>;
+  replayOrigins: ReadonlyMap<string, VerifiedReplayOriginAuthority>;
 }): ProvisionalSettlement {
   const openProvisionals = input.freshLedger.findings.filter(
     (finding) => finding.status === 'open' && finding.provisional !== undefined,
@@ -102,6 +110,7 @@ export function settleProvisionalsWithCleanEvidence(input: {
       output: input.output,
       promotedFindingIds: new Set(),
       promotionSourceRawFindingIds: new Map(),
+      replayPromotionAuthoritiesByFindingId: new Map(),
       resolvedByMapping: new Map(),
       resolvedByEvidence: new Map(),
       settledReplayRawIds: new Set(),
@@ -253,23 +262,6 @@ export function settleProvisionalsWithCleanEvidence(input: {
     }
   }
 
-  // replay / ladder / conflict のどの producer が候補を出しても、最終的な
-  // promotion authority は同じ clean targeted persists predicate で決める。
-  promotedFindingIds = new Set([...promotedFindingIds].filter((findingId) => {
-    const provisional = provisionalById.get(findingId);
-    if (provisional === undefined) {
-      return false;
-    }
-    return [...input.cleanRawIds].some((rawFindingId) => {
-      const wire = input.wireById.get(rawFindingId);
-      return wire !== undefined && isProvisionalPromotionSource({
-        ledger: input.freshLedger,
-        provisional,
-        wire,
-      });
-    });
-  }));
-
   // manager の意味判断だけでは別の provisional を解消できない。
   for (const match of matches) {
     if (provisionalById.has(match.findingId)) {
@@ -298,12 +290,16 @@ export function settleProvisionalsWithCleanEvidence(input: {
   }
 
   const promotionSourceRawFindingIds = new Map<string, string[]>();
+  const replayPromotionAuthoritiesByFindingId = new Map<
+    string,
+    readonly VerifiedReplayOriginAuthority[]
+  >();
   promotedFindingIds = new Set([...promotedFindingIds].filter((findingId) => {
     const provisional = provisionalById.get(findingId);
     if (provisional === undefined || !isProvisionalFindingEntry(provisional)) {
       return false;
     }
-    const sourceRawFindings = [...input.cleanRawIds]
+    const standardSources = [...input.cleanRawIds]
       .map((rawFindingId) => input.wireById.get(rawFindingId))
       .filter((wire): wire is RawFinding => (
         wire !== undefined
@@ -313,6 +309,28 @@ export function settleProvisionalsWithCleanEvidence(input: {
           wire,
         })
       ));
+    const replayAuthorities = (
+      replay.promotionAuthoritiesByFindingId.get(findingId) ?? []
+    ).filter((authority) => {
+      const wire = input.wireById.get(authority.replayRawFindingId);
+      return wire !== undefined
+        && input.cleanRawIds.has(wire.rawFindingId)
+        && isReplayOriginPromotionSource({
+          ledger: input.freshLedger,
+          provisional,
+          wire,
+          authority,
+        });
+    });
+    const replaySources = replayAuthorities.map((authority) => (
+      input.wireById.get(authority.replayRawFindingId)!
+    ));
+    const sourceRawFindings = replaySources.length > 0
+      ? replaySources
+      : standardSources;
+    if (sourceRawFindings.length === 0) {
+      return false;
+    }
     const materialization = materializeProvisionalFinding({
       ledger: input.freshLedger,
       finding: provisional,
@@ -325,6 +343,12 @@ export function settleProvisionalsWithCleanEvidence(input: {
       findingId,
       materialization.transitionRawFindingIds,
     );
+    if (replayAuthorities.length > 0) {
+      replayPromotionAuthoritiesByFindingId.set(
+        findingId,
+        replayAuthorities,
+      );
+    }
     return true;
   }));
 
@@ -332,6 +356,7 @@ export function settleProvisionalsWithCleanEvidence(input: {
     output: { ...settlementOutput, newFindings, matches },
     promotedFindingIds,
     promotionSourceRawFindingIds,
+    replayPromotionAuthoritiesByFindingId,
     resolvedByMapping,
     resolvedByEvidence,
     settledReplayRawIds: replay.settledReplayRawIds,
@@ -443,8 +468,21 @@ export function applyProvisionalSettlement(
             `Provisional settlement for "${finding.id}" became invalid: ${materialized.reason}`,
           );
         }
+        const replayPromotion =
+          settlement.replayPromotionAuthoritiesByFindingId.has(finding.id);
         return {
           ...materialized.finding,
+          ...(replayPromotion
+            ? {
+                lifecycle: 'persists' as const,
+                rawFindingIds: [
+                  ...new Set([
+                    ...materialized.finding.rawFindingIds,
+                    ...sourceRawFindingIds,
+                  ]),
+                ].sort(compareBinaryStrings),
+              }
+            : {}),
           revision: finding.revision + 1,
         };
       }
@@ -555,8 +593,19 @@ export function buildProvisionalSettlementLifecycleCommands(input: {
       `Provisional settlement for "${findingId}"`,
     );
     const absenceRaws = absenceRawFindings(sourceRawFindings);
+    const replayOriginAuthorities = operation === 'promote_provisional'
+      ? input.settlement.replayPromotionAuthoritiesByFindingId.get(findingId)
+      : undefined;
+    if (
+      replayOriginAuthorities !== undefined
+      && replayOriginAuthorities.length === 0
+    ) {
+      throw new Error(
+        `Replay-origin provisional settlement for "${findingId}" has no authority`,
+      );
+    }
     const authority: FindingLifecycleCommand['authority'] =
-      absenceRaws.length === 0
+      replayOriginAuthorities !== undefined || absenceRaws.length === 0
         ? { kind: 'verified_evidence' }
         : (() => {
             const anchorAdjudications = authorityAnchorAdjudications({
@@ -583,8 +632,15 @@ export function buildProvisionalSettlementLifecycleCommands(input: {
       authority,
       evidenceSourcesByTarget: new Map([[
         `finding\0${findingId}`,
-        { sourceRawFindingIds, authorityEvidenceIds: [] },
+        {
+          sourceRawFindingIds:
+            replayOriginAuthorities === undefined ? sourceRawFindingIds : [],
+          authorityEvidenceIds: [],
+        },
       ]]),
+      ...(replayOriginAuthorities === undefined
+        ? {}
+        : { replayOriginAuthorities }),
     });
   };
   for (const findingId of input.settlement.promotedFindingIds) {

@@ -32,6 +32,9 @@ import {
 import {
   collectTaskScopeReportExcerpts,
 } from '../core/workflow/findings/task-scope-adjudication.js';
+import {
+  PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION,
+} from '../core/workflow/findings/manager-raw-decision-adapter.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
 
@@ -200,7 +203,6 @@ function successfulRawResponse(
       rawFindingId: raw.rawFindingId,
       componentId: raw.componentId,
       decision,
-      anchorRelevance: 'not_applicable',
       findingId: decision === 'new' ? '' : 'F-0001',
       evidence: 'manager decision',
     })),
@@ -677,7 +679,6 @@ describe('main manager bounded task runner', () => {
           rawFindingId: first.rawFindingId,
           componentId: first.componentId,
           decision: 'new',
-          anchorRelevance: 'not_applicable',
           findingId: '',
           evidence: 'partial output',
         }],
@@ -733,7 +734,6 @@ describe('main manager bounded task runner', () => {
           decision: raw.rawFindingId === unrelated.rawFindingId
             ? 'new'
             : call === 1 ? 'new' : 'conflict',
-          anchorRelevance: 'not_applicable',
           findingId: raw.rawFindingId === unrelated.rawFindingId || call === 1
             ? ''
             : 'F-0001',
@@ -804,15 +804,19 @@ describe('main manager bounded task runner', () => {
   });
 
   it('drains more than 64 raw tasks without a per-step call cap', async () => {
-    executeAgentMock.mockImplementation(async (_persona, instruction) => (
-      successfulRawResponse(instruction)
-    ));
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      expect(instruction).toContain(PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION);
+      return successfulRawResponse(instruction);
+    });
     const raws = Array.from({ length: 65 }, (_, index) => rawFinding(index + 1));
 
     const result = await run(raws);
 
     expect(executeAgentMock).toHaveBeenCalledTimes(5);
     expect(result.decisions.rawDecisions).toHaveLength(65);
+    expect(result.decisions.rawDecisions.every(
+      (decision) => decision.anchorRelevance === 'not_applicable',
+    )).toBe(true);
     expect(result.rawFailures.size).toBe(0);
     expect(result.taskAudits).toHaveLength(5);
   });
@@ -915,7 +919,6 @@ describe('main manager bounded task runner', () => {
           rawFindingId: raw.rawFindingId,
           componentId: raw.componentId,
           decision: Number(raw.rawFindingId.slice(4)) >= 101 ? 'resolved' : 'same',
-          anchorRelevance: 'not_applicable',
           findingId: 'F-0001',
           evidence: 'relation-specific decision',
         })),

@@ -85,6 +85,7 @@ export async function requestRawAdjudicationBatch(input: {
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'normalizeStructuredOutput' | 'recordSynthesizedAgentUsage'>;
   consumedOutputTokens: number;
+  rawFindings: readonly RawFinding[];
 }): Promise<{ decisions: FindingManagerDecisions; outputTokens: number }> {
   const response = await runPreparedManagerAttempt(input);
   const outputTokens = estimateTokens(JSON.stringify(response.structuredOutput ?? {}));
@@ -96,7 +97,9 @@ export async function requestRawAdjudicationBatch(input: {
     throw new Error(`Raw adjudication output exceeded the per-step budget (${input.consumedOutputTokens + outputTokens} estimated tokens)`);
   }
   return {
-    decisions: rawDecisionsOnly(parseManagerDecisions(response).rawDecisions),
+    decisions: rawDecisionsOnly(
+      parseManagerDecisions(response, input.rawFindings).rawDecisions,
+    ),
     outputTokens,
   };
 }

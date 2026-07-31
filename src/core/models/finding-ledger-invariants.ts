@@ -227,6 +227,7 @@ export function collectFindingLedgerProjectionInvariantViolations(
         result,
         lifecycleEvents: projection.lifecycleEvents,
         evidenceBindings: projection.evidenceBindings,
+        evidenceRecords: projection.evidenceRecords,
       });
       if (eventViolation !== undefined) {
         violations.push({

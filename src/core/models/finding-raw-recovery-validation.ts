@@ -1,6 +1,7 @@
 import { canonicalJson } from '../../shared/utils/canonical-json.js';
 import type {
   FindingEvidenceBinding,
+  FindingEvidenceRecord,
   FindingLifecycleEvent,
   RawRecoveryAttempt,
   RawRecoveryResult,
@@ -10,11 +11,38 @@ function sameValue(left: unknown, right: unknown): boolean {
   return canonicalJson(left) === canonicalJson(right);
 }
 
+export function lifecycleEventAuthorizesReplayRawFinding(input: {
+  event: FindingLifecycleEvent;
+  replayRawFindingId: string;
+  evidenceBindings: readonly FindingEvidenceBinding[];
+  evidenceRecords: readonly FindingEvidenceRecord[];
+}): boolean {
+  return input.event.evidenceBindingIds.some((bindingId) => {
+    const binding = input.evidenceBindings.find(
+      (candidate) => candidate.bindingId === bindingId,
+    );
+    if (binding?.sourceRawFindingId === input.replayRawFindingId) {
+      return true;
+    }
+    const record = binding === undefined
+      ? undefined
+      : input.evidenceRecords.find(
+          (candidate) => candidate.evidenceId === binding.evidenceId,
+        );
+    return record?.kind === 'engine_proof'
+      && record.subject.kind === 'finding_provisional_product_transition'
+      && record.subject.sourceRawFindings.some(
+        (source) => source.rawFindingId === input.replayRawFindingId,
+      );
+  });
+}
+
 export function rawRecoveryResultEventsViolation(input: {
   attempt: RawRecoveryAttempt;
   result: RawRecoveryResult;
   lifecycleEvents: readonly FindingLifecycleEvent[];
   evidenceBindings: readonly FindingEvidenceBinding[];
+  evidenceRecords: readonly FindingEvidenceRecord[];
 }): string | undefined {
   if (input.result.outcome !== 'applied') {
     if (input.result.mutationIds.length !== 0) {
@@ -51,10 +79,12 @@ export function rawRecoveryResultEventsViolation(input: {
     if (transitions.length !== 1 || !sameValue(transitions[0]!.before, expectedBefore)) {
       return `Raw recovery result "${input.result.resultId}" has a broken target transition chain`;
     }
-    const bindsReplay = entry.event.evidenceBindingIds.some((bindingId) => (
-      input.evidenceBindings.find((binding) => binding.bindingId === bindingId)
-        ?.sourceRawFindingId === input.result.replayRawFindingId
-    ));
+    const bindsReplay = lifecycleEventAuthorizesReplayRawFinding({
+      event: entry.event,
+      replayRawFindingId: input.result.replayRawFindingId,
+      evidenceBindings: input.evidenceBindings,
+      evidenceRecords: input.evidenceRecords,
+    });
     if (!bindsReplay) {
       return `Raw recovery result "${input.result.resultId}" mutation "${mutationId}" does not bind its replay raw`;
     }
@@ -69,6 +99,7 @@ export function assertRawRecoveryResultEvents(input: {
   result: RawRecoveryResult;
   lifecycleEvents: readonly FindingLifecycleEvent[];
   evidenceBindings: readonly FindingEvidenceBinding[];
+  evidenceRecords: readonly FindingEvidenceRecord[];
 }): void {
   const violation = rawRecoveryResultEventsViolation(input);
   if (violation !== undefined) {

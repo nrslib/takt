@@ -21,7 +21,6 @@ import {
 import type {
   FindingConflictAdjudicationOutput,
   FindingLedger,
-  FindingManagerDecisions,
   FindingManagerOutput,
   FindingManagerValidationReport,
   FindingMutationPrecondition,
@@ -1499,7 +1498,7 @@ export const FindingManagerOutputSchema = z.object({
 export const FindingManagerRawDecisionSchema = z.object({
   rawFindingId: nonEmptyString,
   decision: z.enum(RAW_DECISION_KINDS),
-  anchorRelevance: z.enum(['relevant', 'not_relevant', 'not_applicable']),
+  anchorRelevance: z.enum(['relevant', 'not_relevant']).optional(),
   findingId: z.string().optional(),
   evidence: nonEmptyString,
 }).strict().transform(({ findingId, ...decision }) => (
@@ -1754,6 +1753,24 @@ export const FindingManagerOutputJsonSchema = {
  * 組み立てと不変条件の強制は decision-assembly.ts が行うため、弱いモデルでも
  * 出力すべき形が単純になる。
  */
+const managerRawDecisionJsonProperties = {
+  rawFindingId: {
+    type: 'string',
+    minLength: 1,
+    description: 'Engine-namespaced raw finding id from the manager prompt.',
+  },
+  decision: {
+    type: 'string',
+    enum: RAW_DECISION_KINDS,
+    description: 'same = matches an existing open finding (familyTag and line-number differences alone are not disqualifying; judge by failure mode, trigger, impact, and required fix). new = no related finding exists yet. resolved = confirms an existing open finding is fixed. reopened = a previously resolved/waived/dismissed finding reappeared. conflict = contradicts an existing finding. unsupported = the raw finding explicitly referenced an existing finding (targetFindingId) as persists/reopened but the reference does not hold up; do not fall back to new.',
+  },
+  findingId: {
+    type: 'string',
+    description: 'Ledger finding id. Required for same/resolved/reopened/conflict. Empty string for new/unsupported.',
+  },
+  evidence: { type: 'string', minLength: 1 },
+} as const;
+
 export const FindingManagerDecisionsJsonSchema = {
   type: 'object',
   additionalProperties: false,
@@ -1763,29 +1780,30 @@ export const FindingManagerDecisionsJsonSchema = {
       type: 'array',
       description: 'Exactly one decision per residual raw finding listed in the prompt.',
       items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['rawFindingId', 'decision', 'anchorRelevance', 'findingId', 'evidence'],
-        properties: {
-          rawFindingId: {
-            type: 'string',
-            minLength: 1,
-            description: 'Engine-namespaced raw finding id from the manager prompt.',
+        anyOf: [
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: Object.keys(managerRawDecisionJsonProperties),
+            properties: managerRawDecisionJsonProperties,
           },
-          decision: {
-            enum: RAW_DECISION_KINDS,
-            description: 'same = matches an existing open finding (familyTag and line-number differences alone are not disqualifying; judge by failure mode, trigger, impact, and required fix). new = no related finding exists yet. resolved = confirms an existing open finding is fixed. reopened = a previously resolved/waived/dismissed finding reappeared. conflict = contradicts an existing finding. unsupported = the raw finding explicitly referenced an existing finding (targetFindingId) as persists/reopened but the reference does not hold up; do not fall back to new.',
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: [
+              ...Object.keys(managerRawDecisionJsonProperties),
+              'anchorRelevance',
+            ],
+            properties: {
+              ...managerRawDecisionJsonProperties,
+              anchorRelevance: {
+                type: 'string',
+                enum: ['relevant', 'not_relevant'],
+                description: 'Required only for an absence target. Decide whether its verified task/public authoritative quote establishes the claimed missing obligation.',
+              },
+            },
           },
-          anchorRelevance: {
-            enum: ['relevant', 'not_relevant', 'not_applicable'],
-            description: 'For an absence target, explicitly decide whether its verified task/public authoritative quote is relevant to the claimed missing obligation. The engine has verified quote existence only. Use relevant only when the quote actually establishes the obligation, not_relevant otherwise. Use not_applicable for code/structure targets.',
-          },
-          findingId: {
-            type: 'string',
-            description: 'Ledger finding id. Required for same/resolved/reopened/conflict. Empty string for new/unsupported.',
-          },
-          evidence: { type: 'string', minLength: 1 },
-        },
+        ],
       },
     },
     disputeDecisions: {
@@ -2251,7 +2269,9 @@ export function parseFindingManagerOutput(value: unknown): FindingManagerOutput 
   return FindingManagerOutputSchema.parse(value);
 }
 
-export function parseFindingManagerDecisions(value: unknown): FindingManagerDecisions {
+export function parseFindingManagerDecisions(
+  value: unknown,
+): z.infer<typeof FindingManagerDecisionsSchema> {
   return FindingManagerDecisionsSchema.parse(value);
 }
 

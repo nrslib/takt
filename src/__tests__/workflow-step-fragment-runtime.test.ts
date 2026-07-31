@@ -381,7 +381,7 @@ describe('workflow step fragment runtime contract', () => {
     expect(fragmentResult.restoredStepIterations).toEqual(inlineResult.restoredStepIterations);
     expect(fragmentResult.result.nextStep).toBe('review');
     expect(fragmentResult.state.stepIterations).toEqual(inlineResult.state.stepIterations);
-    expect(fragmentResult.state.stepIterations).toEqual(new Map([['review', 1], ['fix', 2]]));
+    expect(fragmentResult.state.stepIterations).toEqual(new Map([['review', 1], ['fix', 1]]));
     expect(fragmentResult.result).toMatchObject({ nextStep: inlineResult.result.nextStep });
   });
 });

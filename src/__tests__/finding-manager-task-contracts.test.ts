@@ -25,8 +25,8 @@ function collectConstrainedSchemas(value: unknown): Array<Record<string, unknown
 
 describe('finding manager task contracts', () => {
   it.each([
-    ['raw task', MainManagerRawTaskOutputJsonSchema, 2],
-    ['control task', MainManagerControlTaskOutputJsonSchema, 6],
+    ['raw task', MainManagerRawTaskOutputJsonSchema, 3],
+    ['control task', MainManagerControlTaskOutputJsonSchema, 8],
     ['entity binding task', FindingEntityBindingTaskOutputJsonSchema, 1],
   ])('declares matching string types for every enum and const in the %s output schema', (
     _name,
