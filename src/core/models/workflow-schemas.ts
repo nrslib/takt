@@ -329,7 +329,7 @@ const WorkflowCallOverridesRawSchema = z.object({
   }
 });
 
-const AgentParallelSubStepRawSchema = z.object({
+const AgentParallelSubStepRawObjectSchema = z.object({
   name: WorkflowStepNameSchema,
   description: z.never().optional(),
   kind: z.never().optional(),
@@ -369,7 +369,12 @@ const AgentParallelSubStepRawSchema = z.object({
   concurrency: z.never().optional(),
   arpeggio: z.never().optional(),
   team_leader: z.never().optional(),
-}).superRefine((data, ctx) => {
+});
+
+function validateAgentParallelSubStepRules(
+  data: { rules?: z.output<typeof WorkflowRulesSchema> },
+  ctx: z.RefinementCtx,
+): void {
   validateParallelSubStepRules(data.rules, ctx);
   data.rules?.forEach((rule, index) => {
     if (rule.return !== undefined) {
@@ -380,7 +385,11 @@ const AgentParallelSubStepRawSchema = z.object({
       });
     }
   });
-});
+}
+
+const AgentParallelSubStepRawSchema = AgentParallelSubStepRawObjectSchema.superRefine(
+  validateAgentParallelSubStepRules,
+);
 
 const WorkflowCallParallelSubStepRawSchema = z.object({
   name: WorkflowStepNameSchema,
@@ -432,6 +441,18 @@ export const ParallelSubStepRawSchema = z.union([
   WorkflowCallParallelSubStepRawSchema,
   AgentParallelSubStepRawSchema,
 ]);
+
+const DynamicParallelPoolSubStepRawSchema = AgentParallelSubStepRawObjectSchema.extend({
+  description: z.string().trim().min(1),
+}).superRefine(validateAgentParallelSubStepRules);
+
+const DynamicParallelRawSchema = z.object({
+  fixed: z.array(AgentParallelSubStepRawSchema).optional().default([]),
+  pool: z.array(DynamicParallelPoolSubStepRawSchema).min(1),
+  selection: z.object({
+    mode: z.enum(['replace', 'cumulative']).optional().default('replace'),
+  }).strict().optional().default({ mode: 'replace' }),
+}).strict();
 
 const WorkflowSubworkflowRawSchema = z.object({
   callable: z.boolean().optional(),
@@ -509,7 +530,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     output_contracts: OutputContractsFieldSchema,
     quality_gates: QualityGatesSchema,
     pass_previous_response: z.boolean().optional(),
-    parallel: z.array(ParallelSubStepRawSchema).optional(),
+    parallel: z.union([z.array(ParallelSubStepRawSchema), DynamicParallelRawSchema]).optional(),
     concurrency: z.number().int().min(1).optional(),
     arpeggio: ArpeggioConfigRawSchema.optional(),
     team_leader: TeamLeaderConfigRawSchema.optional(),
@@ -530,7 +551,10 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
 
     const stepKind = getWorkflowStepKind(data);
     if (stepKind !== 'workflow_call') {
-      validateAggregateRulePlacement(data.rules, (data.parallel?.length ?? 0) > 0, ctx);
+      const hasParallelSubSteps = Array.isArray(data.parallel)
+        ? data.parallel.length > 0
+        : data.parallel !== undefined;
+      validateAggregateRulePlacement(data.rules, hasParallelSubSteps, ctx);
     }
     if (data.session_key !== undefined && stepKind !== 'agent') {
       ctx.addIssue({
@@ -727,7 +751,10 @@ interface OutputContractStep {
   readonly output_contracts?: {
     readonly report?: readonly { readonly name: string }[];
   };
-  readonly parallel?: readonly OutputContractStep[];
+  readonly parallel?: readonly OutputContractStep[] | {
+    readonly fixed: readonly OutputContractStep[];
+    readonly pool: readonly OutputContractStep[];
+  };
 }
 
 interface OutputContractProducer {
@@ -791,8 +818,11 @@ function validateOutputContractIdentities(
     });
     if (step.parallel !== undefined) {
       const childBlockPath = JSON.stringify([...stepPath, 'parallel']);
+      const parallelSteps = 'fixed' in step.parallel
+        ? [...step.parallel.fixed, ...step.parallel.pool]
+        : step.parallel;
       validateOutputContractIdentities(
-        step.parallel,
+        parallelSteps,
         ctx,
         [...stepPath, 'parallel'],
         identities,
@@ -825,5 +855,5 @@ export const WorkflowConfigRawSchema = z.object({
   loop_monitors: z.array(LoopMonitorSchema).optional(),
   interactive_mode: InteractiveModeSchema.optional(),
 }).strict().superRefine((workflow, ctx) => {
-  validateOutputContractIdentities(workflow.steps, ctx);
+  validateOutputContractIdentities(workflow.steps as readonly OutputContractStep[], ctx);
 });

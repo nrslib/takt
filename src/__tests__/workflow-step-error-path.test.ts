@@ -4,7 +4,7 @@ import {
   withWorkflowConfigErrorPath,
 } from '../core/workflow/workflow-config-error.js';
 import { findWorkflowStepLocation } from '../core/workflow/workflow-step-location.js';
-import type { WorkflowConfig, WorkflowStep } from '../core/models/types.js';
+import type { NormalAgentWorkflowStep, WorkflowConfig, WorkflowStep } from '../core/models/types.js';
 
 describe('workflow configuration error boundaries', () => {
   it('retains an immutable normalized path and the original cause', () => {
@@ -73,6 +73,35 @@ describe('workflow configuration error boundaries', () => {
     };
 
     expect(findWorkflowStepLocation(config, subStep)).toEqual(['steps', 0, 'parallel', 0]);
+  });
+
+  it('retains the fixed and pool branches in dynamic parallel locations', () => {
+    const fixed: NormalAgentWorkflowStep = { name: 'architecture', personaDisplayName: 'architecture', instruction: 'review' };
+    const pool: NormalAgentWorkflowStep & { description: string } = {
+      name: 'frontend',
+      description: 'review frontend',
+      personaDisplayName: 'frontend',
+      instruction: 'review',
+    };
+    const config: WorkflowConfig = {
+      name: 'dynamic-location-test',
+      initialStep: 'reviewers',
+      maxSteps: 1,
+      steps: [{
+        name: 'reviewers',
+        personaDisplayName: 'reviewers',
+        instruction: 'reviewers',
+        parallel: {
+          kind: 'dynamic',
+          fixed: [fixed],
+          pool: [pool],
+          selection: { mode: 'replace' as const },
+        },
+      }],
+    };
+
+    expect(findWorkflowStepLocation(config, fixed)).toEqual(['steps', 0, 'parallel', 'fixed', 0]);
+    expect(findWorkflowStepLocation(config, pool)).toEqual(['steps', 0, 'parallel', 'pool', 0]);
   });
 
 });

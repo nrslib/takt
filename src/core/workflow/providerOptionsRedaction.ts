@@ -2,7 +2,7 @@ import type { StepProviderOptions } from '../models/workflow-provider-options.js
 
 export const CONFIGURED_PROVIDER_OPTION_VALUE = '[configured]';
 
-export function redactProviderOptionsForLogging(
+export function redactProviderOptions(
   providerOptions: StepProviderOptions | undefined,
 ): StepProviderOptions | undefined {
   if (providerOptions === undefined) {

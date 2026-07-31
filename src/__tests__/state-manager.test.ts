@@ -16,6 +16,8 @@ import {
 import { MAX_USER_INPUTS, MAX_INPUT_LENGTH } from '../core/workflow/constants.js';
 import type { WorkflowConfig, AgentResponse, WorkflowState } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
+import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import { buildDynamicParallelSelectionIdentity } from '../core/workflow/dynamic-parallel/identity.js';
 
 function makeConfig(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig {
   return {
@@ -32,6 +34,29 @@ function makeOptions(overrides: Partial<WorkflowEngineOptions> = {}): WorkflowEn
     projectCwd: '/tmp/project',
     ...overrides,
   };
+}
+
+function makeDynamicParallelConfig(): WorkflowConfig {
+  const fixed = { name: 'architecture', personaDisplayName: 'architecture', instruction: 'Review' };
+  const pool = { name: 'frontend', description: 'Review frontend', personaDisplayName: 'frontend', instruction: 'Review' };
+  return makeConfig({
+    initialStep: 'reviewers',
+    steps: [{
+      name: 'reviewers',
+      personaDisplayName: 'reviewers',
+      instruction: 'Review',
+      parallel: {
+        kind: 'dynamic',
+        fixed: [fixed],
+        pool: [pool],
+        selection: { mode: 'replace' },
+      },
+    }],
+  });
+}
+
+function selectionIdentity(workflow: WorkflowConfig, stepName = 'reviewers'): string {
+  return buildDynamicParallelSelectionIdentity(workflow, stepName, []);
 }
 
 function makeResponse(content: string): AgentResponse {
@@ -96,12 +121,13 @@ describe('StateManager', () => {
         makeOptions({
           startStep: 'review',
           resumePoint: {
-            version: 1,
+            version: 2,
             stack: [
               {
                 workflow: 'parent',
                 step: 'delegate',
                 kind: 'workflow_call',
+                call_instance: 1,
                 step_iterations: { delegate: 3 },
               },
               {
@@ -113,9 +139,11 @@ describe('StateManager', () => {
             ],
             iteration: 12,
             elapsed_ms: 100,
+            workflow_call_invocations: {},
+            workflow_step_participations: {},
           },
           resumeStackPrefix: [
-            { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
+            { workflow: 'parent', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
           ],
         }),
       );
@@ -130,7 +158,7 @@ describe('StateManager', () => {
         makeOptions({
           startStep: 'implement',
           resumePoint: {
-            version: 1,
+            version: 2,
             stack: [{
               workflow: 'test-workflow',
               step: 'review',
@@ -139,11 +167,432 @@ describe('StateManager', () => {
             }],
             iteration: 12,
             elapsed_ms: 100,
+            workflow_call_invocations: {},
+            workflow_step_participations: {},
           },
         }),
       );
 
       expect(manager.state.stepIterations).toEqual(new Map());
+    });
+
+    it('should restore dynamic parallel selections for a resumed round', () => {
+      const config = makeDynamicParallelConfig();
+      const identity = selectionIdentity(config);
+      const manager = new StateManager(
+        config,
+        makeOptions({
+          startStep: 'reviewers',
+          resumePoint: {
+            version: 2,
+            stack: [{ workflow: 'test-workflow', step: 'reviewers', kind: 'agent' }],
+            iteration: 3,
+            elapsed_ms: 100,
+            workflow_call_invocations: {},
+            workflow_step_participations: {},
+            dynamic_parallel_selections: {
+              [identity]: {
+                identity,
+                step_name: 'reviewers',
+                round: 1,
+                selected_pool_ids: ['frontend'],
+                effective_selection_ids: ['architecture', 'frontend'],
+              },
+            },
+          },
+        }),
+      );
+
+      expect(manager.state.dynamicParallelSelections.get(identity)).toEqual({
+        identity,
+        step_name: 'reviewers',
+        round: 1,
+        selected_pool_ids: ['frontend'],
+        effective_selection_ids: ['architecture', 'frontend'],
+      });
+      expect(manager.state.resumedDynamicParallelSteps.has(identity)).toBe(true);
+    });
+
+    it('should reject a snapshot whose identity is not reachable from the workflow graph', () => {
+      expect(() => new StateManager(
+        makeConfig({
+          initialStep: 'prepare',
+          steps: [
+            { name: 'prepare', personaDisplayName: 'prepare', instruction: 'Prepare' },
+            makeDynamicParallelConfig().steps[0]!,
+          ],
+        }),
+        makeOptions({
+          startStep: 'prepare',
+          resumePoint: {
+            version: 2,
+            stack: [{ workflow: 'test-workflow', step: 'prepare', kind: 'agent' }],
+            iteration: 3,
+            elapsed_ms: 100,
+            workflow_call_invocations: {},
+            workflow_step_participations: {},
+            dynamic_parallel_selections: {
+              'wrong-workflow:reviewers': {
+                identity: 'wrong-workflow:reviewers',
+                step_name: 'reviewers',
+                round: 1,
+                selected_pool_ids: ['frontend'],
+                effective_selection_ids: ['architecture', 'frontend'],
+              },
+            },
+          },
+        }),
+      )).toThrow('Dynamic parallel selection snapshot identity "wrong-workflow:reviewers" does not match a reachable dynamic parallel step');
+    });
+
+    it('should reject a snapshot whose internal identity differs from its canonical map key', () => {
+      const config = makeDynamicParallelConfig();
+      const identity = selectionIdentity(config);
+
+      expect(() => new StateManager(config, makeOptions({
+        startStep: 'reviewers',
+        resumePoint: {
+          version: 2,
+          stack: [{ workflow: 'test-workflow', step: 'reviewers', kind: 'agent' }],
+          iteration: 1,
+          elapsed_ms: 0,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
+          dynamic_parallel_selections: {
+            [identity]: {
+              identity: `${identity}-different`,
+              step_name: 'reviewers',
+              round: 1,
+              selected_pool_ids: ['frontend'],
+              effective_selection_ids: ['architecture', 'frontend'],
+            },
+          },
+        },
+      }))).toThrow(`Invalid dynamic parallel selection snapshot for identity "${identity}"`);
+    });
+
+    it.each([
+      {
+        label: 'an extra identity property',
+        identity: '{"workflow":"test-workflow","step":"reviewers","calls":[],"extra":true}',
+      },
+      {
+        label: 'a non-canonical identity key order',
+        identity: '{"step":"reviewers","workflow":"test-workflow","calls":[]}',
+      },
+      {
+        label: 'a non-canonical JSON representation',
+        identity: '{ "workflow":"test-workflow","step":"reviewers","calls":[]}',
+      },
+    ])('should reject a reachable current snapshot with $label', ({ identity }) => {
+      const config = makeDynamicParallelConfig();
+
+      expect(() => new StateManager(config, makeOptions({
+        startStep: 'reviewers',
+        resumePoint: {
+          version: 2,
+          stack: [{ workflow: 'test-workflow', step: 'reviewers', kind: 'agent' }],
+          iteration: 1,
+          elapsed_ms: 0,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
+          dynamic_parallel_selections: {
+            [identity]: {
+              identity,
+              step_name: 'reviewers',
+              round: 1,
+              selected_pool_ids: ['frontend'],
+              effective_selection_ids: ['architecture', 'frontend'],
+            },
+          },
+        },
+      }))).toThrow('does not match a reachable dynamic parallel step');
+    });
+
+    it('should reject a reachable future snapshot with a non-canonical identity', () => {
+      const reviewers = makeDynamicParallelConfig().steps[0]!;
+      const config = makeConfig({
+        initialStep: 'prepare',
+        steps: [
+          { name: 'prepare', personaDisplayName: 'prepare', instruction: 'Prepare' },
+          reviewers,
+        ],
+      });
+      const identity = '{"workflow":"test-workflow","step":"reviewers","calls":[],"extra":true}';
+
+      expect(() => new StateManager(config, makeOptions({
+        startStep: 'prepare',
+        resumePoint: {
+          version: 2,
+          stack: [{ workflow: 'test-workflow', step: 'prepare', kind: 'agent' }],
+          iteration: 1,
+          elapsed_ms: 0,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
+          dynamic_parallel_selections: {
+            [identity]: {
+              identity,
+              step_name: 'reviewers',
+              round: 1,
+              selected_pool_ids: ['frontend'],
+              effective_selection_ids: ['architecture', 'frontend'],
+            },
+          },
+        },
+      }))).toThrow('does not match a reachable dynamic parallel step');
+    });
+
+    it('should reject a nested snapshot with a non-canonical workflow-call kind', () => {
+      const childWorkflow = makeDynamicParallelConfig();
+      childWorkflow.name = 'child-workflow';
+      childWorkflow.subworkflow = { callable: true };
+      const parentWorkflow = makeConfig({
+        initialStep: 'prepare',
+        steps: [
+          { name: 'prepare', personaDisplayName: 'prepare', instruction: 'Prepare' },
+          { name: 'delegate', kind: 'workflow_call', call: 'child-workflow', personaDisplayName: 'delegate' },
+        ],
+      });
+      const identity = '{"workflow":"child-workflow","step":"reviewers","calls":[{"workflow":"test-workflow","step":"delegate","kind":"agent","instance":1}]}';
+
+      expect(() => new StateManager(parentWorkflow, makeOptions({
+        startStep: 'prepare',
+        workflowCallResolver: ({ step }) => step.call === 'child-workflow' ? childWorkflow : null,
+        resumePoint: {
+          version: 2,
+          stack: [{ workflow: 'test-workflow', step: 'prepare', kind: 'agent' }],
+          iteration: 1,
+          elapsed_ms: 0,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
+          dynamic_parallel_selections: {
+            [identity]: {
+              identity,
+              step_name: 'reviewers',
+              round: 1,
+              selected_pool_ids: ['frontend'],
+              effective_selection_ids: ['architecture', 'frontend'],
+            },
+          },
+        },
+      }))).toThrow('does not match a reachable dynamic parallel step');
+    });
+
+    it('should reject a dynamic selection whose step_name does not match the resumed step', () => {
+      const config = makeDynamicParallelConfig();
+      const identity = selectionIdentity(config);
+      expect(() => new StateManager(
+        config,
+        makeOptions({
+          startStep: 'reviewers',
+          resumePoint: {
+            version: 2,
+            stack: [{ workflow: 'test-workflow', step: 'reviewers', kind: 'agent' }],
+            iteration: 3,
+            elapsed_ms: 100,
+            workflow_call_invocations: {},
+            workflow_step_participations: {},
+            dynamic_parallel_selections: {
+              [identity]: {
+                identity,
+                step_name: 'different-step',
+                round: 1,
+                selected_pool_ids: ['frontend'],
+                effective_selection_ids: ['architecture', 'frontend'],
+              },
+            },
+          },
+        }),
+      )).toThrow('Dynamic parallel selection snapshot step_name does not match resumed step "reviewers"');
+    });
+
+    it('should reject a resumed dynamic selection with no effective sub-steps', () => {
+      const pool = {
+        name: 'frontend',
+        description: 'Review frontend',
+        personaDisplayName: 'frontend',
+        instruction: 'Review',
+      };
+      const config = makeConfig({
+        initialStep: 'reviewers',
+        steps: [{
+          name: 'reviewers',
+          personaDisplayName: 'reviewers',
+          instruction: 'Review',
+          parallel: {
+            kind: 'dynamic',
+            fixed: [],
+            pool: [pool],
+            selection: { mode: 'replace' },
+          },
+        }],
+      });
+      const identity = selectionIdentity(config);
+
+      expect(() => new StateManager(
+        config,
+        makeOptions({
+          startStep: 'reviewers',
+          resumePoint: {
+            version: 2,
+            stack: [{ workflow: 'test-workflow', step: 'reviewers', kind: 'agent' }],
+            iteration: 3,
+            elapsed_ms: 100,
+            workflow_call_invocations: {},
+            workflow_step_participations: {},
+            dynamic_parallel_selections: {
+              [identity]: {
+                identity,
+                step_name: 'reviewers',
+                round: 1,
+                selected_pool_ids: [],
+                effective_selection_ids: [],
+              },
+            },
+          },
+        }),
+      )).toThrow('Dynamic parallel selection snapshot for "reviewers" has an empty effective selection');
+    });
+
+    it('should reject an invalid future dynamic selection before the selector can run', () => {
+      const reviewers = makeDynamicParallelConfig().steps[0]!;
+      const config = makeConfig({
+        initialStep: 'prepare',
+        steps: [
+          { name: 'prepare', personaDisplayName: 'prepare', instruction: 'Prepare' },
+          reviewers,
+        ],
+      });
+      const identity = selectionIdentity(config);
+
+      expect(() => new StateManager(
+        config,
+        makeOptions({
+          startStep: 'prepare',
+          resumePoint: {
+            version: 2,
+            stack: [{ workflow: 'test-workflow', step: 'prepare', kind: 'agent' }],
+            iteration: 3,
+            elapsed_ms: 100,
+            workflow_call_invocations: {},
+            workflow_step_participations: {},
+            dynamic_parallel_selections: {
+              [identity]: {
+                identity,
+                step_name: 'reviewers',
+                round: 1,
+                selected_pool_ids: ['unknown-reviewer'],
+                effective_selection_ids: ['architecture', 'unknown-reviewer'],
+              },
+            },
+          },
+        }),
+      )).toThrow('Dynamic parallel selection snapshot for "reviewers" contains unknown pool ID "unknown-reviewer"');
+    });
+
+    it('should accept a valid child workflow dynamic selection snapshot', () => {
+      const childWorkflow = makeDynamicParallelConfig();
+      childWorkflow.name = 'child-workflow';
+      childWorkflow.subworkflow = { callable: true };
+      const parentWorkflow = makeConfig({
+        initialStep: 'prepare',
+        steps: [
+          { name: 'prepare', personaDisplayName: 'prepare', instruction: 'Prepare' },
+          { name: 'delegate', kind: 'workflow_call', call: 'child-workflow', personaDisplayName: 'delegate' },
+        ],
+      });
+      const identity = buildDynamicParallelSelectionIdentity(childWorkflow, 'reviewers', [
+        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', new Map(), 1),
+      ]);
+
+      const manager = new StateManager(
+        parentWorkflow,
+        makeOptions({
+          startStep: 'prepare',
+          workflowCallResolver: ({ step }) => step.call === 'child-workflow' ? childWorkflow : null,
+          resumePoint: {
+            version: 2,
+            stack: [{ workflow: 'test-workflow', step: 'prepare', kind: 'agent' }],
+            iteration: 3,
+            elapsed_ms: 100,
+            workflow_call_invocations: {},
+            workflow_step_participations: {},
+            dynamic_parallel_selections: {
+              [identity]: {
+                identity,
+                step_name: 'reviewers',
+                round: 1,
+                selected_pool_ids: ['frontend'],
+                effective_selection_ids: ['architecture', 'frontend'],
+              },
+            },
+          },
+        }),
+      );
+
+      expect(manager.state.dynamicParallelSelections.get(identity)?.effective_selection_ids)
+        .toEqual(['architecture', 'frontend']);
+    });
+
+    it('should retain independent snapshots for separate workflow call instances', () => {
+      const childWorkflow = makeDynamicParallelConfig();
+      childWorkflow.name = 'child-workflow';
+      childWorkflow.subworkflow = { callable: true };
+      const parentWorkflow = makeConfig({
+        initialStep: 'prepare',
+        steps: [
+          { name: 'prepare', personaDisplayName: 'prepare', instruction: 'Prepare' },
+          { name: 'delegate', kind: 'workflow_call', call: 'child-workflow', personaDisplayName: 'delegate' },
+        ],
+      });
+      const firstIdentity = buildDynamicParallelSelectionIdentity(childWorkflow, 'reviewers', [
+        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', new Map(), 1),
+      ]);
+      const secondIdentity = buildDynamicParallelSelectionIdentity(childWorkflow, 'reviewers', [
+        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', new Map(), 2),
+      ]);
+      const snapshot = (identity: string, selectedPoolId: string) => ({
+        identity,
+        step_name: 'reviewers',
+        round: 1,
+        selected_pool_ids: [selectedPoolId],
+        effective_selection_ids: ['architecture', selectedPoolId],
+      });
+
+      const manager = new StateManager(parentWorkflow, makeOptions({
+        startStep: 'prepare',
+        workflowCallResolver: ({ step }) => step.call === 'child-workflow' ? childWorkflow : null,
+        resumePoint: {
+          version: 2,
+          stack: [{ workflow: 'test-workflow', step: 'prepare', kind: 'agent' }],
+          iteration: 3,
+          elapsed_ms: 100,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
+          dynamic_parallel_selections: {
+            [firstIdentity]: snapshot(firstIdentity, 'frontend'),
+            [secondIdentity]: snapshot(secondIdentity, 'frontend'),
+          },
+        },
+      }));
+
+      expect(manager.state.dynamicParallelSelections).toHaveLength(2);
+    });
+
+    it('should reject resuming a dynamic parallel step without its saved round snapshot', () => {
+      const config = makeDynamicParallelConfig();
+
+      expect(() => new StateManager(config, makeOptions({
+        startStep: 'reviewers',
+        resumePoint: {
+          version: 2,
+          stack: [{ workflow: 'test-workflow', step: 'reviewers', kind: 'agent' }],
+          iteration: 3,
+          elapsed_ms: 100,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
+        },
+      }))).toThrow('Dynamic parallel selection snapshot is required to resume "reviewers"');
     });
   });
 

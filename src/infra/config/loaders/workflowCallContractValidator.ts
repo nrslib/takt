@@ -1,12 +1,12 @@
 import { dirname } from 'node:path';
-import type { WorkflowCallStep, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
-import { isWorkflowCallStep } from '../../../core/workflow/step-kind.js';
+import type { WorkflowConfig } from '../../../core/models/index.js';
 import { validateWorkflowCallRulesAgainstChildReturns } from './workflowCallContracts.js';
 import { getWorkflowSourcePath } from './workflowSourceMetadata.js';
 import { getWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 import { findWorkflowStepLocation } from '../../../core/workflow/workflow-step-location.js';
 import { annotateWorkflowConfigFragmentError } from './workflowRawParser.js';
+import { collectWorkflowCallSteps } from './workflowParallelTraversal.js';
 
 interface WorkflowCallValidationLookupOptions {
   basePath?: string;
@@ -36,19 +36,6 @@ function getWorkflowCallValidationKey(workflow: WorkflowConfig, lookupCwd: strin
     return sourcePath;
   }
   return `${lookupCwd}:${workflow.name}`;
-}
-
-function collectWorkflowCallSteps(
-  steps: readonly WorkflowStep[],
-  matches: WorkflowCallStep[] = [],
-): WorkflowCallStep[] {
-  for (const step of steps) {
-    if (isWorkflowCallStep(step)) {
-      matches.push(step);
-    }
-    collectWorkflowCallSteps(step.parallel ?? [], matches);
-  }
-  return matches;
 }
 
 function validateWorkflowCallContractsRecursive(

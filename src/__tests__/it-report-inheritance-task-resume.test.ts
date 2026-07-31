@@ -10,9 +10,12 @@ vi.mock('../agents/runner.js', () => ({
 
 import { runAgent } from '../agents/runner.js';
 import { executeAndCompleteTask } from '../features/tasks/execute/taskExecution.js';
-import { invalidateGlobalConfigCache } from '../infra/config/index.js';
+import { invalidateGlobalConfigCache, loadWorkflowByIdentifier } from '../infra/config/index.js';
 import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
 import { parseFindingLedger } from '../core/models/finding-schemas.js';
+import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import { WorkflowCallInvocationIndex } from '../core/workflow/workflow-call-invocation-index.js';
+import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
 
 const sourceRunSlug = '20260717-source-run';
 const resumeModes = ['requeue', 'retry', 'instruct'] as const;
@@ -89,15 +92,38 @@ function createEnvironment(withFindingContract: boolean): TestEnvironment {
   return { root, projectDir, globalDir };
 }
 
-function buildResumePoint() {
+function buildResumePoint(projectDir: string) {
+  const parent = loadWorkflowByIdentifier('parent-fix', projectDir);
+  const child = loadWorkflowByIdentifier('child-fix', projectDir);
+  if (parent === null || child === null) {
+    throw new Error('Expected report inheritance workflows');
+  }
+  const delegateEntry = buildWorkflowResumePointEntry(
+    parent,
+    'delegate',
+    'workflow_call',
+    undefined,
+    1,
+  );
+  const invocationIndex = new WorkflowCallInvocationIndex(new Map());
+  invocationIndex.record(parent, 'delegate', [], {
+    call_instance: 1,
+    report_namespace_segment: 'iteration-1--step-delegate--workflow-child-fix',
+  });
+  const participationIndex = new WorkflowStepParticipationIndex(new Map());
+  participationIndex.record(child, 'reviewers', [delegateEntry], []);
+  participationIndex.record(child, 'arch-review', [delegateEntry], ['05-arch-review.md']);
+
   return {
-    version: 1 as const,
+    version: 2 as const,
     stack: [
-      { workflow: 'parent-fix', step: 'delegate', kind: 'workflow_call' as const },
-      { workflow: 'child-fix', step: 'fix', kind: 'agent' as const },
+      delegateEntry,
+      buildWorkflowResumePointEntry(child, 'fix', 'agent', new Map([['reviewers', 1]])),
     ],
     iteration: 1,
     elapsed_ms: 0,
+    workflow_call_invocations: invocationIndex.serialized(),
+    workflow_step_participations: participationIndex.serialized(),
   };
 }
 
@@ -112,7 +138,7 @@ function completeSourceTask(runner: TaskRunner, task: TaskInfo): void {
   });
 }
 
-function prepareResumedTask(runner: TaskRunner, mode: ResumeMode): TaskInfo {
+function prepareResumedTask(runner: TaskRunner, projectDir: string, mode: ResumeMode): TaskInfo {
   runner.addTask('resume inherited review reports', { workflow: 'parent-fix' });
   const sourceTask = runner.claimNextTasks(1)[0];
   if (!sourceTask) {
@@ -121,7 +147,7 @@ function prepareResumedTask(runner: TaskRunner, mode: ResumeMode): TaskInfo {
   const taskWithSourceRun = runner.updateRunningTaskExecution(sourceTask.name, {
     runSlug: sourceRunSlug,
   });
-  const resumePoint = buildResumePoint();
+  const resumePoint = buildResumePoint(projectDir);
 
   if (mode === 'requeue') {
     runner.exceedTask(taskWithSourceRun.name, {
@@ -237,7 +263,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
 
     const source = writeSourceReports(environment.projectDir, withFindingContract);
     const runner = new TaskRunner(environment.projectDir);
-    const resumedTask = prepareResumedTask(runner, mode);
+    const resumedTask = prepareResumedTask(runner, environment.projectDir, mode);
 
     const success = await executeAndCompleteTask(resumedTask, runner, environment.projectDir);
 
@@ -249,7 +275,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       resumedRunSlug,
       'reports',
       'subworkflows',
-      'iteration-2--step-delegate--workflow-child-fix',
+      'iteration-1--step-delegate--workflow-child-fix',
       '05-arch-review.md',
     );
     const diagnosticPath = join(
@@ -259,7 +285,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       resumedRunSlug,
       'reports',
       'subworkflows',
-      'iteration-2--step-delegate--workflow-child-fix',
+      'iteration-1--step-delegate--workflow-child-fix',
       'review-report-inheritance.json',
     );
 
@@ -274,8 +300,12 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
     expect(JSON.parse(readFileSync(diagnosticPath, 'utf-8'))).toEqual(expect.objectContaining({
       sourceRunSlug,
       sourceReportDirectory: join(environment.projectDir, '.takt', 'runs', sourceRunSlug, 'reports'),
-      status: 'copied',
-      fallbackUsed: false,
+      status: 'partial',
+      fallbackUsed: true,
+      skipped: [expect.objectContaining({
+        reportName: '05-arch-review.md',
+        reason: 'target_exists',
+      })],
     }));
     if (source.sourceLedger !== undefined) {
       expect(readFileSync(join(environment.projectDir, '.takt', 'findings', 'review-ledger.json'), 'utf-8'))
@@ -327,21 +357,22 @@ describe('IT: missing report source fallback through task resume', () => {
     });
 
     const runner = new TaskRunner(environment.projectDir);
-    const resumedTask = prepareResumedTask(runner, 'requeue');
+    const resumedTask = prepareResumedTask(runner, environment.projectDir, 'requeue');
 
     const success = await executeAndCompleteTask(resumedTask, runner, environment.projectDir);
 
     const resumedRunSlug = findResumedRunSlug(environment.projectDir);
-    const diagnosticPath = join(
+    const reportRoot = join(
       environment.projectDir,
       '.takt',
       'runs',
       resumedRunSlug,
       'reports',
-      'subworkflows',
-      'iteration-2--step-delegate--workflow-child-fix',
-      'review-report-inheritance.json',
     );
+    const diagnosticRelativePaths = (readdirSync(reportRoot, { recursive: true }) as string[])
+      .filter((entry) => entry.endsWith('review-report-inheritance.json'));
+    expect(diagnosticRelativePaths).toHaveLength(1);
+    const diagnosticPath = join(reportRoot, diagnosticRelativePaths[0]!);
     const diagnostic = JSON.parse(readFileSync(diagnosticPath, 'utf-8')) as {
       sourceRunSlug?: string;
       status?: string;

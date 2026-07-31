@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { isPathInside, isValidReportDirName } from '../../../shared/utils/index.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import type { WorkflowResumePoint } from '../../models/types.js';
+import { parseWorkflowResumePoint } from '../resume-point-codec.js';
 import type { WorkflowTraceDiscovery } from '../observability/traceDiscovery.js';
 import { buildRunPaths } from './run-paths.js';
 import {
@@ -49,8 +50,9 @@ export interface RunMeta {
   prContext?: PullRequestContext;
 }
 
-interface RawRunMeta extends Omit<RunMeta, 'prContext'> {
-  resume_point?: WorkflowResumePoint;
+interface RawRunMeta extends Omit<RunMeta, 'prContext' | 'resumePoint'> {
+  resumePoint?: unknown;
+  resume_point?: unknown;
   source_run_slug?: string;
   resume_mode?: RunResumeMode;
   resume_artifacts?: string;
@@ -62,10 +64,19 @@ interface RawRunMeta extends Omit<RunMeta, 'prContext'> {
 export type RunMetaWarningHandler = (warning: string) => void;
 
 function normalizeRunMeta(raw: RawRunMeta): RunMeta {
-  const { pr_context: persistedPrContext, ...baseMeta } = raw;
+  const {
+    pr_context: persistedPrContext,
+    resumePoint: camelResumePoint,
+    resume_point: snakeResumePoint,
+    ...baseMeta
+  } = raw;
+  const rawResumePoint = camelResumePoint ?? snakeResumePoint;
+  const resumePoint = rawResumePoint === undefined
+    ? undefined
+    : parseWorkflowResumePoint(rawResumePoint);
   return {
     ...baseMeta,
-    resumePoint: raw.resumePoint ?? raw.resume_point,
+    ...(resumePoint === undefined ? {} : { resumePoint }),
     sourceRunSlug: raw.sourceRunSlug ?? raw.source_run_slug,
     resumeMode: raw.resumeMode ?? raw.resume_mode,
     resumeArtifacts: raw.resumeArtifacts ?? raw.resume_artifacts,

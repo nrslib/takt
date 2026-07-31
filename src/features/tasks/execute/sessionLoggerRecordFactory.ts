@@ -17,7 +17,7 @@ import type {
   WorkflowStep,
 } from '../../../core/models/index.js';
 import type { JudgeStageEntry, PhasePromptParts, StepProviderInfo } from '../../../core/workflow/types.js';
-import { redactProviderOptionsForLogging } from '../../../core/workflow/providerOptionsRedaction.js';
+import { redactProviderOptions } from '../../../core/workflow/providerOptionsRedaction.js';
 import { toJudgmentMatchMethod } from '../../../core/logging/contracts.js';
 import type { InteractiveMetadata } from './types.js';
 
@@ -186,7 +186,7 @@ export function buildStepStartRecord(
     ...(providerInfo?.providerSource !== undefined ? { providerSource: providerInfo.providerSource } : {}),
     ...(providerInfo?.model !== undefined ? { model: providerInfo.model } : {}),
     ...(providerInfo?.modelSource !== undefined ? { modelSource: providerInfo.modelSource } : {}),
-    ...(providerInfo?.providerOptions !== undefined ? { providerOptions: redactProviderOptionsForLogging(providerInfo.providerOptions) } : {}),
+    ...(providerInfo?.providerOptions !== undefined ? { providerOptions: redactProviderOptions(providerInfo.providerOptions) } : {}),
     ...(providerInfo?.providerOptionsSources !== undefined ? { providerOptionsSources: providerInfo.providerOptionsSources } : {}),
   };
 }

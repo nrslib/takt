@@ -117,6 +117,40 @@ describe('TaskRunner - exceedTask', () => {
     expect(exceededTask.owner_pid).toBeNull();
   });
 
+  it('should preserve dynamic selection snapshots through exceed, requeue, and claim', () => {
+    const identity = '{"workflow":"default","step":"reviewers","calls":[]}' as const;
+    const resumePoint = {
+      version: 2 as const,
+      stack: [{ workflow: 'default', step: 'reviewers', kind: 'agent' as const }],
+      iteration: 30,
+      elapsed_ms: 183245,
+      dynamic_parallel_selections: {
+        [identity]: {
+          identity,
+          step_name: 'reviewers',
+          round: 2,
+          selected_pool_ids: ['frontend'],
+          effective_selection_ids: ['architecture', 'frontend'],
+        },
+      },
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    runner.addTask('Task A');
+    const running = runner.claimNextTasks(1)[0]!;
+
+    runner.exceedTask(running.name, {
+      currentStep: 'reviewers',
+      newMaxSteps: 60,
+      currentIteration: 30,
+      resumePoint,
+    });
+    runner.requeueExceededTask(running.name);
+    const reclaimed = runner.claimNextTasks(1)[0]!;
+
+    expect(reclaimed.data?.resume_point).toEqual(resumePoint);
+  });
+
   it('should record the current step as start_movement', () => {
     runner.addTask('Task A');
     runner.claimNextTasks(1);
@@ -171,13 +205,15 @@ describe('TaskRunner - exceedTask', () => {
     runner.claimNextTasks(1);
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
     const resumePoint = {
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' },
       ],
       iteration: 30,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     runner.exceedTask(taskName, {
@@ -373,13 +409,15 @@ describe('TaskRunner - requeueExceededTask', () => {
 
   it('should preserve resume_point through requeue for workflow_call retry', () => {
     const resumePoint = {
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' },
       ],
       iteration: 30,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     writeExceededRecord(testDir, {
       name: 'task-a',

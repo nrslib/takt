@@ -154,7 +154,16 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
         provider?: TaktProviderConfigEntry['provider'];
         model?: string;
       };
+      selector?: {
+        provider?: TaktProviderConfigEntry['provider'];
+        model?: string;
+        provider_options?: Record<string, unknown>;
+      };
     } | undefined,
+    {
+      ...projectBaseUrlOptions,
+      pathPrefix: 'takt_providers.selector.provider_options',
+    },
   );
 
   return {
@@ -300,7 +309,10 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   } else {
     delete savePayload.provider_routing;
   }
-  const rawTaktProviders = buildRawTaktProvidersOrThrow(config.taktProviders);
+  const rawTaktProviders = buildRawTaktProvidersOrThrow(config.taktProviders, {
+    baseUrlTrust: 'loopback-only',
+    pathPrefix: 'takt_providers.selector.provider_options',
+  });
   if (rawTaktProviders) {
     savePayload.takt_providers = rawTaktProviders;
   } else {

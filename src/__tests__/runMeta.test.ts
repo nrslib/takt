@@ -128,13 +128,15 @@ describe('RunMetaManager', () => {
   it('should persist and retain resume point metadata for workflow_call retries', () => {
     const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
     const resumePoint = {
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'default', step: 'dev', kind: 'workflow_call' },
+        { workflow: 'default', step: 'dev', kind: 'workflow_call', call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     (
@@ -161,21 +163,25 @@ describe('RunMetaManager', () => {
   it('should refresh resume point without rolling back current step metadata', () => {
     const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
     const staleResumePoint = {
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const refreshedResumePoint = {
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183900,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     manager.updateStep('delegate', 7, staleResumePoint);

@@ -301,7 +301,7 @@ describe('listTasks interactive status actions', () => {
 
       await listTasks('/project');
 
-      expect(mockRetryFailedTask).toHaveBeenCalledWith(failedTask, '/project');
+      expect(mockRetryFailedTask).toHaveBeenCalledWith(failedTask, '/project', undefined);
       expect(mockRequeueFailedTask).not.toHaveBeenCalled();
     });
   });

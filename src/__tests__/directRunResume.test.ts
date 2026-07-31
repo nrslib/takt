@@ -14,6 +14,7 @@ const {
   mockBlankLine,
   mockExecuteTaskWithResult,
   mockLoadWorkflowByIdentifier,
+  mockGetWorkflowDescription,
   mockReadRunContextOrderContent,
   mockLoadRunSessionContext,
   mockFormatRunSessionForPrompt,
@@ -30,6 +31,12 @@ const {
   mockBlankLine: vi.fn(),
   mockExecuteTaskWithResult: vi.fn(),
   mockLoadWorkflowByIdentifier: vi.fn(),
+  mockGetWorkflowDescription: vi.fn(() => ({
+    name: 'default',
+    description: '',
+    workflowStructure: '',
+    stepPreviews: [],
+  })),
   mockReadRunContextOrderContent: vi.fn(),
   mockLoadRunSessionContext: vi.fn(),
   mockFormatRunSessionForPrompt: vi.fn(),
@@ -62,12 +69,7 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: mockLoadWorkflowByIdentifier,
-  getWorkflowDescription: vi.fn(() => ({
-    name: 'default',
-    description: '',
-    workflowStructure: '',
-    stepPreviews: [],
-  })),
+  getWorkflowDescription: mockGetWorkflowDescription,
   resolveWorkflowConfigValue: vi.fn(() => 3),
 }));
 
@@ -95,12 +97,14 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
 import { resumeDirectRun } from '../features/tasks/resume/index.js';
 
 const resumePoint: WorkflowResumePoint = {
-  version: 1,
+  version: 2,
   stack: [
     { workflow: 'default', step: 'review', kind: 'agent' },
   ],
   iteration: 4,
   elapsed_ms: 1000,
+  workflow_call_invocations: {},
+  workflow_step_participations: {},
 };
 
 const workflow: WorkflowConfig = {
@@ -450,7 +454,8 @@ describe('resumeDirectRun', () => {
       task: 'Retry with failing spec fixed',
     }, cleanupAttachments));
 
-    await resumeDirectRun('/project');
+    const overrides = { provider: 'mock' as const, model: 'mock-selector' };
+    await resumeDirectRun('/project', overrides);
 
     expect(mockRunDirectRetryMode).toHaveBeenCalledWith(
       '/project',
@@ -468,12 +473,20 @@ describe('resumeDirectRun', () => {
       }),
     );
     expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
+      agentOverrides: overrides,
       retryNote: 'Retry with failing spec fixed',
       resumeSource: {
         sourceRunSlug: '20260524-direct-failed',
         resumeMode: 'retry',
       },
     }));
+    expect(mockGetWorkflowDescription).toHaveBeenCalledWith(
+      'default',
+      '/project',
+      3,
+      '/project',
+      overrides,
+    );
     expect(cleanupAttachments).toHaveBeenCalledTimes(1);
   });
 

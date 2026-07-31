@@ -62,6 +62,21 @@ describe('workflow step fragment rule ownership', () => {
     });
   });
 
+  it('rejects fragment-owned rules for a caller-owned fragment expansion', () => {
+    write(projectDir, '.takt/steps/body.yaml', `instruction: review
+rules:
+  - condition: fragment-owned
+`);
+    const path = write(projectDir, '.takt/workflows/default.yaml', workflow(`  - name: entry
+    uses: body
+    rules:
+      - condition: caller-owned
+        next: COMPLETE`));
+
+    expect(() => loadWorkflowFromFile(path, projectDir))
+      .toThrow('define rules on each concrete workflow step that uses the fragment');
+  });
+
   it.each([
     ['missing', ''],
     ['empty', '    rules: []\n'],

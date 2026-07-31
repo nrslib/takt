@@ -5,7 +5,10 @@ import type {
   WorkflowResumePointEntry,
 } from '../../models/types.js';
 import { isWorkflowCallStep } from '../step-kind.js';
-import { workflowEntriesMatch, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
+import {
+  workflowEntriesMatch,
+  workflowEntryMatchesWorkflow,
+} from '../workflow-reference.js';
 
 export interface ResumePointStepResolver {
   (parentWorkflow: WorkflowConfig, step: WorkflowCallStep): WorkflowConfig | null;
@@ -28,8 +31,10 @@ function matchesResumeStackPrefix(
 
   return resumeStackPrefix.every((entry, index) => {
     const candidate = stack[index];
-    return candidate !== undefined
-      && workflowEntriesMatch(candidate, entry)
+    if (candidate === undefined) {
+      return false;
+    }
+    return workflowEntriesMatch(candidate, entry)
       && candidate.step === entry.step
       && candidate.kind === entry.kind;
   });
@@ -85,7 +90,10 @@ export function trimResumePointStackForWorkflow(
 
   for (let stackLength = resumePoint.stack.length; stackLength > resumeStackPrefix.length; stackLength -= 1) {
     const candidateStack = resumePoint.stack.slice(0, stackLength);
-    if (!matchesResumeStackPrefix(candidateStack, resumeStackPrefix)) {
+    if (!matchesResumeStackPrefix(
+      candidateStack,
+      resumeStackPrefix,
+    )) {
       continue;
     }
 

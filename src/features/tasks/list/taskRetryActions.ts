@@ -47,6 +47,7 @@ import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-reference.js';
 import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
 import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
+import type { TaskExecutionOptions } from '../execute/types.js';
 
 const log = createLogger('list-tasks');
 
@@ -378,6 +379,7 @@ export async function requeueFailedTask(
 export async function retryFailedTask(
   task: TaskListItem,
   projectDir: string,
+  agentOverrides?: TaskExecutionOptions,
 ): Promise<boolean> {
   const selection = await prepareFailedTaskRetrySelection(task, projectDir);
   if (!selection) {
@@ -387,7 +389,13 @@ export async function retryFailedTask(
     ? buildRetryRunInfo(selection.worktreePath, selection.matchedSlug)
     : null;
   const previewCount = resolveWorkflowConfigValue(projectDir, 'interactivePreviewSteps');
-  const workflowDesc = getWorkflowDescription(selection.selectedWorkflow, projectDir, previewCount, selection.worktreePath);
+  const workflowDesc = getWorkflowDescription(
+    selection.selectedWorkflow,
+    projectDir,
+    previewCount,
+    selection.worktreePath,
+    agentOverrides,
+  );
   const workflowContext = {
     name: workflowDesc.name,
     description: workflowDesc.description,
@@ -466,7 +474,7 @@ export async function retryFailedTask(
       startStep: selection.startStep,
     });
 
-    return executeAndCompleteTask(taskForExecution, runner, projectDir);
+    return executeAndCompleteTask(taskForExecution, runner, projectDir, agentOverrides);
   } finally {
     cleanupInteractiveResultAttachments(retryResult);
   }

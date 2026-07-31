@@ -3,7 +3,10 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 import { inheritReviewReports } from '../core/workflow/report-inheritance.js';
-import { workflowCallNamespaceSegmentsMatch } from '../core/workflow/workflow-call-namespace.js';
+import {
+  workflowCallReportRequestSegmentsMatch,
+  workflowCallRunNamespaceSegmentsCorrespond,
+} from '../core/workflow/workflow-call-namespace.js';
 
 const sourceRunSlug = '20260717-source-run';
 const currentRunSlug = '20260717-current-run';
@@ -55,12 +58,20 @@ afterEach(() => {
 });
 
 describe('inheritReviewReports', () => {
-  it('should normalize iterations only for generated workflow-call namespaces', () => {
-    expect(workflowCallNamespaceSegmentsMatch(
+  it('should use explicit wildcard only for report requests and map iterations between runs separately', () => {
+    expect(workflowCallReportRequestSegmentsMatch(
+      'iteration-1--step-peer-review--workflow-reviewers',
+      'iteration-2--step-peer-review--workflow-reviewers',
+    )).toBe(false);
+    expect(workflowCallReportRequestSegmentsMatch(
+      'iteration-1--step-peer-review--workflow-reviewers',
+      'iteration-*--step-peer-review--workflow-reviewers',
+    )).toBe(true);
+    expect(workflowCallRunNamespaceSegmentsCorrespond(
       'iteration-1--step-peer-review--workflow-reviewers',
       'iteration-2--step-peer-review--workflow-reviewers',
     )).toBe(true);
-    expect(workflowCallNamespaceSegmentsMatch(
+    expect(workflowCallRunNamespaceSegmentsCorrespond(
       'iteration-1--step-peer-review',
       'iteration-2--step-peer-review',
     )).toBe(false);

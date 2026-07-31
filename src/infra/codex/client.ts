@@ -4,7 +4,7 @@
  * Uses @openai/codex-sdk for native TypeScript integration.
  */
 
-import { Codex, type CodexOptions, type Input, type TurnOptions } from '@openai/codex-sdk';
+import { Codex, type CodexOptions, type Input, type Thread, type TurnOptions } from '@openai/codex-sdk';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse, ProviderUsageSnapshot } from '../../core/models/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
@@ -35,6 +35,7 @@ import {
   emitCodexItemUpdate,
 } from './CodexStreamHandler.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
+import { executeIsolatedCodex } from './isolated-executor.js';
 
 export type { CodexCallOptions } from './types.js';
 
@@ -307,6 +308,21 @@ export class CodexClient {
     prompt: string,
     options: CodexCallOptions,
   ): Promise<AgentResponse> {
+    const isolated = options.internalAgentIsolation === 'strict-readonly';
+    if (isolated && options.sessionId !== undefined) {
+      const failure = createProviderErrorFailure(
+        'Strict read-only Codex execution cannot resume a session',
+      );
+      const errorResponse = this.buildErrorResponse(agentType, options.sessionId, failure);
+      emitResult(
+        options.onStream,
+        false,
+        errorResponse.error ?? errorResponse.content,
+        options.sessionId,
+        failure.category,
+      );
+      return errorResponse;
+    }
     const sandboxMode = options.permissionMode
       ? mapToCodexSandboxMode(options.permissionMode)
       : 'workspace-write';
@@ -341,7 +357,7 @@ export class CodexClient {
     let refusalRetryCount = 0;
     let skillConfig: CodexOptions['config'] | undefined;
     try {
-      skillConfig = options.skills
+      skillConfig = !isolated && options.skills
         ? buildCodexSkillConfig({
             cwd: options.cwd,
             env: { ...process.env, ...options.childProcessEnv },
@@ -365,21 +381,25 @@ export class CodexClient {
 
     while (true) {
       const attempt = standardRetryCount + timeoutRetryCount + refusalRetryCount + 1;
-      const codexClientOptions: CodexOptions = {
-        env: buildEnvWithNestedObservabilitySnapshot(
-          process.env,
-          options.childProcessEnv,
-        ) as Record<string, string>,
-        ...(options.openaiApiKey ? { apiKey: options.openaiApiKey } : {}),
-        ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
-        ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
-        ...(skillConfig !== undefined ? { config: skillConfig } : {}),
-      };
-      const codex = new Codex(codexClientOptions);
-      const thread = threadId
-        ? await codex.resumeThread(threadId, threadOptions)
-        : await codex.startThread(threadOptions);
-      let currentThreadId = extractThreadId(thread) || threadId;
+      let currentThreadId = threadId;
+      let thread: Thread | undefined;
+      if (!isolated) {
+        const codexClientOptions: CodexOptions = {
+          env: buildEnvWithNestedObservabilitySnapshot(
+            process.env,
+            options.childProcessEnv,
+          ) as Record<string, string>,
+          ...(options.openaiApiKey ? { apiKey: options.openaiApiKey } : {}),
+          ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
+          ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
+          ...(skillConfig !== undefined ? { config: skillConfig } : {}),
+        };
+        const codex = new Codex(codexClientOptions);
+        thread = threadId
+          ? await codex.resumeThread(threadId, threadOptions)
+          : await codex.startThread(threadOptions);
+        currentThreadId = extractThreadId(thread) || threadId;
+      }
 
       let idleTimeoutId: ReturnType<typeof setTimeout> | undefined;
       const streamAbortController = new AbortController();
@@ -423,11 +443,25 @@ export class CodexClient {
         const diag = createStreamDiagnostics('codex-sdk', { agentType, model: options.model, attempt });
         diagRef = diag;
 
-        const turnOptions: TurnOptions = {
-          signal: streamAbortController.signal,
-          ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
-        };
-        const { events } = await thread.runStreamed(input, turnOptions);
+        let events: AsyncGenerator<CodexEvent>;
+        if (isolated) {
+          events = executeIsolatedCodex({
+            prompt: fullPrompt,
+            options: {
+              ...options,
+              abortSignal: streamAbortController.signal,
+            },
+          });
+        } else {
+          if (thread === undefined) {
+            throw new Error('Codex SDK thread was not initialized');
+          }
+          const turnOptions: TurnOptions = {
+            signal: streamAbortController.signal,
+            ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
+          };
+          ({ events } = await thread.runStreamed(input, turnOptions));
+        }
         resetIdleTimeout();
         diag.onConnected();
 
@@ -561,7 +595,7 @@ export class CodexClient {
           );
           if (!failedAfterStreamError && this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
             log.info('Retrying Codex call after transient failure', { agentType, attempt, message: failure.reason });
-            threadId = currentThreadId;
+            threadId = isolated ? undefined : currentThreadId;
             const retryState = this.recordRetry(failure.category, standardRetryCount, timeoutRetryCount);
             standardRetryCount = retryState.standardRetryCount;
             timeoutRetryCount = retryState.timeoutRetryCount;
@@ -659,7 +693,7 @@ export class CodexClient {
 
         if (this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
           log.info('Retrying Codex call after transient exception', { agentType, attempt, errorMessage });
-          threadId = currentThreadId;
+          threadId = isolated ? undefined : currentThreadId;
           const retryState = this.recordRetry(failure.category, standardRetryCount, timeoutRetryCount);
           standardRetryCount = retryState.standardRetryCount;
           timeoutRetryCount = retryState.timeoutRetryCount;

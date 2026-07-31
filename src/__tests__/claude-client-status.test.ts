@@ -71,6 +71,33 @@ describe('ClaudeClient status normalization', () => {
     );
   });
 
+  it('should pass strict read-only internal agent isolation to executeClaudeCli', async () => {
+    mockExecuteClaudeCli.mockResolvedValue({
+      success: true,
+      content: 'done',
+      sessionId: 'selector-session',
+    });
+    const client = new ClaudeClient();
+
+    await client.callCustom('selector', 'Select reviewers', 'selector system prompt', {
+      ...options,
+      internalAgentIsolation: 'strict-readonly',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+    });
+
+    expect(mockExecuteClaudeCli).toHaveBeenCalledWith(
+      'Select reviewers',
+      expect.objectContaining({
+        internalAgentIsolation: 'strict-readonly',
+        permissionMode: 'readonly',
+        allowedTools: [],
+        mcpServers: {},
+      }),
+    );
+  });
+
   it('should return error status when callCustom() receives an interrupted failure', async () => {
     mockExecuteClaudeCli.mockResolvedValue({
       success: false,

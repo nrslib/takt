@@ -41,7 +41,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
     const state = {
       iteration: 1,
       personaSessions: new Map(),
-      stepIterations: new Map(),
+      stepIterations: new Map([['delegate', 1], ['delegate-other', 1]]),
       userInputs: ['Retry the remaining task work'],
     };
     const createdOptions: Array<Record<string, unknown>> = [];
@@ -145,7 +145,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
       state: {
         iteration: 1,
         personaSessions: new Map(),
-        stepIterations: new Map(),
+        stepIterations: new Map([['delegate', 1]]),
         userInputs: [],
       },
       setActiveResumePoint: vi.fn(),
@@ -199,7 +199,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
         };
       }),
       emit: vi.fn(),
-      state: { iteration: 1, personaSessions: new Map(), stepIterations: new Map(), userInputs: [] },
+      state: { iteration: 1, personaSessions: new Map(), stepIterations: new Map([['delegate', 1]]), userInputs: [] },
       setActiveResumePoint: vi.fn(),
       refreshFindingsState: vi.fn(),
     } as never);

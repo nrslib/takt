@@ -1,6 +1,7 @@
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import { FINDING_CONFLICT_ADJUDICATION_STEP } from '../../../core/workflow/constants.js';
 import type { WorkflowDiagnostic } from './workflowDoctorTypes.js';
+import { enumerateParallelSubSteps } from './workflowParallelTraversal.js';
 
 type RawWorkflow = ReturnType<typeof WorkflowConfigRawSchema.parse>;
 
@@ -111,11 +112,13 @@ function createDoctorGraph(raw: RawWorkflow): DoctorGraph {
     })),
     steps: raw.steps.map((step, stepIndex) => ({
       name: step.name,
-      parallel: step.parallel?.map((substep, subStepIndex) => ({
-        name: substep.name,
-        rules: substep.rules?.map((rule, ruleIndex) => ({
+      parallel: (step.parallel === undefined
+        ? []
+        : enumerateParallelSubSteps(step.parallel, ['steps', stepIndex, 'parallel'])).map(({ subStep, path }) => ({
+        name: subStep.name,
+        rules: subStep.rules?.map((rule, ruleIndex) => ({
           next: rule.next,
-          path: ['steps', stepIndex, 'parallel', subStepIndex, 'rules', ruleIndex, 'next'],
+          path: [...path, 'rules', ruleIndex, 'next'],
         })),
       })),
       rules: step.rules?.map((rule, ruleIndex) => ({

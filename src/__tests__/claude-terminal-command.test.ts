@@ -60,6 +60,34 @@ describe('Claude terminal command builder', () => {
     expect(command.args).toEqual(['--permission-mode', 'bypassPermissions']);
   });
 
+  it('isolates strict read-only internal agents from tools, filesystem settings, and ambient MCP', () => {
+    const command = buildClaudeTerminalCommand({
+      pathToClaudeCodeExecutable: 'claude',
+      internalAgentIsolation: 'strict-readonly',
+      permissionMode: 'readonly',
+    });
+
+    expect(command.args).toEqual([
+      '--tools',
+      '',
+      '--setting-sources',
+      '',
+      '--strict-mcp-config',
+      '--disable-slash-commands',
+      '--permission-mode',
+      'default',
+    ]);
+  });
+
+  it('does not apply strict internal isolation flags to an ordinary terminal call', () => {
+    const command = buildClaudeTerminalCommand({
+      pathToClaudeCodeExecutable: 'claude',
+      permissionMode: 'readonly',
+    });
+
+    expect(command.args).toEqual(['--permission-mode', 'default']);
+  });
+
   it('Given new session id, When building command without resume session, Then command pins the Claude transcript session id', () => {
     const command = buildClaudeTerminalCommand({
       pathToClaudeCodeExecutable: 'claude',
@@ -99,4 +127,5 @@ describe('Claude terminal command builder', () => {
 
     expect(command.args).not.toContain('--disable-slash-commands');
   });
+
 });

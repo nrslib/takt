@@ -183,7 +183,11 @@ program
   .action(async (workflow?: string) => {
     const { getCliExecutionContext } = await import('./initialization.js');
     const { previewPrompts } = await import('../../features/prompt/preview.js');
-    await previewPrompts(getCliExecutionContext().cwd, workflow);
+    await previewPrompts(
+      getCliExecutionContext().cwd,
+      workflow,
+      resolveAgentOverrides(program),
+    );
   });
 
 program
@@ -248,7 +252,11 @@ workflow
   .action(async (targets: string[] | undefined) => {
     const { getCliExecutionContext } = await import('./initialization.js');
     const { doctorWorkflowCommand } = await import('../../features/workflowAuthoring/doctor.js');
-    await doctorWorkflowCommand(targets ?? [], getCliExecutionContext().cwd);
+    await doctorWorkflowCommand(
+      targets ?? [],
+      getCliExecutionContext().cwd,
+      resolveAgentOverrides(program),
+    );
   });
 
 const metrics = program

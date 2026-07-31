@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { TaskInfo } from '../infra/task/index.js';
 import * as infraTask from '../infra/task/index.js';
+import { TaskRunner } from '../infra/task/runner.js';
 import * as runOrderContent from '../core/workflow/run/order-content.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
@@ -157,6 +158,64 @@ describe('resolveTaskExecution', () => {
     expect(result.startStep).toBe('implement');
   });
 
+  it('should preserve dynamic selection through exceed, requeue, claim, and execution resolution', async () => {
+    const root = createTempProjectDir();
+    writeTaktFile(root, 'workflows/default.yaml', [
+      'name: default',
+      'initial_step: reviewers',
+      'max_steps: 5',
+      'steps:',
+      '  - name: reviewers',
+      '    persona: reviewer',
+      '    instruction: Review',
+      '    rules:',
+      '      - condition: approved',
+      '        next: COMPLETE',
+    ].join('\n'));
+    const identity = '{"workflow":"default","step":"reviewers","calls":[]}' as const;
+    const invocationIdentity = '{"workflow":"default","step":"delegate","calls":[]}' as const;
+    const resumePoint = {
+      version: 2 as const,
+      stack: [{ workflow: 'default', step: 'reviewers', kind: 'agent' as const }],
+      iteration: 30,
+      elapsed_ms: 183245,
+      dynamic_parallel_selections: {
+        [identity]: {
+          identity,
+          step_name: 'reviewers',
+          round: 2,
+          selected_pool_ids: ['frontend'],
+          effective_selection_ids: ['architecture', 'frontend'],
+        },
+      },
+      workflow_call_invocations: {
+        [invocationIdentity]: {
+          call_instance: 2,
+          report_namespace_segment: 'iteration-30--step-delegate--workflow-child',
+        },
+      },
+      workflow_step_participations: {},
+    };
+    const runner = new TaskRunner(root);
+    runner.addTask('Run task', { workflow: 'default' });
+    const running = runner.claimNextTasks(1)[0]!;
+
+    runner.exceedTask(running.name, {
+      currentStep: 'reviewers',
+      newMaxSteps: 60,
+      currentIteration: 30,
+      resumePoint,
+    });
+    runner.requeueExceededTask(running.name);
+    const reclaimed = runner.claimNextTasks(1)[0]!;
+
+    const result = await resolveTaskExecutionStrict(reclaimed, root);
+
+    expect(result.startStep).toBe('reviewers');
+    expect(result.initialIterationOverride).toBe(30);
+    expect(result.resumePoint).toEqual(resumePoint);
+  });
+
   it('should prefer resume_point root step over stored start_movement on workflow_call retry', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
@@ -179,13 +238,15 @@ describe('resolveTaskExecution', () => {
         task: 'Run task',
         start_movement: 'review',
         resume_point: {
-          version: 1,
+          version: 2,
           stack: [
-            { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+            { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
             { workflow: 'takt/coding', step: 'review', kind: 'agent' },
           ],
           iteration: 7,
           elapsed_ms: 183245,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
         },
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
@@ -232,13 +293,15 @@ describe('resolveTaskExecution', () => {
     ].join('\n'));
 
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const task = createTask({
       data: ({
@@ -275,13 +338,15 @@ describe('resolveTaskExecution', () => {
     ].join('\n'));
 
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const task = createTask({
       data: ({
@@ -336,13 +401,15 @@ describe('resolveTaskExecution', () => {
     ].join('\n'));
 
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const task = createTask({
       worktreePath,
@@ -408,14 +475,21 @@ describe('resolveTaskExecution', () => {
     ].join('\n'));
 
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
-        { workflow: 'takt/coding', step: 'delegate_review', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
+        {
+          workflow: 'takt/coding',
+          step: 'delegate_review',
+          kind: 'workflow_call' as const,
+          call_instance: 1,
+        },
         { workflow: 'takt/review-loop', step: 'review', kind: 'agent' as const },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const task = createTask({
       data: ({
@@ -456,13 +530,15 @@ describe('resolveTaskExecution', () => {
         task: 'Run task',
         start_step: 'implement',
         resume_point: {
-          version: 1,
+          version: 2,
           stack: [
-            { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+            { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
             { workflow: 'takt/coding', step: 'review', kind: 'agent' },
           ],
           iteration: 7,
           elapsed_ms: 183245,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
         },
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
@@ -1701,12 +1777,14 @@ describe('resolveTaskExecution', () => {
         worktree: true,
         branch: 'feature/retry-sync',
         resume_point: {
-          version: 1,
+          version: 2,
           stack: [
             { workflow: 'default', step: 'fix', kind: 'agent' },
           ],
           iteration: 3,
           elapsed_ms: 1200,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
         },
       } as unknown) as NonNullable<TaskInfo['data']>,
       worktreePath,

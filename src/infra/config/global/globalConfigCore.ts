@@ -217,6 +217,11 @@ export class GlobalConfigManager {
             provider?: TaktProviderConfigEntry['provider'];
             model?: string;
           };
+          selector?: {
+            provider?: TaktProviderConfigEntry['provider'];
+            model?: string;
+            provider_options?: Record<string, unknown>;
+          };
         } | undefined,
       ),
       personaProviders: normalizePersonaProviders(

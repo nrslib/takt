@@ -120,6 +120,7 @@ function makeParallelRunner(): ParallelRunner {
     optionsBuilder: {
       buildAgentOptions: vi.fn().mockReturnValue({}),
       buildPhaseRunnerContext: vi.fn().mockReturnValue({}),
+      resolveStepProviderModelBeforeAutoRouting: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
     } as unknown as ParallelRunnerDeps['optionsBuilder'],
     stepExecutor: {

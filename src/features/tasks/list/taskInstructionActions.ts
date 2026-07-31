@@ -35,6 +35,7 @@ import {
   prepareRetryTaskSpecWithAttachments,
 } from '../retryTaskSpecAttachments.js';
 import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
+import type { TaskExecutionOptions } from '../execute/types.js';
 
 const log = createLogger('list-tasks');
 
@@ -111,6 +112,7 @@ function getBranchContext(
 export async function instructBranch(
   projectDir: string,
   target: BranchActionTarget,
+  agentOverrides?: TaskExecutionOptions,
 ): Promise<boolean> {
   if (!('kind' in target)) {
     throw new Error('Instruct requeue requires a task target.');
@@ -138,6 +140,7 @@ export async function instructBranch(
     projectDir,
     globalConfig.interactivePreviewSteps,
     worktreePath,
+    agentOverrides,
   );
   const workflowContext: WorkflowContext = {
     name: workflowDesc.name,
@@ -221,7 +224,7 @@ export async function instructBranch(
       workflow: selectedWorkflow,
     });
 
-    return executeAndCompleteTask(taskForExecution, runner, projectDir);
+    return executeAndCompleteTask(taskForExecution, runner, projectDir, agentOverrides);
   };
 
   try {

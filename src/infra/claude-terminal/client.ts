@@ -245,7 +245,10 @@ export async function callClaudeTerminal(
   }
 
   try {
-    if (options.skillsEnabled === false && options.terminalBackend === undefined) {
+    if (
+      (options.internalAgentIsolation === 'strict-readonly' || options.skillsEnabled === false)
+      && options.terminalBackend === undefined
+    ) {
       await assertClaudeSkillsDisableSupported(
         options.pathToClaudeCodeExecutable ?? 'claude',
         options.abortSignal,
@@ -258,6 +261,7 @@ export async function callClaudeTerminal(
     }
     const command = buildClaudeTerminalCommand({
       pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable,
+      internalAgentIsolation: options.internalAgentIsolation,
       model: options.model,
       effort: options.effort,
       skillsEnabled: options.skillsEnabled,

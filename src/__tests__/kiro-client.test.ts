@@ -133,7 +133,11 @@ function mockSpawnWithScenario(scenario: SpawnScenario): void {
         return;
       }
 
-      child.emit('close', scenario.code ?? 0, scenario.signal ?? null);
+      child.emit(
+        'close',
+        scenario.code === undefined ? 0 : scenario.code,
+        scenario.signal === undefined ? null : scenario.signal,
+      );
     });
 
     return child;
@@ -169,7 +173,11 @@ function mockSpawnSequence(scenarios: SpawnScenario[]): void {
         return;
       }
 
-      child.emit('close', scenario.code ?? 0, scenario.signal ?? null);
+      child.emit(
+        'close',
+        scenario.code === undefined ? 0 : scenario.code,
+        scenario.signal === undefined ? null : scenario.signal,
+      );
     });
 
     return child;

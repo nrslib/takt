@@ -10,7 +10,7 @@ import type {
   StepProviderOptions,
   ProviderPermissionProfiles,
 } from '../core/models/index.js';
-import type { ProviderType } from '../shared/types/provider.js';
+import type { InternalAgentIsolation, ProviderType } from '../shared/types/provider.js';
 
 export type { StreamCallback };
 
@@ -27,6 +27,13 @@ export interface WorkflowMeta {
   processSafety?: WorkflowProcessSafetyMeta;
 }
 
+export interface ResolvedAgentExecution {
+  readonly provider: ProviderType;
+  readonly model: string | undefined;
+  readonly providerOptions: StepProviderOptions;
+  readonly permissionMode: PermissionMode;
+}
+
 /** Common options for running agents */
 export interface RunAgentOptions {
   cwd: string;
@@ -38,6 +45,8 @@ export interface RunAgentOptions {
   resolvedModel?: string;
   resolvedProvider?: ProviderType;
   personaPath?: string;
+  internalSystemPrompt?: string;
+  internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
   maxTurns?: number;
@@ -48,6 +57,8 @@ export interface RunAgentOptions {
     providerProfiles?: ProviderPermissionProfiles;
   };
   providerOptions?: StepProviderOptions;
+  resolvedProviderOptions?: StepProviderOptions;
+  resolvedExecution?: ResolvedAgentExecution;
   onStream?: StreamCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;

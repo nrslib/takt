@@ -17,8 +17,7 @@ import { readStepFragment } from '../infra/config/loaders/workflowStepFragmentRe
 const workflowPath = '/project/.takt/workflows/review.yaml';
 const fragmentPath = '/project/.takt/steps/review.yaml';
 
-function setupReadableFragment(): void {
-  const content = 'instruction: review';
+function setupReadableFragment(content = 'instruction: review'): void {
   fs.openSync.mockReturnValue(7);
   fs.fstatSync.mockReturnValue({ isFile: () => true, size: content.length });
   fs.readSync
@@ -89,6 +88,20 @@ describe('workflow step fragment reader', () => {
     expect(readStepFragment(fragmentPath, workflowPath, 'review')).toMatchObject({
       name: 'review',
       instruction: 'review',
+    });
+  });
+
+  it('should read fragment rules without applying caller ownership policy', () => {
+    const content = [
+      'instruction: review',
+      'rules:',
+      '  - condition: approved',
+      '',
+    ].join('\n');
+    setupReadableFragment(content);
+
+    expect(readStepFragment(fragmentPath, workflowPath, 'review')).toMatchObject({
+      rules: [{ condition: 'approved' }],
     });
   });
 

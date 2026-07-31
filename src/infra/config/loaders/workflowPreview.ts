@@ -1,10 +1,11 @@
 import type { InteractiveMode, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
+import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../../core/models/types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import {
   resolveStepProviderModel,
   type ProviderModelResolutionContext,
 } from '../../../core/workflow/provider-resolution.js';
-import type { StepProviderInfo } from '../../../core/workflow/types.js';
+import type { SelectorProviderInfo, StepProviderInfo } from '../../../core/workflow/types.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import {
   resolveDeterministicAutoRoutingProviderInfo,
@@ -31,6 +32,10 @@ import {
 } from '../providerOptions.js';
 import { loadPersonaPromptFromPath } from './agentLoader.js';
 import { loadWorkflowByIdentifier } from './workflowResolver.js';
+import {
+  type SelectorProviderOverrides,
+} from '../selectorProviderResolution.js';
+import { resolveWorkflowSelector } from '../workflowSelectorResolution.js';
 
 const log = createLogger('workflow-preview');
 
@@ -43,9 +48,15 @@ export interface StepPreview {
   canEdit: boolean;
   provider?: StepProviderInfo['provider'];
   model?: StepProviderInfo['model'];
+  providerSource?: ProviderResolutionSource;
+  modelSource?: ProviderResolutionSource;
+  permissionMode?: 'readonly';
+  internalAgent?: boolean;
   sessionKey?: string;
   requiresUserInput?: boolean;
   substeps?: StepPreview[];
+  parallelRole?: 'fixed' | 'pool';
+  dynamicSelectionMode?: 'replace' | 'cumulative';
 }
 
 export interface FirstStepInfo {
@@ -60,6 +71,7 @@ interface PreviewProviderResolution extends ProviderModelResolutionContext {
   providerOptions: StepProviderOptions | undefined;
   providerOptionsSource: ReturnType<typeof resolveProviderOptionsWithTrace>['source'];
   providerOptionsOriginResolver: ReturnType<typeof resolveProviderOptionsWithTrace>['originResolver'];
+  selectorProvider?: SelectorProviderInfo;
 }
 
 function buildWorkflowString(steps: WorkflowStep[]): string {
@@ -67,8 +79,18 @@ function buildWorkflowString(steps: WorkflowStep[]): string {
   let index = 1;
   for (const step of steps) {
     lines.push(`${index}. ${step.name}${step.description ? ` (${step.description})` : ''}`);
-    for (const sub of step.parallel ?? []) {
-      lines.push(`   - ${sub.name}${sub.description ? ` (${sub.description})` : ''}`);
+    if (step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)) {
+      lines.push(`   selector mode: ${step.parallel.selection.mode}`);
+      for (const sub of step.parallel.fixed) {
+        lines.push(`   - fixed: ${sub.name}${sub.description ? ` (${sub.description})` : ''}`);
+      }
+      for (const sub of step.parallel.pool) {
+        lines.push(`   - pool candidate: ${sub.name}${sub.description ? ` (${sub.description})` : ''}`);
+      }
+    } else {
+      for (const sub of step.parallel ?? []) {
+        lines.push(`   - ${sub.name}${sub.description ? ` (${sub.description})` : ''}`);
+      }
     }
     index++;
   }
@@ -162,17 +184,63 @@ function buildFindingManagerPreview(
   };
 }
 
+function buildDynamicSelectorPreview(
+  selectorProvider: SelectorProviderInfo,
+): StepPreview {
+  return {
+    name: 'dynamic-selector',
+    personaDisplayName: 'TAKT internal selector',
+    personaContent: '',
+    instructionContent: '',
+    allowedTools: [...selectorProvider.nativeTools],
+    canEdit: false,
+    internalAgent: true,
+    permissionMode: 'readonly',
+    provider: selectorProvider.provider,
+    model: selectorProvider.model,
+    providerSource: selectorProvider.providerSource,
+    modelSource: selectorProvider.modelSource,
+  };
+}
+
+function getDynamicSelectorProvider(
+  resolution: PreviewProviderResolution,
+): SelectorProviderInfo {
+  if (resolution.selectorProvider === undefined) {
+    throw new Error('Dynamic parallel selector has no resolved provider');
+  }
+  return resolution.selectorProvider;
+}
+
 function buildStepPreview(
   workflow: WorkflowConfig,
   step: WorkflowStep,
   projectCwd: string,
   resolution: PreviewProviderResolution,
-  context: { isParallelSubstep: boolean } = { isParallelSubstep: false },
+  context: { isParallelSubstep: boolean; parallelRole?: 'fixed' | 'pool' } = { isParallelSubstep: false },
 ): StepPreview {
   const previewStep = resolvePreviewStep(step);
-  const parallelSubsteps = previewStep.parallel?.map((substep) =>
-    buildStepPreview(workflow, substep, projectCwd, resolution, { isParallelSubstep: true }),
-  );
+  const parallelSubsteps = previewStep.parallel === undefined
+    ? undefined
+    : isDynamicParallelSubSteps(previewStep.parallel)
+      ? [
+          buildDynamicSelectorPreview(getDynamicSelectorProvider(resolution)),
+          ...previewStep.parallel.fixed.map((substep) =>
+            buildStepPreview(workflow, substep, projectCwd, resolution, {
+              isParallelSubstep: true,
+              parallelRole: 'fixed',
+            })),
+          ...previewStep.parallel.pool.map((substep) =>
+            buildStepPreview(workflow, substep, projectCwd, resolution, {
+              isParallelSubstep: true,
+              parallelRole: 'pool',
+            })),
+        ]
+      : getAllParallelSubSteps(previewStep.parallel).map((substep) =>
+          buildStepPreview(workflow, substep, projectCwd, resolution, {
+            isParallelSubstep: true,
+          }),
+        );
   const isParallelParent = parallelSubsteps !== undefined && parallelSubsteps.length > 0;
   // 並列親だけでなく、FC の取り込み対象になるトップレベルの単独ステップの
   // 後にも findings-manager を追加する。実行時に StepExecutor.runNormalStep が
@@ -207,13 +275,19 @@ function buildStepPreview(
     ...(providerInfo?.model !== undefined ? { model: providerInfo.model } : {}),
     sessionKey: previewStep.sessionKey,
     requiresUserInput: previewStep.requiresUserInput,
+    ...(context.parallelRole === undefined ? {} : { parallelRole: context.parallelRole }),
+    ...(previewStep.parallel !== undefined && isDynamicParallelSubSteps(previewStep.parallel)
+      ? { dynamicSelectionMode: previewStep.parallel.selection.mode }
+      : {}),
     ...(substeps ? { substeps } : {}),
   };
 }
 
 function resolvePreviewProviderResolution(
   projectCwd: string,
+  lookupCwd: string,
   workflow: WorkflowConfig,
+  selectorOverrides?: SelectorProviderOverrides,
 ): PreviewProviderResolution {
   const {
     autoRouting,
@@ -234,6 +308,11 @@ function resolvePreviewProviderResolution(
     source: providerOptionsSource,
     originResolver: providerOptionsOriginResolver,
   } = resolveProviderOptionsWithTrace(projectCwd);
+  const selectorResolution = resolveWorkflowSelector(workflow, {
+    projectCwd,
+    lookupCwd,
+    overrides: selectorOverrides,
+  });
 
   return {
     provider: provider.value,
@@ -246,6 +325,9 @@ function resolvePreviewProviderResolution(
     providerOptions,
     providerOptionsSource,
     providerOptionsOriginResolver,
+    ...(selectorResolution.applies
+      ? { selectorProvider: selectorResolution.selectorProvider }
+      : {}),
   };
 }
 
@@ -335,6 +417,7 @@ export function getWorkflowDescription(
   projectCwd: string,
   previewCount?: number,
   lookupCwd = projectCwd,
+  selectorOverrides?: SelectorProviderOverrides,
 ): {
   name: string;
   description: string;
@@ -347,7 +430,12 @@ export function getWorkflowDescription(
   if (!workflow) {
     return { name: identifier, description: '', workflowStructure: '', stepPreviews: [] };
   }
-  const resolution = resolvePreviewProviderResolution(projectCwd, workflow);
+  const resolution = resolvePreviewProviderResolution(
+    projectCwd,
+    lookupCwd,
+    workflow,
+    selectorOverrides,
+  );
   return {
     name: workflow.name,
     description: workflow.description ?? '',

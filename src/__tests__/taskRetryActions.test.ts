@@ -410,12 +410,14 @@ describe('requeueFailedTask', () => {
 
   it('should resolve missing failure step from resume point root step for auto requeue note', async () => {
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
         { workflow: 'default', step: 'implement', kind: 'agent' as const },
       ],
       iteration: 3,
       elapsed_ms: 1000,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const task = makeFailedTask({
       failure: { error: 'Boom' },
@@ -519,13 +521,15 @@ describe('requeueFailedTask', () => {
 
   it('should pass resume_point when selected step matches root workflow_call step', async () => {
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     mockLoadWorkflowByIdentifier.mockReturnValue({
       ...defaultWorkflowConfig,
@@ -942,13 +946,15 @@ describe('retryFailedTask', () => {
       status: 'failed',
       startTime: '2026-04-13T00:00:00.000Z',
       resumePoint: {
-        version: 1,
+        version: 2,
         stack: [
-          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
           { workflow: 'takt/coding', step: 'review', kind: 'agent' },
         ],
         iteration: 7,
         elapsed_ms: 183245,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     });
     const task = makeFailedTask({
@@ -1036,13 +1042,15 @@ describe('retryFailedTask', () => {
       status: 'failed',
       startTime: '2026-04-13T00:00:00.000Z',
       resumePoint: {
-        version: 1,
+        version: 2,
         stack: [
-          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
           { workflow: 'takt/coding', step: 'review', kind: 'agent' },
         ],
         iteration: 7,
         elapsed_ms: 183245,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     });
 
@@ -1076,13 +1084,15 @@ describe('retryFailedTask', () => {
       status: 'failed',
       startTime: '2026-04-13T00:00:00.000Z',
       resumePoint: {
-        version: 1,
+        version: 2,
         stack: [
-          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
           { workflow: 'takt/coding', step: 'review', kind: 'agent' },
         ],
         iteration: 7,
         elapsed_ms: 183245,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     });
 
@@ -1117,13 +1127,15 @@ describe('retryFailedTask', () => {
   it('should pass run meta resume_point when selected step matches root workflow_call step', async () => {
     mockFindRunForTask.mockReturnValue('run-1');
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'implement', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'implement', kind: 'workflow_call' as const, call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     mockReadRunMetaBySlug.mockReturnValue({
       task: 'Do something',
@@ -1158,13 +1170,15 @@ describe('retryFailedTask', () => {
   it('should drop run meta resume_point when user selects a different parent step', async () => {
     mockFindRunForTask.mockReturnValue('run-1');
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'implement', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'implement', kind: 'workflow_call' as const, call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     mockReadRunMetaBySlug.mockReturnValue({
       task: 'Do something',
@@ -1256,6 +1270,7 @@ describe('retryFailedTask', () => {
       '/project',
       3,
       '/project/.takt/worktrees/my-task',
+      undefined,
     );
   });
 
@@ -1275,6 +1290,27 @@ describe('retryFailedTask', () => {
       '/project',
       3,
       '/project/.takt/worktrees/my-task',
+      undefined,
+    );
+  });
+
+  it('should pass the same selector override to retry preview and execution', async () => {
+    const overrides = { provider: 'mock' as const, model: 'mock-selector' };
+
+    await retryFailedTask(makeFailedTask(), '/project', overrides);
+
+    expect(mockGetWorkflowDescription).toHaveBeenCalledWith(
+      'default',
+      '/project',
+      3,
+      '/project/.takt/worktrees/my-task',
+      overrides,
+    );
+    expect(mockExecuteAndCompleteTask).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      '/project',
+      overrides,
     );
   });
 
@@ -1514,13 +1550,15 @@ describe('retryFailedTask', () => {
 
   it('should requeue task with task.data.resume_point when save_task keeps the root workflow_call step', async () => {
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     mockLoadWorkflowByIdentifier.mockReturnValue({
       ...defaultWorkflowConfig,

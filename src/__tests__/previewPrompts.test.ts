@@ -6,6 +6,7 @@ const {
   mockResolveWorkflowConfigValue,
   mockResolveWorkflowConfigValues,
   mockResolveConfigValueWithSource,
+  mockResolveWorkflowSelector,
   mockHeader,
   mockInfo,
   mockError,
@@ -19,6 +20,7 @@ const {
   mockResolveWorkflowConfigValue: vi.fn(),
   mockResolveWorkflowConfigValues: vi.fn(),
   mockResolveConfigValueWithSource: vi.fn(),
+  mockResolveWorkflowSelector: vi.fn(),
   mockHeader: vi.fn(),
   mockInfo: vi.fn(),
   mockError: vi.fn(),
@@ -34,6 +36,7 @@ vi.mock('../infra/config/index.js', () => ({
   resolveWorkflowConfigValue: mockResolveWorkflowConfigValue,
   resolveWorkflowConfigValues: mockResolveWorkflowConfigValues,
   resolveConfigValueWithSource: mockResolveConfigValueWithSource,
+  resolveWorkflowSelector: mockResolveWorkflowSelector,
 }));
 
 vi.mock('../core/workflow/instruction/InstructionBuilder.js', () => ({
@@ -89,6 +92,21 @@ describe('previewPrompts', () => {
       value: undefined,
       source: 'default',
     }));
+    mockResolveWorkflowSelector.mockImplementation((workflow: {
+      steps?: Array<{ parallel?: { kind?: string } }>;
+    }) => workflow.steps?.some((step) => step.parallel?.kind === 'dynamic')
+      ? {
+          applies: true,
+          selectorProvider: {
+            provider: 'codex',
+            model: 'gpt-selector',
+            providerSource: 'project',
+            modelSource: 'project',
+            providerOptions: {},
+            nativeTools: ['request_user_input', 'update_plan', 'view_image', 'web_search'],
+          },
+        }
+      : { applies: false });
     mockLoadWorkflowByIdentifier.mockReturnValue({
       name: 'default',
       maxSteps: 1,
@@ -108,7 +126,7 @@ describe('previewPrompts', () => {
   });
 
   it('workflow未設定時はDEFAULT_WORKFLOW_NAMEでロードする', async () => {
-    await previewPrompts('/project');
+    await previewPrompts('/project', undefined, undefined);
 
     expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith('default', '/project');
     expect(mockResolveWorkflowConfigValues).toHaveBeenCalledWith(
@@ -118,9 +136,141 @@ describe('previewPrompts', () => {
   });
 
   it('step番号の見出しを表示する', async () => {
-    await previewPrompts('/project');
+    await previewPrompts('/project', undefined, undefined);
 
     expect(console.log).toHaveBeenCalledWith('Step 1: implement (persona: coder)');
+  });
+
+  it('dynamic parallel の mode と fixed/pool role を表示する', async () => {
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'dynamic-preview',
+      maxSteps: 1,
+      steps: [{
+        name: 'reviewers',
+        personaDisplayName: 'reviewers',
+        outputContracts: [],
+        parallel: {
+          kind: 'dynamic',
+          fixed: [{
+            name: 'architecture',
+            personaDisplayName: 'architect',
+            instruction: 'Review architecture',
+            outputContracts: [],
+          }],
+          pool: [{
+            name: 'frontend',
+            personaDisplayName: 'frontend reviewer',
+            description: 'Review frontend',
+            instruction: 'Review frontend',
+            outputContracts: [],
+          }],
+          selection: { mode: 'cumulative' },
+        },
+      }],
+    });
+
+    await previewPrompts('/project');
+
+    expect(console.log).toHaveBeenCalledWith('Dynamic selector mode: cumulative');
+    expect(mockInfo).toHaveBeenCalledWith('Dynamic selector provider: codex');
+    expect(mockInfo).toHaveBeenCalledWith('Dynamic selector provider options: not configured');
+    expect(mockInfo).toHaveBeenCalledWith('Dynamic selector permission: readonly');
+    expect(mockInfo).toHaveBeenCalledWith(
+      'Dynamic selector native tools: request_user_input, update_plan, view_image, web_search',
+    );
+    expect(console.log).toHaveBeenCalledWith(
+      '\n--- fixed substep 1: architecture (persona: architect) ---\n',
+    );
+    expect(console.log).toHaveBeenCalledWith(
+      '\n--- pool candidate substep 2: frontend (persona: frontend reviewer) ---\n',
+    );
+  });
+
+  it('selector provider optionsを共通redaction後にだけ端末表示する', async () => {
+    mockResolveWorkflowSelector.mockReturnValueOnce({
+      applies: true,
+      selectorProvider: {
+        provider: 'codex',
+        model: 'gpt-selector',
+        providerSource: 'project',
+        modelSource: 'project',
+        providerOptions: {
+          codex: {
+            baseUrl: 'http://selector-user:selector-password@127.0.0.1:8787?token=selector-token',
+            reasoningEffort: 'medium',
+          },
+        },
+        nativeTools: [],
+      },
+    });
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'dynamic-preview',
+      maxSteps: 1,
+      steps: [{
+        name: 'reviewers',
+        personaDisplayName: 'reviewers',
+        outputContracts: [],
+        parallel: {
+          kind: 'dynamic',
+          fixed: [],
+          pool: [{
+            name: 'security',
+            personaDisplayName: 'security reviewer',
+            description: 'Review security',
+            instruction: 'Review security',
+            outputContracts: [],
+          }],
+          selection: { mode: 'replace' },
+        },
+      }],
+    });
+
+    await previewPrompts('/project');
+    const output = JSON.stringify(mockInfo.mock.calls);
+
+    expect(output).toContain('[configured]');
+    expect(output).toContain('reasoningEffort');
+    expect(output).toContain('medium');
+    expect(output).not.toContain('selector-user');
+    expect(output).not.toContain('selector-password');
+    expect(output).not.toContain('selector-token');
+    expect(output).not.toContain('127.0.0.1:8787');
+  });
+
+  it('CLI selector override を dynamic preview の解決境界へ渡す', async () => {
+    const overrides = { provider: 'mock' as const, model: 'mock-selector' };
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'dynamic-preview',
+      maxSteps: 1,
+      steps: [{
+        name: 'reviewers',
+        personaDisplayName: 'reviewers',
+        outputContracts: [],
+        parallel: {
+          kind: 'dynamic',
+          fixed: [],
+          pool: [{
+            name: 'frontend',
+            personaDisplayName: 'frontend reviewer',
+            description: 'Review frontend',
+            instruction: 'Review frontend',
+            outputContracts: [],
+          }],
+          selection: { mode: 'replace' },
+        },
+      }],
+    });
+
+    await previewPrompts('/project', undefined, overrides);
+
+    expect(mockResolveWorkflowSelector).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'dynamic-preview' }),
+      {
+        projectCwd: '/project',
+        lookupCwd: '/project',
+        overrides,
+      },
+    );
   });
 
   it('ワークフロー用語でステップ数を表示する', async () => {

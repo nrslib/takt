@@ -22,6 +22,7 @@ import {
 import type { GitProvider } from '../../../infra/git/index.js';
 import { USAGE_MISSING_REASONS } from '../../../core/logging/contracts.js';
 import { createPullRequestContext } from '../../../core/workflow/pr-context.js';
+import { GitSelectorCommandRunner } from '../../../infra/task/selector-git-command-runner.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -236,6 +237,8 @@ async function executeWorkflowInternal(
       reportFallbackProvider: options.reportFallbackProvider,
       rateLimitFallback: bootstrap.effectiveWorkflowConfig.rateLimitFallback,
       providerOptions: options.providerOptions,
+      selectorProvider: options.selectorProvider,
+      selectorGitCommandRunner: new GitSelectorCommandRunner(),
       autoRouting: bootstrap.effectiveWorkflowConfig.autoRouting,
       autoStrategyOverride: bootstrap.autoStrategyOverride,
       onEffectiveAutoRoutingReached: bootstrap.onEffectiveAutoRoutingReached,
@@ -252,6 +255,9 @@ async function executeWorkflowInternal(
       retryNote: options.retryNote,
       resumePoint: options.resumePoint,
       resumeSource: options.resumeSource,
+      onDynamicParallelSelectionPersisted: (resumePoint) => {
+        bootstrap.runMetaManager.updateResumePoint(resumePoint);
+      },
       operationJournal: bootstrap.operationJournal,
       reportDirName: bootstrap.runSlug,
       taskPrefix: options.taskPrefix,

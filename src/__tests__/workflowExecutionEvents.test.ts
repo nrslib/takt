@@ -46,10 +46,12 @@ function createBridgeHarness(options?: {
   shouldNotifyRateLimit?: boolean;
 }) {
   const resumePoint = options?.resumePoint ?? {
-    version: 1,
+    version: 2,
     stack: [{ workflow: 'parent', step: 'review', kind: 'agent' }],
     iteration: 2,
     elapsed_ms: 100,
+    workflow_call_invocations: {},
+    workflow_step_participations: {},
   } satisfies WorkflowResumePoint;
   const engine = new TestEngine(resumePoint, options?.findingIds);
   const out = {

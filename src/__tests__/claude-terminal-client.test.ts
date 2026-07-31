@@ -107,6 +107,40 @@ describe('Claude terminal client', () => {
     });
   });
 
+  it('Given strict read-only internal isolation, When terminal lifecycle starts, Then strict CLI flags are used', async () => {
+    const backend = createBackend();
+    const transcriptReader = createTranscriptReader({
+      sessionId: 'claude-session-1',
+      assistantText: 'done',
+      events: [],
+    });
+
+    await callClaudeTerminal('selector', 'select reviewers', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      internalAgentIsolation: 'strict-readonly',
+      permissionMode: 'readonly',
+      skillsEnabled: true,
+      terminalBackend: backend,
+      transcriptReader,
+    });
+
+    expect(backend.start).toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({
+        args: expect.arrayContaining([
+          '--tools',
+          '',
+          '--setting-sources',
+          '',
+          '--strict-mcp-config',
+          '--disable-slash-commands',
+          '--permission-mode',
+          'default',
+        ]),
+      }),
+    }));
+  });
+
   it('Given disabled Skills, When terminal lifecycle runs, Then it keeps slash commands disabled while starting, prompting, receiving, and stopping the session', async () => {
     const backend = createBackend();
     const transcriptReader = createTranscriptReader({

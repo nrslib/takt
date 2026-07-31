@@ -1,6 +1,10 @@
 import type { AutoRoutingConfig } from '../../models/config-types.js';
 import type { AgentWorkflowStep, LoopMonitorRule, WorkflowConfig, WorkflowRule, WorkflowStep } from '../../models/types.js';
 import {
+  getAllParallelSubSteps,
+  isDynamicParallelSubSteps,
+} from '../../models/types.js';
+import {
   SESSION_AGENT_STEP_REQUIRED_MESSAGE,
   SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
 } from '../../models/workflow-session-constraints.js';
@@ -31,6 +35,7 @@ import { findDuplicateWorkflowStepName } from '../../../shared/workflowStepNameV
 import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { getProviderValidationErrorSource, withProviderValidationErrorSource } from '../provider-validation-error.js';
+import { validateDynamicParallelContracts } from '../dynamic-parallel/validator.js';
 
 type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
 const withWorkflowStepErrorPath = withWorkflowConfigErrorPath;
@@ -183,7 +188,8 @@ function validateFindingConflictAdjudicationReservedName(config: WorkflowConfig)
   const collectSteps = (steps: readonly WorkflowStep[], path: readonly PropertyKey[]): Array<{ step: WorkflowStep; path: readonly PropertyKey[] }> =>
     steps.flatMap((step, index) => {
       const stepPath = [...path, index];
-      return [{ step, path: stepPath }, ...collectSteps(step.parallel ?? [], [...stepPath, 'parallel'])];
+      const nested = step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel);
+      return [{ step, path: stepPath }, ...collectSteps(nested, [...stepPath, 'parallel'])];
     });
   for (const { step, path } of collectSteps(config.steps, ['steps'])) {
     if (step.name === FINDING_CONFLICT_ADJUDICATION_STEP && step.engineSynthesized !== true) {
@@ -212,7 +218,8 @@ function validateFindingContractStructuredOutput(config: WorkflowConfig, finding
         new Error(`Invalid step "${step.name}": cannot combine finding_contract raw findings with structured_output`),
       );
     }
-    for (const [subStepIndex, subStep] of (step.parallel ?? []).entries()) {
+    const subSteps = step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel);
+    for (const [subStepIndex, subStep] of subSteps.entries()) {
       if (subStep.structuredOutput) {
         throw withConfigStepErrorPath(
           config,
@@ -313,7 +320,8 @@ function collectFindingContractFormatViolations(
         formatIndex: findingContractFormat.index,
       });
     }
-    for (const [subStepIndex, subStep] of (step.parallel ?? []).entries()) {
+    const subSteps = step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel);
+    for (const [subStepIndex, subStep] of subSteps.entries()) {
       collectFromStep(subStep, `${label}.${subStep.name}`, [...fallbackPath, 'parallel', subStepIndex]);
     }
   };
@@ -363,7 +371,10 @@ function validateFindingContractDelegatedIntake(config: WorkflowConfig, findingC
     return;
   }
   for (const [stepIndex, step] of config.steps.entries()) {
-    if (!isDelegatedWorkflowStep(step) || (step.parallel?.length ?? 0) > 0) {
+    if (
+      !isDelegatedWorkflowStep(step)
+      || (step.parallel !== undefined && getAllParallelSubSteps(step.parallel).length > 0)
+    ) {
       continue;
     }
     const findingContractFormat = findFindingContractFormat(step);
@@ -562,7 +573,10 @@ function findWorkflowCallStep(
     if (isWorkflowCallStep(step)) {
       return { step, path };
     }
-    const nested = findWorkflowCallStep(step.parallel ?? [], [...path, 'parallel']);
+    const nested = findWorkflowCallStep(
+      step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel),
+      [...path, 'parallel'],
+    );
     if (nested !== undefined) {
       return nested;
     }
@@ -575,6 +589,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   if (!initialStep) {
     throw new Error(ERROR_MESSAGES.UNKNOWN_STEP(config.initialStep));
   }
+  validateDynamicParallelContracts(config.steps, ['steps']);
   // 子ワークフローが自前の finding_contract を持たず、workflow_call の親から
   // 継承しているだけのケースも「Finding Contract 有効」として扱う。継承した
   // 契約は ParallelRunner の raw findings 自動付与・manager 起動をそのまま
@@ -630,7 +645,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       }
       validateAggregateRulePlacement(
         step.rules ?? [],
-        (step.parallel?.length ?? 0) > 0,
+        step.parallel !== undefined && getAllParallelSubSteps(step.parallel).length > 0,
         `Invalid rule in step "${step.name}"`,
         [...stepPath, 'rules'],
       );
@@ -657,10 +672,10 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
           throw withWorkflowStepErrorPath(error, [...stepPath, 'rules', ruleIndex]);
         }
       }
-      for (const [subStepIndex, subStep] of (step.parallel ?? []).entries()) {
-        try {
-          const subStepPath = findWorkflowStepLocation(config, subStep)
-            ?? ['steps', stepIndex, 'parallel', subStepIndex];
+      const subSteps = step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel);
+      for (const [subStepIndex, subStep] of subSteps.entries()) {
+        const subStepPath = findWorkflowStepLocation(config, subStep)
+          ?? ['steps', stepIndex, 'parallel', subStepIndex];
           validateAggregateRulePlacement(
             subStep.rules ?? [],
             false,
@@ -680,15 +695,17 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
           } catch (error) {
             throw withWorkflowStepErrorPath(error, [...subStepPath, 'session']);
           }
-          try {
-            validateAgentStepProviderModel(
-              subStep,
-              options,
-              `Configuration error: parallel sub-step "${subStep.name}" of step "${step.name}"`,
-              subStepPath,
-            );
-          } catch (error) {
-            throw withWorkflowStepErrorPath(error, subStepPath);
+          if (!isDynamicParallelSubSteps(step.parallel!)) {
+            try {
+              validateAgentStepProviderModel(
+                subStep,
+                options,
+                `Configuration error: parallel sub-step "${subStep.name}" of step "${step.name}"`,
+                subStepPath,
+              );
+            } catch (error) {
+              throw withWorkflowStepErrorPath(error, subStepPath);
+            }
           }
           for (const [ruleIndex, rule] of (subStep.rules ?? []).entries()) {
             try {
@@ -706,9 +723,6 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
               throw withWorkflowStepErrorPath(error, [...subStepPath, 'rules', ruleIndex]);
             }
           }
-        } catch (error) {
-          throw withWorkflowStepErrorPath(error, ['steps', stepIndex, 'parallel', subStepIndex]);
-        }
       }
     } catch (error) {
       throw withWorkflowStepErrorPath(error, ['steps', stepIndex]);

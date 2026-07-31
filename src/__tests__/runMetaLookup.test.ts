@@ -124,53 +124,19 @@ describe('run-meta lookup', () => {
       startTime: '2026-04-09T00:00:00.000Z',
       currentIteration: 7,
       resumePoint: {
-        version: 1,
+        version: 2,
         stack: [
-          { workflow: 'default', step: 'dev', kind: 'workflow_call' },
+          { workflow: 'default', step: 'dev', kind: 'workflow_call', call_instance: 1 },
           { workflow: 'takt/coding', step: 'review', kind: 'agent' },
         ],
         iteration: 7,
         elapsed_ms: 183245,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     });
 
     expect(findRunningStepByRunSlug(projectDir, '20260409-run-a')).toBeUndefined();
-  });
-
-  it('should normalize legacy resume_point to resumePoint at read boundary', () => {
-    const metaPath = path.join(projectDir, '.takt', 'runs', '20260409-run-a', 'meta.json');
-    writeMeta(projectDir, '20260409-run-a', {
-      task: 'Force fail me\nwith full prompt',
-      workflow: 'default',
-      runSlug: '20260409-run-a',
-      runRoot: '.takt/runs/20260409-run-a',
-      reportDirectory: '.takt/runs/20260409-run-a/reports',
-      contextDirectory: '.takt/runs/20260409-run-a/context',
-      logsDirectory: '.takt/runs/20260409-run-a/logs',
-      status: 'running',
-      startTime: '2026-04-09T00:00:00.000Z',
-      currentStep: 'delegate',
-      currentIteration: 7,
-      resume_point: {
-        version: 1,
-        stack: [
-          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
-        ],
-        iteration: 7,
-        elapsed_ms: 183245,
-      },
-    });
-
-    expect(readRunMeta(metaPath)?.resumePoint).toEqual({
-      version: 1,
-      stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' },
-      ],
-      iteration: 7,
-      elapsed_ms: 183245,
-    });
   });
 
   it('should normalize operation journal ownership metadata at the read boundary', () => {

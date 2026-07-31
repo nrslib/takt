@@ -191,6 +191,36 @@ steps:
     expect(result[0]!.allowedTools).toHaveLength(3);
   });
 
+  it('should collect permissions from both fixed and pool dynamic parallel steps', () => {
+    const content = `
+steps:
+  - name: reviewers
+    parallel:
+      fixed:
+        - name: architecture
+          edit: true
+          provider_options:
+            claude:
+              allowed_tools: [Write]
+      pool:
+        - name: security
+          description: Review security
+          required_permission_mode: bypassPermissions
+          provider_options:
+            claude:
+              allowed_tools: [Bash]
+      selection:
+        mode: replace
+`.trim();
+
+    expect(detectEditWorkflows([{ name: 'dynamic.yaml', content }])).toEqual([{
+      name: 'dynamic.yaml',
+      allowedTools: ['Write', 'Bash'],
+      hasEdit: true,
+      requiredPermissionModes: ['bypassPermissions'],
+    }]);
+  });
+
   it('should merge provider_options.claude.allowed_tools from multiple edit steps', () => {
     const content = `
 steps:

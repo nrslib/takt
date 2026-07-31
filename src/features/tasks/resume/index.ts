@@ -168,9 +168,19 @@ function loadWorkflow(projectDir: string, run: ResumableDirectRun): WorkflowConf
   return workflowConfig;
 }
 
-function buildWorkflowContext(projectDir: string, workflowIdentifier: string): WorkflowContext {
+function buildWorkflowContext(
+  projectDir: string,
+  workflowIdentifier: string,
+  agentOverrides: TaskExecutionOptions | undefined,
+): WorkflowContext {
   const previewCount = resolveWorkflowConfigValue(projectDir, 'interactivePreviewSteps');
-  const workflowDesc = getWorkflowDescription(workflowIdentifier, projectDir, previewCount, projectDir);
+  const workflowDesc = getWorkflowDescription(
+    workflowIdentifier,
+    projectDir,
+    previewCount,
+    projectDir,
+    agentOverrides,
+  );
   return {
     name: workflowDesc.name,
     description: workflowDesc.description,
@@ -200,7 +210,11 @@ function materializeResumePullRequestContext(
   });
 }
 
-function buildExecutionContext(projectDir: string, run: ResumableDirectRun): DirectRunResumeExecutionContext {
+function buildExecutionContext(
+  projectDir: string,
+  run: ResumableDirectRun,
+  agentOverrides: TaskExecutionOptions | undefined,
+): DirectRunResumeExecutionContext {
   const workflowConfig = loadWorkflow(projectDir, run);
   const resumePoint = resolveResumePoint(projectDir, workflowConfig, run);
   const resolvedTask = resolveTaskContent(projectDir, run);
@@ -219,7 +233,7 @@ function buildExecutionContext(projectDir: string, run: ResumableDirectRun): Dir
     previousOrderContent: resolvedTask.previousOrderContent,
     startStep: resolveStartStep(workflowConfig, run, resumePoint),
     resumePoint,
-    workflowContext: buildWorkflowContext(projectDir, run.meta.workflow),
+    workflowContext: buildWorkflowContext(projectDir, run.meta.workflow, agentOverrides),
   };
 }
 
@@ -437,7 +451,7 @@ export async function resumeDirectRun(
     return true;
   }
 
-  const context = buildExecutionContext(projectDir, run);
+  const context = buildExecutionContext(projectDir, run, agentOverrides);
   if (action === 'requeue') {
     return executeDirectResume(projectDir, context, 'requeue', agentOverrides);
   }

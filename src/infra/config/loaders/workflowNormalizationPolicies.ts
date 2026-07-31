@@ -8,9 +8,10 @@ import type {
 } from '../../../core/models/config-types.js';
 import type { WorkflowConfig, WorkflowStepRawSchema } from '../../../core/models/index.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
+import { enumerateParallelSubSteps } from './workflowParallelTraversal.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
-type RawParallelSubStep = NonNullable<RawStep['parallel']>[number];
+type RawParallelSubStep = NonNullable<Extract<RawStep['parallel'], readonly unknown[]>>[number];
 
 export function resolveWorkflowRuntimePreparePolicy(
   globalPolicy: WorkflowRuntimePrepareConfig | undefined,
@@ -52,11 +53,14 @@ export function validateWorkflowCommandGates(
 ): void {
   for (const [stepIndex, step] of steps.entries()) {
     validateStepCommandGates(step, step.name, ['steps', stepIndex], policy);
-    for (const [subStepIndex, subStep] of step.parallel?.entries() ?? []) {
+    const parallelSubSteps = step.parallel === undefined
+      ? []
+      : enumerateParallelSubSteps(step.parallel, ['steps', stepIndex, 'parallel']);
+    for (const { subStep, path } of parallelSubSteps) {
       validateStepCommandGates(
         subStep,
         `${step.name}.${subStep.name}`,
-        ['steps', stepIndex, 'parallel', subStepIndex],
+        path,
         policy,
       );
     }

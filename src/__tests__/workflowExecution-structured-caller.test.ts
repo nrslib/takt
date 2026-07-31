@@ -753,21 +753,25 @@ steps:
       rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
     };
     const childResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const parentResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183900,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     MockWorkflowEngine.nextRunImpl = async (instance) => {
@@ -815,21 +819,25 @@ steps:
       rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
     };
     const childResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const parentResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183900,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     MockWorkflowEngine.nextRunImpl = async (instance) => {

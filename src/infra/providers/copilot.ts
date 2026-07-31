@@ -7,10 +7,14 @@ import { resolveCopilotGithubToken, resolveCopilotCliPath } from '../config/inde
 import { createLogger } from '../../shared/utils/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
+import { createStrictInternalAgentIsolationError } from '../../shared/types/provider.js';
 
 const log = createLogger('copilot-provider');
 
 function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
+  if (options.internalAgentIsolation !== undefined) {
+    throw createStrictInternalAgentIsolationError('copilot');
+  }
   if (options.allowedTools && options.allowedTools.length > 0) {
     log.info('Copilot provider does not support allowedTools; ignoring');
   }
@@ -42,6 +46,7 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
 export class CopilotProvider implements Provider {
   readonly supportsStructuredOutput = false;
   readonly supportsNativeImageInput = false;
+  readonly supportsStrictInternalAgentIsolation = false;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

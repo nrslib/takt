@@ -11,6 +11,26 @@ function isRecord(value: unknown): value is RawStep {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function enumerateParallelStepNames(
+  parallel: unknown,
+  parentPath: readonly PropertyKey[],
+): Array<{ step: RawStep; path: readonly PropertyKey[] }> {
+  if (Array.isArray(parallel)) {
+    return parallel.flatMap((step, index) =>
+      isRecord(step) ? [{ step, path: [...parentPath, index] }] : []);
+  }
+  if (!isRecord(parallel)) {
+    return [];
+  }
+  return (['fixed', 'pool'] as const).flatMap((branch) => {
+    const entries = parallel[branch];
+    return Array.isArray(entries)
+      ? entries.flatMap((step, index) =>
+        isRecord(step) ? [{ step, path: [...parentPath, branch, index] }] : [])
+      : [];
+  });
+}
+
 export function findDuplicateWorkflowStepName(steps: readonly unknown[]): DuplicateWorkflowStepName | undefined {
   const stepNames = new Map<string, readonly PropertyKey[]>();
   for (const [stepIndex, step] of steps.entries()) {
@@ -19,12 +39,12 @@ export function findDuplicateWorkflowStepName(steps: readonly unknown[]): Duplic
     const firstStepPath = stepNames.get(step.name);
     if (firstStepPath) return { name: step.name, firstPath: firstStepPath, path: stepPath };
     stepNames.set(step.name, stepPath);
-    if (!Array.isArray(step.parallel)) continue;
-
     const subStepNames = new Map<string, readonly PropertyKey[]>();
-    for (const [subStepIndex, subStep] of step.parallel.entries()) {
-      if (!isRecord(subStep) || typeof subStep.name !== 'string') continue;
-      const subStepPath = ['steps', stepIndex, 'parallel', subStepIndex];
+    for (const { step: subStep, path: subStepPath } of enumerateParallelStepNames(
+      step.parallel,
+      ['steps', stepIndex, 'parallel'],
+    )) {
+      if (typeof subStep.name !== 'string') continue;
       const firstSubStepPath = subStepNames.get(subStep.name);
       if (firstSubStepPath) {
         return { name: subStep.name, parentName: step.name, firstPath: firstSubStepPath, path: subStepPath };

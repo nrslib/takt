@@ -1,4 +1,9 @@
-import type { WorkflowCallStep, WorkflowConfig, WorkflowStep } from '../../core/models/index.js';
+import {
+  getAllParallelSubSteps,
+  type WorkflowCallStep,
+  type WorkflowConfig,
+  type WorkflowStep,
+} from '../../core/models/index.js';
 
 export function findWorkflowCallStep(
   workflow: WorkflowConfig,
@@ -10,7 +15,7 @@ export function findWorkflowCallStep(
       if (step.kind === 'workflow_call' && step.name === stepName && (call === undefined || step.call === call)) {
         return step;
       }
-      const nested = visit(step.parallel ?? []);
+      const nested = visit(step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel));
       if (nested) {
         return nested;
       }

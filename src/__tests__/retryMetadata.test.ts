@@ -8,12 +8,14 @@ import { readRetryMetadataByRunSlug, resolveRetryMetadataFromRunMeta } from '../
 describe('resolveRetryMetadataFromRunMeta', () => {
   it('resume_point の root step と iteration を retry metadata の基準にする', () => {
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const runMeta: RunMeta = {
       task: 'Task A',
@@ -39,13 +41,15 @@ describe('resolveRetryMetadataFromRunMeta', () => {
 
   it('deep child stack を含む resume_point でも root step と iteration を retry metadata の基準にする', () => {
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
         { workflow: 'takt/coding', step: 'fix', kind: 'agent' as const },
       ],
       iteration: 11,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const runMeta: RunMeta = {
       task: 'Task A',

@@ -45,7 +45,9 @@ export function normalizeConfigProviderReferenceDetailed<ProviderType extends st
 
   return {
     provider: provider.type,
-    model: provider.model ?? model,
+    model: provider.model === undefined
+      ? model
+      : provider.model,
     providerOptions: mergeProviderOptions(
       normalizeProviderBlockOptions(provider),
       normalizeProviderOptions(providerOptions, options),

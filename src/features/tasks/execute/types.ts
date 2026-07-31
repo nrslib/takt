@@ -15,6 +15,7 @@ import type { McpServerConfig, WorkflowResumePoint } from '../../../core/models/
 import type { ProviderType } from '../../../shared/types/provider.js';
 import type {
   AskUserQuestionHandler,
+  SelectorProviderInfo,
   StepProviderInfo,
   WorkflowCallResolver,
   WorkflowTraceTaskMetadata,
@@ -171,6 +172,7 @@ export interface WorkflowExecutionOptions {
   reportFallbackProvider?: StepProviderInfo;
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
+  selectorProvider?: SelectorProviderInfo;
   /** Resolved automatic provider/model routing configuration */
   autoRouting?: AutoRoutingConfig;
   /** Strategy override for automatic provider/model routing. */

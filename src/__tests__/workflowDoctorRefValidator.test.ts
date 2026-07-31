@@ -76,4 +76,45 @@ describe('workflowDoctorRefValidator', () => {
 
     expect(diagnostics).toEqual([]);
   });
+
+  it('reports dynamic parallel resource paths with their fixed and pool branches', () => {
+    const raw = WorkflowConfigRawSchema.parse({
+      name: 'dynamic-parallel-paths',
+      max_steps: 1,
+      initial_step: 'reviewers',
+      steps: [{
+        name: 'reviewers',
+        parallel: {
+          fixed: [{ name: 'architecture', persona: 'missing-fixed', instruction: 'Review' }],
+          pool: [{
+            name: 'frontend',
+            persona: 'missing-pool',
+            description: 'Review frontend changes',
+            instruction: 'Review',
+          }],
+        },
+      }],
+    });
+    const context: FacetResolutionContext = {
+      lang: 'ja',
+      workflowDir: '/project/.takt/workflows',
+      projectDir: '/project',
+      repertoireDir: '/repertoire',
+    };
+    const sections: WorkflowSections = {
+      personas: raw.personas,
+      resolvedInstructions: {},
+      resolvedKnowledge: {},
+      resolvedPolicies: {},
+      resolvedReportFormats: {},
+    };
+    const diagnostics: Array<{ level: 'error' | 'warning'; message: string; path?: readonly PropertyKey[] }> = [];
+
+    validateWorkflowReferences(raw, sections, context, diagnostics);
+
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: ['steps', 0, 'parallel', 'fixed', 0, 'persona'] }),
+      expect.objectContaining({ path: ['steps', 0, 'parallel', 'pool', 0, 'persona'] }),
+    ]));
+  });
 });

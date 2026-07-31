@@ -16,6 +16,7 @@ import type { CodexCallOptions } from '../infra/codex/types.js';
 
 let mockEvents: Array<Record<string, unknown>> = [];
 let lastThreadOptions: Record<string, unknown> | undefined;
+let lastTurnOptions: Record<string, unknown> | undefined;
 let lastCodexConstructorOptions: Record<string, unknown> | undefined;
 
 vi.mock('@openai/codex-sdk', () => {
@@ -28,13 +29,16 @@ vi.mock('@openai/codex-sdk', () => {
         lastThreadOptions = options;
         return {
           id: 'thread-mock',
-          runStreamed: async () => ({
+          runStreamed: async (_input: unknown, options?: Record<string, unknown>) => {
+            lastTurnOptions = options;
+            return {
             events: (async function* () {
               for (const event of mockEvents) {
                 yield event;
               }
             })(),
-          }),
+            };
+          },
         };
       }
       async resumeThread() {
@@ -52,6 +56,7 @@ describe('CodexClient — structuredOutput 抽出', () => {
     vi.clearAllMocks();
     mockEvents = [];
     lastThreadOptions = undefined;
+    lastTurnOptions = undefined;
     lastCodexConstructorOptions = undefined;
     delete process.env.TAKT_OBSERVABILITY;
     delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
@@ -270,6 +275,31 @@ describe('CodexClient — structuredOutput 抽出', () => {
     });
 
     expect(result.structuredOutput).toEqual({ step: 1 });
+  });
+
+  it('read-only structured callをsandboxとapproval policyへ反映する', async () => {
+    const schema = { type: 'object', additionalProperties: false };
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      {
+        type: 'item.completed',
+        item: { id: 'msg-1', type: 'agent_message', text: '{}' },
+      },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('selector', 'prompt', {
+      cwd: '/tmp',
+      permissionMode: 'readonly',
+      outputSchema: schema,
+    });
+
+    expect(lastThreadOptions).toMatchObject({
+      sandboxMode: 'read-only',
+      approvalPolicy: 'never',
+    });
+    expect(lastTurnOptions).toMatchObject({ outputSchema: schema });
   });
 
   it('provider_options.codex.network_access が ThreadOptions に反映される', async () => {

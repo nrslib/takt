@@ -71,18 +71,24 @@ export class SdkOptionsBuilder {
     const hooks = SdkOptionsBuilder.createAskUserQuestionHooks(askHandler);
 
     const permissionMode = this.resolvePermissionMode();
-
     // Only include defined values — the SDK treats key-present-but-undefined
     // differently from key-absent for some options (e.g. model), causing hangs.
     const sdkOptions: Options = {
       cwd: this.options.cwd,
       permissionMode,
-      settingSources: ['project'],
+      settingSources: this.options.internalAgentIsolation === 'strict-readonly' ? [] : ['project'],
     };
 
+    if (this.options.internalAgentIsolation === 'strict-readonly') {
+      sdkOptions.tools = [];
+      sdkOptions.strictMcpConfig = true;
+      sdkOptions.skills = [];
+    }
     if (this.options.model) sdkOptions.model = this.options.model;
     if (this.options.effort) sdkOptions.effort = this.options.effort;
-    if (this.options.skillsEnabled === false) sdkOptions.skills = [];
+    if (this.options.internalAgentIsolation !== 'strict-readonly' && this.options.skillsEnabled === false) {
+      sdkOptions.skills = [];
+    }
     if (this.options.maxTurns != null) sdkOptions.maxTurns = this.options.maxTurns;
     if (this.options.allowedTools) sdkOptions.allowedTools = this.options.allowedTools;
     if (this.options.agents) sdkOptions.agents = this.options.agents;

@@ -315,13 +315,15 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     MockWorkflowEngine.iterationLimitCurrentStep = 'fix';
     MockWorkflowEngine.iterationLimitCurrentIteration = 2;
     MockWorkflowEngine.activeResumePoint = {
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
+        { workflow: 'parent', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
         { workflow: 'takt/coding', step: 'fix', kind: 'agent' },
       ],
       iteration: 2,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     MockWorkflowEngine.buildResumePointForCurrentStep = undefined;
 
@@ -344,21 +346,25 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     MockWorkflowEngine.iterationLimitCurrentStep = 'implement';
     MockWorkflowEngine.iterationLimitCurrentIteration = 3;
     MockWorkflowEngine.activeResumePoint = {
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
+        { workflow: 'parent', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
         { workflow: 'takt/coding', step: 'implement', kind: 'agent' },
       ],
       iteration: 3,
       elapsed_ms: 183246,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     MockWorkflowEngine.buildResumePointForCurrentStep = {
-      version: 1,
+      version: 2,
       stack: [
         { workflow: 'parent', step: 'implement', kind: 'agent' },
       ],
       iteration: 3,
       elapsed_ms: 183247,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     const result = await executeWorkflow(makeConfig(), 'task', '/tmp/project', {

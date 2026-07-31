@@ -180,13 +180,15 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
 
   it('scenario 2: exceeded metadata is recorded in tasks.yaml for resumption', async () => {
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
       ],
       iteration: 30,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     runner.addTask('Do work', { workflow: 'test-workflow' });
     const [task] = runner.claimNextTasks(1);
@@ -383,13 +385,15 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
       worktree_path: cloneDir,
       start_step: 'delegate',
       resume_point: {
-        version: 1,
+        version: 2,
         stack: [
-          { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
           { workflow: 'takt/coding', step: 'review', kind: 'agent' },
         ],
         iteration: 30,
         elapsed_ms: 183245,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     });
 
@@ -405,12 +409,14 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
     const capturedOptions = vi.mocked(executeWorkflow).mock.calls[0]![3] as WorkflowExecutionOptions;
     expect(capturedOptions.startStep).toBe('delegate');
     expect(capturedOptions.resumePoint).toEqual({
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call' },
+        { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
       ],
       iteration: 30,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     });
   });
 });

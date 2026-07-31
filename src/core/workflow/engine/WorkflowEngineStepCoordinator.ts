@@ -1,4 +1,5 @@
 import type { AgentResponse, LoopMonitorConfig, WorkflowMaxSteps, WorkflowState, WorkflowStep } from '../../models/types.js';
+import { getAllParallelSubSteps } from '../../models/types.js';
 import { ABORT_STEP, FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
 import { FINDING_CONFLICT_ADJUDICATION_RULE_INDEX } from '../findings/adjudication-step.js';
 import { isDelegatedWorkflowStep, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
@@ -99,6 +100,7 @@ interface WorkflowEngineStepCoordinatorDeps {
   };
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   emitReport: (step: WorkflowStep, filePath: string, fileName: string) => void;
+  recordParticipation: (step: WorkflowStep, reportNames: readonly string[]) => void;
   /** Present only when the workflow has an effective finding_contract and the finding-conflict-adjudication step was injected (see WorkflowEngine). */
   findingConflictAdjudicationRunner?: {
     run: (step: WorkflowStep, state: WorkflowState, runtime?: RuntimeStepResolution) => Promise<StepRunResult>;
@@ -143,7 +145,7 @@ export class WorkflowEngineStepCoordinator {
         );
       }
       result = await runner.run(step, this.deps.state, runtime);
-    } else if (step.parallel && step.parallel.length > 0) {
+    } else if (step.parallel && getAllParallelSubSteps(step.parallel).length > 0) {
       result = await this.deps.parallelRunner.runParallelStep(
         step,
         this.deps.state,
@@ -190,8 +192,22 @@ export class WorkflowEngineStepCoordinator {
       );
     }
 
-    for (const { step: reportedStep, filePath, fileName } of this.deps.stepExecutor.drainReportFiles()) {
+    const reports = this.deps.stepExecutor.drainReportFiles();
+    for (const { step: reportedStep, filePath, fileName } of reports) {
       this.deps.emitReport(reportedStep, filePath, fileName);
+    }
+    const reportedSteps = new Map<string, WorkflowStep>();
+    for (const report of reports) {
+      reportedSteps.set(report.step.name, report.step);
+    }
+    reportedSteps.set(step.name, step);
+    for (const [stepName, participatedStep] of reportedSteps) {
+      this.deps.recordParticipation(
+        participatedStep,
+        reports
+          .filter((report) => report.step.name === stepName)
+          .map((report) => report.fileName),
+      );
     }
     return result;
   }

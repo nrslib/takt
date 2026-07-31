@@ -12,6 +12,7 @@ import { z } from 'zod/v4';
 import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import { STATUS_VALUES } from './status.js';
 import { CLAUDE_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES, COPILOT_EFFORT_VALUES, RUNTIME_PREPARE_PRESETS } from './workflow-types.js';
+import { ConfiguredModelSchema } from './model-schema.js';
 
 export { McpServerConfigSchema, McpServersSchema } from './mcp-schemas.js';
 
@@ -53,52 +54,92 @@ export const StatusSchema = z.enum(STATUS_VALUES);
 /** Permission mode schema for tool execution */
 export const PermissionModeSchema = z.enum(['readonly', 'edit', 'full']);
 
-/** Claude sandbox settings schema */
-export const ClaudeSandboxSchema = z.object({
+const ClaudeSandboxShape = {
   allow_unsandboxed_commands: z.boolean().optional(),
   excluded_commands: z.array(z.string()).optional(),
-}).optional();
+};
+
+/** Claude sandbox settings schema */
+export const ClaudeSandboxSchema = z.object(ClaudeSandboxShape).optional();
 
 /** Provider-specific step options schema */
+const CodexSkillsShape = {
+  repo: z.boolean().optional(),
+  user: z.boolean().optional(),
+};
+
+const CodexProviderOptionShape = {
+  base_url: z.string().min(1).optional(),
+  network_access: z.boolean().optional(),
+  reasoning_effort: z.enum(CODEX_REASONING_EFFORT_VALUES).optional(),
+  skills: z.object(CodexSkillsShape).optional(),
+};
+
+const CodexProviderOptionsSchema = z.object(CodexProviderOptionShape);
+
+const StrictCodexProviderOptionsSchema = z.object({
+  ...CodexProviderOptionShape,
+  skills: z.object(CodexSkillsShape).strict().optional(),
+}).strict();
+
+const OpenCodeProviderOptionsSchema = z.object({
+  network_access: z.boolean().optional(),
+  variant: z.string().min(1).optional(),
+  allowed_tools: z.array(z.string()).optional(),
+});
+
+const ClaudeSkillsShape = { enabled: z.boolean().optional() };
+const ClaudeSkillsSchema = z.object(ClaudeSkillsShape).strict();
+
+const ClaudeProviderOptionShape = {
+  base_url: z.string().min(1).optional(),
+  allowed_tools: z.array(z.string()).optional(),
+  effort: z.enum(CLAUDE_EFFORT_VALUES).optional(),
+  skills: ClaudeSkillsSchema.optional(),
+  sandbox: z.object(ClaudeSandboxShape).optional(),
+};
+
+const ClaudeProviderOptionsSchema = z.object(ClaudeProviderOptionShape);
+
+const StrictClaudeProviderOptionsSchema = z.object({
+  ...ClaudeProviderOptionShape,
+  sandbox: z.object(ClaudeSandboxShape).strict().optional(),
+}).strict();
+
+const ClaudeTerminalProviderOptionsSchema = z.object({
+  backend: z.enum(['tmux']).optional(),
+  timeout_ms: z.number().int().positive().optional(),
+  keep_session: z.boolean().optional(),
+  transcript_poll_interval_ms: z.number().int().positive().optional(),
+}).strict();
+
+const CopilotProviderOptionsSchema = z.object({
+  effort: z.enum(COPILOT_EFFORT_VALUES).optional(),
+});
+
+const KiroProviderOptionsSchema = z.object({
+  agent: z.string().min(1).optional(),
+});
+
 export const StepProviderOptionsObjectSchema = z.object({
-  codex: z.object({
-    base_url: z.string().min(1).optional(),
-    network_access: z.boolean().optional(),
-    reasoning_effort: z.enum(CODEX_REASONING_EFFORT_VALUES).optional(),
-    skills: z.object({
-      repo: z.boolean().optional(),
-      user: z.boolean().optional(),
-    }).optional(),
-  }).optional(),
-  opencode: z.object({
-    network_access: z.boolean().optional(),
-    variant: z.string().min(1).optional(),
-    allowed_tools: z.array(z.string()).optional(),
-  }).optional(),
-  claude: z.object({
-    base_url: z.string().min(1).optional(),
-    allowed_tools: z.array(z.string()).optional(),
-    effort: z.enum(CLAUDE_EFFORT_VALUES).optional(),
-    skills: z.object({
-      enabled: z.boolean().optional(),
-    }).strict().optional(),
-    sandbox: ClaudeSandboxSchema,
-  }).optional(),
-  claude_terminal: z.object({
-    backend: z.enum(['tmux']).optional(),
-    timeout_ms: z.number().int().positive().optional(),
-    keep_session: z.boolean().optional(),
-    transcript_poll_interval_ms: z.number().int().positive().optional(),
-  }).strict().optional(),
-  copilot: z.object({
-    effort: z.enum(COPILOT_EFFORT_VALUES).optional(),
-  }).optional(),
-  kiro: z.object({
-    agent: z.string().min(1).optional(),
-  }).optional(),
+  codex: CodexProviderOptionsSchema.optional(),
+  opencode: OpenCodeProviderOptionsSchema.optional(),
+  claude: ClaudeProviderOptionsSchema.optional(),
+  claude_terminal: ClaudeTerminalProviderOptionsSchema.optional(),
+  copilot: CopilotProviderOptionsSchema.optional(),
+  kiro: KiroProviderOptionsSchema.optional(),
 });
 
 export const StepProviderOptionsSchema = StepProviderOptionsObjectSchema.optional();
+
+const StrictStepProviderOptionsSchema = z.object({
+  codex: StrictCodexProviderOptionsSchema.optional(),
+  opencode: OpenCodeProviderOptionsSchema.strict().optional(),
+  claude: StrictClaudeProviderOptionsSchema.optional(),
+  claude_terminal: ClaudeTerminalProviderOptionsSchema.strict().optional(),
+  copilot: CopilotProviderOptionsSchema.strict().optional(),
+  kiro: KiroProviderOptionsSchema.strict().optional(),
+}).strict().optional();
 
 /** Provider key schema for profile maps */
 export const ProviderProfileNameSchema = z.enum(PROVIDER_TYPES, {
@@ -407,7 +448,7 @@ export const StepQualityGatesOverrideSchema = z.object({
 }).optional();
 
 export function hasProviderOptionsLeaf(
-  providerOptions: NonNullable<z.infer<typeof StepProviderOptionsSchema>>,
+  providerOptions: Readonly<Record<string, unknown>>,
 ): boolean {
   return Object.values(providerOptions).some(hasDefinedProviderOptionLeaf);
 }
@@ -478,11 +519,82 @@ export const TaktProviderEntrySchema = z.object({
   { message: "takt_providers.assistant must include either 'provider' or 'model'" }
 );
 
+export const TaktSelectorProviderEntrySchema = z.object({
+  provider: ProviderTypeSchema.optional(),
+  model: ConfiguredModelSchema.optional(),
+  provider_options: StrictStepProviderOptionsSchema,
+}).strict().superRefine((entry, ctx) => {
+  if (entry.provider === undefined && entry.model === undefined && entry.provider_options === undefined) {
+    ctx.addIssue({ code: 'custom', message: "takt_providers.selector must include provider, model, or provider_options" });
+  }
+  if (entry.provider_options !== undefined && !hasProviderOptionsLeaf(entry.provider_options)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['provider_options'],
+      message: 'takt_providers.selector provider_options must include at least one provider-specific option',
+    });
+  }
+});
+
+const NormalizedStepProviderOptionsSchema = z.object({
+  codex: z.object({
+    baseUrl: z.string().min(1).optional(),
+    networkAccess: z.boolean().optional(),
+    reasoningEffort: z.enum(CODEX_REASONING_EFFORT_VALUES).optional(),
+    skills: z.object(CodexSkillsShape).strict().optional(),
+  }).strict().optional(),
+  opencode: z.object({
+    networkAccess: z.boolean().optional(),
+    variant: z.string().min(1).optional(),
+    allowedTools: z.array(z.string()).optional(),
+  }).strict().optional(),
+  claude: z.object({
+    baseUrl: z.string().min(1).optional(),
+    allowedTools: z.array(z.string()).optional(),
+    effort: z.enum(CLAUDE_EFFORT_VALUES).optional(),
+    skills: z.object(ClaudeSkillsShape).strict().optional(),
+    sandbox: z.object({
+      allowUnsandboxedCommands: z.boolean().optional(),
+      excludedCommands: z.array(z.string()).optional(),
+    }).strict().optional(),
+  }).strict().optional(),
+  claudeTerminal: z.object({
+    backend: z.enum(['tmux']).optional(),
+    timeoutMs: z.number().int().positive().optional(),
+    keepSession: z.boolean().optional(),
+    transcriptPollIntervalMs: z.number().int().positive().optional(),
+  }).strict().optional(),
+  copilot: z.object({
+    effort: z.enum(COPILOT_EFFORT_VALUES).optional(),
+  }).strict().optional(),
+  kiro: z.object({
+    agent: z.string().min(1).optional(),
+  }).strict().optional(),
+}).strict().optional();
+
+export const NormalizedTaktSelectorProviderEntrySchema = z.object({
+  provider: ProviderTypeSchema.optional(),
+  model: ConfiguredModelSchema.optional(),
+  providerOptions: NormalizedStepProviderOptionsSchema,
+}).strict().superRefine((entry, ctx) => {
+  if (entry.provider === undefined && entry.model === undefined && entry.providerOptions === undefined) {
+    ctx.addIssue({ code: 'custom', message: "takt_providers.selector must include provider, model, or providerOptions" });
+  }
+  if (entry.providerOptions !== undefined && !hasProviderOptionsLeaf(entry.providerOptions)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['providerOptions'],
+      message: 'takt_providers.selector providerOptions must include at least one provider-specific option',
+    });
+  }
+});
+
 export const TaktProvidersSchema = z.object({
   assistant: TaktProviderEntrySchema.optional(),
+  selector: TaktSelectorProviderEntrySchema.optional(),
 }).strict().refine(
-  (entry) => entry.assistant !== undefined,
-  { message: "takt_providers must include 'assistant'" }
+  (entry) => entry.assistant !== undefined || entry.selector !== undefined,
+  { message: "takt_providers must include 'assistant' or 'selector'" },
 );
 
 /** Custom agent configuration schema */

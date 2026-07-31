@@ -125,6 +125,40 @@ describe('ClaudeHeadlessProvider', () => {
     }));
   });
 
+  it('should pass strict read-only internal agent isolation to the headless client', async () => {
+    callClaudeHeadlessMock.mockResolvedValue({
+      persona: 'selector',
+      status: 'done',
+      content: 'ok',
+      timestamp: new Date(),
+    });
+    const agent = new ClaudeHeadlessProvider().setup({
+      name: 'selector',
+      systemPrompt: 'Select reviewers.',
+    });
+
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      internalAgentIsolation: 'strict-readonly',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+      providerOptions: {
+        claude: {
+          skills: { enabled: true },
+        },
+      },
+    });
+
+    expect(callClaudeHeadlessMock).toHaveBeenCalledWith('selector', 'prompt', expect.objectContaining({
+      internalAgentIsolation: 'strict-readonly',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+      skillsEnabled: false,
+    }));
+  });
+
   it('should pass outputSchema to the headless client', async () => {
     callClaudeHeadlessMock.mockResolvedValue({
       persona: 'test',

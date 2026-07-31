@@ -7,15 +7,19 @@ import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from '.
 
 function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOptions {
   const claudeOptions = options.providerOptions?.claude;
+  const skillsEnabled = options.internalAgentIsolation === 'strict-readonly'
+    ? false
+    : claudeOptions?.skills?.enabled;
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
+    internalAgentIsolation: options.internalAgentIsolation,
     model: options.model,
     anthropicApiKey: options.anthropicApiKey ?? resolveAnthropicApiKey(),
     baseUrl: claudeOptions?.baseUrl,
     effort: claudeOptions?.effort,
-    skillsEnabled: claudeOptions?.skills?.enabled,
+    skillsEnabled,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
     permissionMode: options.permissionMode,
@@ -31,6 +35,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
 export class ClaudeHeadlessProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsNativeImageInput = false;
+  readonly supportsStrictInternalAgentIsolation = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

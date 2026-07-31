@@ -181,6 +181,29 @@ describe('CopilotProvider', () => {
     );
   });
 
+  it('should reject strict internal-agent isolation before invoking Copilot', async () => {
+    const provider = new CopilotProvider();
+    const agent = provider.setup({ name: 'selector' });
+
+    await expect(agent.call('select reviewers', {
+      cwd: '/tmp/work',
+      sessionId: 'ambient-session',
+      internalAgentIsolation: 'strict-readonly',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+    })).rejects.toThrow(
+      'Provider "copilot" does not support strict internal-agent isolation required by dynamic parallel selector',
+    );
+
+    expect(mockCallCopilot).not.toHaveBeenCalled();
+    expect(mockCallCopilotCustom).not.toHaveBeenCalled();
+  });
+
+  it('should declare strict internal-agent isolation as unsupported', () => {
+    expect(new CopilotProvider().supportsStrictInternalAgentIsolation).toBe(false);
+  });
+
   it('should pass undefined copilotCliPath when resolver returns undefined', async () => {
     mockResolveCopilotCliPath.mockReturnValue(undefined);
     mockCallCopilot.mockResolvedValue(doneResponse('coder'));

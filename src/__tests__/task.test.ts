@@ -174,12 +174,14 @@ describe('TaskRunner (tasks.yaml)', () => {
 
   it('should clear retry metadata without mutating the source task record', () => {
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
         { workflow: 'default', step: 'review', kind: 'agent' as const },
       ],
       iteration: 3,
       elapsed_ms: 1000,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const source = TaskRecordSchema.parse({
       name: 'task-a',
@@ -292,12 +294,14 @@ describe('TaskRunner (tasks.yaml)', () => {
       exceeded_max_steps: 30,
       exceeded_current_iteration: 4,
       resume_point: {
-        version: 1,
+        version: 2,
         stack: [
-          { workflow: 'default', step: 'draft', kind: 'workflow_call' },
+          { workflow: 'default', step: 'draft', kind: 'workflow_call', call_instance: 1 },
         ],
         iteration: 4,
         elapsed_ms: 120000,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     });
     const task = runner.claimNextTasks(1)[0]!;
@@ -317,13 +321,15 @@ describe('TaskRunner (tasks.yaml)', () => {
       currentStep: 'delegate',
       currentIteration: 7,
       resume_point: {
-        version: 1,
+        version: 2,
         stack: [
-          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
           { workflow: 'takt/coding', step: 'review', kind: 'agent' },
         ],
         iteration: 7,
         elapsed_ms: 183245,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     });
 
@@ -350,12 +356,14 @@ describe('TaskRunner (tasks.yaml)', () => {
 
   it('should clear existing retry metadata when failing a stale running task without run_slug', () => {
     const staleResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
       ],
       iteration: 4,
       elapsed_ms: 120000,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     runner.addTask('Task A', {
@@ -388,12 +396,14 @@ describe('TaskRunner (tasks.yaml)', () => {
 
   it('should clear existing retry metadata when failing a stale running task without run meta', () => {
     const staleResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
       ],
       iteration: 4,
       elapsed_ms: 120000,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     runner.addTask('Task A', {
@@ -1245,12 +1255,13 @@ describe('TaskRunner (tasks.yaml)', () => {
 
   it('should persist resume_point when requeueing and starting re-execution', () => {
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
         {
           workflow: 'default',
           step: 'implement',
           kind: 'workflow_call' as const,
+          call_instance: 1,
           step_iterations: { implement: 3 },
         },
         {
@@ -1262,6 +1273,17 @@ describe('TaskRunner (tasks.yaml)', () => {
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+      dynamic_parallel_selections: {
+        '{"workflow":"takt/coding","step":"review","calls":[]}': {
+          identity: '{"workflow":"takt/coding","step":"review","calls":[]}',
+          step_name: 'review',
+          round: 1,
+          selected_pool_ids: ['frontend'],
+          effective_selection_ids: ['architecture', 'frontend'],
+        },
+      },
     };
 
     runner.addTask('Task A', { workflow: 'default' });
@@ -1288,12 +1310,14 @@ describe('TaskRunner (tasks.yaml)', () => {
 
   it('should keep only start_movement when a re-executed task fails with run meta', () => {
     const latestResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
         { workflow: 'default', step: 'final-review', kind: 'agent' as const },
       ],
       iteration: 9,
       elapsed_ms: 200000,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     runner.addTask('Task A', {
@@ -1302,12 +1326,14 @@ describe('TaskRunner (tasks.yaml)', () => {
       exceeded_max_steps: 30,
       exceeded_current_iteration: 7,
       resume_point: {
-        version: 1,
+        version: 2,
         stack: [
-          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
         ],
         iteration: 7,
         elapsed_ms: 183245,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     });
     const task = runner.claimNextTasks(1)[0]!;
@@ -1349,25 +1375,29 @@ describe('TaskRunner (tasks.yaml)', () => {
 
   it('should keep only start_movement when terminal failure happens after the child completes', () => {
     const workflowCallResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183900,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     runner.addTask('Task A', {
       workflow: 'default',
       start_step: 'delegate',
       resume_point: {
-        version: 1,
+        version: 2,
         stack: [
-          { workflow: 'default', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
           { workflow: 'takt/coding', step: 'review', kind: 'agent' },
         ],
         iteration: 6,
         elapsed_ms: 180000,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     });
     const task = runner.claimNextTasks(1)[0]!;
@@ -1408,12 +1438,14 @@ describe('TaskRunner (tasks.yaml)', () => {
 
   it('should clear stale retry metadata when a re-executed task completes without run meta', () => {
     const staleResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     runner.addTask('Task A', {
@@ -1453,12 +1485,14 @@ describe('TaskRunner (tasks.yaml)', () => {
       },
     });
     const staleResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     runner.addTask('Task A', {
@@ -1505,12 +1539,14 @@ describe('TaskRunner (tasks.yaml)', () => {
       },
     });
     const staleResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     runner.addTask('Task A', {
@@ -1552,12 +1588,14 @@ describe('TaskRunner (tasks.yaml)', () => {
       },
     });
     const staleResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     runner.addTask('Task A', {
@@ -1597,12 +1635,14 @@ describe('TaskRunner (tasks.yaml)', () => {
 
   it('should clear retry metadata when a re-executed task completes with run meta', () => {
     const staleResumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const },
+        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     runner.addTask('Task A', {
@@ -1629,12 +1669,14 @@ describe('TaskRunner (tasks.yaml)', () => {
       currentStep: 'final-review',
       currentIteration: 9,
       resume_point: {
-        version: 1,
+        version: 2,
         stack: [
           { workflow: 'default', step: 'final-review', kind: 'agent' },
         ],
         iteration: 9,
         elapsed_ms: 200000,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     });
 

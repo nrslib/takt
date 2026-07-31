@@ -155,6 +155,64 @@ describe('projectConfig', () => {
     });
   });
 
+  it('should load a provider-only OpenCode selector before top-level composition', () => {
+    const configPath = join(testDir, '.takt', 'config.yaml');
+    writeFileSync(configPath, [
+      'provider: opencode',
+      'model: opencode/big-pickle',
+      'takt_providers:',
+      '  selector:',
+      '    provider: opencode',
+    ].join('\n'), 'utf-8');
+
+    expect(loadProjectConfig(testDir).taktProviders?.selector).toEqual({
+      provider: 'opencode',
+    });
+  });
+
+  describe('selector provider endpoint trust', () => {
+    it.each(['codex', 'claude'])('should reject an external %s selector base_url in project config', (provider) => {
+      writeFileSync(join(testDir, '.takt', 'config.yaml'), [
+        'takt_providers:',
+        '  selector:',
+        `    provider: ${provider}`,
+        '    provider_options:',
+        `      ${provider}:`,
+        '        base_url: https://attacker.example.test/v1',
+      ].join('\n'), 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/base_url/);
+    });
+
+    it.each(['codex', 'claude'])('should accept a loopback %s selector base_url in project config', (provider) => {
+      writeFileSync(join(testDir, '.takt', 'config.yaml'), [
+        'takt_providers:',
+        '  selector:',
+        `    provider: ${provider}`,
+        '    provider_options:',
+        `      ${provider}:`,
+        '        base_url: http://127.0.0.1:8080/v1',
+      ].join('\n'), 'utf-8');
+
+      expect(loadProjectConfig(testDir).taktProviders?.selector?.providerOptions).toBeDefined();
+    });
+
+    it.each(['codex', 'claude'])('should reject an external %s selector base_url when saving project config', (provider) => {
+      const config = {
+        taktProviders: {
+          selector: {
+            provider,
+            providerOptions: {
+              [provider]: { baseUrl: 'https://attacker.example.test/v1' },
+            },
+          },
+        },
+      } as unknown as ProjectLocalConfig;
+
+      expect(() => saveProjectConfig(testDir, config)).toThrow(/base_url/);
+    });
+  });
+
   describe('workflow_overrides empty array round-trip', () => {
     it('should preserve empty rate_limit_fallback switch_chain in save/load cycle', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
@@ -655,6 +713,70 @@ unexpected_overrides:
       });
     });
 
+    it('should load selector provider options without requiring an assistant entry', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider_options:',
+          '      codex:',
+          '        reasoning_effort: medium',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir);
+
+      expect(loaded.taktProviders).toEqual({
+        selector: {
+          providerOptions: {
+            codex: { reasoningEffort: 'medium' },
+          },
+        },
+      });
+    });
+
+    it('should reject a blank selector model in project config', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, [
+        'takt_providers:',
+        '  selector:',
+        '    model: "   "',
+      ].join('\n'), 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/model must not be empty/);
+    });
+
+    it('should trim only selector models and preserve ordinary project models', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, [
+        'provider:',
+        '  type: codex',
+        '  model: " provider-model "',
+        'model: " project-model "',
+        'takt_providers:',
+        '  selector:',
+        '    model: " selector-model "',
+      ].join('\n'), 'utf-8');
+
+      expect(loadProjectConfig(testDir)).toMatchObject({
+        model: ' provider-model ',
+        taktProviders: { selector: { model: 'selector-model' } },
+      });
+    });
+
+    it('should preserve a top-level project model exactly', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, [
+        'provider: codex',
+        'model: " project-model "',
+      ].join('\n'), 'utf-8');
+
+      expect(loadProjectConfig(testDir).model).toBe(' project-model ');
+    });
+
     it('should save project-local fields as snake_case keys', () => {
       const config = {
         pipeline: {
@@ -800,6 +922,36 @@ unexpected_overrides:
       expect(raw).toContain('assistant:');
       expect(raw).toContain('provider: claude');
       expect(raw).toContain('model: haiku');
+    });
+
+    it('should save selector provider options with snake_case keys', () => {
+      const config = {
+        taktProviders: {
+          selector: {
+            provider: 'codex',
+            model: 'gpt-5.6-luna',
+            providerOptions: {
+              codex: { reasoningEffort: 'medium' },
+            },
+          },
+        },
+      } as unknown as ProjectLocalConfig;
+
+      saveProjectConfig(testDir, config);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(raw).toContain('takt_providers:');
+      expect(raw).toContain('selector:');
+      expect(raw).toContain('provider_options:');
+      expect(raw).toContain('reasoning_effort: medium');
+      expect(raw).not.toContain('providerOptions:');
+      expect(loadProjectConfig(testDir).taktProviders).toEqual({
+        selector: {
+          provider: 'codex',
+          model: 'gpt-5.6-luna',
+          providerOptions: { codex: { reasoningEffort: 'medium' } },
+        },
+      });
     });
 
     it('should not persist empty pipeline object on save', () => {
@@ -973,6 +1125,116 @@ unexpected_overrides:
       expect(() => loadProjectConfig(testDir)).toThrow(/Configuration error: invalid takt_providers\.assistant/);
     });
 
+    it.each([
+      [
+        'empty selector entry',
+        [
+          'takt_providers:',
+          '  selector: {}',
+        ],
+      ],
+      [
+        'empty selector provider options',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider_options: {}',
+        ],
+      ],
+      [
+        'empty selector provider branch',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider_options:',
+          '      codex: {}',
+        ],
+      ],
+      [
+        'unknown selector provider branch',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider_options:',
+          '      unknown_provider:',
+          '        enabled: true',
+        ],
+      ],
+      [
+        'unknown selector field',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider: codex',
+          '    unsupported: true',
+        ],
+      ],
+      [
+        'unknown selector option',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider: codex',
+          '    provider_options:',
+          '      codex:',
+          '        unknown_option: true',
+        ],
+      ],
+      [
+        'mixed valid and unknown selector options',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider: codex',
+          '    provider_options:',
+          '      codex:',
+          '        reasoning_effort: medium',
+          '        unknown_option: true',
+        ],
+      ],
+      [
+        'unknown nested codex skills selector option',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider: codex',
+          '    provider_options:',
+          '      codex:',
+          '        skills:',
+          '          repo: true',
+          '          unknown_skill: true',
+        ],
+      ],
+      [
+        'unknown nested claude sandbox selector option',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider: claude',
+          '    provider_options:',
+          '      claude:',
+          '        sandbox:',
+          '          allow_unsandboxed_commands: true',
+          '          unknown_sandbox_option: true',
+        ],
+      ],
+      [
+        'invalid selector enum',
+        [
+          'takt_providers:',
+          '  selector:',
+          '    provider_options:',
+          '      codex:',
+          '        reasoning_effort: turbo',
+        ],
+      ],
+    ])('should reject %s in project config', (_name, lines) => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, lines.join('\n'), 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/takt_providers\.selector/);
+    });
+
     it('should allow takt_providers.assistant to pass arbitrary codex model names downstream', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       writeFileSync(
@@ -1075,13 +1337,13 @@ unexpected_overrides:
       expect(() => loadProjectConfig(testDir)).not.toThrow();
     });
 
-    it('should throw on save when takt_providers is set without assistant', () => {
+    it('should throw on save when takt_providers has no configured entry', () => {
       const invalidConfig = {
         provider: 'codex',
         taktProviders: {},
       } as unknown as ProjectLocalConfig;
 
-      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/Configuration error: 'takt_providers\.assistant' is required when takt_providers is set\./);
+      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/Configuration error: 'takt_providers' must include assistant or selector\./);
     });
 
     it('should allow arbitrary codex model names in takt_providers.assistant on save', () => {
@@ -1112,6 +1374,27 @@ unexpected_overrides:
       } as unknown as ProjectLocalConfig;
 
       expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/Configuration error: 'takt_providers\.assistant' must include provider or model\./);
+    });
+
+    it.each([
+      ['an empty selector entry', {}],
+      ['empty selector provider options', { providerOptions: {} }],
+      ['an empty selector provider branch', { providerOptions: { codex: {} } }],
+      ['an unknown selector provider branch', { providerOptions: { unknownProvider: { enabled: true } } }],
+      ['an unknown selector field', { provider: 'codex', unsupported: true }],
+      ['a mixed valid and unknown selector option', {
+        providerOptions: { codex: { reasoningEffort: 'medium', unknownOption: true } },
+      }],
+      ['an unknown nested selector option', {
+        providerOptions: { codex: { skills: { repo: true, unknownSkill: true } } },
+      }],
+      ['an invalid selector enum', { providerOptions: { codex: { reasoningEffort: 'turbo' } } }],
+    ])('should reject %s when saving project config', (_label, selector) => {
+      const invalidConfig = {
+        taktProviders: { selector },
+      } as unknown as ProjectLocalConfig;
+
+      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow();
     });
   });
 

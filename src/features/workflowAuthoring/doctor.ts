@@ -18,11 +18,16 @@ import {
 } from '../../core/models/workflow-rule-condition.js';
 import { evaluateWhenExpression } from '../../core/workflow/evaluation/when-evaluator.js';
 import { splitTopLevelClausesOrThrow } from '../../core/models/workflow-condition-expression.js';
-import { resolveWorkflowConfigValues } from '../../infra/config/index.js';
+import {
+  resolveWorkflowSelector,
+  resolveWorkflowConfigValues,
+  type SelectorProviderOverrides,
+} from '../../infra/config/index.js';
 import { inspectWorkflowFile, resolveWorkflowDoctorTargets } from '../../infra/config/loaders/workflowDoctor.js';
 import { isMissingWorkflowCallArgError } from '../../infra/config/loaders/workflowCallableArgResolver.js';
 import { loadWorkflowFileWithResolutionOptions } from '../../infra/config/loaders/workflowResolvedLoader.js';
 import type { WorkflowConfig, WorkflowRule, WorkflowState, WorkflowStep } from '../../core/models/types.js';
+import { getAllParallelSubSteps } from '../../core/models/types.js';
 import type { WorkflowDoctorReport, WorkflowDoctorTarget } from '../../infra/config/loaders/workflowDoctor.js';
 import { translateWorkflowConfigError } from '../../shared/workflowConfigMetadata.js';
 
@@ -58,6 +63,7 @@ function validateWorkflowRuntimeContract(
   report: WorkflowDoctorReport,
   target: WorkflowDoctorTarget,
   projectDir: string,
+  selectorOverrides: SelectorProviderOverrides | undefined,
 ): void {
   if (reportHasErrors(report)) {
     return;
@@ -66,6 +72,11 @@ function validateWorkflowRuntimeContract(
   let workflow: ReturnType<typeof loadWorkflowForRuntimeValidation> | undefined;
   try {
     workflow = loadWorkflowForRuntimeValidation(target, projectDir);
+    resolveWorkflowSelector(workflow, {
+      projectCwd: projectDir,
+      lookupCwd: target.lookupCwd ?? projectDir,
+      overrides: selectorOverrides,
+    });
     const config = resolveWorkflowConfigValues(
       projectDir,
       ['provider', 'model', 'personaProviders', 'providerRouting', 'autoRouting'],
@@ -223,7 +234,8 @@ function isReviewerOrFindingsCompletionGate(step: WorkflowStep, rule: WorkflowRu
 
 function hasReviewTag(step: WorkflowStep): boolean {
   return step.tags?.includes('review') === true
-    || step.parallel?.some((child) => child.tags?.includes('review') === true) === true;
+    || (step.parallel !== undefined
+      && getAllParallelSubSteps(step.parallel).some((child) => child.tags?.includes('review') === true));
 }
 
 function hasEffectiveReviewerAnomalyRouting(
@@ -329,7 +341,7 @@ function aggregateRouteCoversCompletion(
   if (routeAggregate === undefined || completeAggregate === undefined || step.parallel === undefined) {
     return false;
   }
-  const completionOutputs = getPossibleCompletionOutputs(step.parallel, completeRule);
+  const completionOutputs = getPossibleCompletionOutputs(getAllParallelSubSteps(step.parallel), completeRule);
   if (completionOutputs === undefined) {
     return false;
   }
@@ -340,7 +352,7 @@ function aggregateRouteCoversCompletion(
       : completionOutputs.every((output) => routeTargets.has(output));
   }
   if (routeAggregate.aggregate === 'all' && completeAggregate.aggregate === 'all') {
-    const routeOutputs = getPossibleCompletionOutputs(step.parallel, route);
+    const routeOutputs = getPossibleCompletionOutputs(getAllParallelSubSteps(step.parallel), route);
     return routeOutputs !== undefined
       && routeOutputs.length === completionOutputs.length
       && routeOutputs.every((output, index) => output === completionOutputs[index]);
@@ -411,7 +423,10 @@ function isReReviewRoute(workflow: WorkflowConfig, rule: WorkflowRule): boolean 
 function isCompletionReachable(step: WorkflowStep, completeRuleIndex: number): boolean {
   const completeRule = step.rules?.[completeRuleIndex];
   if (completeRule !== undefined && aggregateOf(completeRule.condition) !== undefined) {
-    return getPossibleCompletionOutputs(step.parallel ?? [], completeRule) !== undefined
+    return getPossibleCompletionOutputs(
+      step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel),
+      completeRule,
+    ) !== undefined
       && !(step.rules ?? []).slice(0, completeRuleIndex).some((rule) => (
         isEarlierAggregateTerminalRoute(step, rule, completeRule)
       ));
@@ -450,7 +465,7 @@ function collectContractReportNames(step: WorkflowStep, into: Set<string>): void
   for (const contract of step.outputContracts ?? []) {
     into.add(contract.name);
   }
-  for (const subStep of step.parallel ?? []) {
+  for (const subStep of step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel)) {
     collectContractReportNames(subStep, into);
   }
 }
@@ -614,7 +629,7 @@ function warnOnUnproducibleReportReferences(
 
   for (const step of workflow.steps) {
     const references = new Set(extractReportReferences(step.instruction));
-    for (const subStep of step.parallel ?? []) {
+    for (const subStep of step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel)) {
       for (const reference of extractReportReferences(subStep.instruction)) {
         references.add(reference);
       }
@@ -683,6 +698,7 @@ function warnOnUnproducibleReportReferences(
 export async function doctorWorkflowCommand(
   targets: string[],
   projectDir: string,
+  selectorOverrides?: SelectorProviderOverrides,
 ): Promise<void> {
   const resolvedTargets = resolveWorkflowDoctorTargets(targets, projectDir);
   if (resolvedTargets.length === 0) {
@@ -693,7 +709,7 @@ export async function doctorWorkflowCommand(
   for (const target of resolvedTargets) {
     const { filePath, lookupCwd, source } = target;
     const report = inspectWorkflowFile(filePath, projectDir, { lookupCwd, source });
-    validateWorkflowRuntimeContract(report, target, projectDir);
+    validateWorkflowRuntimeContract(report, target, projectDir, selectorOverrides);
     if (report.diagnostics.length === 0) {
       success(`Workflow OK: ${sanitizeTerminalText(filePath)}`);
       continue;

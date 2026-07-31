@@ -217,6 +217,7 @@ function makeRunner(options: {
     optionsBuilder: {
       buildAgentOptions: vi.fn().mockReturnValue({}),
       buildPhaseRunnerContext: vi.fn().mockReturnValue({}),
+      resolveStepProviderModelBeforeAutoRouting: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
       buildFindingContractInstructionContext: vi.fn().mockReturnValue(
         options.findingContractContext ?? makeFindingContractContext(),

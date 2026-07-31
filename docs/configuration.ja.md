@@ -120,6 +120,14 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #   assistant:
 #     provider: claude
 #     model: opus
+#   selector:              # dynamic parallel selector 専用の任意設定
+#     provider: codex
+#     model: gpt-5
+#     provider_options:
+#       codex:
+#         reasoning_effort: medium
+
+`takt_providers.selector` は任意です。provider/model の優先順位は、明示的な CLI または環境 override、project selector、global selector、project top-level、global top-level の順です。model は解決済み provider と一致する候補だけを採用します。`provider_options` は selector entry だけを global → project の leaf 単位でマージし、top-level・persona・pool sub-step の options は selector に継承されません。空の selector entry と空の `provider_options` entry は設定読み込み時に拒否されます。dynamic selector には strict read-only の内部 agent 隔離を保証できる provider が必要です。Claude、Codex、Mock はこの契約を満たし、OpenCode、Cursor、Copilot、Kiro は selector・participant 起動前に拒否されます。dynamic parallel を使わない workflow では selector 設定を解決せず、既存実行へ影響しません。
 
 # ワークフローセキュリティポリシー（すべてデフォルト拒否）
 # 信頼されていないワークフロー YAML が実行できる内容を制御
