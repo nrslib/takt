@@ -702,6 +702,7 @@ describe('operation journal store', () => {
         expectedRevision: worker.revision,
         expectedStage: worker.stage,
         nextStage: 'reserved' as const,
+        resetReason: 'orphan_worker_after_dispatch' as const,
         payload: worker.payload,
       }],
     };
@@ -726,6 +727,118 @@ describe('operation journal store', () => {
       nextStage: 'worker_started',
       payload: worker.payload,
     })).toThrow(/owner changed/);
+  });
+
+  it('reserves an applied child only while atomically materializing a parent successor', () => {
+    const owner = createParent();
+    const applied = store.createChild({
+      parentId: 'parent-1',
+      owner,
+      expectedParentRevision: 0,
+      expectedParentStage: 'reserved',
+      id: 'failed-worker',
+      kind: 'part',
+      stage: 'applied',
+      payload: { applied: { response: { status: 'error' } } },
+    });
+    const predecessor = store.compareAndSetParent({
+      parentId: 'parent-1',
+      owner,
+      expectedRevision: 1,
+      expectedStage: 'reserved',
+      nextStage: 'terminated',
+      payload: { error: { recoveryCode: 'explicit_part_failure' } },
+    });
+
+    expect(() => store.createParentSuccessor({
+      predecessorParentId: predecessor.id,
+      expectedPredecessorOwner: predecessor.owner,
+      expectedPredecessorRevision: predecessor.revision,
+      successorParentId: 'parent-1:invalid-successor',
+      successorClaimToken: 'claim-invalid',
+      successorPayload: {},
+      children: [{
+        id: applied.id,
+        expectedRevision: applied.revision,
+        expectedStage: 'applied',
+        nextStage: 'reserved',
+        payload: applied.payload,
+      }],
+    })).toThrow(/cannot materialize from stage/);
+
+    const successor = store.createParentSuccessor({
+      predecessorParentId: predecessor.id,
+      expectedPredecessorOwner: predecessor.owner,
+      expectedPredecessorRevision: predecessor.revision,
+      successorParentId: 'parent-1:attempt:2',
+      successorClaimToken: 'claim-b',
+      successorPayload: { predecessorParentId: predecessor.id },
+      children: [{
+        id: applied.id,
+        expectedRevision: applied.revision,
+        expectedStage: 'applied',
+        nextStage: 'reserved',
+        resetReason: 'explicit_part_failure',
+        payload: { retryOf: predecessor.id },
+      }],
+    });
+
+    expect(store.getParent(predecessor.id).children[0]).toEqual(applied);
+    expect(successor.children[0]).toMatchObject({
+      id: applied.id,
+      stage: 'reserved',
+      payload: { retryOf: predecessor.id },
+    });
+    expect(() => store.compareAndSetChild({
+      parentId: predecessor.id,
+      owner: predecessor.owner,
+      expectedParentRevision: predecessor.revision,
+      expectedParentStage: 'terminated',
+      childId: applied.id,
+      expectedRevision: applied.revision,
+      expectedStage: 'applied',
+      nextStage: 'reserved',
+      payload: applied.payload,
+    })).toThrow(/sealed/);
+  });
+
+  it('rejects a reset reason on an unchanged successor child', () => {
+    const owner = createParent();
+    const child = store.createChild({
+      parentId: 'parent-1',
+      owner,
+      expectedParentRevision: 0,
+      expectedParentStage: 'reserved',
+      id: 'unchanged',
+      kind: 'part',
+      stage: 'completed',
+      payload: { result: 'done' },
+    });
+    const predecessor = store.compareAndSetParent({
+      parentId: 'parent-1',
+      owner,
+      expectedRevision: 1,
+      expectedStage: 'reserved',
+      nextStage: 'terminated',
+      payload: { error: {} },
+    });
+
+    expect(() => store.createParentSuccessor({
+      predecessorParentId: predecessor.id,
+      expectedPredecessorOwner: predecessor.owner,
+      expectedPredecessorRevision: predecessor.revision,
+      successorParentId: 'parent-1:attempt:2',
+      successorClaimToken: 'claim-b',
+      successorPayload: {},
+      children: [{
+        id: child.id,
+        expectedRevision: child.revision,
+        expectedStage: child.stage,
+        nextStage: child.stage,
+        resetReason: 'explicit_part_failure',
+        payload: child.payload,
+      }],
+    })).toThrow(/cannot declare reset reason/);
   });
 
   it('allows exactly one concurrent process to claim the same parent revision', async () => {

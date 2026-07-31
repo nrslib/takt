@@ -1,6 +1,7 @@
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import {
   existsSync,
+  mkdirSync,
   readdirSync,
 } from 'node:fs';
 import { generateSessionId } from '../../../infra/fs/index.js';
@@ -313,6 +314,17 @@ abstract class BaseWorkflowRunStorageAdapter {
     }
     return runSlug;
   }
+
+  protected assertDistinctResumeRunSlug(
+    runSlug: string,
+    resumeSource: RunResumeSource | undefined,
+  ): void {
+    if (resumeSource?.sourceRunSlug === runSlug) {
+      throw new Error(
+        `Workflow resume requires distinct source and target run slugs: "${runSlug}"`,
+      );
+    }
+  }
 }
 
 class FileWorkflowRunStorageAdapter
@@ -329,10 +341,16 @@ class FileWorkflowRunStorageAdapter
   resolveRunSlug(input: {
     readonly task: string;
     readonly requestedRunSlug?: string;
+    readonly resumeSource?: RunResumeSource;
   }): string {
-    return this.requireValidRunSlug(
-      input.requestedRunSlug ?? generateReportDir(input.task),
+    const runSlug = this.requireValidRunSlug(
+      input.requestedRunSlug
+        ?? (input.resumeSource?.sourceRunSlug === undefined
+          ? generateReportDir(input.task)
+          : generateExecutionReportDir(this.#cwd, input.task)),
     );
+    this.assertDistinctResumeRunSlug(runSlug, input.resumeSource);
+    return runSlug;
   }
 
   createForceFail(
@@ -364,13 +382,20 @@ class FileWorkflowRunStorageAdapter
         ? {}
         : { resumeSource: input.resumeSource }),
     });
-    const runSlug = this.resolveRunSlug({
+    const initialRunSlug = this.resolveRunSlug({
       task: input.task,
       ...(input.requestedRunSlug === undefined
         ? {}
         : { requestedRunSlug: input.requestedRunSlug }),
+      ...(input.resumeSource === undefined
+        ? {}
+        : { resumeSource: input.resumeSource }),
     });
-    const runPaths = buildRunPaths(this.#cwd, runSlug);
+    const runPaths = this.reserveRunDirectory({
+      initialRunSlug,
+      task: input.task,
+      requestedRunSlug: input.requestedRunSlug,
+    });
     const abortController = new AbortController();
     let runMetaManager: RunMetaManager | undefined;
     let bound = false;
@@ -435,6 +460,28 @@ class FileWorkflowRunStorageAdapter
     };
     return Object.freeze(handle);
   }
+
+  private reserveRunDirectory(input: {
+    readonly initialRunSlug: string;
+    readonly task: string;
+    readonly requestedRunSlug?: string;
+  }): RunPaths {
+    mkdirSync(join(this.#cwd, '.takt', 'runs'), { recursive: true });
+    let runSlug = input.initialRunSlug;
+    while (true) {
+      const runPaths = buildRunPaths(this.#cwd, runSlug);
+      try {
+        mkdirSync(runPaths.runRootAbs);
+        return runPaths;
+      } catch (error) {
+        if (!isFileSystemErrorWithCode(error, 'EEXIST')) throw error;
+        if (input.requestedRunSlug !== undefined) {
+          throw new Error(`Run directory already exists: ${runPaths.runRootAbs}`);
+        }
+        runSlug = generateExecutionReportDir(this.#cwd, input.task);
+      }
+    }
+  }
 }
 
 class SqliteWorkflowRunStorageAdapter
@@ -460,11 +507,7 @@ class SqliteWorkflowRunStorageAdapter
           ? generateReportDir(input.task)
           : generateExecutionReportDir(input.cwd, input.task)),
     );
-    if (input.resumeSource?.sourceRunSlug === runSlug) {
-      throw new Error(
-        `SQLite resume requires distinct source and target run slugs: "${runSlug}"`,
-      );
-    }
+    this.assertDistinctResumeRunSlug(runSlug, input.resumeSource);
     return runSlug;
   }
 
@@ -820,6 +863,15 @@ function assertTerminalStatus(
       + `does not match run status "${status}"`,
     );
   }
+}
+
+function isFileSystemErrorWithCode(
+  error: unknown,
+  code: string,
+): error is NodeJS.ErrnoException {
+  return error instanceof Error
+    && 'code' in error
+    && error.code === code;
 }
 
 function assertTerminalPayloadRunIdentity(

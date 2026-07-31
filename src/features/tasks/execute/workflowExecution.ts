@@ -8,7 +8,10 @@ import { AbortHandler } from './abortHandler.js';
 import { createIterationLimitHandler, createUserInputHandler } from './iterationLimitHandler.js';
 import {
   createWorkflowExecutionBootstrap,
+  resolveWorkflowExecutionResumeLineage,
+  resolveWorkflowExecutionResumeSourceLineage,
   type WorkflowExecutionBootstrap,
+  type WorkflowExecutionResumeLineage,
 } from './workflowExecutionBootstrap.js';
 import {
   createWorkflowExecutionContext,
@@ -225,6 +228,9 @@ async function executeWorkflowInternal(
     },
   );
   await runStorageComposition.recovery.reconcilePending();
+  const validatedResumeLineage = options.resumeSource === undefined
+    ? undefined
+    : resolveWorkflowExecutionResumeSourceLineage(cwd, options.resumeSource);
   const activeRun = await runStorageComposition.storage.beginRun({
     workflowConfig: inputWorkflowConfig,
     task,
@@ -235,6 +241,9 @@ async function executeWorkflowInternal(
       ? {}
       : { resumeSource: options.resumeSource }),
   });
+  const publishedResumeSource = options.resumeSource;
+  const resumeLineage: WorkflowExecutionResumeLineage = validatedResumeLineage
+    ?? resolveWorkflowExecutionResumeLineage(cwd, activeRun.runSlug, undefined);
   let bootstrap: WorkflowExecutionBootstrap;
   try {
     publishWorkflowExecutionBundle(activeRun.runPaths, preparedBundle);
@@ -253,6 +262,7 @@ async function executeWorkflowInternal(
         workflowCallResolver,
       },
       activeRun.bootstrap,
+      resumeLineage,
     );
   } catch (bootstrapError) {
     return await terminalizeBootstrapFailure({
@@ -261,9 +271,10 @@ async function executeWorkflowInternal(
       task,
       projectCwd: options.projectCwd,
       primaryError: bootstrapError,
-      ...(options.resumeSource === undefined
+      resumeLineage,
+      ...(publishedResumeSource === undefined
         ? {}
-        : { resumeSource: options.resumeSource }),
+        : { resumeSource: publishedResumeSource }),
     });
   }
   const executionBundle = loadWorkflowExecutionBundle(activeRun.runPaths);
@@ -280,11 +291,11 @@ async function executeWorkflowInternal(
     metaSeed: {
       backend: activeRun.bootstrap.backend,
       startedAt: activeRun.bootstrap.startedAt,
-      resumeSource: options.resumeSource === undefined
+      resumeSource: publishedResumeSource === undefined
         ? null
         : {
-            mode: options.resumeSource.resumeMode,
-            sourceRunSlug: options.resumeSource.sourceRunSlug ?? null,
+            mode: publishedResumeSource.resumeMode,
+            sourceRunSlug: publishedResumeSource.sourceRunSlug ?? null,
           },
     },
     ...(bootstrap.promptLogPath === undefined
@@ -352,9 +363,9 @@ async function executeWorkflowInternal(
   try {
     const executionBinding = await activeRun.bindExecution({
       workflowConfig: bootstrap.effectiveWorkflowConfig,
-      ...(options.resumeSource === undefined
+      ...(publishedResumeSource === undefined
         ? {}
-        : { resumeSource: options.resumeSource }),
+        : { resumeSource: publishedResumeSource }),
       terminalPayloads,
     });
     const activeRunExecution = executionBinding.execution;
@@ -422,7 +433,7 @@ async function executeWorkflowInternal(
         startStep: options.startStep,
         retryNote: options.retryNote,
         resumePoint: options.resumePoint,
-        resumeSource: options.resumeSource,
+        resumeSource: publishedResumeSource,
         onDynamicParallelSelectionPersisted: (resumePoint) => {
           bootstrap.runMetaManager.updateResumePoint(resumePoint);
         },
@@ -621,17 +632,26 @@ async function terminalizeBootstrapFailure(input: {
   readonly projectCwd: string;
   readonly primaryError: unknown;
   readonly resumeSource?: WorkflowExecutionOptions['resumeSource'];
+  readonly resumeLineage?: WorkflowExecutionResumeLineage;
 }): Promise<never> {
   const reason = getErrorMessage(input.primaryError);
   const finalizationErrors: unknown[] = [];
   try {
     input.activeRun.bootstrap.publishRunMeta({
-      runPaths: input.activeRun.runPaths,
-      task: input.task,
-      workflowName: input.workflowConfig.name,
-      ...(input.resumeSource === undefined
-        ? {}
-        : { resumeSource: input.resumeSource }),
+        runPaths: input.activeRun.runPaths,
+        task: input.task,
+        workflowName: input.workflowConfig.name,
+        ...(input.resumeSource === undefined
+          ? {}
+          : { resumeSource: input.resumeSource }),
+        ...(input.resumeLineage === undefined
+          ? {}
+          : {
+              options: {
+                operationJournalRunSlug: input.resumeLineage.operationJournalRunSlug,
+                operationClaimToken: input.resumeLineage.operationClaimToken,
+              },
+            }),
     });
   } catch (error) {
     finalizationErrors.push(error);

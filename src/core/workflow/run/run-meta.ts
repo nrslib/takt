@@ -54,6 +54,17 @@ export interface RunMeta {
   terminalPublicationId?: string;
 }
 
+export const RESUMABLE_RUN_STATUSES = Object.freeze([
+  'aborted',
+  'failed',
+] as const satisfies readonly RunMeta['status'][]);
+
+export function isResumableRunStatus(
+  status: RunMeta['status'],
+): status is (typeof RESUMABLE_RUN_STATUSES)[number] {
+  return (RESUMABLE_RUN_STATUSES as readonly RunMeta['status'][]).includes(status);
+}
+
 interface RawRunMeta extends Omit<
   RunMeta,
   | 'resumePoint'

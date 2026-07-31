@@ -410,6 +410,8 @@ describe('executeWorkflow SQLite integration', () => {
     writeFileSync(sourcePaths.metaAbs, JSON.stringify({
       ...sourceMeta,
       workflow: 'target-workflow',
+      operation_journal_run_slug: sourceSlug,
+      operation_claim_token: 'direct-resume-source-claim',
     }));
     const workflowsDir = join(projectDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
@@ -434,6 +436,28 @@ describe('executeWorkflow SQLite integration', () => {
       '        next: COMPLETE',
       '',
     ].join('\n'));
+    const { loadWorkflowByIdentifier } = await import('../infra/config/index.js');
+    const bundledWorkflow = loadWorkflowByIdentifier(
+      'target-workflow',
+      projectDir,
+      { lookupCwd: projectDir },
+    )!;
+    const {
+      prepareWorkflowExecutionBundle,
+      publishWorkflowExecutionBundle,
+    } = await import('../features/tasks/execute/workflowExecutionBundle.js');
+    const {
+      createWorkflowCallResolver,
+      createWorkflowExecutionContext,
+    } = await import('../features/tasks/execute/workflowExecutionContext.js');
+    publishWorkflowExecutionBundle(sourcePaths, prepareWorkflowExecutionBundle({
+      rootWorkflow: bundledWorkflow,
+      workflowCallResolver: createWorkflowCallResolver(
+        createWorkflowExecutionContext(bundledWorkflow, projectDir),
+      ),
+      projectCwd: projectDir,
+      lookupCwd: projectDir,
+    }));
     directResumePrompt.selectOption.mockResolvedValueOnce('requeue');
 
     const { resumeDirectRun } = await import('../features/tasks/resume/index.js');
@@ -1601,7 +1625,7 @@ steps:
     ]);
   });
 
-  it('新runのsink束縛前にproject pendingのdurable projectionを回収する', async () => {
+  it('resume source検証前にpending terminal projectionを回収する', async () => {
     const pendingRunSlug = '20260727-pending-session-a';
     const { buildRunPaths } = await import(
       '../core/workflow/run/run-paths.js'
@@ -1618,7 +1642,31 @@ steps:
       'pending-workflow',
       'sqlite',
       undefined,
-      { startTime: startedAt },
+      {
+        startTime: startedAt,
+        operationJournalRunSlug: pendingRunSlug,
+        operationClaimToken: 'pending-source-claim',
+      },
+    );
+    const pendingWorkflow = simpleWorkflow();
+    const {
+      prepareWorkflowExecutionBundle,
+      publishWorkflowExecutionBundle,
+    } = await import('../features/tasks/execute/workflowExecutionBundle.js');
+    const {
+      createWorkflowCallResolver,
+      createWorkflowExecutionContext,
+    } = await import('../features/tasks/execute/workflowExecutionContext.js');
+    publishWorkflowExecutionBundle(
+      pendingPaths,
+      prepareWorkflowExecutionBundle({
+        rootWorkflow: pendingWorkflow,
+        workflowCallResolver: createWorkflowCallResolver(
+          createWorkflowExecutionContext(pendingWorkflow, projectDir),
+        ),
+        projectCwd: projectDir,
+        lookupCwd: projectDir,
+      }),
     );
     const {
       createSessionLog,
@@ -1657,8 +1705,9 @@ steps:
         resumeSource: null,
       },
     }).create({
-      status: 'completed',
+      status: 'failed',
       iterations: 1,
+      reason: 'pending source failed',
       lastStepContent: 'done',
       lastStepName: 'done',
       endTime: '2026-07-27T10:00:00.000Z',
@@ -1687,10 +1736,12 @@ steps:
       leaseDurationMs: 30_000,
     });
     pendingRoot.finishRun(lease, {
-      status: 'completed',
+      status: 'failed',
+      failureReason: 'pending source failed',
       publication: {
-        status: 'completed',
+        status: 'failed',
         iteration: 1,
+        reason: 'pending source failed',
         payload: serializeWorkflowTerminalPublication(payload),
       },
     });
@@ -1707,6 +1758,11 @@ steps:
       {
         projectCwd: projectDir,
         provider: 'claude-terminal',
+        reportDirName: '20260727-pending-resumed-target',
+        resumeSource: {
+          sourceRunSlug: pendingRunSlug,
+          resumeMode: 'requeue',
+        },
         eventSink: async (event) => {
           deliveredEvents.push(event);
         },

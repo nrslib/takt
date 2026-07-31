@@ -389,10 +389,13 @@ export async function resolveTaskExecution(
     );
   }
 
-  const resolvedReportDirName = reportDirName ?? generateReportDir(task.content);
   const resumeSource = task.resumeMode
     ? { ...(task.sourceRunSlug ? { sourceRunSlug: task.sourceRunSlug } : {}), resumeMode: task.resumeMode }
     : undefined;
+  const resolvedReportDirName = reportDirName
+    ?? (resumeSource?.sourceRunSlug === undefined
+      ? generateReportDir(task.content)
+      : generateExecutionReportDir(execCwd, task.content));
   const retryResume = resolveRetryResume(
     workflowIdentifier,
     defaultCwd,

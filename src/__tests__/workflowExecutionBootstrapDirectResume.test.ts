@@ -136,12 +136,17 @@ vi.mock('../core/runtime/runtime-environment.js', () => ({
 
 import {
   createWorkflowExecutionBootstrap as createWorkflowExecutionBootstrapImpl,
+  resolveWorkflowExecutionResumeLineage,
 } from '../features/tasks/execute/workflowExecutionBootstrap.js';
 import type {
   WorkflowRunBootstrap,
 } from '../features/tasks/execute/workflowRunStorage.js';
 import { RunMetaManager } from '../features/tasks/execute/runMeta.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
+import { FindingContractOperationJournal } from '../core/workflow/engine/team-leader-finding-contract-operation-journal.js';
+import { ExplicitPartFailureError } from '../core/workflow/operations/operation-recovery-error.js';
+import { createOperationJournalStore } from '../infra/workflow/operation-journal-store.js';
 import {
   generateReportDir,
   isValidReportDirName,
@@ -155,15 +160,21 @@ async function createWorkflowExecutionBootstrap(
     Parameters<typeof createWorkflowExecutionBootstrapImpl>[3],
   ]
 ) {
+  const runBootstrap = createRunBootstrap({
+    backend: 'file',
+    cwd: args[2],
+    task: args[1],
+    requestedRunSlug: args[3].reportDirName,
+    resumeSource: args[3].resumeSource,
+  });
   return await createWorkflowExecutionBootstrapImpl(
     ...args,
-    createRunBootstrap({
-      backend: 'file',
-      cwd: args[2],
-      task: args[1],
-      requestedRunSlug: args[3].reportDirName,
-      resumeSource: args[3].resumeSource,
-    }),
+    runBootstrap,
+    resolveWorkflowExecutionResumeLineage(
+      args[2],
+      runBootstrap.runSlug,
+      args[3].resumeSource,
+    ),
   );
 }
 
@@ -174,16 +185,16 @@ function createRunBootstrap(setup: {
   readonly requestedRunSlug?: string;
   readonly resumeSource?: Parameters<typeof createWorkflowExecutionBootstrapImpl>[3]['resumeSource'];
 }): WorkflowRunBootstrap {
-  const runSlug = setup.requestedRunSlug ?? generateReportDir(setup.task);
+  const runSlug = setup.requestedRunSlug
+    ?? (setup.resumeSource?.sourceRunSlug === undefined
+      ? generateReportDir(setup.task)
+      : generateExecutionReportDir(setup.cwd, setup.task));
   if (!isValidReportDirName(runSlug)) {
     throw new Error(`Invalid reportDirName: ${runSlug}`);
   }
-  if (
-    setup.backend === 'sqlite'
-    && setup.resumeSource?.sourceRunSlug === runSlug
-  ) {
+  if (setup.resumeSource?.sourceRunSlug === runSlug) {
     throw new Error(
-      `SQLite resume requires distinct source and target run slugs: `
+      `Workflow resume requires distinct source and target run slugs: `
       + `"${runSlug}"`,
     );
   }
@@ -262,10 +273,40 @@ function createTempProject(): string {
   return projectDir;
 }
 
-function seedResumeSourceRun(projectDir: string): void {
+function seedResumeSourceRun(
+  projectDir: string,
+  slug = '20260524-source-run',
+  options?: {
+    readonly sourceRunSlug?: string;
+    readonly journalRunSlug?: string;
+    readonly claimToken?: string;
+    readonly status?: 'running' | 'failed';
+  },
+): void {
   mkdirSync(
-    join(projectDir, '.takt', 'runs', '20260524-source-run', 'reports'),
+    join(projectDir, '.takt', 'runs', slug, 'reports'),
     { recursive: true },
+  );
+  writeFileSync(
+    join(projectDir, '.takt', 'runs', slug, 'meta.json'),
+    JSON.stringify({
+      task: 'Resume source',
+      workflow: 'default',
+      runSlug: slug,
+      runRoot: `.takt/runs/${slug}`,
+      reportDirectory: `.takt/runs/${slug}/reports`,
+      contextDirectory: `.takt/runs/${slug}/context`,
+      logsDirectory: `.takt/runs/${slug}/logs`,
+      storageBackend: 'file',
+      status: options?.status ?? 'failed',
+      startTime: '2026-05-24T00:00:00.000Z',
+      operation_journal_run_slug: options?.journalRunSlug ?? '20260524-source-run',
+      operation_claim_token: options?.claimToken ?? 'claim-a',
+      ...(options?.sourceRunSlug === undefined
+        ? {}
+        : { source_run_slug: options.sourceRunSlug, resume_mode: 'requeue' }),
+    }),
+    'utf-8',
   );
 }
 
@@ -984,6 +1025,116 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(meta.resume_mode).toBe('retry');
   });
 
+  it('recovers an operation owner through the direct source run ancestry', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir, 'run-a', {
+      journalRunSlug: 'run-a',
+      claimToken: 'claim-a',
+      status: 'running',
+    });
+    seedResumeSourceRun(projectDir, 'run-b', {
+      sourceRunSlug: 'run-a',
+      journalRunSlug: 'run-a',
+      claimToken: 'claim-b-never-owned',
+    });
+    seedResumeSourceRun(projectDir, 'run-c', {
+      sourceRunSlug: 'run-b',
+      journalRunSlug: 'run-a',
+      claimToken: 'claim-c-never-owned',
+    });
+    const store = createOperationJournalStore(buildRunPaths(projectDir, 'run-a').operationJournalAbs);
+    const operationA = FindingContractOperationJournal.open({
+      context: { store, journalRunSlug: 'run-a', claimToken: 'claim-a' },
+      workflowName: 'default',
+      stepName: 'fix',
+      stepIteration: 1,
+      executionScope: { runPathNamespace: [], workflowStack: [] },
+    });
+    operationA.boundary('decomposition', 'finding_contract_decomposition').complete({ parts: [] });
+    const request = {
+      partId: 'p1',
+      title: 'Repair',
+      instruction: 'Repair finding',
+      findingAssignment: {
+        findingIds: ['F-0001'],
+        role: 'repair' as const,
+        readPaths: ['src/fix.ts'],
+      },
+    };
+    operationA.boundary(
+      'part:p1:completion',
+      'finding_contract_part_completion',
+      request,
+    ).markApplied({
+      part: {
+        id: request.partId,
+        title: request.title,
+        instruction: request.instruction,
+        findingContract: request.findingAssignment,
+      },
+      response: {
+        persona: 'fix.p1',
+        status: 'error',
+        content: '',
+        error: 'preflight failure',
+        timestamp: new Date('2026-08-01T00:00:00.000Z'),
+      },
+    });
+    operationA.terminate(new ExplicitPartFailureError('typed failure', {
+      boundaryId: 'part:p1:completion',
+    }));
+
+    const bootstrap = await createWorkflowExecutionBootstrap(
+      workflowConfig,
+      'Resume ancestry',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'run-d',
+        resumeSource: { sourceRunSlug: 'run-c', resumeMode: 'requeue' },
+      },
+    );
+    expect(bootstrap.operationJournal.sourceClaimTokens).toEqual(
+      new Set(['claim-c-never-owned', 'claim-b-never-owned', 'claim-a']),
+    );
+    const recovered = FindingContractOperationJournal.open({
+      context: bootstrap.operationJournal,
+      workflowName: 'default',
+      stepName: 'fix',
+      stepIteration: 1,
+      executionScope: { runPathNamespace: [], workflowStack: [] },
+    });
+    expect(recovered.getChild('part:p1:completion').stage).toBe('reserved');
+  });
+
+  it('rejects a cycle in the direct source run ancestry', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir, 'run-a', {
+      sourceRunSlug: 'run-b',
+      journalRunSlug: 'run-a',
+      claimToken: 'claim-a',
+    });
+    seedResumeSourceRun(projectDir, 'run-b', {
+      sourceRunSlug: 'run-a',
+      journalRunSlug: 'run-a',
+      claimToken: 'claim-b',
+    });
+
+    await expect(createWorkflowExecutionBootstrap(
+      workflowConfig,
+      'Resume cycle',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'run-c',
+        resumeSource: { sourceRunSlug: 'run-b', resumeMode: 'retry' },
+      },
+    )).rejects.toThrow(/ancestry contains a cycle/);
+    expect(existsSync(join(projectDir, '.takt', 'runs', 'run-c'))).toBe(false);
+  });
+
   it('rejects a restored operation journal slug that traverses outside the runs directory', async () => {
     const projectDir = createTempProject();
     seedResumeSourceRun(projectDir);
@@ -1029,10 +1180,13 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     ).toBe(false);
   });
 
-  it('Given auto requeue reuses the source run slug, When bootstrap resumes, Then it skips snapshot inheritance', async () => {
+  it('rejects a File resume whose explicit target slug equals the source slug', async () => {
     const projectDir = createTempProject();
     const sharedRunSlug = '20260524-shared-run';
-    mkdirSync(join(projectDir, '.takt', 'runs', sharedRunSlug, 'reports'), { recursive: true });
+    seedResumeSourceRun(projectDir, sharedRunSlug, {
+      journalRunSlug: sharedRunSlug,
+      claimToken: 'claim-shared',
+    });
 
     await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Resume same run', projectDir, {
       projectCwd: projectDir,
@@ -1042,18 +1196,9 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
         sourceRunSlug: sharedRunSlug,
         resumeMode: 'requeue',
       },
-    })).resolves.toBeDefined();
-
-    const metaWrite = mockWriteFileAtomic.mock.calls.find((call) =>
-      call[0] === join(projectDir, '.takt', 'runs', sharedRunSlug, 'meta.json')
+    })).rejects.toThrow(
+      `Workflow resume requires distinct source and target run slugs: "${sharedRunSlug}"`,
     );
-    expect(metaWrite).toBeDefined();
-    const meta = JSON.parse(String(metaWrite![1])) as {
-      source_run_slug?: string;
-      resume_artifacts?: unknown;
-    };
-    expect(meta.source_run_slug).toBe(sharedRunSlug);
-    expect(meta).not.toHaveProperty('resume_artifacts');
   });
 
   it('rejects a SQLite resume whose explicit target slug equals the source slug', async () => {
@@ -1084,13 +1229,17 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
             resumeMode: 'retry',
           },
         }),
+        {
+          operationJournalRunSlug: sharedRunSlug,
+          operationClaimToken: 'unreachable',
+        },
       );
     }).rejects.toThrow(
-      `SQLite resume requires distinct source and target run slugs: "${sharedRunSlug}"`,
+      `Workflow resume requires distinct source and target run slugs: "${sharedRunSlug}"`,
     );
   });
 
-  it('Given the source run is unavailable, When bootstrap resumes, Then it records fallback and continues', async () => {
+  it('fails fast when a resume source run is unavailable', async () => {
     const projectDir = createTempProject();
 
     await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Resume missing run', projectDir, {
@@ -1101,25 +1250,37 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
         sourceRunSlug: '20260524-missing-run',
         resumeMode: 'requeue',
       },
-    })).resolves.toBeDefined();
-
-    expect(mockLogWarn).toHaveBeenCalledWith(
-      'Resume report snapshot source unavailable; continuing without inherited snapshot',
-      expect.objectContaining({
-        sourceRunSlug: '20260524-missing-run',
-        targetRunSlug: 'fallback-resume',
-        reason: expect.stringContaining('does not exist'),
-        fallbackUsed: true,
-      }),
-    );
-    const metaWrite = mockWriteFileAtomic.mock.calls.find((call) =>
-      call[0] === join(projectDir, '.takt', 'runs', 'fallback-resume', 'meta.json')
-    );
-    const meta = JSON.parse(String(metaWrite![1])) as { resume_artifacts?: unknown };
-    expect(meta).not.toHaveProperty('resume_artifacts');
+    })).rejects.toThrow('Resume source run "20260524-missing-run" is missing');
+    expect(mockLogWarn).not.toHaveBeenCalled();
+    expect(existsSync(join(projectDir, '.takt', 'runs', 'fallback-resume'))).toBe(false);
   });
 
-  it('Given the source slug is invalid and target reports are non-empty, When bootstrap resumes, Then target safety still fails fast', async () => {
+  it('rejects a running immediate resume source without inspecting terminal ancestors', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir, 'running-source', {
+      journalRunSlug: 'running-source',
+      claimToken: 'claim-running',
+      status: 'running',
+    });
+
+    await expect(createWorkflowExecutionBootstrap(
+      workflowConfig,
+      'Resume running source',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'distinct-target',
+        resumeSource: {
+          sourceRunSlug: 'running-source',
+          resumeMode: 'requeue',
+        },
+      },
+    )).rejects.toThrow(/not in a resumable terminal status/);
+    expect(existsSync(join(projectDir, '.takt', 'runs', 'distinct-target'))).toBe(false);
+  });
+
+  it('fails fast on an invalid source slug before report inheritance', async () => {
     const projectDir = createTempProject();
     mockIsValidReportDirName.mockImplementation((slug: string) => slug !== '../invalid-source');
     const targetReports = join(projectDir, '.takt', 'runs', 'conflicting-resume', 'reports');
@@ -1134,7 +1295,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
         sourceRunSlug: '../invalid-source',
         resumeMode: 'retry',
       },
-    })).rejects.toThrow(/already has a non-empty reports directory/);
+    })).rejects.toThrow('Resume source run slug "../invalid-source" is invalid');
 
     expect(mockLogWarn).not.toHaveBeenCalled();
     expect(readFileSync(join(targetReports, 'existing.md'), 'utf-8')).toBe('existing report');

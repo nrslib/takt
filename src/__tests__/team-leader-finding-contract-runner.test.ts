@@ -468,7 +468,7 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
         store: createOperationJournalStore(runPaths.operationJournalAbs),
         journalRunSlug: runPaths.slug,
         claimToken: 'claim-b',
-        sourceClaimToken: 'claim-a',
+        sourceClaimTokens: new Set(['claim-a']),
       },
     });
     const result = await resumedRunner.runTeamLeaderStep(
@@ -705,7 +705,8 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     };
     state.rateLimitFallbackState = originalFallbackState;
     executeAgentMock
-      .mockImplementationOnce(async () => {
+      .mockImplementationOnce(async (_persona, _instruction, options) => {
+        options.onDispatch?.('edit');
         state.rateLimitFallbackState = {
           origin: {
             stage: 'reviewer',
@@ -723,21 +724,24 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
           timestamp: new Date(),
         };
       })
-      .mockResolvedValueOnce({
-        persona: 'coder',
-        status: 'done',
-        content: 'fixed',
-        structuredOutput: {
-          findingOutcomes: [{
-            findingId: 'F-0002',
-            outcome: 'addressed',
-            evidence: ['src/second.ts:20'],
-          }],
-          changedPaths: ['src/second.ts'],
-          checks: [{ command: 'npm test', status: 'passed' }],
-          summary: 'fixed with fallback provider',
-        },
-        timestamp: new Date(),
+      .mockImplementationOnce(async (_persona, _instruction, options) => {
+        options.onDispatch?.('edit');
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: 'fixed',
+          structuredOutput: {
+            findingOutcomes: [{
+              findingId: 'F-0002',
+              outcome: 'addressed',
+              evidence: ['src/second.ts:20'],
+            }],
+            changedPaths: ['src/second.ts'],
+            checks: [{ command: 'npm test', status: 'passed' }],
+            summary: 'fixed with fallback provider',
+          },
+          timestamp: new Date(),
+        };
       });
     const rawResponse = (structuredOutput: Record<string, unknown>): AgentResponse => ({
       persona: 'leader',

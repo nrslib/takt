@@ -50,7 +50,7 @@ export interface WorkflowOperationJournalContext {
   readonly store: OperationJournalStore;
   readonly journalRunSlug: string;
   readonly claimToken: string;
-  readonly sourceClaimToken?: string;
+  readonly sourceClaimTokens?: ReadonlySet<string>;
 }
 export type {
   ProviderType,

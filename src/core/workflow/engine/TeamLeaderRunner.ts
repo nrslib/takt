@@ -40,6 +40,7 @@ import type { RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../
 import {
   buildPartScopedSessionKey,
   buildTeamLeaderErrorPartResult,
+  createExplicitPartFailure,
   runTeamLeaderPart,
 } from './team-leader-part-runner.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
@@ -1061,6 +1062,9 @@ export class TeamLeaderRunner {
       && result.response.status !== 'done'
       && result.response.status !== 'rate_limited'
     ) {
+      if (result.response.status === 'error' && operationBoundary !== undefined) {
+        throw createExplicitPartFailure(operationBoundary.id, result);
+      }
       throw new Error(result.response.error ?? result.response.content);
     }
     publicationFence?.assertRunning('part.session');

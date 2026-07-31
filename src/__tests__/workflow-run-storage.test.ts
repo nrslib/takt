@@ -1181,6 +1181,24 @@ describe('workflow run storage composition', () => {
     })).rejects.toThrow(/distinct source and target run slugs/);
   });
 
+  it('rejects an identical File resume source and target path', async () => {
+    const cwd = createRoot();
+    const paths = buildRunPaths(cwd, 'same-file-run');
+    writeRunMeta(cwd, paths.slug, 'file');
+
+    await expect(createTestWorkflowRunStorage({
+      backend: 'file',
+      workflowConfig: workflow(true),
+      projectCwd: cwd,
+      cwd,
+      runPaths: paths,
+      resumeSource: {
+        sourceRunSlug: paths.slug,
+        resumeMode: 'retry',
+      },
+    })).rejects.toThrow(/distinct source and target run slugs/);
+  });
+
   it('fails loudly when the SQLite resume source database is missing', async () => {
     const cwd = createRoot();
     writeRunMeta(cwd, 'missing-source', 'sqlite');

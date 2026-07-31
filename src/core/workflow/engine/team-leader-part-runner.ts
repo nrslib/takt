@@ -16,7 +16,10 @@ import { isTeamLeaderPartCancellation } from './team-leader-part-cancellation.js
 import type {
   FindingContractControlValidationIssue,
 } from '../team-leader-finding-contract-control-validation.js';
-import { OperationRecoveryError } from '../operations/operation-recovery-error.js';
+import {
+  ExplicitPartFailureError,
+  OperationRecoveryError,
+} from '../operations/operation-recovery-error.js';
 
 export interface TeamLeaderPartObservability {
   readonly enabled: boolean;
@@ -233,4 +236,14 @@ export function buildTeamLeaderErrorPartResult(
     ...(failure ? { failureCategory: failure.category } : {}),
   };
   return { part, response: errorResponse };
+}
+
+export function createExplicitPartFailure(
+  boundaryId: string,
+  result: PartResult,
+): ExplicitPartFailureError {
+  return new ExplicitPartFailureError(
+    result.response.error ?? result.response.content,
+    { boundaryId },
+  );
 }

@@ -8,11 +8,13 @@ import {
   FindingContractOperationJournal,
 } from '../core/workflow/engine/team-leader-finding-contract-operation-journal.js';
 import {
+  ExplicitPartFailureError,
   ManualRestartRequiredError,
   OperationJournalConflictError,
   OperationRecoveryBlockedError,
 } from '../core/workflow/operations/operation-recovery-error.js';
 import type {
+  OperationJournalJsonValue,
   OperationJournalStore,
 } from '../core/workflow/operations/operation-journal-types.js';
 import type {
@@ -39,7 +41,7 @@ function createContext(claimToken: string, sourceClaimToken?: string) {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken,
-      ...(sourceClaimToken === undefined ? {} : { sourceClaimToken }),
+      ...(sourceClaimToken === undefined ? {} : { sourceClaimTokens: new Set([sourceClaimToken]) }),
     },
     paths,
   };
@@ -84,18 +86,58 @@ function orphanWorkerError(boundaryId = 'part:p1:completion'): ManualRestartRequ
   );
 }
 
+function explicitPartFailureError(
+  boundaryId = 'part:p1:completion',
+): ExplicitPartFailureError {
+  return new ExplicitPartFailureError('part failed', { boundaryId });
+}
+
+function appliedPartResult(
+  status: 'done' | 'error',
+  partId = 'p1',
+  errorMessage = 'preflight failed',
+) {
+  const request = workerRequest('repair finding', partId);
+  return {
+    part: {
+      id: request.partId,
+      title: request.title,
+      instruction: request.instruction,
+      findingContract: request.findingAssignment,
+    },
+    response: {
+      persona: `fix.${partId}`,
+      status,
+      content: status === 'done' ? 'done' : '',
+      ...(status === 'error' ? { error: errorMessage } : {}),
+      timestamp: new Date('2026-08-01T00:00:00.000Z'),
+    },
+  };
+}
+
 function createSuccessorRaceStore(
   store: OperationJournalStore,
   winnerClaimToken: string,
+  options?: {
+    readonly mutateChildren?: (
+      children: Parameters<OperationJournalStore['createParentSuccessor']>[0]['children'],
+    ) => Parameters<OperationJournalStore['createParentSuccessor']>[0]['children'];
+    readonly afterCreate?: (
+      store: OperationJournalStore,
+      successor: ReturnType<OperationJournalStore['createParentSuccessor']>,
+    ) => void;
+  },
 ): OperationJournalStore {
   return new Proxy(store, {
     get(target, property) {
       if (property === 'createParentSuccessor') {
         return (input: Parameters<OperationJournalStore['createParentSuccessor']>[0]) => {
-          target.createParentSuccessor({
+          const successor = target.createParentSuccessor({
             ...input,
             successorClaimToken: winnerClaimToken,
+            children: options?.mutateChildren?.(input.children) ?? input.children,
           });
+          options?.afterCreate?.(target, successor);
           throw new OperationJournalConflictError('simulated successor publication race');
         };
       }
@@ -176,6 +218,71 @@ function seedLegacyWorkerArtifact(): {
   return { paths, operation };
 }
 
+function seedLegacyExplicitFailureAttempt2(options?: {
+  readonly responseError?: string;
+  readonly parentError?: string;
+  readonly removeParentRecoveryMigration?: boolean;
+  readonly addLegacyRecoveryLookalikeMarker?: boolean;
+}): {
+  readonly paths: ReturnType<typeof createContext>['paths'];
+  readonly operationA: FindingContractOperationJournal;
+  readonly operationB: FindingContractOperationJournal;
+} {
+  const { paths, operation: operationA } = seedLegacyWorkerArtifact();
+  const store = createOperationJournalStore(paths.operationJournalAbs);
+  const operationB = open({
+    store,
+    journalRunSlug: paths.slug,
+    claimToken: 'claim-a466',
+    sourceClaimTokens: new Set(['claim-a']),
+  });
+  const boundary = operationB.boundary(
+    'part:p1:completion',
+    'finding_contract_part_completion',
+    workerRequest(),
+  );
+  const child = operationB.getChild(boundary.id);
+  const childPayload = {
+    ...(child.payload as Record<string, OperationJournalJsonValue>),
+  };
+  delete childPayload.dispatchState;
+  const orphanRecovery = {
+    ...(childPayload.orphanRecovery as Record<string, OperationJournalJsonValue>),
+  };
+  delete orphanRecovery.recoveryCode;
+  if (options?.addLegacyRecoveryLookalikeMarker === true) {
+    orphanRecovery.unexpectedMarker = true;
+  }
+  childPayload.orphanRecovery = orphanRecovery;
+  operationB.updateChild(boundary.id, 'reserved', childPayload, child);
+  boundary.markApplied(appliedPartResult(
+    'error',
+    'p1',
+    options?.responseError ?? 'preflight failed',
+  ));
+  if (options?.removeParentRecoveryMigration === true) {
+    const parent = operationB.getParent();
+    const parentPayload = {
+      ...(parent.payload as Record<string, OperationJournalJsonValue>),
+    };
+    const recoveryCause = {
+      ...(parentPayload.recoveryCause as Record<string, OperationJournalJsonValue>),
+    };
+    delete recoveryCause.migration;
+    parentPayload.recoveryCause = recoveryCause;
+    store.compareAndSetParent({
+      parentId: parent.id,
+      owner: parent.owner,
+      expectedRevision: parent.revision,
+      expectedStage: parent.stage,
+      nextStage: parent.stage,
+      payload: parentPayload,
+    });
+  }
+  operationB.terminate(new Error(options?.parentError ?? 'preflight failed'));
+  return { paths, operationA, operationB };
+}
+
 function attemptEvent(
   type: 'started' | 'rejected' | 'accepted' | 'late',
   options?: {
@@ -239,7 +346,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-b',
-      sourceClaimToken: 'claim-a',
+      sourceClaimTokens: new Set(['claim-a']),
     });
     const boundaryB = operationB.boundary('part:p1:completion', 'finding_contract_part_completion');
     expect(boundaryB.readApplied()).toEqual({ response: 'worker claim' });
@@ -256,7 +363,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-c',
-      sourceClaimToken: 'claim-b',
+      sourceClaimTokens: new Set(['claim-b']),
     });
     expect(
       operationC
@@ -311,7 +418,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-b',
-      sourceClaimToken: 'claim-a',
+      sourceClaimTokens: new Set(['claim-a']),
     };
     const operationB = open(resumeContext);
     expect(open(resumeContext).parentId).toBe(operationB.parentId);
@@ -345,6 +452,45 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
     expect(() => orphanA.markApplied({ response: 'late' })).toThrow(/sealed/);
   });
 
+  it('recovers a predecessor with a fresh owner and rejects a sibling without it', () => {
+    const { context, paths } = createContext('claim-same-run');
+    const predecessor = open(context);
+    predecessor
+      .boundary(
+        'part:p1:completion',
+        'finding_contract_part_completion',
+        workerRequest(),
+      )
+      .markWorkerStarted('edit');
+    predecessor.terminate(new ManualRestartRequiredError(
+      'same-run worker interruption',
+      { boundaryId: 'part:p1:completion' },
+    ));
+
+    const successor = open({
+      store: createOperationJournalStore(paths.operationJournalAbs),
+      journalRunSlug: paths.slug,
+      claimToken: 'claim-next-run',
+      sourceClaimTokens: new Set(['claim-same-run']),
+    });
+
+    expect(successor.parentId).toBe(`${predecessor.parentId}:attempt:2`);
+    expect(successor.getParent()).toMatchObject({
+      owner: { generation: 1, claimToken: 'claim-next-run' },
+      payload: {
+        operationAttempt: 2,
+        predecessorParentId: predecessor.parentId,
+      },
+      children: [{ id: 'part:p1:completion', stage: 'reserved' }],
+    });
+    expect(() => open({
+      store: createOperationJournalStore(paths.operationJournalAbs),
+      journalRunSlug: paths.slug,
+      claimToken: 'claim-sibling',
+      sourceClaimTokens: new Set(['claim-same-run']),
+    })).toThrow(/not owned by the current resume source|owner changed/);
+  });
+
   it('accepts a concurrently published successor only for the same lineage and claim', () => {
     const { context, paths } = createContext('claim-a');
     const operationA = open(context);
@@ -360,12 +506,332 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createSuccessorRaceStore(store, 'claim-b'),
       journalRunSlug: paths.slug,
       claimToken: 'claim-b',
-      sourceClaimToken: 'claim-a',
+      sourceClaimTokens: new Set(['claim-a']),
     });
 
     expect(operationB.parentId).toBe(`${operationA.parentId}:attempt:2`);
     expect(operationB.getParent().owner.claimToken).toBe('claim-b');
     expect(store.listParents()).toHaveLength(2);
+  });
+
+  it('rejects a concurrently published successor with a different child recovery plan', () => {
+    const { context, paths } = createContext('claim-a');
+    const operationA = open(context);
+    operationA.boundary(
+      'part:p1:completion',
+      'finding_contract_part_completion',
+      workerRequest(),
+    ).markWorkerStarted('edit');
+    operationA.terminate(orphanWorkerError());
+    const store = createOperationJournalStore(paths.operationJournalAbs);
+
+    expect(() => open({
+      store: createSuccessorRaceStore(store, 'claim-b', {
+        mutateChildren: (children) => children.map((child) => ({
+          ...child,
+          payload: child.id === 'part:p1:completion'
+            ? { unexpected: 'different-plan' }
+            : child.payload,
+        })),
+      }),
+      journalRunSlug: paths.slug,
+      claimToken: 'claim-b',
+      sourceClaimTokens: new Set(['claim-a']),
+    })).toThrow(OperationJournalConflictError);
+  });
+
+  it('rejects a concurrently published successor whose child already advanced', () => {
+    const { context, paths } = createContext('claim-a');
+    const operationA = open(context);
+    operationA.boundary(
+      'part:p1:completion',
+      'finding_contract_part_completion',
+      workerRequest(),
+    ).markWorkerStarted('edit');
+    operationA.terminate(orphanWorkerError());
+    const store = createOperationJournalStore(paths.operationJournalAbs);
+
+    expect(() => open({
+      store: createSuccessorRaceStore(store, 'claim-b', {
+        afterCreate: (target, successor) => {
+          const child = successor.children[0];
+          if (child === undefined) throw new Error('Missing successor child');
+          target.compareAndSetChild({
+            parentId: successor.id,
+            owner: successor.owner,
+            expectedParentRevision: successor.revision,
+            expectedParentStage: successor.stage,
+            childId: child.id,
+            expectedRevision: child.revision,
+            expectedStage: child.stage,
+            nextStage: 'worker_started',
+            payload: child.payload,
+          });
+        },
+      }),
+      journalRunSlug: paths.slug,
+      claimToken: 'claim-b',
+      sourceClaimTokens: new Set(['claim-a']),
+    })).toThrow(OperationJournalConflictError);
+  });
+
+  it('retries a typed pre-dispatch applied error and reuses successful siblings', () => {
+    const { context, paths } = createContext('claim-a');
+    const operationA = open(context);
+    operationA.boundary('decomposition', 'finding_contract_decomposition')
+      .complete({ parts: [] });
+    operationA.boundary(
+      'part:done:completion',
+      'finding_contract_part_completion',
+      workerRequest('repair finding', 'done'),
+    ).complete(appliedPartResult('done', 'done'));
+    operationA.boundary(
+      'part:p1:completion',
+      'finding_contract_part_completion',
+      workerRequest(),
+    ).markApplied(appliedPartResult('error'));
+    operationA.terminate(explicitPartFailureError());
+
+    const resumeContext = {
+      store: createOperationJournalStore(paths.operationJournalAbs),
+      journalRunSlug: paths.slug,
+      claimToken: 'claim-c',
+      sourceClaimTokens: new Set(['claim-b-never-owned', 'claim-a']),
+    };
+    const operationB = open(resumeContext);
+    expect(open(resumeContext).parentId).toBe(operationB.parentId);
+    expect(context.store.listParents()).toHaveLength(2);
+    expect(operationB.getChild('decomposition').stage).toBe('completed');
+    expect(operationB.getChild('part:done:completion').stage).toBe('completed');
+    const failed = operationB.boundary(
+      'part:p1:completion',
+      'finding_contract_part_completion',
+      workerRequest(),
+    );
+    expect(failed.stage).toBe('reserved');
+    expect(failed.readApplied()).toBeUndefined();
+    expect(failed.orphanRecoveryInstruction('en')).toContain('fresh session');
+    expect(operationB.getChild(failed.id).payload).toMatchObject({
+      dispatchState: 'not_dispatched',
+      orphanRecovery: {
+        disposition: 'explicit_retry',
+        recoveryCode: 'explicit_part_failure',
+      },
+    });
+  });
+
+  it('migrates exactly one legacy untyped applied error through an ancestor owner token', () => {
+    const { paths, operationA } = seedLegacyExplicitFailureAttempt2();
+
+    const operationC = open({
+      store: createOperationJournalStore(paths.operationJournalAbs),
+      journalRunSlug: paths.slug,
+      claimToken: 'claim-c',
+      sourceClaimTokens: new Set(['claim-fc0-never-owned', 'claim-a466', 'claim-a']),
+    });
+    expect(operationC.parentId).toBe(`${operationA.parentId}:attempt:3`);
+    expect(operationC.getParent().payload).toMatchObject({
+      recoveryCause: { migration: 'legacy_untyped_part_failure_v1' },
+    });
+    expect(operationC.getChild('part:p1:completion')).toMatchObject({
+      stage: 'reserved',
+      payload: {
+        orphanRecovery: { migration: 'legacy_untyped_part_failure_v1' },
+      },
+    });
+  });
+
+  it('does not migrate an untyped applied error on attempt 1', () => {
+    const { context, paths } = createContext('claim-a');
+    const operation = open(context);
+    operation.boundary('decomposition', 'finding_contract_decomposition').complete({ parts: [] });
+    const boundary = operation.boundary(
+      'part:p1:completion',
+      'finding_contract_part_completion',
+      workerRequest(),
+    );
+    const child = operation.getChild(boundary.id);
+    const payload = { ...(child.payload as Record<string, OperationJournalJsonValue>) };
+    delete payload.dispatchState;
+    operation.updateChild(boundary.id, 'reserved', payload, child);
+    boundary.markApplied(appliedPartResult('error'));
+    operation.terminate(new Error('preflight failed'));
+
+    expect(() => open({
+      store: createOperationJournalStore(paths.operationJournalAbs),
+      journalRunSlug: paths.slug,
+      claimToken: 'claim-b',
+      sourceClaimTokens: new Set(['claim-a']),
+    })).toThrow(OperationRecoveryBlockedError);
+  });
+
+  it.each([
+    ['message mismatch', { parentError: 'different error' }],
+    ['missing recovery migration', { removeParentRecoveryMigration: true }],
+    ['an extra legacy recovery marker', { addLegacyRecoveryLookalikeMarker: true }],
+  ] as const)('does not migrate attempt 2 with %s', (_label, options) => {
+    const { paths } = seedLegacyExplicitFailureAttempt2(options);
+    expect(() => open({
+      store: createOperationJournalStore(paths.operationJournalAbs),
+      journalRunSlug: paths.slug,
+      claimToken: 'claim-c',
+      sourceClaimTokens: new Set(['claim-a466']),
+    })).toThrow(OperationRecoveryBlockedError);
+  });
+
+  it('does not migrate an untyped applied error on attempt 3', () => {
+    const { paths, operationA } = seedLegacyExplicitFailureAttempt2();
+    const operationC = open({
+      store: createOperationJournalStore(paths.operationJournalAbs),
+      journalRunSlug: paths.slug,
+      claimToken: 'claim-c',
+      sourceClaimTokens: new Set(['claim-a466']),
+    });
+    const boundary = operationC.boundary(
+      'part:p1:completion',
+      'finding_contract_part_completion',
+      workerRequest(),
+    );
+    const child = operationC.getChild(boundary.id);
+    const payload = { ...(child.payload as Record<string, OperationJournalJsonValue>) };
+    delete payload.dispatchState;
+    operationC.updateChild(boundary.id, 'reserved', payload, child);
+    boundary.markApplied(appliedPartResult('error'));
+    operationC.terminate(new Error('preflight failed'));
+
+    expect(() => open({
+      store: createOperationJournalStore(paths.operationJournalAbs),
+      journalRunSlug: paths.slug,
+      claimToken: 'claim-d',
+      sourceClaimTokens: new Set(['claim-c']),
+    })).toThrow(OperationRecoveryBlockedError);
+    expect(operationC.parentId).toBe(`${operationA.parentId}:attempt:3`);
+  });
+
+  it('requires the latest operation owner to belong to the direct resume ancestry', () => {
+    const { context, paths } = createContext('claim-a');
+    const operationA = open(context);
+    operationA.boundary('decomposition', 'finding_contract_decomposition')
+      .complete({ parts: [] });
+    operationA.boundary(
+      'part:p1:completion',
+      'finding_contract_part_completion',
+      workerRequest(),
+    ).markApplied(appliedPartResult('error'));
+    operationA.terminate(new Error('legacy untyped failure'));
+
+    expect(() => open({
+      store: createOperationJournalStore(paths.operationJournalAbs),
+      journalRunSlug: paths.slug,
+      claimToken: 'claim-c',
+      sourceClaimTokens: new Set(['sibling-claim']),
+    })).toThrow(/not owned by the current resume source/);
+  });
+
+  it('reconciles post-dispatch edit failures and blocks inconsistent dispatch evidence', () => {
+    const { context, paths } = createContext('claim-a');
+    const operationA = open(context);
+    const boundaryA = operationA.boundary(
+      'part:p1:completion',
+      'finding_contract_part_completion',
+      workerRequest(),
+    );
+    boundaryA.markWorkerStarted('edit');
+    boundaryA.markApplied(appliedPartResult('error'));
+    operationA.terminate(explicitPartFailureError());
+
+    const operationB = open({
+      store: createOperationJournalStore(paths.operationJournalAbs),
+      journalRunSlug: paths.slug,
+      claimToken: 'claim-b',
+      sourceClaimTokens: new Set(['claim-a']),
+    });
+    expect(operationB.getChild('part:p1:completion').payload).toMatchObject({
+      orphanRecovery: { disposition: 'workspace_reconciliation' },
+    });
+
+    const operationC = open(context, 2);
+    const boundaryC = operationC.boundary(
+      'part:p1:completion',
+      'finding_contract_part_completion',
+      workerRequest(),
+    );
+    boundaryC.markApplied(appliedPartResult('error'));
+    const child = operationC.getChild(boundaryC.id);
+    operationC.updateChild(boundaryC.id, 'applied', {
+      ...(child.payload as Record<string, never>),
+      dispatchState: 'dispatched',
+    }, child);
+    operationC.terminate(explicitPartFailureError());
+    expect(() => open({
+      store: createOperationJournalStore(paths.operationJournalAbs),
+      journalRunSlug: paths.slug,
+      claimToken: 'claim-d',
+      sourceClaimTokens: new Set(['claim-a']),
+    }, 2)).toThrow(/inconsistent dispatch evidence/);
+  });
+
+  it('retries a dispatched readonly error but blocks a dispatched full-permission error', () => {
+    const readonlySeed = createContext('claim-readonly');
+    const readonlyOperation = open(readonlySeed.context);
+    const readonlyBoundary = readonlyOperation.boundary(
+      'part:p1:completion',
+      'finding_contract_part_completion',
+      workerRequest(),
+    );
+    readonlyBoundary.markWorkerStarted('readonly');
+    readonlyBoundary.markApplied(appliedPartResult('error'));
+    readonlyOperation.terminate(explicitPartFailureError());
+    const readonlySuccessor = open({
+      store: createOperationJournalStore(readonlySeed.paths.operationJournalAbs),
+      journalRunSlug: readonlySeed.paths.slug,
+      claimToken: 'claim-readonly-next',
+      sourceClaimTokens: new Set(['claim-readonly']),
+    });
+    expect(readonlySuccessor.getChild(readonlyBoundary.id).payload).toMatchObject({
+      orphanRecovery: { disposition: 'explicit_retry' },
+    });
+
+    const fullSeed = createContext('claim-full');
+    const fullOperation = open(fullSeed.context);
+    const fullBoundary = fullOperation.boundary(
+      'part:p1:completion',
+      'finding_contract_part_completion',
+      workerRequest(),
+    );
+    fullBoundary.markWorkerStarted('full');
+    fullBoundary.markApplied(appliedPartResult('error'));
+    fullOperation.terminate(explicitPartFailureError());
+    expect(() => open({
+      store: createOperationJournalStore(fullSeed.paths.operationJournalAbs),
+      journalRunSlug: fullSeed.paths.slug,
+      claimToken: 'claim-full-next',
+      sourceClaimTokens: new Set(['claim-full']),
+    })).toThrow(/full-permission dispatch/);
+  });
+
+  it('blocks a typed explicit failure while another dispatched worker is unsettled', () => {
+    const { context, paths } = createContext('claim-a');
+    const operation = open(context);
+    const failed = operation.boundary(
+      'part:p1:completion',
+      'finding_contract_part_completion',
+      workerRequest(),
+    );
+    failed.markApplied(appliedPartResult('error'));
+    operation.boundary(
+      'part:p2:completion',
+      'finding_contract_part_completion',
+      workerRequest('repair finding', 'p2'),
+    ).markWorkerStarted('edit');
+    operation.terminate(explicitPartFailureError());
+
+    expect(() => open({
+      store: createOperationJournalStore(paths.operationJournalAbs),
+      journalRunSlug: paths.slug,
+      claimToken: 'claim-b',
+      sourceClaimTokens: new Set(['claim-a']),
+    })).toThrow(/another unsettled worker boundary/);
   });
 
   it('rejects a concurrently published successor owned by another claim', () => {
@@ -385,7 +851,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       ),
       journalRunSlug: paths.slug,
       claimToken: 'claim-b',
-      sourceClaimToken: 'claim-a',
+      sourceClaimTokens: new Set(['claim-a']),
     })).toThrow(OperationJournalConflictError);
   });
 
@@ -410,7 +876,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-b',
-      sourceClaimToken: 'claim-a',
+      sourceClaimTokens: new Set(['claim-a']),
     });
 
     expect(operationB.getChild('part:p1:completion').stage).toBe('reserved');
@@ -435,7 +901,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-b',
-      sourceClaimToken: 'claim-a',
+      sourceClaimTokens: new Set(['claim-a']),
     });
     expect(operationB.getChild('decomposition')).toMatchObject({ stage: 'completed' });
     expect(operationB.getChild('part:p0:completion')).toMatchObject({
@@ -530,7 +996,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
         store: createOperationJournalStore(paths.operationJournalAbs),
         journalRunSlug: paths.slug,
         claimToken: 'claim-b',
-        sourceClaimToken: 'claim-a',
+        sourceClaimTokens: new Set(['claim-a']),
       });
       const migratedBoundary = operationB.boundary(
         'part:p1:completion',
@@ -555,7 +1021,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-b',
-      sourceClaimToken: 'claim-a',
+      sourceClaimTokens: new Set(['claim-a']),
     });
     operationB.boundary(
       'part:p1:completion',
@@ -570,7 +1036,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-c',
-      sourceClaimToken: 'claim-b',
+      sourceClaimTokens: new Set(['claim-b']),
     })).toThrow(OperationRecoveryBlockedError);
   });
 
@@ -587,7 +1053,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-b',
-      sourceClaimToken: 'claim-a',
+      sourceClaimTokens: new Set(['claim-a']),
     });
 
     expect(() => operationB.boundary(
@@ -623,7 +1089,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-b',
-      sourceClaimToken: 'claim-a',
+      sourceClaimTokens: new Set(['claim-a']),
     }, 2);
 
     expect(nextIteration.parentId).not.toContain(':attempt:');
@@ -643,7 +1109,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-b',
-      sourceClaimToken: 'claim-a',
+      sourceClaimTokens: new Set(['claim-a']),
     });
     operationB.boundary(
       'part:p1:completion',
@@ -656,7 +1122,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-c',
-      sourceClaimToken: 'claim-b',
+      sourceClaimTokens: new Set(['claim-b']),
     });
 
     expect(operationC.parentId).toBe(`${operationA.parentId}:attempt:3`);
@@ -680,7 +1146,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-b',
-      sourceClaimToken: 'claim-a',
+      sourceClaimTokens: new Set(['claim-a']),
     })).toThrow(OperationRecoveryBlockedError);
     expect(context.store.listParents()).toHaveLength(1);
   });
@@ -700,7 +1166,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
         store: createOperationJournalStore(paths.operationJournalAbs),
         journalRunSlug: paths.slug,
         claimToken: 'claim-b',
-        sourceClaimToken: 'claim-a',
+        sourceClaimTokens: new Set(['claim-a']),
       });
       const boundary = operationB.boundary(
         'part:p1:completion',
@@ -728,7 +1194,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-b',
-      sourceClaimToken: 'claim-a',
+      sourceClaimTokens: new Set(['claim-a']),
     })).toThrow(OperationRecoveryBlockedError);
     expect(context.store.listParents()).toHaveLength(1);
   });
@@ -800,7 +1266,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-b',
-      sourceClaimToken: 'claim-a',
+      sourceClaimTokens: new Set(['claim-a']),
     });
     const boundaryB = operationB.boundary(
       'part:p1:completion',
@@ -861,7 +1327,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-b',
-      sourceClaimToken: 'claim-a',
+      sourceClaimTokens: new Set(['claim-a']),
     });
     expect(operationB.readResultReady()).toEqual({ response: 'complete decision' });
     operationB.completeTransition({ kind: 'next_step', nextStep: 'COMPLETE' });
@@ -870,7 +1336,7 @@ describe('Finding Contract Team Leader operation journal adapter', () => {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken: 'claim-c',
-      sourceClaimToken: 'claim-b',
+      sourceClaimTokens: new Set(['claim-b']),
     });
     expect(operationC.readResultReady()).toEqual({ response: 'complete decision' });
     expect(() => operationC.completeTransition({

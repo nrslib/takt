@@ -1,11 +1,14 @@
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as runMeta from '../features/tasks/execute/runMeta.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import {
@@ -24,6 +27,7 @@ import { openRunStorage } from '../infra/run-storage/index.js';
 const roots: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -151,15 +155,88 @@ describe('workflow run storage boundary', () => {
         requestedRunSlug: `${backend}-reserved-run`,
       });
 
-      if (backend === 'file') {
-        expect(existsSync(activeRun.runPaths.runRootAbs)).toBe(false);
-      } else {
+      expect(existsSync(activeRun.runPaths.runRootAbs)).toBe(true);
+      if (backend === 'sqlite') {
         expect(existsSync(activeRun.runPaths.databaseAbs)).toBe(true);
       }
       await failRun(activeRun, cwd);
       expect(existsSync(activeRun.runPaths.metaAbs)).toBe(true);
     },
   );
+
+  it(
+    'File同一秒の2開始を原子的に別slugへ予約する',
+    async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-08-01T00:00:00.000Z'));
+      const cwd = createRoot();
+      const composition = createWorkflowRunComposition('file', {
+        cwd,
+        projectCwd: cwd,
+      });
+      const first = await composition.storage.beginRun({
+        workflowConfig: workflow,
+        task: 'same task',
+      });
+      const second = await composition.storage.beginRun({
+        workflowConfig: workflow,
+        task: 'same task',
+      });
+
+      expect(second.runSlug).not.toBe(first.runSlug);
+      expect(existsSync(first.runPaths.runRootAbs)).toBe(true);
+      expect(existsSync(second.runPaths.runRootAbs)).toBe(true);
+      await failRun(first, cwd);
+      await failRun(second, cwd);
+      vi.useRealTimers();
+    },
+  );
+
+  it(
+    'File明示slugの競合では一方だけが予約し敗者は勝者artifactを変更しない',
+    async () => {
+      const cwd = createRoot();
+      const composition = createWorkflowRunComposition('file', {
+        cwd,
+        projectCwd: cwd,
+      });
+      const attempts = await Promise.allSettled([1, 2].map(() => (
+        composition.storage.beginRun({
+          workflowConfig: workflow,
+          task: 'same task',
+          requestedRunSlug: 'file-race-run',
+        })
+      )));
+      const winners = attempts.flatMap((result) =>
+        result.status === 'fulfilled' ? [result.value] : []
+      );
+      const failures = attempts.filter((result) => result.status === 'rejected');
+      expect(winners).toHaveLength(1);
+      expect(failures).toHaveLength(1);
+      expect(existsSync(winners[0]!.runPaths.metaAbs)).toBe(false);
+
+      await failRun(winners[0]!, cwd);
+      expect(existsSync(winners[0]!.runPaths.metaAbs)).toBe(true);
+    },
+  );
+
+  it('File明示targetが既存ならartifactを変更せず拒否する', async () => {
+    const cwd = createRoot();
+    const paths = buildRunPaths(cwd, 'existing-file-run');
+    mkdirSync(paths.runRootAbs, { recursive: true });
+    writeFileSync(paths.metaAbs, 'existing-meta', 'utf-8');
+    const composition = createWorkflowRunComposition('file', {
+      cwd,
+      projectCwd: cwd,
+    });
+
+    await expect(composition.storage.beginRun({
+      workflowConfig: workflow,
+      task: 'same task',
+      requestedRunSlug: paths.slug,
+    })).rejects.toThrow(/already exists/);
+    expect(readFileSync(paths.metaAbs, 'utf-8')).toBe('existing-meta');
+  });
 
   it(
     'SQLite同一秒の2開始を原子的に別slugへ予約し、先行authorityを上書きしない',

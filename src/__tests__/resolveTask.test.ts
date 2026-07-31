@@ -275,6 +275,11 @@ describe('resolveTaskExecution', () => {
     expect(result.startStep).toBe('reviewers');
     expect(result.initialIterationOverride).toBe(30);
     expect(result.resumePoint).toEqual(resumePoint);
+    expect(result.resumeSource).toEqual({
+      sourceRunSlug,
+      resumeMode: 'requeue',
+    });
+    expect(result.reportDirName).not.toBe(sourceRunSlug);
   });
 
   it('should reject workflow_call retry resume_point without a source bundle', async () => {

@@ -121,7 +121,16 @@ export interface MaterializeOperationSuccessorChildInput {
   readonly expectedStage: OperationJournalStage;
   readonly nextStage: OperationJournalStage;
   readonly payload: OperationJournalJsonValue;
+  readonly resetReason?: OperationSuccessorResetReason;
 }
+
+export const OPERATION_SUCCESSOR_RESET_REASONS = Object.freeze([
+  'orphan_worker_after_dispatch',
+  'explicit_part_failure',
+] as const);
+
+export type OperationSuccessorResetReason =
+  (typeof OPERATION_SUCCESSOR_RESET_REASONS)[number];
 
 export interface CreateOperationParentSuccessorInput {
   readonly predecessorParentId: string;

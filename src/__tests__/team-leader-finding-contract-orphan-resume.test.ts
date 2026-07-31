@@ -109,7 +109,7 @@ function seedSuccessor(): {
       store: createOperationJournalStore(paths.operationJournalAbs),
       journalRunSlug: paths.slug,
       claimToken,
-      ...(sourceClaimToken === undefined ? {} : { sourceClaimToken }),
+      ...(sourceClaimToken === undefined ? {} : { sourceClaimTokens: new Set([sourceClaimToken]) }),
     },
     workflowName: 'workflow',
     stepName: 'fix',

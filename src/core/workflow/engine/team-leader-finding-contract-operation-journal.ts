@@ -13,6 +13,8 @@ import {
   type OperationOwner,
 } from '../operations/operation-journal-types.js';
 import {
+  EXPLICIT_PART_FAILURE_RECOVERY_CODE,
+  ExplicitPartFailureError,
   ManualRestartRequiredError,
   ORPHAN_WORKER_AFTER_DISPATCH_RECOVERY_CODE,
   OperationJournalConflictError,
@@ -30,7 +32,7 @@ import type {
 import {
   assertOrphanRecoveryCanDispatch,
   bindLegacyBoundaryRequestDigest,
-  createOrphanRecoverySuccessor,
+  createTerminatedRecoverySuccessor,
   createWorkerBoundaryPayload,
   findLatestOperationAttempt,
   readOrphanRecoveryInstruction,
@@ -90,7 +92,7 @@ export class FindingContractOperationJournal {
       );
     }
     if (existing.stage === 'terminated') {
-      const successor = createOrphanRecoverySuccessor({
+      const successor = createTerminatedRecoverySuccessor({
         context: input.context,
         logicalParentId: parentId,
         predecessor: existing,
@@ -114,8 +116,8 @@ export class FindingContractOperationJournal {
       return new FindingContractOperationJournal(input.context, existing.id, existing.owner);
     }
     if (
-      input.context.sourceClaimToken === undefined
-      || existing.owner.claimToken !== input.context.sourceClaimToken
+      input.context.sourceClaimTokens === undefined
+      || !input.context.sourceClaimTokens.has(existing.owner.claimToken)
     ) {
       throw new OperationRecoveryError(
         `Operation "${parentId}" is not owned by the current resume source`,
@@ -372,6 +374,7 @@ export class FindingContractOperationBoundary {
       toJournalJson({
         ...dispatchPayload,
         providerFallbackPending: false,
+        dispatchState: 'dispatched',
         workerPermissionMode: permissionMode,
         workerStartedAt: new Date().toISOString(),
       }),
@@ -674,6 +677,14 @@ function describeError(error: unknown): Record<string, string> {
       name: error.name,
       message: error.message,
       recoveryCode: ORPHAN_WORKER_AFTER_DISPATCH_RECOVERY_CODE,
+      boundaryId: error.boundaryId,
+    };
+  }
+  if (error instanceof ExplicitPartFailureError) {
+    return {
+      name: error.name,
+      message: error.message,
+      recoveryCode: EXPLICIT_PART_FAILURE_RECOVERY_CODE,
       boundaryId: error.boundaryId,
     };
   }

@@ -7,7 +7,10 @@ import type {
   ResolvedObservabilityConfig,
 } from '../../../core/models/config-types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
-import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
+import {
+  isResumableRunStatus,
+  readRunMetaBySlug,
+} from '../../../core/workflow/run/run-meta.js';
 import { OperationRecoveryError } from '../../../core/workflow/operations/operation-recovery-error.js';
 import type { WorkflowOperationJournalContext } from '../../../core/workflow/types.js';
 import {
@@ -112,6 +115,14 @@ export interface WorkflowExecutionBootstrap {
   operationJournal: WorkflowOperationJournalContext;
 }
 
+export interface WorkflowExecutionResumeLineage {
+  readonly sourceRunSlug?: string;
+  readonly publishedResumeSource?: WorkflowExecutionOptions['resumeSource'];
+  readonly operationJournalRunSlug: string;
+  readonly operationClaimToken: string;
+  readonly sourceOperationClaimTokens?: ReadonlySet<string>;
+}
+
 class AutoRoutingReachTracker {
   private reached = false;
 
@@ -124,12 +135,120 @@ class AutoRoutingReachTracker {
   }
 }
 
+function resolveOperationJournalSourceClaims(
+  cwd: string,
+  immediateSourceRunSlug: string,
+): {
+  readonly journalRunSlug: string;
+  readonly claimTokens: ReadonlySet<string>;
+} {
+  const visited = new Set<string>();
+  const claimTokens = new Set<string>();
+  let journalRunSlug: string | undefined;
+  let sourceRunSlug: string | undefined = immediateSourceRunSlug;
+  while (sourceRunSlug !== undefined) {
+    if (!isValidReportDirName(sourceRunSlug)) {
+      throw new OperationRecoveryError(
+        `Resume source run slug "${sourceRunSlug}" is invalid`,
+      );
+    }
+    if (visited.has(sourceRunSlug)) {
+      throw new OperationRecoveryError(
+        `Resume source run ancestry contains a cycle at "${sourceRunSlug}"`,
+      );
+    }
+    visited.add(sourceRunSlug);
+    const sourceMeta = readRunMetaBySlug(cwd, sourceRunSlug);
+    if (sourceMeta === null) {
+      throw new OperationRecoveryError(`Resume source run "${sourceRunSlug}" is missing`);
+    }
+    if (
+      sourceRunSlug === immediateSourceRunSlug
+      && !isResumableRunStatus(sourceMeta.status)
+    ) {
+      throw new OperationRecoveryError(
+        `Resume source run "${sourceRunSlug}" is not in a resumable terminal status`,
+      );
+    }
+    if (
+      sourceMeta.operationJournalRunSlug === undefined
+      || sourceMeta.operationClaimToken === undefined
+    ) {
+      throw new OperationRecoveryError(
+        `Source run "${sourceRunSlug}" has incomplete operation journal ownership metadata`,
+      );
+    }
+    if (!isValidReportDirName(sourceMeta.operationJournalRunSlug)) {
+      throw new OperationRecoveryError(
+        `Source run "${sourceRunSlug}" has an invalid operation journal run slug`,
+      );
+    }
+    if (
+      journalRunSlug !== undefined
+      && sourceMeta.operationJournalRunSlug !== journalRunSlug
+    ) {
+      throw new OperationRecoveryError(
+        `Source run "${sourceRunSlug}" belongs to a different operation journal`,
+      );
+    }
+    journalRunSlug = sourceMeta.operationJournalRunSlug;
+    claimTokens.add(sourceMeta.operationClaimToken);
+    sourceRunSlug = sourceMeta.sourceRunSlug;
+  }
+  if (journalRunSlug === undefined) {
+    throw new OperationRecoveryError('Resume source ancestry has no operation journal');
+  }
+  return {
+    journalRunSlug,
+    claimTokens,
+  };
+}
+
+export function resolveWorkflowExecutionResumeLineage(
+  cwd: string,
+  runSlug: string,
+  resumeSource: WorkflowExecutionOptions['resumeSource'],
+): WorkflowExecutionResumeLineage {
+  const sourceRunSlug = resumeSource?.sourceRunSlug;
+  if (resumeSource === undefined || sourceRunSlug === undefined) {
+    return {
+      operationJournalRunSlug: runSlug,
+      operationClaimToken: randomUUID(),
+      ...(resumeSource === undefined ? {} : { publishedResumeSource: resumeSource }),
+    };
+  }
+
+  return resolveWorkflowExecutionResumeSourceLineage(cwd, resumeSource);
+}
+
+export function resolveWorkflowExecutionResumeSourceLineage(
+  cwd: string,
+  resumeSource: NonNullable<WorkflowExecutionOptions['resumeSource']>,
+): WorkflowExecutionResumeLineage {
+  const sourceRunSlug = resumeSource.sourceRunSlug;
+  if (sourceRunSlug === undefined) {
+    throw new OperationRecoveryError(
+      'Workflow resume requires a source run slug with operation lineage',
+    );
+  }
+
+  const sourceClaims = resolveOperationJournalSourceClaims(cwd, sourceRunSlug);
+  return {
+    sourceRunSlug,
+    publishedResumeSource: resumeSource,
+    operationJournalRunSlug: sourceClaims.journalRunSlug,
+    operationClaimToken: randomUUID(),
+    sourceOperationClaimTokens: sourceClaims.claimTokens,
+  };
+}
+
 export async function createWorkflowExecutionBootstrap(
   workflowConfig: WorkflowConfig,
   task: string,
   cwd: string,
   options: WorkflowExecutionOptions,
   runStorageBootstrap: WorkflowRunBootstrap,
+  resumeLineage: WorkflowExecutionResumeLineage,
 ): Promise<WorkflowExecutionBootstrap> {
   const { headerPrefix = 'Running Workflow:', interactiveUserInput = false, outputMode = 'terminal' } = options;
   const projectCwd = options.projectCwd;
@@ -172,53 +291,28 @@ export async function createWorkflowExecutionBootstrap(
     ensureWorktreeTaktRuntimeProtection(cwd);
   }
 
-  // resume（requeue / retry / instruct、attachment 有無を問わず）が新しい run
-  // slug を作る場合、旧 run の reports/ を継承しないと {report:X} 参照が
-  // 壊れる（v3-r4 の resume 境界バグ）。同一秒の auto requeue などで slug
-  // を再利用する場合は既存 reports/ をそのまま使う。継承は resume feature
-  // 側ではなく bootstrap を一元境界にして配線漏れを防ぐ。順序: run slug
+  // resume（requeue / retry / instruct、attachment 有無を問わず）は source と
+  // 異なる run slug を使う。旧 run の reports/ を継承しないと {report:X}
+  // 参照が壊れるため、bootstrap を一元境界にして配線漏れを防ぐ。順序: run slug
   // 決定 → target 安全検証 → source 検証 → snapshot 作成 → manifest 保存
   // → RunMetaManager 作成 → logs/engine 初期化。source が取得不能な場合だけは
   // fix 側の選択的な best-effort 継承へ委ね、target の不整合や公開競合は
   // ここで失敗させる。
-  const sourceRunSlug = options.resumeSource?.sourceRunSlug;
-  const operationClaimToken = randomUUID();
-  let operationJournalRunSlug = runSlug;
-  let sourceOperationClaimToken: string | undefined;
-  if (sourceRunSlug !== undefined) {
-    const sourceMeta = readRunMetaBySlug(cwd, sourceRunSlug);
-    if (
-      (sourceMeta?.operationJournalRunSlug === undefined)
-      !== (sourceMeta?.operationClaimToken === undefined)
-    ) {
-      throw new OperationRecoveryError(
-        `Source run "${sourceRunSlug}" has incomplete operation journal ownership metadata`,
-      );
-    }
-    if (
-      sourceMeta?.operationJournalRunSlug !== undefined
-      && !isValidReportDirName(sourceMeta.operationJournalRunSlug)
-    ) {
-      throw new OperationRecoveryError(
-        `Source run "${sourceRunSlug}" has an invalid operation journal run slug`,
-      );
-    }
-    if (
-      sourceMeta?.operationJournalRunSlug !== undefined
-      && sourceMeta.operationClaimToken !== undefined
-    ) {
-      operationJournalRunSlug = sourceMeta.operationJournalRunSlug;
-      sourceOperationClaimToken = sourceMeta.operationClaimToken;
-    }
-  }
+  const {
+    sourceRunSlug,
+    publishedResumeSource,
+    operationClaimToken,
+    operationJournalRunSlug,
+    sourceOperationClaimTokens,
+  } = resumeLineage;
   const operationJournalPaths = buildRunPaths(cwd, operationJournalRunSlug);
   const operationJournal: WorkflowOperationJournalContext = {
     store: createOperationJournalStore(operationJournalPaths.operationJournalAbs),
     journalRunSlug: operationJournalRunSlug,
     claimToken: operationClaimToken,
-    ...(sourceOperationClaimToken === undefined
+    ...(sourceOperationClaimTokens === undefined
       ? {}
-      : { sourceClaimToken: sourceOperationClaimToken }),
+      : { sourceClaimTokens: sourceOperationClaimTokens }),
   };
   let resumeArtifactsManifest: ReturnType<typeof inheritResumeReportSnapshot> | undefined;
   if (sourceRunSlug && sourceRunSlug !== runSlug) {
@@ -284,9 +378,9 @@ export async function createWorkflowExecutionBootstrap(
     runPaths,
     task,
     workflowName: workflowConfig.name,
-    ...(options.resumeSource === undefined
+    ...(publishedResumeSource === undefined
       ? {}
-      : { resumeSource: options.resumeSource }),
+      : { resumeSource: publishedResumeSource }),
     options: {
       ...(traceDiscovery ? { traceDiscovery } : {}),
       // manifest（ファイル一覧と hash の SSOT）への参照のみを meta.json に残す。

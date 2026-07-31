@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -214,4 +214,67 @@ describe('executeWorkflow claude-terminal integration', () => {
     expect(terminalMocks.start).toHaveBeenCalledTimes(2);
     expect(terminalMocks.waitForAssistantResponse).toHaveBeenCalledTimes(2);
   });
+
+  it('bootstrap失敗後も解決済みoperation lineageを次のdistinct resumeへ引き継ぐ', async () => {
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+    const sourceRunSlug = '20260801-bootstrap-source';
+    const failedRunSlug = '20260801-bootstrap-failed';
+    const resumedRunSlug = '20260801-bootstrap-resumed';
+
+    await executeWorkflow(makeConfig(), 'source task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+      reportDirName: sourceRunSlug,
+    });
+    const sourceMetaPath = join(projectDir, '.takt', 'runs', sourceRunSlug, 'meta.json');
+    const sourceMeta = JSON.parse(await readFile(sourceMetaPath, 'utf-8')) as {
+      status: string;
+      operation_journal_run_slug?: string;
+    };
+    sourceMeta.status = 'failed';
+    await writeFile(sourceMetaPath, JSON.stringify(sourceMeta), 'utf-8');
+
+    await expect(executeWorkflow(makeConfig(), 'failed target task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+      reportDirName: failedRunSlug,
+      resumeSource: { sourceRunSlug, resumeMode: 'requeue' },
+      taskSpec: {
+        runSlug: failedRunSlug,
+        sourceTaskDir: join(projectDir, 'missing-task-source'),
+        attachmentManifest: [{
+          relativePath: 'attachments/missing.png',
+          kind: 'file',
+          contentSha256: 'a'.repeat(64),
+        }],
+        taskPrompt: 'missing task prompt',
+        orderContent: 'missing task',
+        stagedOrderContent: 'missing task',
+      },
+    })).rejects.toThrow();
+    const failedMeta = JSON.parse(await readFile(
+      join(projectDir, '.takt', 'runs', failedRunSlug, 'meta.json'),
+      'utf-8',
+    )) as {
+      status: string;
+      source_run_slug?: string;
+      operation_journal_run_slug?: string;
+      operation_claim_token?: string;
+    };
+    expect(failedMeta).toMatchObject({
+      status: 'failed',
+      source_run_slug: sourceRunSlug,
+      operation_journal_run_slug: sourceMeta.operation_journal_run_slug,
+      operation_claim_token: expect.any(String),
+    });
+
+    const resumed = await executeWorkflow(makeConfig(), 'resumed target task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+      reportDirName: resumedRunSlug,
+      resumeSource: { sourceRunSlug: failedRunSlug, resumeMode: 'requeue' },
+    });
+    expect(resumed.success).toBe(true);
+  });
+
 });

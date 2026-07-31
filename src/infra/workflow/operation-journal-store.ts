@@ -609,8 +609,25 @@ class FileOperationJournalStore implements OperationJournalStore {
           );
         }
         const isOrphanReservation = materialization.nextStage === 'reserved'
-          && (child.stage === 'worker_started' || child.stage === 'running');
-        if (materialization.nextStage !== child.stage && !isOrphanReservation) {
+          && (child.stage === 'worker_started' || child.stage === 'running')
+          && materialization.resetReason === 'orphan_worker_after_dispatch';
+        const isAppliedFailureReservation = materialization.nextStage === 'reserved'
+          && child.stage === 'applied'
+          && materialization.resetReason === 'explicit_part_failure';
+        if (
+          materialization.nextStage === child.stage
+          && materialization.resetReason !== undefined
+        ) {
+          throw new OperationJournalConflictError(
+            `Operation child "${child.id}" cannot declare reset reason `
+            + `"${materialization.resetReason}" without a reset transition`,
+          );
+        }
+        if (
+          materialization.nextStage !== child.stage
+          && !isOrphanReservation
+          && !isAppliedFailureReservation
+        ) {
           throw new OperationJournalConflictError(
             `Operation child "${child.id}" cannot materialize from stage `
             + `"${child.stage}" to "${materialization.nextStage}"`,

@@ -106,6 +106,7 @@ vi.mock('../core/runtime/runtime-environment.js', () => ({
 
 import {
   createWorkflowExecutionBootstrap as createWorkflowExecutionBootstrapImpl,
+  resolveWorkflowExecutionResumeLineage,
 } from '../features/tasks/execute/workflowExecutionBootstrap.js';
 import type {
   WorkflowRunBootstrap,
@@ -125,12 +126,18 @@ async function createWorkflowExecutionBootstrap(
     Parameters<typeof createWorkflowExecutionBootstrapImpl>[3],
   ]
 ) {
+  const runBootstrap = createRunBootstrap(
+    args[2],
+    args[1],
+    args[3].reportDirName,
+  );
   return await createWorkflowExecutionBootstrapImpl(
     ...args,
-    createRunBootstrap(
+    runBootstrap,
+    resolveWorkflowExecutionResumeLineage(
       args[2],
-      args[1],
-      args[3].reportDirName,
+      runBootstrap.runSlug,
+      args[3].resumeSource,
     ),
   );
 }
