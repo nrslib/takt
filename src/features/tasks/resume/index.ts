@@ -2,12 +2,8 @@ import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { readRunContextOrderContent } from '../../../core/workflow/run/order-content.js';
 import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resume-point.js';
 import type { WorkflowConfig, WorkflowResumePoint } from '../../../core/models/index.js';
-import {
-  getWorkflowDescription,
-  loadWorkflowByIdentifier,
-  resolveWorkflowConfigValue,
-} from '../../../infra/config/index.js';
-import { resolveWorkflowCallTarget } from '../../../infra/config/loaders/workflowCallResolver.js';
+import { resolveWorkflowConfigValue } from '../../../infra/config/index.js';
+import { getWorkflowDescriptionFromConfig } from '../../../infra/config/loaders/workflowPreview.js';
 import { selectOption } from '../../../shared/prompt/index.js';
 import { blankLine, header, info } from '../../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
@@ -51,6 +47,10 @@ import {
 } from '../retryTaskSpecAttachments.js';
 import { runDirectInstructMode } from './directInstructMode.js';
 import { findLatestResumableDirectRun, type ResumableDirectRun } from './directRunFinder.js';
+import {
+  loadWorkflowExecutionBundle,
+  type LoadedWorkflowExecutionBundle,
+} from '../execute/workflowExecutionBundle.js';
 
 type DirectRunResumeAction = 'requeue' | 'retry' | 'instruct' | 'view_reports' | 'cancel';
 
@@ -138,15 +138,23 @@ function resolveTaskContent(projectDir: string, run: ResumableDirectRun): Resolv
 
 function resolveResumePoint(
   projectDir: string,
-  workflowConfig: WorkflowConfig,
+  bundle: LoadedWorkflowExecutionBundle,
   run: ResumableDirectRun,
 ): WorkflowResumePoint | undefined {
-  return trimResumePointStackForWorkflow({
-    workflow: workflowConfig,
+  const resolved = trimResumePointStackForWorkflow({
+    workflow: bundle.rootWorkflow,
     resumePoint: run.meta.resumePoint,
-    resolveWorkflowCall: (parentWorkflow, step) =>
-      resolveWorkflowCallTarget(parentWorkflow, step, projectDir, projectDir),
+    resolveWorkflowCall: (parentWorkflow, step) => bundle.workflowCallResolver({
+      parentWorkflow,
+      step,
+      projectCwd: projectDir,
+      lookupCwd: projectDir,
+    }),
   });
+  if (run.meta.resumePoint !== undefined && resolved?.stack.length !== run.meta.resumePoint.stack.length) {
+    throw new Error(`Direct run "${run.slug}" resume stack does not match its workflow execution bundle.`);
+  }
+  return resolved;
 }
 
 function resolveStartStep(
@@ -167,26 +175,23 @@ function resolveStartStep(
   return undefined;
 }
 
-function loadWorkflow(projectDir: string, run: ResumableDirectRun): WorkflowConfig {
-  const workflowConfig = loadWorkflowByIdentifier(run.meta.workflow, projectDir, { lookupCwd: projectDir });
-  if (!workflowConfig) {
-    throw new Error(`Workflow "${sanitizeTerminalText(run.meta.workflow)}" not found for direct run "${sanitizeTerminalText(run.slug)}".`);
-  }
-  return workflowConfig;
+function loadWorkflow(projectDir: string, run: ResumableDirectRun): LoadedWorkflowExecutionBundle {
+  return loadWorkflowExecutionBundle(buildRunPaths(projectDir, run.slug));
 }
 
 function buildWorkflowContext(
   projectDir: string,
-  workflowIdentifier: string,
+  bundle: LoadedWorkflowExecutionBundle,
   agentOverrides: TaskExecutionOptions | undefined,
 ): WorkflowContext {
-  const previewCount = resolveWorkflowConfigValue(projectDir, 'interactivePreviewSteps');
-  const workflowDesc = getWorkflowDescription(
-    workflowIdentifier,
+  const workflowDesc = getWorkflowDescriptionFromConfig(
+    bundle.rootWorkflow,
     projectDir,
-    previewCount,
+    resolveWorkflowConfigValue(projectDir, 'interactivePreviewSteps'),
     projectDir,
     agentOverrides,
+    bundle.workflowCallResolver,
+    bundle.resourceRoot,
   );
   return {
     name: workflowDesc.name,
@@ -222,8 +227,9 @@ function buildExecutionContext(
   run: ResumableDirectRun,
   agentOverrides: TaskExecutionOptions | undefined,
 ): DirectRunResumeExecutionContext {
-  const workflowConfig = loadWorkflow(projectDir, run);
-  const resumePoint = resolveResumePoint(projectDir, workflowConfig, run);
+  const bundle = loadWorkflow(projectDir, run);
+  const workflowConfig = bundle.rootWorkflow;
+  const resumePoint = resolveResumePoint(projectDir, bundle, run);
   const resolvedTask = resolveTaskContent(projectDir, run);
   const materializedRun = run.meta.prContext === undefined
     ? run
@@ -240,7 +246,7 @@ function buildExecutionContext(
     previousOrderContent: resolvedTask.previousOrderContent,
     startStep: resolveStartStep(workflowConfig, run, resumePoint),
     resumePoint,
-    workflowContext: buildWorkflowContext(projectDir, run.meta.workflow, agentOverrides),
+    workflowContext: buildWorkflowContext(projectDir, bundle, agentOverrides),
   };
 }
 

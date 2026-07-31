@@ -300,6 +300,7 @@ export class AgentRunner {
       const agentDefinition = loadPersonaPromptFromPath(
         options.personaPath,
         options.projectCwd ?? options.cwd,
+        options.workflowBundleResourceRoot,
       );
       const systemPrompt = buildWrappedSystemPrompt(agentDefinition, {
         ...options,

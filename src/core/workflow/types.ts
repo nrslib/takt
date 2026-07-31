@@ -504,6 +504,8 @@ export interface WorkflowEngineOptions {
   sharedRuntime?: WorkflowSharedRuntimeState;
   resumeStackPrefix?: WorkflowResumePointEntry[];
   workflowCallResolver?: WorkflowCallResolver;
+  /** Exact verified resource root for the run's workflow execution bundle. */
+  workflowBundleResourceRoot?: string;
   /**
    * Run-bound Finding authority selected by the application composition root.
    * Local contracts resolve through it; inherited contracts keep the exact

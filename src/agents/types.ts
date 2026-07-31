@@ -47,6 +47,7 @@ export interface RunAgentOptions {
   resolvedModel?: string;
   resolvedProvider?: ProviderType;
   personaPath?: string;
+  workflowBundleResourceRoot?: string;
   internalSystemPrompt?: string;
   internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];

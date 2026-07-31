@@ -5,7 +5,7 @@ import {
   resolveStepProviderModel,
   type ProviderModelResolutionContext,
 } from '../../../core/workflow/provider-resolution.js';
-import type { SelectorProviderInfo, StepProviderInfo } from '../../../core/workflow/types.js';
+import type { SelectorProviderInfo, StepProviderInfo, WorkflowCallResolver } from '../../../core/workflow/types.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import {
   resolveDeterministicAutoRoutingProviderInfo,
@@ -97,12 +97,16 @@ function buildWorkflowString(steps: WorkflowStep[]): string {
   return lines.join('\n');
 }
 
-function readStepPersona(step: WorkflowStep, projectCwd: string): string {
+function readStepPersona(
+  step: WorkflowStep,
+  projectCwd: string,
+  workflowBundleResourceRoot?: string,
+): string {
   if (!step.personaPath) {
     return step.persona ?? '';
   }
   try {
-    return loadPersonaPromptFromPath(step.personaPath, projectCwd);
+    return loadPersonaPromptFromPath(step.personaPath, projectCwd, workflowBundleResourceRoot);
   } catch (error) {
     log.debug('Failed to read persona file', { path: step.personaPath, error: getErrorMessage(error) });
     return '';
@@ -150,6 +154,7 @@ function buildFindingManagerPreview(
   workflow: WorkflowConfig,
   projectCwd: string,
   resolution: PreviewProviderResolution,
+  workflowBundleResourceRoot?: string,
 ): StepPreview | undefined {
   if (!workflow.findingContract) {
     return undefined;
@@ -175,7 +180,7 @@ function buildFindingManagerPreview(
   return {
     name: managerStep.name,
     personaDisplayName: managerStep.personaDisplayName,
-    personaContent: readStepPersona(managerStep, projectCwd),
+    personaContent: readStepPersona(managerStep, projectCwd, workflowBundleResourceRoot),
     instructionContent: managerStep.instruction,
     allowedTools: [],
     canEdit: false,
@@ -217,6 +222,7 @@ function buildStepPreview(
   step: WorkflowStep,
   projectCwd: string,
   resolution: PreviewProviderResolution,
+  workflowBundleResourceRoot?: string,
   context: { isParallelSubstep: boolean; parallelRole?: 'fixed' | 'pool' } = { isParallelSubstep: false },
 ): StepPreview {
   const previewStep = resolvePreviewStep(step);
@@ -226,18 +232,18 @@ function buildStepPreview(
       ? [
           buildDynamicSelectorPreview(getDynamicSelectorProvider(resolution)),
           ...previewStep.parallel.fixed.map((substep) =>
-            buildStepPreview(workflow, substep, projectCwd, resolution, {
+            buildStepPreview(workflow, substep, projectCwd, resolution, workflowBundleResourceRoot, {
               isParallelSubstep: true,
               parallelRole: 'fixed',
             })),
           ...previewStep.parallel.pool.map((substep) =>
-            buildStepPreview(workflow, substep, projectCwd, resolution, {
+            buildStepPreview(workflow, substep, projectCwd, resolution, workflowBundleResourceRoot, {
               isParallelSubstep: true,
               parallelRole: 'pool',
             })),
         ]
       : getAllParallelSubSteps(previewStep.parallel).map((substep) =>
-          buildStepPreview(workflow, substep, projectCwd, resolution, {
+          buildStepPreview(workflow, substep, projectCwd, resolution, workflowBundleResourceRoot, {
             isParallelSubstep: true,
           }),
         );
@@ -259,7 +265,7 @@ function buildStepPreview(
     && !context.isParallelSubstep
     && resolveFindingContractIntakeStep(previewStep, workflow.findingContract) !== undefined;
   const managerPreview = isParallelParent || isFindingContractIntakeStep
-    ? buildFindingManagerPreview(workflow, projectCwd, resolution)
+    ? buildFindingManagerPreview(workflow, projectCwd, resolution, workflowBundleResourceRoot)
     : undefined;
   const substeps = managerPreview ? [...(parallelSubsteps ?? []), managerPreview] : parallelSubsteps;
   const providerInfo = isParallelParent ? undefined : resolvePreviewProviderInfo(previewStep, resolution);
@@ -267,7 +273,7 @@ function buildStepPreview(
   return {
     name: step.name,
     personaDisplayName: previewStep.personaDisplayName,
-    personaContent: isParallelParent ? '' : readStepPersona(previewStep, projectCwd),
+    personaContent: isParallelParent ? '' : readStepPersona(previewStep, projectCwd, workflowBundleResourceRoot),
     instructionContent: isParallelParent ? '' : previewStep.instruction,
     allowedTools: isParallelParent ? [] : resolvePreviewAllowedTools(previewStep, resolution),
     canEdit: isParallelParent ? false : resolvePreviewCanEdit(previewStep),
@@ -288,6 +294,7 @@ function resolvePreviewProviderResolution(
   lookupCwd: string,
   workflow: WorkflowConfig,
   selectorOverrides?: SelectorProviderOverrides,
+  workflowCallResolver?: WorkflowCallResolver,
 ): PreviewProviderResolution {
   const {
     autoRouting,
@@ -312,6 +319,7 @@ function resolvePreviewProviderResolution(
     projectCwd,
     lookupCwd,
     overrides: selectorOverrides,
+    workflowCallResolver,
   });
 
   return {
@@ -378,6 +386,7 @@ function buildStepPreviews(
   maxCount: number,
   projectCwd: string,
   resolution: PreviewProviderResolution,
+  workflowBundleResourceRoot?: string,
 ): StepPreview[] {
   if (maxCount <= 0 || workflow.steps.length === 0) return [];
   const stepMap = new Map(workflow.steps.map((step) => [step.name, step]));
@@ -390,7 +399,7 @@ function buildStepPreviews(
     visited.add(currentName);
     const step = stepMap.get(currentName);
     if (!step) break;
-    previews.push(buildStepPreview(workflow, step, projectCwd, resolution));
+    previews.push(buildStepPreview(workflow, step, projectCwd, resolution, workflowBundleResourceRoot));
     currentName = step.rules?.[0]?.next;
   }
 
@@ -401,12 +410,13 @@ function buildFirstStepInfo(
   workflow: WorkflowConfig,
   projectCwd: string,
   resolution: PreviewProviderResolution,
+  workflowBundleResourceRoot?: string,
 ): FirstStepInfo | undefined {
   const step = workflow.steps.find((candidate) => candidate.name === workflow.initialStep);
   if (!step) return undefined;
   const previewStep = resolvePreviewStep(step);
   return {
-    personaContent: readStepPersona(previewStep, projectCwd),
+    personaContent: readStepPersona(previewStep, projectCwd, workflowBundleResourceRoot),
     personaDisplayName: previewStep.personaDisplayName,
     allowedTools: resolvePreviewAllowedTools(previewStep, resolution),
   };
@@ -430,20 +440,46 @@ export function getWorkflowDescription(
   if (!workflow) {
     return { name: identifier, description: '', workflowStructure: '', stepPreviews: [] };
   }
+  return getWorkflowDescriptionFromConfig(
+    workflow,
+    projectCwd,
+    previewCount,
+    lookupCwd,
+    selectorOverrides,
+  );
+}
+
+export function getWorkflowDescriptionFromConfig(
+  workflow: WorkflowConfig,
+  projectCwd: string,
+  previewCount?: number,
+  lookupCwd = projectCwd,
+  selectorOverrides?: SelectorProviderOverrides,
+  workflowCallResolver?: WorkflowCallResolver,
+  workflowBundleResourceRoot?: string,
+): {
+  name: string;
+  description: string;
+  workflowStructure: string;
+  stepPreviews: StepPreview[];
+  interactiveMode?: InteractiveMode;
+  firstStep?: FirstStepInfo;
+} {
   const resolution = resolvePreviewProviderResolution(
     projectCwd,
     lookupCwd,
     workflow,
     selectorOverrides,
+    workflowCallResolver,
   );
   return {
     name: workflow.name,
     description: workflow.description ?? '',
     workflowStructure: buildWorkflowString(workflow.steps),
     stepPreviews: previewCount && previewCount > 0
-      ? buildStepPreviews(workflow, previewCount, projectCwd, resolution)
+      ? buildStepPreviews(workflow, previewCount, projectCwd, resolution, workflowBundleResourceRoot)
       : [],
     interactiveMode: workflow.interactiveMode,
-    firstStep: buildFirstStepInfo(workflow, projectCwd, resolution),
+    firstStep: buildFirstStepInfo(workflow, projectCwd, resolution, workflowBundleResourceRoot),
   };
 }

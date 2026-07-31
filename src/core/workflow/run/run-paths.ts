@@ -17,6 +17,11 @@ export interface RunPaths {
   readonly operationJournalRel: string;
   readonly databaseRel: string;
   readonly metaRel: string;
+  readonly workflowBundleRel: string;
+  readonly workflowBundleManifestRel: string;
+  readonly workflowBundleManifestHashRel: string;
+  readonly workflowBundleObjectsRel: string;
+  readonly workflowBundleResourcesRel: string;
   readonly runRootAbs: string;
   readonly reportsAbs: string;
   readonly reportsRootAbs: string;
@@ -31,6 +36,11 @@ export interface RunPaths {
   readonly operationJournalAbs: string;
   readonly databaseAbs: string;
   readonly metaAbs: string;
+  readonly workflowBundleAbs: string;
+  readonly workflowBundleManifestAbs: string;
+  readonly workflowBundleManifestHashAbs: string;
+  readonly workflowBundleObjectsAbs: string;
+  readonly workflowBundleResourcesAbs: string;
 }
 
 function joinRel(base: string, namespace: string[] | undefined): string {
@@ -54,6 +64,11 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
   const operationJournalRel = `${operationsRel}/journal.json`;
   const databaseRel = `${runRootRel}/run.sqlite`;
   const metaRel = `${runRootRel}/meta.json`;
+  const workflowBundleRel = `${runRootRel}/workflow-bundle`;
+  const workflowBundleManifestRel = `${workflowBundleRel}/manifest.json`;
+  const workflowBundleManifestHashRel = `${workflowBundleRel}/manifest.sha256`;
+  const workflowBundleObjectsRel = `${workflowBundleRel}/objects`;
+  const workflowBundleResourcesRel = `${workflowBundleRel}/resources`;
 
   return {
     slug,
@@ -71,6 +86,11 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     operationJournalRel,
     databaseRel,
     metaRel,
+    workflowBundleRel,
+    workflowBundleManifestRel,
+    workflowBundleManifestHashRel,
+    workflowBundleObjectsRel,
+    workflowBundleResourcesRel,
     runRootAbs: join(cwd, runRootRel),
     reportsAbs: join(cwd, reportsRel),
     reportsRootAbs: join(cwd, reportsRootRel),
@@ -85,5 +105,10 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     operationJournalAbs: join(cwd, operationJournalRel),
     databaseAbs: join(cwd, databaseRel),
     metaAbs: join(cwd, metaRel),
+    workflowBundleAbs: join(cwd, workflowBundleRel),
+    workflowBundleManifestAbs: join(cwd, workflowBundleManifestRel),
+    workflowBundleManifestHashAbs: join(cwd, workflowBundleManifestHashRel),
+    workflowBundleObjectsAbs: join(cwd, workflowBundleObjectsRel),
+    workflowBundleResourcesAbs: join(cwd, workflowBundleResourcesRel),
   };
 }

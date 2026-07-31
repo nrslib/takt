@@ -306,6 +306,7 @@ export class OptionsBuilder {
       projectCwd: this.getProjectCwd(),
       abortSignal: this.engineOptions.abortSignal,
       personaPath: step.personaPath,
+      workflowBundleResourceRoot: this.engineOptions.workflowBundleResourceRoot,
       resolvedProvider,
       resolvedModel,
       permissionResolution: {
@@ -341,6 +342,7 @@ export class OptionsBuilder {
       projectCwd: baseOptions.projectCwd,
       abortSignal: baseOptions.abortSignal,
       personaPath: baseOptions.personaPath,
+      workflowBundleResourceRoot: baseOptions.workflowBundleResourceRoot,
       resolvedProvider: baseOptions.resolvedProvider,
       resolvedModel: baseOptions.resolvedModel,
       providerOptions: baseOptions.providerOptions,

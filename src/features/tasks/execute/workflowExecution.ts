@@ -64,6 +64,12 @@ import {
 } from './workflowExecutionReporting.js';
 import { stageTaskSpecForExecution } from './taskSpecContext.js';
 import { GitSelectorCommandRunner } from '../../../infra/task/selector-git-command-runner.js';
+import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
+import {
+  loadWorkflowExecutionBundle,
+  prepareWorkflowExecutionBundle,
+  publishWorkflowExecutionBundle,
+} from './workflowExecutionBundle.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -193,8 +199,23 @@ async function executeWorkflowInternal(
     ? options
     : { ...options, prContext };
   const parentRunPid = process.pid;
-  const workflowExecutionContext = createWorkflowExecutionContext(workflowConfig, options.projectCwd);
-  const workflowCallResolver = createWorkflowCallResolver(workflowExecutionContext);
+  const sourceRunSlug = options.resumeSource?.sourceRunSlug;
+  if (options.resumeSource !== undefined && sourceRunSlug === undefined) {
+    throw new Error('Workflow resume requires a source run slug with an execution bundle');
+  }
+  const sourceBundle = sourceRunSlug === undefined
+    ? undefined
+    : loadWorkflowExecutionBundle(buildRunPaths(cwd, sourceRunSlug));
+  const inputWorkflowConfig = sourceBundle?.rootWorkflow ?? workflowConfig;
+  const liveWorkflowCallResolver = sourceBundle === undefined
+    ? createWorkflowCallResolver(createWorkflowExecutionContext(workflowConfig, options.projectCwd))
+    : undefined;
+  const preparedBundle = sourceBundle?.prepared ?? prepareWorkflowExecutionBundle({
+    rootWorkflow: workflowConfig,
+    workflowCallResolver: liveWorkflowCallResolver!,
+    projectCwd: options.projectCwd,
+    lookupCwd: cwd,
+  });
   const runStorage = resolveWorkflowConfigValue(options.projectCwd, 'runStorage');
   const runStorageComposition = createWorkflowRunComposition(
     runStorage.backend,
@@ -205,7 +226,7 @@ async function executeWorkflowInternal(
   );
   await runStorageComposition.recovery.reconcilePending();
   const activeRun = await runStorageComposition.storage.beginRun({
-    workflowConfig,
+    workflowConfig: inputWorkflowConfig,
     task,
     ...(options.reportDirName === undefined
       ? {}
@@ -216,11 +237,15 @@ async function executeWorkflowInternal(
   });
   let bootstrap: WorkflowExecutionBootstrap;
   try {
+    publishWorkflowExecutionBundle(activeRun.runPaths, preparedBundle);
+    const executionBundle = loadWorkflowExecutionBundle(activeRun.runPaths);
+    const bundledWorkflowConfig = executionBundle.rootWorkflow;
+    const workflowCallResolver = executionBundle.workflowCallResolver;
     if (options.taskSpec !== undefined) {
       stageTaskSpecForExecution(options.taskSpec, activeRun.runPaths);
     }
     bootstrap = await createWorkflowExecutionBootstrap(
-      workflowConfig,
+      bundledWorkflowConfig,
       task,
       cwd,
       {
@@ -232,7 +257,7 @@ async function executeWorkflowInternal(
   } catch (bootstrapError) {
     return await terminalizeBootstrapFailure({
       activeRun,
-      workflowConfig,
+      workflowConfig: inputWorkflowConfig,
       task,
       projectCwd: options.projectCwd,
       primaryError: bootstrapError,
@@ -241,6 +266,8 @@ async function executeWorkflowInternal(
         : { resumeSource: options.resumeSource }),
     });
   }
+  const executionBundle = loadWorkflowExecutionBundle(activeRun.runPaths);
+  const workflowCallResolver = executionBundle.workflowCallResolver;
   const terminalPublicationContext = {
     runSlug: bootstrap.runSlug,
     projectCwd: options.projectCwd,
@@ -270,7 +297,7 @@ async function executeWorkflowInternal(
   const terminalPayloads = createWorkflowTerminalPayloadFactory(
     terminalPublicationContext,
   );
-  const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(workflowConfig, parentRunPid);
+  const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(bootstrap.effectiveWorkflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
   let eventBridge: WorkflowExecutionEventBridge | undefined;
   let runExecution: Pick<WorkflowRunExecutionHandle, 'run'> | undefined;
@@ -413,6 +440,7 @@ async function executeWorkflowInternal(
           ...(runContext?.gitProvider !== undefined ? { gitProvider: runContext.gitProvider } : {}),
         }),
         workflowCallResolver,
+        workflowBundleResourceRoot: executionBundle.resourceRoot,
         findingAuthorityResolver: executionBinding.findingAuthorityResolver,
       });
 

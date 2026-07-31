@@ -1,0 +1,244 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { WorkflowConfig } from '../core/models/index.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
+import {
+  loadWorkflowExecutionBundle,
+  prepareWorkflowExecutionBundle,
+  publishWorkflowExecutionBundle,
+} from '../features/tasks/execute/workflowExecutionBundle.js';
+import { attachLegacyWorkflowExecutionBundle } from '../features/workflowAuthoring/attachExecutionBundle.js';
+
+const roots: string[] = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+function workflow(name: string, steps: WorkflowConfig['steps']): WorkflowConfig {
+  return attachWorkflowOpaqueRef({
+    name,
+    initialStep: steps[0]?.name ?? 'done',
+    maxSteps: 5,
+    steps,
+  }, `project:sha256:${name.padEnd(64, '0').slice(0, 64)}`);
+}
+
+describe('workflow execution bundle', () => {
+  it('round-trips an args-specific graph without replacing workflow_ref with node hashes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-'));
+    roots.push(root);
+    const firstChild = workflow('child', [{
+      name: 'one', kind: 'agent', persona: 'first prompt', personaDisplayName: 'first', instruction: '{task}',
+    }]);
+    const secondChild = workflow('child', [{
+      name: 'two', kind: 'agent', persona: 'second prompt', personaDisplayName: 'second', instruction: '{task}',
+    }]);
+    const parent = workflow('parent', [
+      { name: 'first', kind: 'workflow_call', call: 'child', args: { mode: 'first' }, personaDisplayName: 'first', instruction: '' },
+      { name: 'second', kind: 'workflow_call', call: 'child', args: { mode: 'second' }, personaDisplayName: 'second', instruction: '' },
+    ]);
+    const prepared = prepareWorkflowExecutionBundle({
+      rootWorkflow: parent,
+      workflowCallResolver: ({ step }) => step.args?.mode === 'first' ? firstChild : secondChild,
+      projectCwd: root,
+      lookupCwd: root,
+    });
+    expect(Object.keys(prepared.manifest.nodes)).toHaveLength(3);
+
+    const paths = buildRunPaths(root, 'bundle-run');
+    publishWorkflowExecutionBundle(paths, prepared);
+    const loaded = loadWorkflowExecutionBundle(paths);
+    const [first, second] = loaded.rootWorkflow.steps;
+    const loadedFirst = loaded.workflowCallResolver({
+      parentWorkflow: loaded.rootWorkflow,
+      step: first as never,
+      projectCwd: root,
+      lookupCwd: root,
+    });
+    const loadedSecond = loaded.workflowCallResolver({
+      parentWorkflow: loaded.rootWorkflow,
+      step: second as never,
+      projectCwd: root,
+      lookupCwd: root,
+    });
+    expect(loadedFirst?.steps[0]?.name).toBe('one');
+    expect(loadedSecond?.steps[0]?.name).toBe('two');
+    expect(getWorkflowReference(loaded.rootWorkflow)).toBe(getWorkflowReference(parent));
+    expect(getWorkflowReference(loadedFirst!)).toBe(getWorkflowReference(firstChild));
+    expect(Object.keys(prepared.manifest.nodes)).not.toContain(getWorkflowReference(parent));
+  });
+
+  it('fails loudly when an object is tampered', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-tamper-'));
+    roots.push(root);
+    const config = workflow('root', [{
+      name: 'work', kind: 'agent', persona: 'prompt', personaDisplayName: 'work', instruction: '{task}',
+    }]);
+    const paths = buildRunPaths(root, 'tamper-run');
+    publishWorkflowExecutionBundle(paths, prepareWorkflowExecutionBundle({
+      rootWorkflow: config,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    }));
+    const manifest = JSON.parse(readFileSync(paths.workflowBundleManifestAbs, 'utf-8')) as { nodes: Record<string, string> };
+    const objectHash = Object.values(manifest.nodes)[0]!;
+    const objectFile = join(paths.workflowBundleObjectsAbs, `${objectHash}.json`);
+    writeFileSync(objectFile, readFileSync(objectFile, 'utf-8').replace('"name":"root"', '"name":"evil"'));
+    expect(() => loadWorkflowExecutionBundle(paths)).toThrow(/integrity|hash/i);
+  });
+
+  it('attaches once from an explicit historical source without changing run metadata', () => {
+    const project = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-attach-project-'));
+    const source = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-attach-source-'));
+    roots.push(project, source);
+    mkdirSync(join(source, 'builtins', 'en', 'workflows'), { recursive: true });
+    mkdirSync(join(source, 'builtins', 'en', 'facets'), { recursive: true });
+    mkdirSync(join(source, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(join(source, '.takt', 'workflows', 'legacy.yaml'), [
+      'name: legacy',
+      'max_steps: 3',
+      'steps:',
+      '  - name: work',
+      '    persona: inline historical prompt',
+      '    instruction: "{task}"',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+    ].join('\n'));
+    const paths = buildRunPaths(project, 'legacy-run');
+    mkdirSync(paths.runRootAbs, { recursive: true });
+    const historicalRef = `project:sha256:${'a'.repeat(64)}`;
+    writeFileSync(paths.metaAbs, JSON.stringify({
+      task: 'legacy task',
+      workflow: 'legacy',
+      runSlug: 'legacy-run',
+      runRoot: paths.runRootRel,
+      reportDirectory: paths.reportsRel,
+      contextDirectory: paths.contextRel,
+      logsDirectory: paths.logsRel,
+      storageBackend: 'file',
+      status: 'failed',
+      startTime: '2026-01-01T00:00:00.000Z',
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'legacy', workflow_ref: historicalRef, step: 'work', kind: 'agent', occurrence: 1,
+        }],
+        iteration: 1,
+        elapsed_ms: 1,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    }));
+    const metaBefore = readFileSync(paths.metaAbs, 'utf-8');
+
+    const result = attachLegacyWorkflowExecutionBundle({
+      projectDir: project,
+      runSlug: 'legacy-run',
+      sourceRoot: source,
+      rootWorkflow: '.takt/workflows/legacy.yaml',
+    });
+
+    expect(result.rootWorkflowRef).toBe(historicalRef);
+    expect(readFileSync(paths.metaAbs, 'utf-8')).toBe(metaBefore);
+    expect(getWorkflowReference(loadWorkflowExecutionBundle(paths).rootWorkflow)).toBe(historicalRef);
+    expect(() => attachLegacyWorkflowExecutionBundle({
+      projectDir: project,
+      runSlug: 'legacy-run',
+      sourceRoot: source,
+      rootWorkflow: '.takt/workflows/legacy.yaml',
+    })).toThrow(/already exists/);
+  });
+
+  it('rejects reusing one historical child ref for distinct same-name source workflows', () => {
+    const project = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-ambiguous-project-'));
+    const source = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-ambiguous-source-'));
+    roots.push(project, source);
+    mkdirSync(join(source, 'builtins', 'en', 'workflows'), { recursive: true });
+    mkdirSync(join(source, 'builtins', 'en', 'facets'), { recursive: true });
+    mkdirSync(join(source, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(join(source, '.takt', 'workflows', 'legacy.yaml'), [
+      'name: legacy',
+      'initial_step: first',
+      'max_steps: 3',
+      'steps:',
+      '  - name: first',
+      '    kind: workflow_call',
+      '    call: ./child-a.yaml',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+      '  - name: second',
+      '    kind: workflow_call',
+      '    call: ./child-b.yaml',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+    ].join('\n'));
+    for (const fileName of ['child-a.yaml', 'child-b.yaml']) {
+      writeFileSync(join(source, '.takt', 'workflows', fileName), [
+        'name: child',
+        'subworkflow:',
+        '  callable: true',
+        'initial_step: work',
+        'max_steps: 3',
+        'steps:',
+        '  - name: work',
+        '    persona: child prompt',
+        '    instruction: "{task}"',
+        '    rules:',
+        '      - condition: COMPLETE',
+        '        next: COMPLETE',
+      ].join('\n'));
+    }
+    const paths = buildRunPaths(project, 'ambiguous-run');
+    mkdirSync(paths.runRootAbs, { recursive: true });
+    const rootRef = `project:sha256:${'b'.repeat(64)}`;
+    const childRef = `project:sha256:${'c'.repeat(64)}`;
+    const invocationIdentity = JSON.stringify({ workflow: rootRef, step: 'first', calls: [] });
+    writeFileSync(paths.metaAbs, JSON.stringify({
+      task: 'ambiguous legacy task',
+      workflow: 'legacy',
+      runSlug: 'ambiguous-run',
+      runRoot: paths.runRootRel,
+      reportDirectory: paths.reportsRel,
+      contextDirectory: paths.contextRel,
+      logsDirectory: paths.logsRel,
+      storageBackend: 'file',
+      status: 'failed',
+      startTime: '2026-01-01T00:00:00.000Z',
+      resume_point: {
+        version: 2,
+        stack: [
+          {
+            workflow: 'legacy', workflow_ref: rootRef, step: 'first', kind: 'workflow_call', occurrence: 1, call_instance: 1,
+          },
+          { workflow: 'child', workflow_ref: childRef, step: 'work', kind: 'agent', occurrence: 1 },
+        ],
+        iteration: 1,
+        elapsed_ms: 1,
+        workflow_call_invocations: {
+          [invocationIdentity]: {
+            call_instance: 1,
+            report_namespace_segment: 'iteration-1--step-first--workflow-child',
+          },
+        },
+        workflow_step_participations: {},
+      },
+    }));
+
+    expect(() => attachLegacyWorkflowExecutionBundle({
+      projectDir: project,
+      runSlug: 'ambiguous-run',
+      sourceRoot: source,
+      rootWorkflow: '.takt/workflows/legacy.yaml',
+      dryRun: true,
+    })).toThrow(/ambiguous across supplied source graph entities/);
+  });
+});

@@ -402,6 +402,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       response = await runAgent(options.persona, prompt, {
         cwd: options.cwd,
         personaPath: options.personaPath,
+        workflowBundleResourceRoot: options.workflowBundleResourceRoot,
         language: options.language,
         model: options.model,
         provider: options.provider,

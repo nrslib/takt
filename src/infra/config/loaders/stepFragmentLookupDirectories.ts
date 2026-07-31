@@ -1,6 +1,7 @@
 import { isScopeRef, parseScopeRef } from 'faceted-prompting';
 import {
   getBuiltinLanguageStepsDir,
+  getBuiltinSharedStepsDir,
   getGlobalStepsDir,
   getProjectStepsDir,
   getRepertoireStepsDir,
@@ -48,6 +49,7 @@ export function buildStepFragmentLookupDirs(context: FacetResolutionContext): st
   }
   dirs.push(getGlobalStepsDir());
   dirs.push(getBuiltinLanguageStepsDir(context.lang));
+  dirs.push(getBuiltinSharedStepsDir());
   return dirs;
 }
 
