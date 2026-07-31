@@ -16,7 +16,6 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import {
   getBuiltinLanguageStepsDir,
-  getBuiltinStepsDir,
   getGlobalStepsDir,
   getRepertoireDir,
 } from '../../infra/config/paths.js';
@@ -154,8 +153,7 @@ function createEjectStepFragmentPlan(
   isProjectEject: boolean,
 ): EjectStepFragmentPlan {
   const builtinLanguageDir = getBuiltinLanguageStepsDir(lang);
-  const builtinStepsDir = getBuiltinStepsDir();
-  const outputCandidateDirs = [targetDir, getGlobalStepsDir(), builtinLanguageDir, builtinStepsDir];
+  const outputCandidateDirs = [targetDir, getGlobalStepsDir(), builtinLanguageDir];
   const copiesByName = new Map<string, PlannedStepFragmentCopy>();
   const stagedSources = new Map<string, string>();
   const retainedPaths = new Set<string>();
@@ -177,16 +175,14 @@ function createEjectStepFragmentPlan(
       isProjectWorkflowRoot: false,
     },
     nestedCandidateDirs: (fragment) => {
-      const sourceIsBuiltin = isSamePath(fragment.candidateDir, builtinLanguageDir)
-        || isSamePath(fragment.candidateDir, builtinStepsDir);
+      const sourceIsBuiltin = isSamePath(fragment.candidateDir, builtinLanguageDir);
       return sourceIsBuiltin ? [targetDir, ...fragment.candidateDirs] : undefined;
     },
   }).dependencies;
 
   for (const dependency of dependencies) {
     const sourceIsTarget = isSamePath(dependency.sourceRoot, targetDir);
-    const sourceIsBuiltin = isSamePath(dependency.sourceRoot, builtinLanguageDir)
-      || isSamePath(dependency.sourceRoot, builtinStepsDir);
+    const sourceIsBuiltin = isSamePath(dependency.sourceRoot, builtinLanguageDir);
     if (sourceIsTarget) {
       stagedSources.set(basename(dependency.sourcePath), dependency.sourcePath);
       retainedPaths.add(dependency.sourcePath);
@@ -222,7 +218,7 @@ function validateEjectStepFragmentPlan(
     writeFileSync(stagingWorkflowPath, workflowContent, 'utf-8');
     resolveWorkflowStepFragments(parseYaml(workflowContent), {
       workflowPath: stagingWorkflowPath,
-      candidateDirs: [stagingStepsDir, getGlobalStepsDir(), getBuiltinLanguageStepsDir(lang), getBuiltinStepsDir()],
+      candidateDirs: [stagingStepsDir, getGlobalStepsDir(), getBuiltinLanguageStepsDir(lang)],
       context: {
         lang,
         projectDir: stagingProjectDir,

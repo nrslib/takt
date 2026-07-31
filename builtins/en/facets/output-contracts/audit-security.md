@@ -42,5 +42,5 @@
 
 **Cognitive load reduction rules:**
 - No issues → Audit scope table only (15 lines max)
-- Low/Medium only → + issues table (30 lines max)
+- Low/Medium only → include every verified issue in the table and aggregate locations with the same cause
 - High/Critical present → Full output

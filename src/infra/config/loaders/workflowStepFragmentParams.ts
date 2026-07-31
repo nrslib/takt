@@ -6,18 +6,23 @@ import {
   workflowError,
 } from './workflowStepFragmentReader.js';
 
-type FragmentParamType = 'facet_ref' | 'facet_ref[]';
-type FragmentFacetKind = 'policy' | 'knowledge' | 'instruction' | 'report_format';
+type FragmentParamType = 'facet_ref' | 'facet_ref[]' | 'workflow_ref';
+type FragmentFacetKind = 'policy' | 'knowledge' | 'instruction' | 'persona' | 'report_format';
 type FragmentParamValue = string | string[] | FragmentParamReference;
 
 interface FragmentParamReference {
   readonly $param: string;
 }
 
-export interface FragmentParamDeclaration {
-  readonly type: FragmentParamType;
-  readonly facetKind: FragmentFacetKind;
-}
+export type FragmentParamDeclaration =
+  | {
+      readonly type: 'facet_ref' | 'facet_ref[]';
+      readonly facetKind: FragmentFacetKind;
+    }
+  | {
+      readonly type: 'workflow_ref';
+      readonly facetKind?: never;
+    };
 
 export interface BindStepFragmentParamsOptions {
   readonly callerPath: readonly PropertyKey[];
@@ -34,7 +39,7 @@ export interface BoundStepFragment {
 }
 
 interface FieldContract {
-  readonly kinds: readonly FragmentFacetKind[];
+  readonly kinds?: readonly FragmentFacetKind[];
   readonly types: readonly FragmentParamType[];
 }
 
@@ -50,8 +55,8 @@ export interface BoundStepFragmentSource {
 
 const PASS_THROUGH_BINDINGS = new WeakMap<RawRecord, ResolvedFragmentBinding>();
 const BOUND_STEP_FRAGMENT_SOURCES = new WeakMap<RawRecord, BoundStepFragmentSource>();
-const PARAM_TYPES = new Set<FragmentParamType>(['facet_ref', 'facet_ref[]']);
-const FACET_KINDS = new Set<FragmentFacetKind>(['policy', 'knowledge', 'instruction', 'report_format']);
+const PARAM_TYPES = new Set<FragmentParamType>(['facet_ref', 'facet_ref[]', 'workflow_ref']);
+const FACET_KINDS = new Set<FragmentFacetKind>(['policy', 'knowledge', 'instruction', 'persona', 'report_format']);
 const POLICY_CONTRACT: FieldContract = {
   kinds: ['policy'],
   types: ['facet_ref', 'facet_ref[]'],
@@ -64,13 +69,20 @@ const INSTRUCTION_CONTRACT: FieldContract = {
   kinds: ['instruction'],
   types: ['facet_ref'],
 };
+const PERSONA_CONTRACT: FieldContract = {
+  kinds: ['persona'],
+  types: ['facet_ref'],
+};
 const REPORT_FORMAT_CONTRACT: FieldContract = {
   kinds: ['report_format'],
   types: ['facet_ref'],
 };
 const WORKFLOW_CALL_ARG_CONTRACT: FieldContract = {
-  kinds: ['policy', 'knowledge', 'instruction', 'report_format'],
-  types: ['facet_ref', 'facet_ref[]'],
+  kinds: ['policy', 'knowledge', 'instruction', 'persona', 'report_format'],
+  types: ['facet_ref', 'facet_ref[]', 'workflow_ref'],
+};
+const WORKFLOW_REFERENCE_CONTRACT: FieldContract = {
+  types: ['workflow_ref'],
 };
 
 function fragmentError(
@@ -133,6 +145,16 @@ function parseDeclaration(
     throw fragmentError(options, [...path, 'type'], `fragment param "${name}" has an invalid type`);
   }
   const facetKind = getOwnValue(value, 'facet_kind');
+  if (type === 'workflow_ref') {
+    if (facetKind !== undefined) {
+      throw fragmentError(
+        options,
+        [...path, 'facet_kind'],
+        `fragment param "${name}" does not allow facet_kind for workflow_ref`,
+      );
+    }
+    return { type };
+  }
   if (typeof facetKind !== 'string' || !FACET_KINDS.has(facetKind as FragmentFacetKind)) {
     throw fragmentError(
       options,
@@ -141,7 +163,7 @@ function parseDeclaration(
     );
   }
   return {
-    type: type as FragmentParamType,
+    type: type as 'facet_ref' | 'facet_ref[]',
     facetKind: facetKind as FragmentFacetKind,
   };
 }
@@ -178,8 +200,14 @@ function validateLiteralBinding(
     }
     return value;
   }
-  if (!Array.isArray(value) || value.length === 0 || value.some((entry) => typeof entry !== 'string' || entry.length === 0)) {
-    throw callerError(options, path, `fragment param "${name}" requires a non-empty facet reference array`);
+  if (declaration.type === 'workflow_ref') {
+    if (typeof value !== 'string' || value.length === 0) {
+      throw callerError(options, path, `fragment param "${name}" requires a scalar workflow reference`);
+    }
+    return value;
+  }
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string' || entry.length === 0)) {
+    throw callerError(options, path, `fragment param "${name}" requires a facet reference array`);
   }
   return [...value] as string[];
 }
@@ -282,11 +310,38 @@ function substituteParam(
   if (!contract.types.includes(declaration.type)) {
     throw fragmentError(options, path, `fragment param "${reference.$param}" has incompatible cardinality`);
   }
-  if (!contract.kinds.includes(declaration.facetKind)) {
+  if (declaration.type !== 'workflow_ref' && contract.kinds !== undefined && (
+    declaration.facetKind === undefined
+    || !contract.kinds.includes(declaration.facetKind)
+  )) {
     throw fragmentError(options, path, `fragment param "${reference.$param}" has incompatible facet kind`);
   }
   options.boundPaths?.push(path);
   return bindings.get(reference.$param)?.value;
+}
+
+function substituteFacetList(
+  value: unknown,
+  contract: FieldContract,
+  declarations: ReadonlyMap<string, FragmentParamDeclaration>,
+  bindings: ReadonlyMap<string, ResolvedFragmentBinding>,
+  options: BindStepFragmentParamsOptions,
+  path: readonly PropertyKey[],
+): unknown {
+  if (!Array.isArray(value)) {
+    return substituteParam(value, contract, declarations, bindings, options, path);
+  }
+  return value.flatMap((entry, index) => {
+    const substituted = substituteParam(
+      entry,
+      contract,
+      declarations,
+      bindings,
+      options,
+      [...path, index],
+    );
+    return Array.isArray(substituted) ? substituted : [substituted];
+  });
 }
 
 function substitutePassThrough(
@@ -410,13 +465,19 @@ function bindStepFields(
         }
         break;
       case 'policy':
-        expanded[key] = substituteParam(value, POLICY_CONTRACT, declarations, bindings, options, fieldPath);
+        expanded[key] = substituteFacetList(value, POLICY_CONTRACT, declarations, bindings, options, fieldPath);
         break;
       case 'knowledge':
-        expanded[key] = substituteParam(value, KNOWLEDGE_CONTRACT, declarations, bindings, options, fieldPath);
+        expanded[key] = substituteFacetList(value, KNOWLEDGE_CONTRACT, declarations, bindings, options, fieldPath);
         break;
       case 'instruction':
         expanded[key] = substituteParam(value, INSTRUCTION_CONTRACT, declarations, bindings, options, fieldPath);
+        break;
+      case 'persona':
+        expanded[key] = substituteParam(value, PERSONA_CONTRACT, declarations, bindings, options, fieldPath);
+        break;
+      case 'call':
+        expanded[key] = substituteParam(value, WORKFLOW_REFERENCE_CONTRACT, declarations, bindings, options, fieldPath);
         break;
       case 'output_contracts':
         expanded[key] = bindOutputContracts(value, declarations, bindings, options, fieldPath);
@@ -466,14 +527,17 @@ export function getWorkflowParamDeclarations(raw: RawRecord): ReadonlyMap<string
     if (!isPlainObject(value)) continue;
     const type = getOwnValue(value, 'type');
     const facetKind = getOwnValue(value, 'facet_kind');
+    if (type === 'workflow_ref' && facetKind === undefined) {
+      declarations.set(name, { type });
+      continue;
+    }
     if (
-      typeof type === 'string'
-      && PARAM_TYPES.has(type as FragmentParamType)
+      (type === 'facet_ref' || type === 'facet_ref[]')
       && typeof facetKind === 'string'
       && FACET_KINDS.has(facetKind as FragmentFacetKind)
     ) {
       declarations.set(name, {
-        type: type as FragmentParamType,
+        type,
         facetKind: facetKind as FragmentFacetKind,
       });
     }

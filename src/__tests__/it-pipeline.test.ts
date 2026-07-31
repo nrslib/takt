@@ -13,7 +13,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSyn
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { setMockScenario, resetScenario } from '../infra/mock/index.js';
+import { getScenarioQueue, setMockScenario, resetScenario } from '../infra/mock/index.js';
 import type { WorkflowStep } from '../core/models/index.js';
 import { semanticRuleCandidatesOf } from '../core/models/workflow-rule-condition.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
@@ -29,8 +29,9 @@ function selectSemanticLabelFromTag(step: WorkflowStep, context: { lastResponse?
   return { label: candidate.label, method: 'phase3_tag' as const };
 }
 
-const { mockWorkflowWarn } = vi.hoisted(() => ({
+const { mockWorkflowWarn, mockUiError } = vi.hoisted(() => ({
   mockWorkflowWarn: vi.fn(),
+  mockUiError: vi.fn(),
 }));
 
 // --- Mocks ---
@@ -56,7 +57,7 @@ vi.mock('../shared/ui/index.js', () => ({
   header: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
-  error: vi.fn(),
+  error: mockUiError,
   success: vi.fn(),
   status: vi.fn(),
   blankLine: vi.fn(),
@@ -134,7 +135,16 @@ vi.mock('../shared/prompt/index.js', () => ({
 
 vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../core/workflow/phase-runner.js')>()),
-  runReportPhase: vi.fn().mockResolvedValue(undefined),
+  runReportPhase: vi.fn().mockImplementation(async (
+    step: WorkflowStep,
+    _stepIteration: number,
+    context: { reportDir: string; lastResponse?: string },
+  ) => {
+    mkdirSync(context.reportDir, { recursive: true });
+    for (const contract of step.outputContracts ?? []) {
+      writeFileSync(join(context.reportDir, contract.name), context.lastResponse ?? 'Mock report');
+    }
+  }),
   runStatusJudgmentPhase: vi.fn().mockImplementation(selectSemanticLabelFromTag),
 }));
 
@@ -347,15 +357,31 @@ describe('Pipeline Integration Tests', () => {
   it('should complete pipeline with workflow name + skip-git + mock scenario', async () => {
     // Use builtin 'default' workflow
     // persona field: extractPersonaName result (from .md filename)
-    // Flow: plan → write_tests → draft → peer-review reviewers(arch + ai-antipattern + coding) → final-gate → COMPLETE
+    // Flow: shared development core → peer-review → final gate → COMPLETE
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRequirements are clear and implementable' },
       { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written successfully' },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: 'Implementation work decomposed.',
+        structuredOutput: {
+          parts: [{ id: 'implementation', title: 'Implement', instruction: 'Implement the planned change.' }],
+        },
+      },
       { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation complete' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-1ST:1]\n\nNo AI-specific issues' },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: 'No additional work is needed.',
+        structuredOutput: { done: true, reasoning: 'Implementation is complete.', cancelPartIds: [], parts: [] },
+      },
       { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nNo AI-specific issues' },
+      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\napproved' },
+      { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\napproved' },
+      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\napproved' },
       { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\napproved' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\napproved' },
       { persona: 'merge-readiness-reviewer', status: 'done', content: '[MERGE-READINESS-REVIEW:1]\n\napproved' },
       { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\napproved' },
     ]);
@@ -370,6 +396,87 @@ describe('Pipeline Integration Tests', () => {
     });
 
     expect(exitCode).toBe(0);
+    expect(getScenarioQueue()?.remaining).toBe(0);
+  });
+
+  it('should complete the shared development core after remediating review findings', async () => {
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
+      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests created.' },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: 'Implementation work decomposed.',
+        structuredOutput: {
+          parts: [{ id: 'implementation', title: 'Implement', instruction: 'Implement the planned change.' }],
+        },
+      },
+      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation completed.' },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: 'No additional work is needed.',
+        structuredOutput: { done: true, reasoning: 'Implementation is complete.', cancelPartIds: [], parts: [] },
+      },
+      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:2]\n\nA fix is required.' },
+      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
+      { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\nApproved.' },
+      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
+      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
+      { persona: 'frontend-reviewer', status: 'done', content: '[FRONTEND-REVIEW:1]\n\nApproved.' },
+      { persona: 'planner', status: 'done', content: '[FIX-PLAN:1]\n\nFix plan finalized.' },
+      { persona: 'coder', status: 'done', content: '[FIX:1]\n\nFix completed.' },
+      { persona: 'coding-reviewer', status: 'done', content: '[FIX-VERIFIER:1]\n\nVerified.' },
+      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\nApproved.' },
+      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
+      { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\nApproved.' },
+      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
+      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
+      { persona: 'frontend-reviewer', status: 'done', content: '[FRONTEND-REVIEW:1]\n\nApproved.' },
+      { persona: 'merge-readiness-reviewer', status: 'done', content: '[MERGE-READINESS-REVIEW:1]\n\nApproved.' },
+      { persona: 'dual-supervisor', status: 'done', content: '[SUPERVISE:2]\n\nApproved.' },
+    ]);
+
+    const exitCode = await executePipeline({
+      task: 'Implement a frontend change that requires review remediation',
+      workflow: 'frontend',
+      autoPr: false,
+      skipGit: true,
+      cwd: testDir,
+      provider: 'mock',
+    });
+
+    expect(
+      exitCode,
+      JSON.stringify({
+        errors: mockUiError.mock.calls,
+        remaining: getScenarioQueue()?.remaining,
+      }),
+    ).toBe(0);
+    expect(getScenarioQueue()?.remaining).toBe(0);
+  });
+
+  it.each(['backend-mini', 'default-mini'])('should complete %s through the shared mini core', async (workflow) => {
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
+      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation completed.' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
+      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\nApproved.' },
+    ]);
+
+    const exitCode = await executePipeline({
+      task: 'Implement a focused backend change',
+      workflow,
+      autoPr: false,
+      skipGit: true,
+      cwd: testDir,
+      provider: 'mock',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(getScenarioQueue()?.remaining).toBe(0);
   });
 
   it('should return EXIT_WORKFLOW_FAILED for non-existent workflow', async () => {

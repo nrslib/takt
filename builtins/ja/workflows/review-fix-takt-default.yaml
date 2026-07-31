@@ -1,103 +1,35 @@
 name: review-fix-takt-default
-description: TAKT開発向けレビュー対象収集付き開発ワークフロー（収集 → 計画 → テスト作成 → draft（実装+AI自己レビュー） → peer-review（専門レビュー+修正+逐次最終ゲート） → 完了）
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
-max_steps: 50
+description: レビュー対象を収集してから、TAKT固有ファセットを共通開発フローへ注入するワークフロー。
+max_steps: 52
 initial_step: gather
-loop_monitors:
-  - cycle:
-      - plan
-      - write_tests
-      - draft
-      - peer-review
-    threshold: 3
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-replan
-      rules:
-        - condition: 健全（計画が具体化し、実装が収束している）
-          next: plan
-        - condition: 非生産的（同じ再計画理由が繰り返されている）
-          next: ABORT
 steps:
   - name: gather
     uses: gather
     rules:
       - condition: レビュー対象の情報収集完了
-        next: plan
+        next: develop
       - condition: レビュー対象を特定できない、情報不足
         next: ABORT
         appendix: |
           確認事項:
           - {質問1}
           - {質問2}
-  - name: plan
-    uses: implementation-plan-to-write-tests
-    rules:
-      - condition: 要件が明確で実装可能
-        next: write_tests
-      - condition: ユーザーが質問をしている（実装タスクではない）
-        next: COMPLETE
-      - condition: 要件が不明確、情報不足
-        next: ABORT
-        appendix: |
-          確認事項:
-          - {質問1}
-          - {質問2}
-  - name: write_tests
-    tags:
-      - coding
-      - test-planning
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge:
-      - takt
-      - architecture
-      - unit-testing
-      - e2e-testing
-    provider_options:
-      extends: edit
-    required_permission_mode: edit
-    instruction: write-tests-first
-    rules:
-      - condition: テスト作成が完了した
-        next: draft
-      - condition: テスト対象が未実装のためテスト作成をスキップする
-        next: draft
-      - condition: テスト作成を進行できない
-        next: plan
-      - condition: ユーザーへの確認事項があるためユーザー入力が必要
-        next: write_tests
-        requires_user_input: true
-        interactive_only: true
-    output_contracts:
-      report:
-        - name: test-report.md
-          format: test-report
-  - name: draft
+  - name: develop
     kind: workflow_call
-    call: draft
-    rules:
-      - condition: COMPLETE
-        next: peer-review
-      - condition: need_replan
-        next: plan
-      - condition: ABORT
-        next: ABORT
-  - name: peer-review
-    kind: workflow_call
-    call: peer-review
+    call: development-core
+    args:
+      plan_policy: [design-planning]
+      plan_knowledge: [takt, architecture]
+      testing_policy: [coding, testing]
+      testing_knowledge: [takt, architecture, unit-testing, e2e-testing]
+      development_policy: [coding, testing]
+      development_knowledge: [takt, architecture, task-decomposition]
+      implementation_instruction: team-leader-implement
+      review_policy: [coding, testing, review]
+      review_knowledge: [takt, architecture, unit-testing, e2e-testing]
+      supervisor_persona: supervisor
     rules:
       - condition: COMPLETE
         next: COMPLETE
-      - condition: need_replan
-        next: plan
       - condition: ABORT
         next: ABORT

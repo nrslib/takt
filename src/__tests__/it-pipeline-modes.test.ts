@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { setMockScenario, resetScenario } from '../infra/mock/index.js';
+import { getScenarioQueue, setMockScenario, resetScenario } from '../infra/mock/index.js';
 import type { WorkflowStep } from '../core/models/index.js';
 import { semanticRuleCandidatesOf } from '../core/models/workflow-rule-condition.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
@@ -330,15 +330,31 @@ describe('Pipeline Modes IT: --task + --workflow name (builtin)', () => {
   });
 
   it('should load and execute builtin default workflow by name', async () => {
-    // Flow: plan → write_tests → draft → peer-review reviewers(arch + ai-antipattern + coding) → final-gate → COMPLETE
+    // Flow: shared development core → peer-review → final gate → COMPLETE
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRequirements are clear and implementable' },
       { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written successfully' },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: 'Implementation work decomposed.',
+        structuredOutput: {
+          parts: [{ id: 'implementation', title: 'Implement', instruction: 'Implement the planned change.' }],
+        },
+      },
       { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation complete' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-1ST:1]\n\nNo AI-specific issues' },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: 'No additional work is needed.',
+        structuredOutput: { done: true, reasoning: 'Implementation is complete.', cancelPartIds: [], parts: [] },
+      },
       { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nNo AI-specific issues' },
+      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\napproved' },
+      { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\napproved' },
+      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\napproved' },
       { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\napproved' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\napproved' },
       { persona: 'merge-readiness-reviewer', status: 'done', content: '[MERGE-READINESS-REVIEW:1]\n\napproved' },
       { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\napproved' },
     ]);
@@ -353,6 +369,7 @@ describe('Pipeline Modes IT: --task + --workflow name (builtin)', () => {
     });
 
     expect(exitCode).toBe(0);
+    expect(getScenarioQueue()?.remaining).toBe(0);
   });
 
   it('should return EXIT_WORKFLOW_FAILED for non-existent workflow name', async () => {

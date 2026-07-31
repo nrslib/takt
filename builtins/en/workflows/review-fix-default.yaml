@@ -12,15 +12,17 @@ loop_monitors:
   - cycle:
       - reviewers
       - final-gate
-      - fix
+      - remediation
     threshold: 3
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
-        - condition: Healthy (progress being made)
+        - condition: Healthy (fixes progressing and report content converging)
           next: reviewers
-        - condition: Unproductive (repeated findings, fixes not applied)
+        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
+          next: reviewers
+        - condition: The current loop cannot converge and requires a final-gate decision
           next: final-gate
 
 steps:
@@ -175,7 +177,7 @@ steps:
       - condition: all("approved")
         next: final-gate
       - condition: any("needs_fix")
-        next: fix
+        next: remediation
 
   - name: final-gate
     kind: workflow_call
@@ -184,22 +186,32 @@ steps:
       - condition: COMPLETE
         next: COMPLETE
       - condition: needs_fix
-        next: fix
+        next: remediation
       - condition: need_replan
-        next: fix
+        next: remediation
       - condition: ABORT
         next: ABORT
-  - name: fix
-    uses: fix-with-provider-tools
+  - name: remediation
+    uses: review-remediation
     with:
+      plan_policy:
+        - coding
+        - testing
+        - review
       fix_policy:
         - coding
         - testing
+      verification_policy:
+        - coding
+        - testing
+        - review
       fix_knowledge:
         - architecture
         - security
     rules:
-      - condition: Fixes complete
+      - condition: COMPLETE
         next: reviewers
-      - condition: Unable to proceed with fixes
+      - condition: need_replan
         next: final-gate
+      - condition: ABORT
+        next: ABORT

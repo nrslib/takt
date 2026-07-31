@@ -64,4 +64,4 @@
 
 **Cognitive load reduction rules:**
 - APPROVE: Summary + Maintainability-Aware Merge Quality Check + Cross-Audit Evidence only (15 lines or fewer)
-- REJECT: Prioritize blocker findings (40 lines or fewer)
+- REJECT: Include every verified blocker and aggregate locations with the same cause

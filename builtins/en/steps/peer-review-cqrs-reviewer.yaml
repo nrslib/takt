@@ -1,0 +1,26 @@
+params:
+  review_policy_additions:
+    type: facet_ref[]
+    facet_kind: policy
+  review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
+name: cqrs-es-review
+tags:
+  - review
+edit: false
+persona: cqrs-es-reviewer
+policy:
+  - review
+  - $param: review_policy_additions
+knowledge:
+  - cqrs-es
+  - backend
+  - $param: review_knowledge_additions
+provider_options:
+  extends: review-readonly
+instruction: review-cqrs-es
+output_contracts:
+  report:
+    - name: cqrs-es-review.md
+      format: cqrs-es-review

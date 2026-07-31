@@ -1,3 +1,0 @@
-name: peer-review
-kind: workflow_call
-call: peer-review

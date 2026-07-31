@@ -151,6 +151,10 @@ setMockScenario([
 | Environment variables not cleared in test setup | Warning |
 | E2E tests assuming real API | Isolate via `provider` config |
 
+## Platform Priority
+
+TAKT treats Windows as a secondary platform.
+
 ## Error Propagation
 
 Provider errors propagate through: `AgentResponse.error` → session log → console output.

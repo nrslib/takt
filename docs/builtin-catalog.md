@@ -10,9 +10,9 @@ A comprehensive catalog of all builtin workflows and personas included with TAKT
 |----------|-----------------|
 | `simple` | A simple development workflow that trusts a capable model's judgment. The model selects relevant available skills for plan → write tests → implement → code review → fix loop → final supervision → complete. |
 | `simple-mini` | A lightweight variant that trusts a capable model's judgment. Omits dedicated test writing and final supervision: plan → implement → code review → fix loop → complete. |
-| `default` | Standard development workflow. Test-first with draft implementation, AI antipattern self-review, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → draft → peer-review (specialists → merge-readiness → fix loop) → supervise → complete. |
+| `default` | Standard test-first development workflow using the shared development core: plan → write tests → implement → specialist peer review → fix planning → fix → verification → merge-readiness and supervision → complete. |
 | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
-| `default-high` | Full-spec development workflow. Test-first with team-leader implementation, AI antipattern review with arbitration, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → team-leader draft → peer-review (specialists → merge-readiness → fix loop) → supervise → complete. |
+| `default-high` | Full-spec workflow using the shared development core with team-leader implementation, specialist peer review, convergent remediation, merge-readiness, and supervision. |
 | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
 | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
 | `dual` | Frontend + backend development workflow with team-leader implementation, architecture, frontend, security, QA reviews with fix loops. |
@@ -24,9 +24,9 @@ Organized by category.
 | Category | Workflow | Description |
 |----------|----------|-------------|
 | 🚀 Quick Start | `simple` | A simple development workflow that trusts a capable model's judgment. The model selects relevant available skills for plan → write tests → implement → code review → fix loop → final supervision → complete. |
-| | `default` | Standard development workflow. Test-first with draft implementation, AI antipattern self-review, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → draft → peer-review (specialists → merge-readiness → fix loop) → supervise → complete. |
+| | `default` | Standard test-first workflow using the shared development core, specialist peer review, convergent remediation, merge-readiness, and supervision. |
 | | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
-| | `default-high` | Full-spec development workflow. Test-first with team-leader implementation, AI antipattern review with arbitration, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → team-leader draft → peer-review (specialists → merge-readiness → fix loop) → supervise → complete. |
+| | `default-high` | Full-spec workflow using the shared development core with team-leader implementation, specialist peer review, convergent remediation, merge-readiness, and supervision. |
 | | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
 | | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
 | | `dual` | Frontend + backend development workflow: architecture, frontend, security, QA reviews with fix loops. |
@@ -76,10 +76,10 @@ Organized by category.
 | | `audit-architecture-dual` | Full-stack architecture audit. Enumerates frontend/backend boundaries and cross-layer wiring. |
 | 🧪 Testing | `unit-test` | Unit test focused workflow: test analysis -> test implementation -> review -> fix. |
 | | `e2e-test` | E2E test focused workflow: E2E analysis -> E2E implementation -> review -> fix (Vitest-based E2E flow). |
-| 🎵 TAKT Development | `takt-default` | TAKT development workflow: plan → write tests → draft (implement + AI self-review) → peer-review (specialists + merge-readiness + fix) → supervise → complete. |
+| 🎵 TAKT Development | `takt-default` | TAKT-focused workflow using the shared development core with TAKT knowledge injected into planning, testing, implementation, review, and remediation. |
 | | `takt-default-team-high` | Team Leader variant of takt-default-high. The leader decomposes implementation and fixes for members, followed by the same six compact specialist reviews, Finding Contract, and final gate. Provider and model remain configurable. |
 | | `takt-default-high` | Enhanced high-cost variant of takt-default: direct implementation and fixes, six compact specialist reviews, Finding Contract, and a merge-readiness/supervisor final gate. |
-| | `review-fix-takt-default` | TAKT development code review + fix loop: gather → plan → tests → draft → peer-review (specialists + merge-readiness + fix) → supervise. |
+| | `review-fix-takt-default` | Gathers the review target, then runs the TAKT-focused shared development core through implementation, review, remediation, and final gates. |
 | Others | `research` | Research workflow: planner -> digger -> supervisor. Autonomously executes research without asking questions. |
 | | `deep-research` | Deep research workflow: plan -> dig -> analyze -> supervise. Discovery-driven investigation that follows emerging questions with multi-perspective analysis. |
 | | `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |

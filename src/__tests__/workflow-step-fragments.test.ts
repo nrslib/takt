@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { ZodError } from 'zod';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
-import { getBuiltinLanguageStepsDir, getBuiltinStepsDir } from '../infra/config/paths.js';
+import { getBuiltinLanguageStepsDir, getGlobalStepsDir } from '../infra/config/paths.js';
 import { buildStepFragmentLookupDirs } from '../infra/config/loaders/stepFragmentLookupDirectories.js';
 import { resolveWorkflowStepFragments } from '../infra/config/loaders/workflowStepFragmentResolver.js';
 import { inspectWorkflowFile } from '../infra/config/loaders/workflowDoctor.js';
@@ -335,15 +335,14 @@ steps:
     expect(message).toContain('expected @owner/repo/name');
   });
 
-  it('should use the same shared builtin steps directory for both languages', () => {
-    const englishDirs = buildStepFragmentLookupDirs({ lang: 'en' });
-    const japaneseDirs = buildStepFragmentLookupDirs({ lang: 'ja' });
-
-    expect(englishDirs).toContain(getBuiltinStepsDir());
-    expect(japaneseDirs).toContain(getBuiltinStepsDir());
+  it.each(['en', 'ja'] as const)('should use the selected %s builtin steps directory', (lang) => {
+    expect(buildStepFragmentLookupDirs({ lang })).toEqual([
+      getGlobalStepsDir(),
+      getBuiltinLanguageStepsDir(lang),
+    ]);
   });
 
-  it.each(['en', 'ja'] as const)('should resolve the shared final-gate fragment for %s builtins', (lang) => {
+  it.each(['en', 'ja'] as const)('should resolve the language-specific final-gate fragment for %s builtins', (lang) => {
     const workflowPath = join(getBuiltinLanguageStepsDir(lang), 'fixture-workflow.yaml');
     const resolution = resolveWorkflowStepFragments({
       steps: [{
@@ -352,7 +351,7 @@ steps:
       }],
     }, {
       workflowPath,
-      candidateDirs: [getBuiltinLanguageStepsDir(lang), getBuiltinStepsDir()],
+      candidateDirs: [getBuiltinLanguageStepsDir(lang)],
       context: {
         lang,
         projectDir,
@@ -369,7 +368,7 @@ steps:
 
     expect(resolution.dependencies).toContainEqual(expect.objectContaining({
       ref: 'finding-contract-final-gate',
-      sourceRoot: getBuiltinStepsDir(),
+      sourceRoot: getBuiltinLanguageStepsDir(lang),
     }));
   });
 
@@ -550,7 +549,6 @@ steps:
     expect(message).toContain(join(globalConfigDir, 'repertoire', '@owner', 'missing', 'steps'));
     expect(message).not.toContain(join(projectDir, '.takt', 'steps'));
     expect(message).not.toContain(join(globalConfigDir, 'steps'));
-    expect(message).not.toContain(getBuiltinStepsDir());
   });
 
   it('should retain schema-allowed record keys when no step uses a fragment', () => {

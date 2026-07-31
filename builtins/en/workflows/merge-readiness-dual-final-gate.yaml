@@ -22,6 +22,10 @@ subworkflow:
       facet_kind: knowledge
       default:
         - architecture
+    supervisor_persona:
+      type: facet_ref
+      facet_kind: persona
+      default: dual-supervisor
 workflow_config:
   provider_options:
     codex:
@@ -62,7 +66,8 @@ steps:
       - final-gate
       - supervise
     edit: false
-    persona: dual-supervisor
+    persona:
+      $param: supervisor_persona
     policy: review
     knowledge:
       $param: supervise_knowledge

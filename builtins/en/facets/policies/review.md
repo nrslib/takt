@@ -25,6 +25,7 @@ This review is a defensive quality and security audit performed, on request, aga
 | Defect-class re-scan | Before recognizing a defect as resolved, re-scan every path in the same defect class for the original acceptance criteria |
 | Concern handling | Any concern recognized in the prose must either become a finding or be explicitly classified with evidence as non-finding |
 | Behavior evidence | Verify what behavior the tests or logs prove, not merely that they exist |
+| Demonstrability | Distinguish items that environmental factors prevent demonstrating from implementation defects confirmed by current evidence |
 | Boy Scout | Have problems fixed within the task scope when they are in changed code or in areas directly affecting correctness, contracts, or wiring of the change |
 
 ## Finding Decision Invariants
@@ -35,8 +36,25 @@ This review is a defensive quality and security audit performed, on request, aga
 | Evidence is insufficient, the search scope is incomplete, or the result cannot be verified | Record it as unverified scope, not as an issue |
 | Claiming absence or missing wiring | Report a locationless issue only when the original requirement or existing public contract makes existence or wiring necessary and every required route was searched |
 | Questioning whether quality gates were run or their evidence was reported | Not an issue. Evaluating verification results is the final gate's jurisdiction |
+| Environmental factors prevent demonstration, and neither current code nor reproducible evidence confirms a defect requiring correction | Record it as unverified scope; do not create an issue or REJECT |
 
 - APPROVE means zero issues and REJECT means one or more issues. Never pad issues with approvals, summaries, or normal confirmations.
+
+## Items That Cannot Be Demonstrated Due to Environmental Factors
+
+Treat an item separately from an implementation defect only when all of the following conditions establish that environmental factors prevent its demonstration.
+
+- The current execution environment does not provide a required OS, execution capability, external service, credential, or hardware resource
+- Implementation, configuration, or test setup in the target repository cannot provide the missing environmental requirement
+- Repeating work in the same execution environment cannot increase the evidence
+- Every deterministic alternative verification available now and the execution path into the target environment have been verified
+
+| Criteria | Judgment |
+|----------|----------|
+| Current code or reproducible evidence confirms an implementation defect | Apply the normal judgment criteria |
+| All conditions above hold and no evidence indicates an implementation defect | Non-blocking. Record it as unverified scope |
+| Repository configuration or test setup can provide the missing requirement | Do not classify it as environmentally undemonstrable; apply the normal judgment criteria |
+| Demonstration in the target environment is itself an explicit requirement | Record it as a follow-up gate in an environment where it can run, not as implementation remediation |
 
 ## Scope Determination
 
@@ -167,6 +185,13 @@ When the same kind of problem appears in multiple locations, report one represen
 
 - Findings already tracked under separate `finding_id`s (do not break the tracking unit)
 - When a Finding Contract is in use (report every observed problem as an individual raw finding; deduplication is the responsibility of the findings-manager and the ledger)
+
+### Report Completeness
+
+- Finding one issue does not end discovery. On the first review, apply every assigned Policy / Knowledge perspective to the entire cumulative diff
+- On later reviews, prioritize prior open findings, changed locations, and direct impact paths. Before finalizing either APPROVE or REJECT, apply every assigned Policy / Knowledge perspective to that scope; before APPROVE, also perform the final full cumulative-diff review
+- Report every blocking finding verified in the same round. Keep explanations concise and aggregate locations with the same cause, but never omit findings to satisfy an output line limit
+- A correct new finding discovered later remains valid. However, structural or contract findings added across multiple completed review rounds mean the report content has not converged
 
 - **Which file and line number**
 - **What the problem is**

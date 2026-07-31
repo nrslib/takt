@@ -20,10 +20,6 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: review-coding
-    fix_instruction:
-      type: facet_ref
-      facet_kind: instruction
-      default: fix
     supervise_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -196,34 +192,25 @@ steps:
       - condition: approved
         next: supervise
       - condition: needs_fix
-        next: fix
+        next: remediation
 
-  - name: fix
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      $param: development_policy
-    knowledge:
-      $param: development_knowledge
-    provider_options:
-      extends: edit
-    required_permission_mode: edit
-    pass_previous_response: false
-    instruction:
-      $param: fix_instruction
-    output_contracts:
-      report:
-        - name: fix-report.md
-          format: fix-report
-          use_judge: false
+  - name: remediation
+    uses: review-remediation
+    with:
+      plan_policy:
+        $param: review_policy
+      fix_policy:
+        $param: development_policy
+      verification_policy:
+        $param: review_policy
+      fix_knowledge:
+        $param: review_knowledge
     rules:
-      - condition: 修正完了
+      - condition: COMPLETE
         next: review
-      - condition: 再計画が必要
+      - condition: need_replan
         next: plan
-      - condition: 修正を進行できない
+      - condition: ABORT
         next: ABORT
 
   - name: supervise
@@ -257,4 +244,4 @@ steps:
       - condition: need_replan
         next: plan
       - condition: needs_fix
-        next: fix
+        next: remediation

@@ -34,4 +34,4 @@
 **Cognitive load reduction rules:**
 - APPROVE with no resolution confirmations → Summary only (5 lines or fewer)
 - APPROVE with resolution confirmations → Summary and Resolution Confirmations only
-- REJECT → Include only related finding rows and necessary resolution confirmations (30 lines or fewer)
+- REJECT → Include every verified finding and necessary resolution confirmation, aggregating locations with the same cause

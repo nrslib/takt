@@ -6,265 +6,34 @@ workflow_config:
       network_access: true
     opencode:
       network_access: true
-max_steps: 20
-initial_step: plan
-loop_monitors:
-  - cycle:
-      - reviewers
-      - fix_both
-    threshold: 3
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-reviewers-fix
-      rules:
-        - condition: 健全（指摘数が減少、修正が反映されている）
-          next: reviewers
-        - condition: 非生産的（同じ指摘が繰り返される）
-          next: supervise_fix
+max_steps: 21
+initial_step: develop
 steps:
-  - name: plan
-    tags:
-      - plan
-    edit: false
-    persona: planner
-    policy:
-      - design-planning
-    knowledge:
-      - frontend
-      - backend
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    rules:
-      - condition: 要件が明確で実装可能
-        next: implement
-      - condition: ユーザーが質問をしている（実装タスクではない）
-        next: COMPLETE
-      - condition: 要件が不明確、情報不足
-        next: ABORT
-    instruction: plan
-    output_contracts:
-      report:
-        - name: plan.md
-          format: plan-frontend
-  - name: implement
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-      - design-fidelity
-      - screen-api
-    knowledge:
-      - frontend
-      - backend
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    required_permission_mode: edit
-    instruction: implement
-    rules:
-      - condition: 実装が完了した
-        next: reviewers
-      - condition: 実装を進行できない
-        next: ABORT
-      - condition: ユーザーへの確認事項があるためユーザー入力が必要
-        next: implement
-        requires_user_input: true
-        interactive_only: true
-    output_contracts:
-      report:
-        - name: coder-scope.md
-          format: coder-scope
-          use_judge: false
-        - name: coder-decisions.md
-          format: coder-decisions
-          use_judge: false
-  - name: reviewers
-    tags:
-      - review
-    parallel:
-      - name: ai-antipattern-review-2nd
-        tags:
-          - review
-        edit: false
-        persona: ai-antipattern-reviewer
-        policy:
-          - review
-          - ai-antipattern
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
-        instruction: ai-antipattern-review
-        rules:
-          - condition: AI特有の問題なし
-          - condition: AI特有の問題あり
-        output_contracts:
-          report:
-            - name: ai-antipattern-review.md
-              format: ai-antipattern-review
-      - name: supervise
-        tags:
-          - review
-          - supervise
-        edit: false
-        persona: dual-supervisor
-        policy: review
-        knowledge:
-          - frontend
-          - backend
-          - security
-          - architecture
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        instruction: supervise
-        rules:
-          - condition: BLOCKED
-          - condition: すべて問題なし
-          - condition: 要求未達成、テスト失敗、ビルドエラー
-        output_contracts:
-          report:
-            - name: supervisor-validation.md
-              format: supervisor-validation
-            - name: summary.md
-              format: supervisor-summary
-              use_judge: false
-    rules:
-      - condition: any("BLOCKED")
-        next: ABORT
-      - condition: all("AI特有の問題なし", "すべて問題なし")
-        next: COMPLETE
-      - condition: all("AI特有の問題あり", "要求未達成、テスト失敗、ビルドエラー")
-        next: fix_both
-      - condition: any("AI特有の問題あり")
-        next: ai-antipattern-fix
-      - condition: any("要求未達成、テスト失敗、ビルドエラー")
-        next: supervise_fix
-  - name: fix_both
-    uses: mini-fix-both
-    with:
-      fix_policy:
-        - coding
-        - testing
-        - design-fidelity
-      fix_knowledge:
+  - name: develop
+    kind: workflow_call
+    call: mini-core
+    args:
+      plan_policy:
+        - design-planning
+      plan_knowledge:
         - frontend
         - backend
         - security
         - architecture
+      plan_report_format: plan-frontend
+      development_policy:
+        - coding
+        - testing
+        - design-fidelity
+        - screen-api
+      development_knowledge:
+        - frontend
+        - backend
+        - security
+        - architecture
+      supervisor_persona: dual-supervisor
     rules:
-      self:
-        - condition: all("AI問題の修正完了", "監督者の指摘に対する修正が完了した")
-          next: reviewers
-        - condition: any("修正不要（指摘対象ファイル/仕様の確認済み）", "判断できない、情報不足", "修正を進行できない")
-          next: implement
-      parallel:
-        ai-antipattern-fix-parallel:
-          - condition: AI問題の修正完了
-          - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
-          - condition: 判断できない、情報不足
-        supervise_fix_parallel:
-          - condition: 監督者の指摘に対する修正が完了した
-          - condition: 修正を進行できない
-  - name: ai-antipattern-fix
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-      - design-fidelity
-      - screen-api
-    knowledge:
-      - frontend
-      - backend
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    required_permission_mode: edit
-    pass_previous_response: false
-    rules:
-      - condition: AI問題の修正完了
-        next: reviewers
-      - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
-        next: implement
-      - condition: 判断できない、情報不足
-        next: implement
-    instruction: ai-antipattern-fix
-  - name: supervise_fix
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-      - design-fidelity
-      - screen-api
-    knowledge:
-      - frontend
-      - backend
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    required_permission_mode: edit
-    pass_previous_response: false
-    rules:
-      - condition: 監督者の指摘に対する修正が完了した
-        next: reviewers
-      - condition: 修正を進行できない
-        next: implement
-    instruction: fix-supervisor
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT

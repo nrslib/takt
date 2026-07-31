@@ -25,4 +25,4 @@ Use exactly two specialist tables in total: one row per external input in the in
 - APPROVE means zero issues; REJECT means one or more issues. Do not make approvals or summaries issues.
 ```
 
-**Cognitive-load rule:** For APPROVE, include only the summary and necessary evidence; for REJECT, include only relevant rows within 30 lines.
+**Cognitive-load rule:** For APPROVE, include only the summary and necessary evidence; for REJECT, include every verified finding and aggregate locations with the same cause.

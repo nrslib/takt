@@ -1,9 +1,0 @@
-name: ai-antipattern-no-fix
-tags:
-  - review
-edit: false
-persona: architecture-reviewer
-policy: review
-provider_options:
-  extends: review-files
-instruction: arbitrate

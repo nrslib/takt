@@ -118,15 +118,24 @@ export interface CommandQualityGate {
 
 export type QualityGate = string | CommandQualityGate;
 
-export type WorkflowParamType = 'facet_ref' | 'facet_ref[]';
-export type WorkflowParamFacetKind = 'knowledge' | 'policy' | 'instruction' | 'report_format';
+export type WorkflowParamType = 'facet_ref' | 'facet_ref[]' | 'workflow_ref';
+export type WorkflowParamFacetKind = 'knowledge' | 'policy' | 'instruction' | 'persona' | 'report_format';
 export type WorkflowCallArgValue = string | string[];
 
-export interface WorkflowSubworkflowParamConfig {
-  type: WorkflowParamType;
+interface WorkflowFacetSubworkflowParamConfig {
+  type: 'facet_ref' | 'facet_ref[]';
   facetKind: WorkflowParamFacetKind;
   default?: WorkflowCallArgValue;
 }
+
+interface WorkflowReferenceSubworkflowParamConfig {
+  type: 'workflow_ref';
+  default?: string;
+}
+
+export type WorkflowSubworkflowParamConfig =
+  | WorkflowFacetSubworkflowParamConfig
+  | WorkflowReferenceSubworkflowParamConfig;
 
 export interface WorkflowSubworkflowConfig {
   callable?: boolean;

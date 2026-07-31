@@ -62,7 +62,6 @@ vi.mock('../../features/repertoire/github-ref-resolver.js', () => ({
 vi.mock('../../infra/config/paths.js', () => ({
   getBuiltinProviderOptionsDir: (lang: string) => `${mockPaths.root}/builtins/${lang}/provider-options`,
   getBuiltinLanguageStepsDir: (lang: string) => `${mockPaths.root}/builtins/${lang}/steps`,
-  getBuiltinStepsDir: () => `${mockPaths.root}/builtins/steps`,
   getGlobalProviderOptionsDir: () => `${mockPaths.root}/home/.takt/provider-options`,
   getGlobalStepsDir: () => `${mockPaths.root}/home/.takt/steps`,
   getProjectProviderOptionsDir: (projectDir: string) => `${projectDir}/.takt/provider-options`,

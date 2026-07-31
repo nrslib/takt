@@ -1,12 +1,19 @@
 name: peer-review
-description: Specialist parallel peer reviewers (+ ai-antipattern-review-2nd) -> fix planning -> fix loop, followed by merge-readiness review and then supervision.
+description: Specialist parallel peer reviewers (+ ai-antipattern-review-2nd) -> fix planning -> fix -> fix verification loop, followed by merge-readiness review and then supervision.
 subworkflow:
   callable: true
   visibility: internal
   returns:
     - need_replan
   params:
-    arch_knowledge:
+    reviewer_suite:
+      type: workflow_ref
+      default: peer-review-suite-base
+    review_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    review_knowledge_additions:
       type: facet_ref[]
       facet_kind: knowledge
       default:
@@ -18,6 +25,30 @@ subworkflow:
       default:
         - takt
         - architecture
+    plan_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+        - review
+    fix_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+    verification_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+        - review
+    supervisor_persona:
+      type: facet_ref
+      facet_kind: persona
+      default: supervisor
 workflow_config:
   provider_options:
     codex:
@@ -29,83 +60,87 @@ initial_step: reviewers
 loop_monitors:
   - cycle:
       - reviewers
-      - fix-plan
-      - fix
+      - remediation
     threshold: 5
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
-        - condition: Healthy (findings decreasing, fixes applied)
+        - condition: Healthy (fixes progressing and report content converging)
           next: reviewers
-        - condition: Unproductive (same findings repeating)
+        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
+          next: reviewers
+        - condition: The remediation assumptions must change and replanning is actionable
+          next: remediation
+        - condition: No feasible action can satisfy the requirements
           next: ABORT
   - cycle:
       - reviewers
       - final-gate
-      - fix-plan
-      - fix
+      - remediation
     threshold: 5
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
-        - condition: Healthy (findings decreasing, fixes applied)
+        - condition: Healthy (fixes progressing and report content converging)
           next: reviewers
-        - condition: Unproductive (same findings repeating)
+        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
+          next: reviewers
+        - condition: The remediation assumptions must change and replanning is actionable
+          next: remediation
+        - condition: No feasible action can satisfy the requirements
           next: ABORT
 steps:
   - name: reviewers
-    uses: peer-review-reviewers
-    with:
-      arch_knowledge:
-        $param: arch_knowledge
+    kind: workflow_call
+    call:
+      $param: reviewer_suite
+    args:
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge_additions
     rules:
-      self:
-        - condition: all("approved")
-          next: final-gate
-        - condition: any("needs_fix")
-          next: fix-plan
-      parallel:
-        arch-review: [{ condition: approved }, { condition: needs_fix }]
-        security-review: [{ condition: approved }, { condition: needs_fix }]
-        qa-review: [{ condition: approved }, { condition: needs_fix }]
-        testing-review: [{ condition: approved }, { condition: needs_fix }]
-        coding-review: [{ condition: approved }, { condition: needs_fix }]
-        ai-antipattern-review-2nd: [{ condition: approved }, { condition: needs_fix }]
+      - condition: COMPLETE
+        next: final-gate
+      - condition: needs_fix
+        next: remediation
   - name: final-gate
     uses: peer-review-final-gate
     with:
-      arch_knowledge:
-        $param: arch_knowledge
+      merge_readiness_policy:
+        $param: verification_policy
+      merge_readiness_knowledge:
+        $param: review_knowledge_additions
+      supervise_knowledge:
+        $param: review_knowledge_additions
+      supervisor_persona:
+        $param: supervisor_persona
     rules:
       - condition: COMPLETE
         next: COMPLETE
       - condition: needs_fix
-        next: fix-plan
+        next: remediation
       - condition: need_replan
         return: need_replan
       - condition: ABORT
         next: ABORT
-  - name: fix-plan
-    uses: peer-review-fix-plan
+  - name: remediation
+    uses: review-remediation
     with:
+      plan_policy:
+        $param: plan_policy
+      fix_policy:
+        $param: fix_policy
+      verification_policy:
+        $param: verification_policy
       fix_knowledge:
         $param: fix_knowledge
     rules:
-      - condition: Fix plan finalized
-        next: fix
-      - condition: Task-level replanning required
-        return: need_replan
-  - name: fix
-    uses: peer-review-fix
-    with:
-      fix_knowledge:
-        $param: fix_knowledge
-    rules:
-      - condition: Fix complete
+      - condition: COMPLETE
         next: reviewers
-      - condition: Fix plan requires revision
-        next: fix-plan
-      - condition: Cannot proceed, insufficient info
+      - condition: need_replan
         return: need_replan
+      - condition: ABORT
+        next: ABORT

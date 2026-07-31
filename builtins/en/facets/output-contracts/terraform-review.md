@@ -44,4 +44,4 @@ Scope: "In-scope" (fixable in this change) / "Out-of-scope" (existing issue, non
 
 **Cognitive load reduction rules:**
 - APPROVE → Summary only (5 lines or fewer)
-- REJECT → Include only relevant finding rows (30 lines or fewer)
+- REJECT → Include every verified finding row and aggregate locations with the same cause

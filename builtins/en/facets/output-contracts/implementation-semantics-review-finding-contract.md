@@ -24,4 +24,4 @@
 - APPROVE means zero issues; REJECT means one or more issues. Do not make approvals or summaries issues.
 ```
 
-**Cognitive-load rule:** Even for APPROVE, include the one aggregated re-scan row; group like targets and stay within 30 lines. For REJECT, include only relevant rows.
+**Cognitive-load rule:** Even for APPROVE, include the one aggregated re-scan row; group locations with the same cause. For REJECT, do not omit verified findings.

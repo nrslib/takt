@@ -1,0 +1,156 @@
+name: development-core
+description: Shared development flow that injects domain facets into planning, testing, delegated implementation, peer review, and convergent remediation.
+subworkflow:
+  callable: true
+  visibility: internal
+  params:
+    plan_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [design-planning]
+    plan_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture]
+    plan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: plan
+    testing_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing]
+    testing_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture, unit-testing, e2e-testing]
+    testing_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: write-tests-first
+    development_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing]
+    development_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture]
+    implementation_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: implement
+    reviewer_suite:
+      type: workflow_ref
+      default: peer-review-suite-base
+    review_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    review_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing, review]
+    review_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture, unit-testing, e2e-testing]
+    supervisor_persona:
+      type: facet_ref
+      facet_kind: persona
+      default: dual-supervisor
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 50
+initial_step: plan
+steps:
+  - name: plan
+    uses: development-core-plan
+    with:
+      plan_policy:
+        $param: plan_policy
+      plan_knowledge:
+        $param: plan_knowledge
+      plan_instruction:
+        $param: plan_instruction
+    rules:
+      - condition: Requirements are clear and implementable
+        next: write_tests
+      - condition: User is asking a question (not an implementation task)
+        next: COMPLETE
+      - condition: Requirements are unclear or information is insufficient
+        next: ABORT
+
+  - name: write_tests
+    uses: development-core-write-tests
+    with:
+      testing_policy:
+        $param: testing_policy
+      testing_knowledge:
+        $param: testing_knowledge
+      testing_instruction:
+        $param: testing_instruction
+    rules:
+      - condition: Test creation completed
+        next: implement
+      - condition: Test creation skipped because the target is not implemented
+        next: implement
+      - condition: Unable to proceed with test creation
+        next: plan
+      - condition: User input is required to resolve a question
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+
+  - name: implement
+    uses: development-core-implement
+    with:
+      development_policy:
+        $param: development_policy
+      development_knowledge:
+        $param: development_knowledge
+      implementation_instruction:
+        $param: implementation_instruction
+    rules:
+      - condition: Implementation completed
+        next: peer-review
+      - condition: Implementation not started (report only)
+        next: peer-review
+      - condition: Unable to proceed with implementation
+        next: plan
+      - condition: User input is required
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+
+  - name: peer-review
+    kind: workflow_call
+    call: peer-review
+    args:
+      reviewer_suite:
+        $param: reviewer_suite
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge
+      fix_knowledge:
+        $param: review_knowledge
+      plan_policy:
+        $param: review_policy
+      fix_policy:
+        $param: development_policy
+      verification_policy:
+        $param: review_policy
+      supervisor_persona:
+        $param: supervisor_persona
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: need_replan
+        next: plan
+      - condition: ABORT
+        next: ABORT

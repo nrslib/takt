@@ -10,7 +10,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import type { Language } from '../../core/models/index.js';
 import { LanguageSchema } from '../../core/models/schema-base.js';
-import { getLanguageResourcesDir, getResourcesDir } from '../resources/index.js';
+import { getLanguageResourcesDir } from '../resources/index.js';
 
 import type { FacetKind } from 'faceted-prompting';
 import { REPERTOIRE_DIR_NAME } from './constants.js';
@@ -69,10 +69,6 @@ export function getBuiltinWorkflowsDir(lang: Language): string {
 
 export function getBuiltinProviderOptionsDir(lang: Language): string {
   return join(getLanguageResourcesDir(lang), 'provider-options');
-}
-
-export function getBuiltinStepsDir(): string {
-  return join(getResourcesDir(), 'steps');
 }
 
 export function getBuiltinLanguageStepsDir(lang: Language): string {

@@ -10,9 +10,9 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 |----------|-----------------|
 | `simple` | 強いモデルの判断力を信頼するシンプルな開発 workflow です。モデル自身が関連 SKILL を選び、計画 → テスト作成 → 実装 → コードレビュー → 修正ループ → 最終監督 → 完了。 |
 | `simple-mini` | 強いモデルの判断力を信頼する軽量版です。独立したテスト作成と最終監督を省き、計画 → 実装 → コードレビュー → 修正ループ → 完了。 |
-| `default` | 標準の開発 workflow です。テスト先行、ドラフト実装、AIアンチパターン自己レビュー、専門ピアレビュー、merge-readiness ゲート、監督の構成です。計画 → テスト作成 → draft → peer-review（専門レビュー → merge-readiness → 修正ループ）→ 監督 → 完了。 |
+| `default` | 共通開発コアを使う標準テスト先行 workflow です。計画 → テスト作成 → 実装 → 専門ピアレビュー → 修正計画 → 修正 → 検証 → merge-readiness・監督 → 完了。 |
 | `default-mini` | テストなしのミニ開発 workflow です。`default` から `write_tests` を抜き、軽量に回したいタスク向けの構成です。計画 → 実装 → AIアンチパターンレビュー → 並列レビュー → 完了。 |
-| `default-high` | フルスペック開発 workflow です。テスト先行、チームリーダー実装、AIアンチパターンレビュー（仲裁付き）、専門ピアレビュー、merge-readiness ゲート、監督の構成です。計画 → テスト作成 → team-leader draft → peer-review（専門レビュー → merge-readiness → 修正ループ）→ 監督 → 完了。 |
+| `default-high` | 共通開発コアをチームリーダー実装で使い、専門ピアレビュー、収束修正、merge-readiness、監督まで行うフルスペック workflow です。 |
 | `frontend` | フロントエンド特化開発 workflow。React/Next.js に焦点を当てたレビューとナレッジ注入付き。 |
 | `backend` | バックエンド特化開発 workflow。バックエンド、セキュリティ、QA エキスパートレビュー付き。 |
 | `dual` | フロントエンド＋バックエンド開発 workflow。チームリーダー実装、architecture、frontend、security、QA レビューと修正ループ付き。 |
@@ -24,9 +24,9 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | カテゴリ | Workflow | 説明 |
 |---------|----------|-------------|
 | 🚀 クイックスタート | `simple` | 強いモデルの判断力を信頼するシンプルな開発 workflow。モデル自身が関連 SKILL を選び、計画 → テスト作成 → 実装 → コードレビュー → 修正ループ → 最終監督 → 完了。 |
-| | `default` | 標準の開発 workflow です。テスト先行、ドラフト実装、AIアンチパターン自己レビュー、専門ピアレビュー、merge-readiness ゲート、監督の構成です。計画 → テスト作成 → draft → peer-review（専門レビュー → merge-readiness → 修正ループ）→ 監督 → 完了。 |
+| | `default` | 共通開発コアを使い、専門ピアレビュー、収束修正、merge-readiness、監督まで行う標準テスト先行 workflow です。 |
 | | `default-mini` | テストなしのミニ開発 workflow。`default` から `write_tests` を抜いた軽量版。計画 → 実装 → AIアンチパターンレビュー → 並列レビュー → 完了。 |
-| | `default-high` | フルスペック開発 workflow。テスト先行、チームリーダー実装、AIアンチパターンレビュー（仲裁付き）、専門ピアレビュー、merge-readiness ゲート、監督。計画 → テスト作成 → team-leader draft → peer-review（専門レビュー → merge-readiness → 修正ループ）→ 監督 → 完了。 |
+| | `default-high` | 共通開発コアをチームリーダー実装で使い、専門ピアレビュー、収束修正、merge-readiness、監督まで行うフルスペック workflow です。 |
 | | `frontend` | フロントエンド特化開発 workflow。React/Next.js に焦点を当てたレビューとナレッジ注入付き。 |
 | | `backend` | バックエンド特化開発 workflow。バックエンド、セキュリティ、QA エキスパートレビュー付き。 |
 | | `dual` | フロントエンド＋バックエンド開発 workflow: architecture、frontend、security、QA レビューと修正ループ付き。 |
@@ -76,10 +76,10 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `audit-architecture-dual` | フルスタックアーキテクチャ監査。フロントエンド/バックエンドの境界とクロスレイヤー配線を列挙。 |
 | 🧪 テスト | `unit-test` | ユニットテスト特化 workflow: テスト分析 -> テスト実装 -> レビュー -> 修正。 |
 | | `e2e-test` | E2E テスト特化 workflow: E2E 分析 -> E2E 実装 -> レビュー -> 修正 (Vitest ベースの E2E フロー)。 |
-| 🎵 TAKT開発 | `takt-default` | TAKT 開発 workflow: 計画 → テスト作成 → draft（実装 + AI セルフレビュー）→ peer-review（専門レビュー + merge-readiness + 修正）→ 監督 → 完了。 |
+| 🎵 TAKT開発 | `takt-default` | 計画、テスト、実装、レビュー、修正へ TAKT 固有知識を注入して共通開発コアを実行する workflow です。 |
 | | `takt-default-team-high` | takt-default-high の Team Leader 版。実装・修正を Team Leader が分解して member へ委譲し、同じ6観点の compact 専門レビュー、Finding Contract、最終ゲートを実行する。provider/model は固定しない。 |
 | | `takt-default-high` | takt-default の高コスト強化構成。直接実装・直接修正、6観点の compact 専門レビュー、Finding Contract、merge-readiness/supervisor 最終ゲートで構成する。 |
-| | `review-fix-takt-default` | TAKT 開発コードレビュー＋修正ループ: gather → plan → tests → draft → peer-review（専門レビュー + merge-readiness + 修正）→ supervise。 |
+| | `review-fix-takt-default` | レビュー対象を収集してから、TAKT向け共通開発コアで実装、レビュー、収束修正、最終ゲートまで実行します。 |
 | その他 | `research` | リサーチ workflow: planner -> digger -> supervisor。質問せずに自律的にリサーチを実行。 |
 | | `deep-research` | ディープリサーチ workflow: plan -> dig -> analyze -> supervise。発見駆動型の調査で、浮上した疑問を多角的に分析。 |
 | | `magi` | エヴァンゲリオンにインスパイアされた合議システム。3つの AI persona (MELCHIOR, BALTHASAR, CASPER) が分析・投票。 |

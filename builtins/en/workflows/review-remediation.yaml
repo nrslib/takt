@@ -1,0 +1,102 @@
+name: review-remediation
+description: Shared convergence loop that plans review findings across their full scope, fixes them, and verifies completion.
+subworkflow:
+  callable: true
+  visibility: internal
+  returns:
+    - need_replan
+  params:
+    plan_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+        - review
+    fix_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+    verification_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+        - review
+    fix_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 15
+initial_step: fix-plan
+loop_monitors:
+  - cycle:
+      - fix-plan
+      - fix
+      - fix-verifier
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: Healthy (fix progress exists and report content is converging)
+          next: fix-plan
+        - condition: Fixes are incomplete or reports have not converged, but another review and fix is feasible
+          next: fix-plan
+        - condition: The fix approach assumptions must change and replanning is feasible
+          next: fix-plan
+        - condition: No feasible path can satisfy the requirements
+          next: ABORT
+steps:
+  - name: fix-plan
+    uses: peer-review-fix-plan
+    with:
+      plan_policy:
+        $param: plan_policy
+      fix_knowledge:
+        $param: fix_knowledge
+    rules:
+      - condition: Fix plan finalized
+        next: fix
+      - condition: Overall task replanning required
+        return: need_replan
+
+  - name: fix
+    uses: peer-review-fix
+    with:
+      fix_policy:
+        $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+    rules:
+      - condition: Fix completed
+        next: fix-verifier
+      - condition: Fix plan revision required
+        next: fix-plan
+      - condition: Overall task replanning required
+        return: need_replan
+
+  - name: fix-verifier
+    uses: peer-review-fix-verifier
+    with:
+      verification_policy:
+        $param: verification_policy
+      fix_knowledge:
+        $param: fix_knowledge
+    rules:
+      - condition: verified
+        next: COMPLETE
+      - condition: incomplete
+        next: fix
+      - condition: plan_invalid
+        next: fix-plan

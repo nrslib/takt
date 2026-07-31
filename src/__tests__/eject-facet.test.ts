@@ -21,7 +21,6 @@ const mocks = vi.hoisted(() => {
   let globalFacetDir = '';
   let projectWorkflowsDir = '';
   let globalWorkflowsDir = '';
-  let builtinStepsDir = '';
   let builtinLanguageStepsDir = '';
   let projectStepsDir = '';
   let globalStepsDir = '';
@@ -37,8 +36,6 @@ const mocks = vi.hoisted(() => {
     set projectWorkflowsDir(v: string) { projectWorkflowsDir = v; },
     get globalWorkflowsDir() { return globalWorkflowsDir; },
     set globalWorkflowsDir(v: string) { globalWorkflowsDir = v; },
-    get builtinStepsDir() { return builtinStepsDir; },
-    set builtinStepsDir(v: string) { builtinStepsDir = v; },
     get builtinLanguageStepsDir() { return builtinLanguageStepsDir; },
     set builtinLanguageStepsDir(v: string) { builtinLanguageStepsDir = v; },
     get projectStepsDir() { return projectStepsDir; },
@@ -64,7 +61,6 @@ vi.mock('../infra/config/index.js', () => ({
   getGlobalWorkflowsDir: () => mocks.globalWorkflowsDir,
   getProjectWorkflowsDir: () => mocks.projectWorkflowsDir,
   getBuiltinWorkflowsDir: () => mocks.builtinDir,
-  getBuiltinStepsDir: () => mocks.builtinStepsDir,
   getBuiltinLanguageStepsDir: () => mocks.builtinLanguageStepsDir,
   getProjectStepsDir: () => mocks.projectStepsDir,
   getGlobalStepsDir: () => mocks.globalStepsDir,
@@ -80,7 +76,6 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../infra/config/paths.js')>();
   return {
     ...actual,
-    getBuiltinStepsDir: () => mocks.builtinStepsDir,
     getBuiltinLanguageStepsDir: () => mocks.builtinLanguageStepsDir,
     getGlobalStepsDir: () => mocks.globalStepsDir,
   };
@@ -123,7 +118,6 @@ describe('ejectFacet', () => {
     mocks.globalFacetDir = join(dirs.globalDir, 'personas');
     mocks.projectWorkflowsDir = join(dirs.projectDir, '.takt', 'workflows');
     mocks.globalWorkflowsDir = join(dirs.globalDir, 'workflows');
-    mocks.builtinStepsDir = join(dirs.baseDir, 'builtins', 'steps');
     mocks.builtinLanguageStepsDir = join(dirs.baseDir, 'builtins', 'en', 'steps');
     mocks.projectStepsDir = join(dirs.projectDir, '.takt', 'steps');
     mocks.globalStepsDir = join(dirs.globalDir, 'steps');
@@ -190,7 +184,6 @@ describe('ejectBuiltin', () => {
     mocks.globalFacetDir = join(dirs.globalDir, 'personas');
     mocks.projectWorkflowsDir = join(dirs.projectDir, '.takt', 'workflows');
     mocks.globalWorkflowsDir = join(dirs.globalDir, 'workflows');
-    mocks.builtinStepsDir = join(dirs.baseDir, 'builtins', 'steps');
     mocks.builtinLanguageStepsDir = join(dirs.baseDir, 'builtins', 'en', 'steps');
     mocks.projectStepsDir = join(dirs.projectDir, '.takt', 'steps');
     mocks.globalStepsDir = join(dirs.globalDir, 'steps');
@@ -235,9 +228,9 @@ steps:
       - condition: done
         next: COMPLETE
 `);
-    mkdirSync(mocks.builtinStepsDir, { recursive: true });
-    writeFileSync(join(mocks.builtinStepsDir, 'final-gate.yaml'), 'uses: delegate\n');
-    writeFileSync(join(mocks.builtinStepsDir, 'delegate.yaml'), `kind: workflow_call
+    mkdirSync(mocks.builtinLanguageStepsDir, { recursive: true });
+    writeFileSync(join(mocks.builtinLanguageStepsDir, 'final-gate.yaml'), 'uses: delegate\n');
+    writeFileSync(join(mocks.builtinLanguageStepsDir, 'delegate.yaml'), `kind: workflow_call
 call: called
 `);
 
@@ -258,10 +251,10 @@ steps:
       - condition: done
         next: COMPLETE
 `);
-    mkdirSync(mocks.builtinStepsDir, { recursive: true });
+    mkdirSync(mocks.builtinLanguageStepsDir, { recursive: true });
     for (let index = 0; index <= 64; index += 1) {
       writeFileSync(
-        join(mocks.builtinStepsDir, `depth-${index}.yaml`),
+        join(mocks.builtinLanguageStepsDir, `depth-${index}.yaml`),
         index === 64 ? 'instruction: complete\n' : `uses: depth-${index + 1}\n`,
       );
     }
@@ -284,50 +277,14 @@ steps:
         next: COMPLETE
 `);
     mkdirSync(mocks.builtinLanguageStepsDir, { recursive: true });
-    mkdirSync(mocks.builtinStepsDir, { recursive: true });
-    writeFileSync(join(mocks.builtinStepsDir, 'parent.yaml'), 'uses: child\n');
+    mkdirSync(mocks.globalStepsDir, { recursive: true });
+    writeFileSync(join(mocks.builtinLanguageStepsDir, 'parent.yaml'), 'uses: child\n');
     writeFileSync(join(mocks.builtinLanguageStepsDir, 'child.yaml'), 'instruction: language child\n');
-    writeFileSync(join(mocks.builtinStepsDir, 'child.yaml'), 'instruction: shared child\n');
+    writeFileSync(join(mocks.globalStepsDir, 'child.yaml'), 'instruction: global child\n');
 
     await ejectBuiltin('default', { projectDir: dirs.projectDir });
 
-    expect(readFileSync(join(mocks.projectStepsDir, 'child.yaml'), 'utf-8')).toBe('instruction: shared child\n');
-  });
-
-  it.each([
-    ['project', false],
-    ['global', true],
-  ])('should reject %s eject when nested builtin step fragments resolve to different sources', async (_target, global) => {
-    writeFileSync(join(mocks.builtinDir, 'default.yaml'), `name: default
-initial_step: language-parent
-max_steps: 1
-steps:
-  - name: language-parent
-    uses: language-parent
-    rules:
-      - condition: done
-        next: COMPLETE
-  - name: shared-parent
-    uses: shared-parent
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-    mkdirSync(mocks.builtinLanguageStepsDir, { recursive: true });
-    mkdirSync(mocks.builtinStepsDir, { recursive: true });
-    writeFileSync(join(mocks.builtinLanguageStepsDir, 'language-parent.yaml'), 'uses: child\n');
-    writeFileSync(join(mocks.builtinStepsDir, 'shared-parent.yaml'), 'uses: child\n');
-    writeFileSync(join(mocks.builtinLanguageStepsDir, 'child.yaml'), 'instruction: language child\n');
-    writeFileSync(join(mocks.builtinStepsDir, 'child.yaml'), 'instruction: shared child\n');
-
-    await expect(ejectBuiltin('default', { global, projectDir: dirs.projectDir })).rejects.toThrow('resolves to conflicting sources during eject');
-
-    const targetStepsDir = global ? mocks.globalStepsDir : mocks.projectStepsDir;
-    const targetWorkflowsDir = global ? mocks.globalWorkflowsDir : mocks.projectWorkflowsDir;
-    expect(existsSync(join(targetStepsDir, 'language-parent.yaml'))).toBe(false);
-    expect(existsSync(join(targetStepsDir, 'shared-parent.yaml'))).toBe(false);
-    expect(existsSync(join(targetStepsDir, 'child.yaml'))).toBe(false);
-    expect(existsSync(join(targetWorkflowsDir, 'default.yaml'))).toBe(false);
+    expect(readFileSync(join(mocks.projectStepsDir, 'child.yaml'), 'utf-8')).toBe('instruction: language child\n');
   });
 
   it('should resolve nested global step fragments without reading project overrides', async () => {
@@ -369,9 +326,9 @@ steps:
       - condition: done
         next: COMPLETE
 `);
-    mkdirSync(mocks.builtinStepsDir, { recursive: true });
-    writeFileSync(join(mocks.builtinStepsDir, 'parent.yaml'), 'uses: child\n');
-    writeFileSync(join(mocks.builtinStepsDir, 'child.yaml'), 'instruction: builtin child\n');
+    mkdirSync(mocks.builtinLanguageStepsDir, { recursive: true });
+    writeFileSync(join(mocks.builtinLanguageStepsDir, 'parent.yaml'), 'uses: child\n');
+    writeFileSync(join(mocks.builtinLanguageStepsDir, 'child.yaml'), 'instruction: builtin child\n');
 
     const targetStepsDir = global ? mocks.globalStepsDir : mocks.projectStepsDir;
     mkdirSync(targetStepsDir, { recursive: true });
@@ -397,8 +354,8 @@ steps:
       - condition: done
         next: COMPLETE
 `);
-    mkdirSync(mocks.builtinStepsDir, { recursive: true });
-    writeFileSync(join(mocks.builtinStepsDir, 'review.yaml'), 'instruction: builtin review\n');
+    mkdirSync(mocks.builtinLanguageStepsDir, { recursive: true });
+    writeFileSync(join(mocks.builtinLanguageStepsDir, 'review.yaml'), 'instruction: builtin review\n');
 
     const targetStepsDir = global ? mocks.globalStepsDir : mocks.projectStepsDir;
     mkdirSync(targetStepsDir, { recursive: true });
@@ -422,8 +379,8 @@ steps:
       - condition: done
         next: COMPLETE
 `);
-    mkdirSync(mocks.builtinStepsDir, { recursive: true });
-    writeFileSync(join(mocks.builtinStepsDir, 'invalid.yaml'), '- not a step object\n');
+    mkdirSync(mocks.builtinLanguageStepsDir, { recursive: true });
+    writeFileSync(join(mocks.builtinLanguageStepsDir, 'invalid.yaml'), '- not a step object\n');
 
     await expect(ejectBuiltin('default', { projectDir: dirs.projectDir })).rejects.toThrow('must contain one step object');
 

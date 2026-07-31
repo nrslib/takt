@@ -1,113 +1,24 @@
 name: cli
-description: CLI開発ワークフロー（計画 → テスト作成 → draft（実装+AI自己レビュー） → peer-review（並列レビュー+修正） → 監督 → 完了）
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
-max_steps: 50
-initial_step: plan
+description: CLI開発向けファセットを共通開発フローへ注入するワークフロー。
+max_steps: 51
+initial_step: develop
 steps:
-  - name: plan
-    uses: implementation-plan-to-write-tests
-    rules:
-      - condition: 要件が明確で実装可能
-        next: write_tests
-      - condition: ユーザーが質問をしている（実装タスクではない）
-        next: COMPLETE
-      - condition: 要件が不明確、情報不足
-        next: ABORT
-        appendix: |
-          確認事項:
-          - {質問1}
-          - {質問2}
-  - name: write_tests
-    tags:
-      - coding
-      - test-planning
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge:
-      - architecture
-      - unit-testing
-      - e2e-testing
-    provider_options:
-      extends: edit
-    required_permission_mode: edit
-    instruction: write-tests-first
-    rules:
-      - condition: テスト作成が完了した
-        next: draft
-      - condition: テスト対象が未実装のためテスト作成をスキップする
-        next: draft
-      - condition: テスト作成を進行できない
-        next: plan
-      - condition: ユーザーへの確認事項があるためユーザー入力が必要
-        next: write_tests
-        requires_user_input: true
-        interactive_only: true
-    output_contracts:
-      report:
-        - name: test-report.md
-          format: test-report
-  - name: draft
+  - name: develop
     kind: workflow_call
-    call: draft
+    call: development-core
     args:
-      impl_knowledge:
-        - architecture
-        - task-decomposition
-      fix_knowledge:
-        - architecture
+      plan_policy: [design-planning]
+      plan_knowledge: [architecture]
+      testing_policy: [coding, testing]
+      testing_knowledge: [architecture, unit-testing, e2e-testing]
+      development_policy: [coding, testing]
+      development_knowledge: [architecture, task-decomposition]
+      implementation_instruction: team-leader-implement
+      review_policy: [coding, testing, review]
+      review_knowledge: [architecture, unit-testing, e2e-testing]
+      supervisor_persona: supervisor
     rules:
       - condition: COMPLETE
-        next: peer-review
-      - condition: need_replan
-        next: plan
-      - condition: ABORT
-        next: ABORT
-  - name: peer-review
-    kind: workflow_call
-    call: peer-review
-    args:
-      arch_knowledge:
-        - architecture
-      fix_knowledge:
-        - architecture
-    rules:
-      - condition: COMPLETE
-        next: supervise
-      - condition: need_replan
-        next: plan
-      - condition: ABORT
-        next: ABORT
-  - name: supervise
-    tags:
-      - review
-      - supervise
-    edit: false
-    persona: supervisor
-    policy: review
-    knowledge: architecture
-    provider_options:
-      extends: review-readonly
-    pass_previous_response: false
-    rules:
-      - condition: BLOCKED
-        next: ABORT
-      - condition: すべて問題なし
         next: COMPLETE
-      - condition: 要求未達成、テスト失敗、ビルドエラー
-        next: plan
-    instruction: supervise
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: supervisor-summary
-          use_judge: false
+      - condition: ABORT
+        next: ABORT

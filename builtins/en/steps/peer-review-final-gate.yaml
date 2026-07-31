@@ -1,10 +1,25 @@
 params:
-  arch_knowledge:
+  merge_readiness_policy:
+    type: facet_ref[]
+    facet_kind: policy
+  merge_readiness_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
+  supervise_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
+  supervisor_persona:
+    type: facet_ref
+    facet_kind: persona
 name: final-gate
 kind: workflow_call
-call: merge-readiness-final-gate
+call: merge-readiness-dual-final-gate
 args:
+  merge_readiness_policy:
+    $param: merge_readiness_policy
+  merge_readiness_knowledge:
+    $param: merge_readiness_knowledge
   supervise_knowledge:
-    $param: arch_knowledge
+    $param: supervise_knowledge
+  supervisor_persona:
+    $param: supervisor_persona

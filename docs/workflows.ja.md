@@ -117,7 +117,9 @@ call: merge-readiness-finding-contract-final-gate
 
 `uses` を宣言する concrete workflow step は、parallel sub-step を含め、呼び出し側に空でない rule 定義を必ず持ちます。非 parallel fragment の呼び出し側は `rules` 配列を、parallel fragment の呼び出し側は次に示す rule tree を使います。fragment は root と parallel sub-step のどちらにも `rules` を定義できません。これにより、遷移先の step 名を知る workflow が routing を所有します。fragment から別 fragment を参照する中間 `uses` は、concrete workflow がその参照 chain を呼び出すまではこの必須条件の対象外です。loader は rule のコピー、継承、fallback の自動生成を行いません。
 
-step fragment は root の `params` で必須の型付き facet parameter を宣言し、各 `uses` caller は `with` で値を束縛できます。宣言できる型は `facet_ref` / `facet_ref[]`、`facet_kind` は `policy` / `knowledge` / `instruction` / `report_format` で、default と optional parameter はありません。`{ $param: name }` を置けるのは `policy`、`knowledge`、`instruction`、`output_contracts.report[].format`、`workflow_call.args` の直接の値、または nested fragment caller の `with` だけです。nested fragment は lexical scope を使い、outer parameter を暗黙 capture できません。`with: { child_param: { $param: outer_param } }` と明示的に渡します。callable workflow parameter も同じ方法で渡せ、fragment 展開後に解決されます。resolver は未知・不足 binding、scalar/list 不一致、kind 不一致、未宣言参照、未対応 field の参照を拒否します。`params` と `with` は schema 検証前に消費され、`workflow_call` fragment 自身の `args` は保持・展開され、通常の caller overlay は parameter 展開後に適用されます。
+step fragment は root の `params` で必須の型付き parameter を宣言し、各 `uses` caller は `with` で値を束縛できます。facet parameter は `type: facet_ref` / `facet_ref[]` と、`policy` / `knowledge` / `instruction` / `persona` / `report_format` のいずれかの `facet_kind` を指定します。workflow の呼び出し先を表す parameter は `type: workflow_ref` とし、`facet_kind` は指定しません。fragment では default と optional parameter は利用できません。
+
+`{ $param: name }` は宣言と対応する `policy`、`knowledge`、`persona`、`instruction`、`output_contracts.report[].format`、または `workflow_call.call` に配置します。`facet_ref` / `facet_ref[]` parameter は `policy` / `knowledge` の配列要素として固定参照と混在でき、配列値は順序を保ってその位置へ展開されます。空の `facet_ref[]` は要素を追加しません。すべての parameter 型は `workflow_call.args` の直接の値、または nested fragment caller の `with` に渡せます。nested fragment は lexical scope を使い、outer parameter を暗黙 capture できません。`with: { child_param: { $param: outer_param } }` と明示的に渡します。callable workflow parameter も同じ方法で渡せ、fragment 展開後に解決されます。resolver は未知・不足 binding、scalar/list 不一致、kind 不一致、未宣言参照、未対応 field の参照を拒否します。`params` と `with` は schema 検証前に消費され、`workflow_call` fragment 自身の `args` は保持・展開され、通常の caller overlay は parameter 展開後に適用されます。
 
 fragment が parallel step に解決される場合、呼び出し側は通常の配列ではなく strict な rule tree を指定します。`self` に parallel parent の空でない rule 配列を、`parallel` に明示的かつ一意な全 final child 名と各 child の空でない rule 配列を定義します。workflow の parallel step は nested にできないため、child rule tree は無効です。全 child を過不足なく1回ずつ列挙する必要があり、不明な child は指定できません。loader は fragment の展開後に rule tree を適用し、schema 検証前に各 step の通常の `rules` 配列へ変換します。
 
@@ -138,7 +140,7 @@ steps:
           - condition: needs_fix
 ```
 
-呼び出し側のフィールドが fragment を上書きします。object は deep merge、`parallel` などの配列は呼び出し側の配列全体で置換します。ただし、呼び出し側の rule tree は resolver 専用の routing overlay であり、fragment が所有する parallel 構造を置換しません。名前は呼び出し側の `name`、fragment の `name`、`uses` の末尾名の順に決まります。YAML key の記述順は runtime の動作に影響しませんが、例では可読性のため `name`、`uses`、その他の field、`rules` の順に記述します。fragment から別 fragment を参照できますが、循環参照は設定エラーです。bare name は project、global、言語別 builtin、共有 builtin の `steps/` を順に検索し、package workflow では package-local `steps/` が最優先です。各候補層では `.yaml` を `.yml` より先に最初の一致として採用し、nested bare 参照は親 fragment の解決元以降の候補層を検索します。workflow 全体で nested 展開は64段、参照は512個までで、各 fragment は1 MiB以下の読み取り可能な通常ファイルでなければなりません。不明な参照、不正な scoped 参照、object 以外のfragment、読み取り不能なファイル、循環参照、上限超過、絶対 path、traversal、ネストしたpath、symlink の `steps/` root、`steps/` root 外を指す symlink、解決後の `system` step は設定エラーになります。project trust の workflow は、project 外の fragment から `workflow_call` または `allow_git_commit: true` を受け取れません。fragment 由来の `allow_git_commit` は呼び出し側で明示的に `false` を指定して上書きできます。
+呼び出し側のフィールドが fragment を上書きします。object は deep merge、`parallel` などの配列は呼び出し側の配列全体で置換します。ただし、呼び出し側の rule tree は resolver 専用の routing overlay であり、fragment が所有する parallel 構造を置換しません。名前は呼び出し側の `name`、fragment の `name`、`uses` の末尾名の順に決まります。YAML key の記述順は runtime の動作に影響しませんが、例では可読性のため `name`、`uses`、その他の field、`rules` の順に記述します。fragment から別 fragment を参照できますが、循環参照は設定エラーです。bare name は project、global、選択言語の builtin `steps/` を順に検索し、package workflow では package-local `steps/` が最優先です。各候補層では `.yaml` を `.yml` より先に最初の一致として採用し、nested bare 参照は親 fragment の解決元以降の候補層を検索します。workflow 全体で nested 展開は64段、参照は512個までで、各 fragment は1 MiB以下の読み取り可能な通常ファイルでなければなりません。不明な参照、不正な scoped 参照、object 以外のfragment、読み取り不能なファイル、循環参照、上限超過、絶対 path、traversal、ネストしたpath、symlink の `steps/` root、`steps/` root 外を指す symlink、解決後の `system` step は設定エラーになります。project trust の workflow は、project 外の fragment から `workflow_call` または `allow_git_commit: true` を受け取れません。fragment 由来の `allow_git_commit` は呼び出し側で明示的に `false` を指定して上書きできます。
 
 `persona_name` は表示名専用です。config の `provider_routing.personas` は raw `persona` キーに一致し、`provider_routing.tags` は step の任意の `tags` 配列に書かれた順で一致します。同じ provider / model / provider_options leaf では後ろの tag が前の tag を上書きします。
 
@@ -611,7 +613,17 @@ subworkflow:
     impl_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
+      default: []
+    supervisor_persona:
+      type: facet_ref
+      facet_kind: persona
+      default: supervisor
+    reviewer_suite:
+      type: workflow_ref
+      default: peer-review-suite-base
 ```
+
+callable workflow の facet parameter は `facet_ref` / `facet_ref[]` と、`policy` / `knowledge` / `instruction` / `persona` / `report_format` の5種の `facet_kind` を使います。呼び出す callable workflow を表す `workflow_ref` parameter には `facet_kind` を指定せず、`call: { $param: reviewer_suite }` の形で利用できます。default は省略可能です。`facet_ref[]` の引数と default には空配列を指定でき、任意の追加 facet を表現できます。`policy` / `knowledge` では固定参照と scalar/list parameter を混在でき、list parameter は field の記載順を保ってその位置へ平坦化されます。parameter は `workflow_call.args` を通じてさらに下位へ渡すこともできます。
 
 子が継承した `findings.*` 状態や Finding Contract 用出力形式を使う場合、または同じ要件を持つ別のサブワークフローへ委譲する場合は、`requires_finding_contract: true` を指定します。直近の呼出元は `finding_contract` を宣言するか、さらに上位の呼出元へ同じ要件を宣言する必要があります。連鎖内の各子は独自の台帳を作らず、契約所有元と同じ契約・台帳を使用します。
 

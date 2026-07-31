@@ -96,32 +96,30 @@ steps:
       - condition: approved
         next: COMPLETE
       - condition: needs_fix
-        next: fix
+        next: remediation
 
-  - name: fix
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge:
-      - architecture
-    provider_options:
-      extends: edit
-    required_permission_mode: edit
-    pass_previous_response: false
-    instruction: simple-fix
-    output_contracts:
-      report:
-        - name: fix-report.md
-          format: fix-report
-          use_judge: false
+  - name: remediation
+    uses: review-remediation
+    with:
+      plan_policy:
+        - coding
+        - testing
+        - review
+      fix_policy:
+        - coding
+        - testing
+      verification_policy:
+        - coding
+        - testing
+        - review
+      fix_knowledge:
+        - architecture
+        - unit-testing
+        - e2e-testing
     rules:
-      - condition: Fix completed
+      - condition: COMPLETE
         next: review
-      - condition: Replanning is required
+      - condition: need_replan
         next: plan
-      - condition: Unable to proceed with the fix
+      - condition: ABORT
         next: ABORT

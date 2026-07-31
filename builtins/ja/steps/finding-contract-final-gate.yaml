@@ -1,0 +1,6 @@
+kind: workflow_call
+call: merge-readiness-finding-contract-final-gate
+args:
+  supervise_knowledge:
+    - architecture
+    - takt

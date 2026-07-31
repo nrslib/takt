@@ -21,9 +21,13 @@ function loadBuiltinWorkflows(language: 'en' | 'ja') {
 
 describe('builtin implementation status judgment input', () => {
   describe.each(['en', 'ja'] as const)('shipped %s workflows', (language) => {
-    it.each(['frontend-mini', 'backend-mini', 'backend-maintenance'] as const)(
-      'should judge the %s implementation from its Phase 1 response',
-      async (workflowName) => {
+    it.each([
+      { entrypoint: 'frontend-mini', implementationWorkflow: 'mini-core' },
+      { entrypoint: 'backend-mini', implementationWorkflow: 'mini-core' },
+      { entrypoint: 'backend-maintenance', implementationWorkflow: 'development-core' },
+    ] as const)(
+      'should judge the $entrypoint implementation from its Phase 1 response',
+      async ({ entrypoint, implementationWorkflow }) => {
         const reportDir = mkdtempSync(join(tmpdir(), 'takt-implementation-judgment-'));
         const scopeMetadata = 'SCOPE_METADATA_MUST_NOT_REPLACE_IMPLEMENTATION_RESULT';
         const decisionMetadata = 'DECISION_METADATA_MUST_NOT_REPLACE_IMPLEMENTATION_RESULT';
@@ -35,10 +39,10 @@ describe('builtin implementation status judgment input', () => {
           writeFileSync(join(reportDir, 'coder-decisions.md'), decisionMetadata);
           writeFileSync(join(reportDir, 'maintenance-scope.md'), maintenanceMetadata);
 
-          const workflow = loadBuiltinWorkflows(language).get(workflowName)?.config;
+          const workflow = loadBuiltinWorkflows(language).get(implementationWorkflow)?.config;
           const implementStep = workflow?.steps.find((step) => step.name === 'implement');
           if (!implementStep) {
-            throw new Error(`Missing ${workflowName} implement step for ${language}`);
+            throw new Error(`Missing ${entrypoint} implementation step for ${language}`);
           }
 
           const structuredCaller = {

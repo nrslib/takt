@@ -278,6 +278,11 @@ steps:
           - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
           - condition: 判断できない、情報不足
         instruction: ai-antipattern-fix
+        output_contracts:
+          report:
+            - name: ai-antipattern-fix-report.md
+              format: fix-report
+              use_judge: false
       - name: supervise_fix_parallel
         tags:
           - coding
@@ -333,6 +338,11 @@ steps:
       - condition: 判断できない、情報不足
         next: implement
     instruction: ai-antipattern-fix
+    output_contracts:
+      report:
+        - name: ai-antipattern-fix-report.md
+          format: fix-report
+          use_judge: false
   - name: supervise_fix
     tags:
       - coding
@@ -368,12 +378,13 @@ loop_monitors:
         レビュー → 修正のサイクルが {cycle_count} 回繰り返されました。
         Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
 
-        **非生産的の兆候:**
-        - 同じ finding_id が resolved → new を繰り返している
-        - 前の修正の副作用で新しい issue が生まれ続けている
-        - レビュアーの指摘とタスク要件が矛盾しており解消不能
+        - 修正進捗: 既存 finding の受入条件が満たされたか
+        - 報告の収束: 正しい構造・契約上の new findings がレビュー回ごとに追加され続けていないか
+        - 異なる finding であること自体は進捗の根拠にせず、件数は補助情報に留める
       rules:
-        - condition: 健全（新しい問題が減少傾向）
+        - condition: 健全（修正進捗があり、報告内容も収束している）
+          next: fix_both
+        - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
           next: fix_both
         - condition: 非生産的（振動または要件矛盾）
           next: ABORT
@@ -385,12 +396,13 @@ loop_monitors:
         AI修正 → レビューのサイクルが {cycle_count} 回繰り返されました。
         Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
 
-        **非生産的の兆候:**
-        - 同じ finding_id が resolved → new を繰り返している
-        - 前の修正の副作用で新しい issue が生まれ続けている
-        - レビュアーの指摘とタスク要件が矛盾しており解消不能
+        - 修正進捗: 既存 finding の受入条件が満たされたか
+        - 報告の収束: 正しい構造・契約上の new findings がレビュー回ごとに追加され続けていないか
+        - 異なる finding であること自体は進捗の根拠にせず、件数は補助情報に留める
       rules:
-        - condition: 健全（新しい問題が減少傾向）
+        - condition: 健全（修正進捗があり、報告内容も収束している）
+          next: ai-antipattern-fix
+        - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
           next: ai-antipattern-fix
         - condition: 非生産的（振動または要件矛盾）
           next: ABORT
@@ -402,12 +414,13 @@ loop_monitors:
         監督修正 → レビューのサイクルが {cycle_count} 回繰り返されました。
         Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
 
-        **非生産的の兆候:**
-        - 同じ finding_id が resolved → new を繰り返している
-        - 前の修正の副作用で新しい issue が生まれ続けている
-        - レビュアーの指摘とタスク要件が矛盾しており解消不能
+        - 修正進捗: 既存 finding の受入条件が満たされたか
+        - 報告の収束: 正しい構造・契約上の new findings がレビュー回ごとに追加され続けていないか
+        - 異なる finding であること自体は進捗の根拠にせず、件数は補助情報に留める
       rules:
-        - condition: 健全（新しい問題が減少傾向）
+        - condition: 健全（修正進捗があり、報告内容も収束している）
+          next: supervise_fix
+        - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
           next: supervise_fix
         - condition: 非生産的（振動または要件矛盾）
           next: ABORT

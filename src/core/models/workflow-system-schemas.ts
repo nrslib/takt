@@ -211,7 +211,7 @@ export function validateSystemStepFields(
   data: {
     kind?: 'agent' | 'system' | 'workflow_call';
     mode?: 'system';
-    call?: string;
+    call?: unknown;
     system_inputs?: Array<{
       as?: string;
       type?: string;

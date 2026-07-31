@@ -1,0 +1,47 @@
+name: peer-review-suite-cqrs
+description: Shared reviewer suite composed with the CQRS and event-sourcing specialist review.
+subworkflow:
+  callable: true
+  visibility: internal
+  returns:
+    - needs_fix
+  params:
+    review_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+max_steps: 5
+initial_step: reviewers
+steps:
+  - name: reviewers
+    parallel:
+      - name: base-reviewers
+        kind: workflow_call
+        call: peer-review-suite-base
+        args:
+          review_policy_additions:
+            $param: review_policy_additions
+          review_knowledge_additions:
+            $param: review_knowledge_additions
+        rules:
+          - condition: COMPLETE
+          - condition: needs_fix
+      - name: cqrs-es-review
+        uses: peer-review-cqrs-reviewer
+        with:
+          review_policy_additions:
+            $param: review_policy_additions
+          review_knowledge_additions:
+            $param: review_knowledge_additions
+        rules:
+          - condition: approved
+          - condition: needs_fix
+    rules:
+      - condition: all("COMPLETE", "approved")
+        next: COMPLETE
+      - condition: any("needs_fix")
+        return: needs_fix

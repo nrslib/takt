@@ -12,15 +12,17 @@ loop_monitors:
   - cycle:
       - reviewers
       - final-gate
-      - fix
+      - remediation
     threshold: 3
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
-        - condition: 健全（進捗あり）
+        - condition: 健全（修正進捗があり、報告内容も収束している）
           next: reviewers
-        - condition: 非生産的（同じ指摘の反復・修正未反映）
+        - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
+          next: reviewers
+        - condition: 現行ループでは収束せず、最終ゲートの判定が必要である
           next: final-gate
 
 steps:
@@ -194,7 +196,7 @@ steps:
       - condition: all("approved")
         next: final-gate
       - condition: any("needs_fix")
-        next: fix
+        next: remediation
 
   - name: final-gate
     kind: workflow_call
@@ -216,19 +218,31 @@ steps:
       - condition: COMPLETE
         next: COMPLETE
       - condition: needs_fix
-        next: fix
+        next: remediation
       - condition: need_replan
-        next: fix
+        next: remediation
       - condition: ABORT
         next: ABORT
-  - name: fix
-    uses: fix-with-provider-tools
+  - name: remediation
+    uses: review-remediation
     with:
+      plan_policy:
+        - coding
+        - testing
+        - design-fidelity
+        - screen-api
+        - review
       fix_policy:
         - coding
         - testing
         - design-fidelity
         - screen-api
+      verification_policy:
+        - coding
+        - testing
+        - design-fidelity
+        - screen-api
+        - review
       fix_knowledge:
         - frontend
         - backend
@@ -236,7 +250,9 @@ steps:
         - security
         - architecture
     rules:
-      - condition: 修正が完了した
+      - condition: COMPLETE
         next: reviewers
-      - condition: 修正を進行できない
+      - condition: need_replan
         next: final-gate
+      - condition: ABORT
+        next: ABORT

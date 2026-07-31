@@ -68,6 +68,9 @@ describe('workflow step fragment facet params', () => {
   knowledge:
     type: facet_ref[]
     facet_kind: knowledge
+  persona:
+    type: facet_ref
+    facet_kind: persona
   instruction:
     type: facet_ref
     facet_kind: instruction
@@ -78,6 +81,8 @@ policy:
   $param: policies
 knowledge:
   $param: knowledge
+persona:
+  $param: persona
 instruction:
   $param: instruction
 output_contracts:
@@ -91,6 +96,7 @@ output_contracts:
       steps: [caller('typed', {
         policies: ['strict'],
         knowledge: ['architecture'],
+        persona: 'reviewer',
         instruction: 'implement',
         report: 'implementation',
       })],
@@ -100,6 +106,7 @@ output_contracts:
       steps: [{
         policy: ['strict'],
         knowledge: ['architecture'],
+        persona: 'reviewer',
         instruction: 'implement',
         output_contracts: {
           report: [{ name: 'result.md', format: 'implementation' }],
@@ -136,6 +143,38 @@ parallel:
     });
 
     expect(result.raw).toHaveProperty('steps.0.parallel.0.knowledge', ['reviewing']);
+  });
+
+  it('splices empty and populated facet_ref arrays into mixed facet lists', () => {
+    write(projectDir, '.takt/steps/composed.yaml', `params:
+  policy_additions:
+    type: facet_ref[]
+    facet_kind: policy
+  knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
+policy:
+  - base-policy
+  - $param: policy_additions
+  - final-policy
+knowledge:
+  - base-knowledge
+  - $param: knowledge_additions
+  - final-knowledge
+`);
+
+    const result = resolve({
+      steps: [caller('composed', {
+        policy_additions: [],
+        knowledge_additions: ['domain-a', 'domain-b'],
+      })],
+    });
+
+    expect(result.raw).toHaveProperty('steps.0.policy', ['base-policy', 'final-policy']);
+    expect(result.raw).toHaveProperty(
+      'steps.0.knowledge',
+      ['base-knowledge', 'domain-a', 'domain-b', 'final-knowledge'],
+    );
   });
 
   it('passes a bound value through an explicitly mapped nested fragment scope', () => {
@@ -378,6 +417,42 @@ steps:
     expect(loaded.steps[0]).toMatchObject({
       kind: 'workflow_call',
       args: { knowledge: ['domain'] },
+    });
+  });
+
+  it('passes a callable workflow_ref param through a fragment call field', () => {
+    write(projectDir, '.takt/steps/delegate.yaml', `params:
+  target:
+    type: workflow_ref
+kind: workflow_call
+call:
+  $param: target
+`);
+    const path = write(projectDir, '.takt/workflows/callable.yaml', `name: callable
+initial_step: delegate
+subworkflow:
+  callable: true
+  params:
+    target:
+      type: workflow_ref
+steps:
+  - name: delegate
+    uses: delegate
+    with:
+      target:
+        $param: target
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+    const loaded = loadWorkflowFromFile(path, projectDir, {
+      callableArgs: { target: 'implementation' },
+    });
+
+    expect(loaded.steps[0]).toMatchObject({
+      kind: 'workflow_call',
+      call: 'implementation',
     });
   });
 
