@@ -107,6 +107,7 @@ import {
 } from './phase1-empty-recovery.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import {
+  assertFindingReviewPublicationSourceBindings,
   createFindingReviewPublication,
   createPendingFindingReviewNormalization,
   loadFindingReviewPublication,
@@ -120,6 +121,7 @@ import {
   type FindingReviewPublicationIdentity,
   type FindingReviewPublicationProtocol,
   type ReviewerExecutionIdentity,
+  FindingReviewPublicationSourceBindingError,
 } from '../findings/review-publication.js';
 import {
   FINDING_REVIEW_PUBLICATION_SCHEMA_REF,
@@ -1432,14 +1434,25 @@ export class StepExecutor {
       // post-hoc 検証は寛容版（validationSchema）を優先する。provider へ渡る
       // 生成拘束用 schema（strict 様式）とは役割が異なる — 詳細は
       // WorkflowStructuredOutput の doc コメント参照。
+      const validationSchema = step.structuredOutput.validationSchema
+        ?? step.structuredOutput.schema;
       validateStructuredOutputAgainstSchema(
         structuredOutput,
-        step.structuredOutput.validationSchema ?? step.structuredOutput.schema,
+        validationSchema,
       );
       structuredOutput = this.structuredOutputNormalizers.normalize(structuredOutput, {
         step,
         language: this.deps.getLanguage(),
       });
+      validateStructuredOutputAgainstSchema(structuredOutput, validationSchema);
+      if (step.structuredOutput.schemaRef === FINDING_REVIEW_PUBLICATION_SCHEMA_REF) {
+        const reportContent = findingReviewPublicationReportContent(structuredOutput);
+        const rawFindings = structuredOutput.rawFindings;
+        if (reportContent === undefined || !Array.isArray(rawFindings)) {
+          throw new Error('Finding review publication projection failed validation');
+        }
+        assertFindingReviewPublicationSourceBindings(reportContent, rawFindings);
+      }
       if (structuredOutput === response.structuredOutput) {
         return {
           response,
@@ -1480,6 +1493,9 @@ export class StepExecutor {
         invalidKind: error instanceof StructuredOutputSchemaError
           ? 'schema_config'
           : 'model_output',
+        ...(error instanceof FindingReviewPublicationSourceBindingError
+          ? { correctionScope: 'raw_excerpt_single_edit' as const }
+          : {}),
         ...(error instanceof StructuredOutputValueValidationError
           ? { invalidIssues: error.issues }
           : {}),

@@ -612,15 +612,40 @@ function assertPublicationRawFindings(
     throw new Error(`Finding review publication field exceeded its limit: ${fieldViolation}`);
   }
 
+  assertFindingReviewPublicationSourceBindings(reportContent, rawFindings);
+}
+
+export class FindingReviewPublicationSourceBindingError extends Error {
+  readonly rawFindingIndex: number;
+
+  constructor(rawFindingIndex: number, detail: string, cause?: unknown) {
+    super(
+      `Finding review publication rawFindings[${rawFindingIndex}] has invalid source binding: ${detail}`,
+      cause === undefined ? undefined : { cause },
+    );
+    this.name = 'FindingReviewPublicationSourceBindingError';
+    this.rawFindingIndex = rawFindingIndex;
+  }
+}
+
+export function assertFindingReviewPublicationSourceBindings(
+  reportContent: string,
+  rawFindings: readonly unknown[],
+): void {
   for (const [index, item] of rawFindings.entries()) {
     if (typeof item !== 'object' || item === null || Array.isArray(item)) {
-      throw new Error(`Finding review publication rawFindings[${index}] is not an object`);
+      throw new FindingReviewPublicationSourceBindingError(index, 'item is not an object');
     }
     const rawExcerpt = Reflect.get(item, 'rawExcerpt');
     if (typeof rawExcerpt !== 'string' || rawExcerpt.length === 0) {
-      throw new Error(`Finding review publication rawFindings[${index}] requires rawExcerpt`);
+      throw new FindingReviewPublicationSourceBindingError(index, 'requires rawExcerpt');
     }
-    bindReviewerReportExcerpt(reportContent, rawExcerpt);
+    try {
+      bindReviewerReportExcerpt(reportContent, rawExcerpt);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new FindingReviewPublicationSourceBindingError(index, detail, error);
+    }
   }
 }
 

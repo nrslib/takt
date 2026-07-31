@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
-import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
+import {
+  createStructuredOutputNormalizerRegistry,
+  type StructuredOutputNormalizerRegistry,
+} from '../core/workflow/engine/structured-output-normalizer.js';
 import type { AgentResponse, WorkflowState } from '../core/models/types.js';
 import type { FindingIntakeNormalizeConfig } from '../core/models/config-types.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
@@ -31,6 +34,7 @@ vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) =
 import { executeAgent } from '../agents/agent-usecases.js';
 import { ingestFindingContractResults } from '../core/workflow/findings/contract-intake.js';
 import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
+import { createFindingReviewPublicationStructuredOutput } from '../core/workflow/findings/review-publication-structured-output.js';
 import { RawFindingsOutputValidationJsonSchema } from '../core/models/finding-schemas.js';
 import { createFindingLedgerStore, type FindingManagerValidationReport } from '../core/workflow/findings/store.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
@@ -104,6 +108,7 @@ describe('StepExecutor', () => {
     normalizerResponses: readonly AgentResponse[],
     reportContentOverride?: string,
     intakeNormalizeOverride?: FindingIntakeNormalizeConfig,
+    structuredOutputNormalizersOverride?: StructuredOutputNormalizerRegistry,
   ) {
     const reportContent = reportContentOverride ?? [
       '# Architecture Review',
@@ -209,7 +214,8 @@ describe('StepExecutor', () => {
       getCwd: () => cwd,
       getProjectCwd: () => cwd,
       getReportDir: () => runPaths.reportsRel,
-      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+      structuredOutputNormalizers: structuredOutputNormalizersOverride
+        ?? createStructuredOutputNormalizerRegistry([]),
       structuredCaller: { normalizeFindingIntake },
       intakeNormalize: intakeNormalizeOverride ?? {
         provider: 'mock',
@@ -262,6 +268,117 @@ describe('StepExecutor', () => {
       resolveStepProviderModel,
     };
   }
+
+  it('structured publication正規化は投影後のsource binding違反を訂正可能なmodel output不正にする', () => {
+    const harness = createPlainTextPublicationHarness([]);
+    const step = {
+      ...harness.step,
+      structuredOutput: createFindingReviewPublicationStructuredOutput(),
+    };
+    const candidate = {
+      rawFindingId: 'raw-1',
+      relation: 'new',
+      targetFindingIds: [],
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Cleanup path is incorrect',
+      description: 'The cleanup path is incorrect.',
+      suggestion: null,
+      target: { kind: 'code', paths: ['src/example.ts'] },
+      evidenceRequests: [],
+    };
+    const invalid = harness.executor.normalizeStructuredOutputWithDiagnostics(step, {
+      persona: 'reviewer',
+      status: 'done',
+      content: '',
+      structuredOutput: {
+        reportContent: 'Use finally to close the resource.',
+        rawFindings: [{ rawExcerpt: 'finally`', candidate }],
+      },
+      timestamp: new Date('2026-07-31T00:00:00.000Z'),
+    });
+
+    expect(invalid).toMatchObject({
+      invalidKind: 'model_output',
+      correctionScope: 'raw_excerpt_single_edit',
+      invalidDetail: expect.stringContaining('rawFindings[0]'),
+    });
+
+    const valid = harness.executor.normalizeStructuredOutputWithDiagnostics(step, {
+      persona: 'reviewer',
+      status: 'done',
+      content: '',
+      structuredOutput: {
+        reportContent: 'Use finally to close the resource.',
+        rawFindings: [{ rawExcerpt: 'finally', candidate }],
+      },
+      timestamp: new Date('2026-07-31T00:00:01.000Z'),
+    });
+    expect(valid.invalidDetail).toBeUndefined();
+  });
+
+  it('structured output normalizerが最終schemaまたはsource bindingを無効化した場合は拒否する', () => {
+    const candidate = {
+      rawFindingId: 'raw-1',
+      relation: 'new',
+      targetFindingIds: [],
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Cleanup path is incorrect',
+      description: 'The cleanup path is incorrect.',
+      suggestion: null,
+      target: { kind: 'code', paths: ['src/example.ts'] },
+      evidenceRequests: [],
+    };
+    const normalizeWith = (
+      normalize: (value: Record<string, unknown>) => Record<string, unknown>,
+    ) => {
+      const registry = createStructuredOutputNormalizerRegistry([{
+        supports: () => true,
+        normalize,
+      }]);
+      const harness = createPlainTextPublicationHarness(
+        [],
+        undefined,
+        undefined,
+        registry,
+      );
+      return harness.executor.normalizeStructuredOutputWithDiagnostics(
+        {
+          ...harness.step,
+          structuredOutput: createFindingReviewPublicationStructuredOutput(),
+        },
+        {
+          persona: 'reviewer',
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            reportContent: 'Use finally to close the resource.',
+            rawFindings: [{ rawExcerpt: 'finally', candidate }],
+          },
+          timestamp: new Date('2026-07-31T00:00:00.000Z'),
+        },
+      );
+    };
+
+    const invalidBinding = normalizeWith((value) => ({
+      ...value,
+      rawFindings: [{ rawExcerpt: 'not present in the report', candidate }],
+    }));
+    expect(invalidBinding).toMatchObject({
+      invalidKind: 'model_output',
+      correctionScope: 'raw_excerpt_single_edit',
+      invalidDetail: expect.stringContaining('rawFindings[0]'),
+    });
+
+    const invalidSchema = normalizeWith((value) => ({
+      ...value,
+      rawFindings: 'invalid',
+    }));
+    expect(invalidSchema.invalidKind).toBe('model_output');
+    expect(invalidSchema.invalidDetail).toBeDefined();
+    expect(invalidSchema.correctionScope).toBeUndefined();
+  });
 
   it('plain-text reviewer reportを保存してから隔離normalizerの結果をpublicationする', async () => {
     const rawFinding = {

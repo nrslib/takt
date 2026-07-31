@@ -9,7 +9,7 @@
  *
  * 厳守事項:
  * - correction では raw 集合・本文・severity 等の変更を禁止する
- *   （findRegenerationContractViolation が決定的に検証し、違反は訂正全体を不採用）。
+ *   （canonical projection の regeneration contract が決定的に検証し、違反は訂正全体を不採用）。
  * - correction 後も ambiguity-origin taint は保持する。訂正結果は manager の
  *   解釈材料には使えるが、既存 finding を閉じる権限の根拠にはならない —
  *   呼び出し元は返り値の clarification（engine が作るメタデータ。LLM 出力からは
@@ -33,6 +33,7 @@ import {
   assertCorrectionRawFindingsWithinLimits,
   assertFindingReviewPublicationCorrectionInput,
   buildRelationClarificationLedgerProjection,
+  findRelationClarificationContractViolation,
   type FindingReviewPublicationCorrectionInput,
   type RelationClarificationLedgerProjection,
 } from './review-publication-correction.js';
@@ -222,7 +223,7 @@ export function buildRelationCoherenceRegenerationInstruction(
     'Some of your raw findings have contradictory relation/targetFindingIds labeling against the current finding ledger:',
     ...mismatchBlock,
     '',
-    'Fix ONLY the relation and targetFindingIds fields of the raw findings listed above. Do NOT change any other field (title, description, severity, suggestion, familyTag, evidence), do NOT add or remove raw findings, and do NOT touch raw findings that are not listed.',
+    'Fix ONLY the relation and targetFindingIds fields of the raw findings listed above. Preserve count and order, and keep every protected field equivalent under the canonical reviewer projection; representational differences discarded by that projection are permitted. Do not touch raw findings that are not listed.',
     ...ledgerRules,
     ...publicationRules,
   ].join('\n');
@@ -358,7 +359,11 @@ export async function clarifyAmbiguousRawRelationsOnce(
     regeneratedItems,
     `Step "${input.stepName}" relation clarification output`,
   );
-  const violation = findRegenerationContractViolation(rawItems, regeneratedItems, mismatches);
+  const violation = findRelationClarificationContractViolation(
+    rawItems,
+    regeneratedItems,
+    new Set(mismatches.map((mismatch) => mismatch.rawFindingId)),
+  );
   if (violation !== undefined) {
     throw new Error(
       `Relation clarification violated the regeneration contract for step "${input.stepName}": ${violation}`,
@@ -373,69 +378,4 @@ export async function clarifyAmbiguousRawRelationsOnce(
     reviewerRawResourceEnvelope: renormalized.reviewerRawResourceEnvelope,
     clarification,
   };
-}
-
-/** Content identity for the regeneration contract. relation / targetFindingId は含めない（それらの付け替えが correction の目的）。 */
-function rawContentKey(fields: ReturnType<typeof extractLenientRawFields>): string {
-  return JSON.stringify([
-    fields.title ?? '',
-    fields.description ?? '',
-    fields.evidence ?? [],
-    fields.severity ?? '',
-    fields.suggestion ?? '',
-    fields.familyTag ?? '',
-  ]);
-}
-
-/**
- * regeneration contract: reviewer は指摘された raw の relation /
- * targetFindingId だけを付け替えてよい。決定的に検証する:
- *
- * - rawFindingId の集合が元と完全一致（追加・削除・重複なし）
- * - 全 raw の内容（title/description/location/severity/suggestion/familyTag）不変
- * - 指摘されていない raw は relation / targetFindingId も不変
- *
- * 1件でも違反があれば訂正全体を不採用にし、元の出力を使う。
- */
-export function findRegenerationContractViolation(
-  original: readonly unknown[],
-  regenerated: readonly unknown[],
-  mismatches: readonly AmbiguousRawMismatch[],
-): string | undefined {
-  const flaggedIds = new Set(mismatches.map((mismatch) => mismatch.rawFindingId));
-  const originalFields = original.map((item) => extractLenientRawFields(item));
-  const originalById = new Map(
-    originalFields
-      .filter((fields) => fields.rawFindingId !== undefined)
-      .map((fields) => [fields.rawFindingId!, fields]),
-  );
-  if (regenerated.length !== original.length) {
-    return `raw finding count changed from ${original.length} to ${regenerated.length}`;
-  }
-  const seen = new Set<string>();
-  for (const item of regenerated) {
-    const fields = extractLenientRawFields(item);
-    if (fields.rawFindingId === undefined) {
-      return 'regenerated output contains a raw finding without rawFindingId';
-    }
-    if (seen.has(fields.rawFindingId)) {
-      return `duplicate rawFindingId "${fields.rawFindingId}" in regenerated output`;
-    }
-    seen.add(fields.rawFindingId);
-    const originalRaw = originalById.get(fields.rawFindingId);
-    if (originalRaw === undefined) {
-      return `regenerated output added rawFindingId "${fields.rawFindingId}"`;
-    }
-    if (rawContentKey(fields) !== rawContentKey(originalRaw)) {
-      return `regenerated output changed the content of rawFindingId "${fields.rawFindingId}"`;
-    }
-    if (!flaggedIds.has(fields.rawFindingId)) {
-      const relationChanged = fields.relation !== originalRaw.relation
-        || JSON.stringify(fields.targetFindingIds) !== JSON.stringify(originalRaw.targetFindingIds);
-      if (relationChanged) {
-        return `regenerated output changed relation/targetFindingIds of non-flagged rawFindingId "${fields.rawFindingId}"`;
-      }
-    }
-  }
-  return undefined;
 }

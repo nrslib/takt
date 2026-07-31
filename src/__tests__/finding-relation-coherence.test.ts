@@ -536,6 +536,51 @@ describe('clarifyAmbiguousRawRelationsOnce: 再生成契約 (codex B5 / 設計�
     ])).rejects.toThrow('violated the regeneration contract');
   });
 
+  it.each([
+    {
+      field: 'rawExcerpt',
+      mutate: () => ({ ...originalRaw, rawExcerpt: 'A different report excerpt.' }),
+    },
+    {
+      field: 'target',
+      mutate: () => ({
+        ...originalRaw,
+        candidate: {
+          ...originalRaw.candidate,
+          target: { kind: 'code', paths: ['src/changed.ts'] },
+        },
+      }),
+    },
+    {
+      field: 'evidenceRequests',
+      mutate: () => ({
+        ...originalRaw,
+        candidate: {
+          ...originalRaw.candidate,
+          evidenceRequests: [{
+            kind: 'file_quote',
+            path: 'src/changed.ts',
+            startLine: 1,
+            endLine: 1,
+            verbatimExcerpt: 'changed evidence',
+          }],
+        },
+      }),
+    },
+  ])('対象 raw の $field 変更も fail-closed で拒否する', async ({ mutate }) => {
+    await expect(runWithRegeneratedRawFindings([
+      mutate(),
+      bystanderRaw,
+    ])).rejects.toThrow('violated the regeneration contract');
+  });
+
+  it('raw findingの並べ替えもfail-closedで拒否する', async () => {
+    await expect(runWithRegeneratedRawFindings([
+      bystanderRaw,
+      originalRaw,
+    ])).rejects.toThrow('violated the regeneration contract');
+  });
+
   it('executeAgent の例外時は fail-closed で取り込みを止める', async () => {
     executeAgentMock.mockReset();
     executeAgentMock.mockRejectedValueOnce(new Error('provider crashed mid-call'));
