@@ -12,10 +12,10 @@ A comprehensive catalog of all builtin workflows and personas included with TAKT
 | `simple-mini` | A lightweight variant that trusts a capable model's judgment. Omits dedicated test writing and final supervision: plan → implement → code review → fix loop → complete. |
 | `default` | Standard test-first development workflow using the shared development core: plan → write tests → implement → specialist peer review → fix planning → fix → verification → merge-readiness and supervision → complete. |
 | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
-| `default-high` | Full-spec workflow using the shared development core with team-leader implementation, specialist peer review, convergent remediation, merge-readiness, and supervision. |
+| `default-high` | Full-spec workflow using the shared development core with direct implementation, specialist peer review, convergent remediation, merge-readiness, and supervision. |
 | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
 | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
-| `dual` | Frontend + backend development workflow with team-leader implementation, architecture, frontend, security, QA reviews with fix loops. |
+| `dual` | Frontend + backend development workflow with direct implementation, architecture, frontend, security, QA reviews with fix loops. |
 
 ## All Builtin Workflows
 
@@ -26,7 +26,7 @@ Organized by category.
 | 🚀 Quick Start | `simple` | A simple development workflow that trusts a capable model's judgment. The model selects relevant available skills for plan → write tests → implement → code review → fix loop → final supervision → complete. |
 | | `default` | Standard test-first workflow using the shared development core, specialist peer review, convergent remediation, merge-readiness, and supervision. |
 | | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
-| | `default-high` | Full-spec workflow using the shared development core with team-leader implementation, specialist peer review, convergent remediation, merge-readiness, and supervision. |
+| | `default-high` | Full-spec workflow using the shared development core with direct implementation, specialist peer review, convergent remediation, merge-readiness, and supervision. |
 | | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
 | | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
 | | `dual` | Frontend + backend development workflow: architecture, frontend, security, QA reviews with fix loops. |
