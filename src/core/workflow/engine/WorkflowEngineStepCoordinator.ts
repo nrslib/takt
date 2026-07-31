@@ -17,6 +17,7 @@ import type {
   WorkflowStepExecutionEventContext,
 } from '../types.js';
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
+import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import { determineRuleTransition, type WorkflowRuleTransition } from './transitions.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 
@@ -112,6 +113,7 @@ interface WorkflowEngineStepCoordinatorDeps {
   workflowCallRunner: {
     run: (
       step: WorkflowStep & { call: string },
+      execution: WorkflowCallExecutionToken,
       runtime?: RuntimeStepResolution,
     ) => Promise<StepRunResult>;
     resolveRuntime: (step: WorkflowStep & { call: string }) => RuntimeStepResolution;
@@ -156,6 +158,7 @@ export class WorkflowEngineStepCoordinator {
     runtime?: RuntimeStepResolution,
     stepIteration?: number,
     preparedExecution?: PreparedNormalStepExecution,
+    workflowCallExecution?: WorkflowCallExecutionToken,
   ): Promise<StepRunResult> {
     const updateSession = this.deps.updatePersonaSession;
     let result: StepRunResult;
@@ -201,7 +204,10 @@ export class WorkflowEngineStepCoordinator {
         instruction: '',
       };
     } else if (isWorkflowCallStep(step)) {
-      result = await this.deps.workflowCallRunner.run(step, runtime);
+      if (workflowCallExecution === undefined) {
+        throw new Error(`workflow_call step "${step.name}" execution was not activated`);
+      }
+      result = await this.deps.workflowCallRunner.run(step, workflowCallExecution, runtime);
     } else {
       result = await this.deps.stepExecutor.runNormalStep(
         step,

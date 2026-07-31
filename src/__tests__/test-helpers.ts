@@ -91,7 +91,7 @@ export function createWorkflowOccurrenceTestHarness(
       step: WorkflowStep,
       _iteration: number,
       occurrence: number,
-    ): void => {
+    ): undefined => {
       activeWorkflowStack = [
         ...resumeStackPrefix,
         buildWorkflowResumePointEntry(
@@ -102,7 +102,9 @@ export function createWorkflowOccurrenceTestHarness(
           state.stepIterations,
         ),
       ];
+      return undefined;
     },
+    cancelPendingStepActivation: () => {},
     getCurrentWorkflowStack: (): WorkflowResumePointEntry[] | undefined => (
       activeWorkflowStack
     ),

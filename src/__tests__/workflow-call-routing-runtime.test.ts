@@ -97,16 +97,27 @@ describe('WorkflowCallExecutor routing runtime', () => {
       providerRouting: undefined,
     } as never;
 
-    occurrenceHarness.claimStepOccurrence(request.step);
-    await executor.execute(request, { syncParentState: true, resumeStackPrefix: [] });
+    const occurrence = occurrenceHarness.claimStepOccurrence(request.step);
+    await executor.execute({
+      ...request,
+      preparedExecution: executor.prepare(request.step, childWorkflow, occurrence, []),
+    }, { syncParentState: true });
     const otherRequest = {
       ...request,
       step: { ...request.step, name: 'delegate-other' },
     };
-    occurrenceHarness.claimStepOccurrence(otherRequest.step);
+    const otherOccurrence = occurrenceHarness.claimStepOccurrence(otherRequest.step);
     await executor.execute(
-      otherRequest,
-      { syncParentState: true, resumeStackPrefix: [] },
+      {
+        ...otherRequest,
+        preparedExecution: executor.prepare(
+          otherRequest.step,
+          childWorkflow,
+          otherOccurrence,
+          [],
+        ),
+      },
+      { syncParentState: true },
     );
 
     expect(createdOptions[0]?.autoRoutingEstimator).toBe(parentEstimator);
@@ -179,8 +190,11 @@ describe('WorkflowCallExecutor routing runtime', () => {
       personaProviders: undefined,
       providerRouting: undefined,
     } as never;
-    occurrenceHarness.claimStepOccurrence(request.step);
-    await executor.execute(request, { syncParentState: true, resumeStackPrefix: [] });
+    const occurrence = occurrenceHarness.claimStepOccurrence(request.step);
+    await executor.execute({
+      ...request,
+      preparedExecution: executor.prepare(request.step, childWorkflow, occurrence, []),
+    }, { syncParentState: true });
 
     expect(createdOptions[0]?.autoRouting).toBe(childAutoRouting);
     expect(createdOptions[0]?.autoRoutingEstimator).toBe(parentEstimator);
@@ -241,8 +255,16 @@ describe('WorkflowCallExecutor routing runtime', () => {
       personaProviders: undefined,
       providerRouting: undefined,
     } as never;
-    occurrenceHarness.claimStepOccurrence(request.step);
-    await executor.execute(request, { syncParentState: true, resumeStackPrefix: [] });
+    const occurrence = occurrenceHarness.claimStepOccurrence(request.step);
+    await executor.execute({
+      ...request,
+      preparedExecution: executor.prepare(
+        request.step,
+        request.childWorkflow,
+        occurrence,
+        [],
+      ),
+    }, { syncParentState: true });
 
     expect(createdOptions[0]?.autoRoutingEstimator).not.toBe(parentEstimator);
     expect(createWorkRequirementEstimatorMock).toHaveBeenCalledWith(expect.objectContaining({

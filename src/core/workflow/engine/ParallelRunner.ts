@@ -1132,35 +1132,46 @@ export class ParallelRunner {
       throw new Error(`Parallel sub-step "${subStep.name}" is not a workflow_call`);
     }
 
-    this.deps.claimStepOccurrence(subStep, resumeStackPrefix);
+    const occurrence = this.deps.claimStepOccurrence(subStep, resumeStackPrefix);
     const workflowCallRunner = this.deps.getWorkflowCallRunner?.();
     if (!workflowCallRunner) {
       throw new Error(`Parallel workflow_call sub-step "${subStep.name}" requires workflowCallRunner`);
     }
-    const operationRuntime = runtimeForOperation(
-      runtime,
-      reviewerOperationOrigin(subStep.name),
-    );
-    const subRuntime = operationRuntime?.fallback
-      ? operationRuntime
-      : workflowCallRunner.resolveRuntime(subStep);
-    const result = await workflowCallRunner.runIsolated(
+    const workflowCallExecution = workflowCallRunner.activateInvocation(
       subStep,
-      subRuntime,
+      state.iteration,
+      occurrence,
       resumeStackPrefix,
     );
-    return {
-      subStep,
-      response: result.result.response,
-      instruction: result.result.instruction,
-      providerInfo: result.result.providerInfo,
-      ...(result.result.terminalOperation !== undefined
-        ? { terminalOperation: result.result.terminalOperation }
-        : {}),
-      durationMs: Math.max(0, result.result.response.timestamp.getTime() - startedAt),
-      workflowCallSessionUpdates: result.sessionUpdates,
-      workflowCallStateSync: result.stateSync,
-    };
+    try {
+      const operationRuntime = runtimeForOperation(
+        runtime,
+        reviewerOperationOrigin(subStep.name),
+      );
+      const subRuntime = operationRuntime?.fallback
+        ? operationRuntime
+        : workflowCallRunner.resolveRuntime(subStep);
+      const result = await workflowCallRunner.runIsolated(
+        subStep,
+        subRuntime,
+        resumeStackPrefix,
+        workflowCallExecution,
+      );
+      return {
+        subStep,
+        response: result.result.response,
+        instruction: result.result.instruction,
+        providerInfo: result.result.providerInfo,
+        ...(result.result.terminalOperation !== undefined
+          ? { terminalOperation: result.result.terminalOperation }
+          : {}),
+        durationMs: Math.max(0, result.result.response.timestamp.getTime() - startedAt),
+        workflowCallSessionUpdates: result.sessionUpdates,
+        workflowCallStateSync: result.stateSync,
+      };
+    } finally {
+      workflowCallExecution.cancel();
+    }
   }
 
   private requireWorkflowCallResumeStack(

@@ -47,6 +47,7 @@ import { resolveEffectiveAutoRouting } from '../auto-routing/effective-auto-rout
 import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
 import { runWithWorkflowSpan, type WorkflowSpanOutcome, type WorkflowSpanParams } from '../observability/workflowSpans.js';
 import { WorkflowEngineStepCoordinator } from './WorkflowEngineStepCoordinator.js';
+import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import {
   applyRuntimeEnvironment,
   assertTaskPrefixPair,
@@ -449,7 +450,8 @@ export class WorkflowEngine extends EventEmitter {
               state: this.state,
             })
           ),
-          setActiveStep: this.setActiveResumePoint.bind(this),
+          setActiveStep: this.activateStep.bind(this),
+          cancelPendingStepActivation: () => this.workflowCallRunner.cancelPendingInvocation(),
           addUserInput: this.addUserInput.bind(this),
           emit: (event, ...args) => this.emitEvent(event, ...args),
           updateMaxSteps: (maxSteps) => {
@@ -705,13 +707,14 @@ export class WorkflowEngine extends EventEmitter {
     step: WorkflowStep,
     iteration: number,
     occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
     dynamicParallelSelections: ReadonlyMap<string, import('../../models/types.js').DynamicParallelSelectionSnapshot> = this.sharedRuntime.dynamicParallelSelectionStore!.snapshot(),
   ): WorkflowResumePoint {
     const workflowCallInstance = isWorkflowCallStep(step)
       ? this.sharedRuntime.workflowCallInvocationEvidence!.index.get(
           this.config,
           step.name,
-          this.resumeStackPrefix,
+          resumeStackPrefix,
         )?.call_instance
       : undefined;
     const workflowCallInvocations = serializeWorkflowCallInvocationEvidence(
@@ -722,7 +725,7 @@ export class WorkflowEngine extends EventEmitter {
     return {
       version: 2,
       stack: [
-        ...this.resumeStackPrefix,
+        ...resumeStackPrefix,
         buildWorkflowResumePointEntry(
           this.config,
           step.name,
@@ -746,15 +749,35 @@ export class WorkflowEngine extends EventEmitter {
     step: WorkflowStep,
     iteration: number,
     occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ): void {
     this.syncStateDynamicParallelSelections();
     const activeResumePoint = this.buildResumePoint(
       step,
       iteration,
       occurrence,
+      resumeStackPrefix,
     );
     this.activeResumePoint = activeResumePoint;
     this.sharedRuntime.activeResumePoint = activeResumePoint;
+  }
+
+  private activateStep(
+    step: WorkflowStep,
+    iteration: number,
+    occurrence: number,
+  ): WorkflowCallExecutionToken | undefined {
+    if (isWorkflowCallStep(step)) {
+      return this.workflowCallRunner.activateInvocation(
+        step,
+        iteration,
+        occurrence,
+        this.resumeStackPrefix,
+      );
+    }
+    this.workflowCallRunner.cancelPendingInvocation();
+    this.setActiveResumePoint(step, iteration, occurrence, this.resumeStackPrefix);
+    return undefined;
   }
 
   private async persistDynamicParallelSelection(
@@ -772,7 +795,13 @@ export class WorkflowEngine extends EventEmitter {
       throw new Error(`Cannot persist dynamic parallel selection without an active resume frame for step '${step.name}'`);
     }
     const selections = await this.sharedRuntime.dynamicParallelSelectionStore!.commit(identity, selection, async (selections) => {
-      const resumePoint = this.buildResumePoint(step, iteration, activeEntry.occurrence, selections);
+      const resumePoint = this.buildResumePoint(
+        step,
+        iteration,
+        activeEntry.occurrence,
+        this.resumeStackPrefix,
+        selections,
+      );
       await this.options.onDynamicParallelSelectionPersisted?.(resumePoint);
       this.activeResumePoint = resumePoint;
       this.sharedRuntime.activeResumePoint = resumePoint;
@@ -845,6 +874,7 @@ export class WorkflowEngine extends EventEmitter {
       step,
       this.state.iteration,
       nextOccurrence,
+      this.resumeStackPrefix,
     );
   }
 
@@ -1008,7 +1038,8 @@ export class WorkflowEngine extends EventEmitter {
               state: this.state,
             })
           ),
-          setActiveStep: this.setActiveResumePoint.bind(this),
+          setActiveStep: this.activateStep.bind(this),
+          cancelPendingStepActivation: () => this.workflowCallRunner.cancelPendingInvocation(),
           addUserInput: this.addUserInput.bind(this),
           emit: (event, ...args) => this.emitEvent(event, ...args),
           updateMaxSteps: () => {},

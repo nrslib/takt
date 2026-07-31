@@ -91,6 +91,7 @@ interface WorkflowEngineSetupParams {
     step: WorkflowStep,
     iteration: number,
     occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ) => void;
   persistDynamicParallelSelection: (
     step: WorkflowStep,
@@ -299,7 +300,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     resumeStackPrefix: [...(params.resumeStackPrefix ?? [])],
     consumeWorkflowCallContinuation: params.consumeWorkflowCallContinuation,
     runPaths: params.runPaths,
-    setActiveResumePoint: params.setActiveResumePoint as never,
+    setActiveResumePoint: params.setActiveResumePoint,
     emit: params.emitEvent,
     resolveWorkflowCall: (request) => params.options.workflowCallResolver!(request),
     createEngine: params.createEngine,
@@ -355,7 +356,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getWorkflowCallRunner: () => workflowCallRunner,
     claimStepOccurrence: params.claimStepOccurrence,
     updateMaxSteps: params.updateMaxSteps,
-    setActiveResumePoint: params.setActiveResumePoint,
+    setActiveResumePoint: (step, iteration, occurrence) => params.setActiveResumePoint(
+      step,
+      iteration,
+      occurrence,
+      params.resumeStackPrefix,
+    ),
     getRunId: () => params.runPaths.slug,
     getFindingCallNamespace: () => params.options.findingCallNamespace ?? '',
     runQualityGates,

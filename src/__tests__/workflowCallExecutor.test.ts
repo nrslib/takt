@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
-import type { AgentResponse, FindingContractConfig, FindingLedger, WorkflowConfig, WorkflowState, WorkflowCallStep } from '../core/models/index.js';
-import type { WorkflowCallChildEngine, WorkflowRunResult } from '../core/workflow/types.js';
+import type { AgentResponse, FindingContractConfig, FindingLedger, WorkflowConfig, WorkflowResumePointEntry, WorkflowState, WorkflowCallStep } from '../core/models/index.js';
+import type { WorkflowCallChildEngine, WorkflowRunResult, WorkflowSharedRuntimeState } from '../core/workflow/types.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 
 function makeResponse(overrides: Partial<AgentResponse> = {}): AgentResponse {
@@ -66,6 +66,24 @@ function createFakeLedgerStore(): FindingLedgerStore {
   };
 }
 
+function prepareExecutionRequest(
+  executor: WorkflowCallExecutor,
+  request: { step: WorkflowCallStep; childWorkflow: WorkflowConfig } & Record<string, unknown>,
+  occurrence: number,
+  resumeStackPrefix: readonly WorkflowResumePointEntry[],
+): Parameters<WorkflowCallExecutor['execute']>[0] {
+  const { childWorkflow, ...executeRequest } = request;
+  return {
+    ...executeRequest,
+    preparedExecution: executor.prepare(
+      request.step,
+      childWorkflow,
+      occurrence,
+      resumeStackPrefix,
+    ),
+  } as Parameters<WorkflowCallExecutor['execute']>[0];
+}
+
 const FAKE_FINDING_CONTRACT: FindingContractConfig = {
   ledgerPath: '.takt/findings/peer-review.json',
   rawFindingsPath: '.takt/findings/raw',
@@ -126,7 +144,7 @@ describe('WorkflowCallExecutor', () => {
     const createEngine = vi.fn().mockReturnValue(childEngine);
     const emit = vi.fn();
     const setActiveResumePoint = vi.fn();
-    const sharedRuntime = { startedAtMs: Date.now(), maxSteps: 10 };
+    const sharedRuntime: WorkflowSharedRuntimeState = { startedAtMs: Date.now(), maxSteps: 10 };
     const traceTaskMetadata = {
       taskSummary: 'Review PR #827 trace metadata',
       taskSource: 'pr_review',
@@ -161,14 +179,18 @@ describe('WorkflowCallExecutor', () => {
       setActiveResumePoint,
       refreshFindingsState: vi.fn(),
     });
+    const recordInvocation = vi.spyOn(
+      sharedRuntime.workflowCallInvocationEvidence!.index,
+      'record',
+    );
 
-    await executor.execute({
+    await executor.execute(prepareExecutionRequest(executor, {
       step,
       childWorkflow: childConfig,
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
-    }, { syncParentState: true, resumeStackPrefix: [] });
+    }, 3, []), { syncParentState: true });
 
     expect(createEngine).toHaveBeenCalledWith(
       childConfig,
@@ -185,6 +207,7 @@ describe('WorkflowCallExecutor', () => {
     const childOptions = createEngine.mock.calls[0]?.[3];
     expect(childOptions?.sharedRuntime).toBe(sharedRuntime);
     expect(childOptions?.traceTaskMetadata).toBe(traceTaskMetadata);
+    expect(recordInvocation).toHaveBeenCalledTimes(1);
     expect(childOptions?.resumeStackPrefix).toEqual([{
       workflow: 'parent',
       workflow_ref: 'parent',
@@ -267,7 +290,7 @@ describe('WorkflowCallExecutor', () => {
     expect(emit).toHaveBeenCalledWith('findings:ledger', ledger);
     expect(state.iteration).toBe(4);
     expect(state.personaSessions.get('coder')).toBe('session-2');
-    expect(setActiveResumePoint).toHaveBeenCalledWith(step, 4, 3);
+    expect(setActiveResumePoint).toHaveBeenCalledWith(step, 4, 3, []);
   });
 
   it('異なる parallel 親配下の同名 workflow_call に異なる canonical call-site identity を割り当てる', async () => {
@@ -353,14 +376,14 @@ describe('WorkflowCallExecutor', () => {
       providerRouting: undefined,
     };
 
-    await executor.execute(request, {
-      syncParentState: false,
-      resumeStackPrefix: [parallelA],
-    });
-    await executor.execute(request, {
-      syncParentState: false,
-      resumeStackPrefix: [parallelB],
-    });
+    await executor.execute(
+      prepareExecutionRequest(executor, request, 1, [parallelA]),
+      { syncParentState: false },
+    );
+    await executor.execute(
+      prepareExecutionRequest(executor, request, 1, [parallelB]),
+      { syncParentState: false },
+    );
 
     const first = createdOptions[0]!;
     const second = createdOptions[1]!;
@@ -428,13 +451,13 @@ describe('WorkflowCallExecutor', () => {
       refreshFindingsState: vi.fn(),
     });
 
-    const result = await executor.execute({
+    const result = await executor.execute(prepareExecutionRequest(executor, {
       step,
       childWorkflow: childConfig,
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
-    }, { syncParentState: true, resumeStackPrefix: [] }) as WorkflowState & { abortKind?: string; abortReason?: string };
+    }, 1, []), { syncParentState: true }) as WorkflowState & { abortKind?: string; abortReason?: string };
 
     expect(result.status).toBe('aborted');
     expect(result.abortKind).toBe('runtime_error');
@@ -490,13 +513,13 @@ describe('WorkflowCallExecutor', () => {
       refreshFindingsState: vi.fn(),
     });
 
-    const result = await executor.execute({
+    const result = await executor.execute(prepareExecutionRequest(executor, {
       step,
       childWorkflow: childConfig,
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
-    }, { syncParentState: true, resumeStackPrefix: [] });
+    }, 1, []), { syncParentState: true });
 
     expect(result.status).toBe('completed');
     expect(childEngine.runWithResult).toHaveBeenCalledTimes(1);
@@ -554,13 +577,13 @@ describe('WorkflowCallExecutor', () => {
       refreshFindingsState: vi.fn(),
     });
 
-    const result = await executor.execute({
+    const result = await executor.execute(prepareExecutionRequest(executor, {
       step,
       childWorkflow: childConfig,
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
-    }, { syncParentState: true, resumeStackPrefix: [] }) as WorkflowState & { returnValue?: string };
+    }, 1, []), { syncParentState: true }) as WorkflowState & { returnValue?: string };
 
     expect(result.status).toBe('completed');
     expect(result.returnValue).toBe('retry_plan');
@@ -620,13 +643,13 @@ describe('WorkflowCallExecutor', () => {
       findingLedgerStore: ledgerStore,
     });
 
-    await executor.execute({
+    await executor.execute(prepareExecutionRequest(executor, {
       step,
       childWorkflow: childConfig,
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
-    }, { syncParentState: true, resumeStackPrefix: [] });
+    }, 1, []), { syncParentState: true });
 
     const childOptions = createEngine.mock.calls[0]?.[3];
     expect(childOptions?.inheritedFindingContract).toEqual({
@@ -687,13 +710,13 @@ describe('WorkflowCallExecutor', () => {
       refreshFindingsState: vi.fn(),
     });
 
-    await executor.execute({
+    await executor.execute(prepareExecutionRequest(executor, {
       step,
       childWorkflow: childConfig,
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
-    }, { syncParentState: true, resumeStackPrefix: [] });
+    }, 1, []), { syncParentState: true });
 
     const childOptions = createEngine.mock.calls[0]?.[3];
     expect(childOptions?.inheritedFindingContract).toBeUndefined();
@@ -753,13 +776,13 @@ describe('WorkflowCallExecutor', () => {
 
     expect(refreshFindingsState).not.toHaveBeenCalled();
 
-    await executor.execute({
+    await executor.execute(prepareExecutionRequest(executor, {
       step,
       childWorkflow: childConfig,
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
-    }, { syncParentState: true, resumeStackPrefix: [] });
+    }, 1, []), { syncParentState: true });
 
     expect(refreshFindingsState).toHaveBeenCalledTimes(1);
   });
@@ -814,13 +837,13 @@ describe('WorkflowCallExecutor', () => {
       findingLedgerStore: createFakeLedgerStore(),
     });
 
-    await expect(executor.execute({
+    await expect(executor.execute(prepareExecutionRequest(executor, {
       step,
       childWorkflow: childConfig,
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
-    }, { syncParentState: true, resumeStackPrefix: [] })).rejects.toThrow(/provider 'opencode' requires model/);
+    }, 1, []), { syncParentState: true })).rejects.toThrow(/provider 'opencode' requires model/);
 
     expect(createEngine).not.toHaveBeenCalled();
   });
@@ -877,13 +900,13 @@ describe('WorkflowCallExecutor', () => {
       findingLedgerStore: createFakeLedgerStore(),
     });
 
-    const result = await executor.execute({
+    const result = await executor.execute(prepareExecutionRequest(executor, {
       step,
       childWorkflow: childConfig,
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
-    }, { syncParentState: true, resumeStackPrefix: [] });
+    }, 1, []), { syncParentState: true });
 
     expect(result.status).toBe('completed');
     expect(createEngine).toHaveBeenCalledTimes(1);

@@ -30,6 +30,7 @@ import { runWithStepSpan, type StepSpanParams } from '../observability/workflowS
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
+import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 import {
   reviewerOperationOrigin,
@@ -78,6 +79,7 @@ interface WorkflowRunLoopDeps {
     runtime?: RuntimeStepResolution,
     stepIteration?: number,
     preparedExecution?: PreparedNormalStepExecution,
+    workflowCallExecution?: WorkflowCallExecutionToken,
   ) => Promise<StepRunResult>;
   runQualityGates: (options: {
     qualityGates: WorkflowStep['qualityGates'];
@@ -112,7 +114,8 @@ interface WorkflowRunLoopDeps {
     step: WorkflowStep,
     iteration: number,
     occurrence: number,
-  ) => void;
+  ) => WorkflowCallExecutionToken | undefined;
+  cancelPendingStepActivation: () => void;
   addUserInput: (input: string) => void;
   emit: (event: string, ...args: unknown[]) => void;
   updateMaxSteps: (maxSteps: number) => void;
@@ -634,6 +637,14 @@ function resolveQualityGateSnapshotIteration(
 }
 
 export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promise<WorkflowRunResult> {
+  try {
+    return await runWorkflowToCompletionCore(deps);
+  } finally {
+    deps.cancelPendingStepActivation();
+  }
+}
+
+async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<WorkflowRunResult> {
   let abort: WorkflowAbortResult | undefined;
   let returnValue: string | undefined;
 
@@ -719,7 +730,13 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       ?? (prebuiltInstruction
       ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
       : '');
-    deps.setActiveStep(step, activeIteration, stepIteration);
+    let workflowCallExecution: WorkflowCallExecutionToken | undefined;
+    try {
+      workflowCallExecution = deps.setActiveStep(step, activeIteration, stepIteration);
+    } catch (error) {
+      abort = abortWorkflowRuntimeError(deps, error);
+      break;
+    }
     const stepEventWorkflowStack = requireWorkflowResumeStackSnapshot(
       deps.getCurrentWorkflowStack(),
     );
@@ -753,7 +770,14 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         providerInfo,
         getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
         traceTaskMetadata: deps.options.traceTaskMetadata,
-      }, () => deps.runStep(step, prebuiltInstruction, stepRuntime, stepIteration, preparedExecution));
+      }, () => deps.runStep(
+        step,
+        prebuiltInstruction,
+        stepRuntime,
+        stepIteration,
+        preparedExecution,
+        workflowCallExecution,
+      ));
       if (workflowInterruptRequested(deps)) {
         abort = abortInterruptedWorkflow(deps);
         break;
@@ -928,6 +952,8 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     } catch (error) {
       abort = abortWorkflowRuntimeError(deps, error);
       break;
+    } finally {
+      workflowCallExecution?.cancel();
     }
   }
 
@@ -939,8 +965,13 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
 export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Promise<SingleWorkflowIterationResult> {
   const step = deps.getStep(deps.state.currentStep);
   try {
-    return await runSingleWorkflowIterationCore(deps);
+    const result = await runSingleWorkflowIterationCore(deps);
+    if (result.isComplete || result.abort !== undefined) {
+      deps.cancelPendingStepActivation();
+    }
+    return result;
   } catch (error) {
+    deps.cancelPendingStepActivation();
     if (!workflowInterruptRequested(deps) && !(error instanceof RuleDetectionExhaustedError)) {
       throw error;
     }
@@ -1002,7 +1033,8 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   const isDelegated = isDelegatedWorkflowStep(step);
   const baseStepRuntime = deps.resolveRuntimeForStep(step);
   const stepIteration = deps.claimStepOccurrence(step);
-  deps.setActiveStep(step, activeIteration, stepIteration);
+  const workflowCallExecution = deps.setActiveStep(step, activeIteration, stepIteration);
+  try {
   const promotedRuntime = await resolveStepPromotionRuntime(
     deps,
     step,
@@ -1046,7 +1078,14 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     providerInfo,
     getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
     traceTaskMetadata: deps.options.traceTaskMetadata,
-  }, () => deps.runStep(step, prebuiltInstruction, stepRuntime, stepIteration, preparedExecution));
+  }, () => deps.runStep(
+    step,
+    prebuiltInstruction,
+    stepRuntime,
+    stepIteration,
+    preparedExecution,
+    workflowCallExecution,
+  ));
   if (workflowInterruptRequested(deps)) {
     return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
   }
@@ -1196,4 +1235,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
 
   return { response, nextStep, isComplete, loopDetected: loopCheck.isLoop };
+  } finally {
+    workflowCallExecution?.cancel();
+  }
 }

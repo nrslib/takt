@@ -19,6 +19,7 @@ import {
   getWorkflowReference,
 } from '../workflow-reference.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../workflow-call-depth.js';
+import { buildWorkflowCallInvocationIdentity } from '../workflow-call-invocation-index.js';
 import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import type {
@@ -37,6 +38,7 @@ import {
   type WorkflowCallExecutionResult,
   type WorkflowCallIsolatedStateSync,
   type WorkflowCallSessionUpdates,
+  type PreparedWorkflowCallExecution,
 } from './WorkflowCallExecutor.js';
 import { terminalLabelOf } from '../../models/workflow-rule-condition.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
@@ -63,6 +65,7 @@ interface WorkflowCallRunnerDeps {
     step: WorkflowCallStep,
     iteration: number,
     occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ) => void;
   emit: (event: string, ...args: unknown[]) => void;
   resolveWorkflowCall: WorkflowCallResolver;
@@ -79,8 +82,23 @@ interface WorkflowCallRunnerDeps {
   refreshFindingsState: () => void;
 }
 
+export interface WorkflowCallExecutionToken {
+  readonly stepName: string;
+  readonly occurrence: number;
+  readonly resumeStackPrefix: readonly WorkflowResumePointEntry[];
+  cancel(): void;
+}
+
+interface PendingWorkflowCallExecution {
+  readonly identity: string;
+  readonly occurrence: number;
+  readonly token: WorkflowCallExecutionToken;
+}
+
 export class WorkflowCallRunner {
   private readonly executor: WorkflowCallExecutor;
+  private readonly preparedExecutions = new WeakMap<WorkflowCallExecutionToken, PreparedWorkflowCallExecution>();
+  private pendingExecution: PendingWorkflowCallExecution | undefined;
 
   constructor(private readonly deps: WorkflowCallRunnerDeps) {
     this.executor = new WorkflowCallExecutor(deps);
@@ -257,15 +275,10 @@ export class WorkflowCallRunner {
     );
   }
 
-  private async executeChildWorkflow(
+  private resolveCallableChildWorkflow(
     step: WorkflowCallStep,
-    runtime: RuntimeStepResolution,
-    syncParentState: boolean,
     resumeStackPrefix: readonly WorkflowResumePointEntry[],
-  ): Promise<{
-    childResult: WorkflowCallExecutionResult;
-    providerInfo: NonNullable<StepRunResult['providerInfo']>;
-  }> {
+  ): WorkflowConfig {
     const parentConfig = this.deps.getConfig();
     const childWorkflow = this.deps.resolveWorkflowCall({
       parentWorkflow: parentConfig,
@@ -318,6 +331,114 @@ export class WorkflowCallRunner {
         ['call'],
       );
     }
+    return childWorkflow;
+  }
+
+  private prepareInvocation(
+    step: WorkflowCallStep,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ): WorkflowCallExecutionToken {
+    const identity = buildWorkflowCallInvocationIdentity(
+      getWorkflowReference(this.deps.getConfig()),
+      step.name,
+      resumeStackPrefix,
+    );
+    if (
+      this.pendingExecution?.identity === identity
+      && this.pendingExecution.occurrence === occurrence
+    ) {
+      return this.pendingExecution.token;
+    }
+    this.cancelPendingInvocation();
+    const childWorkflow = this.resolveCallableChildWorkflow(step, resumeStackPrefix);
+    const prepared = this.executor.prepare(
+      step,
+      childWorkflow,
+      occurrence,
+      resumeStackPrefix,
+    );
+    const token: WorkflowCallExecutionToken = Object.freeze({
+      stepName: step.name,
+      occurrence,
+      resumeStackPrefix: prepared.resumeStackPrefix,
+      cancel: () => {
+        this.preparedExecutions.delete(token);
+        if (this.pendingExecution?.token === token) {
+          this.pendingExecution = undefined;
+        }
+      },
+    });
+    this.preparedExecutions.set(token, prepared);
+    this.pendingExecution = { identity, occurrence, token };
+    return token;
+  }
+
+  cancelPendingInvocation(): void {
+    this.pendingExecution?.token.cancel();
+  }
+
+  activateInvocation(
+    step: WorkflowCallStep,
+    iteration: number,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ): WorkflowCallExecutionToken {
+    const token = this.prepareInvocation(step, occurrence, resumeStackPrefix);
+    try {
+      this.deps.setActiveResumePoint(step, iteration, occurrence, token.resumeStackPrefix);
+      return token;
+    } catch (error) {
+      token.cancel();
+      throw error;
+    }
+  }
+
+  private consumePreparedExecution(
+    step: WorkflowCallStep,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+    token: WorkflowCallExecutionToken,
+  ): PreparedWorkflowCallExecution {
+    const expectedIdentity = buildWorkflowCallInvocationIdentity(
+      getWorkflowReference(this.deps.getConfig()),
+      step.name,
+      resumeStackPrefix,
+    );
+    const tokenIdentity = buildWorkflowCallInvocationIdentity(
+      getWorkflowReference(this.deps.getConfig()),
+      token.stepName,
+      token.resumeStackPrefix,
+    );
+    if (tokenIdentity !== expectedIdentity) {
+      throw new Error(`workflow_call step "${step.name}" execution token does not match the call site`);
+    }
+    const prepared = this.preparedExecutions.get(token);
+    if (prepared === undefined) {
+      throw new Error(`workflow_call step "${step.name}" execution was not prepared`);
+    }
+    if (token.occurrence !== prepared.occurrence) {
+      throw new Error(`workflow_call step "${step.name}" execution token occurrence does not match its preparation`);
+    }
+    this.preparedExecutions.delete(token);
+    if (this.pendingExecution?.token === token) {
+      this.pendingExecution = undefined;
+    }
+    return prepared;
+  }
+
+  private async executeChildWorkflow(
+    step: WorkflowCallStep,
+    runtime: RuntimeStepResolution,
+    syncParentState: boolean,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+    token: WorkflowCallExecutionToken,
+  ): Promise<{
+    childResult: WorkflowCallExecutionResult;
+    providerInfo: NonNullable<StepRunResult['providerInfo']>;
+  }> {
+    const parentConfig = this.deps.getConfig();
+    const prepared = this.consumePreparedExecution(step, resumeStackPrefix, token);
+    const childWorkflow = prepared.childWorkflow;
 
     const runtimeProviderInfo = runtime.providerInfo ?? this.resolveRuntime(step).providerInfo;
     if (!runtimeProviderInfo) {
@@ -334,14 +455,13 @@ export class WorkflowCallRunner {
     const parentProviderContext = this.resolveParentWorkflowProviderContext();
     const childResult = await this.executor.execute({
       step,
-      childWorkflow,
+      preparedExecution: prepared,
       childProviderInfo,
       parentProviderOptions: parentProviderContext.providerOptions,
       personaProviders: this.buildChildPersonaProviders(step),
       providerRouting: this.buildChildProviderRouting(step),
     }, {
       syncParentState,
-      resumeStackPrefix,
     });
 
     return {
@@ -352,6 +472,7 @@ export class WorkflowCallRunner {
 
   async run(
     step: WorkflowCallStep,
+    token: WorkflowCallExecutionToken,
     runtime: RuntimeStepResolution = this.resolveRuntime(step),
   ): Promise<StepRunResult> {
     const { childResult, providerInfo } = await this.executeChildWorkflow(
@@ -359,6 +480,7 @@ export class WorkflowCallRunner {
       runtime,
       true,
       this.deps.resumeStackPrefix,
+      token,
     );
 
     const response = this.buildWorkflowCallResponse(
@@ -382,6 +504,7 @@ export class WorkflowCallRunner {
     step: WorkflowCallStep,
     runtime: RuntimeStepResolution,
     resumeStackPrefix: readonly WorkflowResumePointEntry[],
+    token: WorkflowCallExecutionToken,
   ): Promise<{
     result: StepRunResult;
     sessionUpdates: WorkflowCallSessionUpdates;
@@ -392,6 +515,7 @@ export class WorkflowCallRunner {
       runtime,
       false,
       resumeStackPrefix,
+      token,
     );
     const response = this.buildWorkflowCallResponse(
       step,
