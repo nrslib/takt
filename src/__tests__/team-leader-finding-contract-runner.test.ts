@@ -179,7 +179,6 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     const findingContract: FindingContractConfig = {
       ledgerPath: '.takt/findings.json',
       rawFindingsPath: '.takt/raw',
-      reviewerOutput: 'structured',
       manager: {
         persona: 'findings-manager',
         instruction: 'manage',
@@ -676,7 +675,6 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     const findingContract: FindingContractConfig = {
       ledgerPath: '.takt/findings.json',
       rawFindingsPath: '.takt/raw',
-      reviewerOutput: 'structured',
       manager: {
         persona: 'findings-manager',
         instruction: 'manage',

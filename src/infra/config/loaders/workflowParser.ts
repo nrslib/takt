@@ -111,7 +111,6 @@ function normalizeFindingContractConfig(
   return {
     ledgerPath: raw.ledger_path,
     rawFindingsPath: raw.raw_findings_path,
-    reviewerOutput: raw.reviewer_output ?? 'structured',
     manager: {
       persona: personaSpec,
       personaDisplayName: personaPath ? extractPersonaDisplayName(personaPath) : personaSpec,

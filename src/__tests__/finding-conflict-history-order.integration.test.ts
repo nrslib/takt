@@ -286,7 +286,6 @@ describe('reconciled conflict lifecycle history order', () => {
       workflowName: WORKFLOW_NAME,
       ledgerPath: LEDGER_PATH,
       rawFindingsPath: RAW_FINDINGS_PATH,
-      reviewerOutput: 'structured',
     });
     await store.updateLedger(() => ({ ledger: applied, result: undefined }));
     const persisted = store.loadLedger();

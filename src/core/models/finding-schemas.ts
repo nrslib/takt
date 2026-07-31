@@ -37,7 +37,6 @@ import {
   FINDING_CONFLICT_ADJUDICATION_OUTCOMES,
   FINDING_CONFLICT_ADJUDICATION_TRANSITIONS,
   FINDING_CONFLICT_STATUSES,
-  FINDING_CONTRACT_REVIEWER_OUTPUTS,
   FINDING_DISMISSAL_BASES,
   FINDING_LIFECYCLES,
   FINDING_LIFECYCLE_ENTITY_KINDS,
@@ -148,7 +147,6 @@ export const FindingContractReviewBudgetRawSchema = z.object({
 export const FindingContractConfigRawSchema = z.object({
   ledger_path: nonEmptyString,
   raw_findings_path: nonEmptyString,
-  reviewer_output: z.enum(FINDING_CONTRACT_REVIEWER_OUTPUTS).optional(),
   manager: FindingContractManagerConfigRawSchema,
   stop_budget: FindingContractStopBudgetRawSchema.optional(),
   review_budget: FindingContractReviewBudgetRawSchema.optional(),

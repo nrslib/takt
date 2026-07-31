@@ -29,7 +29,6 @@ function workflow(): WorkflowConfig {
     findingContract: {
       ledgerPath: '.takt/findings/injection.json',
       rawFindingsPath: '.takt/findings/raw',
-      reviewerOutput: 'structured',
       manager: {
         persona: 'findings-manager',
         instruction: 'manage',
@@ -65,7 +64,6 @@ describe('WorkflowEngine Finding ledger store dependency', () => {
       workflowName: config.name,
       ledgerPath: config.findingContract!.ledgerPath,
       rawFindingsPath: config.findingContract!.rawFindingsPath,
-      reviewerOutput: 'structured',
     });
 
     expect(() => new WorkflowEngine(config, cwd, 'task', {
@@ -87,7 +85,6 @@ describe('WorkflowEngine Finding ledger store dependency', () => {
       workflowName: configWithContract.name,
       ledgerPath: configWithContract.findingContract!.ledgerPath,
       rawFindingsPath: configWithContract.findingContract!.rawFindingsPath,
-      reviewerOutput: 'structured',
     });
     const configWithoutContract = { ...configWithContract };
     delete configWithoutContract.findingContract;

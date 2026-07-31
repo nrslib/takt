@@ -1,7 +1,6 @@
 import type { Language } from '../../models/types.js';
 import type { FindingContractInstructionContext } from './instruction-context.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
-import { FINDING_CLAIM_BLOCK_PROTOCOL } from '../../../shared/prompts/finding-canonical-claim.js';
 
 /**
  * Finding Contract の指示文を組み立てる。
@@ -36,7 +35,6 @@ function renderFindingContractInstruction(input: {
   const reviewer = contract.reviewer;
   const isReviewer = reviewer !== undefined;
   const structuredReviewer = reviewer?.mode === 'structured';
-  const canonicalBlocksReviewer = reviewer?.mode === 'canonical_blocks';
   const plainTextNormalizedReviewer = reviewer?.mode === 'plain_text_normalized';
   const rawFindingsStructuredOutput = structuredReviewer
     ? reviewer.rawFindingsStructuredOutput
@@ -79,21 +77,15 @@ function renderFindingContractInstruction(input: {
     isReportPhase: reportPhase,
     isReviewer,
     structuredReviewer,
-    canonicalBlocksReviewer,
     plainTextNormalizedReviewer,
     reviewerHasOpenFindings: isReviewer && contract.hasOpenFindings,
     structuredReviewerHasOpenFindings: structuredReviewer && contract.hasOpenFindings,
-    canonicalBlocksReviewerHasOpenFindings:
-      canonicalBlocksReviewer && contract.hasOpenFindings,
     plainTextNormalizedReviewerHasOpenFindings:
       plainTextNormalizedReviewer && contract.hasOpenFindings,
     reviewerHasWaivedFindings: isReviewer && contract.hasWaivedFindings,
     reviewerHasDismissedFindings: isReviewer && contract.hasDismissedFindings,
     rawFindingsJsonSchema: rawFindingsStructuredOutput
       ? renderFencedJsonBlock(rawFindingsStructuredOutput.schema)
-      : '',
-    canonicalClaimBlockProtocol: canonicalBlocksReviewer
-      ? FINDING_CLAIM_BLOCK_PROTOCOL
       : '',
     // review-integrity protocol: reviewer step のときだけ設定される（instruction-context.ts
     // 参照）。空文字は「該当なし」— テンプレート側は isReviewer と一緒にしか

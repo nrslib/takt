@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { CapabilityAwareStructuredCaller } from '../../../agents/structured-caller.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type {
-  FindingIntakeNormalizeConfig,
+  FindingContractRuntimeConfig,
   ResolvedObservabilityConfig,
 } from '../../../core/models/config-types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
@@ -95,7 +95,7 @@ export interface WorkflowExecutionBootstrap {
   configuredModel: string | undefined;
   configuredModelSource: ProviderResolutionSource;
   effectiveWorkflowConfig: WorkflowConfig;
-  intakeNormalize?: FindingIntakeNormalizeConfig;
+  findingContractConfig?: FindingContractRuntimeConfig;
   autoStrategyOverride: WorkflowExecutionOptions['autoStrategy'];
   onEffectiveAutoRoutingReached: () => void;
   warnIfAutoStrategyUnused: () => void;
@@ -264,7 +264,7 @@ export async function createWorkflowExecutionBootstrap(
     'telemetry',
     'observability',
     'autoRouting',
-    'intakeNormalize',
+    'findingContract',
   ]);
   const traceReportMode = globalConfig.logging?.trace === true ? 'full' : 'redacted';
   const allowSensitiveData = traceReportMode === 'full';
@@ -466,7 +466,7 @@ export async function createWorkflowExecutionBootstrap(
     configuredModel,
     configuredModelSource,
     effectiveWorkflowConfig,
-    intakeNormalize: globalConfig.intakeNormalize,
+    findingContractConfig: globalConfig.findingContract,
     autoStrategyOverride,
     onEffectiveAutoRoutingReached,
     warnIfAutoStrategyUnused,

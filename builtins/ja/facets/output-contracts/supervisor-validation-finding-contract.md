@@ -14,10 +14,10 @@
 |------|----------------------------|------|------------------|
 | {テスト・ビルド・動作確認} | {現在コードと一致する実行ログ・レポート、または理由} | ✅ / ❌ / 未確認 | {NEED_REPLAN 時の検証またはなし} |
 ## Finding Contract Claims
-{注入された Finding Contract 指示に canonical block protocol がある場合は、観測した欠陥または明示的な台帳 lifecycle claim ごとに正確に1つの block を出力する。protocol がない場合は、claim を通常の文章で記載する。注入された指示が structured output を要求するときだけ、その schema を機械形式として使い、要求がなければ Markdown report だけを返す。指摘表は使わない。claim がなければ `None` と記載する。}
+{観測した欠陥または明示的な台帳 lifecycle claim を、ここに1件ずつ分けて記載する。注入された指示が structured output を要求するときは、その schema を機械形式として使い、要求がなければ Markdown report だけを返す。指摘表は使わない。claim がなければ `None` と記載する。}
 
 ## 出力整合性
-- canonical block protocol がある場合は、block と normalized item を同じ順序集合とし、rawExcerpt を byte-exact に一致させる。protocol がない場合は、注入された structured-output schema があるときだけそれを機械 claim 形式とし、なければ通常の report 本文だけを使う。最終 finding ID は採番しない。
+- 注入された structured-output schema がある場合は、report に記載したすべての問題を structured output にも含める。schema がなければ通常の report 本文だけを使う。最終 finding ID は採番しない。
 - APPROVE は issue 0 件かつ必須証跡の確認完了、REJECT は現在の観測欠陥 issue が1件以上、NEED_REPLAN は issue 0 件のまま主要要件または必須証跡が未確認で承認不能とする。補助的未確認だけで、他の確認済み根拠により APPROVE にできる。
 ```
 

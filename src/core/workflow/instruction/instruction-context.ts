@@ -22,11 +22,6 @@ export type FindingContractReviewerOutputStrategy =
       readonly intake: 'reviewer_structured';
     }
   | {
-      readonly kind: 'canonical_blocks';
-      readonly reportGeneration: 'plain_text';
-      readonly intake: 'canonical_parser';
-    }
-  | {
       readonly kind: 'plain_text_normalized';
       readonly reportGeneration: 'plain_text';
       readonly intake: 'isolated_normalizer';
@@ -36,10 +31,6 @@ export type FindingContractReviewerContext =
   | {
       mode: 'structured';
       rawFindingsStructuredOutput: WorkflowStructuredOutput;
-      reviewScopeSnapshotId: string;
-    }
-  | {
-      mode: 'canonical_blocks';
       reviewScopeSnapshotId: string;
     }
   | {

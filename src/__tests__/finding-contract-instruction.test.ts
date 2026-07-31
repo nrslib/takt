@@ -50,10 +50,6 @@ const REVIEWER = {
   rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT,
   reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
 };
-const CANONICAL_BLOCKS_REVIEWER = {
-  mode: 'canonical_blocks' as const,
-  reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
-};
 const PLAIN_TEXT_NORMALIZED_REVIEWER = {
   mode: 'plain_text_normalized' as const,
   reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
@@ -91,26 +87,13 @@ describe('buildFindingContractInstruction', () => {
       expect(rendered).toContain('構造化 raw finding として報告してください');
     });
 
-    it('injects canonical claim grammar only for canonical-block reviewers in both languages', () => {
+    it('injects the structured finding protocol in both languages', () => {
       for (const language of ['en', 'ja'] as const) {
         for (const render of [build, buildReport]) {
-          const canonicalBlocks = render({
-            contract: { reviewer: CANONICAL_BLOCKS_REVIEWER, hasOpenFindings: true },
-            language,
-          });
-          expect(canonicalBlocks).toContain('<!-- TAKT_FINDING_CLAIM_BEGIN -->');
-          expect(canonicalBlocks).toContain(
-            'Relation: <new | persists | resolution_confirmation | reopened>',
-          );
-          expect(canonicalBlocks).toContain('<!-- TAKT_FINDING_CLAIM_END -->');
-
           const structured = render({
             contract: { reviewer: REVIEWER, hasOpenFindings: true },
             language,
           });
-          expect(structured).not.toContain('<!-- TAKT_FINDING_CLAIM_BEGIN -->');
-          expect(structured).not.toContain('canonical block protocol');
-          expect(structured).not.toContain('canonical block');
           expect(structured).not.toContain('typed evidence matrix');
           expect(structured).toContain('structured output');
           expect(structured).toContain('resolution_confirmation');
@@ -134,7 +117,6 @@ describe('buildFindingContractInstruction', () => {
           expect(rendered).toMatch(/isolated extractor|隔離された抽出器/u);
           expect(rendered).toContain('resolution_confirmation');
           expect(rendered).toMatch(/architectural|アーキテクチャ上/u);
-          expect(rendered).not.toContain('<!-- TAKT_FINDING_CLAIM_BEGIN -->');
           expect(rendered).not.toContain('raw findings schema');
           expect(rendered).not.toContain('structured output matching');
         }
@@ -214,25 +196,9 @@ describe('buildFindingContractInstruction', () => {
       expect(structuredJa).toContain('structure の確認は `repository_manifest`');
       expect(structuredJa).toContain('absence の確認は `repository_query` と `authoritative_quote`');
 
-      const canonicalBlocksEn = build({
-        contract: { reviewer: CANONICAL_BLOCKS_REVIEWER, hasOpenFindings: true },
-      });
-      const canonicalBlocksJa = build({
-        contract: { reviewer: CANONICAL_BLOCKS_REVIEWER, hasOpenFindings: true },
-        language: 'ja',
-      });
-      expect(canonicalBlocksEn).toContain('code confirmation needs File Quote');
-      expect(canonicalBlocksEn).toContain('structure confirmation needs Repository Manifest');
-      expect(canonicalBlocksEn).toContain('absence confirmation needs Repository Query plus Authoritative Quote');
-      expect(canonicalBlocksJa).toContain('code の確認は File Quote');
-      expect(canonicalBlocksJa).toContain('structure の確認は Repository Manifest');
-      expect(canonicalBlocksJa).toContain('absence の確認は Repository Query と Authoritative Quote');
-
       for (const rendered of [
         structuredEn,
         structuredJa,
-        canonicalBlocksEn,
-        canonicalBlocksJa,
       ]) {
         expect(rendered).toMatch(/Do not output snapshotId|snapshotId・runId・proofId/u);
         expect(rendered).not.toContain(REVIEWER_SNAPSHOT_ID);

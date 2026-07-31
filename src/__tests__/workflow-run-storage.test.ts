@@ -210,7 +210,6 @@ function workflow(withFindingContract: boolean): WorkflowConfig {
           findingContract: {
             ledgerPath: '.takt/findings/storage-test.json',
             rawFindingsPath: '.takt/findings/raw',
-            reviewerOutput: 'structured',
             manager: {
               persona: 'findings-manager',
               instruction: 'manage',
@@ -229,7 +228,6 @@ function findingWorkflow(name: string): WorkflowConfig {
     findingContract: {
       ledgerPath: `.takt/findings/${name}.json`,
       rawFindingsPath: `.takt/findings/${name}-raw`,
-      reviewerOutput: 'structured',
       manager: {
         persona: 'findings-manager',
         instruction: 'manage',

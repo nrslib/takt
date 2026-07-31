@@ -221,7 +221,9 @@ TAKT は 5 種類の step をサポートしています。必要な構造に応
 
 ### Finding Contract reviewer 出力と manager の provider/model
 
-`finding_contract.reviewer_output` は reviewer の intake 形式を明示的に選択します。省略時は `structured` です。canonical claim block protocol を出力する workflow は `canonical_blocks`、reviewer が通常の Markdown を書き、その後で隔離された `intake_normalize` model が raw finding を抽出する workflow は `plain_text_normalized` を指定してください。TAKT は provider や global normalizer 設定から形式を推論しません。
+Finding Contract reviewer は既定でnative structured outputを使います。
+runtime configの`finding_contract.intake_normalize`により、解決済みreviewerの
+provider/model完全一致を条件として、通常Markdownと隔離extractorを選択できます。
 
 `finding_contract.manager` では、合成 Finding Manager step 専用の provider と model を指定できます。
 
@@ -229,7 +231,6 @@ TAKT は 5 種類の step をサポートしています。必要な構造に応
 finding_contract:
   ledger_path: .takt/findings/review.json
   raw_findings_path: .takt/findings/review/raw
-  reviewer_output: canonical_blocks
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -238,10 +239,8 @@ finding_contract:
     model: gpt-5.5
 ```
 
-`plain_text_normalized` には config の `intake_normalize.provider` と
-`intake_normalize.model` が必須です。`targets` を指定する場合は workflow の完全一致名を
-含めます。レポートは normalization より先に保存され、normalizer にはその1件のレポートだけが
-tool なしの新規 session で渡されます。
+レポートはnormalizationより先に保存され、normalizerにはその1件のレポートだけが
+toolなしの新規sessionで渡されます。
 
 指定した値は Finding Manager の step レベル `provider` / `model` として扱われます。CLI と環境変数の明示 override は、これらより高い優先順位を維持します。manager の値は `provider_routing`、deprecated の `persona_providers.findings-manager`、effective auto routing、workflow/project/global fallback より優先されます。両方とも未指定の場合、manager は通常の workflow step provider/model 解決を維持します。`provider` だけを指定すると、下位優先度の model fallback は停止し、選択した provider 自身のデフォルトを使います。明示 model が必須の provider では検証エラーになります。
 

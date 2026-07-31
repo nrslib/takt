@@ -7,6 +7,7 @@ import { DEFAULT_LANGUAGE } from '../../shared/constants.js';
 import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
 import { RUN_STORAGE_BACKENDS } from './config-types.js';
+import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import {
   AnalyticsConfigSchema,
   AutoRoutingSchema,
@@ -75,12 +76,25 @@ export const ProviderRoutingSchema = z.object({
 export const FindingIntakeNormalizeConfigSchema = z.object({
   provider: ProviderReferenceSchema,
   model: z.string().trim().min(1).optional(),
-  targets: z.array(z.string().trim().min(1)).min(1)
-    .refine((targets) => new Set(targets).size === targets.length, {
-      message: 'intake_normalize.targets must not contain duplicates',
-    })
+  targets: z.array(z.object({
+    provider: z.enum(PROVIDER_TYPES),
+    model: z.string().trim().min(1),
+  }).strict()).min(1)
+    .refine(
+      (targets) =>
+        new Set(
+          targets.map((target) => JSON.stringify([target.provider, target.model])),
+        ).size === targets.length,
+      {
+        message: 'finding_contract.intake_normalize.targets must not contain duplicates',
+      },
+    )
     .optional(),
   provider_options: StepProviderOptionsSchema,
+}).strict();
+
+export const FindingContractRuntimeConfigSchema = z.object({
+  intake_normalize: FindingIntakeNormalizeConfigSchema.optional(),
 }).strict();
 
 /** Workflow category config schema (recursive) */
@@ -121,7 +135,7 @@ const ProjectConfigObjectBaseSchema = z.object({
   assistant: AssistantConfigSchema.optional(),
   persona_providers: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
   provider_routing: ProviderRoutingSchema,
-  intake_normalize: FindingIntakeNormalizeConfigSchema.optional(),
+  finding_contract: FindingContractRuntimeConfigSchema.optional(),
   branch_name_strategy: z.enum(['romaji', 'ai']).optional(),
   minimal_output: z.boolean().optional(),
   provider_options: StepProviderOptionsSchema,

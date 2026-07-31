@@ -55,11 +55,15 @@ import {
   executeObservedPhase1Attempt,
   PHASE1_EMPTY_OUTPUT_ERROR,
   runPhase1WithEmptyRecovery,
-  runSingleFreshPhase1Retry,
 } from './phase1-empty-recovery.js';
 import type {
+  FindingIntakeNormalizeConfig,
+} from '../../models/config-types.js';
+import type {
   FindingContractReviewerOutputStrategy,
+  FindingContractInstructionContext,
 } from '../instruction/instruction-context.js';
+import { resolveFindingContractReviewerOutputStrategy } from '../findings/reviewer-output-strategy.js';
 import {
   fallbackContextForOperation,
   findingIntakeNormalizerOperationOrigin,
@@ -89,6 +93,28 @@ type ParallelTerminalStatus = 'error' | 'blocked' | 'rate_limited';
 
 function isAgentParallelSubStep(step: WorkflowStep): step is AgentWorkflowStep {
   return !isWorkflowCallStep(step) && step.kind !== 'system';
+}
+
+function specializeParallelFindingContractContext(
+  baseContext: FindingContractInstructionContext | undefined,
+  reviewerOutputStrategy: FindingContractReviewerOutputStrategy,
+): FindingContractInstructionContext {
+  if (baseContext === undefined || baseContext.reviewer?.mode !== 'structured') {
+    throw new Error(
+      'Parallel Finding Contract reviewers require one shared review scope snapshot',
+    );
+  }
+  const sharedReviewerContext = baseContext.reviewer;
+  if (reviewerOutputStrategy.kind === 'structured') {
+    return baseContext;
+  }
+  return {
+    ...baseContext,
+    reviewer: {
+      mode: 'plain_text_normalized',
+      reviewScopeSnapshotId: sharedReviewerContext.reviewScopeSnapshotId,
+    },
+  };
 }
 
 /**
@@ -138,7 +164,7 @@ export interface ParallelRunnerDeps {
   readonly refreshFindingsState: () => void;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
   readonly findingContract?: FindingContractConfig;
-  readonly reviewerOutputStrategy?: FindingContractReviewerOutputStrategy;
+  readonly intakeNormalize?: FindingIntakeNormalizeConfig;
   readonly findingManagerAuthority: FindingManagerAuthority;
   /** findings-manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
   readonly workflowProvider?: WorkflowConfig['provider'];
@@ -245,27 +271,6 @@ export class ParallelRunner {
     if (semaphore) {
       log.debug('Concurrency limit enabled', { step: step.name, concurrency: step.concurrency });
     }
-    // WorkflowEngineSetup.buildFindingContractInstructionContext と同じヘルパを
-    // ラウンドの先頭で1回だけ呼ぶ（sub-step ごとに再計算しない）。
-    // reviewScopeSnapshotId は「このラウンドの reviewer 全員が同じ値を見る」ことが
-    // 前提であり（manager 検証時の再計算と一致する必要がある —
-    // WorkflowEngineSetup.ts・snapshot.ts 参照）、ここで inline に再実装すると
-    // reviewScopeSnapshotId の付与漏れのような配線バグを繰り返す。
-    // findingContract 未設定のワークフローが大半のため、クロージャ呼び出し自体を
-    // 避ける早期リターンは維持する（OptionsBuilder 側でも undefined を返すが、
-    // 呼び出しコストを避けたい）。
-    const reviewerOutputStrategy = this.deps.findingContract
-      ? this.requireFindingContractReviewerOutputStrategy()
-      : undefined;
-    const findingContractContext = this.deps.findingContract
-      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(
-          step,
-          reviewerOutputStrategy,
-        )
-      : undefined;
-    const rawFindingsStructuredOutput = findingContractContext?.reviewer?.mode === 'structured'
-      ? findingContractContext.reviewer.rawFindingsStructuredOutput
-      : undefined;
     const agentSubSteps = subSteps.filter(isAgentParallelSubStep);
     const routingLedger = this.deps.engineOptions.autoRouting && agentSubSteps.length > 0
       ? this.deps.findingLedgerStore?.loadLedger()
@@ -312,6 +317,31 @@ export class ParallelRunner {
           abortSignal: this.deps.engineOptions.abortSignal,
         })
       : new Map();
+    const structuredReviewerStrategy: FindingContractReviewerOutputStrategy = {
+      kind: 'structured',
+      reportGeneration: 'structured',
+      intake: 'reviewer_structured',
+    };
+    const baseFindingContractContext = this.deps.findingContract
+      && agentSubSteps[0] !== undefined
+      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(
+          agentSubSteps[0],
+          structuredReviewerStrategy,
+        )
+      : undefined;
+    const sharedReviewerContext = baseFindingContractContext?.reviewer;
+    if (
+      this.deps.findingContract !== undefined
+      && agentSubSteps.length > 0
+      && (
+        sharedReviewerContext?.mode !== 'structured'
+        || sharedReviewerContext.reviewScopeSnapshotId.length === 0
+      )
+    ) {
+      throw new Error(
+        'Parallel Finding Contract reviewers require one shared review scope snapshot',
+      );
+    }
     const workflowCallResumeStack = subSteps.some(isWorkflowCallStep)
       ? this.requireWorkflowCallResumeStack(step, stepIteration)
       : undefined;
@@ -347,9 +377,6 @@ export class ParallelRunner {
             throw new Error(`Unsupported parallel sub-step kind for "${subStep.name}"`);
           }
 
-          const executableSubStep = findingContractContext?.reviewer?.mode === 'structured'
-            ? withFindingContractStructuredOutput(subStep, findingContractContext)
-            : subStep;
           const routedRuntime = routedProviderInfoByStep.has(subStep.name)
             ? {
                 ...runtime,
@@ -366,6 +393,36 @@ export class ParallelRunner {
             findingIntakeNormalizerOperationOrigin(subStep.name),
             routedRuntime?.providerInfo,
           );
+          const reviewerOutputStrategy = this.deps.findingContract
+            ? resolveFindingContractReviewerOutputStrategy(
+                this.deps.findingContract,
+                this.deps.intakeNormalize,
+                this.deps.optionsBuilder.resolveStepProviderModel(
+                  subStep,
+                  subRuntime,
+                ),
+              )
+            : undefined;
+          if (
+            this.deps.findingContract !== undefined
+            && reviewerOutputStrategy === undefined
+          ) {
+            throw new Error('Finding contract reviewer output strategy is not configured');
+          }
+          const findingContractContext = reviewerOutputStrategy !== undefined
+            ? specializeParallelFindingContractContext(
+                baseFindingContractContext,
+                reviewerOutputStrategy,
+              )
+            : undefined;
+          const rawFindingsStructuredOutput =
+            findingContractContext?.reviewer?.mode === 'structured'
+              ? findingContractContext.reviewer.rawFindingsStructuredOutput
+              : undefined;
+          const executableSubStep =
+            findingContractContext?.reviewer?.mode === 'structured'
+              ? withFindingContractStructuredOutput(subStep, findingContractContext)
+              : subStep;
           const subIteration = incrementStepIteration(
             state,
             buildScopedStepIterationIdentity(subStep.name, [step.name]),
@@ -398,6 +455,9 @@ export class ParallelRunner {
           };
 
         if (findingContractContext !== undefined) {
+          if (reviewerOutputStrategy === undefined) {
+            throw new Error('Finding contract reviewer output strategy is not configured');
+          }
           const resumedPublication = await this.deps.stepExecutor
             .resumeFindingReviewPublication({
               step: subStep,
@@ -603,65 +663,18 @@ export class ParallelRunner {
           providerInfo: subPm,
         };
         if (findingContractContext !== undefined) {
-          let publicationRetryPhase1Executed = false;
+          if (reviewerOutputStrategy === undefined) {
+            throw new Error('Finding contract reviewer output strategy is not configured');
+          }
           const prepared = await this.deps.stepExecutor.prepareFindingReviewPublication({
             step: subStep,
             executableStep: executableSubStep,
+            reviewerOutputStrategy,
             parentStepName: step.name,
             stepIteration,
             state,
             phase1Response: subResponse,
             agentOptions,
-            rerunPhase1Fresh: async () => {
-              if (publicationRetryPhase1Executed) {
-                throw new Error(
-                  `Finding contract reviewer "${subStep.name}" attempted more than one fresh Phase 1 retry`,
-                );
-              }
-              publicationRetryPhase1Executed = true;
-              const response = await runSingleFreshPhase1Retry({
-                stepName: subStep.name,
-                sequence: phase1Result.finalAttempt.sequence + 1,
-                instruction: phase1Instruction,
-                discardSession: () => updatePersonaSession(subSessionKey, undefined),
-                execute: (attempt) => executeObservedPhase1Attempt({
-                  enabled: this.deps.observabilityEnabled,
-                  runId: this.deps.observabilityRunId,
-                  workflowName: this.deps.getWorkflowName(),
-                  eventStep: subStep,
-                  spanStep: executableSubStep,
-                  iteration: parentIteration,
-                  attempt,
-                  workflowStack: this.deps.getCurrentWorkflowStack?.(),
-                  sanitizeText: this.deps.sanitizeObservabilityText,
-                  providerInfo: subPm,
-                  execute: (attemptInstruction, sessionId, onPromptResolved) => (
-                    this.executeSubStepAgent(
-                      executableSubStep,
-                      subPm,
-                      attemptInstruction,
-                      {
-                        ...agentOptions,
-                        sessionId,
-                        onPromptResolved,
-                      },
-                    )
-                  ),
-                  onPhaseStart: this.deps.onPhaseStart,
-                }),
-                complete: (completedResponse, attempt) => completeObservedPhase1Attempt({
-                  eventStep: subStep,
-                  iteration: parentIteration,
-                  attempt,
-                  response: completedResponse,
-                  onPhaseComplete: this.deps.onPhaseComplete,
-                }),
-              });
-              if (response.sessionId !== undefined) {
-                updatePersonaSession(subSessionKey, response.sessionId);
-              }
-              return response;
-            },
             onProviderAttempt: (attemptProviderInfo, success, usage) => {
               recordAgentUsageEvent(
                 this.deps.engineOptions,
@@ -981,7 +994,7 @@ export class ParallelRunner {
     const postExecutionRuntime = runtime?.fallback === undefined
       ? runtime
       : { ...runtime, fallback: undefined };
-    if (findingContractContext !== undefined) {
+    if (this.deps.findingContract !== undefined) {
       for (const result of subResults) {
         if (!isAgentParallelSubStep(result.subStep)) {
           continue;
@@ -1077,16 +1090,6 @@ export class ParallelRunner {
       },
     );
     return { response: aggregatedResponse, instruction: aggregatedInstruction, providerInfo: parentPm };
-  }
-
-  private requireFindingContractReviewerOutputStrategy(): FindingContractReviewerOutputStrategy {
-    const strategy = this.deps.reviewerOutputStrategy;
-    if (strategy === undefined) {
-      throw new Error(
-        'Finding contract reviewer output strategy is not configured',
-      );
-    }
-    return strategy;
   }
 
   private async runWorkflowCallSubStep(

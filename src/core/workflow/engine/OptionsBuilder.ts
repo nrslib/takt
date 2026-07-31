@@ -84,6 +84,7 @@ export class OptionsBuilder {
     private readonly getFindingContractInstructionContext?: (
       step: WorkflowStep,
       reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
+      reviewScopeSnapshotId?: string,
     ) => FindingContractInstructionContext | undefined,
   ) {}
 
@@ -382,8 +383,13 @@ export class OptionsBuilder {
   buildFindingContractInstructionContext(
     step: WorkflowStep,
     reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
+    reviewScopeSnapshotId?: string,
   ): FindingContractInstructionContext | undefined {
-    return this.getFindingContractInstructionContext?.(step, reviewerOutputStrategy);
+    return this.getFindingContractInstructionContext?.(
+      step,
+      reviewerOutputStrategy,
+      reviewScopeSnapshotId,
+    );
   }
 
   private resolveSupportedMaxTurns(

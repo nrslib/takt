@@ -454,7 +454,6 @@ describe('session compaction Phase 1 wiring', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',

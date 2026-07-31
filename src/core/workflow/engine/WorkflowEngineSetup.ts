@@ -44,9 +44,6 @@ import type {
   FindingContractReviewerOutputStrategy,
 } from '../instruction/instruction-context.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
-import {
-  resolveFindingContractReviewerOutputStrategy,
-} from '../findings/reviewer-output-strategy.js';
 import { resolveFindingIntakeNormalizeConfig } from '../findings/intake-normalize-policy.js';
 
 const log = createLogger('workflow-engine');
@@ -170,17 +167,14 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     (event, ...args) => params.emitEvent(event, ...args),
     params.getCurrentWorkflowStack,
   );
-  const reviewerOutputStrategy = resolveFindingContractReviewerOutputStrategy(
-    params.findingContract,
-  );
   const intakeNormalize = resolveFindingIntakeNormalizeConfig(
-    params.options.intakeNormalize,
-    params.config.name,
+    params.options.findingContractConfig?.intakeNormalize,
     params.findingContract,
   );
   const buildFindingContractInstructionContext = (
     _step: WorkflowStep,
     strategy: FindingContractReviewerOutputStrategy | undefined,
+    sharedReviewScopeSnapshotId?: string,
   ): FindingContractInstructionContext | undefined => {
     if (!params.findingContract) {
       return undefined;
@@ -192,7 +186,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     const ledger = params.findingLedgerStore.loadLedger();
     let reviewer: FindingContractInstructionContext['reviewer'];
     if (strategy !== undefined) {
-      const reviewScopeSnapshotId = computeReviewScopeSnapshotId(params.getCwd());
+      const reviewScopeSnapshotId = sharedReviewScopeSnapshotId
+        ?? computeReviewScopeSnapshotId(params.getCwd());
       reviewer = strategy.reportGeneration === 'structured'
         ? {
             mode: 'structured',
@@ -247,7 +242,6 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,
     getCurrentWorkflowStack: params.getCurrentWorkflowStack,
     structuredOutputNormalizers: params.options.structuredOutputNormalizers,
-    reviewerOutputStrategy,
     structuredCaller: params.structuredCaller,
     intakeNormalize,
     abortSignal: params.options.abortSignal,
@@ -305,7 +299,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
     findingContract: params.findingContract,
-    reviewerOutputStrategy,
+    intakeNormalize,
     findingManagerAuthority: params.findingManagerAuthority,
     workflowProvider: params.config.provider,
     workflowModel: params.config.model,

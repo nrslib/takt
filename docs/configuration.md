@@ -124,13 +124,16 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #     model: opus
 
 # Finding Contract plain-text intake normalizer
-# intake_normalize:
-#   provider: codex
-#   model: gpt-5.6-terra
-#   targets: [takt-default-localllm] # Optional exact workflow-name filter
-#   provider_options:
-#     codex:
-#       reasoning_effort: high
+# finding_contract:
+#   intake_normalize:
+#     provider: codex
+#     model: gpt-5.6-terra
+#     targets:
+#       - provider: opencode
+#         model: ollama-cloud/gemma4:31b
+#     provider_options:
+#       codex:
+#         reasoning_effort: high
 
 # Workflow security policies (all default to deny)
 # These settings control what untrusted workflow YAMLs are allowed to do.
@@ -197,7 +200,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 | `persona_providers` | object | - | Deprecated legacy per-display-name provider/model/provider_options overrides. Prefer `provider_routing` for new settings |
 | `provider_options` | object | - | Global provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
-| `intake_normalize` | object | - | Provider/model used to extract raw findings from `plain_text_normalized` reviewer reports in an isolated session. Both are required; `targets`, when present, is an exact workflow-name allowlist |
+| `finding_contract.intake_normalize` | object | - | Provider/model used to extract raw findings from selected reviewer reports in an isolated session. Both are required; `targets` is an optional exact resolved reviewer provider/model allowlist |
 | `anthropic_api_key` | string | - | Anthropic API key for Claude |
 | `openai_api_key` | string | - | OpenAI API key for Codex |
 | `opencode_api_key` | string | - | OpenCode API key |
@@ -271,10 +274,13 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #     step_permission_overrides:
 #       ai_review: readonly
 
-# intake_normalize:
-#   provider: codex
-#   model: gpt-5.6-terra
-#   targets: [takt-default-localllm]
+# finding_contract:
+#   intake_normalize:
+#     provider: codex
+#     model: gpt-5.6-terra
+#     targets:
+#       - provider: opencode
+#         model: ollama-cloud/gemma4:31b
 ```
 
 ### Project Config Field Reference
@@ -294,7 +300,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 | `assistant.init_files` | string[] | - | Project-only interactive assistant initial context files. Paths must be relative to the project root; absolute paths, paths resolving outside the project root, and sensitive file patterns such as `.env*`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, and `.git/**` are rejected. Missing paths, directories, and unreadable files fail with a clear error. At most 16 files are allowed; each file is limited to 256 KiB and the combined content is limited to 1 MiB. When unset or empty, TAKT does not auto-discover `CLAUDE.md`, `AGENT.md`, `AGENTS.md`, `TAKT.md`, or other files. This is separate from `takt_providers.assistant`, which only controls the assistant provider/model. |
 | `provider_options` | object | - | Provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
-| `intake_normalize` | object | global setting | Project override for the Finding Contract plain-text intake normalizer |
+| `finding_contract.intake_normalize` | object | global setting | Project override for the Finding Contract plain-text intake normalizer |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global) |
 | `takt_providers` | object | - | TAKT internal provider overrides. Project `takt_providers.assistant` overrides the global assistant provider/model and is used for assistant conversations (interactive planning, instruct on existing tasks, and retry dialogue) and Report phase fallback after an OpenCode report retry fails. If project and global assistant are both unset, Report phase fallback is disabled and top-level `provider` / `model` are not used as an implicit fallback. |
 | `workflow_mcp_servers` | object | - | MCP server transport policy (overrides global) |
@@ -306,16 +312,16 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 
 Project config values override global config when both are set.
 
-`intake_normalize` is used only when a workflow explicitly selects
-`finding_contract.reviewer_output: plain_text_normalized`. It does not select or
-override that strategy. TAKT saves each ordinary Markdown reviewer report, then
+`finding_contract.intake_normalize` selects reviewer intake by the reviewer's
+resolved provider/model. TAKT saves each ordinary Markdown reviewer report, then
 passes only that report to the configured provider/model in a fresh tool-free
 structured session. The provider must support isolated structured execution.
-When `targets` is omitted, the configuration applies to all
-`plain_text_normalized` workflows. When present, the current workflow name must
-match one entry exactly. A missing configuration or target mismatch fails
-validation before execution. The project block atomically replaces the global
-block.
+When `targets` is omitted, normalization applies to every Finding Contract
+reviewer. When present, it applies only when a `{ provider, model }` entry exactly
+matches the resolved reviewer. Other reviewers keep native structured output.
+The normalizer provider/model/options are isolated from reviewer routing and CLI
+overrides; only a rate-limit fallback for the `finding_intake_normalizer`
+operation may replace them. The project block atomically replaces the global block.
 
 With `backend: sqlite`, TAKT uses only `.takt/runs/<run>/run.sqlite` as the
 Finding Contract authority; it does not dual-write or fall back to the file

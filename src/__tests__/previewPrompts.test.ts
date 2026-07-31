@@ -213,7 +213,6 @@ describe('previewPrompts', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           personaDisplayName: 'Findings Manager',
@@ -246,7 +245,6 @@ describe('previewPrompts', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'manager instruction',
@@ -287,7 +285,6 @@ describe('previewPrompts', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           personaDisplayName: 'Findings Manager',
@@ -322,7 +319,6 @@ describe('previewPrompts', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'manager instruction',
@@ -358,7 +354,6 @@ describe('previewPrompts', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           personaDisplayName: 'Findings Manager',
@@ -409,7 +404,6 @@ describe('previewPrompts', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'manager instruction',
@@ -452,7 +446,6 @@ describe('previewPrompts', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'manager instruction',

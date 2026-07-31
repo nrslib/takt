@@ -166,7 +166,6 @@ describe('conflict lifecycle reservation persistence', () => {
       workflowName: WORKFLOW_NAME,
       ledgerPath: LEDGER_PATH,
       rawFindingsPath: RAW_FINDINGS_PATH,
-      reviewerOutput: 'structured',
     });
   }
 

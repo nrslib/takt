@@ -124,13 +124,16 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #     model: opus
 
 # Finding Contract plain-text intake normalizer
-# intake_normalize:
-#   provider: codex
-#   model: gpt-5.6-terra
-#   targets: [takt-default-localllm] # 任意のworkflow name完全一致filter
-#   provider_options:
-#     codex:
-#       reasoning_effort: high
+# finding_contract:
+#   intake_normalize:
+#     provider: codex
+#     model: gpt-5.6-terra
+#     targets:
+#       - provider: opencode
+#         model: ollama-cloud/gemma4:31b
+#     provider_options:
+#       codex:
+#         reasoning_effort: high
 
 # ワークフローセキュリティポリシー（すべてデフォルト拒否）
 # 信頼されていないワークフロー YAML が実行できる内容を制御
@@ -197,7 +200,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 | `persona_providers` | object | - | deprecated の旧設定。persona display name ごとの provider / model / provider_options 上書き。新規設定では `provider_routing` を推奨 |
 | `provider_options` | object | - | グローバルな provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
-| `intake_normalize` | object | - | `plain_text_normalized` reviewer reportからraw findingを隔離sessionで抽出するprovider/model設定。両方必須。`targets`指定時はworkflow nameの完全一致allowlist |
+| `finding_contract.intake_normalize` | object | - | 選択したreviewer reportからraw findingを隔離sessionで抽出するprovider/model設定。両方必須。`targets`は解決済みreviewer provider/modelの完全一致allowlist |
 | `anthropic_api_key` | string | - | Claude 用 Anthropic API キー |
 | `openai_api_key` | string | - | Codex 用 OpenAI API キー |
 | `opencode_api_key` | string | - | OpenCode API キー |
@@ -271,10 +274,13 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #     step_permission_overrides:
 #       ai_review: readonly
 
-# intake_normalize:
-#   provider: codex
-#   model: gpt-5.6-terra
-#   targets: [takt-default-localllm]
+# finding_contract:
+#   intake_normalize:
+#     provider: codex
+#     model: gpt-5.6-terra
+#     targets:
+#       - provider: opencode
+#         model: ollama-cloud/gemma4:31b
 ```
 
 ### プロジェクト設定フィールドリファレンス
@@ -294,7 +300,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 | `assistant.init_files` | string[] | - | project config 専用のインタラクティブ assistant 初期コンテキストファイル。パスは project root 相対で指定します。絶対パス、project root 外へ解決されるパス、`.env*` / `.npmrc` / `.pypirc` / `.netrc` / `*.pem` / `*.key` / `.git/**` などの機密ファイルパターンは拒否されます。存在しないパス、ディレクトリ、読めないファイルは分かるエラーになります。最大16ファイルまで指定でき、1ファイルは256KiB、合計本文は1MiBまでです。未設定または空の場合、`CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` などは自動探索されません。assistant の provider/model だけを制御する `takt_providers.assistant` とは別設定です。 |
 | `provider_options` | object | - | provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
-| `intake_normalize` | object | global 設定 | Finding Contract plain-text intake normalizerのproject上書き |
+| `finding_contract.intake_normalize` | object | global 設定 | Finding Contract plain-text intake normalizerのproject上書き |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（グローバルを上書き） |
 | `takt_providers` | object | - | TAKT 内部プロバイダー上書き。project の `takt_providers.assistant` は global assistant provider/model を上書きし、assistant 会話（インタラクティブモードの計画会話、既存タスクへの追加指示 (instruct)、リトライ対話）と、OpenCode の report retry 失敗後の Report phase fallback に使われます。project と global の assistant がどちらも未設定の場合、Report phase fallback は無効で、top-level `provider` / `model` は暗黙 fallback として使われません。 |
 | `workflow_mcp_servers` | object | - | MCP サーバートランスポートポリシー（グローバルを上書き） |
@@ -306,14 +312,15 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 プロジェクト設定の値は、両方が設定されている場合にグローバル設定を上書きします。
 
-`intake_normalize` はworkflowが
-`finding_contract.reviewer_output: plain_text_normalized`を明示した場合だけ使われます。
-この設定自体がstrategyを選択・上書きすることはありません。TAKTは通常のMarkdown reviewer
+`finding_contract.intake_normalize` は、reviewer の解決済み provider/model によって
+intake strategy を選択します。TAKTは通常のMarkdown reviewer
 reportを先に保存し、そのreportだけを設定済みprovider/modelのtoolなし新規structured sessionへ
 渡します。providerはisolated structured executionをサポートしている必要があります。
-`targets`省略時はすべての`plain_text_normalized` workflowに適用し、指定時は現在の
-workflow nameが完全一致で含まれていなければ実行前の検証で失敗します。設定自体がない場合も
-同様にfail-fastします。project blockがglobal block全体をatomicに置き換える規則は維持します。
+`targets`省略時は全Finding Contract reviewerに適用し、指定時は
+`{ provider, model }` が解決済みreviewerと完全一致する場合だけ適用します。それ以外のreviewerは
+native structured outputを使います。normalizer自身のprovider/model/optionsはreviewer routingや
+CLI overrideから隔離され、`finding_intake_normalizer` operationのrate-limit fallbackだけが変更できます。
+project blockがglobal block全体をatomicに置き換える規則は維持します。
 
 `backend: sqlite` の場合、Finding Contractのauthorityは
 `.takt/runs/<run>/run.sqlite` のみです。file ledgerとのdual-writeやfileへのfallbackは行いません。

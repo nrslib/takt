@@ -1,23 +1,18 @@
 import type {
   FindingContractConfig,
-  FindingContractReviewerOutput,
 } from '../../models/finding-types.js';
+import type { FindingIntakeNormalizeConfig } from '../../models/config-types.js';
+import type { StepProviderInfo } from '../types.js';
 import type {
   FindingContractReviewerOutputStrategy,
 } from '../instruction/instruction-context.js';
+import { findingIntakeNormalizerTargetsStep } from './intake-normalize-policy.js';
 
-const STRATEGIES: Readonly<
-  Record<FindingContractReviewerOutput, FindingContractReviewerOutputStrategy>
-> = Object.freeze({
+const STRATEGIES = Object.freeze({
   structured: Object.freeze({
     kind: 'structured',
     reportGeneration: 'structured',
     intake: 'reviewer_structured',
-  }),
-  canonical_blocks: Object.freeze({
-    kind: 'canonical_blocks',
-    reportGeneration: 'plain_text',
-    intake: 'canonical_parser',
   }),
   plain_text_normalized: Object.freeze({
     kind: 'plain_text_normalized',
@@ -28,6 +23,16 @@ const STRATEGIES: Readonly<
 
 export function resolveFindingContractReviewerOutputStrategy(
   contract: FindingContractConfig | undefined,
+  intakeNormalize: FindingIntakeNormalizeConfig | undefined,
+  reviewerProviderInfo: StepProviderInfo,
 ): FindingContractReviewerOutputStrategy | undefined {
-  return contract === undefined ? undefined : STRATEGIES[contract.reviewerOutput];
+  if (contract === undefined) {
+    return undefined;
+  }
+  return findingIntakeNormalizerTargetsStep(
+    intakeNormalize,
+    reviewerProviderInfo,
+  )
+    ? STRATEGIES.plain_text_normalized
+    : STRATEGIES.structured;
 }

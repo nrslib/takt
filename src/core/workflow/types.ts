@@ -18,8 +18,8 @@ import type {
 import type { FindingManagerAuthority } from '../models/finding-types.js';
 import type {
   AutoRoutingConfig,
-  FindingIntakeNormalizeConfig,
   AutoRoutingStrategy,
+  FindingContractRuntimeConfig,
   PersonaProviderEntry,
   ProviderRoutingConfig,
   ResolvedObservabilityConfig,
@@ -426,7 +426,7 @@ export interface WorkflowEngineOptions {
   /** Resolved automatic provider/model routing configuration */
   autoRouting?: AutoRoutingConfig;
   /** Opt-in reviewer report extraction for effective Finding Contract workflows. */
-  intakeNormalize?: FindingIntakeNormalizeConfig;
+  findingContractConfig?: FindingContractRuntimeConfig;
   /** Run-scoped strategy override for automatic provider/model routing. */
   autoStrategyOverride?: AutoRoutingStrategy;
   onEffectiveAutoRoutingReached?: () => void;

@@ -52,7 +52,6 @@ import { MAIN_MANAGER_INPUT_MAX_BYTES } from '../core/workflow/findings/manager-
 const FINDING_CONTRACT: FindingContractConfig = {
   ledgerPath: '.takt/findings/peer-review.json',
   rawFindingsPath: '.takt/findings/raw',
-  reviewerOutput: 'structured',
   manager: {
     persona: 'findings-manager',
     instruction: 'Reconcile findings.',

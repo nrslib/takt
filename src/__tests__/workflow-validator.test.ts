@@ -75,7 +75,6 @@ function createFindingContractParallelWorkflow(
     findingContract: {
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
-      reviewerOutput: 'structured',
       manager: {
         persona: 'findings-manager',
         instruction: 'findings-manager',
@@ -152,39 +151,7 @@ function createPoolScopedValidatorAutoRouting(): AutoRoutingConfig {
 }
 
 describe('validateWorkflowConfig', () => {
-  describe('plain-text Finding Contract intake normalization', () => {
-    const plainTextWorkflow = createWorkflow({
-      findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'plain_text_normalized',
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-      },
-    });
-
-    it('fails before step validation when intake_normalize is missing', () => {
-      expect(() => validateWorkflowConfig(plainTextWorkflow, {
-        projectCwd: process.cwd(),
-      })).toThrow(/intake_normalize is not configured/);
-    });
-
-    it('fails when intake_normalize.targets does not include the exact workflow name', () => {
-      expect(() => validateWorkflowConfig(plainTextWorkflow, {
-        projectCwd: process.cwd(),
-        intakeNormalize: {
-          provider: 'mock',
-          model: 'normalizer',
-          targets: ['other-workflow'],
-        },
-      })).toThrow(/not included in intake_normalize.targets/);
-    });
-  });
-
-  it('accepts canonical workflow transitions', () => {
+  it('accepts valid workflow transitions', () => {
     expect(() => validateWorkflowConfig(createWorkflow(), { projectCwd: process.cwd() })).not.toThrow();
   });
 
@@ -294,7 +261,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -315,7 +281,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -349,7 +314,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -370,7 +334,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -403,7 +366,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -533,7 +495,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -629,7 +590,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -667,7 +627,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -695,7 +654,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -715,7 +673,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           providerRoutingPersonaKey: 'findings-manager',
@@ -741,7 +698,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           providerRoutingPersonaKey: 'findings-manager',
@@ -781,7 +737,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -825,7 +780,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -882,7 +836,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -947,7 +900,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -972,7 +924,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1015,7 +966,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1042,7 +992,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1087,7 +1036,6 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [createPlanAgent({
@@ -1532,7 +1480,6 @@ describe('validateWorkflowConfig', () => {
         findingContract: {
           ledgerPath: '.takt/findings/peer-review.json',
           rawFindingsPath: '.takt/findings/raw',
-          reviewerOutput: 'structured',
           manager: {
             persona: 'findings-manager',
             instruction: 'findings-manager',
@@ -1582,7 +1529,6 @@ describe('validateWorkflowConfig', () => {
           contract: {
             ledgerPath: '.takt/findings/peer-review.json',
             rawFindingsPath: '.takt/findings/raw',
-            reviewerOutput: 'structured',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1616,7 +1562,6 @@ describe('validateWorkflowConfig', () => {
           contract: {
             ledgerPath: '.takt/findings/peer-review.json',
             rawFindingsPath: '.takt/findings/raw',
-            reviewerOutput: 'structured',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1654,7 +1599,6 @@ describe('validateWorkflowConfig', () => {
           contract: {
             ledgerPath: '.takt/findings/peer-review.json',
             rawFindingsPath: '.takt/findings/raw',
-            reviewerOutput: 'structured',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1672,7 +1616,6 @@ describe('validateWorkflowConfig', () => {
         findingContract: {
           ledgerPath: '.takt/findings/own.json',
           rawFindingsPath: '.takt/findings/own/raw',
-          reviewerOutput: 'structured',
           manager: {
             persona: 'findings-manager',
             instruction: 'findings-manager',
@@ -1687,7 +1630,6 @@ describe('validateWorkflowConfig', () => {
           contract: {
             ledgerPath: '.takt/findings/parent.json',
             rawFindingsPath: '.takt/findings/parent/raw',
-            reviewerOutput: 'structured',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1712,7 +1654,6 @@ describe('validateWorkflowConfig', () => {
           contract: {
             ledgerPath: '.takt/findings/peer-review.json',
             rawFindingsPath: '.takt/findings/raw',
-            reviewerOutput: 'structured',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1736,7 +1677,6 @@ describe('validateWorkflowConfig', () => {
           contract: {
             ledgerPath: '.takt/findings/peer-review.json',
             rawFindingsPath: '.takt/findings/raw',
-            reviewerOutput: 'structured',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',

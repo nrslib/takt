@@ -66,9 +66,20 @@ export function runtimeForOperation(
       ? operationRuntime
       : { ...operationRuntime, providerInfo: baseProviderInfo };
   }
+  const resolvedFallbackProviderInfo = fallbackProviderInfo(runtime.fallback);
+  const optionSource = [baseProviderInfo, runtime.providerInfo].find(
+    (providerInfo) =>
+      providerInfo?.provider === resolvedFallbackProviderInfo.provider
+      && providerInfo?.model === resolvedFallbackProviderInfo.model,
+  );
   return {
     ...runtime,
-    providerInfo: fallbackProviderInfo(runtime.fallback),
+    providerInfo: {
+      ...resolvedFallbackProviderInfo,
+      ...(optionSource?.providerOptions !== undefined
+        ? { providerOptions: optionSource.providerOptions }
+        : {}),
+    },
   };
 }
 

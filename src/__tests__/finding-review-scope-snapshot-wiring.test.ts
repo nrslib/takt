@@ -30,12 +30,14 @@ import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/Ste
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import type { AgentResponse, FindingContractConfig, WorkflowState, WorkflowStep } from '../core/models/types.js';
 import type { ProviderUsageSnapshot } from '../core/models/response.js';
-import type { AutoRoutingConfig } from '../core/models/config-types.js';
+import type {
+  AutoRoutingConfig,
+  FindingIntakeNormalizeConfig,
+} from '../core/models/config-types.js';
 import type { StepProviderInfo } from '../core/workflow/types.js';
 import type {
   FindingContractInstructionContext,
   FindingContractInstructionPolicy,
-  FindingContractReviewerOutputStrategy,
 } from '../core/workflow/instruction/instruction-context.js';
 import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
@@ -158,7 +160,6 @@ function makeParallelStep(): WorkflowStep {
 const FINDING_CONTRACT: FindingContractConfig = {
   ledgerPath: '.takt/findings/peer-review.json',
   rawFindingsPath: '.takt/findings/raw',
-  reviewerOutput: 'structured',
   manager: {
     persona: 'findings-manager',
     instruction: 'Reconcile findings.',
@@ -251,7 +252,8 @@ function makeRunner(options: {
   projectCwd?: string;
   reportDir?: string;
   findingContractContext?: FindingContractInstructionContext;
-  reviewerOutputStrategy?: FindingContractReviewerOutputStrategy;
+  intakeNormalize?: FindingIntakeNormalizeConfig;
+  reviewerProviderInfoByStep?: Readonly<Record<string, StepProviderInfo>>;
   reportAttempt?: {
     readonly providerInfo: StepProviderInfo;
     readonly success: boolean;
@@ -372,11 +374,15 @@ function makeRunner(options: {
         resolvedModel: runtime?.providerInfo?.model,
       })),
       buildPhaseRunnerContext: vi.fn().mockReturnValue({}),
-      resolveStepProviderModel: vi.fn((_step, runtime) => (
-        runtime?.providerInfo ?? { provider: 'claude', model: 'claude-sonnet' }
+      resolveStepProviderModel: vi.fn((resolvedStep, runtime) => (
+        runtime?.providerInfo
+        ?? options.reviewerProviderInfoByStep?.[resolvedStep.name]
+        ?? { provider: 'claude', model: 'claude-sonnet' }
       )),
       resolveStepProviderModelBeforeAutoRouting: vi.fn((_step, runtime) => (
-        runtime?.providerInfo ?? (
+        runtime?.providerInfo
+        ?? options.reviewerProviderInfoByStep?.[_step.name]
+        ?? (
           options.autoRouting === undefined
             ? { provider: 'claude', model: 'claude-sonnet' }
             : { provider: undefined, model: undefined }
@@ -409,11 +415,8 @@ function makeRunner(options: {
     emitEvent: vi.fn(),
     onPhaseComplete: vi.fn(),
     ...(withFindingContract ? { findingContract: FINDING_CONTRACT } : {}),
-    ...(withFindingContract
-      ? {
-          reviewerOutputStrategy: options.reviewerOutputStrategy
-            ?? { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
-        }
+    ...(options.intakeNormalize !== undefined
+      ? { intakeNormalize: options.intakeNormalize }
       : {}),
     findingLedgerStore,
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
@@ -456,7 +459,10 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     // 直列化時に特に問題になる）。
     expect(deps.optionsBuilder.buildFindingContractInstructionContext).toHaveBeenCalledTimes(1);
     expect(deps.optionsBuilder.buildFindingContractInstructionContext)
-      .toHaveBeenCalledWith(step, { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' });
+      .toHaveBeenCalledWith(
+        step.parallel![0],
+        { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
+      );
 
     const builtContext = vi.mocked(deps.optionsBuilder.buildFindingContractInstructionContext).mock.results[0]?.value;
     expect(builtContext).toBeDefined();
@@ -490,18 +496,27 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     );
   });
 
-  it('wires canonical-block reviewers without adding structured output to their steps', async () => {
-    const canonicalBlocksContext = makeFindingContractContext({
-      reviewer: {
-        mode: 'canonical_blocks',
-        reviewScopeSnapshotId: 'round-snapshot-abc123',
+  it('shares one snapshot across structured and normalized reviewers', async () => {
+    const { runner, deps } = makeRunner({
+      intakeNormalize: {
+        provider: 'codex',
+        model: 'gpt-5.6-terra',
+        targets: [{
+          provider: 'opencode',
+          model: 'ollama-cloud/gemma4:31b',
+        }],
+      },
+      reviewerProviderInfoByStep: {
+        'ai-antipattern-review': {
+          provider: 'opencode',
+          model: 'ollama-cloud/gemma4:31b',
+        },
+        'security-review': {
+          provider: 'codex',
+          model: 'gpt-5.6-sol',
+        },
       },
     });
-    const { runner, deps } = makeRunner({
-      findingContractContext: canonicalBlocksContext,
-      reviewerOutputStrategy: { kind: 'canonical_blocks', reportGeneration: 'plain_text', intake: 'canonical_parser' },
-    });
-    const updatePersonaSession = vi.fn();
     const step = makeParallelStep();
     const state = makeState();
     queueAgentResponse(makeAgentResponse({
@@ -515,13 +530,30 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       sessionId: 'session-b',
     }));
 
-    await runner.runParallelStep(step, state, 'test task', 5, updatePersonaSession);
+    await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
+    expect(deps.optionsBuilder.buildFindingContractInstructionContext).toHaveBeenCalledTimes(1);
     expect(deps.optionsBuilder.buildFindingContractInstructionContext)
-      .toHaveBeenCalledWith(step, { kind: 'canonical_blocks', reportGeneration: 'plain_text', intake: 'canonical_parser' });
-    for (const call of vi.mocked(deps.optionsBuilder.buildAgentOptions).mock.calls) {
-      expect((call[0] as WorkflowStep).structuredOutput).toBeUndefined();
-    }
+      .toHaveBeenCalledWith(
+        step.parallel![0],
+        { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
+      );
+    const instructionPolicies = vi.mocked(deps.stepExecutor.buildInstruction).mock.calls
+      .map((call) => call[6] as FindingContractInstructionPolicy);
+    expect(instructionPolicies.map((policy) => policy.context.reviewer?.mode)).toEqual([
+      'plain_text_normalized',
+      'structured',
+    ]);
+    expect(instructionPolicies.map(
+      (policy) => policy.context.reviewer?.reviewScopeSnapshotId,
+    )).toEqual([
+      'round-snapshot-abc123',
+      'round-snapshot-abc123',
+    ]);
+    const executableSteps = vi.mocked(deps.optionsBuilder.buildAgentOptions).mock.calls
+      .map((call) => call[0] as WorkflowStep);
+    expect(executableSteps[0]?.structuredOutput).toBeUndefined();
+    expect(executableSteps[1]?.structuredOutput).toBeDefined();
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
   });
 
@@ -614,19 +646,15 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     ]));
   });
 
-  it('does not run manager intake when one canonical reviewer publication fails', async () => {
-    const canonicalBlocksContext = makeFindingContractContext({
-      reviewer: {
-        mode: 'canonical_blocks',
-        reviewScopeSnapshotId: 'round-snapshot-abc123',
+  it('does not run manager intake when one normalized reviewer publication fails', async () => {
+    const { runner, deps } = makeRunner({
+      intakeNormalize: {
+        provider: 'codex',
+        model: 'gpt-5.6-terra',
       },
     });
-    const { runner, deps } = makeRunner({
-      findingContractContext: canonicalBlocksContext,
-      reviewerOutputStrategy: { kind: 'canonical_blocks', reportGeneration: 'plain_text', intake: 'canonical_parser' },
-    });
     vi.mocked(deps.stepExecutor.prepareFindingReviewPublication)
-      .mockRejectedValueOnce(new Error('invalid canonical report'));
+      .mockRejectedValueOnce(new Error('invalid normalized report'));
     queueAgentResponse(makeAgentResponse({ persona: 'ai-antipattern-review' }));
     queueAgentResponse(makeAgentResponse({ persona: 'security-review' }));
 
@@ -691,29 +719,25 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
   });
 
-  it('parallel正式resumeはpending本文をnormalizerだけで再開する', async () => {
+  it('parallelのreviewer fallback後にnormalizer fallbackしても保存済みidentityで再開する', async () => {
     const projectCwd = mkdtempSync(join(tmpdir(), 'takt-parallel-pending-project-'));
     const sourcePaths = buildRunPaths(projectCwd, 'source-run');
     const targetPaths = buildRunPaths(projectCwd, 'target-run');
     const reportDir = targetPaths.reportsAbs;
     try {
       mkdirSync(sourcePaths.runRootAbs, { recursive: true });
-      const plainContext = makeFindingContractContext({
-        reviewer: {
-          mode: 'plain_text_normalized',
-          reviewScopeSnapshotId: 'round-snapshot-abc123',
-        },
-      });
+      const intakeNormalize: FindingIntakeNormalizeConfig = {
+        provider: 'mock',
+        model: 'normalizer-model',
+        targets: [{
+          provider: 'opencode',
+          model: 'openrouter/routed-reviewer-model',
+        }],
+      };
       const { runner, deps } = makeRunner({
         projectCwd,
         reportDir,
-        findingContractContext: plainContext,
-        reviewerOutputStrategy: {
-          kind: 'plain_text_normalized',
-          reportGeneration: 'plain_text',
-          intake: 'isolated_normalizer',
-        },
-        autoRouting: makeReviewerAutoRouting(),
+        intakeNormalize,
       });
       const reportContent = [
         '# AI Antipattern Review',
@@ -749,8 +773,13 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
           workflowName: 'test-workflow',
           reportContent,
           reviewerExecutionIdentity: {
-            provider: 'mock',
-            model: 'reviewer-model',
+            provider: 'opencode',
+            model: 'openrouter/routed-reviewer-model',
+            providerOptions: {
+              opencode: {
+                variant: 'reviewer-fallback',
+              },
+            },
           },
         }),
       );
@@ -778,16 +807,9 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
           )),
         } as unknown as StepExecutorDeps['optionsBuilder'],
         structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-        reviewerOutputStrategy: {
-          kind: 'plain_text_normalized',
-          reportGeneration: 'plain_text',
-          intake: 'isolated_normalizer',
-        },
         structuredCaller: { normalizeFindingIntake },
-        intakeNormalize: {
-          provider: 'mock',
-          model: 'normalizer-model',
-        },
+        intakeNormalize,
+        findingContract: FINDING_CONTRACT,
         getRunPaths: () => ({ reportsAbs: reportDir }),
         getFindingCallNamespace: () => '',
         getLanguage: () => 'en',
@@ -831,10 +853,6 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
 
       expect(result.response.status, result.response.content).toBe('done');
       expect(executeAgent).toHaveBeenCalledOnce();
-      expect(vi.mocked(executeAgent).mock.calls[0]?.[2]).toMatchObject({
-        resolvedProvider: 'opencode',
-        resolvedModel: 'openrouter/routed-reviewer-model',
-      });
       expect(normalizeFindingIntake).toHaveBeenCalledOnce();
       expect(normalizeFindingIntake.mock.calls[0]?.[0]).toBe(reportContent);
       expect(normalizeFindingIntake.mock.calls[0]?.[1]).toMatchObject({
@@ -849,9 +867,15 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         .toHaveLength(2);
       expect(vi.mocked(deps.stepExecutor.applyPostExecutionRulesOnly).mock.calls
         .map((call) => call[4]?.providerInfo?.model)).toEqual([
-        'reviewer-model',
         'openrouter/routed-reviewer-model',
+        'claude-sonnet',
       ]);
+      expect(vi.mocked(deps.stepExecutor.applyPostExecutionRulesOnly)
+        .mock.calls[0]?.[4]?.providerInfo?.providerOptions).toEqual({
+        opencode: {
+          variant: 'reviewer-fallback',
+        },
+      });
       expect(vi.mocked(deps.stepExecutor.buildInstruction).mock.calls
         .map((call) => call[5])).toEqual([undefined, undefined]);
       expect(ingestFindingContractResults).toHaveBeenCalledOnce();
@@ -900,7 +924,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     },
   );
 
-  it('resolves an open finding from a canonical parallel lifecycle confirmation', async () => {
+  it('resolves an open finding from a structured parallel lifecycle confirmation', async () => {
     const projectCwd = mkdtempSync(join(tmpdir(), 'takt-parallel-normalized-confirmation-'));
     const reportDir = mkdtempSync(join(tmpdir(), 'takt-parallel-normalized-reports-'));
     try {
@@ -919,18 +943,18 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         targetFindingId: 'F-0001',
         evidence: [evidence],
       });
-      const canonicalBlocksContext = makeFindingContractContext({
+      const structuredContext = makeFindingContractContext({
         hasOpenFindings: true,
         reviewer: {
-          mode: 'canonical_blocks',
+          mode: 'structured',
+          rawFindingsStructuredOutput: createRawFindingsStructuredOutput(evidence.snapshotId),
           reviewScopeSnapshotId: evidence.snapshotId,
         },
       });
       const { runner, deps } = makeRunner({
         projectCwd,
         reportDir,
-        findingContractContext: canonicalBlocksContext,
-        reviewerOutputStrategy: { kind: 'canonical_blocks', reportGeneration: 'plain_text', intake: 'canonical_parser' },
+        findingContractContext: structuredContext,
       });
       const ledgerStore = deps.findingLedgerStore!;
       await ledgerStore.updateLedger(() => ({

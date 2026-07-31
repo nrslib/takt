@@ -49,7 +49,6 @@ describe('workflow finding_contract schema', () => {
     expect(workflow.findingContract).toMatchObject({
       ledgerPath: '.takt/findings/peer-review.json',
       rawFindingsPath: '.takt/findings/raw',
-      reviewerOutput: 'structured',
       manager: {
         persona: 'findings-manager',
         personaDisplayName: 'findings-manager',
@@ -66,58 +65,12 @@ describe('workflow finding_contract schema', () => {
     );
   });
 
-  it('should normalize an explicit canonical_blocks reviewer output strategy', () => {
-    const workflow = normalizeWorkflowConfig({
-      ...makeWorkflowWithFindingContract({
-        ledger_path: '.takt/findings/peer-review.json',
-        raw_findings_path: '.takt/findings/raw',
-        reviewer_output: 'canonical_blocks',
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          output_contract: 'findings-manager',
-        },
-      }),
-      steps: [{
-        name: 'peer-review',
-        persona: 'reviewer',
-        instruction: 'Review the change.',
-        rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
-      }],
-    }, '/tmp/project');
-
-    expect(workflow.findingContract?.reviewerOutput).toBe('canonical_blocks');
-  });
-
-  it('should normalize an explicit plain_text_normalized reviewer output strategy', () => {
-    const workflow = normalizeWorkflowConfig({
-      ...makeWorkflowWithFindingContract({
-        ledger_path: '.takt/findings/peer-review.json',
-        raw_findings_path: '.takt/findings/raw',
-        reviewer_output: 'plain_text_normalized',
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          output_contract: 'findings-manager',
-        },
-      }),
-      steps: [{
-        name: 'peer-review',
-        persona: 'reviewer',
-        instruction: 'Review the change.',
-        rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
-      }],
-    }, '/tmp/project');
-
-    expect(workflow.findingContract?.reviewerOutput).toBe('plain_text_normalized');
-  });
-
-  it('should reject an unknown reviewer output strategy', () => {
+  it('should reject the removed workflow-level reviewer_output field', () => {
     expect(() => normalizeWorkflowConfig(
       makeWorkflowWithFindingContract({
         ledger_path: '.takt/findings/peer-review.json',
         raw_findings_path: '.takt/findings/raw',
-        reviewer_output: 'provider_inferred',
+        reviewer_output: 'plain_text_normalized',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',

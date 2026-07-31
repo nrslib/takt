@@ -233,7 +233,7 @@ describe('runReportPhase retry with new session', () => {
 
   });
 
-  it('canonical-block Finding Contract Phase 2 は本文テキストだけを要求する', async () => {
+  it('plain-text-normalized Finding Contract Phase 2 は本文テキストだけを要求する', async () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('freeform-review.md');
     const ctx = createContext(reportDir);
@@ -244,7 +244,7 @@ describe('runReportPhase retry with new session', () => {
       hasWaivedFindings: false,
       hasDismissedFindings: false,
       reviewer: {
-        mode: 'canonical_blocks',
+        mode: 'plain_text_normalized',
         reviewScopeSnapshotId: '1'.repeat(64),
       },
     });
@@ -256,7 +256,11 @@ describe('runReportPhase retry with new session', () => {
     }]);
 
     await generateReportPhase(step, 1, ctx, {
-      reviewerOutputStrategy: { kind: 'canonical_blocks', reportGeneration: 'plain_text', intake: 'canonical_parser' },
+      reviewerOutputStrategy: {
+        kind: 'plain_text_normalized',
+        reportGeneration: 'plain_text',
+        intake: 'isolated_normalizer',
+      },
     });
 
     const prompt = vi.mocked(runAgent).mock.calls[0]?.[1] as string;

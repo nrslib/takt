@@ -38,7 +38,6 @@ import {
   generateReportPhase,
   runReportPhase,
   ReportPhaseGenerationError,
-  type ReportRetryFailureReason,
 } from '../phase-runner.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import type {
@@ -84,6 +83,7 @@ import {
   resolveFindingContractIntakeStep,
   withFindingContractStructuredOutput,
 } from '../findings/contract-intake.js';
+import { resolveFindingContractReviewerOutputStrategy } from '../findings/reviewer-output-strategy.js';
 import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
 import {
   RAW_FINDINGS_SCHEMA_REF,
@@ -104,11 +104,9 @@ import {
   executeObservedPhase1Attempt,
   PHASE1_EMPTY_OUTPUT_ERROR,
   runPhase1WithEmptyRecovery,
-  runSingleFreshPhase1Retry,
 } from './phase1-empty-recovery.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import {
-  CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   createFindingReviewPublication,
   createPendingFindingReviewNormalization,
   loadFindingReviewPublication,
@@ -123,10 +121,6 @@ import {
   type FindingReviewPublicationProtocol,
   type ReviewerExecutionIdentity,
 } from '../findings/review-publication.js';
-import {
-  parseCanonicalFindingClaimReport,
-  type CanonicalFindingClaimItem,
-} from '../../../shared/prompts/finding-canonical-claim.js';
 import {
   FINDING_REVIEW_PUBLICATION_SCHEMA_REF,
   createFindingReviewPublicationStructuredOutput,
@@ -143,13 +137,6 @@ import {
 } from './fallback-operation.js';
 
 const log = createLogger('step-executor');
-
-const REPORT_FAILURE_LABELS: Record<ReportRetryFailureReason, string> = {
-  invalid_output: 'invalid output',
-  empty_output: 'empty output',
-  tool_call: 'forbidden tool call',
-  provider_error: 'provider error',
-};
 
 function reviewerExecutionIdentity(
   providerInfo: StepProviderInfo,
@@ -194,21 +181,6 @@ function replaceResponseProviderUsage(
     : { ...withoutProviderUsage, providerUsage };
 }
 
-function mergeReportFailureReasons(
-  first: readonly ReportRetryFailureReason[],
-  second: readonly ReportRetryFailureReason[],
-): readonly ReportRetryFailureReason[] {
-  return [...new Set([...first, ...second])];
-}
-
-function buildReportRecoveryExhaustedError(
-  stepName: string,
-  failureReasons: readonly ReportRetryFailureReason[],
-): string {
-  const labels = failureReasons.map((reason) => REPORT_FAILURE_LABELS[reason]);
-  return `Finding contract reviewer "${stepName}" exhausted report recovery attempts; failure types: ${labels.join(', ')}`;
-}
-
 export interface StepExecutorDeps {
   readonly optionsBuilder: OptionsBuilder;
   readonly getCwd: () => string;
@@ -228,7 +200,6 @@ export interface StepExecutorDeps {
   readonly sanitizeObservabilityText?: (text: string) => string;
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
-  readonly reviewerOutputStrategy?: FindingContractReviewerOutputStrategy;
   readonly structuredCaller?: StructuredCaller;
   readonly intakeNormalize?: FindingIntakeNormalizeConfig;
   readonly abortSignal?: AbortSignal;
@@ -289,6 +260,7 @@ export interface StepExecutorDeps {
 export interface PreparedNormalStepExecution {
   readonly executableStep: AgentWorkflowStep;
   readonly findingContractContext?: FindingContractInstructionContext;
+  readonly reviewerOutputStrategy?: FindingContractReviewerOutputStrategy;
   readonly phase1Instruction: string;
   readonly priorStepResponseText?: string;
   readonly stepIteration: number;
@@ -491,8 +463,14 @@ export class StepExecutor {
     runtime?: RuntimeStepResolution,
   ): PreparedNormalStepExecution {
     const findingContractIntakeStep = this.resolveFindingContractIntakeStep(step);
+    const reviewerRuntime = findingContractIntakeStep === undefined
+      ? runtime
+      : this.resolveReviewerRuntime(findingContractIntakeStep, runtime);
     const reviewerOutputStrategy = findingContractIntakeStep
-      ? this.requireFindingContractReviewerOutputStrategy()
+      ? this.requireFindingContractReviewerOutputStrategy(
+          findingContractIntakeStep,
+          reviewerRuntime,
+        )
       : undefined;
     const findingContractContext = findingContractIntakeStep
       ? this.deps.optionsBuilder.buildFindingContractInstructionContext(
@@ -514,7 +492,7 @@ export class StepExecutor {
       task,
       maxSteps,
       fallbackContextForOperation(
-        runtime,
+        reviewerRuntime,
         reviewerOperationOrigin(step.name),
       ),
       findingContractContext === undefined
@@ -525,7 +503,12 @@ export class StepExecutor {
     return {
       executableStep,
       ...(findingContractContext !== undefined ? { findingContractContext } : {}),
-      phase1Instruction: this.buildPhase1Instruction(instruction, executableStep, runtime),
+      ...(reviewerOutputStrategy !== undefined ? { reviewerOutputStrategy } : {}),
+      phase1Instruction: this.buildPhase1Instruction(
+        instruction,
+        executableStep,
+        reviewerRuntime,
+      ),
       ...(state.lastOutput?.content !== undefined ? { priorStepResponseText: state.lastOutput.content } : {}),
       stepIteration,
     };
@@ -580,66 +563,53 @@ export class StepExecutor {
     return rawFindings;
   }
 
-  private requireCanonicalItems(
-    stepName: string,
-    items: readonly CanonicalFindingClaimItem[] | undefined,
-  ): readonly CanonicalFindingClaimItem[] {
-    if (items === undefined) {
-      throw new Error(
-        `Finding contract reviewer "${stepName}" has no validated canonical claims`,
-      );
-    }
-    return items;
-  }
-
-  private validateCanonicalFindingItems(
-    response: AgentResponse,
-    items: readonly CanonicalFindingClaimItem[],
-  ): StructuredOutputNormalizationResult {
-    try {
-      const projected = projectReviewerRawStructuredOutputWithEnvelope({
-        rawFindings: [...items],
-      });
-      const rawFindingsStructuredOutput = createRawFindingsStructuredOutput();
-      validateStructuredOutputAgainstSchema(
-        projected.structuredOutput,
-        rawFindingsStructuredOutput.validationSchema
-          ?? rawFindingsStructuredOutput.schema,
-      );
-      return {
-        response: {
-          ...response,
-          structuredOutput: projected.structuredOutput,
-        },
-        reviewerRawResourceEnvelope: projected.resourceEnvelope,
-      };
-    } catch (error) {
-      return {
-        response,
-        invalidDetail: getErrorMessage(error),
-      };
-    }
-  }
-
-  private findingReviewPublicationProtocol(): FindingReviewPublicationProtocol {
-    switch (this.requireFindingContractReviewerOutputStrategy().intake) {
+  private findingReviewPublicationProtocolForStrategy(
+    strategy: FindingContractReviewerOutputStrategy,
+  ): FindingReviewPublicationProtocol {
+    switch (strategy.intake) {
       case 'reviewer_structured':
         return STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
-      case 'canonical_parser':
-        return CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL;
       case 'isolated_normalizer':
         return PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
     }
   }
 
-  private requireFindingContractReviewerOutputStrategy(): FindingContractReviewerOutputStrategy {
-    const strategy = this.deps.reviewerOutputStrategy;
+  requireFindingContractReviewerOutputStrategy(
+    step: AgentWorkflowStep,
+    runtime?: RuntimeStepResolution,
+  ): FindingContractReviewerOutputStrategy {
+    const reviewerProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(
+      step,
+      runtime,
+    );
+    const strategy = resolveFindingContractReviewerOutputStrategy(
+      this.deps.findingContract,
+      this.deps.intakeNormalize,
+      reviewerProviderInfo,
+    );
     if (strategy === undefined) {
       throw new Error(
         'Finding contract reviewer output strategy is not configured',
       );
     }
     return strategy;
+  }
+
+  private resolveReviewerRuntime(
+    step: AgentWorkflowStep,
+    runtime?: RuntimeStepResolution,
+  ): RuntimeStepResolution | undefined {
+    const runtimeProviderBelongsToNormalizer =
+      runtime?.fallback?.origin.stage === 'finding_intake_normalizer'
+      && runtime.fallback.origin.reviewerStepName === step.name;
+    const reviewerBaseProviderInfo = runtimeProviderBelongsToNormalizer
+      ? this.deps.optionsBuilder.resolveStepProviderModel(step)
+      : runtime?.providerInfo;
+    return runtimeForOperation(
+      runtime,
+      reviewerOperationOrigin(step.name),
+      reviewerBaseProviderInfo,
+    );
   }
 
   private requireFindingIntakeNormalizer(): {
@@ -687,18 +657,23 @@ export class StepExecutor {
       edit: false,
       structuredOutput: createRawFindingsStructuredOutput(),
     };
-    const configuredProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(
-      normalizerStep,
-    );
+    const configuredProviderInfo: StepProviderInfo = {
+      provider: config.provider,
+      model: config.model,
+      providerOptions: config.providerOptions,
+      providerSource: 'step',
+      modelSource: 'step',
+    };
     const normalizerRuntime = runtimeForOperation(
       input.runtime,
       findingIntakeNormalizerOperationOrigin(input.reviewerStep.name),
       configuredProviderInfo,
     );
-    const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(
-      normalizerStep,
-      normalizerRuntime,
-    );
+    const resolvedProviderInfo = normalizerRuntime?.providerInfo ?? configuredProviderInfo;
+    const providerInfo: StepProviderInfo = {
+      ...resolvedProviderInfo,
+      providerOptions: config.providerOptions,
+    };
     if (
       providerInfo.provider === undefined
       || providerSupportsIsolatedStructuredExecution(providerInfo.provider) !== true
@@ -901,20 +876,15 @@ export class StepExecutor {
     const preparation = loadFindingReviewPublication(
       reportDir,
       identity,
-      this.findingReviewPublicationProtocol(),
     );
-    if (preparation === undefined) {
-      if (this.findingReviewPublicationProtocol().format !== 'normalized-plain-text') {
-        return undefined;
-      }
-      const pending = loadPendingFindingReviewNormalization(
-        reportDir,
-        identity,
-        this.deps.getWorkflowName(),
-      );
-      if (pending === undefined) {
-        return undefined;
-      }
+    const pending = preparation === undefined
+      ? loadPendingFindingReviewNormalization(
+          reportDir,
+          identity,
+          this.deps.getWorkflowName(),
+        )
+      : undefined;
+    if (pending !== undefined) {
       const reportResponse: AgentResponse = {
         persona: input.step.name,
         status: 'done',
@@ -977,6 +947,9 @@ export class StepExecutor {
         reviewerRuntime: persistedReviewerRuntime,
       };
     }
+    if (preparation === undefined) {
+      return undefined;
+    }
     const { publication } = preparation;
     publishFindingReviewPublication(reportDir, publication);
     return {
@@ -1005,12 +978,12 @@ export class StepExecutor {
   async prepareFindingReviewPublication(input: {
     readonly step: AgentWorkflowStep;
     readonly executableStep: AgentWorkflowStep;
+    readonly reviewerOutputStrategy: FindingContractReviewerOutputStrategy;
     readonly parentStepName: string;
     readonly stepIteration: number;
     readonly state: WorkflowState;
     readonly phase1Response: AgentResponse;
     readonly agentOptions: RunAgentOptions;
-    readonly rerunPhase1Fresh: () => Promise<AgentResponse>;
     readonly onProviderAttempt: NonNullable<
       BasePhaseRunnerContext['onProviderAttempt']
     >;
@@ -1031,8 +1004,13 @@ export class StepExecutor {
         readonly terminalOperation?: NonNullable<StepRunResult['terminalOperation']>;
       }
   > {
-    const reviewerOutputStrategy =
-      this.requireFindingContractReviewerOutputStrategy();
+    const reviewerOutputStrategy = input.reviewerOutputStrategy;
+    const reviewerSelectionIdentity = reviewerExecutionIdentity(
+      this.deps.optionsBuilder.resolveStepProviderModel(
+        input.step,
+        input.runtime,
+      ),
+    );
     const reportStep = reviewerOutputStrategy.reportGeneration === 'structured'
       ? {
           ...input.executableStep,
@@ -1053,7 +1031,7 @@ export class StepExecutor {
         input.onProviderAttempt,
       )
     );
-    let phaseContext = buildPhaseContext(input.phase1Response);
+    const phaseContext = buildPhaseContext(input.phase1Response);
     const reportFiles = input.step.outputContracts?.map((entry) => entry.name) ?? [];
     if (reportFiles.length !== 1) {
       throw new Error(
@@ -1067,11 +1045,12 @@ export class StepExecutor {
       reportName: reportFiles[0]!,
     });
     const publicationReportDir = this.deps.getRunPaths().reportsAbs;
-    const publicationProtocol = this.findingReviewPublicationProtocol();
+    const publicationProtocol = this.findingReviewPublicationProtocolForStrategy(
+      reviewerOutputStrategy,
+    );
     const stored = loadFindingReviewPublication(
       publicationReportDir,
       identity,
-      publicationProtocol,
     );
     if (stored !== undefined) {
       publishFindingReviewPublication(publicationReportDir, stored.publication);
@@ -1098,122 +1077,17 @@ export class StepExecutor {
 
     let phaseSequence = 0;
     const nextPhaseSequence = (): number => ++phaseSequence;
-    let canonicalItems: readonly CanonicalFindingClaimItem[] | undefined;
-    const validateReportContent = reviewerOutputStrategy.intake === 'canonical_parser'
-      ? (reportContent: string) => {
-          const parsed = parseCanonicalFindingClaimReport(reportContent);
-          if (parsed.error !== undefined) {
-            canonicalItems = undefined;
-            return { valid: false } as const;
-          }
-          canonicalItems = parsed.report.items;
-          return { valid: true } as const;
-        }
-      : undefined;
-    let activePhase1Response = input.phase1Response;
-    let usedFreshPhase1Cycle = false;
-    let recoveryFailureReasons: readonly ReportRetryFailureReason[] = [];
-    let generated;
-    try {
-      generated = await generateReportPhase(
-        reportStep,
-        input.stepIteration,
-        phaseContext,
-        {
-          reviewerOutputStrategy,
-          validateReportContent,
-          nextPhaseSequence,
-        },
-      );
-    } catch (error) {
-      if (
-        !(error instanceof ReportPhaseGenerationError)
-        || !error.recovery.requiresFreshPhase1
-        || reviewerOutputStrategy.intake !== 'canonical_parser'
-      ) {
-        throw error;
-      }
-
-      recoveryFailureReasons = error.recovery.failureReasons;
-      input.updatePersonaSession(phaseContext.resolveSessionKey(reportStep), undefined);
-      activePhase1Response = await input.rerunPhase1Fresh();
-      usedFreshPhase1Cycle = true;
-      if (
-        activePhase1Response.status === 'done'
-        && activePhase1Response.structuredOutput === undefined
-        && activePhase1Response.content.trim().length === 0
-      ) {
-        input.updatePersonaSession(
-          phaseContext.resolveSessionKey(reportStep),
-          undefined,
-        );
-        return {
-          terminalResponse: {
-            ...activePhase1Response,
-            status: 'error',
-            content: '',
-            error: PHASE1_EMPTY_OUTPUT_ERROR,
-          },
-        };
-      }
-      if (activePhase1Response.status !== 'done') {
-        input.updatePersonaSession(
-          phaseContext.resolveSessionKey(reportStep),
-          undefined,
-        );
-        return {
-          terminalResponse: {
-            ...activePhase1Response,
-            persona: input.step.name,
-          },
-        };
-      }
-      phaseContext = buildPhaseContext(activePhase1Response);
-      try {
-        generated = await generateReportPhase(
-          reportStep,
-          input.stepIteration,
-          phaseContext,
-          {
-            reviewerOutputStrategy,
-            validateReportContent,
-            retryMode: 'single-attempt',
-            nextPhaseSequence,
-          },
-        );
-      } catch (finalError) {
-        input.updatePersonaSession(
-          phaseContext.resolveSessionKey(reportStep),
-          undefined,
-        );
-        if (finalError instanceof ReportPhaseGenerationError) {
-          const failureReasons = mergeReportFailureReasons(
-            recoveryFailureReasons,
-            finalError.recovery.failureReasons,
-          );
-          return {
-            terminalResponse: {
-              persona: input.step.name,
-              status: 'error',
-              content: '',
-              error: buildReportRecoveryExhaustedError(
-                input.step.name,
-                failureReasons,
-              ),
-              timestamp: new Date(),
-            },
-          };
-        }
-        throw finalError;
-      }
-    }
+    const activePhase1Response = input.phase1Response;
+    const generated = await generateReportPhase(
+      reportStep,
+      input.stepIteration,
+      phaseContext,
+      {
+        reviewerOutputStrategy,
+        nextPhaseSequence,
+      },
+    );
     if ('blocked' in generated) {
-      if (usedFreshPhase1Cycle) {
-        input.updatePersonaSession(
-          phaseContext.resolveSessionKey(reportStep),
-          undefined,
-        );
-      }
       return {
         terminalResponse: {
           ...activePhase1Response,
@@ -1231,12 +1105,6 @@ export class StepExecutor {
       };
     }
     if ('rateLimited' in generated) {
-      if (usedFreshPhase1Cycle) {
-        input.updatePersonaSession(
-          phaseContext.resolveSessionKey(reportStep),
-          undefined,
-        );
-      }
       return {
         terminalResponse: {
           ...generated.response,
@@ -1272,7 +1140,7 @@ export class StepExecutor {
           identity,
           workflowName: this.deps.getWorkflowName(),
           reportContent: report.reportContent,
-          reviewerExecutionIdentity: completedReviewerExecutionIdentity,
+          reviewerExecutionIdentity: reviewerSelectionIdentity,
         }),
       );
     }
@@ -1283,15 +1151,7 @@ export class StepExecutor {
     let normalizedPlainPublication: CanonicalFindingReviewPublication | undefined;
     let normalizerProviderInfo: StepProviderInfo | undefined;
     let normalized: StructuredOutputNormalizationResult;
-    if (reviewerOutputStrategy.intake === 'canonical_parser') {
-      normalized = this.validateCanonicalFindingItems(
-          {
-            ...reportResponse,
-            content: report.reportContent,
-          },
-          this.requireCanonicalItems(input.step.name, canonicalItems),
-        );
-    } else if (reviewerOutputStrategy.intake === 'isolated_normalizer') {
+    if (reviewerOutputStrategy.intake === 'isolated_normalizer') {
       const plainNormalization = await this.normalizePlainTextFindingReview({
         reviewerStep: input.step,
         reportResponse,
@@ -1465,9 +1325,7 @@ export class StepExecutor {
       {
         publication,
         ...(relationClarification !== undefined ? { relationClarification } : {}),
-        ...(reviewerOutputStrategy.intake === 'isolated_normalizer'
-          ? { reviewerExecutionIdentity: completedReviewerExecutionIdentity }
-          : {}),
+        reviewerExecutionIdentity: reviewerSelectionIdentity,
       },
     );
     const finalPublication = persisted.publication;
@@ -1906,6 +1764,9 @@ export class StepExecutor {
       if (preparedExecution.findingContractContext === undefined) {
         throw new Error(`Prepared reviewer step "${step.name}" is missing finding contract context`);
       }
+      if (preparedExecution.reviewerOutputStrategy === undefined) {
+        throw new Error(`Prepared reviewer step "${step.name}" is missing reviewer output strategy`);
+      }
       const reviewer = preparedExecution.findingContractContext.reviewer;
       if (reviewer === undefined) {
         throw new Error(`Prepared reviewer step "${step.name}" is missing reviewer context`);
@@ -1918,16 +1779,13 @@ export class StepExecutor {
           throw new Error(`Prepared reviewer step "${step.name}" has mismatched structured output`);
         }
       } else if (preparedExecution.executableStep.structuredOutput !== undefined) {
-        throw new Error(`Prepared canonical-block reviewer step "${step.name}" must not require structured output`);
+        throw new Error(`Prepared normalized reviewer step "${step.name}" must not require structured output`);
       }
     }
     const findingContractContext = preparedExecution?.findingContractContext;
+    const reviewerOutputStrategy = preparedExecution?.reviewerOutputStrategy;
     const executableStep = preparedExecution?.executableStep ?? step as AgentWorkflowStep;
-    const executionRuntime = runtimeForOperation(
-      runtime,
-      reviewerOperationOrigin(step.name),
-      runtime?.providerInfo,
-    );
+    const executionRuntime = this.resolveReviewerRuntime(executableStep, runtime);
     const publicationResumeRuntime = runtimeForOperation(
       runtime,
       findingIntakeNormalizerOperationOrigin(step.name),
@@ -1958,6 +1816,9 @@ export class StepExecutor {
       model: providerInfo.model,
     });
     if (findingContractIntakeStep !== undefined) {
+      if (reviewerOutputStrategy === undefined) {
+        throw new Error(`Prepared reviewer step "${step.name}" is missing reviewer output strategy`);
+      }
       const resumedPublication = await this.resumeFindingReviewPublication({
         step: findingContractIntakeStep,
         parentStepName: step.name,
@@ -2183,82 +2044,19 @@ export class StepExecutor {
       providerInfo,
     };
     if (findingContractIntakeStep && findingContractContext) {
+      if (reviewerOutputStrategy === undefined) {
+        throw new Error(`Prepared reviewer step "${step.name}" is missing reviewer output strategy`);
+      }
       const phase1ProviderUsage = response.providerUsage;
-      let publicationRetryPhase1Executed = false;
       const prepared = await this.prepareFindingReviewPublication({
         step: findingContractIntakeStep,
         executableStep,
+        reviewerOutputStrategy,
         parentStepName: step.name,
         stepIteration,
         state,
         phase1Response: response,
         agentOptions,
-        rerunPhase1Fresh: async () => {
-          if (publicationRetryPhase1Executed) {
-            throw new Error(
-              `Finding contract reviewer "${step.name}" attempted more than one fresh Phase 1 retry`,
-            );
-          }
-          publicationRetryPhase1Executed = true;
-          let freshResponse: AgentResponse;
-          try {
-            freshResponse = await runSingleFreshPhase1Retry({
-              stepName: step.name,
-              sequence: phase1Result.finalAttempt.sequence + 1,
-              instruction: phase1Instruction,
-              discardSession: () => updatePersonaSession(sessionKey, undefined),
-              execute: (attempt) => executeObservedPhase1Attempt({
-                enabled: this.deps.observabilityEnabled?.() === true,
-                runId: this.deps.getObservabilityRunId?.(),
-                workflowName: this.deps.getWorkflowName(),
-                eventStep: step,
-                spanStep: executableStep,
-                iteration: state.iteration,
-                attempt,
-                workflowStack: this.deps.getCurrentWorkflowStack?.(),
-                sanitizeText: this.deps.sanitizeObservabilityText,
-                providerInfo,
-                execute: (attemptInstruction, sessionId, onPromptResolved) => (
-                  executeAgent(
-                    executableStep.persona,
-                    attemptInstruction,
-                    {
-                      ...agentOptions,
-                      sessionId,
-                      onPromptResolved,
-                    },
-                  )
-                ),
-                onPhaseStart: this.deps.onPhaseStart,
-              }),
-              complete: (completedResponse, attempt) => completeObservedPhase1Attempt({
-                eventStep: step,
-                iteration: state.iteration,
-                attempt,
-                response: completedResponse,
-                onPhaseComplete: this.deps.onPhaseComplete,
-              }),
-            });
-          } catch (error) {
-            this.deps.recordSynthesizedAgentUsage(
-              step.name,
-              providerInfo,
-              false,
-              undefined,
-            );
-            throw error;
-          }
-          this.deps.recordSynthesizedAgentUsage(
-            step.name,
-            providerInfo,
-            freshResponse.status === 'done',
-            freshResponse.providerUsage,
-          );
-          if (freshResponse.sessionId !== undefined) {
-            updatePersonaSession(sessionKey, freshResponse.sessionId);
-          }
-          return freshResponse;
-        },
         onProviderAttempt: (providerInfo, success, usage) => {
           this.deps.recordSynthesizedAgentUsage(
             step.name,

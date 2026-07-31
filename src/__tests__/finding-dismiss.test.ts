@@ -592,7 +592,6 @@ describe('runFindingManagerForStep dismiss round trip', () => {
       contract: {
         ledgerPath: '.takt/findings/ledger.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: { persona: 'findings-manager', instruction: 'Reconcile findings.', outputContract: 'Return JSON.' },
       } as never,
       ledgerStore,

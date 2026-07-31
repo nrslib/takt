@@ -364,7 +364,6 @@ function makeRoundHarness(
   const contract = {
     ledgerPath: '.takt/findings/ledger.json',
     rawFindingsPath: '.takt/findings/raw',
-    reviewerOutput: 'structured',
     manager: {
       persona: 'findings-manager',
       instruction: 'Reconcile findings.',
@@ -635,7 +634,6 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
     const contract = {
       ledgerPath: '.takt/findings/ledger.json',
       rawFindingsPath: '.takt/findings/raw',
-      reviewerOutput: 'structured',
       manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'JSON.' },
       stopBudget: { maxRounds: 5 },
     };

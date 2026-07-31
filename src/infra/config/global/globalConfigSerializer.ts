@@ -53,9 +53,11 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (rawAutoRouting) {
     raw.auto_routing = rawAutoRouting;
   }
-  const rawIntakeNormalize = denormalizeFindingIntakeNormalize(config.intakeNormalize);
+  const rawIntakeNormalize = denormalizeFindingIntakeNormalize(
+    config.findingContract?.intakeNormalize,
+  );
   if (rawIntakeNormalize) {
-    raw.intake_normalize = rawIntakeNormalize;
+    raw.finding_contract = { intake_normalize: rawIntakeNormalize };
   }
   const rawObservability = denormalizeObservabilityConfig(config.observability);
   if (rawObservability) {

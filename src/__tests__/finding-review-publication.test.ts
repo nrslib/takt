@@ -9,7 +9,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   createFindingReviewPublication,
   createPendingFindingReviewNormalization,
   loadFindingReviewPublication,
@@ -22,11 +21,6 @@ import {
   type FindingReviewPublicationIdentity,
 } from '../core/workflow/findings/review-publication.js';
 import { bindReviewerReportExcerpt } from '../core/workflow/findings/raw-canonicalization.js';
-import {
-  FINDING_CLAIM_BEGIN_MARKER,
-  FINDING_CLAIM_END_MARKER,
-  parseCanonicalFindingClaimReport,
-} from '../shared/prompts/finding-canonical-claim.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
 
@@ -61,40 +55,6 @@ function identity(
   };
 }
 
-function canonicalCodeReport(): string {
-  return [
-    '## Result: REJECT',
-    '',
-    FINDING_CLAIM_BEGIN_MARKER,
-    'Finding Claim',
-    'Raw Finding ID: code-1',
-    'Relation: new',
-    'Target Finding ID: none',
-    'Family Tag: correctness',
-    'Severity: high',
-    'Title: Incorrect value',
-    'Description: The value is incorrect.',
-    'Suggestion: Return the required value.',
-    'Target Kind: code',
-    'Target Paths: ["src/code.ts"]',
-    'Review Scope Roots: none',
-    'Manifest Targets: none',
-    'Absence Predicate: none',
-    'Absence Path: none',
-    'Absence Literal: none',
-    'Evidence Requests:',
-    '- File Quote',
-    '  Path: src/code.ts',
-    '  Start Line: 1',
-    '  End Line: 1',
-    '  Verbatim Excerpt:',
-    '  ```text',
-    '    const value = 1;',
-    '  ```',
-    FINDING_CLAIM_END_MARKER,
-  ].join('\n');
-}
-
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -102,85 +62,19 @@ afterEach(() => {
 });
 
 describe('Finding review publication', () => {
-  it('persists the generation protocol and selects resume records by that protocol', () => {
+  it('persists structured publications without a text parser', () => {
     const reportDir = createReportDirectory();
-    const publication = createFindingReviewPublication({
-      identity: identity(),
-      protocol: CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-      reportContent: '## Result: NEED_REPLAN\n\nReview scope must be replanned.',
-      rawFindings: [],
-    });
-    persistFindingReviewPublication(reportDir, {
-      publication,
-      reviewerExecutionIdentity,
-    });
-
-    const loaded = loadFindingReviewPublication(
-      reportDir,
-      identity(),
-      CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-    )!.publication;
-    expect(loaded.protocol).toEqual(CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL);
-    expect(() => loadFindingReviewPublication(
-      reportDir,
-      identity(),
-      STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-    )).toThrow(/protocol mismatch/);
-  });
-
-  it.each([
-    {
-      label: 'relation',
-      mutate: (item: Record<string, unknown>) => {
-        (item.candidate as Record<string, unknown>).relation = 'reopened';
-      },
-    },
-    {
-      label: 'evidence indentation',
-      mutate: (item: Record<string, unknown>) => {
-        const candidate = item.candidate as {
-          evidenceRequests: Array<Record<string, unknown>>;
-        };
-        candidate.evidenceRequests[0]!.verbatimExcerpt = 'const value = 1;';
-      },
-    },
-  ])('rejects stored canonical raw findings with changed $label on resume', ({ mutate }) => {
-    const reportDir = createReportDirectory();
-    const reportContent = canonicalCodeReport();
-    const parsed = parseCanonicalFindingClaimReport(reportContent);
-    if (parsed.error !== undefined) {
-      throw new Error(parsed.error);
-    }
-    const changed = structuredClone(parsed.report.items[0]) as unknown as Record<string, unknown>;
-    mutate(changed);
-    const publication = createFindingReviewPublication({
-      identity: identity(),
-      protocol: CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-      reportContent,
-      rawFindings: [changed],
-    });
-    persistFindingReviewPublication(reportDir, {
-      publication,
-      reviewerExecutionIdentity,
-    });
-
-    expect(() => loadFindingReviewPublication(
-      reportDir,
-      identity(),
-      CANONICAL_BLOCKS_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-    )).toThrow(/Stored finding review publication canonical claim invariant failed/);
-  });
-
-  it('does not apply the canonical claim parser to structured publications', () => {
-    const reportDir = createReportDirectory();
-    const reportContent = '## Result: REJECT\n\nNot a canonical claim block.';
+    const reportContent = '## Result: REJECT\n\nOrdinary review prose.';
     const publication = createFindingReviewPublication({
       identity: identity(),
       protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
       reportContent,
-      rawFindings: [{ rawExcerpt: 'Not a canonical claim block.' }],
+      rawFindings: [{ rawExcerpt: 'Ordinary review prose.' }],
     });
-    persistFindingReviewPublication(reportDir, { publication });
+    persistFindingReviewPublication(reportDir, {
+      publication,
+      reviewerExecutionIdentity,
+    });
 
     expect(loadFindingReviewPublication(
       reportDir,
@@ -189,15 +83,15 @@ describe('Finding review publication', () => {
     )?.publication.reportContent).toBe(reportContent);
   });
 
-  it('persists normalized plain-text publications without applying the canonical parser', () => {
+  it('persists normalized plain-text publications as ordinary prose', () => {
     const reportDir = createReportDirectory();
-    const reportContent = '## Result: REJECT\n\nOrdinary prose issue without a canonical block.';
+    const reportContent = '## Result: REJECT\n\nOrdinary prose issue.';
     const publication = createFindingReviewPublication({
       identity: identity(),
       protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
       reportContent,
       rawFindings: [{
-        rawExcerpt: 'Ordinary prose issue without a canonical block.',
+        rawExcerpt: 'Ordinary prose issue.',
         candidate: null,
       }],
     });
@@ -386,7 +280,10 @@ describe('Finding review publication', () => {
         candidate: { evidenceRequests: [{ kind: 'repository_manifest', roots: ['src'] }] },
       }],
     });
-    persistFindingReviewPublication(reportDir, { publication });
+    persistFindingReviewPublication(reportDir, {
+      publication,
+      reviewerExecutionIdentity,
+    });
 
     const loaded = loadFindingReviewPublication(
       reportDir,
@@ -405,7 +302,7 @@ describe('Finding review publication', () => {
     }).toThrow(TypeError);
   });
 
-  it('persists canonical report bytes and publishes them idempotently', () => {
+  it('persists report bytes and publishes them idempotently', () => {
     const reportDir = createReportDirectory();
     const reportContent = '# Review\n\n設計上の問題です。\n';
     const publication = createFindingReviewPublication({
@@ -424,8 +321,12 @@ describe('Finding review publication', () => {
           'raw-1': ['relation-target-mismatch'],
         },
       },
+      reviewerExecutionIdentity,
     });
-    const replayed = persistFindingReviewPublication(reportDir, { publication });
+    const replayed = persistFindingReviewPublication(reportDir, {
+      publication,
+      reviewerExecutionIdentity,
+    });
     publishFindingReviewPublication(reportDir, persisted.publication);
     publishFindingReviewPublication(reportDir, replayed.publication);
 
@@ -451,6 +352,7 @@ describe('Finding review publication', () => {
           reportContent: 'first issue',
           rawFindings: [{ rawExcerpt: 'first issue' }],
         }),
+        reviewerExecutionIdentity,
       },
     );
 
@@ -463,6 +365,7 @@ describe('Finding review publication', () => {
           reportContent: 'second issue',
           rawFindings: [{ rawExcerpt: 'second issue' }],
         }),
+        reviewerExecutionIdentity,
       },
     )).toThrow(/publication conflict/);
   });

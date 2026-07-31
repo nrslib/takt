@@ -103,7 +103,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     takt_providers,
     persona_providers,
     provider_routing,
-    intake_normalize,
+    finding_contract,
     branch_name_strategy,
     minimal_output,
     concurrency,
@@ -196,15 +196,16 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
     autoRouting: normalizeAutoRoutingConfig(auto_routing, projectBaseUrlOptions),
-    intakeNormalize: normalizeFindingIntakeNormalize(
-      intake_normalize as {
-        provider: RawProviderReference;
-        model?: string;
-        targets?: string[];
-        provider_options?: Record<string, unknown>;
-      } | undefined,
-      projectBaseUrlOptions,
-    ),
+    findingContract: finding_contract === undefined
+      ? undefined
+      : {
+          intakeNormalize: normalizeFindingIntakeNormalize(
+            finding_contract.intake_normalize as Parameters<
+              typeof normalizeFindingIntakeNormalize
+            >[0],
+            projectBaseUrlOptions,
+          ),
+        },
     rateLimitFallback: normalizeRateLimitFallback(rate_limit_fallback),
     providerProfiles: normalizeProviderProfiles(
       parsedConfigResult.provider_profiles as Record<string, {
@@ -268,11 +269,13 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     delete savePayload.auto_routing;
   }
 
-  const rawIntakeNormalize = denormalizeFindingIntakeNormalize(config.intakeNormalize);
+  const rawIntakeNormalize = denormalizeFindingIntakeNormalize(
+    config.findingContract?.intakeNormalize,
+  );
   if (rawIntakeNormalize) {
-    savePayload.intake_normalize = rawIntakeNormalize;
+    savePayload.finding_contract = { intake_normalize: rawIntakeNormalize };
   } else {
-    delete savePayload.intake_normalize;
+    delete savePayload.finding_contract;
   }
 
   const rawObservability = denormalizeObservabilityConfig(config.observability);
@@ -352,7 +355,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'intakeNormalize', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers', 'runStorage'] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'findingContract', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers', 'runStorage'] as const) {
     delete savePayload[k];
   }
 

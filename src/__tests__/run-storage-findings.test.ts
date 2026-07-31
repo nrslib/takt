@@ -92,7 +92,6 @@ describe('Finding authority boundary', () => {
       contract: {
         ledgerPath: '.takt/findings/default.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'plain_text_normalized',
         manager: {
           persona: 'findings-manager',
           instruction: 'Reconcile findings.',

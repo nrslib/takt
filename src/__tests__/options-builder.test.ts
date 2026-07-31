@@ -544,7 +544,6 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
       contract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',

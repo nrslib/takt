@@ -166,7 +166,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [
@@ -213,7 +212,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [
@@ -269,7 +267,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [
@@ -346,7 +343,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
         reviewBudget: { maxReviewRounds: 2 },
       },
@@ -429,7 +425,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [

@@ -6,29 +6,35 @@ import {
 
 export function resolveFindingIntakeNormalizeConfig(
   config: FindingIntakeNormalizeConfig | undefined,
-  workflowName: string,
   findingContract: FindingContractConfig | undefined,
 ): FindingIntakeNormalizeConfig | undefined {
-  if (findingContract?.reviewerOutput !== 'plain_text_normalized') {
+  if (findingContract === undefined || config === undefined) {
     return undefined;
-  }
-  if (config === undefined) {
-    throw new Error(
-      `Configuration error: workflow "${workflowName}" uses finding_contract.reviewer_output `
-      + '"plain_text_normalized" but intake_normalize is not configured',
-    );
-  }
-  if (config.targets !== undefined && !config.targets.includes(workflowName)) {
-    throw new Error(
-      `Configuration error: workflow "${workflowName}" uses finding_contract.reviewer_output `
-      + '"plain_text_normalized" but is not included in intake_normalize.targets',
-    );
   }
   if (providerSupportsIsolatedStructuredExecution(config.provider) !== true) {
     throw new Error(
-      `Configuration error: intake_normalize provider "${config.provider}" does not support `
+      `Configuration error: finding_contract.intake_normalize provider "${config.provider}" does not support `
       + 'isolated structured execution',
     );
   }
   return config;
+}
+
+export function findingIntakeNormalizerTargetsStep(
+  config: FindingIntakeNormalizeConfig | undefined,
+  reviewer: {
+    readonly provider: FindingIntakeNormalizeConfig['provider'] | undefined;
+    readonly model: string | undefined;
+  },
+): boolean {
+  if (config === undefined) {
+    return false;
+  }
+  if (config.targets === undefined) {
+    return true;
+  }
+  return config.targets.some((target) =>
+    target.provider === reviewer.provider
+    && target.model === reviewer.model
+  );
 }

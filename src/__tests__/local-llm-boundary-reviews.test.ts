@@ -50,20 +50,20 @@ interface RawWorkflow {
 
 const SHARED_CONTRACT_HASHES: Record<Locale, Record<string, string>> = {
   ja: {
-    architecture: '7592c630133bba72719a02d17b77a574226166db84eb0dcdc46962e7e7c8ba8d',
-    'ai-antipattern': 'bddd468992cf70e4bcc9d3bd47a1b0484c19d80a7463fa4b104e22f83b8e9490',
-    coding: '5825a4381f70ea8ad59f9eedf4cdd5e9efb7f8b8e60c4176ca2ab805cca36dff',
-    'implementation-semantics': '06b0b984ede91cf844ea78692b8c2977b1b3e336e5d7f1545bc048c72c575646',
-    'contract-lifecycle': '307cba17d2670a730bbe9cfdeac982c8ccca441e771f71ababa19e7ec119286e',
-    robustness: 'cd2f96dcfc951e6a17a2150bd5d60876553ad081a8186bbc27bf7ed068086d29',
+    architecture: '5939c48f17e7592352691c978a9151ead2858d7973999deb944f4371e0673eed',
+    'ai-antipattern': '49b3f41d6c35691d101cf2340486611e189d03c4edf7a778e767dec5392212d2',
+    coding: '5a06c7bbfbfd421929d728c72c830f5ecdc8fe309036ee91dd27df4a50ffd1d4',
+    'implementation-semantics': '340a77e69c157ceda5626ca235eb51fcdc6eeff044b9ba9d2f926f9da754ae74',
+    'contract-lifecycle': '88ad553e74f32ccd5b58186b2feaa04b11f757564345120379fe129e94e5f07f',
+    robustness: '7e44afd8884736ca632954fd716d8b304f956f142082031bce36314d1cf272c9',
   },
   en: {
-    architecture: 'd4908d7daa0d4ee56d512e949f123ffd50991e8eb147554525b0fc1b93174141',
-    'ai-antipattern': 'fadaf3a587633f88a39550c01c4b0b43f4e9a5e104e2cac4f515ba3683e1aa29',
-    coding: '40d25ddbfa648c312502bf9c7a7b83454701627aac27984d9b9fa14b34c59e5c',
-    'implementation-semantics': '78a6158773e9c4992929fe8a60bdb69dae948e12fc015adfa4f24222f77b42e5',
-    'contract-lifecycle': 'e33d8f42ea909c0d14cf62aa6825c68cbadfd79956b37fb315625e5749b5be2a',
-    robustness: '3d0721063a91ff7854cccb79541ba05d6847cef3b1cbe057958cacf3fc8f10ca',
+    architecture: '92c38cf528a745bb9adc4c0caad45aedc4a9e9e170bf8964dc6df2c0a304a6e6',
+    'ai-antipattern': 'a05c395d12d278ac836d3a8bfb5465198063fb8a37337e1bb9ab5dc91d1aa48e',
+    coding: 'a4fecf3f2d46142ae6bf73e8ed2f04d33fdcce1c5efe1730d2e243378b73bd1f',
+    'implementation-semantics': '33f49cfc8200fb9fa0d53a5bdf76cc667a282f7844c8a9e3104f7bce5bb00965',
+    'contract-lifecycle': '7f3de629b7293d22cf6fdc0cd31b60fc252c439872ba83cd1d130a4f898198da',
+    robustness: '77b5ed8c246d5167163d832089c415c1d03b7e98dc56d528fb01ee50fcb9e24a',
   },
 };
 
@@ -455,8 +455,7 @@ describe('takt-default-localllm boundary reviews', () => {
     const boundary = getRawStep(rawWorkflow, 'boundary-reviewers');
     const finalGate = getRawStep(rawWorkflow, 'final-gate');
 
-    expect(loadedWorkflow.findingContract?.reviewerOutput)
-      .toBe('plain_text_normalized');
+    expect(loadedWorkflow.findingContract).not.toHaveProperty('reviewerOutput');
     expect(transitionFor(reviewers, 'all(')).toBe('boundary-reviewers');
     expect(transitionFor(reviewers, 'reviewerAnomalies.count > 0')).toBe('local-review-integrity-gate');
     expect(reviewers.rules?.find((rule) => rule.condition.includes('all('))?.condition)
@@ -542,9 +541,7 @@ describe('takt-default-localllm boundary reviews', () => {
     for (const name of names) {
       const outputContract = readFileSync(join(dir, name), 'utf8');
       expect(outputContract.match(/^## Finding Contract Claims$/gmu)).toHaveLength(1);
-      expect(outputContract).toContain('canonical block protocol');
       expect(outputContract).toContain('structured');
-      expect(outputContract).not.toContain('structured-output schema is the sole machine claim format');
       expect(outputContract).not.toMatch(/^## (?:Observed Findings|Resolution Confirmations|観測した指摘|解消確認)/mu);
       expect(outputContract).not.toContain('| # | family_tag');
       expect(outputContract).not.toMatch(/(?:20|30|40) lines|(?:20|30|40)行/u);
@@ -564,14 +561,13 @@ describe('takt-default-localllm boundary reviews', () => {
       const outputContract = readFileSync(path, 'utf-8');
 
       expect(outputContract).toContain('## Finding Contract Claims');
-      expect(outputContract).toContain('canonical block');
       expect(outputContract).not.toContain('| # | family_tag');
       expect(outputContract).toContain(`\`${name}\``);
       expect(outputContract).toContain('`file:line`');
       expect(outputContract).toContain('`file:line-line`');
       expect(outputContract).toMatch(locale === 'ja'
-        ? /block と normalized item を同じ順序集合/
-        : /blocks and normalized items must be the same ordered set/);
+        ? /report に記載したすべての問題を structured output にも含める/
+        : /every issue described in the report must also appear in that structured output/);
       expect(outputContract).toMatch(locale === 'ja'
         ? /欠陥を記述したまま APPROVE しない/
         : /Do not describe a defect while returning APPROVE/);
@@ -602,7 +598,7 @@ describe('takt-default-localllm boundary reviews', () => {
   it.each(['ja', 'en'] as const)('%s の既存high workflowは共有6契約の実効formatを維持する', (locale) => {
     for (const workflowName of ['takt-default-high', 'takt-default-team-high']) {
       const workflow = loadBuiltinWorkflow(locale, workflowName);
-      expect(workflow.findingContract?.reviewerOutput).toBe('structured');
+      expect(workflow.findingContract).not.toHaveProperty('reviewerOutput');
       const substeps = getParallelSubsteps(workflow, 'reviewers');
       const contracts = substeps.map((step) => step.outputContracts?.[0]);
 

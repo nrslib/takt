@@ -639,8 +639,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   // したのに実行時に落ちる、という食い違いが生まれる。
   const findingContractEnabled = config.findingContract !== undefined || options.inheritedFindingContract !== undefined;
   resolveFindingIntakeNormalizeConfig(
-    options.intakeNormalize,
-    config.name,
+    options.findingContractConfig?.intakeNormalize,
     config.findingContract ?? options.inheritedFindingContract?.contract,
   );
   validateFindingContractStructuredOutput(config, findingContractEnabled);

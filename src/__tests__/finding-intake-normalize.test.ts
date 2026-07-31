@@ -29,16 +29,11 @@ const dirs: string[] = [];
 const findingContract: FindingContractConfig = {
   ledgerPath: '.takt/findings/peer-review.json',
   rawFindingsPath: '.takt/findings/raw',
-  reviewerOutput: 'structured',
   manager: {
     persona: 'findings-manager',
     instruction: 'findings-manager',
     outputContract: 'findings-manager',
   },
-};
-const plainTextFindingContract: FindingContractConfig = {
-  ...findingContract,
-  reviewerOutput: 'plain_text_normalized',
 };
 let taktEnv: TaktEnvSnapshot;
 
@@ -53,39 +48,44 @@ afterEach(() => {
   restoreTaktEnv(taktEnv);
 });
 
-describe('intake_normalize config', () => {
-  it('rejects absent provider/model, empty targets, and unknown keys', () => {
-    expect(() => ProjectConfigSchema.parse({ intake_normalize: {} })).toThrow();
+describe('finding_contract.intake_normalize config', () => {
+  it('rejects the removed top-level key and malformed or duplicate targets', () => {
     expect(() => ProjectConfigSchema.parse({
-      intake_normalize: { provider: 'codex' },
-    })).not.toThrow();
-    expect(() => normalizeFindingIntakeNormalize({
-      provider: 'codex',
-    })).toThrow(/model is required/);
-    expect(() => ProjectConfigSchema.parse({
-      intake_normalize: { provider: 'codex', model: 'gpt', targets: [] },
+      intake_normalize: { provider: 'codex', model: 'gpt' },
     })).toThrow();
     expect(() => ProjectConfigSchema.parse({
-      intake_normalize: { provider: 'codex', model: 'gpt', unexpected: true },
+      finding_contract: { intake_normalize: { provider: 'codex', model: 'gpt', targets: [] } },
     })).toThrow();
+    expect(() => ProjectConfigSchema.parse({
+      finding_contract: {
+        intake_normalize: {
+          provider: 'codex',
+          model: 'gpt',
+          targets: [
+            { provider: 'opencode', model: 'gemma4' },
+            { provider: 'opencode', model: 'gemma4' },
+          ],
+        },
+      },
+    })).toThrow(/must not contain duplicates/);
   });
 
-  it('accepts provider block form and round-trips provider options and targets', () => {
+  it('normalizes and serializes strict provider/model targets', () => {
     const normalized = normalizeFindingIntakeNormalize({
       provider: {
         type: 'codex',
         model: 'gpt-5.6-terra',
         network_access: false,
       },
-      targets: ['takt-default-localllm'],
+      targets: [{ provider: 'opencode', model: 'ollama-cloud/gemma4:31b' }],
       provider_options: {
         codex: { reasoning_effort: 'high' },
       },
     });
-    expect(normalized).toMatchObject({
+    expect(normalized).toEqual({
       provider: 'codex',
       model: 'gpt-5.6-terra',
-      targets: ['takt-default-localllm'],
+      targets: [{ provider: 'opencode', model: 'ollama-cloud/gemma4:31b' }],
       providerOptions: {
         codex: {
           networkAccess: false,
@@ -96,7 +96,7 @@ describe('intake_normalize config', () => {
     expect(denormalizeFindingIntakeNormalize(normalized)).toEqual({
       provider: 'codex',
       model: 'gpt-5.6-terra',
-      targets: ['takt-default-localllm'],
+      targets: [{ provider: 'opencode', model: 'ollama-cloud/gemma4:31b' }],
       provider_options: {
         codex: {
           network_access: false,
@@ -106,40 +106,7 @@ describe('intake_normalize config', () => {
     });
   });
 
-  it('loads and saves the project block and serializes the global block', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'takt-intake-normalize-'));
-    dirs.push(dir);
-    mkdirSync(join(dir, '.takt'), { recursive: true });
-    writeFileSync(join(dir, '.takt', 'config.yaml'), [
-      'intake_normalize:',
-      '  provider: codex',
-      '  model: gpt-5.6-terra',
-      '  targets: [target-a]',
-      '',
-    ].join('\n'));
-
-    const loaded = loadProjectConfig(dir);
-    expect(loaded.intakeNormalize).toEqual({
-      provider: 'codex',
-      model: 'gpt-5.6-terra',
-      targets: ['target-a'],
-    });
-    saveProjectConfig(dir, loaded);
-    expect(readFileSync(join(dir, '.takt', 'config.yaml'), 'utf8')).toContain('intake_normalize:');
-    expect(serializeGlobalConfig({
-      language: 'en',
-      provider: 'claude',
-      intakeNormalize: loaded.intakeNormalize,
-    })).toMatchObject({
-      intake_normalize: {
-        provider: 'codex',
-        model: 'gpt-5.6-terra',
-        targets: ['target-a'],
-      },
-    });
-  });
-
-  it('resolves the project block atomically over the global block', () => {
+  it('loads, saves, and resolves the namespaced project/global setting', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-intake-project-'));
     const globalDir = mkdtempSync(join(tmpdir(), 'takt-intake-global-'));
     dirs.push(projectDir, globalDir);
@@ -147,138 +114,97 @@ describe('intake_normalize config', () => {
     process.env.TAKT_CONFIG_DIR = globalDir;
     writeFileSync(join(globalDir, 'config.yaml'), [
       'language: en',
-      'intake_normalize:',
-      '  provider: codex',
-      '  model: gpt-5.6-terra',
-      '  targets: [global-target]',
-      '  provider_options:',
-      '    codex:',
-      '      reasoning_effort: high',
+      'finding_contract:',
+      '  intake_normalize:',
+      '    provider: codex',
+      '    model: gpt-5.6-terra',
       '',
     ].join('\n'));
     writeFileSync(join(projectDir, '.takt', 'config.yaml'), [
-      'intake_normalize:',
-      '  provider: mock',
-      '  model: project-model',
-      '  targets: [project-target]',
+      'finding_contract:',
+      '  intake_normalize:',
+      '    provider: mock',
+      '    model: project-model',
+      '    targets:',
+      '      - provider: opencode',
+      '        model: ollama-cloud/gemma4:31b',
       '',
     ].join('\n'));
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
 
-    expect(resolveConfigValue(projectDir, 'intakeNormalize')).toEqual({
+    const loaded = loadProjectConfig(projectDir);
+    expect(loaded.findingContract?.intakeNormalize).toEqual({
       provider: 'mock',
       model: 'project-model',
-      targets: ['project-target'],
+      targets: [{ provider: 'opencode', model: 'ollama-cloud/gemma4:31b' }],
     });
-
-    writeFileSync(join(projectDir, '.takt', 'config.yaml'), '');
-    invalidateAllResolvedConfigCache();
-    expect(resolveConfigValue(projectDir, 'intakeNormalize')).toEqual({
-      provider: 'codex',
-      model: 'gpt-5.6-terra',
-      targets: ['global-target'],
-      providerOptions: {
-        codex: { reasoningEffort: 'high' },
+    expect(resolveConfigValue(projectDir, 'findingContract')).toEqual(loaded.findingContract);
+    saveProjectConfig(projectDir, loaded);
+    expect(readFileSync(join(projectDir, '.takt', 'config.yaml'), 'utf8'))
+      .toContain('finding_contract:');
+    expect(serializeGlobalConfig({
+      language: 'en',
+      provider: 'claude',
+      findingContract: loaded.findingContract,
+    })).toMatchObject({
+      finding_contract: {
+        intake_normalize: {
+          provider: 'mock',
+          model: 'project-model',
+        },
       },
     });
   });
 });
 
-describe('intake normalizer policy', () => {
-  const config = { provider: 'codex', model: 'gpt-5.6-terra' } as const;
+describe('reviewer output strategy', () => {
+  const normalizer = {
+    provider: 'codex',
+    model: 'gpt-5.6-terra',
+    targets: [{ provider: 'opencode', model: 'ollama-cloud/gemma4:31b' }],
+  } as const;
 
-  it('is disabled without the block or an effective Finding Contract', () => {
-    expect(resolveFindingIntakeNormalizeConfig(undefined, 'child', findingContract)).toBeUndefined();
-    expect(resolveFindingIntakeNormalizeConfig(config, 'child', undefined)).toBeUndefined();
-    expect(resolveFindingIntakeNormalizeConfig(config, 'child', findingContract)).toBeUndefined();
+  it('matches the resolved reviewer provider and model exactly', () => {
+    expect(resolveFindingContractReviewerOutputStrategy(
+      findingContract,
+      normalizer,
+      { provider: 'opencode', model: 'ollama-cloud/gemma4:31b' },
+    )?.kind).toBe('plain_text_normalized');
+    expect(resolveFindingContractReviewerOutputStrategy(
+      findingContract,
+      normalizer,
+      { provider: 'opencode', model: 'ollama-cloud/gemma4:27b' },
+    )?.kind).toBe('structured');
+    expect(resolveFindingContractReviewerOutputStrategy(
+      findingContract,
+      normalizer,
+      { provider: 'codex', model: 'gpt-5.6-sol' },
+    )?.kind).toBe('structured');
   });
 
-  it('requires a config and matches exact workflow names, including workflow_call child names', () => {
-    expect(() => resolveFindingIntakeNormalizeConfig(
+  it('targets every Finding reviewer only when targets is omitted', () => {
+    expect(resolveFindingContractReviewerOutputStrategy(
+      findingContract,
+      { provider: 'codex', model: 'gpt-5.6-terra' },
+      { provider: 'codex', model: 'gpt-5.6-sol' },
+    )?.kind).toBe('plain_text_normalized');
+    expect(resolveFindingContractReviewerOutputStrategy(
+      findingContract,
       undefined,
-      'child',
-      plainTextFindingContract,
-    )).toThrow(/intake_normalize is not configured/);
+      { provider: 'codex', model: 'gpt-5.6-sol' },
+    )?.kind).toBe('structured');
+  });
+
+  it('validates the isolated normalizer provider independently of targets', () => {
     expect(resolveFindingIntakeNormalizeConfig(
-      config,
-      'child',
-      plainTextFindingContract,
-    )).toBe(config);
-    const targeted = { ...config, targets: ['child'] };
-    expect(resolveFindingIntakeNormalizeConfig(
-      targeted,
-      'child',
-      plainTextFindingContract,
-    )).toBe(targeted);
-    expect(() => resolveFindingIntakeNormalizeConfig(
-      targeted,
-      'Child',
-      plainTextFindingContract,
-    )).toThrow(/not included in intake_normalize.targets/);
-    expect(() => resolveFindingIntakeNormalizeConfig(
-      targeted,
-      'parent',
-      plainTextFindingContract,
-    )).toThrow(/not included in intake_normalize.targets/);
+      { provider: 'codex', model: 'gpt-5.6-terra' },
+      findingContract,
+    )).toBeDefined();
     expect(() => resolveFindingIntakeNormalizeConfig(
       { provider: 'claude', model: 'sonnet' },
-      'child',
-      plainTextFindingContract,
-    )).toThrow(/does not support isolated structured execution/);
-  });
-});
-
-describe('finding contract reviewer output strategy', () => {
-  it('is selected only by workflow Finding Contract, regardless of normalizer config', () => {
-    const normalizerConfig = {
-      provider: 'codex',
-      model: 'gpt-5.6-terra',
-      targets: ['workflow'],
-    } as const;
-    const canonicalContract: FindingContractConfig = {
-      ledgerPath: '.takt/findings/ledger.json',
-      rawFindingsPath: '.takt/findings/raw',
-      reviewerOutput: 'canonical_blocks',
-      manager: {
-        persona: 'findings-manager',
-        instruction: 'findings-manager',
-        outputContract: 'findings-manager',
-      },
-    };
-    expect(resolveFindingIntakeNormalizeConfig(
-      normalizerConfig,
-      'workflow',
-      canonicalContract,
-    )).toBeUndefined();
-    expect(resolveFindingContractReviewerOutputStrategy(canonicalContract))
-      .toEqual({
-        kind: 'canonical_blocks',
-        reportGeneration: 'plain_text',
-        intake: 'canonical_parser',
-      });
-    expect(resolveFindingContractReviewerOutputStrategy({
-      ledgerPath: '.takt/findings/ledger.json',
-      rawFindingsPath: '.takt/findings/raw',
-      reviewerOutput: 'structured',
-      manager: {
-        persona: 'findings-manager',
-        instruction: 'findings-manager',
-        outputContract: 'findings-manager',
-      },
-    })).toEqual({
-      kind: 'structured',
-      reportGeneration: 'structured',
-      intake: 'reviewer_structured',
-    });
-    expect(resolveFindingContractReviewerOutputStrategy({
-      ...canonicalContract,
-      reviewerOutput: 'plain_text_normalized',
-    })).toEqual({
-      kind: 'plain_text_normalized',
-      reportGeneration: 'plain_text',
-      intake: 'isolated_normalizer',
-    });
+      findingContract,
+    )).toThrow(/finding_contract\.intake_normalize/);
   });
 });
 
@@ -286,15 +212,13 @@ describe('finding intake extraction prompt', () => {
   it('uses only the report as source and preserves missing or ambiguous fields', () => {
     const report = '## Finding\nIssue: broken';
     const prompt = buildFindingIntakeExtractionPrompt(report, 'en');
-    expect(prompt).toContain('## Finding\nIssue: broken');
+    expect(prompt).toContain(report);
     expect(prompt.match(/## Finding\nIssue: broken/g)).toHaveLength(1);
     expect(prompt).toContain('report below is your only source');
     expect(prompt).toContain('missing or ambiguous scalar fields as `null`');
-    expect(prompt).toMatch(/broad\s+architecture or repository-design issue/u);
-    expect(prompt).not.toContain('canonical block');
   });
 
-  it('localizes the prompt and gives correction no previous output', () => {
+  it('localizes correction without carrying previous output', () => {
     const prompt = buildFindingIntakeCorrectionPrompt('唯一の報告', 'ja');
     expect(prompt).toContain('下記のレビュー報告だけを情報源');
     expect(prompt).toContain('前回出力の再利用、議論、修復は禁止');

@@ -285,7 +285,6 @@ function makeHarness(
   const contract = {
     ledgerPath: '.takt/findings/ledger.json',
     rawFindingsPath: '.takt/findings/raw',
-    reviewerOutput: 'structured',
     manager: {
       persona: 'findings-manager',
       instruction: 'Reconcile findings.',
@@ -2167,7 +2166,6 @@ describe('解釈梯子の追加必須テスト', () => {
         workflowName: 'peer-review',
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
       });
       await realStore.updateLedger(() => ({
         ledger: authorizeFindingLedgerFixture({
@@ -2213,7 +2211,6 @@ describe('解釈梯子の追加必須テスト', () => {
         contract: {
           ledgerPath: '.takt/findings/peer-review.json',
           rawFindingsPath: '.takt/findings/raw',
-          reviewerOutput: 'structured',
           manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'JSON.' },
         } as never,
         ledgerStore: crashingStore,
@@ -2479,7 +2476,6 @@ describe('解釈梯子の追加必須テスト', () => {
         workflowName: 'peer-review',
         ledgerPath: '.takt/findings/peer-review.json',
         rawFindingsPath: '.takt/findings/raw',
-        reviewerOutput: 'structured',
       });
       await store.updateLedger(() => ({
         ledger: authorizeFindingLedgerFixture({
@@ -2518,7 +2514,6 @@ describe('解釈梯子の追加必須テスト', () => {
           contract: {
             ledgerPath: '.takt/findings/peer-review.json',
             rawFindingsPath: '.takt/findings/raw',
-            reviewerOutput: 'structured',
             manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'JSON.' },
           } as never,
           ledgerStore: store,
