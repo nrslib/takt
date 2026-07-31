@@ -9,6 +9,10 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 4. Run tests to verify
 5. Report specifically "what you checked and what you fixed"
 
+{{include:instructions/fix-root-cause-analysis}}
+
+{{include:instructions/fix-family-completion}}
+
 **Report format:**
 - NG: "It has already been fixed"
 - OK: "After checking file X at L123, I found issue Y and fixed it to Z"
@@ -27,3 +31,5 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 - {change details}
 ## Test results
 - {command executed and results}
+## Quality gates
+- {Quality gates run after the final change and their results}

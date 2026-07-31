@@ -9,6 +9,10 @@ Report Directory 内のレポートを一次情報として参照してくださ
 4. テストを実行して検証する
 5. 「何を確認して、何を修正したか」を具体的に報告する
 
+{{include:instructions/fix-root-cause-analysis}}
+
+{{include:instructions/fix-family-completion}}
+
 **報告フォーマット:**
 - NG: 「既に修正されています」
 - OK: 「ファイル X の L123 を確認した結果、問題 Y が存在したため、Z に修正しました」
@@ -27,3 +31,5 @@ Report Directory 内のレポートを一次情報として参照してくださ
 - {変更内容}
 ## テスト結果
 - {実行コマンドと結果}
+## 品質ゲート
+- {最後の変更後に実行した品質ゲートと結果}

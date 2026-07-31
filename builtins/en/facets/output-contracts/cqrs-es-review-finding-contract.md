@@ -26,6 +26,6 @@
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE with no lifecycle claims → Summary only
-- APPROVE with confirmations → Summary and the required claims in the active Finding Contract format
-- REJECT → Include every related claim and necessary resolution confirmation in the active Finding Contract format
+- APPROVE with no resolution confirmations → Summary only (5 lines or fewer)
+- APPROVE with resolution confirmations → Summary and every required claim in the active Finding Contract format
+- REJECT → Include every verified finding and necessary resolution confirmation in the active Finding Contract format, aggregating locations with the same cause

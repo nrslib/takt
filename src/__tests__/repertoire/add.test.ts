@@ -62,7 +62,6 @@ vi.mock('node:child_process', () => ({
 vi.mock('../../infra/config/paths.js', () => ({
   getBuiltinProviderOptionsDir: vi.fn(() => '/builtin/ja/provider-options'),
   getBuiltinLanguageStepsDir: vi.fn(() => '/builtin/ja/steps'),
-  getBuiltinStepsDir: vi.fn(() => '/builtin/steps'),
   getGlobalProviderOptionsDir: vi.fn(() => '/home/user/.takt/provider-options'),
   getGlobalStepsDir: vi.fn(() => '/home/user/.takt/steps'),
   getProjectProviderOptionsDir: vi.fn(() => '/project/.takt/provider-options'),
@@ -246,7 +245,6 @@ describe('repertoireAddCommand temporary directory handling', () => {
           `${process.cwd()}/.takt/steps`,
           '/home/user/.takt/steps',
           '/builtin/ja/steps',
-          '/builtin/steps',
         ],
         stepFragmentScopedCandidateDirs: new Map([
           ['owner/repo', [join(secureTempDir, 'extract', 'steps')]],

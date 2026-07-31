@@ -63,6 +63,78 @@ describe('facet include expansion', () => {
     expect(content).not.toContain('{{include:instructions/review-pr-context}}');
   });
 
+  it.each(['en', 'ja'] as const)('should compose the builtin fix-family contract into fix instructions in %s', (lang) => {
+    const partial = readFileSync(
+      join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions', 'fix-family-completion.md'),
+      'utf-8',
+    ).trim();
+
+    for (const instruction of [
+      'fix',
+      'ai-antipattern-fix',
+      'fix-maintenance',
+      'fix-supervisor',
+      'apply-fix-plan',
+    ]) {
+      const content = resolveRefToContent(
+        instruction,
+        undefined,
+        tempDir,
+        'instructions',
+        { projectDir: tempDir, lang },
+      );
+
+      expect(content).toContain(partial);
+      expect(content).not.toContain('{{include:instructions/fix-family-completion}}');
+    }
+  });
+
+  it.each(['en', 'ja'] as const)('should compose root-cause analysis into planning and direct fix instructions in %s', (lang) => {
+    const partial = readFileSync(
+      join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions', 'fix-root-cause-analysis.md'),
+      'utf-8',
+    ).trim();
+
+    for (const instruction of [
+      'fix-plan',
+      'fix',
+      'ai-antipattern-fix',
+      'fix-maintenance',
+      'fix-supervisor',
+    ]) {
+      const content = resolveRefToContent(
+        instruction,
+        undefined,
+        tempDir,
+        'instructions',
+        { projectDir: tempDir, lang },
+      );
+
+      expect(content).toContain(partial);
+      expect(content).not.toContain('{{include:instructions/fix-root-cause-analysis}}');
+    }
+  });
+
+  it.each(['en', 'ja'] as const)('should compose one fix-plan validity contract across planning, fixing, and verification in %s', (lang) => {
+    const partial = readFileSync(
+      join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions', 'fix-plan-validity.md'),
+      'utf-8',
+    ).trim();
+
+    for (const instruction of ['fix-plan', 'apply-fix-plan', 'verify-fix']) {
+      const content = resolveRefToContent(
+        instruction,
+        undefined,
+        tempDir,
+        'instructions',
+        { projectDir: tempDir, lang },
+      );
+
+      expect(content).toContain(partial);
+      expect(content).not.toContain('{{include:instructions/fix-plan-validity}}');
+    }
+  });
+
   it('should expand {{include:policies/<name>}} in a policy facet', () => {
     const policiesDir = join(tempDir, '.takt', 'facets', 'policies');
     const partialsDir = join(tempDir, '.takt', 'facets', 'partials', 'policies');

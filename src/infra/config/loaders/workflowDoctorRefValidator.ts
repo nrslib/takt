@@ -13,7 +13,8 @@ import { enumerateParallelSubSteps } from './workflowParallelTraversal.js';
 type RawWorkflow = ReturnType<typeof WorkflowConfigRawSchema.parse>;
 type RawStep = RawWorkflow['steps'][number];
 type RawParamDefinition = NonNullable<NonNullable<RawWorkflow['subworkflow']>['params']>[string];
-type RawParamType = RawParamDefinition['type'];
+type RawFacetParamDefinition = Extract<RawParamDefinition, { type: 'facet_ref' | 'facet_ref[]' }>;
+type RawFacetParamType = RawFacetParamDefinition['type'];
 function isNamedRef(ref: string): boolean {
   return !isResourcePath(ref) && !/\s/.test(ref);
 }
@@ -58,9 +59,9 @@ function collectNamedRefs(refs: string | string[] | undefined): string[] {
 function getParamDefinition(
   raw: RawWorkflow,
   value: unknown,
-  expectedTypes: readonly RawParamType[],
-  expectedKind: RawParamDefinition['facet_kind'],
-): RawParamDefinition | undefined {
+  expectedTypes: readonly RawFacetParamType[],
+  expectedKind: RawFacetParamDefinition['facet_kind'],
+): RawFacetParamDefinition | undefined {
   if (!isWorkflowParamReference(value)) {
     return undefined;
   }
@@ -68,7 +69,11 @@ function getParamDefinition(
   if (!definition) {
     return undefined;
   }
-  if (!expectedTypes.includes(definition.type) || definition.facet_kind !== expectedKind) {
+  if (
+    definition.type === 'workflow_ref'
+    || !expectedTypes.includes(definition.type)
+    || definition.facet_kind !== expectedKind
+  ) {
     return undefined;
   }
   return definition;
@@ -77,17 +82,17 @@ function getParamDefinition(
 function collectNamedRefsFromField(
   raw: RawWorkflow,
   value: unknown,
-  expectedTypes: readonly RawParamType[],
-  expectedKind: RawParamDefinition['facet_kind'],
+  expectedTypes: readonly RawFacetParamType[],
+  expectedKind: RawFacetParamDefinition['facet_kind'],
 ): string[] {
-  if (typeof value === 'string' || Array.isArray(value)) {
-    return collectNamedRefs(value);
-  }
-  const definition = getParamDefinition(raw, value, expectedTypes, expectedKind);
-  if (!definition?.default) {
-    return [];
-  }
-  return collectNamedRefs(definition.default);
+  const entries = Array.isArray(value) ? value : [value];
+  return entries.flatMap((entry) => {
+    if (typeof entry === 'string') {
+      return isNamedRef(entry) ? [entry] : [];
+    }
+    const definition = getParamDefinition(raw, entry, expectedTypes, expectedKind);
+    return definition?.default === undefined ? [] : collectNamedRefs(definition.default);
+  });
 }
 
 function validateScalarRefs(
@@ -122,8 +127,8 @@ function collectUsedLocalKeys(raw: RawWorkflow): Record<'personas' | 'policies' 
     report_formats: new Set<string>(),
   };
   const collectStep = (step: RawStep): void => {
-    if (step.persona && isNamedRef(step.persona)) {
-      used.personas.add(step.persona);
+    for (const ref of collectNamedRefsFromField(raw, step.persona, ['facet_ref'], 'persona')) {
+      used.personas.add(ref);
     }
     if (step.team_leader?.persona && isNamedRef(step.team_leader.persona)) {
       used.personas.add(step.team_leader.persona);
@@ -199,13 +204,13 @@ function validateStepRefs(
   stepPath: readonly PropertyKey[],
 ): void {
   const workflowDir = context.workflowDir!;
-  if (step.persona && isNamedRef(step.persona)) {
+  for (const ref of collectNamedRefsFromField(raw, step.persona, ['facet_ref'], 'persona')) {
     appendMissingRef(
       diagnostics,
       `${label} persona`,
-      step.persona,
-      () => sections.personas?.[step.persona!] !== undefined
-        || resolvePersona(step.persona, sections, workflowDir, context).personaPath !== undefined,
+      ref,
+      () => sections.personas?.[ref] !== undefined
+        || resolvePersona(ref, sections, workflowDir, context).personaPath !== undefined,
       [...stepPath, 'persona'],
     );
   }

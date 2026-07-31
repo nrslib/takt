@@ -121,9 +121,9 @@ loop_monitors:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix-fc
       rules:
-        - condition: 修正後レビューで進捗が確認され、次の修正が実行可能である
+        - condition: 修正進捗があり、報告内容が収束中で、次の修正が実行可能である
           next: fix
-        - condition: 同じ指摘が繰り返されるが再計画で解消できる見込みがある
+        - condition: 修正未完了または報告未収束で、再計画により解消できる見込みがある
           next: replan
         - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
           next: ABORT
@@ -133,9 +133,9 @@ loop_monitors:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix-fc
       rules:
-        - condition: 修正後レビューで進捗が確認され、次の修正が実行可能である
+        - condition: 修正進捗があり、報告内容が収束中で、次の修正が実行可能である
           next: fix
-        - condition: 同じ指摘が繰り返されるが再計画で解消できる見込みがある
+        - condition: 修正未完了または報告未収束で、再計画により解消できる見込みがある
           next: replan
         - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
           next: ABORT

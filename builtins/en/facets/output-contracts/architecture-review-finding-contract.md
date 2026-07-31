@@ -19,4 +19,4 @@
 - APPROVE means zero issues; REJECT means one or more issues. Do not make approvals or summaries issues.
 ```
 
-**Cognitive-load rule:** Keep verification evidence concise, but include every machine claim required by the active Finding Contract format without truncation.
+**Cognitive-load rule:** Even for APPROVE, include the one aggregated re-scan row; group locations with the same cause. Keep verification evidence concise, but do not omit or truncate any machine claim required by the active Finding Contract format.

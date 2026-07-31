@@ -30,5 +30,5 @@
 
 **Cognitive load reduction rules:**
 - No issues → Checklist only (10 lines or fewer)
-- Warnings only → + concise warnings
-- Vulnerabilities found → + every vulnerability in the active Finding Contract format
+- Warnings only → + Warnings in 1-2 lines (15 lines or fewer)
+- Vulnerabilities found → Include every verified vulnerability claim in the active Finding Contract format and aggregate locations with the same cause

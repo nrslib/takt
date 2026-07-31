@@ -3,11 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { describe, expect, it, vi } from 'vitest';
-import type { WorkflowConfig } from '../core/models/index.js';
-import {
-  iterateWorkflowDir,
-  loadAllWorkflowsWithSourcesFromDirs,
-} from '../infra/config/loaders/workflowDiscovery.js';
+import { loadAllWorkflowsWithSourcesFromDirs } from '../infra/config/loaders/workflowDiscovery.js';
 
 describe('workflowDiscovery', () => {
   it('loads every shipped English and Japanese workflow through the normalized rule schema', () => {
@@ -23,47 +19,32 @@ describe('workflowDiscovery', () => {
     const japaneseWorkflows = loadLanguageWorkflows('ja');
 
     expect(onWarning).not.toHaveBeenCalled();
-    expect(englishWorkflows.size + japaneseWorkflows.size).toBe(126);
+    expect(englishWorkflows.size).toBe(japaneseWorkflows.size);
+    for (const workflows of [englishWorkflows, japaneseWorkflows]) {
+      expect(workflows.size).toBeGreaterThan(0);
+      expect(workflows.has('peer-review-suite-base')).toBe(true);
+      expect(workflows.has('peer-review-suite-frontend')).toBe(true);
+      expect(workflows.has('peer-review-suite-cqrs')).toBe(true);
+      expect(workflows.has('peer-review-suite-frontend-cqrs')).toBe(true);
+    }
   });
 
-  it.each(['en', 'ja'] as const)('gives every shared fix step a non-judging fix report in %s workflows', (language) => {
-    const rootDir = process.cwd();
-    const workflowsDir = join(rootDir, 'builtins', language, 'workflows');
-    const workflows = loadAllWorkflowsWithSourcesFromDirs<WorkflowConfig>(
-      rootDir,
-      [{ dir: workflowsDir, source: 'builtin' }],
-      undefined,
-      undefined,
-      true,
+  it.each(['en', 'ja'] as const)('keeps the composed shared fix step report non-judging in %s', (language) => {
+    const source = readFileSync(
+      join(process.cwd(), 'builtins', language, 'steps', 'peer-review-fix.yaml'),
+      'utf-8',
     );
-    const sharedFixSteps = Array.from(iterateWorkflowDir(workflowsDir, 'builtin')).flatMap((entry) => {
-      const rawWorkflow = parseYaml(readFileSync(entry.path, 'utf-8')) as {
-        steps?: Array<{ name?: unknown; instruction?: unknown }>;
-      };
-      const rawFixStepNames = (rawWorkflow.steps ?? [])
-        .filter((step) => step.instruction === 'fix')
-        .map((step) => step.name);
-      const workflow = workflows.get(entry.name);
+    const step = parseYaml(source) as {
+      output_contracts?: { report?: Array<Record<string, unknown>> };
+    };
 
-      expect(workflow).toBeDefined();
-      return rawFixStepNames.map((stepName) => {
-        expect(typeof stepName).toBe('string');
-        const step = workflow?.config.steps.find((candidate) => candidate.name === stepName);
-        expect(step).toBeDefined();
-        return step!;
-      });
-    });
-
-    expect(sharedFixSteps.length).toBeGreaterThan(0);
-    for (const step of sharedFixSteps) {
-      expect(step.outputContracts).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          name: 'fix-report.md',
-          formatRef: 'fix-report',
-          useJudge: false,
-        }),
-      ]));
-    }
+    expect(step.output_contracts?.report).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'fix-report.md',
+        format: 'fix-report',
+        use_judge: false,
+      }),
+    ]));
   });
 
   it('repo 直下でも builtin の privileged workflow を discovery で skip しない', () => {

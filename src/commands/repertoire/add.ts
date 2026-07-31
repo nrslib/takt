@@ -14,7 +14,6 @@ import { stringify as stringifyYaml } from 'yaml';
 import {
   getBuiltinProviderOptionsDir,
   getBuiltinLanguageStepsDir,
-  getBuiltinStepsDir,
   getGlobalProviderOptionsDir,
   getGlobalStepsDir,
   getProjectProviderOptionsDir,
@@ -218,7 +217,6 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
         getProjectStepsDir(projectCwd),
         getGlobalStepsDir(),
         getBuiltinLanguageStepsDir(language),
-        getBuiltinStepsDir(),
       ],
       stepFragmentScopedCandidateDirs: new Map([
         [getScopedStepFragmentCandidateKey(owner, repo), [join(packageRoot, 'steps')]],

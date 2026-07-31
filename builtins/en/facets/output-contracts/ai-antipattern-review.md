@@ -51,4 +51,4 @@
 
 **Cognitive load reduction rules:**
 - No issues → Summary sentence + checklist + Re-scan Evidence (from the second iteration onward) + Non-Finding Concerns when needed
-- Issues found → include table rows only for impacted sections (30 lines or fewer)
+- Issues found → include every verified finding in the impacted sections and aggregate locations with the same cause

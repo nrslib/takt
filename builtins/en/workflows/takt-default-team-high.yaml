@@ -121,9 +121,9 @@ loop_monitors:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix-fc
       rules:
-        - condition: The post-fix review confirms progress and the next fix is actionable
+        - condition: Fixes are progressing, report content is converging, and the next fix is actionable
           next: fix
-        - condition: The same finding repeats but replanning may resolve it
+        - condition: Implementation is incomplete or the report has not converged, and replanning may resolve it
           next: replan
         - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
           next: ABORT
@@ -133,9 +133,9 @@ loop_monitors:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix-fc
       rules:
-        - condition: The post-fix review confirms progress and the next fix is actionable
+        - condition: Fixes are progressing, report content is converging, and the next fix is actionable
           next: fix
-        - condition: The same finding repeats but replanning may resolve it
+        - condition: Implementation is incomplete or the report has not converged, and replanning may resolve it
           next: replan
         - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
           next: ABORT

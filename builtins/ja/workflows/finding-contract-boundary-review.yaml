@@ -1,0 +1,63 @@
+name: finding-contract-boundary-review
+description: 契約配線・資源所有権・失敗境界を高信頼レビューし、継承した ledger の terminal gate で検証する。
+subworkflow:
+  callable: true
+  visibility: internal
+  requires_finding_contract: true
+  returns:
+    - needs_fix
+    - need_replan
+max_steps: 10
+initial_step: boundary-reviewers
+loop_monitors:
+  - cycle: [boundary-reviewers, final-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-gate-needs-review
+      rules:
+        - condition: 不足証跡を具体的に取得でき、同じ境界レビューを再実行する価値がある
+          next: boundary-reviewers
+        - condition: 同じ境界レビューでは不足証跡を取得できない
+          next: ABORT
+steps:
+  - name: boundary-reviewers
+    uses: boundary-reviewers
+    rules:
+      self:
+        - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+          next: finding-conflict-adjudication
+        - condition: when(findings.conflicts.count > 0)
+          next: ABORT
+        - condition: when(findings.provisional.dismissEligible.count > 0 && findings.conflicts.count == 0)
+          next: final-gate
+        - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+          return: need_replan
+        - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
+          return: need_replan
+        - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+          return: need_replan
+        - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+          next: final-gate
+        - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+          return: needs_fix
+      parallel:
+        contract-wiring-review: [{ condition: approved }, { condition: needs_fix }]
+        resource-ownership-review: [{ condition: approved }, { condition: needs_fix }]
+        failure-boundary-review: [{ condition: approved }, { condition: needs_fix }]
+
+  - name: final-gate
+    uses: finding-contract-final-gate
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: needs_review
+        next: boundary-reviewers
+      - condition: need_replan
+        return: need_replan
+      - condition: needs_fix
+        return: needs_fix
+      - condition: needs_conflict_adjudication
+        next: finding-conflict-adjudication
+      - condition: ABORT
+        next: ABORT

@@ -6,272 +6,36 @@ workflow_config:
       network_access: true
     opencode:
       network_access: true
-max_steps: 20
-initial_step: plan
-loop_monitors:
-  - cycle:
-      - reviewers
-      - fix_both
-    threshold: 3
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-reviewers-fix
-      rules:
-        - condition: converging (findings decreasing, fixes applied)
-          next: reviewers
-        - condition: unproductive (same findings repeating)
-          next: supervise_fix
+max_steps: 21
+initial_step: develop
 steps:
-  - name: plan
-    tags:
-      - plan
-    edit: false
-    persona: planner
-    policy:
-      - design-planning
-    knowledge:
-      - frontend
-      - backend
-      - cqrs-es
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    rules:
-      - condition: Requirements are clear and implementation is possible
-        next: implement
-      - condition: User is asking a question (not an implementation task)
-        next: COMPLETE
-      - condition: Requirements are unclear, insufficient information
-        next: ABORT
-    instruction: plan
-    output_contracts:
-      report:
-        - name: plan.md
-          format: plan-frontend
-  - name: implement
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-      - design-fidelity
-      - screen-api
-    knowledge:
-      - frontend
-      - backend
-      - cqrs-es
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    required_permission_mode: edit
-    instruction: implement
-    rules:
-      - condition: Implementation complete
-        next: reviewers
-      - condition: Cannot proceed, insufficient info
-        next: ABORT
-      - condition: User input required because there are items to confirm with the user
-        next: implement
-        requires_user_input: true
-        interactive_only: true
-    output_contracts:
-      report:
-        - name: coder-scope.md
-          format: coder-scope
-          use_judge: false
-        - name: coder-decisions.md
-          format: coder-decisions
-          use_judge: false
-  - name: reviewers
-    tags:
-      - review
-    parallel:
-      - name: ai-antipattern-review-2nd
-        tags:
-          - review
-        edit: false
-        persona: ai-antipattern-reviewer
-        policy:
-          - review
-          - ai-antipattern
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
-        instruction: ai-antipattern-review
-        rules:
-          - condition: No AI-specific issues
-          - condition: AI-specific issues found
-        output_contracts:
-          report:
-            - name: ai-antipattern-review.md
-              format: ai-antipattern-review
-      - name: supervise
-        tags:
-          - review
-          - supervise
-        edit: false
-        persona: dual-supervisor
-        policy: review
-        knowledge:
-          - frontend
-          - backend
-          - cqrs-es
-          - security
-          - architecture
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        instruction: supervise
-        rules:
-          - condition: BLOCKED
-          - condition: All checks passed
-          - condition: Requirements unmet, tests failing
-        output_contracts:
-          report:
-            - name: supervisor-validation.md
-              format: supervisor-validation
-            - name: summary.md
-              format: supervisor-summary
-              use_judge: false
-    rules:
-      - condition: any("BLOCKED")
-        next: ABORT
-      - condition: all("No AI-specific issues", "All checks passed")
-        next: COMPLETE
-      - condition: all("AI-specific issues found", "Requirements unmet, tests failing")
-        next: fix_both
-      - condition: any("AI-specific issues found")
-        next: ai-antipattern-fix
-      - condition: any("Requirements unmet, tests failing")
-        next: supervise_fix
-  - name: fix_both
-    uses: mini-fix-both
-    with:
-      fix_policy:
-        - coding
-        - testing
-        - design-fidelity
-      fix_knowledge:
+  - name: develop
+    kind: workflow_call
+    call: mini-core
+    args:
+      plan_policy:
+        - design-planning
+      plan_knowledge:
         - frontend
         - backend
         - cqrs-es
         - security
         - architecture
+      plan_report_format: plan-frontend
+      development_policy:
+        - coding
+        - testing
+        - design-fidelity
+        - screen-api
+      development_knowledge:
+        - frontend
+        - backend
+        - cqrs-es
+        - security
+        - architecture
+      supervisor_persona: dual-supervisor
     rules:
-      self:
-        - condition: all("AI Reviewer's issues fixed", "Supervisor's issues fixed")
-          next: reviewers
-        - condition: any("No fix needed (verified target files/spec)", "Cannot proceed,
-            insufficient info")
-          next: implement
-      parallel:
-        ai-antipattern-fix-parallel:
-          - condition: AI Reviewer's issues fixed
-          - condition: No fix needed (verified target files/spec)
-          - condition: Cannot proceed, insufficient info
-        supervise_fix_parallel:
-          - condition: Supervisor's issues fixed
-          - condition: Cannot proceed, insufficient info
-  - name: ai-antipattern-fix
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-      - design-fidelity
-      - screen-api
-    knowledge:
-      - frontend
-      - backend
-      - cqrs-es
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    required_permission_mode: edit
-    pass_previous_response: false
-    rules:
-      - condition: AI Reviewer's issues fixed
-        next: reviewers
-      - condition: No fix needed (verified target files/spec)
-        next: implement
-      - condition: Cannot proceed, insufficient info
-        next: implement
-    instruction: ai-antipattern-fix
-  - name: supervise_fix
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-      - design-fidelity
-      - screen-api
-    knowledge:
-      - frontend
-      - backend
-      - cqrs-es
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    required_permission_mode: edit
-    pass_previous_response: false
-    rules:
-      - condition: Supervisor's issues fixed
-        next: reviewers
-      - condition: Cannot proceed, insufficient info
-        next: implement
-    instruction: fix-supervisor
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT

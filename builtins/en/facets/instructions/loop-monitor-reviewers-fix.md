@@ -7,12 +7,12 @@ Review the latest review and fix reports in the Report Directory and determine w
 - When no fix reports addressing the issue, do not infer that the loop is healthy merely because no post-fix review exists.
 
 **Judgment criteria:**
-- Check whether the same issue persists across multiple post-fix reviews.
-  - A reported fix awaiting post-fix review → healthy (continue normal verification)
-  - A post-fix review reconfirms the same issue → candidate unproductive repetition
-  - Previous issues resolve and a different issue appears as new → healthy as a rule
-- Compare the fix report with the current code to verify that the fix was actually applied.
+- **Fix progress:** Use fix reports, current code, and post-fix reviews to verify that each prior open finding's acceptance criteria are satisfied. Repetition of the same `finding_id`, root cause, or acceptance criterion after a fix means implementation is incomplete.
+- **Report convergence:** Compare completed review rounds and check whether valid new structural or contract findings keep being added. Even when earlier findings resolve, this means the review report has not converged.
+- A new finding from a different `family_tag` is not inherently healthy or unproductive. Inspect its content, impact scope, and review round.
+- The loop may be converging when new findings are limited to a finite set of local issues and the unreviewed structural or contract surface is not expanding.
+- Compare fix units and acceptance evidence in the fix report with the current code to verify that target findings are actually closed.
 - When a post-fix review conflicts with the current code, do not repeat the same fix; choose among the available verification, recovery, or stop options.
-- Check whether the number of new or recurring issues is decreasing overall.
+- Treat counts as supporting information and judge fix progress separately from report-content convergence.
 
-Choose a stop outcome only when the same problem repeats after post-fix review and no available action can break the deadlock.
+Choose a stop outcome only when implementation is incomplete or the report has not converged and no available action can break the deadlock.

@@ -1,0 +1,9 @@
+name: request-replan
+tags:
+  - plan
+edit: false
+persona: supervisor
+provider_options:
+  extends: review-readonly
+required_permission_mode: readonly
+instruction: request-replan

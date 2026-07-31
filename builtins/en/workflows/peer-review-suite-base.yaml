@@ -1,0 +1,39 @@
+name: peer-review-suite-base
+description: Shared specialist reviewer suite with injectable domain review context.
+subworkflow:
+  callable: true
+  visibility: internal
+  returns:
+    - needs_fix
+  params:
+    review_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+max_steps: 3
+initial_step: reviewers
+steps:
+  - name: reviewers
+    uses: peer-review-reviewers
+    with:
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge_additions
+    rules:
+      self:
+        - condition: all("approved")
+          next: COMPLETE
+        - condition: any("needs_fix")
+          return: needs_fix
+      parallel:
+        arch-review: [{ condition: approved }, { condition: needs_fix }]
+        security-review: [{ condition: approved }, { condition: needs_fix }]
+        qa-review: [{ condition: approved }, { condition: needs_fix }]
+        testing-review: [{ condition: approved }, { condition: needs_fix }]
+        coding-review: [{ condition: approved }, { condition: needs_fix }]
+        ai-antipattern-review-2nd: [{ condition: approved }, { condition: needs_fix }]

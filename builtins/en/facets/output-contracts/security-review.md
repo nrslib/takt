@@ -49,4 +49,4 @@
 **Cognitive load reduction rules:**
 - No issues → Checklist only (10 lines or fewer)
 - Warnings only → + Warnings in 1-2 lines (15 lines or fewer)
-- Vulnerabilities found → + finding tables (30 lines or fewer)
+- Vulnerabilities found → include every verified finding in tables and aggregate locations with the same cause

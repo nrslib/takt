@@ -294,6 +294,7 @@ steps:
     call: shared/review-loop
     args:
       review_policy: [strict-review]
+      review_persona: delegated-reviewer
       fix_instruction: child-fix
       review_report_format: summary
     rules:
@@ -315,6 +316,9 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: [architecture]
+    review_persona:
+      type: facet_ref
+      facet_kind: persona
     fix_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -323,6 +327,9 @@ subworkflow:
       facet_kind: report_format
 initial_step: review
 max_steps: 3
+personas:
+  delegated-reviewer: |
+    Review the delegated change.
 policies:
   strict-review: |
     Follow the strict child review checklist.
@@ -337,7 +344,8 @@ report_formats:
     # Summary Format
 steps:
   - name: review
-    persona: reviewer
+    persona:
+      $param: review_persona
     policy:
       $param: review_policy
     knowledge:
@@ -378,6 +386,7 @@ steps:
     const fixStep = childWorkflow!.steps.find((step) => step.name === 'fix') as Record<string, unknown> | undefined;
 
     expect(reviewStep).toMatchObject({
+      persona: expect.stringContaining('Review the delegated change'),
       policyContents: [expect.stringContaining('strict child review checklist')],
       knowledgeContents: [expect.stringContaining('Architecture reference content')],
     });
@@ -624,6 +633,444 @@ steps:
       policyContents: [expect.stringContaining('strict child review checklist')],
       knowledgeContents: [expect.stringContaining('Architecture reference content')],
     });
+  });
+
+  it('flattens scalar and array facet params in declaration order', () => {
+    writeProjectWorkflow('parent.yaml', `name: parent
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: composed-review
+    args:
+      policy_additions: [domain-policy-a, domain-policy-b]
+      knowledge_addition: domain-knowledge
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('composed-review.yaml', `name: composed-review
+subworkflow:
+  callable: true
+  params:
+    policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+    knowledge_addition:
+      type: facet_ref
+      facet_kind: knowledge
+policies:
+  base-policy: Base policy
+  domain-policy-a: Domain policy A
+  domain-policy-b: Domain policy B
+  final-policy: Final policy
+knowledge:
+  base-knowledge: Base knowledge
+  domain-knowledge: Domain knowledge
+  final-knowledge: Final knowledge
+steps:
+  - name: review
+    persona: reviewer
+    policy:
+      - base-policy
+      - $param: policy_additions
+      - final-policy
+    knowledge:
+      - base-knowledge
+      - $param: knowledge_addition
+      - final-knowledge
+    instruction: Review
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const parent = loadProjectWorkflow('parent.yaml');
+    const child = workflowCallResolver.resolveWorkflowCallTarget(
+      parent!,
+      findWorkflowCallStep(parent!, 'delegate'),
+      projectDir,
+      projectDir,
+    );
+
+    expect(child?.steps[0]?.policyContents).toEqual([
+      'Base policy',
+      'Domain policy A',
+      'Domain policy B',
+      'Final policy',
+    ]);
+    expect(child?.steps[0]?.knowledgeContents).toEqual([
+      'Base knowledge',
+      'Domain knowledge',
+      'Final knowledge',
+    ]);
+  });
+
+  it('accepts empty facet_ref arrays from args and defaults when fixed refs remain', () => {
+    writeProjectWorkflow('parent.yaml', `name: parent
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: composed-review
+    args:
+      knowledge_additions: []
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('composed-review.yaml', `name: composed-review
+subworkflow:
+  callable: true
+  params:
+    policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+policies:
+  base-policy: Base policy
+knowledge:
+  base-knowledge: Base knowledge
+steps:
+  - name: review
+    persona: reviewer
+    policy:
+      - base-policy
+      - $param: policy_additions
+    knowledge:
+      - base-knowledge
+      - $param: knowledge_additions
+    instruction: Review
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const parent = loadProjectWorkflow('parent.yaml');
+    const child = workflowCallResolver.resolveWorkflowCallTarget(
+      parent!,
+      findWorkflowCallStep(parent!, 'delegate'),
+      projectDir,
+      projectDir,
+    );
+
+    expect(child?.steps[0]?.policyContents).toEqual(['Base policy']);
+    expect(child?.steps[0]?.knowledgeContents).toEqual(['Base knowledge']);
+  });
+
+  it('resolves a workflow_ref param before the nested workflow_call target boundary', () => {
+    writeProjectWorkflow('root.yaml', `name: root
+initial_step: compose
+steps:
+  - name: compose
+    kind: workflow_call
+    call: composer
+    args:
+      target: implementation
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('composer.yaml', `name: composer
+subworkflow:
+  callable: true
+  params:
+    target:
+      type: workflow_ref
+steps:
+  - name: delegate
+    kind: workflow_call
+    call:
+      $param: target
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('implementation.yaml', `name: implementation
+subworkflow:
+  callable: true
+steps:
+  - name: implement
+    persona: coder
+    instruction: Implement
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const root = loadProjectWorkflow('root.yaml');
+    const composer = workflowCallResolver.resolveWorkflowCallTarget(
+      root!,
+      findWorkflowCallStep(root!, 'compose'),
+      projectDir,
+      projectDir,
+    );
+    const delegate = findWorkflowCallStep(composer!, 'delegate');
+    const implementation = workflowCallResolver.resolveWorkflowCallTarget(
+      composer!,
+      delegate,
+      projectDir,
+      projectDir,
+    );
+
+    expect(delegate.call).toBe('implementation');
+    expect(implementation?.name).toBe('implementation');
+  });
+
+  it('validates required Finding Contracts for each expanded workflow_ref invocation', () => {
+    writeProjectWorkflow('root.yaml', `name: root
+initial_step: compose-safe
+steps:
+  - name: compose-safe
+    kind: workflow_call
+    call: composer
+    args:
+      target: safe-review
+    rules:
+      - condition: COMPLETE
+        next: compose-required
+  - name: compose-required
+    kind: workflow_call
+    call: composer
+    args:
+      target: required-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('composer.yaml', `name: composer
+subworkflow:
+  callable: true
+  params:
+    target:
+      type: workflow_ref
+steps:
+  - name: delegate
+    kind: workflow_call
+    call:
+      $param: target
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('safe-review.yaml', `name: safe-review
+subworkflow:
+  callable: true
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review without a Finding Contract
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeProjectWorkflow('required-review.yaml', `name: required-review
+subworkflow:
+  callable: true
+  requires_finding_contract: true
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review with the inherited Finding Contract
+    rules:
+      - condition: when(findings.open.count == 0)
+        next: COMPLETE
+`);
+
+    const root = loadProjectWorkflow('root.yaml');
+
+    expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir)).toThrow(
+      /workflow "required-review".*requires a finding_contract inherited from its caller/s,
+    );
+  });
+
+  it('validates nested return routes for each expanded workflow_ref invocation', () => {
+    writeProjectWorkflow('root.yaml', `name: root
+initial_step: compose-accepted
+steps:
+  - name: compose-accepted
+    kind: workflow_call
+    call: composer
+    args:
+      target: accepted-review
+    rules:
+      - condition: COMPLETE
+        next: compose-rejected
+  - name: compose-rejected
+    kind: workflow_call
+    call: composer
+    args:
+      target: rejected-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('composer.yaml', `name: composer
+subworkflow:
+  callable: true
+  params:
+    target:
+      type: workflow_ref
+steps:
+  - name: delegate
+    kind: workflow_call
+    call:
+      $param: target
+    rules:
+      - condition: accepted
+        next: COMPLETE
+`);
+    writeProjectWorkflow('accepted-review.yaml', `name: accepted-review
+subworkflow:
+  callable: true
+  returns: [accepted]
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review and accept
+    rules:
+      - condition: done
+        return: accepted
+`);
+    writeProjectWorkflow('rejected-review.yaml', `name: rejected-review
+subworkflow:
+  callable: true
+  returns: [rejected]
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review and reject
+    rules:
+      - condition: done
+        return: rejected
+`);
+
+    const root = loadProjectWorkflow('root.yaml');
+
+    expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir)).toThrow(
+      'workflow_call step "delegate" cannot route on unsupported child result "accepted"',
+    );
+  });
+
+  it('rejects recursive workflow_call validation cycles without unbounded recursion', () => {
+    writeProjectWorkflow('root.yaml', `name: root
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: recursive-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('recursive-review.yaml', `name: recursive-review
+subworkflow:
+  callable: true
+steps:
+  - name: recurse
+    kind: workflow_call
+    call: recursive-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+    const root = loadProjectWorkflow('root.yaml');
+
+    expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir)).toThrow(
+      'Configuration error: recursive workflow_call cycle detected at workflow "recursive-review"',
+    );
+  });
+
+  it.each([
+    {
+      name: 'array value',
+      args: '    args:\n      target: [implementation]\n',
+    },
+    {
+      name: 'missing value',
+      args: '',
+    },
+  ])('rejects a workflow_ref param with $name', ({ args }) => {
+    writeProjectWorkflow('root.yaml', `name: root
+initial_step: compose
+steps:
+  - name: compose
+    kind: workflow_call
+    call: composer
+${args}    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('composer.yaml', `name: composer
+subworkflow:
+  callable: true
+  params:
+    target:
+      type: workflow_ref
+steps:
+  - name: delegate
+    kind: workflow_call
+    call:
+      $param: target
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+    const root = loadProjectWorkflow('root.yaml');
+
+    expect(() => workflowCallResolver.resolveWorkflowCallTarget(
+      root!,
+      findWorkflowCallStep(root!, 'compose'),
+      projectDir,
+      projectDir,
+    )).toThrow();
+  });
+
+  it('rejects a facet param used as a workflow_call target', () => {
+    writeProjectWorkflow('root.yaml', `name: root
+initial_step: compose
+steps:
+  - name: compose
+    kind: workflow_call
+    call: composer
+    args:
+      target: strict
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('composer.yaml', `name: composer
+subworkflow:
+  callable: true
+  params:
+    target:
+      type: facet_ref
+      facet_kind: policy
+policies:
+  strict: Strict policy
+steps:
+  - name: delegate
+    kind: workflow_call
+    call:
+      $param: target
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+    const root = loadProjectWorkflow('root.yaml');
+
+    expect(() => workflowCallResolver.resolveWorkflowCallTarget(
+      root!,
+      findWorkflowCallStep(root!, 'compose'),
+      projectDir,
+      projectDir,
+    )).toThrow();
   });
 
   it('rejects undeclared workflow_call args during child workflow resolution', () => {

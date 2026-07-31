@@ -25,6 +25,6 @@
 ```
 
 **認知負荷軽減ルール:**
-- APPROVE かつ lifecycle claim なし → サマリーのみ
-- APPROVE かつ confirmation あり → サマリーと有効な Finding Contract 形式の必要 claim
-- REJECT → 有効な Finding Contract 形式で関連 claim をすべて記載
+- APPROVE かつ解消確認なし → サマリーのみ（5行以内）
+- APPROVE かつ解消確認あり → サマリーと有効な Finding Contract 形式が要求するすべての claim
+- REJECT → 有効な Finding Contract 形式で確認済みの指摘と必要な解消確認をすべて記載し、同じ原因の場所は集約

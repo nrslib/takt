@@ -1,5 +1,8 @@
 params:
-  arch_knowledge:
+  review_policy_additions:
+    type: facet_ref[]
+    facet_kind: policy
+  review_knowledge_additions:
     type: facet_ref[]
     facet_kind: knowledge
 name: reviewers
@@ -11,9 +14,12 @@ parallel:
       - review
     edit: false
     persona: architecture-reviewer
-    policy: review
+    policy:
+      - review
+      - $param: review_policy_additions
     knowledge:
-      $param: arch_knowledge
+      - architecture
+      - $param: review_knowledge_additions
     provider_options:
       extends: review-readonly
     instruction: review-arch
@@ -26,8 +32,13 @@ parallel:
       - review
     edit: false
     persona: security-reviewer
-    policy: review
-    knowledge: security
+    policy:
+      - review
+      - $param: review_policy_additions
+    knowledge:
+      - security
+      - takt
+      - $param: review_knowledge_additions
     provider_options:
       extends: review-readonly
     instruction: review-security
@@ -43,6 +54,10 @@ parallel:
     policy:
       - review
       - qa
+      - $param: review_policy_additions
+    knowledge:
+      - takt
+      - $param: review_knowledge_additions
     provider_options:
       extends: review-readonly
     instruction: review-qa
@@ -58,9 +73,12 @@ parallel:
     policy:
       - review
       - testing
+      - $param: review_policy_additions
     knowledge:
       - unit-testing
       - e2e-testing
+      - takt
+      - $param: review_knowledge_additions
     provider_options:
       extends: review-readonly
     instruction: review-test
@@ -76,6 +94,10 @@ parallel:
     policy:
       - review
       - coding
+      - $param: review_policy_additions
+    knowledge:
+      - takt
+      - $param: review_knowledge_additions
     pass_previous_response: false
     provider_options:
       extends: review-readonly
@@ -92,6 +114,10 @@ parallel:
     policy:
       - review
       - ai-antipattern
+      - $param: review_policy_additions
+    knowledge:
+      - takt
+      - $param: review_knowledge_additions
     provider_options:
       extends: review-readonly
     instruction: ai-antipattern-review

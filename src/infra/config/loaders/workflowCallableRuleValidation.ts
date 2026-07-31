@@ -18,14 +18,16 @@ function assertNoParamReferencesInStep(
   step: RawWorkflowConfig['steps'][number],
   stepPath: readonly PropertyKey[],
 ): void {
-    if (isWorkflowParamReference(step.policy)) {
-      throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in policy outside a callable subworkflow`), [...stepPath, 'policy']);
-    }
-    if (isWorkflowParamReference(step.knowledge)) {
-      throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in knowledge outside a callable subworkflow`), [...stepPath, 'knowledge']);
+    assertNoParamReferencesInFacetField(step.name, 'policy', step.policy, stepPath);
+    assertNoParamReferencesInFacetField(step.name, 'knowledge', step.knowledge, stepPath);
+    if (isWorkflowParamReference(step.persona)) {
+      throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in persona outside a callable subworkflow`), [...stepPath, 'persona']);
     }
     if (isWorkflowParamReference(step.instruction)) {
       throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in instruction outside a callable subworkflow`), [...stepPath, 'instruction']);
+    }
+    if (isWorkflowParamReference(step.call)) {
+      throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in call outside a callable subworkflow`), [...stepPath, 'call']);
     }
     for (const [argName, value] of Object.entries(step.args ?? {})) {
       if (isWorkflowParamReference(value)) {
@@ -42,6 +44,27 @@ function assertNoParamReferencesInStep(
         assertNoParamReferencesInStep(subStep as RawWorkflowConfig['steps'][number], path);
       }
     }
+}
+
+function assertNoParamReferencesInFacetField(
+  stepName: string,
+  fieldName: 'policy' | 'knowledge',
+  value: RawWorkflowConfig['steps'][number]['policy'] | RawWorkflowConfig['steps'][number]['knowledge'],
+  stepPath: readonly PropertyKey[],
+): void {
+  const values = Array.isArray(value) ? value : [value];
+  for (const [index, entry] of values.entries()) {
+    if (!isWorkflowParamReference(entry)) {
+      continue;
+    }
+    const path = Array.isArray(value)
+      ? [...stepPath, fieldName, index]
+      : [...stepPath, fieldName];
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${stepName}" cannot use $param in ${fieldName} outside a callable subworkflow`),
+      path,
+    );
+  }
 }
 
 export function validateReturnRules(

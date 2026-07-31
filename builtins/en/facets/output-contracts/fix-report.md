@@ -3,23 +3,21 @@
 ## Summary
 {Summary of the work result, changes, and evidence}
 
-## Addressed Findings
-| Finding ID | Change | Status |
-|------------|--------|--------|
-| {ID} | {Summary of the change} | {Fixed / Disputed} |
+## Fix Units
+| Fix Unit | Target Findings | Authoritative Contract and Complete Invariant Set | Implementation and Participating Paths | Happy-Path, Failure-Path, and Boundary Evidence | Status |
+|----------|-----------------|---------------------------------------------------|----------------------------------------|-------------------------------------------------|--------|
+| {Stable ID from the plan} | {IDs} | {Completion conditions beyond the finding examples} | {Boundary change, every consumer migration, removal, or local fix} | {Tests or reproduction results} | {Complete only after every operation / replan / blocker} |
 
-## Unaddressed Findings
-| Finding ID | Reason | Required Action |
-|------------|--------|-----------------|
-| {ID or "None"} | {Reason it remains} | {Next action} |
+## Acceptance Criteria
+| Finding ID | Acceptance Criterion | Evidence | Status |
+|------------|----------------------|----------|--------|
+| {ID} | {Expected behavior} | {Test or reproducible verification result} | {Complete / disputed / blocker} |
 
 ## Verification
 | Type | Result | Evidence |
 |------|--------|----------|
 | {Build / Test / Other} | {Passed / Failed / Not run} | {Command or verification details} |
 
-## Family Coverage
-| family_tag | Covered Branches | Test | Status and Reason |
-|------------|------------------|------|-------------------|
-| {tag} | {Branches} | {file:line or "None"} | {✅ / ❌: Reason} |
+## Unresolved Items
+- {None, or unresolved finding, reason, and required next action}
 ```

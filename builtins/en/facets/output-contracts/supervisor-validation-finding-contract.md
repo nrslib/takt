@@ -21,4 +21,4 @@
 - APPROVE means zero issues and required evidence is confirmed; REJECT means one or more currently observed defect issues; NEED_REPLAN means zero issues but approval is impossible because a major requirement or required evidence is unverified. Auxiliary unverified items may still APPROVE when other confirmed evidence is sufficient.
 ```
 
-**Cognitive-load rule:** For APPROVE, include only requirement fulfillment and necessary evidence; for REJECT, keep supporting prose concise while including every required machine claim.
+**Cognitive-load rule:** For APPROVE, include only requirement fulfillment and necessary evidence; for REJECT, keep supporting prose concise, include every verified finding and required machine claim, and aggregate locations with the same cause.

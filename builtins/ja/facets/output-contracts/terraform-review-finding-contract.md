@@ -24,4 +24,4 @@
 
 **認知負荷軽減ルール:**
 - APPROVE → サマリーのみ（5行以内）
-- REJECT → 有効な Finding Contract 形式で関連 claim を省略せず記載
+- REJECT → 有効な Finding Contract 形式で確認済みの指摘 claim を省略せず記載し、同じ原因の場所は集約

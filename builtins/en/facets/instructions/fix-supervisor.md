@@ -4,6 +4,10 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 The supervisor has flagged problems from an overall perspective.
 Address items in order of priority, starting with the highest.
 
+{{include:instructions/fix-root-cause-analysis}}
+
+{{include:instructions/fix-family-completion}}
+
 **Required output (include headings)**
 ## Work results
 - {Summary of actions taken}
@@ -11,5 +15,7 @@ Address items in order of priority, starting with the highest.
 - {Summary of changes}
 ## Test results
 - {Command executed and results}
+## Quality gates
+- {Quality gates run after the final change and their results}
 ## Evidence
 - {List key points from files checked/searches/diffs/logs}

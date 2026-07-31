@@ -1,0 +1,27 @@
+params:
+  plan_policy:
+    type: facet_ref[]
+    facet_kind: policy
+  plan_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
+  plan_instruction:
+    type: facet_ref
+    facet_kind: instruction
+name: plan
+tags:
+  - plan
+edit: false
+persona: planner
+policy:
+  $param: plan_policy
+knowledge:
+  $param: plan_knowledge
+provider_options:
+  extends: review-readonly
+instruction:
+  $param: plan_instruction
+output_contracts:
+  report:
+    - name: plan.md
+      format: plan

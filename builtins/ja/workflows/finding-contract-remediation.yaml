@@ -1,0 +1,44 @@
+name: finding-contract-remediation
+description: 継承した Finding Contract ledger の対応可能な指摘を Team Leader が修正する。
+subworkflow:
+  callable: true
+  visibility: internal
+  requires_finding_contract: true
+  returns:
+    - need_replan
+  params:
+    fix_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing]
+    fix_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [takt, architecture, implementation-semantics]
+max_steps: 3
+initial_step: fix
+steps:
+  - name: fix
+    tags: [leader]
+    edit: true
+    persona: coder
+    policy:
+      $param: fix_policy
+    knowledge:
+      $param: fix_knowledge
+    required_permission_mode: edit
+    team_leader:
+      mode: finding_contract_fix
+      max_concurrency: 3
+      initial_max_parts: 3
+      fail_on_part_error: false
+      part_tags: [coding]
+      part_persona: coder
+      part_edit: true
+      part_permission_mode: edit
+    instruction: team-leader-finding-contract-fix
+    rules:
+      - condition: when(structured.fix.decision == "complete")
+        next: COMPLETE
+      - condition: when(structured.fix.decision == "replan")
+        return: need_replan

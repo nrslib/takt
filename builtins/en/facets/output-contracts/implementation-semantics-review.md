@@ -47,4 +47,4 @@
 
 **Cognitive load reduction rules:**
 - APPROVE → Summary + Verification Evidence + Re-scan Evidence (from the second iteration onward), plus Non-Finding Concerns only when needed
-- REJECT → List only the applicable findings in tables (30 lines or fewer)
+- REJECT → Include every verified finding in tables and aggregate locations with the same cause

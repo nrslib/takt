@@ -163,7 +163,10 @@ function sharedReviewers(language: Language): RawStep {
 }
 
 function localReviewers(language: Language, name: 'reviewers' | 'boundary-reviewers'): RawStep {
-  return readExpandedStep(language, 'takt-default-localllm', name);
+  const workflowName = name === 'reviewers'
+    ? 'finding-contract-local-review'
+    : 'finding-contract-boundary-review';
+  return readExpandedStep(language, workflowName, name);
 }
 
 describe('builtin Finding ledger routing', () => {
@@ -202,30 +205,30 @@ describe('builtin Finding ledger routing', () => {
       for (const label of [undefined, 'all("approved")', 'any("needs_fix")', 'needs_fix', 'need_replan']) {
         for (const anomalies of [0, 3]) {
           expect(transition(regular, { anomalies }, reviewerRuleIndex, label))
-            .toBe('local-review-integrity-gate');
+            .toBe('integrity-gate');
           expect(transition(boundary, { anomalies }, reviewerRuleIndex, label)).toBe('final-gate');
         }
-        expect(transition(regular, { open: 1 }, reviewerRuleIndex, label)).toBe('fix');
-        expect(transition(boundary, { open: 1 }, reviewerRuleIndex, label)).toBe('fix');
+        expect(transition(regular, { open: 1 }, reviewerRuleIndex, label)).toBe('needs_fix');
+        expect(transition(boundary, { open: 1 }, reviewerRuleIndex, label)).toBe('needs_fix');
       }
     }
   });
 
   it.each(['en', 'ja'] as const)('%s reviewer集約はconflict/provisionalの先行ルールを維持する', (language) => {
     const cases = [
-      { raw: sharedReviewers(language), dismissTarget: 'final-gate' },
-      { raw: localReviewers(language, 'reviewers'), dismissTarget: 'local-review-integrity-gate' },
-      { raw: localReviewers(language, 'boundary-reviewers'), dismissTarget: 'final-gate' },
+      { raw: sharedReviewers(language), dismissTarget: 'final-gate', replanTarget: 'replan' },
+      { raw: localReviewers(language, 'reviewers'), dismissTarget: 'integrity-gate', replanTarget: 'need_replan' },
+      { raw: localReviewers(language, 'boundary-reviewers'), dismissTarget: 'final-gate', replanTarget: 'need_replan' },
     ];
 
-    for (const { raw, dismissTarget } of cases) {
+    for (const { raw, dismissTarget, replanTarget } of cases) {
       const step = toWorkflowStep(raw);
       expect(transition(step, { open: 1, conflicts: 1, unadjudicated: 1 }, 1))
         .toBe('finding-conflict-adjudication');
       expect(transition(step, { open: 1, conflicts: 1 }, 1)).toBe('ABORT');
       expect(transition(step, { open: 1, provisional: 1, dismissEligible: 1 }, 1))
         .toBe(dismissTarget);
-      expect(transition(step, { open: 1, provisional: 1 }, 1)).toBe('replan');
+      expect(transition(step, { open: 1, provisional: 1 }, 1)).toBe(replanTarget);
     }
   });
 

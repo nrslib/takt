@@ -47,10 +47,18 @@ export const WorkflowParamReferenceRawSchema = z.object({
 }).strict();
 
 const WorkflowFacetRefScalarSchema = z.string().min(1);
-const WorkflowFacetRefListSchema = z.array(z.string().min(1)).min(1);
-const WorkflowFacetRefValueSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowFacetRefListSchema]);
+const WorkflowFacetRefArrayValueSchema = z.array(z.string().min(1));
+const WorkflowFacetRefValueSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowFacetRefArrayValueSchema]);
 const WorkflowFacetRefOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowParamReferenceRawSchema]);
-const WorkflowFacetRefListOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowFacetRefListSchema, WorkflowParamReferenceRawSchema]);
+// Preserve the normalizer's contextual empty-persona error and fragment provenance.
+const WorkflowPersonaRefOrParamSchema = z.union([z.string(), WorkflowParamReferenceRawSchema]);
+const WorkflowFacetRefListItemSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowParamReferenceRawSchema]);
+const WorkflowFacetRefListOrParamSchema = z.union([
+  WorkflowFacetRefScalarSchema,
+  z.array(WorkflowFacetRefListItemSchema).min(1),
+  WorkflowParamReferenceRawSchema,
+]);
+const WorkflowReferenceOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowParamReferenceRawSchema]);
 
 const WorkflowCallArgsRawSchema = z.record(
   z.string().min(1),
@@ -76,9 +84,9 @@ const WorkflowProviderOptionsWithExtendsSchema = z.object({
   runtime: RuntimeConfigSchema,
 }).optional();
 
-const WorkflowParamDeclarationRawSchema = z.object({
+const WorkflowFacetParamDeclarationRawSchema = z.object({
   type: z.enum(['facet_ref', 'facet_ref[]']),
-  facet_kind: z.enum(['knowledge', 'policy', 'instruction', 'report_format']),
+  facet_kind: z.enum(['knowledge', 'policy', 'instruction', 'persona', 'report_format']),
   default: WorkflowFacetRefValueSchema.optional(),
 }).strict().superRefine((data, ctx) => {
   const isArrayDefault = Array.isArray(data.default);
@@ -97,6 +105,16 @@ const WorkflowParamDeclarationRawSchema = z.object({
     });
   }
 });
+
+const WorkflowReferenceParamDeclarationRawSchema = z.object({
+  type: z.literal('workflow_ref'),
+  default: WorkflowFacetRefScalarSchema.optional(),
+}).strict();
+
+const WorkflowParamDeclarationRawSchema = z.union([
+  WorkflowFacetParamDeclarationRawSchema,
+  WorkflowReferenceParamDeclarationRawSchema,
+]);
 
 const WorkflowRuleConditionRawSchema = z.string().trim().min(1).superRefine((condition, ctx) => {
   try {
@@ -340,7 +358,7 @@ const AgentParallelSubStepRawObjectSchema = z.object({
   overrides: z.never().optional(),
   session_key: z.string().trim().min(1).optional(),
   session: z.enum(WORKFLOW_SESSION_MODES).optional(),
-  persona: z.string().optional(),
+  persona: WorkflowPersonaRefOrParamSchema.optional(),
   persona_name: z.string().optional(),
   tags: z.array(z.string().min(1)).optional(),
   policy: WorkflowFacetRefListOrParamSchema.optional(),
@@ -396,7 +414,7 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   name: WorkflowStepNameSchema,
   kind: z.literal('workflow_call').optional(),
   mode: z.never().optional(),
-  call: z.string().min(1),
+  call: WorkflowReferenceOrParamSchema,
   overrides: WorkflowCallOverridesRawSchema.optional(),
   args: WorkflowCallArgsRawSchema.optional(),
   finding_contract_authority: WorkflowCallFindingContractAuthoritySchema.optional(),
@@ -502,12 +520,12 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     session_key: z.string().trim().min(1).optional(),
     kind: WorkflowStepKindSchema.optional(),
     mode: z.literal('system').optional(),
-    call: z.string().min(1).optional(),
+    call: WorkflowReferenceOrParamSchema.optional(),
     overrides: WorkflowCallOverridesRawSchema.optional(),
     args: WorkflowCallArgsRawSchema.optional(),
     finding_contract_authority: WorkflowCallFindingContractAuthoritySchema.optional(),
     session: z.enum(WORKFLOW_SESSION_MODES).optional(),
-    persona: z.string().optional(),
+    persona: WorkflowPersonaRefOrParamSchema.optional(),
     persona_name: z.string().optional(),
     tags: z.array(z.string().min(1)).optional(),
     policy: WorkflowFacetRefListOrParamSchema.optional(),

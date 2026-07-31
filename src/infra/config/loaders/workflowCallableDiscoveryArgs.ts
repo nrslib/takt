@@ -5,11 +5,13 @@ import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 type RawWorkflowConfig = z.output<typeof WorkflowConfigRawSchema>;
 
 const DISCOVERY_PLACEHOLDER_PREFIX = '__takt_discovery_param__';
+const DISCOVERY_WORKFLOW_REF_PREFIX = '__takt_discovery_workflow_ref__';
 
 const FACET_SECTION_BY_KIND = {
   knowledge: 'knowledge',
   policy: 'policies',
   instruction: 'instructions',
+  persona: 'personas',
   report_format: 'report_formats',
 } as const;
 
@@ -54,6 +56,11 @@ export function prepareCallableSubworkflowDiscoveryArgs(
   for (const [paramName, definition] of Object.entries(params)) {
     if (definition.default !== undefined) {
       callableArgs.set(paramName, definition.default);
+      continue;
+    }
+
+    if (definition.type === 'workflow_ref') {
+      callableArgs.set(paramName, `${DISCOVERY_WORKFLOW_REF_PREFIX}_${paramName}`);
       continue;
     }
 

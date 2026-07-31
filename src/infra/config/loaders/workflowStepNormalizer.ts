@@ -273,6 +273,12 @@ export function normalizeStepFromRaw(
   validateWorkflowMcpServers(step.name, step.mcp_servers, stepPath, workflowMcpServersPolicy);
 
   if (isWorkflowCallStep) {
+    if (isWorkflowParamReference(step.call)) {
+      throw withWorkflowStepErrorPath(
+        new Error(`Step "${step.name}" has unresolved $param in call`),
+        [...stepPath, 'call'],
+      );
+    }
     const normalizedStep: WorkflowCallStep = {
       name: step.name,
       description: step.description,

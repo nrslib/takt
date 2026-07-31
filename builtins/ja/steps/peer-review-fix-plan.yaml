@@ -1,4 +1,7 @@
 params:
+  plan_policy:
+    type: facet_ref[]
+    facet_kind: policy
   fix_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
@@ -9,9 +12,7 @@ tags:
 edit: false
 persona: planner
 policy:
-  - coding
-  - testing
-  - review
+  $param: plan_policy
 knowledge:
   $param: fix_knowledge
 provider_options:

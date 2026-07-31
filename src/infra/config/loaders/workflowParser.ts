@@ -66,11 +66,16 @@ function normalizeSubworkflowConfig(
       ? Object.fromEntries(
         Object.entries(raw.params).map(([name, param]) => [
           name,
-          {
-            type: param.type,
-            facetKind: param.facet_kind,
-            default: param.default,
-          },
+          param.type === 'workflow_ref'
+            ? {
+                type: param.type,
+                default: param.default,
+              }
+            : {
+                type: param.type,
+                facetKind: param.facet_kind,
+                default: param.default,
+              },
         ]),
       )
       : undefined,

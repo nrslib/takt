@@ -278,6 +278,11 @@ steps:
           - condition: No fix needed (target file/spec verified)
           - condition: Cannot determine, insufficient info
         instruction: ai-antipattern-fix
+        output_contracts:
+          report:
+            - name: ai-antipattern-fix-report.md
+              format: fix-report
+              use_judge: false
       - name: supervise_fix_parallel
         tags:
           - coding
@@ -333,6 +338,11 @@ steps:
       - condition: Cannot determine, insufficient info
         next: implement
     instruction: ai-antipattern-fix
+    output_contracts:
+      report:
+        - name: ai-antipattern-fix-report.md
+          format: fix-report
+          use_judge: false
   - name: supervise_fix
     tags:
       - coding
@@ -368,12 +378,13 @@ loop_monitors:
         The review → fix cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 
-        **Signs of unproductive cycling:**
-        - Same finding_id oscillating between resolved → new
-        - New issues keep arising as side effects of previous fixes
-        - Reviewer findings conflict with task requirements and cannot be reconciled
+        - Fix progress: whether existing findings satisfy their acceptance criteria
+        - Report convergence: whether valid structural or contract findings keep being added across review rounds
+        - A different finding is not progress by itself; treat counts as supporting information
       rules:
-        - condition: Healthy (new issues trending down)
+        - condition: Healthy (fixes progressing and report content converging)
+          next: fix_both
+        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
           next: fix_both
         - condition: Unproductive (oscillation or requirement conflict)
           next: ABORT
@@ -385,12 +396,13 @@ loop_monitors:
         The AI fix → review cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 
-        **Signs of unproductive cycling:**
-        - Same finding_id oscillating between resolved → new
-        - New issues keep arising as side effects of previous fixes
-        - Reviewer findings conflict with task requirements and cannot be reconciled
+        - Fix progress: whether existing findings satisfy their acceptance criteria
+        - Report convergence: whether valid structural or contract findings keep being added across review rounds
+        - A different finding is not progress by itself; treat counts as supporting information
       rules:
-        - condition: Healthy (new issues trending down)
+        - condition: Healthy (fixes progressing and report content converging)
+          next: ai-antipattern-fix
+        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
           next: ai-antipattern-fix
         - condition: Unproductive (oscillation or requirement conflict)
           next: ABORT
@@ -402,12 +414,13 @@ loop_monitors:
         The supervisor fix → review cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 
-        **Signs of unproductive cycling:**
-        - Same finding_id oscillating between resolved → new
-        - New issues keep arising as side effects of previous fixes
-        - Reviewer findings conflict with task requirements and cannot be reconciled
+        - Fix progress: whether existing findings satisfy their acceptance criteria
+        - Report convergence: whether valid structural or contract findings keep being added across review rounds
+        - A different finding is not progress by itself; treat counts as supporting information
       rules:
-        - condition: Healthy (new issues trending down)
+        - condition: Healthy (fixes progressing and report content converging)
+          next: supervise_fix
+        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
           next: supervise_fix
         - condition: Unproductive (oscillation or requirement conflict)
           next: ABORT

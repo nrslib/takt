@@ -111,6 +111,55 @@ const workflowCallForbiddenFieldCases = [
 ] as const;
 
 describe('workflow_call schema', () => {
+  it('accepts workflow_ref params and empty facet_ref array values', () => {
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'composer',
+      subworkflow: {
+        callable: true,
+        params: {
+          target: {
+            type: 'workflow_ref',
+          },
+          additions: {
+            type: 'facet_ref[]',
+            facet_kind: 'policy',
+            default: [],
+          },
+        },
+      },
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: { $param: 'target' },
+        args: {
+          child_additions: [],
+        },
+        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+      }],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects param composition outside a callable workflow', () => {
+    expect(() => normalizeWorkflowConfig({
+      name: 'non-callable',
+      policies: {
+        base: 'Base policy',
+      },
+      steps: [{
+        name: 'review',
+        persona: 'reviewer',
+        policy: [
+          'base',
+          { $param: 'additions' },
+        ],
+        instruction: 'Review',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    }, '/tmp')).toThrow();
+  });
+
   it('workflow_call v2 DSL を保持できる', () => {
     const callableResult = WorkflowConfigRawSchema.safeParse({
       name: 'shared/review-loop',

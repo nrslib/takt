@@ -1,4 +1,7 @@
 params:
+  fix_policy:
+    type: facet_ref[]
+    facet_kind: policy
   fix_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
@@ -8,8 +11,7 @@ tags:
 edit: true
 persona: coder
 policy:
-  - coding
-  - testing
+  $param: fix_policy
 knowledge:
   $param: fix_knowledge
 provider_options:

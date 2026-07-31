@@ -36,4 +36,4 @@
 
 **Cognitive load reduction rules:**
 - APPROVE: Summary and unverified scope only (8 lines or fewer)
-- REJECT: Include every relevant claim using the active Finding Contract format
+- REJECT: Include every verified finding claim using the active Finding Contract format and aggregate locations with the same cause

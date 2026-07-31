@@ -1,0 +1,27 @@
+params:
+  review_policy_additions:
+    type: facet_ref[]
+    facet_kind: policy
+  review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
+name: frontend-review
+tags:
+  - review
+edit: false
+persona: frontend-reviewer
+policy:
+  - review
+  - design-fidelity
+  - $param: review_policy_additions
+knowledge:
+  - frontend
+  - react
+  - $param: review_knowledge_additions
+provider_options:
+  extends: review-readonly
+instruction: review-frontend
+output_contracts:
+  report:
+    - name: frontend-review.md
+      format: frontend-review

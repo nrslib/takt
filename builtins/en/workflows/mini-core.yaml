@@ -1,0 +1,288 @@
+name: mini-core
+description: Internal core development workflow for the mini family. Uses injected policies, knowledge, and supervisor to run plan -> implement -> parallel review -> direct fixes.
+subworkflow:
+  callable: true
+  visibility: internal
+  params:
+    plan_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - design-planning
+    plan_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+    plan_report_format:
+      type: facet_ref
+      facet_kind: report_format
+      default: plan
+    development_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+    development_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+    supervisor_persona:
+      type: facet_ref
+      facet_kind: persona
+      default: supervisor
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 20
+initial_step: plan
+loop_monitors:
+  - cycle:
+      - reviewers
+      - fix_both
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: converging (fixes progressing and report content converging)
+          next: reviewers
+        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
+          next: reviewers
+        - condition: The current loop cannot converge and must switch to another verification or remediation stage
+          next: supervise_fix
+steps:
+  - name: plan
+    tags:
+      - plan
+    edit: false
+    persona: planner
+    policy:
+      $param: plan_policy
+    knowledge:
+      $param: plan_knowledge
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    instruction: plan
+    output_contracts:
+      report:
+        - name: plan.md
+          format:
+            $param: plan_report_format
+    rules:
+      - condition: Requirements are clear and implementation is possible
+        next: implement
+      - condition: User is asking a question (not an implementation task)
+        next: COMPLETE
+      - condition: Requirements are unclear, insufficient information
+        next: ABORT
+
+  - name: implement
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      $param: development_policy
+    knowledge:
+      $param: development_knowledge
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
+    required_permission_mode: edit
+    instruction: implement
+    rules:
+      - condition: Implementation complete
+        next: reviewers
+      - condition: Cannot proceed, insufficient info
+        next: ABORT
+      - condition: User input required because there are items to confirm with the user
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - name: coder-scope.md
+          format: coder-scope
+          use_judge: false
+        - name: coder-decisions.md
+          format: coder-decisions
+          use_judge: false
+
+  - name: reviewers
+    tags:
+      - review
+    parallel:
+      - name: ai-antipattern-review-2nd
+        tags:
+          - review
+        edit: false
+        persona: ai-antipattern-reviewer
+        policy:
+          - review
+          - ai-antipattern
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - WebSearch
+              - WebFetch
+        instruction: ai-antipattern-review
+        rules:
+          - condition: No AI-specific issues
+          - condition: AI-specific issues found
+        output_contracts:
+          report:
+            - name: ai-antipattern-review.md
+              format: ai-antipattern-review
+      - name: supervise
+        tags:
+          - review
+          - supervise
+        edit: false
+        persona:
+          $param: supervisor_persona
+        policy: review
+        knowledge:
+          $param: development_knowledge
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: supervise
+        rules:
+          - condition: BLOCKED
+          - condition: All checks passed
+          - condition: Requirements unmet, tests failing
+        output_contracts:
+          report:
+            - name: supervisor-validation.md
+              format: supervisor-validation
+            - name: summary.md
+              format: supervisor-summary
+              use_judge: false
+    rules:
+      - condition: any("BLOCKED")
+        next: ABORT
+      - condition: all("No AI-specific issues", "All checks passed")
+        next: COMPLETE
+      - condition: all("AI-specific issues found", "Requirements unmet, tests failing")
+        next: fix_both
+      - condition: any("AI-specific issues found")
+        next: ai-antipattern-fix
+      - condition: any("Requirements unmet, tests failing")
+        next: supervise_fix
+
+  - name: fix_both
+    uses: mini-fix-both
+    with:
+      fix_policy:
+        $param: development_policy
+      fix_knowledge:
+        $param: development_knowledge
+    rules:
+      self:
+        - condition: all("AI Reviewer's issues fixed", "Supervisor's issues fixed")
+          next: reviewers
+        - condition: any("No fix needed (verified target files/spec)", "Cannot proceed, insufficient info")
+          next: implement
+      parallel:
+        ai-antipattern-fix-parallel:
+          - condition: AI Reviewer's issues fixed
+          - condition: No fix needed (verified target files/spec)
+          - condition: Cannot proceed, insufficient info
+        supervise_fix_parallel:
+          - condition: Supervisor's issues fixed
+          - condition: Cannot proceed, insufficient info
+
+  - name: ai-antipattern-fix
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      $param: development_policy
+    knowledge:
+      $param: development_knowledge
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
+    required_permission_mode: edit
+    pass_previous_response: false
+    rules:
+      - condition: AI Reviewer's issues fixed
+        next: reviewers
+      - condition: No fix needed (verified target files/spec)
+        next: implement
+      - condition: Cannot proceed, insufficient info
+        next: implement
+    instruction: ai-antipattern-fix
+    output_contracts:
+      report:
+        - name: ai-antipattern-fix-report.md
+          format: fix-report
+          use_judge: false
+
+  - name: supervise_fix
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      $param: development_policy
+    knowledge:
+      $param: development_knowledge
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
+    required_permission_mode: edit
+    pass_previous_response: false
+    rules:
+      - condition: Supervisor's issues fixed
+        next: reviewers
+      - condition: Cannot proceed, insufficient info
+        next: implement
+    instruction: fix-supervisor
