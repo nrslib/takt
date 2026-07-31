@@ -542,33 +542,81 @@ function parseNode(value: unknown): BundleNodeObject {
   };
 }
 
-function validateAndRebindResourceRefs(
+function rebindResourcePath(
   value: unknown,
+  key: string,
+  expectedKind: BundleManifest['resources'][string]['kind'],
+  manifest: BundleManifest,
+  resourceRoot: string,
+  usedResources: Set<string>,
+): string {
+  if (typeof value !== 'string') throw new Error(`Workflow bundle ${key} must be a resource reference`);
+  const hash = parseResourceRef(value);
+  if (hash === undefined || manifest.resources[hash]?.kind !== expectedKind) {
+    throw new Error(`Workflow bundle ${key} does not reference a declared ${expectedKind} resource`);
+  }
+  usedResources.add(hash);
+  return join(resourceRoot, hash);
+}
+
+function rebindWorkflowResourcePaths(
+  config: WorkflowConfig,
   manifest: BundleManifest,
   resourceRoot: string,
   usedResources: Set<string>,
 ): void {
-  if (Array.isArray(value)) {
-    value.forEach((entry) => validateAndRebindResourceRefs(entry, manifest, resourceRoot, usedResources));
-    return;
-  }
-  if (value === null || typeof value !== 'object') return;
-  for (const [key, entry] of Object.entries(value)) {
-    const expectedKind = key === 'personaPath' || key === 'templatePath'
-      ? 'prompt'
-      : key === 'sourcePath'
-        ? 'arpeggio-source'
-        : undefined;
-    if (expectedKind !== undefined) {
-      if (typeof entry !== 'string') throw new Error(`Workflow bundle ${key} must be a resource reference`);
-      const hash = parseResourceRef(entry);
-      if (hash === undefined || manifest.resources[hash]?.kind !== expectedKind) {
-        throw new Error(`Workflow bundle ${key} does not reference a declared ${expectedKind} resource`);
+  const rebindPersona = (owner: { personaPath?: string }): void => {
+    if (owner.personaPath === undefined) return;
+    owner.personaPath = rebindResourcePath(
+      owner.personaPath,
+      'personaPath',
+      'prompt',
+      manifest,
+      resourceRoot,
+      usedResources,
+    );
+  };
+  walkSteps(config.steps, (step) => {
+    if (step.kind !== undefined && step.kind !== 'agent') return;
+    rebindPersona(step);
+    if (step.teamLeader !== undefined) {
+      rebindPersona(step.teamLeader);
+      if (step.teamLeader.partPersonaPath !== undefined) {
+        step.teamLeader.partPersonaPath = rebindResourcePath(
+          step.teamLeader.partPersonaPath,
+          'partPersonaPath',
+          'prompt',
+          manifest,
+          resourceRoot,
+          usedResources,
+        );
       }
-      usedResources.add(hash);
-      (value as Record<string, unknown>)[key] = join(resourceRoot, hash);
-    } else {
-      validateAndRebindResourceRefs(entry, manifest, resourceRoot, usedResources);
+    }
+    if (step.arpeggio !== undefined) {
+      const sourcePath = rebindResourcePath(
+        step.arpeggio.sourcePath,
+        'sourcePath',
+        'arpeggio-source',
+        manifest,
+        resourceRoot,
+        usedResources,
+      );
+      const templatePath = rebindResourcePath(
+        step.arpeggio.templatePath,
+        'templatePath',
+        'prompt',
+        manifest,
+        resourceRoot,
+        usedResources,
+      );
+      step.arpeggio = { ...step.arpeggio, sourcePath, templatePath };
+    }
+  });
+  for (const monitor of config.loopMonitors ?? []) rebindPersona(monitor.judge);
+  if (config.findingContract !== undefined) {
+    rebindPersona(config.findingContract.manager);
+    if (config.findingContract.adjudicator !== undefined) {
+      rebindPersona(config.findingContract.adjudicator);
     }
   }
 }
@@ -671,7 +719,7 @@ export function loadWorkflowExecutionBundle(runPaths: RunPaths): LoadedWorkflowE
       throw new Error(`Workflow bundle node ${nodeId} failed logical identity validation`);
     }
     const config = structuredClone(object.config) as unknown as WorkflowConfig;
-    validateAndRebindResourceRefs(
+    rebindWorkflowResourcePaths(
       config,
       manifest,
       runPaths.workflowBundleResourcesAbs,

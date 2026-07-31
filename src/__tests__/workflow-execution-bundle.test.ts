@@ -1,10 +1,11 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { createPartStep } from '../core/workflow/engine/team-leader-common.js';
 import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
 import {
   loadWorkflowExecutionBundle,
@@ -39,7 +40,18 @@ describe('workflow execution bundle', () => {
       name: 'two', kind: 'agent', persona: 'second prompt', personaDisplayName: 'second', instruction: '{task}',
     }]);
     const parent = workflow('parent', [
-      { name: 'first', kind: 'workflow_call', call: 'child', args: { mode: 'first' }, personaDisplayName: 'first', instruction: '' },
+      {
+        name: 'first',
+        kind: 'workflow_call',
+        call: 'child',
+        args: {
+          mode: 'first',
+          personaPath: 'ordinary-persona-argument',
+          partPersonaPath: 'ordinary-part-persona-argument',
+        },
+        personaDisplayName: 'first',
+        instruction: '',
+      },
       { name: 'second', kind: 'workflow_call', call: 'child', args: { mode: 'second' }, personaDisplayName: 'second', instruction: '' },
     ]);
     const prepared = prepareWorkflowExecutionBundle({
@@ -54,6 +66,11 @@ describe('workflow execution bundle', () => {
     publishWorkflowExecutionBundle(paths, prepared);
     const loaded = loadWorkflowExecutionBundle(paths);
     const [first, second] = loaded.rootWorkflow.steps;
+    expect(first?.args).toEqual({
+      mode: 'first',
+      personaPath: 'ordinary-persona-argument',
+      partPersonaPath: 'ordinary-part-persona-argument',
+    });
     const loadedFirst = loaded.workflowCallResolver({
       parentWorkflow: loaded.rootWorkflow,
       step: first as never,
@@ -91,6 +108,43 @@ describe('workflow execution bundle', () => {
     const objectFile = join(paths.workflowBundleObjectsAbs, `${objectHash}.json`);
     writeFileSync(objectFile, readFileSync(objectFile, 'utf-8').replace('"name":"root"', '"name":"evil"'));
     expect(() => loadWorkflowExecutionBundle(paths)).toThrow(/integrity|hash/i);
+  });
+
+  it('rebinds a team leader part persona to the verified bundle resource', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-team-leader-'));
+    roots.push(root);
+    const config = workflow('root', [{
+      name: 'implement',
+      kind: 'agent',
+      persona: 'leader step prompt',
+      personaDisplayName: 'leader',
+      instruction: '{task}',
+      teamLeader: {
+        persona: 'planning prompt',
+        partPersona: 'part execution prompt',
+      },
+    }]);
+    const paths = buildRunPaths(root, 'team-leader-run');
+    publishWorkflowExecutionBundle(paths, prepareWorkflowExecutionBundle({
+      rootWorkflow: config,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    }));
+
+    const loaded = loadWorkflowExecutionBundle(paths);
+    const loadedStep = loaded.rootWorkflow.steps[0]!;
+    const partPersonaPath = loadedStep.teamLeader?.partPersonaPath;
+    expect(dirname(partPersonaPath!)).toBe(loaded.resourceRoot);
+    expect(basename(partPersonaPath!)).toMatch(/^[0-9a-f]{64}$/);
+    expect(readFileSync(partPersonaPath!, 'utf-8')).toBe('part execution prompt');
+
+    const partStep = createPartStep(loadedStep, {
+      id: 'part-1',
+      title: 'Part 1',
+      instruction: 'Implement part 1',
+    });
+    expect(partStep.personaPath).toBe(partPersonaPath);
   });
 
   it('attaches once from an explicit historical source without changing run metadata', () => {
